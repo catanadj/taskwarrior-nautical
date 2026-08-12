@@ -7,10 +7,11 @@ reconcile, and future lifecycle consumers can share one read contract.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from collections.abc import Callable, Sequence
 from functools import lru_cache
+import threading
 from typing import Any
 
 from .hook_support import LookupResult
@@ -106,6 +107,28 @@ class ChainIndexes:
     by_uuid: dict[str, TaskRow]
 
 
+@dataclass(slots=True)
+class ChainCacheStore:
+    """Request-scoped chain rows and indexes owned by the read service."""
+
+    chain_id: str = ""
+    rows: list[TaskRow] = field(default_factory=list)
+    indexes: ChainIndexes | None = None
+    lock: threading.RLock = field(default_factory=threading.RLock)
+
+    def rows_for(self, chain_id: str) -> list[TaskRow] | None:
+        with self.lock:
+            if self.chain_id == chain_id and self.rows:
+                return list(self.rows)
+        return None
+
+    def replace(self, chain_id: str, rows: Sequence[TaskRow], indexes: ChainIndexes) -> None:
+        with self.lock:
+            self.chain_id = str(chain_id or "")
+            self.rows = [dict(row) for row in rows if isinstance(row, dict)]
+            self.indexes = indexes
+
+
 class LifecycleReadService:
     """Own chain snapshot filtering, indexing, and read-cache orchestration."""
 
@@ -123,6 +146,7 @@ class LifecycleReadService:
         record_stat: Counter | None = None,
         read_query_set: ReadQuerySet | None = None,
         read_query_delete: ReadQueryDelete | None = None,
+        cache_store: ChainCacheStore | None = None,
     ) -> None:
         self._coerce_int = coerce_int
         self._parse_extra_tokens = parse_extra_tokens
@@ -135,6 +159,20 @@ class LifecycleReadService:
         self._record_stat = record_stat or (lambda _name: None)
         self._read_query_set = read_query_set or (lambda _kind, _key, _value: None)
         self._read_query_delete = read_query_delete or (lambda _kind, _key: None)
+        self._cache_store = cache_store
+
+    def cached_chain_rows(self, chain_id: str) -> list[TaskRow] | None:
+        """Return the service-owned chain cache, if seeded for this chain."""
+        if self._cache_store is not None:
+            return self._cache_store.rows_for(chain_id)
+        return list(self._chain_cache_get(chain_id) or []) or None
+
+    def replace_chain_cache(self, chain_id: str, rows: Sequence[TaskRow]) -> ChainIndexes:
+        """Replace cached chain rows and their indexes atomically."""
+        indexes = self.build_indexes(rows)
+        if self._cache_store is not None:
+            self._cache_store.replace(chain_id, rows, indexes)
+        return indexes
 
     def collect_prev_two(
         self,
@@ -418,7 +456,7 @@ class LifecycleReadService:
                 if filtered is not None:
                     self._record_stat("chain_snapshot_filter_hits")
                     return filtered
-        cached_chain = self._chain_cache_get(chain_id)
+        cached_chain = self.cached_chain_rows(chain_id)
         if cached_chain and not since and not extra:
             return list(cached_chain)
         if cached_chain and not since:
@@ -484,6 +522,7 @@ class LifecycleReadService:
 
 
 __all__ = [
+    "ChainCacheStore",
     "ChainReadResult",
     "ChainSnapshotResult",
     "ChainIndexes",

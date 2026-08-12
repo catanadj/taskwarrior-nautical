@@ -7971,6 +7971,28 @@ def test_lifecycle_read_service_completion_snapshot_promotes_full_reads():
     expect(calls["load"] == 1, f"full snapshot loaded more than once: {calls}")
 
 
+def test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed():
+    """The request cache store keeps rows and indexes together per chain."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    store = read_service.ChainCacheStore()
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda _extra: [],
+        token_matcher=lambda _row, _token: True,
+        read_query_get=lambda _kind, _key: object(),
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+        cache_store=store,
+    )
+    service.replace_chain_cache("cid", [{"uuid": "aaaaaaaa", "link": 1}])
+    rows = service.cached_chain_rows("cid")
+    expect(rows and rows[0].get("link") == 1, f"cache store did not retain rows: {rows}")
+    expect(store.indexes and store.indexes.by_short["aaaaaaaa"]["link"] == 1, "cache indexes were not retained")
+    expect(service.cached_chain_rows("other") is None, "cache leaked across chain IDs")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33657,6 +33679,7 @@ TESTS = [
     test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
     test_lifecycle_read_service_checked_export_is_typed_and_cached,
     test_lifecycle_read_service_completion_snapshot_promotes_full_reads,
+    test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

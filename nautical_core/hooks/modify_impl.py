@@ -2607,6 +2607,8 @@ def _lifecycle_read_service():
     if existing is not None:
         return existing
     lifecycle_read_service = _module("lifecycle_read_service")
+    if getattr(state, "chain_cache_store", None) is None:
+        state.chain_cache_store = lifecycle_read_service.ChainCacheStore()
 
     def _cached_chain(chain_id: str):
         state = _modify_chain_state()
@@ -2627,6 +2629,7 @@ def _lifecycle_read_service():
         max_chain_walk=_MAX_CHAIN_WALK,
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,
+        cache_store=state.chain_cache_store,
     )
     state.lifecycle_read_service = service
     return service
@@ -2687,7 +2690,7 @@ def _set_chain_cache(chain_id: str, chain: list[dict]) -> None:
     """Set per-run chain cache to avoid repeated task exports."""
     global _CHAIN_CACHE_CHAIN_ID, _CHAIN_CACHE
     chain_copy = list(chain or [])
-    indexes = _lifecycle_read_service().build_indexes(chain_copy)
+    indexes = _lifecycle_read_service().replace_chain_cache(chain_id, chain_copy)
     state = _modify_chain_state()
     with state.chain_cache_lock:
         state.chain_cache_chain_id = chain_id or ""

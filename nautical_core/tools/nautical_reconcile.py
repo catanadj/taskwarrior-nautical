@@ -32,15 +32,13 @@ from nautical_core.lifecycle_executor import (  # noqa: E402
     OperationState,
 )
 from nautical_core.lifecycle_models import (  # noqa: E402
-    LifecycleAction,
     DeletionDisposition,
     LifecycleEvent,
-    LifecycleIdentity,
     LifecyclePlan,
     LifecycleOutcomeKind,
-    ParentGuard,
-    recurrence_fingerprint,
+    TaskSnapshot,
 )
+from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
@@ -1102,8 +1100,6 @@ def _execute_reconcile_lifecycle_plan(
 def _terminal_lifecycle_plan(plan: reconcile.ReconcilePlan) -> LifecyclePlan:
     """Create the typed terminal plan for a reconcile final/manual decision."""
     parent = plan.parent
-    status = str(parent.get("status") or "pending").strip() or "pending"
-    action = LifecycleAction.FINALIZE_CHAIN
     if plan.action == "manual_stop":
         event = LifecycleEvent.MANUAL_DELETE
     elif str(parent.get("status") or "").strip().lower() == "deleted":
@@ -1114,31 +1110,15 @@ def _terminal_lifecycle_plan(plan: reconcile.ReconcilePlan) -> LifecyclePlan:
         event = LifecycleEvent.CHAIN_UNTIL
     else:
         event = LifecycleEvent.COMPLETE
-    link = reconcile.int_or_default(parent.get("link"), 0)
-    chain_id = str(parent.get("chainID") or "").strip()
-    parent_uuid = str(parent.get("uuid") or "").strip()
-    guard = ParentGuard(
-        status=status,
-        chain=str(parent.get("chain") or "on").strip() or "on",
-        chain_id=chain_id,
-        link=link,
-        recurrence_fingerprint=recurrence_fingerprint(parent),
-        modified=str(parent.get("modified") or ""),
-    )
-    identity = LifecycleIdentity(
-        chain_id=chain_id,
-        parent_uuid=parent_uuid,
-        source_link=link,
-        target_link=None,
-        event=event,
-    )
-    return LifecyclePlan.from_mappings(
-        identity=identity,
-        action=action,
-        parent_guard=guard,
-        parent_patch={"chain": "off"},
-        expected_postconditions=("terminal_chain", "no_successor"),
-    )
+    try:
+        return terminal_plan_for_snapshot(
+            TaskSnapshot.from_mapping(parent),
+            event,
+        )
+    except Exception as exc:
+        raise _LifecycleManualReview(
+            f"terminal policy refused mutation: {str(exc).strip() or type(exc).__name__}"
+        ) from exc
 
 
 def _execute_reconcile_terminal_plan(

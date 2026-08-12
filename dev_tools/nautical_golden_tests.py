@@ -1624,6 +1624,29 @@ def test_terminal_policy_routes_all_terminal_events_through_one_patch():
         expect(changed and task["chain"] == "off", f"{event.value} did not disable chain")
         expect(not apply_terminal_transition(task, event), f"{event.value} was not idempotent")
 
+    from nautical_core.lifecycle_models import LifecycleAction, TaskSnapshot
+    from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+
+    linked = {
+        "uuid": "88888888-0000-0000-0000-000000000008",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "terminal-policy-linked",
+        "link": 8,
+        "nextLink": "successor",
+    }
+    try:
+        terminal_plan_for_snapshot(TaskSnapshot.from_mapping(linked), LifecycleEvent.CHAIN_UNTIL)
+    except Exception as exc:
+        expect("persisted successor" in str(exc), "linked terminal rejection was not actionable")
+    else:
+        raise AssertionError("terminal finalization accepted a persisted successor")
+    manual_plan = terminal_plan_for_snapshot(
+        TaskSnapshot.from_mapping({**linked, "status": "deleted"}),
+        LifecycleEvent.MANUAL_DELETE,
+    )
+    expect(manual_plan.action is LifecycleAction.DISABLE_CHAIN, "manual deletion did not retain successor policy")
+
 
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""

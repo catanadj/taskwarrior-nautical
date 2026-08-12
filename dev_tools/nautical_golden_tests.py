@@ -324,6 +324,15 @@ def _load_hook_module(path: str, module_name: str):
     load_core = getattr(mod, "_load_core", None)
     if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
         load_core()
+    if os.path.basename(path) == "modify_impl.py":
+        # Tests that exercise historical private names now resolve directly
+        # through the public task-scoped generation service. Production hooks
+        # no longer carry these compatibility delegates.
+        mod._compute_cp_child_due = lambda parent: mod._chain_generation_service().compute_cp_child_due(parent)
+        mod._compute_anchor_child_due = lambda parent: mod._chain_generation_service().compute_anchor_child_due(parent)
+        mod._carry_relative_datetime = lambda parent, child, child_due, field, **kwargs: mod._chain_generation_service().carry_relative_datetime(parent, child, child_due, field, **kwargs)
+        mod._carry_native_until = lambda parent, child, child_due, kind, **kwargs: mod._chain_generation_service().carry_native_until(parent, child, child_due, kind, **kwargs)
+        mod._build_child_from_parent = lambda parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt: mod._chain_generation_service().build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     return mod
 
 def _load_core_module(path: str, module_name: str, config_path: str):

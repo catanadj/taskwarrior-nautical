@@ -594,8 +594,6 @@ _MODIFY_CHAIN_READS = None
 _MODIFY_CHAIN_READS_LOAD_FAILED = False
 _CHAIN_GENERATION = None
 _CHAIN_GENERATION_LOAD_FAILED = False
-_MODIFY_GENERATION_COMPAT = None
-_MODIFY_GENERATION_COMPAT_LOAD_FAILED = False
 _MODIFY_ORDINARY = None
 _MODIFY_ORDINARY_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
@@ -669,12 +667,6 @@ _MODULE_SPECS = {
         "_CHAIN_GENERATION_LOAD_FAILED",
         "chain_generation.py",
         "nautical_core.chain_generation",
-    ),
-    "modify_generation_compat": (
-        "_MODIFY_GENERATION_COMPAT",
-        "_MODIFY_GENERATION_COMPAT_LOAD_FAILED",
-        "modify_generation_compat.py",
-        "nautical_core.modify_generation_compat",
     ),
     "modify_ordinary": (
         "_MODIFY_ORDINARY",
@@ -3658,92 +3650,6 @@ def _chain_generation_service():
         )
         state.chain_generation_service = service
     return service
-
-
-_GENERATION_COMPAT = None
-
-
-def _generation_compat_bindings():
-    global _GENERATION_COMPAT
-    if _GENERATION_COMPAT is None:
-        compat = _module("modify_generation_compat")
-        _GENERATION_COMPAT = compat.bind_generation_compat(
-            lambda: _chain_generation_service()
-        )
-    return _GENERATION_COMPAT
-
-
-# ChainGenerationService is the sole production owner of recurrence
-# scheduling, carry, and child construction.  These five names are retained
-# as thin, lazy compatibility adapters for the existing golden tests and
-# external monkeypatch callers; do not add production logic here.  Keeping the
-# adapters lazy also avoids importing the shared service during module import.
-def _compute_cp_child_due(parent):
-    return _generation_compat_bindings().compute_cp_child_due(parent)
-
-
-def _compute_anchor_child_due(parent):
-    return _generation_compat_bindings().compute_anchor_child_due(parent)
-
-
-def _carry_relative_datetime(
-    parent,
-    child,
-    child_due_utc,
-    field,
-    *,
-    parent_anchor_field="due",
-    child_anchor_field="due",
-):
-    return _generation_compat_bindings().carry_relative_datetime(
-        parent,
-        child,
-        child_due_utc,
-        field,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_anchor_field,
-    )
-
-
-def _carry_native_until(
-    parent,
-    child,
-    child_due_utc,
-    kind,
-    *,
-    parent_anchor_field="due",
-    child_anchor_field="due",
-):
-    return _generation_compat_bindings().carry_native_until(
-        parent,
-        child,
-        child_due_utc,
-        kind,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_anchor_field,
-    )
-
-
-def _build_child_from_parent(
-    parent,
-    child_due_utc,
-    child_field,
-    next_link_no,
-    parent_short,
-    kind,
-    cpmax,
-    until_dt,
-):
-    return _generation_compat_bindings().build_child_from_parent(
-        parent,
-        child_due_utc,
-        child_field,
-        next_link_no,
-        parent_short,
-        kind,
-        cpmax,
-        until_dt,
-    )
 
 
 def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:

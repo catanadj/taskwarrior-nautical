@@ -175,6 +175,33 @@ class PrecomputedRecurrencePlanningService:
         return self.child_service.build_child(snapshot, event, candidate, next_link)
 
 
+def plan_candidate_successor(
+    snapshot: TaskSnapshot,
+    event: LifecycleEvent,
+    candidate: RecurrenceCandidate,
+    *,
+    generation: Any,
+    validated_configuration: Any,
+    compare_datetimes: Callable[[Any, Any], int],
+) -> LifecyclePlan:
+    """Build one candidate-backed plan for hooks, expiration, and reconcile.
+
+    Candidate calculation remains owned by the caller, but the conversion
+    into a lifecycle plan is deliberately centralized so those entry points
+    cannot drift in child construction or successor-limit handling.
+    """
+    recurrence = PrecomputedRecurrencePlanningService(
+        candidate=candidate,
+        child_service=ChainGenerationPlanningService(generation),
+    )
+    planner = LifecyclePlanner(
+        validated_configuration,
+        recurrence_service=recurrence,
+        successor_limit_policy=ChainGenerationLimitPolicy(compare_datetimes),
+    )
+    return planner.plan(snapshot, event)
+
+
 @dataclass(frozen=True, slots=True)
 class ChainGenerationLimitPolicy:
     """Default numeric and datetime limit policy for generation candidates."""
@@ -417,5 +444,6 @@ __all__ = (
     "RecurrencePlanningService",
     "SuccessorLimitPolicy",
     "PrecomputedRecurrencePlanningService",
+    "plan_candidate_successor",
     "terminal_plan_for_snapshot",
 )

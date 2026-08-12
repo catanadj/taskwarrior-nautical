@@ -1344,6 +1344,85 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
     expect(generated_plan.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil policy did not stop generated child")
 
 
+def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
+    """Completion and reconcile must use identical candidate-to-plan assembly."""
+    from datetime import datetime, timezone
+
+    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import RecurrenceCandidate, plan_candidate_successor
+    import nautical_core.reconcile as reconcile
+
+    due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
+    parent = {
+        "uuid": "11111111-0000-0000-0000-000000000001",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "planner-parity",
+        "link": 1,
+        "cp": "1d",
+        "due": "20260816T090000Z",
+    }
+
+    class Generation:
+        class Core:
+            @staticmethod
+            def coerce_int(value, default=0):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+            @staticmethod
+            def fmt_isoz(value):
+                return value.isoformat().replace("+00:00", "Z")
+
+        core = Core()
+
+        def build_child_from_parent(self, task, child_due, child_field, next_link, parent_short, kind, cpmax, until):
+            return {
+                "uuid": "22222222-0000-0000-0000-000000000002",
+                "status": "pending",
+                "chain": "on",
+                "chainID": task["chainID"],
+                "link": next_link,
+                "prevLink": parent_short,
+                child_field: child_due,
+                "kind": kind,
+                "chainMax": cpmax,
+            }
+
+    generation = Generation()
+    candidate = RecurrenceCandidate(child_due=due, metadata=(("target_field", "due"),))
+    snapshot = TaskSnapshot.from_mapping(parent)
+    completion_plan = plan_candidate_successor(
+        snapshot,
+        LifecycleEvent.COMPLETE,
+        candidate,
+        generation=generation,
+        validated_configuration={"scheduler_fingerprint": "completion"},
+        compare_datetimes=lambda left, right: (left > right) - (left < right),
+    )
+    reconcile_plan = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[],
+        hook=None,
+        generation=type(
+            "ReconcileGeneration",
+            (Generation,),
+            {
+                "compute_cp_child_due": lambda self, _task: (due, {"target_field": "due"}),
+                "safe_parse_datetime": lambda self, _value: (None, None),
+            },
+        )(),
+    )
+    expect(reconcile_plan.lifecycle_plan is not None, "reconcile did not produce a lifecycle plan")
+    actual = reconcile_plan.lifecycle_plan
+    expect(
+        actual == completion_plan,
+        f"completion/reconcile plans diverged:\ncompletion={completion_plan!r}\nreconcile={actual!r}",
+    )
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -33938,6 +34017,7 @@ TESTS = [
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,
+    test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile,
     test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,

@@ -19,11 +19,8 @@ from nautical_core.lifecycle_models import (
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import (
-    ChainGenerationLimitPolicy,
-    ChainGenerationPlanningService,
-    LifecyclePlanner,
-    PrecomputedRecurrencePlanningService,
     RecurrenceCandidate,
+    plan_candidate_successor,
 )
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
@@ -595,18 +592,13 @@ def _build_reconcile_plan_unscoped(
             dnf=None,
             until=until_dt,
         )
-        recurrence = PrecomputedRecurrencePlanningService(
-            candidate=candidate,
-            child_service=ChainGenerationPlanningService(generation),
-        )
-        planner = LifecyclePlanner(
-            {"scheduler_fingerprint": "reconcile"},
-            recurrence_service=recurrence,
-            successor_limit_policy=ChainGenerationLimitPolicy(compare_datetimes),
-        )
-        lifecycle_plan = planner.plan(
+        lifecycle_plan = plan_candidate_successor(
             TaskSnapshot.from_mapping(parent),
             LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
+            candidate,
+            generation=generation,
+            validated_configuration={"scheduler_fingerprint": "reconcile"},
+            compare_datetimes=compare_datetimes,
         )
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return ReconcilePlan(

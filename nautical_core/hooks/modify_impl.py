@@ -5121,20 +5121,15 @@ def _completion_compute_next_and_limits(new: dict, kind: str, next_no: int, now_
             dnf=computed.dnf,
             until=computed.until_dt,
         )
-        recurrence = lifecycle_planner.PrecomputedRecurrencePlanningService(
-            candidate=candidate,
-            child_service=lifecycle_planner.ChainGenerationPlanningService(generation),
-        )
         fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
         fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
-        planner = lifecycle_planner.LifecyclePlanner(
-            {"scheduler_fingerprint": fingerprint},
-            recurrence_service=recurrence,
-            successor_limit_policy=lifecycle_planner.ChainGenerationLimitPolicy(_compare_datetimes),
-        )
-        plan = planner.plan(
+        plan = lifecycle_planner.plan_candidate_successor(
             lifecycle_models.TaskSnapshot.from_mapping(new),
             lifecycle_models.LifecycleEvent.COMPLETE,
+            candidate,
+            generation=generation,
+            validated_configuration={"scheduler_fingerprint": fingerprint},
+            compare_datetimes=_compare_datetimes,
         )
         if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
             _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)

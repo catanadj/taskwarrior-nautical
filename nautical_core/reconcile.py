@@ -21,6 +21,7 @@ from nautical_core.lifecycle_models import (
 from nautical_core.lifecycle_planner import (
     LifecyclePreflight,
     RecurrenceCandidate,
+    expiration_candidate,
     plan_candidate_successor,
 )
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
@@ -165,17 +166,8 @@ def compute_expiration_child_due(
 ) -> tuple[Any, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
-    calculation_parent = expiration_recurrence_parent(parent)
-    kind = recurrence_kind(parent)
-    if kind in {"anchor", "anchor_file"}:
-        child_due, meta, _dnf = generation.compute_anchor_child_due(calculation_parent)
-    else:
-        child_due, meta = generation.compute_cp_child_due(calculation_parent)
-    target_field = "scheduled" if not parent.get("due") and parent.get("scheduled") else "due"
-    result_meta = dict(meta or {})
-    result_meta["basis"] = f"{target_field} recurrence target (expired)"
-    result_meta["target_field"] = target_field
-    return child_due, result_meta
+    candidate = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+    return candidate.child_due, dict(candidate.metadata)
 
 
 def native_until_target_field(task: dict[str, Any]) -> str:
@@ -562,7 +554,9 @@ def _build_reconcile_plan_unscoped(
 
     try:
         if is_expiration:
-            child_due, meta = compute_expiration_child_due(parent, hook=hook, generation=generation)
+            expiration = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+            child_due = expiration.child_due
+            meta = dict(expiration.metadata)
         elif kind in {"anchor", "anchor_file"}:
             child_due, meta, _dnf = generation.compute_anchor_child_due(parent)
         else:

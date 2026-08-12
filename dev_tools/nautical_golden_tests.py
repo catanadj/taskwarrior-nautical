@@ -1457,6 +1457,65 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
     )
 
 
+def test_expiration_candidate_uses_scheduled_recurrence_basis():
+    """Expired scheduled-only tasks must calculate from scheduled, not deletion end."""
+    from datetime import datetime, timezone
+    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+    from nautical_core.lifecycle_planner import LifecyclePreflight, expiration_candidate, plan_candidate_successor
+
+    scheduled = "2026-08-16T09:00:00Z"
+    parent = {
+        "uuid": "33333333-0000-0000-0000-000000000003",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "expiration-parity",
+        "link": 4,
+        "cp": "1d",
+        "scheduled": scheduled,
+        "end": "2026-08-20T12:00:00Z",
+    }
+
+    class Generation:
+        class Core:
+            @staticmethod
+            def coerce_int(value, default=0):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+        core = Core()
+
+        def compute_cp_child_due(self, task):
+            expect(task["end"] == scheduled, "expiration candidate used deletion end instead of scheduled")
+            return datetime(2026, 8, 17, 9, tzinfo=timezone.utc), {"target_field": "scheduled"}
+
+        def build_child_from_parent(self, task, due, field, link, parent_short, kind, cpmax, until):
+            return {
+                "uuid": "44444444-0000-0000-0000-000000000004",
+                "chain": "on",
+                "chainID": task["chainID"],
+                "link": link,
+                "prevLink": parent_short,
+                field: due,
+            }
+
+    generation = Generation()
+    candidate = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+    plan = plan_candidate_successor(
+        TaskSnapshot.from_mapping(parent),
+        LifecycleEvent.EXPIRE,
+        candidate,
+        generation=generation,
+        validated_configuration={"scheduler_fingerprint": "expiration"},
+        compare_datetimes=lambda left, right: (left > right) - (left < right),
+        preflight=LifecyclePreflight.from_context(
+            base_link=4, next_link=5, kind="cp", chain_id="expiration-parity"
+        ),
+    )
+    expect(plan.child_dict()["scheduled"] == candidate.child_due, "expiration plan lost scheduled target field")
+
+
 def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
     """Structured diagnostics must keep stdout clean and expose stable fields."""
     from nautical_core import diagnostic_models, runtime
@@ -34052,6 +34111,7 @@ TESTS = [
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,
     test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile,
+    test_expiration_candidate_uses_scheduled_recurrence_basis,
     test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
     test_diagnostic_event_renders_to_stderr_and_has_stable_record,
     test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,

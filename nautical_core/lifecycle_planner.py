@@ -247,6 +247,37 @@ def plan_candidate_successor(
     return planner.plan(snapshot, event, preflight=preflight, carry_validator=carry_validator)
 
 
+def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> RecurrenceCandidate:
+    """Calculate an expiration successor from the prior recurrence target."""
+    parent = snapshot.to_dict()
+    target_field = "due" if parent.get("due") else "scheduled"
+    target = parent.get(target_field)
+    if not str(target or "").strip():
+        raise LifecyclePlanningError("expired recurrence has no due or scheduled timestamp")
+    calculation_parent = dict(parent)
+    calculation_parent["end"] = target
+    kind = (
+        "cp"
+        if str(parent.get("cp") or "").strip()
+        else "anchor_file"
+        if str(parent.get("anchor_file") or "").strip()
+        else "anchor"
+    )
+    if kind in {"anchor", "anchor_file"}:
+        child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_parent)
+    else:
+        child_due, metadata = generation.compute_cp_child_due(calculation_parent)
+        dnf = None
+    result_metadata = dict(metadata or {})
+    result_metadata["basis"] = f"{target_field} recurrence target (expired)"
+    result_metadata["target_field"] = target_field
+    return RecurrenceCandidate(
+        child_due=child_due,
+        metadata=tuple(sorted(result_metadata.items())),
+        dnf=dnf,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ChainGenerationLimitPolicy:
     """Default numeric and datetime limit policy for generation candidates."""
@@ -525,5 +556,6 @@ __all__ = (
     "SuccessorLimitPolicy",
     "PrecomputedRecurrencePlanningService",
     "plan_candidate_successor",
+    "expiration_candidate",
     "terminal_plan_for_snapshot",
 )

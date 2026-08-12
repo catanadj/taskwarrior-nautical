@@ -1218,6 +1218,16 @@ def test_lifecycle_planner_is_pure_and_deterministic():
     )
     checked = planner.plan(snapshot, LifecycleEvent.COMPLETE, preflight=preflight)
     expect(checked == first, "validated preflight changed the candidate plan")
+    rejected = False
+    try:
+        planner.plan(
+            snapshot,
+            LifecycleEvent.COMPLETE,
+            carry_validator=lambda _snapshot, _child, _candidate: "scheduled carry is missing",
+        )
+    except LifecyclePlanningError as exc:
+        rejected = "scheduled carry" in str(exc)
+    expect(rejected, "planner did not reject an invalid carry result")
     try:
         planner.plan(
             snapshot,

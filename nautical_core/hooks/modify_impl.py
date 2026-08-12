@@ -5147,6 +5147,12 @@ def _completion_compute_next_and_limits(
                 if preflight is not None
                 else None
             ),
+            carry_validator=lambda snapshot, candidate_child, _candidate: _module("reconcile").invalid_relative_carry_reason(
+                snapshot.to_dict(),
+                dict(candidate_child),
+                child_field=str(computed.meta.get("target_field") or "due"),
+                generation=generation,
+            ),
         )
         if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
             _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)

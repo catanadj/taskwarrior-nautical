@@ -114,6 +114,15 @@ class SuccessorLimitPolicy(Protocol):
     ) -> str | None: ...
 
 
+class CarryValidator(Protocol):
+    def __call__(
+        self,
+        snapshot: TaskSnapshot,
+        child: Mapping[str, Any],
+        candidate: RecurrenceCandidate,
+    ) -> str | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ChainGenerationPlanningService:
     """Adapt ``ChainGenerationService`` to the planner's narrow protocol."""
@@ -218,6 +227,7 @@ def plan_candidate_successor(
     validated_configuration: Any,
     compare_datetimes: Callable[[Any, Any], int],
     preflight: LifecyclePreflight | None = None,
+    carry_validator: CarryValidator | None = None,
 ) -> LifecyclePlan:
     """Build one candidate-backed plan for hooks, expiration, and reconcile.
 
@@ -234,7 +244,7 @@ def plan_candidate_successor(
         recurrence_service=recurrence,
         successor_limit_policy=ChainGenerationLimitPolicy(compare_datetimes),
     )
-    return planner.plan(snapshot, event, preflight=preflight)
+    return planner.plan(snapshot, event, preflight=preflight, carry_validator=carry_validator)
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +383,7 @@ class LifecyclePlanner:
         event: LifecycleEvent,
         *,
         preflight: LifecyclePreflight | None = None,
+        carry_validator: CarryValidator | None = None,
     ) -> LifecyclePlan:
         try:
             event = LifecycleEvent(event)
@@ -426,6 +437,7 @@ class LifecyclePlanner:
             raise LifecyclePlanningError(f"event {event.value!r} has no planning policy")
 
         child = None
+        candidate: RecurrenceCandidate | None = None
         if self.recurrence_service is not None:
             kind = (
                 "cp"
@@ -475,6 +487,19 @@ class LifecyclePlanner:
             return terminal_plan_for_snapshot(snapshot, event)
         if not isinstance(child, Mapping) or child.get("link") in (None, ""):
             raise LifecyclePlanningError("child builder returned an incomplete successor")
+        if carry_validator is not None:
+            try:
+                carry_error = carry_validator(
+                    snapshot,
+                    child,
+                    candidate or RecurrenceCandidate(child_due=None),
+                )
+            except Exception as exc:
+                raise LifecyclePlanningError(
+                    f"carry validation failed: {type(exc).__name__}: {exc}"
+                ) from exc
+            if carry_error:
+                raise LifecyclePlanningError(str(carry_error))
         child_uuid = str(child.get("uuid") or "").strip()
         parent_patch = {"nextLink": child_uuid[:8]} if child_uuid else {}
         return LifecyclePlan.from_mappings(
@@ -489,6 +514,7 @@ class LifecyclePlanner:
 
 __all__ = (
     "ChildPlanBuilder",
+    "CarryValidator",
     "ChainGenerationLimitPolicy",
     "ChainGenerationPlanningService",
     "LifecyclePlanner",

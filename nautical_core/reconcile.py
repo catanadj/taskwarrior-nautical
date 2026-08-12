@@ -606,6 +606,12 @@ def _build_reconcile_plan_unscoped(
                 kind=kind,
                 chain_id=parent.get("chainID"),
             ),
+            carry_validator=lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
+                snapshot.to_dict(),
+                dict(candidate_child),
+                child_field=child_field,
+                generation=generation,
+            ),
         )
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return ReconcilePlan(
@@ -642,15 +648,6 @@ def _build_reconcile_plan_unscoped(
                 return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
             return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
-    carry_reason = invalid_relative_carry_reason(
-        parent,
-        child,
-        child_field=child_field,
-        hook=hook,
-        generation=generation,
-    )
-    if carry_reason:
-        return ReconcilePlan("error", parent, next_link, carry_reason, child_due=child_due)
     if lifecycle_plan is None:
         try:
             guard = ParentGuard(

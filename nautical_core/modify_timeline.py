@@ -134,15 +134,19 @@ def _timeline_future_cp_items(
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
     cp_str = str(task.get("cp") or "")
     if evaluator is None:
-        from .recurrence_evaluator import RecurrenceEvaluator
+        from .scheduler_service import SchedulerService
+        from .recurrence_context import RecurrenceContext
 
-        evaluator = RecurrenceEvaluator.from_task(
+        evaluator = SchedulerService.from_task(
             task,
-            fallback_chain_id=task.get("uuid") or "preview",
-            timezone=getattr(core, "_LOCAL_TZ", None),
-            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        )
+            context=RecurrenceContext.from_task(
+                task,
+                fallback_chain_id=task.get("uuid") or "preview",
+                timezone=getattr(core, "_LOCAL_TZ", None),
+                astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            ),
+        ).session.evaluator
     tokens = evaluator.cp_tokens
     if not tokens:
         return []

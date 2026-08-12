@@ -3667,9 +3667,10 @@ def _timeline_lines(
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None
+    evaluator = _recurrence_evaluator_for_task(task) if kind in {"anchor", "cp"} else None
     timeline_scheduler = _next_occurrence_after_local_dt
-    if kind == "anchor":
-        timeline_scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
+    if evaluator is not None and kind == "anchor":
+        timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
     return modify_timeline.timeline_lines(
         kind,
         task,
@@ -3700,6 +3701,7 @@ def _timeline_lines(
             if anchor_omit is not None else None
         ),
         omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
+        evaluator=evaluator,
     )
 
 def _got_anchor_invalid(msg: str) -> None:

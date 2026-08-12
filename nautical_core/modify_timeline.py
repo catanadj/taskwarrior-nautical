@@ -130,17 +130,19 @@ def _timeline_future_cp_items(
     core: Any,
     tolocal: Callable[[datetime], datetime],
     max_iterations: int,
+    evaluator: Any | None = None,
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
     cp_str = str(task.get("cp") or "")
-    from .recurrence_evaluator import RecurrenceEvaluator
+    if evaluator is None:
+        from .recurrence_evaluator import RecurrenceEvaluator
 
-    evaluator = RecurrenceEvaluator.from_task(
-        task,
-        fallback_chain_id=task.get("uuid") or "preview",
-        timezone=getattr(core, "_LOCAL_TZ", None),
-        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-    )
+        evaluator = RecurrenceEvaluator.from_task(
+            task,
+            fallback_chain_id=task.get("uuid") or "preview",
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
     tokens = evaluator.cp_tokens
     if not tokens:
         return []
@@ -506,6 +508,7 @@ def timeline_lines(
     omit_dnf=None,
     omit_expr_fires_on_date: Callable[..., bool] | None = None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None = None,
+    evaluator: Any | None = None,
 ) -> list[str]:
     cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
@@ -553,6 +556,7 @@ def timeline_lines(
                     core=core,
                     tolocal=tolocal,
                     max_iterations=max_iterations,
+                    evaluator=evaluator,
                 )
             )
         else:

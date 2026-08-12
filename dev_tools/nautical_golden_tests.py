@@ -15746,6 +15746,14 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp sequence timeline.")
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
+    evaluator_calls = {"count": 0}
+    original_evaluator = mod._recurrence_evaluator_for_task
+
+    def _shared_evaluator(task):
+        evaluator_calls["count"] += 1
+        return original_evaluator(task)
+
+    mod._recurrence_evaluator_for_task = _shared_evaluator
     child_due_utc = datetime(2026, 1, 4, 9, 0, tzinfo=timezone.utc)
     task = {
         "uuid": "00000000-0000-0000-0000-000000000224",
@@ -15769,6 +15777,10 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     txt = _strip_markup("\n".join(lines))
     for token in ("(20d)", "(7d)", "(3d)"):
         expect(token in txt, f"cp sequence timeline missing {token}: {txt}")
+    expect(
+        evaluator_calls["count"] == 1,
+        f"CP timeline rebuilt the task evaluator instead of reusing one session: {evaluator_calls}",
+    )
 
 
 def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():

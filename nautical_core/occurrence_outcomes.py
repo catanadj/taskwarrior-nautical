@@ -21,17 +21,42 @@ class FoundOccurrence:
 
     status: Literal["found"] = "found"
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "source": self.source,
+            "local": self.local_datetime.isoformat(),
+            "utc": self.utc_datetime.isoformat(),
+            "projection": self.projection,
+            "selected_term": self.selected_term,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class AbsentOccurrence:
     reason: str = "no matching occurrence"
     status: Literal["absent"] = "absent"
 
+    def to_dict(self) -> dict[str, str]:
+        return {"status": self.status, "reason": self.reason}
+
 
 @dataclass(frozen=True, slots=True)
 class ExhaustedOccurrence:
     error: OccurrenceSearchExhausted
     status: Literal["exhausted"] = "exhausted"
+
+    @property
+    def terminal_evidence(self) -> dict[str, Any]:
+        return {
+            "scope": self.error.scope,
+            "kind": self.error.kind,
+            "reference": self.error.reference,
+            "limit": self.error.limit,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"status": self.status, "error": str(self.error), **self.terminal_evidence}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,12 +65,18 @@ class UnavailableOccurrence:
     error_type: str = ""
     status: Literal["unavailable"] = "unavailable"
 
+    def to_dict(self) -> dict[str, str]:
+        return {"status": self.status, "reason": self.reason, "error_type": self.error_type}
+
 
 @dataclass(frozen=True, slots=True)
 class InvalidOccurrence:
     reason: str
     error_type: str = ""
     status: Literal["invalid"] = "invalid"
+
+    def to_dict(self) -> dict[str, str]:
+        return {"status": self.status, "reason": self.reason, "error_type": self.error_type}
 
 
 OccurrenceOutcome = (

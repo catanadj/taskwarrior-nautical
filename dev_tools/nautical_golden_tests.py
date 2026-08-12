@@ -23696,6 +23696,21 @@ def test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states():
     expect(isinstance(evaluator.next_outcome("bad-cursor"), InvalidOccurrence), "bad cursor was not invalid")
 
 
+def test_typed_occurrence_outcomes_preserve_terminal_evidence():
+    """Exhaustion remains distinct from ordinary absence and keeps bounds."""
+    from nautical_core.occurrence_outcomes import AbsentOccurrence, ExhaustedOccurrence
+    from nautical_core.scheduler_models import OccurrenceSearchExhausted
+
+    error = OccurrenceSearchExhausted(
+        "yearly atom scheduling", reference="9999-01-01", limit=12,
+        kind=OccurrenceSearchExhausted.DATE_LIMIT,
+    )
+    exhausted = ExhaustedOccurrence(error)
+    expect(exhausted.terminal_evidence["kind"] == "date_limit", "date-limit exhaustion lost its kind")
+    expect(exhausted.to_dict()["limit"] == 12, "exhaustion limit was not retained")
+    expect(AbsentOccurrence().status == "absent", "ordinary absence was conflated with exhaustion")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35221,6 +35236,7 @@ TESTS.extend([
     test_occurrence_cursor_makes_lookup_semantics_explicit,
     test_occurrence_cursor_keeps_adjacent_weekday_occurrences,
     test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states,
+    test_typed_occurrence_outcomes_preserve_terminal_evidence,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

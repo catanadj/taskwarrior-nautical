@@ -91,8 +91,8 @@
     },
     "task_call_budgets": {
       "workflow_queue_drain": {
-        "run_task_calls": 27,
-        "run_task_calls_export_uuid": 18,
+        "run_task_calls": 11,
+        "run_task_calls_export_uuid": 2,
         "run_task_calls_import": 1,
         "run_task_calls_modify_parent_nextlink": 8
       }

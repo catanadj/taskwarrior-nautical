@@ -148,10 +148,16 @@ def _format_local_until(hook: Any, value: Any) -> str:
 
 
 def _safe_parse_datetime(hook: Any, value: Any):
+    # Heavy hook implementations keep this boundary private because they are
+    # loaded as executable modules.  Prefer the public adapter when present,
+    # then use the hook's typed private parser; never silently treat a missing
+    # parser as a valid/absent timestamp.
     parser = getattr(hook, "safe_parse_datetime", None)
     if not callable(parser):
-        return None, "datetime parser unavailable"
-    return parser(value)
+        parser = getattr(hook, "_safe_parse_datetime", None)
+    if callable(parser):
+        return parser(value)
+    return None, "datetime parser unavailable"
 
 
 def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any]) -> str:

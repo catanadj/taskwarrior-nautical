@@ -23580,6 +23580,7 @@ def test_compiled_schedule_is_canonical_and_reusable():
     cached_first = cache.get_or_compile(first.spec)
     expect(cached_first is cache.get_or_compile(second.spec), "compiled schedules were not reused")
     expect(first.to_dict()["compiler_schema"] == 1, "compiled schedule schema was not versioned")
+    expect(first.cache_key.startswith("compiled-schedule:1:cs1-"), "compiled cache key was not namespaced")
     diagnostic = first.to_diagnostic_json()
     expect(json.loads(diagnostic) == first.to_dict(), "compiled diagnostic JSON did not round-trip")
     normalized = CompiledSchedule.from_task({

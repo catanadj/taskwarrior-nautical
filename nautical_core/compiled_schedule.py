@@ -281,6 +281,11 @@ class CompiledSchedule:
             self.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
 
+    @property
+    def cache_key(self) -> str:
+        """Namespaced key for derived state; schema changes naturally miss."""
+        return f"compiled-schedule:{self.compiler_schema}:{self.fingerprint}"
+
 
 __all__ = (
     "COMPILER_SCHEMA_VERSION",

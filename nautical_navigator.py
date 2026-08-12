@@ -452,7 +452,12 @@ def _self_check() -> int:
 
     return 0 if ok else 1
 
-def _anchor_preview_details(expr: str, count: int = 5) -> tuple[str, list[str], str | None]:
+def _anchor_preview_details(
+    expr: str,
+    count: int = 5,
+    *,
+    trace: Any = None,
+) -> tuple[str, list[str], str | None]:
     natural = ""
     next_dates: list[str] = []
     terminal_note: str | None = None
@@ -487,7 +492,11 @@ def _anchor_preview_details(expr: str, count: int = 5) -> tuple[str, list[str], 
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
-        service = SchedulerService.from_task({"anchor": expr, "chainID": "preview"}, context=context)
+        service = SchedulerService.from_task(
+            {"anchor": expr, "chainID": "preview"},
+            context=context,
+            trace=trace,
+        )
         try:
             result = service.collect(
                 OccurrenceCursor(
@@ -533,7 +542,69 @@ def _next_after_expr_pair(dnf, after_date, **kwargs):
         return result[0], result[1]
     raise TypeError("next_after_expr returned a non-sequence result")
 
-def _anchor_explain(expr: str) -> int:
+class _NavigatorTrace:
+    """Keep an explicit explain trace available for the concise UI summary."""
+
+    def __init__(self):
+        from nautical_core.scheduler_trace import SchedulerTrace
+
+        self._trace = SchedulerTrace(enabled=True)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._trace, name)
+
+    def emit(self, **_kwargs: Any) -> None:
+        # The explain command renders a summary itself; do not duplicate it on
+        # stderr or require NAUTICAL_DIAG for this explicitly requested output.
+        return None
+
+    def clear(self) -> None:
+        # SchedulerService clears after each operation. Keep the captured
+        # events so the explain panel can summarize them after collection.
+        return None
+
+
+def _trace_summary(trace: Any) -> str:
+    events = list(trace.events)
+    if not events:
+        return "No scheduler decisions captured"
+    counts: dict[str, int] = {}
+    providers: set[str] = set()
+    selected: list[str] = []
+    rejected: dict[str, int] = {}
+    terminal = ""
+    for event in events:
+        data = event.to_dict()
+        phase = str(data.get("phase") or "event")
+        counts[phase] = counts.get(phase, 0) + 1
+        provider = str(data.get("provider") or "")
+        if provider:
+            providers.add(provider)
+        if phase == "selected" and data.get("candidate") is not None:
+            selected.append(str(data["candidate"]))
+        if phase == "rejected":
+            reason = str(data.get("reason") or "constraint")
+            rejected[reason] = rejected.get(reason, 0) + 1
+        if phase == "terminal":
+            terminal = str(data.get("reason") or "terminal")
+    parts = [f"{len(events)} events"]
+    if providers:
+        parts.append(f"providers={','.join(sorted(providers))}")
+    if counts:
+        parts.append("phases=" + ",".join(f"{key}:{counts[key]}" for key in sorted(counts)))
+    if rejected:
+        parts.append("rejected=" + ",".join(f"{key}:{rejected[key]}" for key in sorted(rejected)))
+    if selected:
+        parts.append(f"selected={selected[-1]}")
+    if terminal:
+        parts.append(f"terminal={terminal}")
+    dropped = int(getattr(trace, "dropped", 0) or 0)
+    if dropped:
+        parts.append(f"dropped={dropped}")
+    return " · ".join(parts)
+
+
+def _anchor_explain(expr: str, *, trace_enabled: bool = False) -> int:
     try:
         core.validate_anchor_expr_strict(expr)
     except Exception as e:
@@ -541,7 +612,8 @@ def _anchor_explain(expr: str) -> int:
         return 1
 
     try:
-        natural, next_dates, terminal_note = _anchor_preview_details(expr, count=5)
+        trace = _NavigatorTrace() if trace_enabled else None
+        natural, next_dates, terminal_note = _anchor_preview_details(expr, count=5, trace=trace)
     except Exception as exc:
         console.print(f"[{COLORS['error']}]Unable to project anchor:[/] {_format_runtime_error(exc)}")
         return 1
@@ -553,6 +625,8 @@ def _anchor_explain(expr: str) -> int:
         table.add_row("Next", nxt)
     if terminal_note:
         table.add_row("Chain", terminal_note)
+    if trace is not None:
+        table.add_row("Trace", _trace_summary(trace))
     console.print(Panel(table, title="Anchor explain", border_style=COLORS["secondary"], expand=False))
     return 0
 
@@ -3081,6 +3155,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--explain", metavar="ANCHOR", help="Explain an anchor expression")
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Include a concise scheduler decision trace with --explain",
+    )
     parser.add_argument("--validate", metavar="ANCHOR", help="Validate an anchor expression")
     parser.add_argument("--self-check", action="store_true", help="Run self-check diagnostics")
     parser.add_argument("--id", type=int, help="Analyze a chain starting from a specific task ID")
@@ -3134,7 +3213,7 @@ def main():
         if args.validate:
             code = max(code, _validate_anchor(args.validate))
         if args.explain:
-            code = max(code, _anchor_explain(args.explain))
+            code = max(code, _anchor_explain(args.explain, trace_enabled=args.trace))
         if args.recover_dead_letter:
             code = max(
                 code,

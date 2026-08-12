@@ -9,6 +9,13 @@ from .timeutil import compare_datetimes
 from .scheduler_models import OccurrenceSearchExhausted
 
 
+def _scheduler_engine(core: Any) -> Any:
+    engine = getattr(core, "_scheduler_api", None)
+    if engine is None:
+        raise RuntimeError("Anchor inclusion scheduler engine is unavailable")
+    return engine
+
+
 def _norm_t_mod(v):
     if v is None:
         return []
@@ -278,7 +285,7 @@ def next_occurrence_event_local(
 ) -> Occurrence | None:
     scheduler_omit = omit_dnf if scheduler_omit_dnf is ... else scheduler_omit_dnf
     expr_local = None
-    expr_omit_dnf = omit_dnf if dnf and core.dnf_has_counted_random(dnf) else None
+    expr_omit_dnf = omit_dnf if dnf and _scheduler_engine(core).dnf_has_counted_random(dnf) else None
     if dnf:
         if inclusive and pick_occurrence_local is not None:
             expr_local = pick_occurrence_local(

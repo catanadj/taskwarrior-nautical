@@ -88,6 +88,15 @@ OccurrenceOutcome = (
 )
 
 
+def mutation_candidate(outcome: OccurrenceOutcome) -> FoundOccurrence:
+    """Return a found occurrence or fail closed for mutation callers."""
+    if isinstance(outcome, FoundOccurrence):
+        return outcome
+    raise RuntimeError(
+        f"recurrence mutation requires a found occurrence; received {outcome.status}"
+    )
+
+
 def outcome_from_occurrence(occurrence: Occurrence | None) -> FoundOccurrence | AbsentOccurrence:
     if occurrence is None:
         return AbsentOccurrence()
@@ -111,4 +120,5 @@ __all__ = (
     "OccurrenceOutcome",
     "UnavailableOccurrence",
     "outcome_from_occurrence",
+    "mutation_candidate",
 )

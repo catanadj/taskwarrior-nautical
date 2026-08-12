@@ -23711,6 +23711,18 @@ def test_typed_occurrence_outcomes_preserve_terminal_evidence():
     expect(AbsentOccurrence().status == "absent", "ordinary absence was conflated with exhaustion")
 
 
+def test_typed_occurrence_outcomes_fail_closed_for_mutation():
+    """Mutation helpers must not accept unavailable or invalid outcomes."""
+    from nautical_core.occurrence_outcomes import AbsentOccurrence, mutation_candidate
+
+    try:
+        mutation_candidate(AbsentOccurrence())
+    except RuntimeError as exc:
+        expect("requires a found occurrence" in str(exc), "mutation rejection was unclear")
+    else:
+        raise AssertionError("mutation helper accepted an absent occurrence")
+
+
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
@@ -35237,6 +35249,7 @@ TESTS.extend([
     test_occurrence_cursor_keeps_adjacent_weekday_occurrences,
     test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states,
     test_typed_occurrence_outcomes_preserve_terminal_evidence,
+    test_typed_occurrence_outcomes_fail_closed_for_mutation,
     test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,

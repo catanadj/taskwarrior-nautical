@@ -619,12 +619,6 @@ _MODULE_SPECS = {
         "modify_queries.py",
         "nautical_core.modify_queries",
     ),
-    "modify_chain_reads": (
-        "_MODIFY_CHAIN_READS",
-        "_MODIFY_CHAIN_READS_LOAD_FAILED",
-        "modify_chain_reads.py",
-        "nautical_core.modify_chain_reads",
-    ),
     "lifecycle_read_service": (
         "_LIFECYCLE_READ_SERVICE",
         "_LIFECYCLE_READ_SERVICE_LOAD_FAILED",

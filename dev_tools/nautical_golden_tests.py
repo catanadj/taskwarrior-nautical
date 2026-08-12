@@ -124,6 +124,23 @@ def expect(cond, msg):
     if not cond:
         raise AssertionError(msg)
 
+
+def _new_lifecycle_read_service():
+    """Build the focused read service for direct service-level tests."""
+    read_service = core._import_sibling("lifecycle_read_service")
+    missing = object()
+    return read_service.LifecycleReadService(
+        coerce_int=core.coerce_int,
+        parse_extra_tokens=lambda _extra: [],
+        token_matcher=lambda _row, _token: True,
+        read_query_get=lambda _kind, _key: missing,
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=500,
+        read_query_missing=missing,
+    )
+
+
 def has_function(name):
     return hasattr(core, name)
 
@@ -3744,7 +3761,6 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
     """Lowercase chainid should no longer participate in chain identity helpers."""
     import uuid
     import nautical_core.exit_queries as exit_queries
-    import nautical_core.modify_chain_reads as modify_chain_reads
     import nautical_core.modify_spawn_prep as modify_spawn_prep
 
     parent = {"chainid": "legacy-1", "uuid": "parent-uuid"}
@@ -3774,7 +3790,7 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
     else:
         raise AssertionError("UUID-only parent should not provide a chain identity")
     expect(
-        modify_chain_reads.existing_next_lookup({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ).is_absent,
+        _new_lifecycle_read_service().existing_next_lookup({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ).is_absent,
         "legacy chainid should not drive existing next task lookup",
     )
     expect(
@@ -19531,11 +19547,10 @@ def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
 
 def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
     """an intentionally empty snapshot should not fall back to a full chain export."""
-    reads = core._import_sibling("modify_chain_reads")
+    reads = _new_lifecycle_read_service()
     calls = []
     rows = reads.collect_prev_two(
         {"chainID": "cid", "link": 5},
-        coerce_int=core.coerce_int,
         get_chain_export=lambda *_a, **_k: calls.append(True) or [],
         panel_chain_by_link={},
         panel_chain_snapshot_loaded=True,
@@ -31341,7 +31356,7 @@ def test_hook_lookup_result_distinguishes_absent_and_unavailable():
 
 def test_existing_next_lookup_fails_closed_on_chain_export_failure():
     """A failed chain read must not become a spawn-allowed empty result."""
-    reads = core._import_sibling("modify_chain_reads")
+    reads = _new_lifecycle_read_service()
     result = reads.existing_next_lookup(
         {"chainID": "abcd1234", "link": 1},
         2,

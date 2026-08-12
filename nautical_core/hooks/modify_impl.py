@@ -2421,59 +2421,6 @@ def _task(args, env=None) -> str:
         _query_ctx_set("task_text", cache_key, out or "")
     return out
 
-def _export_uuid_full(u: str, env=None) -> dict | None:
-    """Export a single task by full UUID."""
-    if env is None:
-        res = _export_uuid_full_cached(u)
-        return dict(res) if isinstance(res, dict) else None
-    return _export_uuid_full_uncached(u, env=env)
-
-
-@lru_cache(maxsize=256)
-def _export_uuid_full_cached(u: str) -> dict | None:
-    return _export_uuid_full_uncached(u, env=None)
-
-
-def _export_uuid_full_uncached(u: str, env=None) -> dict | None:
-    cache_chain_id = ""
-    if env is None and u:
-        state = _modify_chain_state()
-        with state.chain_cache_lock:
-            cached = state.chain_by_uuid.get(u)
-            cache_chain_id = state.chain_cache_chain_id
-        if isinstance(cached, dict):
-            _diag_count("export_full_cache_hits")
-            return dict(cached)
-    if env is None:
-        if cache_chain_id:
-            _diag_count("unexpected_cache_misses")
-            _diag(f"cache miss: full uuid {u} (chainID={cache_chain_id})")
-        else:
-            _diag_count("export_full_cache_misses")
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        obj = hook_support.export_uuid_full(
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            uuid_str=u,
-            env=env,
-            timeout=3.0,
-            retries=2,
-            diag=_diag,
-        )
-        if env is None and isinstance(obj, dict):
-            return _seed_runtime_lookup_task(obj)
-        return obj
-    try:
-        out = _task(["rc.json.array=1", f"export uuid:{u}"], env=env)  # uses existing _task()
-        arr = json.loads(out) if out and out.strip().startswith("[") else []
-        obj = arr[0] if arr else None
-        if env is None and isinstance(obj, dict):
-            return _seed_runtime_lookup_task(obj)
-        return obj
-    except Exception:
-        return None
-
 def tw_export_chain_required(seed_task, env=None):
     """Return full chain export for a task.
 

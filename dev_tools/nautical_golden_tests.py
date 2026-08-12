@@ -7743,7 +7743,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     mod._task = lambda *_args, **_kwargs: "[]"
 
     errs = []
-    hits = {"short": 0, "full": 0}
+    hits = {"short": 0}
 
     def _writer(chain_id: str):
         try:
@@ -7762,10 +7762,6 @@ def test_on_modify_chain_cache_thread_safety_smoke():
                 if s is not None:
                     expect(isinstance(s, dict), f"short cache read should return dict, got {type(s)}")
                     hits["short"] += 1
-                f = mod._export_uuid_full(full_uuid)
-                if f is not None:
-                    expect(isinstance(f, dict), f"full cache read should return dict, got {type(f)}")
-                    hits["full"] += 1
         except Exception as e:
             errs.append(f"reader:{e}")
 
@@ -7781,7 +7777,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
         t.join()
 
     expect(not errs, f"concurrent chain cache access raised errors: {errs}")
-    expect(hits["short"] > 0 and hits["full"] > 0, f"expected cache hits, got {hits}")
+    expect(hits["short"] > 0, f"expected cache hits, got {hits}")
 
 def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     """Filtered chain reads should use the in-memory chain cache before falling back to Taskwarrior export."""
@@ -31142,27 +31138,6 @@ def test_completion_preflight_stops_on_unavailable_next_lookup():
     expect(printed, "stopped completion should print the unchanged task")
 
 
-def test_on_modify_export_uuid_full_cached():
-    """Full UUID export should be cached within a hook run."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_export_full_cache_test")
-    calls = {"count": 0}
-    uuid_full = "00000000-0000-0000-0000-000000000abc"
-
-    def _run_task_stub(cmd, **_kwargs):
-        cmd_s = " ".join(cmd)
-        if "export" in cmd_s and f"uuid:{uuid_full}" in cmd_s:
-            calls["count"] += 1
-            return True, json.dumps([{"uuid": uuid_full}]), ""
-        return False, "", "unexpected"
-
-    mod._run_task = _run_task_stub
-    a = mod._export_uuid_full(uuid_full, env=None)
-    b = mod._export_uuid_full(uuid_full, env=None)
-    expect(a and b, "expected export results")
-    expect(calls["count"] == 1, f"expected 1 export call, got {calls['count']}")
-
-
 def test_on_modify_missing_taskdata_uses_tw_dir():
     """on-modify uses TW_DIR when TASKDATA is missing."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33905,7 +33880,6 @@ TESTS = [
     test_hook_lookup_result_distinguishes_absent_and_unavailable,
     test_existing_next_lookup_fails_closed_on_chain_export_failure,
     test_completion_preflight_stops_on_unavailable_next_lookup,
-    test_on_modify_export_uuid_full_cached,
     test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_missing_taskdata_uses_tw_dir,

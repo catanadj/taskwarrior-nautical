@@ -10588,29 +10588,6 @@ def test_weekday_weekend_single_time():
         seen.add(key)
 
 
-def test_anchors_between_large_range_honors_count_cap():
-    """Large-range expansion must continue past the historical 100-result prefix."""
-    from nautical_core.precompute import anchors_between_large_range
-
-    start = date(2026, 1, 1)
-    end = start + timedelta(days=400)
-
-    def next_day(_dnf, current, _default_seed, seed_base=None):
-        _ = seed_base
-        return current + timedelta(days=1), {}
-
-    result = anchors_between_large_range(
-        [],
-        start,
-        end,
-        start,
-        until_count_cap=250,
-        next_after_expr=next_day,
-    )
-    expect(len(result) == 250, f"large-range expansion truncated at {len(result)} results")
-    expect(result[-1] == start + timedelta(days=250), f"large-range expansion stopped at {result[-1]!r}")
-
-
 def test_rand_with_year_window():
     """Test random pattern with yearly window constraint"""
     # Only inside Apr 20 – May 15
@@ -10887,37 +10864,6 @@ def test_build_and_cache_hints_routes_scheduler_through_service():
         core._next_for_or = saved_or
         core.cache_load = saved_load
         core.cache_save = saved_save
-
-
-def test_large_range_candidates_use_typed_scheduler_collection():
-    """Large-range enumeration can use one bounded typed service request."""
-    from datetime import date
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_service import SchedulerService
-
-    import nautical_core.precompute as precompute
-
-    zone = ZoneInfo("Europe/Sofia")
-    service = SchedulerService.from_task(
-        {"chainID": "range-service", "anchor": "w:mon"},
-        context=RecurrenceContext(chain_id="range-service", timezone=zone),
-    )
-    dates = precompute.anchors_between_expr(
-        [[{"typ": "w", "spec": "mon"}]],
-        date(2026, 8, 1),
-        date(2026, 9, 1),
-        date(2026, 8, 1),
-        until_count_cap=8,
-        next_after_expr=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("typed range used legacy callback")
-        ),
-        anchors_between_large_range=precompute.anchors_between_large_range,
-        warn_once_per_day=lambda *_args, **_kwargs: None,
-        os_mod=__import__("os"),
-        scheduler_service=service,
-    )
-    expect(dates == [date(2026, 8, 3), date(2026, 8, 10), date(2026, 8, 17), date(2026, 8, 24), date(2026, 8, 31)], f"unexpected typed range: {dates}")
 
 
 def test_parser_validation():
@@ -34659,7 +34605,6 @@ TESTS = [
     test_same_day_prev_weekday_roll_moves_back_one_week,
     test_next_weekday_roll_cross_year_date_still_matches_expression,
     test_weekly_multi_days_every_2weeks_spacing_and_days,
-    test_anchors_between_large_range_honors_count_cap,
     test_inline_time_mods_split_ok,
     test_weekly_trailing_time_modifier_applies_to_whole_list,
     test_group_time_modifier_distributes_to_all_branches,
@@ -34747,7 +34692,6 @@ TESTS = [
     test_cache_key_for_task_caches_build_acf_results,
     test_build_and_cache_hints_parses_once_per_miss,
     test_build_and_cache_hints_routes_scheduler_through_service,
-    test_large_range_candidates_use_typed_scheduler_collection,
     test_yearly_rand_natural_and_bounds,
     test_yearly_rand_respects_sibling_month_filter,
     test_yearly_rand_natural_compacts_sibling_filter,

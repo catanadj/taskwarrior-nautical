@@ -12,6 +12,7 @@ from datetime import datetime
 from collections.abc import Callable, Sequence
 from functools import lru_cache
 import threading
+import time
 from typing import Any
 
 from .hook_support import LookupResult
@@ -192,6 +193,38 @@ class LifecycleReadService:
             args.extend(tokens)
         args.append("export")
         return args
+
+    def run_checked_export(
+        self,
+        chain_id: str,
+        args: list[str],
+        *,
+        env: Any,
+        timeout: float,
+        run_task_result: Callable[..., Any],
+        parse_result: Callable[[Any], tuple[bool, list[TaskRow], str]],
+        on_failure: Callable[[str, float], None] | None = None,
+        on_success: Callable[[float], None] | None = None,
+    ) -> ChainReadResult:
+        """Run and strictly validate one Taskwarrior chain export."""
+        started = time.perf_counter()
+        result = run_task_result(
+            args,
+            env=env,
+            timeout=timeout,
+            retries=1,
+            use_tempfiles=True,
+        )
+        ok, rows, error = parse_result(result)
+        elapsed = time.perf_counter() - started
+        if not ok:
+            message = str(error or "Taskwarrior export failed")
+            if callable(on_failure):
+                on_failure(message, timeout)
+            return ChainReadResult.failure(message)
+        if callable(on_success):
+            on_success(elapsed)
+        return ChainReadResult.success(rows)
 
     def cached_chain_rows(self, chain_id: str) -> list[TaskRow] | None:
         """Return the service-owned chain cache, if seeded for this chain."""

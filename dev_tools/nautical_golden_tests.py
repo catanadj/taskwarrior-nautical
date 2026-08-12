@@ -8017,6 +8017,35 @@ def test_lifecycle_read_service_builds_strict_chain_export_args():
     expect(service.build_export_args("cid", since=None, extra="-bad", limit=None) is None, "unsafe filter was accepted")
 
 
+def test_lifecycle_read_service_runs_checked_export_with_typed_failure():
+    """The lifecycle service owns runner timing and strict export outcomes."""
+    import nautical_core.lifecycle_read_service as read_service
+
+    service = read_service.LifecycleReadService(
+        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
+        parse_extra_tokens=lambda _extra: [],
+        token_matcher=lambda _row, _token: True,
+        read_query_get=lambda _kind, _key: object(),
+        chain_cache_get=lambda _chain_id: None,
+        export_chain_cached=lambda *_args: (),
+        max_chain_walk=10,
+    )
+    failures = []
+    success = []
+    result = service.run_checked_export(
+        "cid",
+        ["task", "chainID:cid", "export"],
+        env=None,
+        timeout=1.0,
+        run_task_result=lambda *_args, **_kwargs: object(),
+        parse_result=lambda _result: (False, [], "malformed export"),
+        on_failure=lambda error, timeout: failures.append((error, timeout)),
+        on_success=lambda elapsed: success.append(elapsed),
+    )
+    expect(not result.ok and result.error == "malformed export", f"unexpected typed failure: {result}")
+    expect(failures and not success, f"runner callbacks were not classified correctly: {failures}, {success}")
+
+
 def test_chain_integrity_warnings_detects_issues():
     """Chain integrity checker should flag gaps and link inconsistencies."""
     hook = _find_hook_file("on-modify.nautical")
@@ -33705,6 +33734,7 @@ TESTS = [
     test_lifecycle_read_service_completion_snapshot_promotes_full_reads,
     test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed,
     test_lifecycle_read_service_builds_strict_chain_export_args,
+    test_lifecycle_read_service_runs_checked_export_with_typed_failure,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,

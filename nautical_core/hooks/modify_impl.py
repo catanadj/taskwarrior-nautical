@@ -4027,46 +4027,39 @@ def _tw_export_chain_parse(out: str) -> list[dict]:
 def _run_checked_chain_export(args: list[str], env, timeout: float):
     """Run and validate one Taskwarrior chain export for the read service."""
     lifecycle_read_service = _module("lifecycle_read_service")
-    start = _time.perf_counter()
     hook_support = _module("hook_support", required=False)
     if hook_support is not None:
-        result = hook_support.run_task_result(
-            run_task=_run_task_result,
-            cmd=args,
-            env=env,
-            timeout=timeout,
-            retries=1,
-            use_tempfiles=True,
-        )
-        ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
-        elapsed = _time.perf_counter() - start
-        if not ok:
-            _tw_export_chain_failure(_chain_id_from_export_args(args), error, timeout)
-            return lifecycle_read_service.ChainReadResult.failure(error)
+        def run_task_result(command, **kwargs):
+            return hook_support.run_task_result(run_task=_run_task_result, cmd=command, **kwargs)
+
+        def parse_result(result):
+            return hook_support.parse_export_array_result(result, diag=_diag)
     else:
-        result = _run_task_result(
-            args,
-            env=env,
-            timeout=timeout,
-            retries=1,
-            use_tempfiles=True,
-        )
-        elapsed = _time.perf_counter() - start
-        if not result.ok:
-            error = result.stderr or "task export failed"
-            _tw_export_chain_failure(_chain_id_from_export_args(args), error, timeout)
-            return lifecycle_read_service.ChainReadResult.failure(error)
-        try:
-            parsed = json.loads((result.stdout or "").strip())
-            if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
-                raise ValueError("expected an array of task objects")
-            rows = parsed
-        except Exception as exc:
-            error = f"Taskwarrior export returned invalid JSON: {exc}"
-            _tw_export_chain_failure(_chain_id_from_export_args(args), error, timeout)
-            return lifecycle_read_service.ChainReadResult.failure(error)
-    _tw_export_chain_success(elapsed)
-    return lifecycle_read_service.ChainReadResult.success(rows)
+        run_task_result = _run_task_result
+
+        def parse_result(result):
+            if not result.ok:
+                return False, [], result.stderr or "task export failed"
+            try:
+                parsed = json.loads((result.stdout or "").strip())
+                if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
+                    raise ValueError("expected an array of task objects")
+                return True, parsed, ""
+            except Exception as exc:
+                return False, [], f"Taskwarrior export returned invalid JSON: {exc}"
+
+    return _lifecycle_read_service().run_checked_export(
+        _chain_id_from_export_args(args),
+        args,
+        env=env,
+        timeout=timeout,
+        run_task_result=run_task_result,
+        parse_result=parse_result,
+        on_failure=lambda error, export_timeout: _tw_export_chain_failure(
+            _chain_id_from_export_args(args), error, export_timeout
+        ),
+        on_success=_tw_export_chain_success,
+    )
 
 
 def _chain_id_from_export_args(args: list[str]) -> str:

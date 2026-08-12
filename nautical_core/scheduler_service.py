@@ -10,6 +10,7 @@ from .evaluation_session import EvaluationSession
 from .occurrence_outcomes import OccurrenceOutcome
 from .occurrence_provider import Occurrence
 from .recurrence_context import RecurrenceContext
+from .recurrence_spec import RecurrenceSpec
 from .scheduler_cursor import OccurrenceCursor
 
 
@@ -31,6 +32,9 @@ class SchedulerService:
     @property
     def fingerprint(self) -> str:
         return self.session.fingerprint
+
+    def refresh(self, spec: RecurrenceSpec) -> bool:
+        return self.session.refresh(spec)
 
     def next(self, cursor: OccurrenceCursor, **kwargs: Any) -> OccurrenceOutcome:
         return self.session.next_outcome(cursor, **kwargs)

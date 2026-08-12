@@ -2604,6 +2604,10 @@ def _cached_chain_token_match(task: dict, token: str) -> bool:
 
 def _lifecycle_read_service():
     """Build the focused chain-read service for this hook invocation."""
+    state = _modify_chain_state()
+    existing = getattr(state, "lifecycle_read_service", None)
+    if existing is not None:
+        return existing
     lifecycle_read_service = _module("lifecycle_read_service")
 
     def _cached_chain(chain_id: str):
@@ -2613,7 +2617,7 @@ def _lifecycle_read_service():
                 return list(state.chain_cache)
         return None
 
-    return lifecycle_read_service.LifecycleReadService(
+    service = lifecycle_read_service.LifecycleReadService(
         coerce_int=core.coerce_int,
         parse_extra_tokens=_parse_extra_tokens,
         token_matcher=_cached_chain_token_match,
@@ -2626,6 +2630,8 @@ def _lifecycle_read_service():
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,
     )
+    state.lifecycle_read_service = service
+    return service
 
 
 def _filter_cached_chain_rows(chain: list[dict], *, extra: str | None, limit: int | None) -> list[dict] | None:

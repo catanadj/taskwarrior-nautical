@@ -119,6 +119,7 @@ class ModifyRuntimeState:
     chain_by_short: dict[str, dict[str, Any]] = field(default_factory=dict)
     chain_by_uuid: dict[str, dict[str, Any]] = field(default_factory=dict)
     chain_cache_lock: threading.RLock = field(default_factory=threading.RLock)
+    lifecycle_read_service: Any = None
     anchor_file_providers: dict[tuple[str, str, tuple[int, int], str], Any] = field(
         default_factory=dict
     )

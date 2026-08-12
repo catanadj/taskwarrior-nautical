@@ -323,6 +323,7 @@ def _timeline_omitted_before_next_anchor_items(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     next_occurrence_after_local_dt: Callable[..., Any],
+    scheduler_service: Any | None = None,
     omit_dnf,
     omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
@@ -342,6 +343,47 @@ def _timeline_omitted_before_next_anchor_items(
     due0, _ = safe_parse_datetime(task.get("due"))
     sched0, _ = safe_parse_datetime(task.get("scheduled"))
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
+    if scheduler_service is not None:
+        try:
+            from .scheduler_cursor import OccurrenceCursor
+
+            result = scheduler_service.collect(
+                OccurrenceCursor.strict_after(
+                    after_local,
+                    timezone=scheduler_service.session.evaluator.context.timezone,
+                ),
+                limit=max_iterations,
+                count_omitted=True,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed,
+                max_iterations=max_iterations,
+                max_file_skips=max_iterations,
+            )
+            for occurrence in result.occurrences:
+                next_local = occurrence.local_datetime
+                if next_local is None or compare_datetimes(next_local, child_local) >= 0:
+                    break
+                if occurrence.omitted:
+                    items.append(
+                        (
+                            "··",
+                            next_local.astimezone(timezone.utc),
+                            {
+                                "is_omit": True,
+                                "omit_label": _timeline_omit_label(
+                                    omit_dnf,
+                                    next_local.date(),
+                                    omit_description_for_date=omit_description_for_date,
+                                ),
+                            },
+                            "omitted",
+                        )
+                    )
+            if result.terminal is not None and not result.occurrences:
+                items.append(_timeline_warning(f"Projection ended: {occurrence_exhaustion_message(result.terminal)}"))
+            return items
+        except Exception as exc:
+            return [_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}")]
     from .occurrence_provider import AnchorOccurrenceProvider
 
     provider = AnchorOccurrenceProvider(
@@ -566,6 +608,7 @@ def timeline_lines(
             to_local_cached=to_local_cached,
             safe_parse_datetime=safe_parse_datetime,
             next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            scheduler_service=scheduler_service,
             omit_dnf=omit_dnf,
             omit_expr_fires_on_date=omit_expr_fires_on_date,
             omit_description_for_date=omit_description_for_date,

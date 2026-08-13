@@ -24,11 +24,12 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.integration_context import IntegrationAccess, build_operator_context  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
-import nautical_core.runtime as runtime  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
@@ -1320,20 +1321,55 @@ def main() -> int:
     args = parser.parse_args()
 
     env = os.environ.copy()
-    if args.taskdata:
-        taskdata_raw, _, _ = runtime.resolve_task_data_context(
-            argv=[f"data:{args.taskdata}"],
+    findings: list[dict[str, Any]] = []
+    try:
+        integration = build_operator_context(
+            core=nautical_core_package,
+            task_binary=args.task_bin,
+            taskdata=args.taskdata,
             env=env,
-            tw_dir=args.taskdata,
+            access=IntegrationAccess.READ_ONLY,
+        )
+    except Exception as exc:
+        stage = str(getattr(exc, "stage", "context") or "context")
+        if stage != "configuration":
+            message = f"Integration context unavailable: {exc}"
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "schema": _JSON_SCHEMA,
+                            "schema_version": _JSON_SCHEMA_VERSION,
+                            "status": "error",
+                            "findings": [
+                                {"id": "integration.context", "severity": "error", "message": message}
+                            ],
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+            else:
+                print(f"Nautical doctor: ERROR\nContext: {message}")
+            return 1
+        raw_taskdata = str(args.taskdata or _discover_taskdata(args.task_bin, env) or "").strip()
+        if not raw_taskdata:
+            message = f"Integration context unavailable: {exc}"
+            print(message if not args.json else json.dumps({"status": "error", "error": message}, ensure_ascii=False))
+            return 1
+        taskdata = Path(raw_taskdata).expanduser().resolve()
+        _finding(
+            findings,
+            "integration.context",
+            "error",
+            "The validated integration context could not be constructed.",
+            fix="Correct the reported scheduling configuration before using Nautical hooks or mutations.",
+            details={"error": str(exc)},
         )
     else:
-        taskdata_raw, _, _ = runtime.resolve_task_data_context(
-            env=env,
-            tw_dir=_discover_taskdata(args.task_bin, env) or None,
-        )
-    taskdata = Path(taskdata_raw).expanduser().resolve()
+        taskdata = integration.taskdata
+        args.task_bin = integration.command_prefix[0]
     env["TASKDATA"] = str(taskdata)
-    findings: list[dict[str, Any]] = []
 
     hooks_dir = _check_runtime(
         findings,
@@ -1348,19 +1384,6 @@ def main() -> int:
         env=env,
     )
     _check_managed_runtime(findings, hooks_dir, hook_runtimes)
-    try:
-        import nautical_core as core
-
-        core.reload_taskdata_config(taskdata)
-    except Exception as exc:
-        _finding(
-            findings,
-            "config.reload",
-            "error",
-            "The runtime could not apply the Taskdata Nautical configuration.",
-            fix="Correct the reported TOML or timezone error before running reconcile or scheduling recurrence.",
-            details={"error": str(exc)},
-        )
     _check_config(findings, taskdata)
     if args.clean_cache:
         gc_result = run_cache_gc()

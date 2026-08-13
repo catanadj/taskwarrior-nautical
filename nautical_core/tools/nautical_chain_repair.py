@@ -15,21 +15,27 @@ BASE_DIR = CORE_DIR.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import chain_repair, task_command  # noqa: E402
+from nautical_core.integration_context import (  # noqa: E402
+    IntegrationAccess,
+    IntegrationContext,
+    build_operator_context,
+)
 
 
-def _run_task(task_bin: str, args: list[str], *, timeout: float = 60.0, read_only: bool = False):
+def _run_task(command_prefix: tuple[str, ...], args: list[str], *, timeout: float = 60.0, read_only: bool = False):
     return task_command.run_task_command(
-        task_bin,
-        args,
+        command_prefix[0],
+        [*command_prefix[1:], *args],
         timeout=timeout,
         retry_locks=read_only,
     )
 
 
-def _export(task_bin: str) -> list[dict[str, Any]]:
+def _export(command_prefix: tuple[str, ...]) -> list[dict[str, Any]]:
     proc = _run_task(
-        task_bin,
+        command_prefix,
         ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID.not:", "export"],
         timeout=120.0,
         read_only=True,
@@ -42,9 +48,9 @@ def _export(task_bin: str) -> list[dict[str, Any]]:
     return [row for row in payload if isinstance(row, dict)]
 
 
-def _apply_repair(task_bin: str, repair: chain_repair.LinkRepair) -> None:
+def _apply_repair(command_prefix: tuple[str, ...], repair: chain_repair.LinkRepair) -> None:
     proc = _run_task(
-        task_bin,
+        command_prefix,
         [
             "rc.hooks=off",
             "rc.confirmation=off",
@@ -102,15 +108,29 @@ def _failure(args: argparse.Namespace, stage: str, exc: Exception) -> int:
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    _integration_context: IntegrationContext | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Repair deterministic Nautical chain link gaps.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     args = parser.parse_args(argv)
 
+    if _integration_context is None:
+        try:
+            _integration_context = build_operator_context(
+                core=nautical_core_package,
+                task_binary=args.task_bin,
+                access=IntegrationAccess.MUTATION if args.apply else IntegrationAccess.READ_ONLY,
+            )
+        except Exception as exc:
+            return _failure(args, "integration_context", exc)
+    command_prefix = _integration_context.command_prefix
     try:
-        tasks = _export(args.task_bin)
+        tasks = _export(command_prefix)
     except Exception as exc:
         return _failure(args, "task_export", exc)
     repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
@@ -124,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     for repair in repairs:
         if args.apply:
             try:
-                _apply_repair(args.task_bin, repair)
+                _apply_repair(command_prefix, repair)
             except Exception as exc:
                 apply_error = {
                     "repair": repair.__dict__,

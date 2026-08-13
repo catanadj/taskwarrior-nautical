@@ -23,8 +23,14 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
+import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.integration_context import (  # noqa: E402
+    IntegrationAccess,
+    IntegrationContext,
+    build_operator_context,
+)
 from nautical_core.lifecycle_executor import (  # noqa: E402
     LifecycleTerminalExecutor,
     LifecycleTransitionExecutor,
@@ -736,40 +742,6 @@ def _expiration_hop_limit(value: str) -> int:
             f"expiration hop limit must be between 1 and {_MAX_EXPIRATION_HOPS}"
         )
     return parsed
-
-
-def _task_data_dir(task_bin: str) -> Path:
-    raw = str(os.environ.get("TASKDATA") or "").strip()
-    if not raw:
-        proc = _run_task(
-            task_bin,
-            ["rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"],
-            timeout=10.0,
-            read_only=True,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(task_command.failure_message(proc, "Taskwarrior data location lookup"))
-        raw = str(proc.stdout or "").strip()
-    if not raw:
-        raise RuntimeError("Taskwarrior data location is empty")
-    return Path(os.path.expandvars(raw)).expanduser().resolve()
-
-
-def _synchronize_taskdata_config(hook: Any, taskdata: Path | None) -> None:
-    """Apply the validated config selected for the resolved Taskwarrior data directory."""
-    if taskdata is None:
-        return
-    core = getattr(hook, "core", None)
-    if core is None:
-        raise RuntimeError("Nautical core is unavailable for configuration reload")
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    if not callable(reload_config):
-        # Lightweight fake cores used by operator-level unit tests do not
-        # carry the facade API. A real imported Nautical module must provide it.
-        if isinstance(core, ModuleType):
-            raise RuntimeError("Nautical core does not provide validated configuration reload")
-        return
-    reload_config(taskdata)
 
 
 @contextmanager
@@ -1904,6 +1876,7 @@ def main(
     *,
     _apply_lease_held: bool = False,
     _locked_taskdata: Path | None = None,
+    _integration_context: IntegrationContext | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Repair Nautical chains after hookless completion, expiration, or deletion.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
@@ -1920,16 +1893,29 @@ def main(
     args = parser.parse_args(argv)
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
-    if args.apply and not _apply_lease_held:
+    if _integration_context is None:
         try:
-            taskdata = _task_data_dir(args.task_bin)
+            _integration_context = build_operator_context(
+                core=nautical_core_package,
+                task_binary=args.task_bin,
+                env=os.environ,
+                access=IntegrationAccess.MUTATION if args.apply else IntegrationAccess.READ_ONLY,
+            )
         except Exception as exc:
-            return _startup_failure(args, "taskdata", exc)
-        with _reconcile_apply_lock(taskdata) as acquired:
+            return _startup_failure(args, "integration_context", exc)
+    args.task_bin = _integration_context.command_prefix[0]
+    resolved_taskdata = _integration_context.taskdata
+    if args.apply and not _apply_lease_held:
+        with _reconcile_apply_lock(resolved_taskdata) as acquired:
             if not acquired:
                 _LOCK_STATS["reconcile_busy"] += 1
                 return _startup_failure(args, "apply_lock", RuntimeError("another reconcile apply is already running"))
-            return main(argv, _apply_lease_held=True, _locked_taskdata=taskdata)
+            return main(
+                argv,
+                _apply_lease_held=True,
+                _locked_taskdata=resolved_taskdata,
+                _integration_context=_integration_context,
+            )
 
     try:
         hook, legacy_hook = _load_reconcile_runtime(args.task_bin, args.hook_path)
@@ -1958,27 +1944,8 @@ def main(
         candidates = _candidate_rows(args.task_bin, hook)
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
-    try:
-        taskdata = _locked_taskdata if args.apply else None
-        if args.apply and taskdata is None:
-            taskdata = _task_data_dir(args.task_bin)
-    except Exception as exc:
-        return _startup_failure(args, "taskdata", exc)
-    runtime_taskdata = taskdata
-    if runtime_taskdata is None:
-        try:
-            if not str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
-                env_taskdata = str(os.environ.get("TASKDATA") or "").strip()
-                if env_taskdata:
-                    runtime_taskdata = Path(env_taskdata).expanduser().resolve()
-                elif candidates and callable(getattr(getattr(hook, "core", None), "reload_taskdata_config", None)):
-                    runtime_taskdata = _task_data_dir(args.task_bin)
-        except Exception as exc:
-            return _startup_failure(args, "taskdata_config", exc)
-    try:
-        _synchronize_taskdata_config(hook, runtime_taskdata)
-    except Exception as exc:
-        return _startup_failure(args, "taskdata_config", exc)
+    taskdata = _locked_taskdata if args.apply else None
+    runtime_taskdata = resolved_taskdata
     try:
         generation = _chain_generation_for_hook(hook)
     except Exception as exc:

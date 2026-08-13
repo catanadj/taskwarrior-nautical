@@ -208,6 +208,7 @@ def build_integration_context(
     diagnostics: DiagnosticsSink | None = None,
     clock: Clock | None = None,
     invocation_id: str | None = None,
+    discover_taskdata: bool = False,
 ) -> IntegrationContext:
     """Resolve and validate all invocation state exactly once."""
     env_map = dict(os.environ if env is None else env)
@@ -216,6 +217,33 @@ def build_integration_context(
     except (TypeError, ValueError) as exc:
         raise IntegrationContextError("access", "invalid integration access") from exc
 
+    task_path = _validated_task_binary(task_binary, env_map)
+    resolved_tw_dir = tw_dir
+    discovered_taskdata = False
+    explicit_taskdata = bool(str(env_map.get("TASKDATA") or "").strip()) or any(
+        str(arg).startswith(("data:", "data=", "data.location:", "data.location="))
+        for arg in argv
+    )
+    if discover_taskdata and not explicit_taskdata:
+        from . import task_command
+
+        result = task_command.run_task_command(
+            task_path,
+            ("rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"),
+            env=env_map,
+            timeout=10.0,
+            retry_locks=True,
+        )
+        if not result.ok:
+            raise IntegrationContextError(
+                "taskdata",
+                task_command.failure_message(result, "Taskwarrior data location lookup"),
+            )
+        resolved_tw_dir = str(result.stdout or "").strip()
+        if not resolved_tw_dir:
+            raise IntegrationContextError("taskdata", "Taskwarrior data location is empty")
+        discovered_taskdata = True
+
     resolver = getattr(core, "resolve_task_data_context", None)
     if not callable(resolver):
         raise IntegrationContextError("taskdata", "core resolver is unavailable")
@@ -223,13 +251,12 @@ def build_integration_context(
         raw_taskdata, use_rc_data_location, source = resolver(
             argv=list(argv),
             env=env_map,
-            tw_dir=tw_dir,
+            tw_dir=resolved_tw_dir,
         )
     except Exception as exc:
         raise IntegrationContextError("taskdata", str(exc) or type(exc).__name__) from exc
     taskdata = _validated_taskdata(str(raw_taskdata), mutation=access is IntegrationAccess.MUTATION)
 
-    task_path = _validated_task_binary(task_binary, env_map)
     command_prefix: tuple[str, ...] = (task_path,)
     if bool(use_rc_data_location):
         command_prefix += (f"rc.data.location={taskdata}",)
@@ -271,7 +298,7 @@ def build_integration_context(
         diagnostic_sink = SilentDiagnostics()
     return IntegrationContext(
         taskdata=taskdata,
-        taskdata_source=str(source or "resolved"),
+        taskdata_source="taskwarrior" if discovered_taskdata else str(source or "resolved"),
         command_prefix=command_prefix,
         configuration=configuration,
         local_timezone=local_timezone,
@@ -280,6 +307,29 @@ def build_integration_context(
         invocation_id=invocation_id or uuid.uuid4().hex,
         command_budget=command_budget,
         access=access,
+    )
+
+
+def build_operator_context(
+    *,
+    core: ModuleType,
+    task_binary: str,
+    taskdata: str | None = None,
+    env: Mapping[str, str] | None = None,
+    access: IntegrationAccess = IntegrationAccess.READ_ONLY,
+    command_budget: int = 256,
+) -> IntegrationContext:
+    """Build one validated context for a Taskwarrior-facing operator command."""
+    argv = (f"data:{taskdata}",) if str(taskdata or "").strip() else ()
+    return build_integration_context(
+        core=core,
+        argv=argv,
+        env=env,
+        tw_dir=str(taskdata or "~/.task"),
+        task_binary=task_binary,
+        access=access,
+        command_budget=command_budget,
+        discover_taskdata=not bool(argv),
     )
 
 
@@ -295,4 +345,5 @@ __all__ = (
     "SystemClock",
     "ValidatedNauticalConfiguration",
     "build_integration_context",
+    "build_operator_context",
 )

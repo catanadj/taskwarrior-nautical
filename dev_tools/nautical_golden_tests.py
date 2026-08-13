@@ -81,6 +81,14 @@ def parse_due(v):
     except Exception:
         return None
 
+
+def _test_operator_context(taskdata: str | Path = "/tmp/nautical-test-taskdata") -> SimpleNamespace:
+    """Provide explicit operator state to tests that enter below CLI startup."""
+    return SimpleNamespace(
+        taskdata=Path(taskdata),
+        command_prefix=("task",),
+    )
+
 def build_preview(expr, mode="ALL", due=None):
     """
     Always use core.build_and_cache_hints if present (it computes upcoming),
@@ -1674,6 +1682,57 @@ def test_full_hooks_receive_one_explicit_integration_context():
             os.environ.pop("TASKDATA", None)
         else:
             os.environ["TASKDATA"] = previous_taskdata
+
+
+def test_operator_context_discovers_taskdata_once():
+    """Operator context owns Taskwarrior data-location discovery and config reload."""
+    from pathlib import Path
+    from types import ModuleType
+
+    from nautical_core.integration_context import IntegrationAccess, build_operator_context
+
+    with tempfile.TemporaryDirectory(prefix="nautical_operator_context_") as td:
+        root = Path(td)
+        taskdata = root / "taskdata"
+        taskdata.mkdir()
+        task_binary = root / "task"
+        task_binary.write_text(
+            f"#!/bin/sh\nprintf '%s\\n' '{taskdata}'\n",
+            encoding="utf-8",
+        )
+        task_binary.chmod(0o700)
+        core = ModuleType("operator_context_test_core")
+        calls = {"resolve": 0, "reload": 0}
+
+        def resolve_task_data_context(**kwargs):
+            calls["resolve"] += 1
+            return str(kwargs["tw_dir"]), False, "fallback"
+
+        def reload_taskdata_config(selected):
+            calls["reload"] += 1
+            expect(Path(selected) == taskdata, "operator reloaded the wrong Taskdata")
+            return {"ok": True, "scheduler_fingerprint": "operator-scheduler-fp"}
+
+        core.resolve_task_data_context = resolve_task_data_context
+        core.reload_taskdata_config = reload_taskdata_config
+        core.scheduling_configuration_error = lambda: ""
+        core.effective_config_snapshot = lambda: {
+            "source": str(taskdata / "nautical.toml"),
+            "fingerprint": "operator-config-fp",
+            "values": {"tz": "UTC"},
+        }
+        core.LOCAL_TZ_NAME = "UTC"
+        core._LOCAL_TZ = timezone.utc
+        context = build_operator_context(
+            core=core,
+            task_binary=str(task_binary),
+            env={"PATH": os.environ.get("PATH", "")},
+            access=IntegrationAccess.MUTATION,
+        )
+        expect(context.taskdata == taskdata, "operator context lost discovered Taskdata")
+        expect(context.taskdata_source == "taskwarrior", "operator discovery source was not retained")
+        expect(context.mutation_capable, "operator mutation capability was lost")
+        expect(calls == {"resolve": 1, "reload": 1}, "operator context repeated discovery or reload")
 
 
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
@@ -6449,8 +6508,8 @@ args = sys.argv[1:]
 if args == ["--version"]:
     print("3.4.2")
     raise SystemExit(0)
-if len(args) == 2 and args[0] == "_get":
-    key = args[1]
+if len(args) >= 2 and args[-2] == "_get":
+    key = args[-1]
     if key == "rc.hooks.location":
         print(os.environ.get("FAKE_HOOKS", ""))
         raise SystemExit(0)
@@ -9475,11 +9534,9 @@ def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
     script = (
         "import sys\n"
         "import nautical_core\n"
-        "from types import SimpleNamespace\n"
-        "from pathlib import Path\n"
-        "from nautical_core.tools import nautical_reconcile\n"
+        "from nautical_core.integration_context import build_operator_context\n"
         "try:\n"
-        "    nautical_reconcile._synchronize_taskdata_config(SimpleNamespace(core=nautical_core), Path(sys.argv[1]))\n"
+        "    build_operator_context(core=nautical_core, task_binary=sys.executable, taskdata=sys.argv[1])\n"
         "except Exception as exc:\n"
         "    print(type(exc).__name__ + ': ' + str(exc))\n"
         "else:\n"
@@ -23564,26 +23621,36 @@ def test_navigator_surfaces_configuration_drift_warning():
 
 
 def test_navigator_reloads_validated_taskdata_configuration():
-    """Navigator must use the same validated Taskdata reload boundary as hooks."""
+    """Navigator must construct and retain the shared validated context."""
     module_name = "_nautical_navigator_config_reload_test"
     loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
     spec = importlib.util.spec_from_loader(module_name, loader)
     navigator = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = navigator
     loader.exec_module(navigator)
-    old_reload = navigator.core.reload_taskdata_config
-    old_tz_name = navigator.core.LOCAL_TZ_NAME
+    old_builder = navigator.build_operator_context
     old_taskdata = os.environ.get("TASKDATA")
-    calls: list[str] = []
+    calls: list[dict] = []
     try:
         with tempfile.TemporaryDirectory() as td:
             os.environ["TASKDATA"] = td
-            navigator.core.LOCAL_TZ_NAME = "UTC"
-            navigator.core.reload_taskdata_config = lambda path: calls.append(str(path))
-            navigator._reload_navigator_configuration()
-            expect(calls == [str(Path(td).resolve())], f"Navigator used the wrong Taskdata path: {calls!r}")
+            expected_context = SimpleNamespace(
+                taskdata=Path(td).resolve(),
+                local_timezone=timezone.utc,
+                command_prefix=("task",),
+            )
 
-            navigator.core.reload_taskdata_config = lambda _path: (_ for _ in ()).throw(
+            def build_context(**kwargs):
+                calls.append(kwargs)
+                return expected_context
+
+            navigator.build_operator_context = build_context
+            navigator._reload_navigator_configuration()
+            expect(len(calls) == 1, f"Navigator built its context repeatedly: {calls!r}")
+            expect(navigator._INTEGRATION_CONTEXT is expected_context, "Navigator discarded its validated context")
+            expect(navigator.LOCAL_ZONE is timezone.utc, "Navigator ignored the context timezone")
+
+            navigator.build_operator_context = lambda **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("invalid discovered TOML")
             )
             try:
@@ -23597,8 +23664,7 @@ def test_navigator_reloads_validated_taskdata_configuration():
             os.environ.pop("TASKDATA", None)
         else:
             os.environ["TASKDATA"] = old_taskdata
-        navigator.core.reload_taskdata_config = old_reload
-        navigator.core.LOCAL_TZ_NAME = old_tz_name
+        navigator.build_operator_context = old_builder
         sys.modules.pop(module_name, None)
 
 
@@ -23631,6 +23697,7 @@ def test_navigator_fallback_export_uses_empty_filter():
     calls = []
     try:
         loader.exec_module(navigator)
+        navigator._INTEGRATION_CONTEXT = SimpleNamespace(command_prefix=("task",))
         original_run = navigator._task_command.run_task_command
 
         def fake_run(task_bin, args, **_kwargs):
@@ -23690,8 +23757,13 @@ def test_navigator_projects_all_slots_in_a_time_window():
     spec = importlib.util.spec_from_loader(module_name, loader)
     navigator = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = navigator
+    old_tz_name = core.LOCAL_TZ_NAME
+    old_tz = core._LOCAL_TZ
     try:
         loader.exec_module(navigator)
+        core.LOCAL_TZ_NAME = "Etc/GMT-3"
+        core._LOCAL_TZ = timezone(timedelta(hours=3))
+        navigator.LOCAL_ZONE = core._LOCAL_TZ
         analyzer = navigator.TaskAnalyzer()
         dates = analyzer._project_anchor_dates(
             {"anchor": "w:mon..sun@t=04:30..19:30/3h30min", "uuid": "navigator-window-test"},
@@ -23762,6 +23834,8 @@ def test_navigator_projects_all_slots_in_a_time_window():
         overnight_natural, _overnight_preview = navigator._anchor_preview("w:mon@t=22:30..06:30/7", count=3)
         expect("next day" in (overnight_natural or "").lower(), f"Navigator omitted overnight ownership wording: {overnight_natural!r}")
     finally:
+        core.LOCAL_TZ_NAME = old_tz_name
+        core._LOCAL_TZ = old_tz
         sys.modules.pop(module_name, None)
 
 
@@ -25730,6 +25804,7 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
     finally:
         sys.modules.pop(module_name, None)
 
+    navigator._INTEGRATION_CONTEXT = SimpleNamespace(command_prefix=("task",))
     root = {
         "id": 1,
         "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
@@ -25797,6 +25872,7 @@ def test_navigator_empty_task_export_treats_no_matches_as_empty():
     sys.modules[module_name] = navigator
     try:
         loader.exec_module(navigator)
+        navigator._INTEGRATION_CONTEXT = SimpleNamespace(command_prefix=("task",))
         original_run = navigator._task_command.run_task_command
         try:
             navigator._task_command.run_task_command = lambda *_args, **_kwargs: SimpleNamespace(
@@ -25828,6 +25904,7 @@ def test_navigator_sparse_calendar_renders_only_active_months():
     sys.modules[module_name] = navigator
     try:
         loader.exec_module(navigator)
+        navigator._INTEGRATION_CONTEXT = SimpleNamespace(command_prefix=("task",))
         analyzer = navigator.TaskAnalyzer()
         panel = analyzer.create_enhanced_calendar(
             completed_dates=[date(2026, 7, 1)],
@@ -30385,7 +30462,7 @@ def test_reconcile_json_startup_failures_are_structured():
         output = io.StringIO()
         errors = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            result = tool.main(["--json"])
+            result = tool.main(["--json"], _integration_context=_test_operator_context())
         summary = json.loads(output.getvalue())
         expect(result == 1 and summary.get("stage") == "hook_load", f"hook load failure was not structured: {summary}")
         expect(summary.get("schema") == "nautical.reconcile" and summary.get("schema_version") == 1,
@@ -30400,7 +30477,7 @@ def test_reconcile_json_startup_failures_are_structured():
         tool._load_on_modify = lambda _path=None: incompatible
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            result = tool.main(["--json"])
+            result = tool.main(["--json"], _integration_context=_test_operator_context())
         summary = json.loads(output.getvalue())
         expect(result == 1 and summary.get("stage") == "hook_protocol", f"protocol failure was not structured: {summary}")
     finally:
@@ -30664,7 +30741,6 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         tool._export,
         tool._run_task,
         tool._parent_apply_lock,
-        tool._task_data_dir,
     )
     try:
         tool._load_on_modify = lambda _path=None: FakeHook()
@@ -30690,7 +30766,6 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         calls = []
         tool._export = fake_export
         tool._parent_apply_lock = parent_lock
-        tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-expiration-test")
 
         def fake_run_task(task_bin, args, **_kwargs):
             calls.append((task_bin, args))
@@ -30702,7 +30777,13 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
         tool._run_task = fake_run_task
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            expect(tool.main(["--apply", "--json"]) == 0, "expiration reconcile apply should succeed")
+            expect(
+                tool.main(
+                    ["--apply", "--json"],
+                    _integration_context=_test_operator_context("/tmp/nautical-reconcile-expiration-test"),
+                ) == 0,
+                "expiration reconcile apply should succeed",
+            )
         summary = json.loads(output.getvalue())
         expect(summary.get("spawn") == 1, f"expiration candidate was not planned: {summary!r}")
         expect(summary.get("expiration_hops") == 1, f"expiration hop was not summarized: {summary!r}")
@@ -30719,7 +30800,6 @@ def test_reconcile_tool_exports_and_applies_expired_candidates():
             tool._export,
             tool._run_task,
             tool._parent_apply_lock,
-            tool._task_data_dir,
         ) = original
 
 
@@ -30767,10 +30847,8 @@ def test_reconcile_apply_refuses_a_second_full_run():
     )
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
-        original_taskdata = tool._task_data_dir
         original_hook = tool._load_on_modify
         try:
-            tool._task_data_dir = lambda _task_bin: taskdata
             tool._load_on_modify = lambda _path=None: (_ for _ in ()).throw(
                 AssertionError("busy reconcile loaded its hook")
             )
@@ -30778,9 +30856,11 @@ def test_reconcile_apply_refuses_a_second_full_run():
             with tool._reconcile_apply_lock(taskdata) as held:
                 expect(held, "test could not acquire reconcile lease")
                 with contextlib.redirect_stdout(output):
-                    result = tool.main(["--apply", "--json"])
+                    result = tool.main(
+                        ["--apply", "--json"],
+                        _integration_context=_test_operator_context(taskdata),
+                    )
         finally:
-            tool._task_data_dir = original_taskdata
             tool._load_on_modify = original_hook
     summary = json.loads(output.getvalue())
     expect(result == 1, f"busy reconcile returned {result}")
@@ -31483,13 +31563,11 @@ def test_reconcile_apply_isolates_candidate_failures():
     original = (
         tool._load_on_modify,
         tool._candidate_rows,
-        tool._task_data_dir,
         tool._apply_parent_atomic,
     )
     try:
         tool._load_on_modify = lambda _path=None: FakeHook()
         tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
-        tool._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-isolation-test")
 
         def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
             expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
@@ -31507,12 +31585,14 @@ def test_reconcile_apply_isolates_candidate_failures():
         tool._apply_parent_atomic = apply_parent
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            result = tool.main(["--apply", "--json"])
+            result = tool.main(
+                ["--apply", "--json"],
+                _integration_context=_test_operator_context("/tmp/nautical-reconcile-isolation-test"),
+            )
     finally:
         (
             tool._load_on_modify,
             tool._candidate_rows,
-            tool._task_data_dir,
             tool._apply_parent_atomic,
         ) = original
 
@@ -31575,7 +31655,7 @@ def test_reconcile_dry_run_isolates_candidate_failures():
         tool._existing_children = existing_children
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            result = tool.main(["--json"])
+            result = tool.main(["--json"], _integration_context=_test_operator_context())
     finally:
         tool._load_on_modify, tool._candidate_rows, tool._existing_children = original
 
@@ -32056,10 +32136,10 @@ def test_reconcile_partial_recovery_exit_and_verbose_output():
 
         compact = io.StringIO()
         with contextlib.redirect_stdout(compact):
-            compact_result = mod.main([])
+            compact_result = mod.main([], _integration_context=_test_operator_context())
         verbose = io.StringIO()
         with contextlib.redirect_stdout(verbose):
-            verbose_result = mod.main(["--verbose"])
+            verbose_result = mod.main(["--verbose"], _integration_context=_test_operator_context())
     finally:
         mod._load_on_modify, mod._candidate_rows, mod._reconcile_candidate = original
 
@@ -32081,7 +32161,7 @@ def test_reconcile_degraded_audit_status_is_structured():
         )
         manual_output = io.StringIO()
         with contextlib.redirect_stdout(manual_output):
-            manual_result = mod.main(["--json"])
+            manual_result = mod.main(["--json"], _integration_context=_test_operator_context())
         manual_summary = json.loads(manual_output.getvalue())
         expect(manual_result == 2, f"manual review should be degraded: {manual_result}")
         expect(manual_summary.get("schema_version") == 1, f"JSON schema version missing: {manual_summary!r}")
@@ -32093,7 +32173,7 @@ def test_reconcile_degraded_audit_status_is_structured():
 
         manual_text = io.StringIO()
         with contextlib.redirect_stdout(manual_text):
-            manual_text_result = mod.main([])
+            manual_text_result = mod.main([], _integration_context=_test_operator_context())
         expect(manual_text_result == 2, f"manual review text output returned {manual_text_result}")
         expect("no change applied" in manual_text.getvalue(), f"manual review text was not actionable: {manual_text.getvalue()!r}")
 
@@ -32103,7 +32183,7 @@ def test_reconcile_degraded_audit_status_is_structured():
         )
         error_output = io.StringIO()
         with contextlib.redirect_stdout(error_output):
-            error_result = mod.main(["--json"])
+            error_result = mod.main(["--json"], _integration_context=_test_operator_context())
         error_summary = json.loads(error_output.getvalue())
         expect(error_result == 1 and error_summary.get("status") == "error", f"native repair error was not fatal: {error_summary!r}")
         expect(error_summary.get("errors") == 1, f"native repair error was omitted from total: {error_summary!r}")
@@ -32116,7 +32196,7 @@ def test_reconcile_degraded_audit_status_is_structured():
         mod._native_until_repairs = skipped_audit
         skipped_output = io.StringIO()
         with contextlib.redirect_stdout(skipped_output):
-            skipped_result = mod.main(["--json"])
+            skipped_result = mod.main(["--json"], _integration_context=_test_operator_context())
         skipped_summary = json.loads(skipped_output.getvalue())
         expect(skipped_result == 2, f"skipped audit should be degraded: {skipped_result}")
         expect(skipped_summary.get("status") == "degraded", f"wrong skipped status: {skipped_summary!r}")
@@ -32126,7 +32206,7 @@ def test_reconcile_degraded_audit_status_is_structured():
         mod._configuration_drift_reason = lambda _hook: "configuration changed during reconcile (source: test)"
         drift_output = io.StringIO()
         with contextlib.redirect_stdout(drift_output):
-            drift_result = mod.main(["--json"])
+            drift_result = mod.main(["--json"], _integration_context=_test_operator_context())
         drift_summary = json.loads(drift_output.getvalue())
         expect(drift_result == 2, f"configuration drift should be degraded: {drift_result}")
         expect(drift_summary.get("configuration_drifted") == 1, f"configuration drift was not counted: {drift_summary!r}")
@@ -32191,7 +32271,7 @@ def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repair
         )
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            result = mod.main([])
+            result = mod.main([], _integration_context=_test_operator_context())
     finally:
         mod._load_on_modify, mod._candidate_rows, mod._native_until_repairs = original
 
@@ -32249,14 +32329,12 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
         mod._run_task,
         mod._fresh_parent,
         mod._parent_apply_lock,
-        mod._task_data_dir,
     )
     try:
         mod._load_on_modify = lambda _path=None: FakeHook()
         mod._candidate_rows = lambda _task_bin, _hook: [parent] if parent["chain"] == "on" else []
         mod._existing_children = lambda _task_bin, _parent: []
         mod._fresh_parent = lambda _task_bin, _parent: dict(parent)
-        mod._task_data_dir = lambda _task_bin: Path("/tmp/nautical-reconcile-final-test")
 
         @contextlib.contextmanager
         def parent_lock(_taskdata, _parent_uuid):
@@ -32273,13 +32351,25 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
         mod._run_task = fake_run_task
         first_out = io.StringIO()
         with contextlib.redirect_stdout(first_out):
-            expect(mod.main(["--apply"]) == 0, "first reconcile apply should succeed")
+            expect(
+                mod.main(
+                    ["--apply"],
+                    _integration_context=_test_operator_context("/tmp/nautical-reconcile-final-test"),
+                ) == 0,
+                "first reconcile apply should succeed",
+            )
         expect("set chain:off" in first_out.getvalue(), f"applied final should report the persisted state: {first_out.getvalue()!r}")
         expect(any(args[-2:] == ["modify", "chain:off"] for _bin, args in calls), f"chain:off was not persisted: {calls!r}")
 
         second_out = io.StringIO()
         with contextlib.redirect_stdout(second_out):
-            expect(mod.main(["--apply", "--json"]) == 0, "second reconcile apply should succeed")
+            expect(
+                mod.main(
+                    ["--apply", "--json"],
+                    _integration_context=_test_operator_context("/tmp/nautical-reconcile-final-test"),
+                ) == 0,
+                "second reconcile apply should succeed",
+            )
         second = json.loads(second_out.getvalue())
         expect(second.get("candidates") == 0, f"disabled final task should not be reconsidered: {second!r}")
     finally:
@@ -32290,7 +32380,6 @@ def test_reconcile_tool_apply_disables_legitimate_final_chain():
             mod._run_task,
             mod._fresh_parent,
             mod._parent_apply_lock,
-            mod._task_data_dir,
         ) = original
 
 
@@ -32627,8 +32716,8 @@ def test_operator_tools_apply_read_only_retry_policy():
         task_command.run_task_command = fake_run
         reconcile_tool._run_task("task", ["export"], read_only=True)
         reconcile_tool._run_task("task", ["modify", "chain:off"])
-        repair_tool._run_task("task", ["export"], read_only=True)
-        repair_tool._run_task("task", ["modify", "nextLink:abc"])
+        repair_tool._run_task(("task",), ["export"], read_only=True)
+        repair_tool._run_task(("task",), ["modify", "nextLink:abc"])
         doctor_tool._run_task("task", ["--version"], {})
     finally:
         task_command.run_task_command = original
@@ -32650,13 +32739,13 @@ def test_chain_repair_command_failure_is_structured():
     with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
         result = tool.main(["--json", "--task-bin", "/definitely/missing/task-Ω"])
     payload = json.loads(output.getvalue())
-    expect(result == 1 and payload.get("stage") == "task_export", f"failure was not structured: {payload}")
+    expect(result == 1 and payload.get("stage") == "integration_context", f"failure was not structured: {payload}")
     expect("task-Ω" in payload.get("error", ""), f"Unicode command detail was lost: {payload}")
     expect("Traceback" not in errors.getvalue(), f"chain repair leaked a traceback: {errors.getvalue()!r}")
 
     original = (tool._export, tool._apply_repair)
     try:
-        tool._export = lambda _task_bin: [
+        tool._export = lambda _command_prefix: [
             {
                 "uuid": "11111111-0000-0000-0000-000000000001",
                 "chainID": "apply-failure",
@@ -32671,14 +32760,17 @@ def test_chain_repair_command_failure_is_structured():
             },
         ]
 
-        def fail_apply(_task_bin, _repair):
+        def fail_apply(_command_prefix, _repair):
             raise RuntimeError("write rejected Ω")
 
         tool._apply_repair = fail_apply
         output = io.StringIO()
         errors = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            result = tool.main(["--apply", "--json"])
+            result = tool.main(
+                ["--apply", "--json"],
+                _integration_context=_test_operator_context(),
+            )
         payload = json.loads(output.getvalue())
         expect(result == 1 and not payload.get("applied"), f"failed repair was counted as applied: {payload}")
         expect((payload.get("error") or {}).get("error") == "write rejected Ω", f"apply failure was unclear: {payload}")
@@ -34536,6 +34628,11 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     mod = _load_hook_module(hook_path, "_nautical_seasonal_reconcile_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
+    season_support = mod.core._import_sibling("season_support")
+    previous_hemisphere = season_support.active_hemisphere()
+    previous_core_hemisphere = mod.core.SEASON_HEMISPHERE
+    mod.core.SEASON_HEMISPHERE = "north"
+    season_support.configure_hemisphere("north")
 
     def stamp(day, hhmm):
         return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
@@ -34592,6 +34689,8 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         recovered_meta.get("basis") == "due recurrence target (expired)",
         f"expiration recovery lost its basis: {recovered_meta}",
     )
+    mod.core.SEASON_HEMISPHERE = previous_core_hemisphere
+    season_support.configure_hemisphere(previous_hemisphere)
 
 
 def test_reconcile_repairs_invalid_native_until_from_previous_link():
@@ -35403,6 +35502,7 @@ TESTS = [
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
     test_full_hooks_receive_one_explicit_integration_context,
+    test_operator_context_discovers_taskdata_once,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

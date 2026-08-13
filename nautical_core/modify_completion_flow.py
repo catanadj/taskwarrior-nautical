@@ -135,14 +135,12 @@ def finalize_completion_modify(
                 indexes = read_service.build_indexes(chain)
                 chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                 read_service.replace_chain_cache(chain_id, chain)
-                services.export_uuid_short_cached.cache_clear()
             elif need_chain and not chain_snapshot_loaded:
                 chain = read_service.get_chain_export(chain_id)
                 if chain:
                     indexes = read_service.build_indexes(chain)
                     chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                     read_service.replace_chain_cache(chain_id, chain)
-                    services.export_uuid_short_cached.cache_clear()
         except Exception:
             pass
 

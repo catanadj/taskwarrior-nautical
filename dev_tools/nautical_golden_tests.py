@@ -9491,24 +9491,56 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
         ],
     )
 
-    calls = {"count": 0}
-
-    def _tw_export_chain_fail(*_args, **_kwargs):
-        calls["count"] += 1
-        raise AssertionError("cached filtered chain read should not call tw_export_chain")
-
-    orig = mod.tw_export_chain
-    mod.tw_export_chain = _tw_export_chain_fail
-    try:
-        rows = mod._lifecycle_read_service().get_chain_export(
-            "cid-1", extra="link:2 status.not:deleted"
-        )
-    finally:
-        mod.tw_export_chain = orig
-
-    expect(calls["count"] == 0, f"expected cached filtering to avoid export, got {calls}")
+    rows = mod._lifecycle_read_service().get_chain_export(
+        "cid-1", extra="link:2 status.not:deleted"
+    )
     expect(len(rows) == 1, f"expected exactly one filtered cached row, got {rows}")
     expect(rows[0].get("uuid") == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", f"unexpected filtered row: {rows}")
+
+
+def test_on_modify_chain_cache_reads_through_typed_repository():
+    """Modify chain caches must filter one authoritative repository snapshot in memory."""
+    from nautical_core.integration_models import Found
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_modify_repository_chain_cache_test")
+    rows = (
+        {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "chainID": "cid", "link": 1, "status": "completed", "modified": "20250101T090000Z"},
+        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "chainID": "cid", "link": 2, "status": "pending", "modified": "20250102T090000Z"},
+    )
+    calls = []
+
+    class Repository:
+        def chain_snapshot(self, chain_id):
+            calls.append(chain_id)
+            return Found(rows, "chain:cid")
+
+    mod._modify_runtime_state().task_repository = Repository()
+    selected = mod._chain_export_for_cache("cid", None, "status:pending", 10)
+    expect(calls == ["cid"], f"expected one repository read, got {calls!r}")
+    expect([row.get("link") for row in selected] == [2], f"repository rows were not filtered: {selected!r}")
+
+
+def test_on_modify_chain_cache_preserves_repository_unavailability():
+    """An unavailable repository chain read must never become an empty chain."""
+    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
+
+    hook = _find_hook_file("on-modify.nautical")
+    mod = _load_hook_module(hook, "_nautical_modify_repository_chain_failure_test")
+    command = TaskCommand(("task", "export"), "test chain read", 1.0)
+    evidence = FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 0, 1, 0.0, False, "malformed JSON")
+
+    class Repository:
+        def chain_snapshot(self, _chain_id):
+            return Unavailable("chain:cid", evidence)
+
+    mod._modify_runtime_state().task_repository = Repository()
+    try:
+        mod._chain_export_for_cache("cid", None, None, 10)
+    except RuntimeError as exc:
+        expect("malformed JSON" in str(exc), f"unavailable detail was lost: {exc}")
+    else:
+        raise AssertionError("unavailable repository read became an empty chain")
 
 
 def test_lifecycle_read_service_indexes_and_merges_chain_rows():
@@ -21047,7 +21079,6 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         build_and_spawn_child=fake_build_and_spawn_child,
         seed_runtime_lookup_tasks=lambda *_a, **_k: None,
         modify_chain_state=fake_modify_chain_state,
-        export_uuid_short_cached=SimpleNamespace(cache_clear=lambda: None),
         lifecycle_read_service=None,
         chain_health_advice=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("analytics should not be computed when hidden")),
         chain_integrity_warnings=lambda *_a, **_k: ["missing link"],
@@ -36092,6 +36123,8 @@ TESTS = [
     test_on_exit_run_task_diag_bucket_stats,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
+    test_on_modify_chain_cache_reads_through_typed_repository,
+    test_on_modify_chain_cache_preserves_repository_unavailability,
     test_lifecycle_read_service_indexes_and_merges_chain_rows,
     test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
     test_lifecycle_read_service_checked_export_is_typed_and_cached,

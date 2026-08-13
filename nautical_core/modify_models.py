@@ -576,7 +576,6 @@ class CompletionFinalizeServices:
     build_and_spawn_child: BuildAndSpawnCallback
     seed_runtime_lookup_tasks: SeedLookupCallback
     modify_chain_state: ModifyChainStateCallback
-    export_uuid_short_cached: Any
     lifecycle_read_service: Any
     chain_health_advice: ChainHealthCallback
     chain_integrity_warnings: ChainIntegrityCallback

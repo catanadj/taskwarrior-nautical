@@ -128,7 +128,6 @@ if TYPE_CHECKING:
 # ------------------------------------------------------------------------------
 
 _MAX_CHAIN_WALK = 500  # cap for chain summaries/analytics
-_MAX_UUID_LOOKUPS = 50  # max individual UUID exports before giving up
 _MAX_ITERATIONS = 2000  # prevent infinite loops in stepping functions
 _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
@@ -139,24 +138,6 @@ _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 # Spawn intent queue guards (override via env for heavy workloads).
 # spawn_queue_max_bytes: warn when queue exceeds this size (on-exit drains).
 _DEFAULT_SPAWN_QUEUE_MAX_BYTES = 524288
-_DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE = 1.5
-_DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100 = 1.0
-_DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX = 12.0
-
-def _env_float(
-    name: str,
-    default: float,
-    *,
-    min_value: float | None = None,
-    max_value: float | None = None,
-) -> float:
-    return hook_bootstrap.env_float(
-        name,
-        default,
-        min_value=min_value,
-        max_value=max_value,
-    )
-
 # Panel chain index and chain caches live in the per-run modify runtime state.
 _MODIFY_RUNTIME_STATE = None
 _HOOK_CONTEXT = None
@@ -173,8 +154,6 @@ _DEFAULT_DEBUG_WAIT_SCHED = False
 _LAST_WAIT_SCHED_DEBUG: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
 _WARNED_SPAWN_QUEUE_GROWTH = False
-_WARNED_CHAIN_EXPORT: set[str] = set()
-_LAST_CHAIN_EXPORT_STATUS: tuple[bool, str] = (True, "")
 
 
 def _diag(msg: str) -> None:
@@ -398,15 +377,6 @@ def _invalidate_read_query_cache() -> None:
         )
     except Exception:
         pass
-    for name in (
-        "_export_uuid_short_cached",
-    ):
-        try:
-            clear = getattr(globals().get(name), "cache_clear", None)
-            if callable(clear):
-                clear()
-        except Exception:
-            pass
     try:
         _module("lifecycle_read_service").clear_cached_chain_exports()
     except Exception:
@@ -934,30 +904,6 @@ def _apply_core_config() -> None:
     _RECURRENCE_UPDATE_UDAS = tuple(core.RECURRENCE_UPDATE_UDAS) if hasattr(core, "RECURRENCE_UPDATE_UDAS") else ()
     _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
     _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
-_CHAIN_EXPORT_TIMEOUT_BASE = _env_float(
-    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE",
-    _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE,
-    min_value=0.1,
-    max_value=120.0,
-)
-_CHAIN_EXPORT_TIMEOUT_PER_100 = _env_float(
-    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100",
-    _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100,
-    min_value=0.0,
-    max_value=120.0,
-)
-_CHAIN_EXPORT_TIMEOUT_MAX = _env_float(
-    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX",
-    _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX,
-    min_value=0.1,
-    max_value=300.0,
-)
-_CHAIN_EXPORT_TIMEOUT_MAX = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_MAX)
-_CHAIN_EXPORT_TIMES: list[float] = []
-_CHAIN_EXPORT_TIMES_MAX = 20
-_CHAIN_EXPORT_TIMEOUT_FLOOR = _CHAIN_EXPORT_TIMEOUT_BASE
-
-
 # ------------------------------------------------------------------------------
 # Small cached helpers for speed + consistency
 # ------------------------------------------------------------------------------
@@ -1004,39 +950,6 @@ def _load_omit_file_dates(name: str):
 def _load_anchor_file_dates(name: str):
     anchor_files = core._import_sibling("anchor_files")
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
-
-
-@lru_cache(maxsize=512)
-def _export_uuid_short_cached(u_short: str):
-    obj = _export_uuid_short(u_short, env=None)
-    if isinstance(obj, dict) and obj.get("uuid"):
-        return obj
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.LookupResult.unavailable("short UUID lookup unavailable")
-    return None
-
-
-def _export_uuid_short_lookup(u_short: str):
-    """Return a tri-state UUID lookup without collapsing failures to None."""
-    cached = _export_uuid_short_cached(u_short)
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None and isinstance(cached, hook_support.LookupResult):
-        return cached
-    if isinstance(cached, dict) and cached.get("uuid"):
-        if hook_support is not None:
-            return hook_support.LookupResult.found(cached)
-    if hook_support is None:
-        return None
-    return hook_support.export_uuid_short_result(
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        uuid_short=u_short,
-        env=os.environ.copy(),
-        timeout=2.5,
-        retries=2,
-        diag=_diag,
-    )
 
 
 def _dtparse(s):
@@ -1589,86 +1502,6 @@ def _run_task_result(
     return result
 
 
-def _export_uuid_short(u_short: str, env=None):
-    if env is None:
-        cached_read = _read_query_get("uuid", str(u_short or "").lower())
-        if cached_read is not _READ_QUERY_MISSING:
-            return cached_read
-    cache_chain_id = ""
-    if env is None and u_short:
-        cached, cache_chain_id = _lifecycle_read_service().lookup_short(u_short)
-        if isinstance(cached, dict):
-            _diag_count("export_uuid_cache_hits")
-            return dict(cached)
-    if env is None:
-        if cache_chain_id:
-            _diag_count("unexpected_cache_misses")
-            _diag(f"cache miss: short uuid {u_short} (chainID={cache_chain_id})")
-        else:
-            _diag_count("export_uuid_cache_misses")
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        obj = hook_support.export_uuid_short(
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            uuid_short=u_short,
-            env=(env or os.environ.copy()),
-            timeout=2.5,
-            retries=2,
-            diag=_diag,
-        )
-        if env is None and isinstance(obj, dict):
-            _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
-        return obj
-    env = env or os.environ.copy()
-    result = _run_task_result(
-        _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
-        env=env,
-        timeout=2.5,
-        retries=2,
-    )
-    if not result.ok:
-        _diag(f"export uuid:{u_short} failed: {result.stderr.strip()}")
-        return None
-    try:
-        obj = json.loads(result.stdout.strip() or "{}")
-        if not obj.get("uuid"):
-            return None
-        if not str(obj.get("uuid") or "").lower().startswith((u_short or "").lower()):
-            _diag(f"uuid prefix mismatch for {u_short}")
-            return None
-        if env is None:
-            _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
-        return obj
-    except Exception:
-        return None
-
-
-def _task_lookup_by_uuid(u: str, env: dict | None):
-    """Return a tri-state child verification result for mutation decisions."""
-    hook_support = _module("hook_support", required=False)
-    if hook_support is None:
-        return None
-    if env is None:
-        cached_read = _read_query_get("uuid", str(u or "").lower())
-        if cached_read is not _READ_QUERY_MISSING:
-            # Empty legacy cache entries can represent an earlier parse or
-            # command failure; only a task-bearing entry is authoritative.
-            if isinstance(cached_read, dict) and cached_read.get("uuid"):
-                return hook_support.LookupResult.found(cached_read)
-    return hook_support.task_lookup_by_uuid_uncached(
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        uuid_str=u,
-        env=env,
-        timeout=2.5,
-        retries=2,
-        diag=_diag,
-    )
-
-
 def _reserve_child_uuid(env: dict) -> str:
     candidate = str(uuid.uuid4())
     while True:
@@ -2014,14 +1847,11 @@ def tw_export_chain_required(seed_task, env=None):
             "ChainID is required (legacy chain traversal removed). "
             "Run dev_tools/nautical_backfill_chainid.py, then retry."
         )
-    if env is None:
-        rows = _lifecycle_read_service().get_chain_export(chain_id)
-        if rows is None:
-            raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
-        return rows
-    ok, rows, error = _tw_export_chain_checked(chain_id, env=env, limit=_MAX_CHAIN_WALK)
-    if not ok:
-        raise RuntimeError(error or f"Chain export unavailable for chainID {chain_id}")
+    if env is not None:
+        raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
+    rows = _lifecycle_read_service().get_chain_export(chain_id)
+    if rows is None:
+        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
     return rows
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
@@ -2386,14 +2216,31 @@ def _chain_export_for_cache(
     extra: str | None,
     limit: int,
 ) -> tuple[dict, ...]:
-    """Validated exporter injected into the lifecycle read service cache."""
-    global _LAST_CHAIN_EXPORT_STATUS
-    _LAST_CHAIN_EXPORT_STATUS = (True, "")
-    rows = tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit)
-    ok, error = _LAST_CHAIN_EXPORT_STATUS
-    if not ok:
-        raise RuntimeError(error or "chain export unavailable")
-    return tuple(rows)
+    """Load one authoritative chain and apply presentation filters in memory."""
+    repository = getattr(_modify_runtime_state(), "task_repository", None)
+    if repository is None:
+        raise RuntimeError("modify task repository is unavailable")
+    integration_models = importlib.import_module("nautical_core.integration_models")
+    read = repository.chain_snapshot(chain_id)
+    if isinstance(read, integration_models.Unavailable):
+        raise RuntimeError(read.evidence.detail or "chain export unavailable")
+    if isinstance(read, integration_models.Absent):
+        return ()
+    if not isinstance(read, integration_models.Found):
+        raise RuntimeError("task repository returned an invalid chain result")
+    rows = [dict(row) for row in read.value]
+    if since is not None:
+        rows = [
+            row
+            for row in rows
+            if (parsed := _dtparse(row.get("modified"))) is not None and parsed > since
+        ]
+    if extra:
+        tokens = _parse_extra_tokens(extra)
+        if tokens is None:
+            raise RuntimeError("invalid chain export filters")
+        rows = [row for row in rows if all(_cached_chain_token_match(row, token) for token in tokens)]
+    return tuple(rows[: max(1, int(limit or _MAX_CHAIN_WALK))])
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:
     if not isinstance(task, dict) or not isinstance(token, str) or not token:
@@ -3662,156 +3509,21 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
         out.append(f"{key}:{value}")
     return out
 
-def _chain_export_timeout(chain_id: str) -> float:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    base = float(_CHAIN_EXPORT_TIMEOUT_BASE)
-    per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
-    max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
-    est = base
-    cache_len = _lifecycle_read_service().cache_size(chain_id) if chain_id else 0
-    cache_match = bool(cache_len)
-    if cache_match:
-        extra = max(0, cache_len // 100)
-        est = base + (extra * per_100)
-    adaptive = 0.0
-    if _CHAIN_EXPORT_TIMES:
-        try:
-            times = sorted(t for t in _CHAIN_EXPORT_TIMES if t > 0)
-        except Exception:
-            times = []
-        if times:
-            idx = int(0.95 * (len(times) - 1))
-            p95 = times[max(0, min(idx, len(times) - 1))]
-            adaptive = p95 * 2.0
-    floor = _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if floor < base:
-        floor = base
-        _CHAIN_EXPORT_TIMEOUT_FLOOR = base
-    if est < base:
-        est = base
-    timeout = max(est, adaptive, floor)
-    if timeout > max_t:
-        timeout = max_t
-    return timeout
-
-def _tw_export_chain_success(elapsed: float) -> None:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if elapsed > 0:
-        _CHAIN_EXPORT_TIMES.append(elapsed)
-        if len(_CHAIN_EXPORT_TIMES) > _CHAIN_EXPORT_TIMES_MAX:
-            del _CHAIN_EXPORT_TIMES[:len(_CHAIN_EXPORT_TIMES) - _CHAIN_EXPORT_TIMES_MAX]
-    if _CHAIN_EXPORT_TIMEOUT_FLOOR > _CHAIN_EXPORT_TIMEOUT_BASE:
-        _CHAIN_EXPORT_TIMEOUT_FLOOR = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_FLOOR * 0.9)
-
-
-def _tw_export_chain_failure(chain_id: str, err: str, timeout: float, failure_kind) -> None:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if getattr(failure_kind, "value", failure_kind) == "timeout":
-        _CHAIN_EXPORT_TIMEOUT_FLOOR = min(
-            _CHAIN_EXPORT_TIMEOUT_MAX,
-            max(_CHAIN_EXPORT_TIMEOUT_FLOOR, timeout * 1.5),
-        )
-    _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
-    if chain_id and chain_id in _WARNED_CHAIN_EXPORT:
-        return
-    if chain_id:
-        _WARNED_CHAIN_EXPORT.add(chain_id)
-    if getattr(failure_kind, "value", failure_kind) in {"busy", "timeout"}:
-        reason = "Taskwarrior lock active"
-    else:
-        reason = (err or "").strip() or "task export failed"
-    _panel("⚠ Chain export failed", [("ChainID", chain_id), ("Reason", reason)], kind="warning")
-
-
-def _tw_export_chain_parse(out: str) -> list[dict]:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.parse_export_array(out, diag=_diag)
-    try:
-        data = json.loads(out.strip() or "[]")
-        return data if isinstance(data, list) else [data]
-    except Exception as e:
-        _diag(f"tw_export_chain JSON parse failed: {e}")
-        return []
-
-
-def _tw_export_chain_checked(
-    chain_id: str,
-    since: datetime | None = None,
-    extra: str | None = None,
-    env=None,
-    limit: int | None = None,
-) -> tuple[bool, list[dict], str]:
-    """Compatibility facade for the typed lifecycle chain-read service."""
-    service = _lifecycle_read_service()
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        def run_task_result(command, **kwargs):
-            return hook_support.run_task_result(run_task=_run_task_result, cmd=command, **kwargs)
-
-        def parse_result(result):
-            return hook_support.parse_export_array_result(result, diag=_diag)
-    else:
-        run_task_result = _run_task_result
-
-        def parse_result(result):
-            if not result.ok:
-                return False, [], result.stderr or "task export failed"
-            try:
-                parsed = json.loads((result.stdout or "").strip())
-                if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
-                    raise ValueError("expected an array of task objects")
-                return True, parsed, ""
-            except Exception as exc:
-                return False, [], f"Taskwarrior export returned invalid JSON: {exc}"
-
-    result = service.export_chain_checked(
-        chain_id,
-        since=since,
-        extra=extra,
-        env=env,
-        limit=limit,
-        run_task_result=run_task_result,
-        parse_result=parse_result,
-        timeout_for_chain=_chain_export_timeout,
-        read_query_missing=_READ_QUERY_MISSING,
-        on_failure=lambda error, export_timeout, failure_kind: _tw_export_chain_failure(
-            chain_id, error, export_timeout, failure_kind
-        ),
-        on_success=_tw_export_chain_success,
-    )
-    return result.ok, result.rows, result.error
-
-
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
-    """Return rows for compatibility; internal mutation reads use checked results."""
-    global _LAST_CHAIN_EXPORT_STATUS
-    _ok, rows, _error = _tw_export_chain_checked(
-        chain_id,
-        since=since,
-        extra=extra,
-        env=env,
-        limit=limit,
-    )
-    _LAST_CHAIN_EXPORT_STATUS = (_ok, _error)
-    return rows
-
-
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
-    """Return the first/last chain task using a minimal export."""
-    modify_queries = _module("modify_queries")
-    hook_support = _module("hook_support", required=False)
-    parser = (hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse)
-    return modify_queries.export_chain_endpoint(
-        chain_id,
-        direction,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        parse_export_array=parser,
-        diag=_diag,
-        timeout=3.0,
-        retries=1,
-    )
+    """Return a chain endpoint from the invocation's authoritative snapshot."""
+    rows = _lifecycle_read_service().get_chain_export(chain_id)
+    if rows is None:
+        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
+    with_links = [
+        (core.coerce_int(row.get("link"), None), row)
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    with_links = [(link, row) for link, row in with_links if link is not None]
+    if not with_links:
+        return None
+    with_links.sort(key=lambda item: item[0])
+    return dict(with_links[0 if direction == "first" else -1][1])
 
 # ------------------------------------------------------------------------------
 # Main
@@ -4543,7 +4255,7 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
 
 
 def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
-    del unit_of_work
+    _modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
     services = modify_ordinary.OrdinaryModifyServices(
@@ -5026,6 +4738,7 @@ def _completion_build_and_spawn_child(
 
 
 def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
+    _modify_runtime_state().task_repository = unit_of_work.repository
     # Prepare carry-forward fields on an isolated snapshot.  A malformed
     # carry must never leave the Taskwarrior response partially rewritten.
     prepared = dict(new)
@@ -5067,13 +4780,11 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "Completion
     if snapshot.mode == "full" and snapshot.loaded:
         _lifecycle_read_service().replace_chain_cache(chain_id, preloaded_chain)
         _diag_count("chain_cache_seeded")
-        _export_uuid_short_cached.cache_clear()
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
     services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,
         seed_runtime_lookup_tasks=_seed_runtime_lookup_tasks,
         modify_chain_state=_modify_chain_state,
-        export_uuid_short_cached=_export_uuid_short_cached,
         lifecycle_read_service=_lifecycle_read_service(),
         chain_health_advice=_chain_health_advice,
         chain_integrity_warnings=_chain_integrity_warnings,
@@ -5145,7 +4856,7 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
 
 
 def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
-    del unit_of_work
+    _modify_runtime_state().task_repository = unit_of_work.repository
     if str(old.get("status") or "").strip().lower() != "pending":
         return
     if not ((old.get("chainID") or new.get("chainID") or "").strip()):

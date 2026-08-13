@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from .hook_support import LookupResult
+from .integration_models import CommandFailureKind
 
 
 TaskRow = dict[str, Any]
@@ -40,14 +41,19 @@ class ChainReadResult:
     ok: bool
     rows: list[TaskRow]
     error: str = ""
+    failure_kind: CommandFailureKind | None = None
 
     @classmethod
     def success(cls, rows: Sequence[TaskRow]) -> "ChainReadResult":
-        return cls(True, list(rows), "")
+        return cls(True, list(rows), "", None)
 
     @classmethod
-    def failure(cls, error: str) -> "ChainReadResult":
-        return cls(False, [], str(error or "chain export unavailable"))
+    def failure(
+        cls,
+        error: str,
+        kind: CommandFailureKind = CommandFailureKind.INVALID_RESPONSE,
+    ) -> "ChainReadResult":
+        return cls(False, [], str(error or "chain export unavailable"), kind)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +211,7 @@ class LifecycleReadService:
         timeout: float,
         run_task_result: Callable[..., Any],
         parse_result: Callable[[Any], tuple[bool, list[TaskRow], str]],
-        on_failure: Callable[[str, float], None] | None = None,
+        on_failure: Callable[[str, float, CommandFailureKind], None] | None = None,
         on_success: Callable[[float], None] | None = None,
     ) -> ChainReadResult:
         """Run and strictly validate one Taskwarrior chain export."""
@@ -221,9 +227,14 @@ class LifecycleReadService:
         elapsed = time.perf_counter() - started
         if not ok:
             message = str(error or "Taskwarrior export failed")
+            failure_kind = (
+                CommandFailureKind.INVALID_RESPONSE
+                if result.ok
+                else CommandFailureKind(result.kind)
+            )
             if callable(on_failure):
-                on_failure(message, timeout)
-            return ChainReadResult.failure(message)
+                on_failure(message, timeout, failure_kind)
+            return ChainReadResult.failure(message, failure_kind)
         if callable(on_success):
             on_success(elapsed)
         return ChainReadResult.success(rows)
@@ -504,7 +515,7 @@ class LifecycleReadService:
         parse_result: Callable[[Any], tuple[bool, list[TaskRow], str]],
         timeout_for_chain: Callable[[str], float],
         read_query_missing: object,
-        on_failure: Callable[[str, float], None] | None = None,
+        on_failure: Callable[[str, float, CommandFailureKind], None] | None = None,
         on_success: Callable[[float], None] | None = None,
     ) -> ChainReadResult:
         """Run one checked export using the service-owned cache boundary."""

@@ -44,7 +44,6 @@ def export_uuid(
     timeout: float,
     retries: int,
     retry_delay: float,
-    is_lock_error: Callable[[str], bool],
 ) -> ExitExportResult:
     from nautical_core.exit_models import ExitExportResult
 
@@ -56,7 +55,6 @@ def export_uuid(
             timeout=timeout,
             retries=retries,
             retry_delay=retry_delay,
-            is_lock_error=is_lock_error,
             tolerate_noisy_stdout=True,
         )
         return ExitExportResult(
@@ -105,7 +103,6 @@ def existing_equivalent_child(
     timeout: float,
     retries: int,
     retry_delay: float,
-    is_lock_error: Callable[[str], bool],
     short_uuid_fn: Callable[[str], str],
 ) -> ExitEquivalentChildResult:
     from nautical_core.exit_models import ExitEquivalentChildResult

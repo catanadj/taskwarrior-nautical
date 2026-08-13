@@ -78,7 +78,7 @@ def precheck_parent_guard(
 
     clear_res = services.clear_parent_nextlink_if_matches(ctx.parent_uuid, ctx.child_short)
     if not clear_res.ok:
-        if clear_res.err in {"parent export locked", "parent lock busy"} or services.is_lock_error(clear_res.err):
+        if clear_res.retryable:
             return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
         mismatch += f"; optimistic parent link cleanup failed: {clear_res.err}"
         services.diag(f"stale spawn intent cleanup failed: {clear_res.err}")
@@ -126,7 +126,7 @@ def ensure_child_exists_for_entry(
             return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
         import_res = services.import_child(ctx.child)
         if not import_res.ok:
-            if services.is_lock_error(import_res.err):
+            if import_res.retryable:
                 return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
             if not services.export_uuid(ctx.child_uuid, prefer_cache=False).exists:
                 if ctx.spawn_intent_id:
@@ -174,7 +174,7 @@ def apply_parent_update_for_entry(
         services.diag(f"parent update failed (intent={ctx.spawn_intent_id}): {ctx.parent_uuid}")
     else:
         services.diag(f"parent update failed: {ctx.parent_uuid}")
-    if update_res.err in {"parent export locked", "parent lock busy"} or services.is_lock_error(update_res.err):
+    if update_res.retryable:
         return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
     if imported:
         services.cleanup_orphan_child(ctx.child_uuid, ctx.spawn_intent_id)

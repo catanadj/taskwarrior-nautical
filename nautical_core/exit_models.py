@@ -70,10 +70,6 @@ class ExitParentGuardCallback(Protocol):
     def __call__(self, ctx: "ExitEntryContext") -> str: ...
 
 
-class ExitLockErrorCallback(Protocol):
-    def __call__(self, error: str) -> bool: ...
-
-
 class ExitDiagnosticCallback(Protocol):
     def __call__(self, message: str) -> None: ...
 
@@ -105,7 +101,6 @@ class ExitPrecheckServices:
     parent_nextlink_state: ExitParentNextlinkStateCallback
     export_uuid: ExitExportCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
-    is_lock_error: ExitLockErrorCallback
     diag: ExitDiagnosticCallback
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
     recurrence_fingerprint: ExitRecurrenceFingerprintCallback | None = None
@@ -116,7 +111,6 @@ class ExitEnsureChildServices:
     export_uuid: ExitExportCallback
     import_child: ExitImportCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
-    is_lock_error: ExitLockErrorCallback
     diag: ExitDiagnosticCallback
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
 
@@ -124,7 +118,6 @@ class ExitEnsureChildServices:
 @dataclass(slots=True)
 class ExitApplyParentUpdateServices:
     update_parent_nextlink: ExitParentUpdateCallback
-    is_lock_error: ExitLockErrorCallback
     cleanup_orphan_child: ExitCleanupCallback
     diag: ExitDiagnosticCallback
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
@@ -159,6 +152,7 @@ class ExitEquivalentChildResult:
 class ExitImportResult:
     ok: bool
     err: str
+    retryable: bool = False
 
 
 class LifecycleBatchDecisionKind(str, Enum):
@@ -229,6 +223,7 @@ class ExitParentUpdateResult:
     ok: bool
     err: str
     state: str = ""
+    retryable: bool = False
 
 
 @dataclass(slots=True)

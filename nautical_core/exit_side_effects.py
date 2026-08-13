@@ -30,18 +30,18 @@ def _typed_result(run_task, cmd, *, input_text=None, timeout: float, retries: in
     )
 
 
+def _retryable(result: TaskCommandResult) -> bool:
+    return result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT}
+
+
 def import_child(
     obj: dict[str, Any],
     *,
     run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_import: float,
-    is_lock_error: Callable[[str], bool],
-    sleep: Callable[[float], None],
-    random_uniform: Callable[[float, float], float],
 ) -> ExitImportResult:
     payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-    del is_lock_error, sleep, random_uniform
     result = _typed_result(
         run_task,
         task_cmd_prefix + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
@@ -53,7 +53,7 @@ def import_child(
     from nautical_core.exit_models import ExitImportResult
     if result.ok:
         return ExitImportResult(True, "")
-    return ExitImportResult(False, result.stderr or result.kind.value)
+    return ExitImportResult(False, result.stderr or result.kind.value, _retryable(result))
 
 
 def import_children(
@@ -75,7 +75,7 @@ def import_children(
         input_text=payload,
         timeout=timeout_import,
     )
-    return ExitImportResult(bool(result.ok), result.stderr or "")
+    return ExitImportResult(bool(result.ok), result.stderr or "", _retryable(result))
 
 
 def parent_nextlink_state(
@@ -141,7 +141,7 @@ def update_parent_nextlink(
         return ExitParentUpdateResult(False, "missing parent or child")
     with lock_parent_nextlink(parent_uuid) as locked:
         if not locked:
-            return ExitParentUpdateResult(False, "parent lock busy")
+            return ExitParentUpdateResult(False, "parent lock busy", retryable=True)
         if isinstance(parent_snapshot, dict):
             from nautical_core.exit_models import ExitParentNextlinkStateResult
 
@@ -223,11 +223,26 @@ def update_parent_nextlink(
                 if post_state.state == "already":
                     return ExitParentUpdateResult(True, "", "already")
                 if post_state.state in {"locked", "conflict", "missing", "invalid"}:
-                    return ExitParentUpdateResult(False, post_state.err, post_state.state)
-            return ExitParentUpdateResult(False, result.stderr or "parent update failed", "failed")
+                    return ExitParentUpdateResult(
+                        False,
+                        post_state.err,
+                        post_state.state,
+                        post_state.state == "locked",
+                    )
+            return ExitParentUpdateResult(
+                False,
+                result.stderr or "parent update failed",
+                "failed",
+                _retryable(result),
+            )
         if state_res.state == "already":
             return ExitParentUpdateResult(True, "", "already")
-        return ExitParentUpdateResult(False, state_res.err, state_res.state)
+        return ExitParentUpdateResult(
+            False,
+            state_res.err,
+            state_res.state,
+            state_res.state == "locked",
+        )
 
 
 def clear_parent_nextlink_if_matches(
@@ -249,10 +264,14 @@ def clear_parent_nextlink_if_matches(
         return ExitParentUpdateResult(False, "missing parent or child")
     with lock_parent_nextlink(parent_uuid) as locked:
         if not locked:
-            return ExitParentUpdateResult(False, "parent lock busy")
+            return ExitParentUpdateResult(False, "parent lock busy", retryable=True)
         parent_res = export_uuid(parent_uuid)
         if parent_res.retryable:
-            return ExitParentUpdateResult(False, parent_res.err or "parent export locked")
+            return ExitParentUpdateResult(
+                False,
+                parent_res.err or "parent export locked",
+                retryable=True,
+            )
         parent = parent_res.obj
         if not parent:
             return ExitParentUpdateResult(True, "")
@@ -273,7 +292,11 @@ def clear_parent_nextlink_if_matches(
             retries=retries_modify,
             retry_delay=retry_delay,
         )
-        return ExitParentUpdateResult(result.ok, result.stderr or "")
+        return ExitParentUpdateResult(
+            result.ok,
+            result.stderr or "",
+            retryable=_retryable(result),
+        )
 
 
 def cleanup_orphan_child(
@@ -348,4 +371,4 @@ def cleanup_orphan_children(
         retries=retries_modify,
         retry_delay=retry_delay,
     )
-    return ExitImportResult(bool(result.ok), result.stderr or "")
+    return ExitImportResult(bool(result.ok), result.stderr or "", _retryable(result))

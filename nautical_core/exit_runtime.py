@@ -13,7 +13,6 @@ from nautical_core.exit_models import (
     ExitEnsureChildServices,
     ExitExportCallback,
     ExitImportCallback,
-    ExitLockErrorCallback,
     ExitParentNextlinkStateCallback,
     ExitParentNextlinkStateResult,
     ExitParentUpdateCallback,
@@ -51,7 +50,6 @@ class ExitRuntimeServices:
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
     export_uuid: ExitExportCallback
     import_child: ExitImportCallback
-    is_lock_error: ExitLockErrorCallback
     diag: ExitDiagnosticCallback
     update_parent_nextlink: ExitParentUpdateCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
@@ -89,7 +87,6 @@ def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckService
         parent_nextlink_state=parent_nextlink_state,
         export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
-        is_lock_error=runtime.is_lock_error,
         diag=runtime.diag,
         requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
     )
@@ -100,7 +97,6 @@ def build_ensure_child_services(runtime: ExitRuntimeServices) -> ExitEnsureChild
         export_uuid=lambda uuid_str, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         import_child=runtime.import_child,
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
-        is_lock_error=runtime.is_lock_error,
         diag=runtime.diag,
         requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
     )
@@ -109,7 +105,6 @@ def build_ensure_child_services(runtime: ExitRuntimeServices) -> ExitEnsureChild
 def build_apply_parent_update_services(runtime: ExitRuntimeServices) -> ExitApplyParentUpdateServices:
     return ExitApplyParentUpdateServices(
         update_parent_nextlink=runtime.update_parent_nextlink,
-        is_lock_error=runtime.is_lock_error,
         cleanup_orphan_child=runtime.cleanup_orphan_child,
         diag=runtime.diag,
         requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,

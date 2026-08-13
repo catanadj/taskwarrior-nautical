@@ -251,7 +251,6 @@ def export_uuid_status(
     retries: int,
     retry_delay: float = 0.0,
     env: Mapping[str, str] | None = None,
-    is_lock_error: Callable[[str], bool] | None = None,
     tolerate_noisy_stdout: bool = False,
 ) -> dict[str, Any]:
     if not uuid_str:

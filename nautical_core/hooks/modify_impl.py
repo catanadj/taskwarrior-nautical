@@ -193,21 +193,6 @@ def _diag(msg: str) -> None:
             pass
 
 
-def _is_lock_error(stderr: str) -> bool:
-    try:
-        _load_core()
-    except Exception:
-        pass
-    if core is not None:
-        return core.is_lock_error(stderr)
-    s = (stderr or "").lower()
-    return (
-        "database is locked" in s or "unable to lock" in s
-        or "resource temporarily unavailable" in s or "another task is running" in s
-        or "lock file" in s or "lockfile" in s or "locked by" in s or "timeout" in s
-    )
-
-
 def _modify_runtime_state():
     global _MODIFY_RUNTIME_STATE
     if _MODIFY_RUNTIME_STATE is None:
@@ -3737,9 +3722,9 @@ def _tw_export_chain_success(elapsed: float) -> None:
         _CHAIN_EXPORT_TIMEOUT_FLOOR = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_FLOOR * 0.9)
 
 
-def _tw_export_chain_failure(chain_id: str, err: str, timeout: float) -> None:
+def _tw_export_chain_failure(chain_id: str, err: str, timeout: float, failure_kind) -> None:
     global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if "timeout" in (err or "").lower():
+    if getattr(failure_kind, "value", failure_kind) == "timeout":
         _CHAIN_EXPORT_TIMEOUT_FLOOR = min(
             _CHAIN_EXPORT_TIMEOUT_MAX,
             max(_CHAIN_EXPORT_TIMEOUT_FLOOR, timeout * 1.5),
@@ -3749,7 +3734,7 @@ def _tw_export_chain_failure(chain_id: str, err: str, timeout: float) -> None:
         return
     if chain_id:
         _WARNED_CHAIN_EXPORT.add(chain_id)
-    if _is_lock_error(err):
+    if getattr(failure_kind, "value", failure_kind) in {"busy", "timeout"}:
         reason = "Taskwarrior lock active"
     else:
         reason = (err or "").strip() or "task export failed"
@@ -3808,8 +3793,8 @@ def _tw_export_chain_checked(
         parse_result=parse_result,
         timeout_for_chain=_chain_export_timeout,
         read_query_missing=_READ_QUERY_MISSING,
-        on_failure=lambda error, export_timeout: _tw_export_chain_failure(
-            chain_id, error, export_timeout
+        on_failure=lambda error, export_timeout, failure_kind: _tw_export_chain_failure(
+            chain_id, error, export_timeout, failure_kind
         ),
         on_success=_tw_export_chain_success,
     )

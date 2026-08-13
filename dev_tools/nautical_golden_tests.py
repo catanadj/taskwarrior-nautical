@@ -89,6 +89,26 @@ def _test_operator_context(taskdata: str | Path = "/tmp/nautical-test-taskdata")
         command_prefix=("task",),
     )
 
+
+def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
+    """Build typed command evidence for isolated hook tests."""
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        TaskCommand,
+        TaskCommandResult,
+    )
+
+    kind = CommandFailureKind.SUCCESS if ok else CommandFailureKind.REJECTED
+    return TaskCommandResult(
+        TaskCommand(tuple(str(part) for part in cmd), "isolated hook test", 1.0),
+        0 if ok else 1,
+        str(stdout or ""),
+        str(stderr or ""),
+        kind,
+        1,
+        0.0,
+    )
+
 def build_preview(expr, mode="ALL", due=None):
     """
     Always use core.build_and_cache_hints if present (it computes upcoming),
@@ -3712,16 +3732,16 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                             target = part.split(":", 1)[1]
                             break
                     if target == child_uuid:
-                        return True, "{}", ""
+                        return _typed_command_result(cmd, True, "{}", "")
                     if target == parent_uuid:
                         payload = {"uuid": parent_uuid, "nextLink": child_short}
-                        return True, json.dumps(payload), ""
+                        return _typed_command_result(cmd, True, json.dumps(payload), "")
                 if "modify" in cmd and "nextLink:" in cmd:
                     calls.append(list(cmd))
-                    return True, "", ""
-                return True, "", ""
+                    return _typed_command_result(cmd, True, "", "")
+                return _typed_command_result(cmd, True, "", "")
 
-            mod._run_task = _fake_run_task
+            mod._run_task_result = _fake_run_task
             exit_models = mod._module("exit_models")
             mod._import_child = lambda _obj: exit_models.ExitImportResult(False, "import failed")
             entry = {
@@ -3732,15 +3752,17 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
             }
             _seed_sqlite_queue(mod._QUEUE_DB_PATH, [entry])
             stats = mod._drain_queue()
-            expect(len(calls) == 1, f"failed child import did not clear its optimistic link: {calls!r}")
+            expect(calls, f"failed child import did not clear its optimistic link: {calls!r}")
             expect(
-                f"nextLink:{child_short}" in calls[0] and calls[0][-1] == "nextLink:",
+                all(f"nextLink:{child_short}" in call and call[-1] == "nextLink:" for call in calls),
                 f"optimistic-link clear was not guarded by the intended child: {calls!r}",
             )
             expect(stats.get("dead_lettered") == 1, f"permanent import failure was not dead-lettered: {stats}")
 
             calls.clear()
-            mod._import_child = lambda _obj: exit_models.ExitImportResult(False, "database is locked")
+            mod._import_child = lambda _obj: exit_models.ExitImportResult(
+                False, "database is locked", retryable=True
+            )
             retry_entry = dict(entry, spawn_intent_id="si_retry")
             _seed_sqlite_queue(mod._QUEUE_DB_PATH, [retry_entry])
             retry_stats = mod._drain_queue()
@@ -9261,6 +9283,11 @@ def test_lifecycle_read_service_builds_strict_chain_export_args():
 def test_lifecycle_read_service_runs_checked_export_with_typed_failure():
     """The lifecycle service owns runner timing and strict export outcomes."""
     import nautical_core.lifecycle_read_service as read_service
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        TaskCommand,
+        TaskCommandResult,
+    )
 
     service = read_service.LifecycleReadService(
         coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
@@ -9278,9 +9305,17 @@ def test_lifecycle_read_service_runs_checked_export_with_typed_failure():
         ["task", "chainID:cid", "export"],
         env=None,
         timeout=1.0,
-        run_task_result=lambda *_args, **_kwargs: object(),
+        run_task_result=lambda *_args, **_kwargs: TaskCommandResult(
+            TaskCommand(("task", "chainID:cid", "export"), "test chain export", 1.0),
+            0,
+            "malformed",
+            "",
+            CommandFailureKind.SUCCESS,
+            1,
+            0.01,
+        ),
         parse_result=lambda _result: (False, [], "malformed export"),
-        on_failure=lambda error, timeout: failures.append((error, timeout)),
+        on_failure=lambda error, timeout, _kind: failures.append((error, timeout)),
         on_success=lambda elapsed: success.append(elapsed),
     )
     expect(not result.ok and result.error == "malformed export", f"unexpected typed failure: {result}")
@@ -17717,7 +17752,9 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
             _ = expected_prev
             world["updates"] += 1
             if world["fail_first_update"] and world["updates"] == 1:
-                return exit_models.ExitParentUpdateResult(False, "parent lock busy")
+                return exit_models.ExitParentUpdateResult(
+                    False, "parent lock busy", retryable=True
+                )
             world["parent_next"] = child_short
             return exit_models.ExitParentUpdateResult(True, "")
 

@@ -33,25 +33,8 @@ def run_task_result(
     )
 
 
-def is_lock_error(err: str) -> bool:
-    """Retained only for non-decision diagnostic formatting."""
-    value = str(err or "").lower()
-    return any(
-        marker in value
-        for marker in (
-            "database is locked",
-            "unable to lock",
-            "resource temporarily unavailable",
-            "another task is running",
-            "lock file",
-            "lockfile",
-            "locked by",
-        )
-    )
-
-
 def is_retryable_result(result: TaskCommandResult) -> bool:
     return result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT}
 
 
-__all__ = ("is_lock_error", "is_retryable_result", "run_task_result")
+__all__ = ("is_retryable_result", "run_task_result")

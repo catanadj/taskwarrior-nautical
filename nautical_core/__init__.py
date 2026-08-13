@@ -815,10 +815,6 @@ def run_task_result(*args, **kwargs):
     return _runtime_command_module().run_task_result(*args, **kwargs)
 
 
-def is_lock_error(*args, **kwargs):
-    return _runtime_command_module().is_lock_error(*args, **kwargs)
-
-
 # ---- Core iterator over DNF ---------------------------------------------------
 _NTH_RE  = re.compile(
     r"^(?:(\d)(?:st|nd|rd|th)|last)-(mon|tue|wed|thu|fri|sat|sun)$"

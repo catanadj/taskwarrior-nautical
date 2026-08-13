@@ -195,7 +195,3 @@ def _runtime_command_module():
     from . import runtime_command
 
     return runtime_command
-
-
-def is_lock_error(*args, **kwargs):
-    return _runtime_command_module().is_lock_error(*args, **kwargs)

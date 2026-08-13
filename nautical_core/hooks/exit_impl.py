@@ -1188,16 +1188,6 @@ def _run_task_result(
     return result
 
 
-def _is_lock_error(err: str) -> bool:
-    if core is not None:
-        return core.is_lock_error(err)
-    e = (err or "").lower()
-    return (
-        "database is locked" in e or "unable to lock" in e
-        or "resource temporarily unavailable" in e or "another task is running" in e
-        or "lock file" in e or "lockfile" in e or "locked by" in e or "timeout" in e
-    )
-
 def _tw_lock_path() -> Path:
     return _tw_data_dir_path() / "lock"
 
@@ -1930,7 +1920,6 @@ def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
-        is_lock_error=_is_lock_error,
     )
     if not result.retryable:
         _export_cache_set(uuid_str, result)
@@ -1950,7 +1939,6 @@ def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
         timeout=_TASK_TIMEOUT_EXPORT,
         retries=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
-        is_lock_error=_is_lock_error,
         short_uuid_fn=_short_uuid,
     )
     if not result.retryable:
@@ -1965,9 +1953,6 @@ def _import_child(obj: dict):
         run_task=_run_task_result,
         task_cmd_prefix=_task_cmd_prefix(),
         timeout_import=_TASK_TIMEOUT_IMPORT,
-        is_lock_error=_is_lock_error,
-        sleep=_sleep,
-        random_uniform=random.uniform,
     )
 
 
@@ -2693,7 +2678,6 @@ def _exit_runtime_services():
         requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
         export_uuid=_export_uuid,
         import_child=_import_child,
-        is_lock_error=_is_lock_error,
         diag=_diag,
         update_parent_nextlink=_update_parent_nextlink,
         clear_parent_nextlink_if_matches=_clear_parent_nextlink_if_matches,
@@ -2922,7 +2906,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
                 return stage_result
             operation_state = (
                 lifecycle_executor.OperationState.UNAVAILABLE
-                if _is_lock_error(imported.err)
+                if imported.retryable
                 else lifecycle_executor.OperationState.FAILED
             )
             return _lifecycle_operation_result(operation_state, reason=imported.err or "child import failed")
@@ -2997,7 +2981,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
                 )
             operation_state = (
                 lifecycle_executor.OperationState.UNAVAILABLE
-                if _is_lock_error(updated.err)
+                if updated.retryable
                 else lifecycle_executor.OperationState.FAILED
             )
             return _lifecycle_operation_result(operation_state, reason=updated.err or "parent update failed")

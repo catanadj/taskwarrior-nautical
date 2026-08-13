@@ -1851,6 +1851,103 @@ def test_integration_mutation_models_enforce_guards_and_postconditions():
         raise AssertionError("invalid mutation contract was accepted")
 
 
+def test_integration_mutation_requests_use_named_typed_payloads():
+    """Gateway requests reject arbitrary commands and mismatched identities."""
+    from nautical_core.integration_models import (
+        ChainDisablePayload,
+        ChildImportPayload,
+        GuardTimestamp,
+        GuardTimestampField,
+        IntegrationContractError,
+        MetadataRepairPayload,
+        MutationGuard,
+        MutationOperation,
+        MutationRequest,
+        NativeUntilRepairPayload,
+        ParentLinkPayload,
+    )
+
+    parent_uuid = "00000000-0000-0000-0000-000000000922"
+    child_uuid = "00000000-0000-0000-0000-000000000923"
+    guard = MutationGuard(
+        parent_uuid,
+        "completed",
+        "chain-requests",
+        7,
+        "rf1-requests",
+        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),),
+        0,
+    )
+    child = ChildImportPayload.from_mapping(
+        {
+            "uuid": child_uuid,
+            "chainID": "chain-requests",
+            "link": 8,
+            "prevLink": parent_uuid[:8],
+            "description": "typed child",
+        },
+        parent_uuid=parent_uuid,
+    )
+    request = MutationRequest(MutationOperation.CHILD_IMPORT, guard, child)
+    expect(request.payload.child_uuid == child_uuid, "child identity was not retained")
+    expect(request.payload.to_dict()["description"] == "typed child", "child payload was not retained")
+
+    named = (
+        MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),
+        MutationRequest(MutationOperation.CHAIN_DISABLE, guard, ChainDisablePayload(parent_uuid)),
+        MutationRequest(
+            MutationOperation.NATIVE_UNTIL_REPAIR,
+            guard,
+            NativeUntilRepairPayload(parent_uuid, "20260813T200000Z", "20260814T200000Z"),
+        ),
+        MutationRequest(
+            MutationOperation.METADATA_REPAIR,
+            guard,
+            MetadataRepairPayload.from_mapping(parent_uuid, {"nextLink": child_uuid[:8]}),
+        ),
+    )
+    expect(len(named) == 4, "named mutation payloads were not constructible")
+    invalid = (
+        lambda: ChildImportPayload.from_mapping(
+            {"uuid": "short", "chainID": "chain-requests", "link": 8, "prevLink": parent_uuid[:8]},
+            parent_uuid=parent_uuid,
+        ),
+        lambda: MutationRequest(MutationOperation.CHILD_IMPORT, guard, {"uuid": child_uuid}),
+        lambda: MutationRequest(
+            MutationOperation.CHILD_IMPORT,
+            guard,
+            ChildImportPayload.from_mapping(
+                {
+                    "uuid": child_uuid,
+                    "chainID": "other-chain",
+                    "link": 8,
+                    "prevLink": parent_uuid[:8],
+                },
+                parent_uuid=parent_uuid,
+            ),
+        ),
+        lambda: MutationRequest(
+            MutationOperation.CHILD_IMPORT,
+            guard,
+            ChildImportPayload.from_mapping(
+                {
+                    "uuid": child_uuid,
+                    "chainID": "chain-requests",
+                    "link": 7,
+                    "prevLink": parent_uuid[:8],
+                },
+                parent_uuid=parent_uuid,
+            ),
+        ),
+    )
+    for make_invalid in invalid:
+        try:
+            make_invalid()
+        except IntegrationContractError:
+            continue
+        raise AssertionError("untyped or mismatched mutation request was accepted")
+
+
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
     """Outbox work is deterministic and cannot finalize without verified mutations."""
     from nautical_core.integration_models import (
@@ -35427,6 +35524,7 @@ TESTS = [
     test_task_read_repository_mutation_epoch_prevents_stale_reuse,
     test_task_read_repository_exposes_all_domain_reads,
     test_integration_mutation_models_enforce_guards_and_postconditions,
+    test_integration_mutation_requests_use_named_typed_payloads,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,

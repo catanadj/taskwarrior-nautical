@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import math
-from typing import Generic, TypeAlias, TypeVar
+from typing import Generic, Mapping, Protocol, TypeAlias, TypeVar
 
 from .lifecycle_models import LifecycleIdentity
 
@@ -40,6 +40,32 @@ def _required_text(value: object, field: str) -> str:
     if not text:
         raise IntegrationContractError(f"{field} is required")
     return text
+
+
+FrozenValue: TypeAlias = object
+FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
+
+
+def _freeze_value(value: object) -> FrozenValue:
+    if isinstance(value, Mapping):
+        return tuple(sorted((str(key), _freeze_value(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze_value(item) for item in value), key=repr))
+    return value
+
+
+def _freeze_pairs(value: Mapping[str, object]) -> FrozenPairs:
+    return tuple(sorted((str(key), _freeze_value(item)) for key, item in value.items()))
+
+
+def _thaw(value: FrozenValue) -> object:
+    if isinstance(value, tuple):
+        if all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in value):
+            return {key: _thaw(item) for key, item in value}
+        return [_thaw(item) for item in value]
+    return value
 
 
 def _non_negative_float(value: object, field: str, *, positive: bool = False) -> float:
@@ -338,6 +364,218 @@ class MutationOutcome:
         object.__setattr__(self, "reason", reason)
 
 
+@dataclass(frozen=True, slots=True)
+class ChildImportPayload:
+    """Immutable child document and identity supplied to the import gateway."""
+
+    parent_uuid: str
+    child_uuid: str
+    chain_id: str
+    target_link: int
+    fields: FrozenPairs
+
+    def __post_init__(self) -> None:
+        parent_uuid = _required_text(self.parent_uuid, "child parent UUID")
+        child_uuid = _required_text(self.child_uuid, "child UUID")
+        chain_id = _required_text(self.chain_id, "child chainID")
+        try:
+            import uuid
+
+            parsed_uuid = uuid.UUID(child_uuid)
+        except (ValueError, AttributeError) as exc:
+            raise IntegrationContractError("child UUID must be a valid full UUID") from exc
+        if str(parsed_uuid) != child_uuid.lower():
+            raise IntegrationContractError("child UUID must use canonical UUID form")
+        if isinstance(self.target_link, bool) or not isinstance(self.target_link, int) or self.target_link <= 0:
+            raise IntegrationContractError("child target link must be a positive integer")
+        fields = tuple(self.fields)
+        if any(
+            not isinstance(item, tuple) or len(item) != 2 or not isinstance(item[0], str)
+            for item in fields
+        ):
+            raise IntegrationContractError("child payload fields must be frozen key/value pairs")
+        field_map = dict(fields)
+        if str(field_map.get("uuid") or "").strip().lower() != child_uuid.lower():
+            raise IntegrationContractError("child payload UUID does not match its identity")
+        if str(field_map.get("chainID") or "").strip() != chain_id:
+            raise IntegrationContractError("child payload chainID does not match its identity")
+        if _coerce_payload_link(field_map.get("link")) != self.target_link:
+            raise IntegrationContractError("child payload link does not match its identity")
+        if not str(field_map.get("prevLink") or "").strip():
+            raise IntegrationContractError("child payload requires prevLink")
+        object.__setattr__(self, "parent_uuid", parent_uuid)
+        object.__setattr__(self, "child_uuid", str(parsed_uuid))
+        object.__setattr__(self, "chain_id", chain_id)
+        object.__setattr__(self, "fields", fields)
+
+    @classmethod
+    def from_mapping(cls, payload: dict[str, object], *, parent_uuid: str) -> "ChildImportPayload":
+        if not isinstance(payload, dict):
+            raise IntegrationContractError("child import payload must be an object")
+        child_uuid = _required_text(payload.get("uuid"), "child UUID")
+        chain_id = _required_text(payload.get("chainID"), "child chainID")
+        target_link = _coerce_payload_link(payload.get("link"))
+        if target_link is None:
+            raise IntegrationContractError("child import payload requires an integer link")
+        return cls(parent_uuid, child_uuid, chain_id, target_link, _freeze_pairs(payload))
+
+    def to_dict(self) -> dict[str, object]:
+        return {key: _thaw(value) for key, value in self.fields}
+
+
+def _coerce_payload_link(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(float(str(value).strip()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if number >= 0 else None
+
+
+@dataclass(frozen=True, slots=True)
+class ParentLinkPayload:
+    """Expected parent-link update, separated from its task guard."""
+
+    parent_uuid: str
+    child_short_uuid: str
+    expected_next_link: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parent_uuid", _required_text(self.parent_uuid, "parent UUID"))
+        object.__setattr__(self, "child_short_uuid", _required_text(self.child_short_uuid, "child short UUID"))
+        object.__setattr__(self, "expected_next_link", str(self.expected_next_link or "").strip())
+
+
+@dataclass(frozen=True, slots=True)
+class ChainDisablePayload:
+    """Chain state transition requested for one guarded parent task."""
+
+    task_uuid: str
+    expected_chain: str = "on"
+    target_chain: str = "off"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "chain task UUID"))
+        expected = str(self.expected_chain or "").strip().lower()
+        target = str(self.target_chain or "").strip().lower()
+        if expected != "on" or target != "off":
+            raise IntegrationContractError("chain disablement must transition chain:on to chain:off")
+        object.__setattr__(self, "expected_chain", expected)
+        object.__setattr__(self, "target_chain", target)
+
+
+@dataclass(frozen=True, slots=True)
+class NativeUntilRepairPayload:
+    """Native-until replacement with its expected prior value."""
+
+    task_uuid: str
+    expected_until: str
+    replacement_until: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "native-until task UUID"))
+        expected = _required_text(self.expected_until, "expected native until")
+        replacement = _required_text(self.replacement_until, "replacement native until")
+        if expected == replacement:
+            raise IntegrationContractError("native-until repair must change the value")
+        object.__setattr__(self, "expected_until", expected)
+        object.__setattr__(self, "replacement_until", replacement)
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataRepairPayload:
+    """Explicit UDA updates for one guarded lifecycle task."""
+
+    task_uuid: str
+    updates: FrozenPairs
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "metadata task UUID"))
+        updates = tuple(self.updates)
+        if not updates or any(
+            not isinstance(item, tuple) or len(item) != 2 or not isinstance(item[0], str)
+            for item in updates
+        ):
+            raise IntegrationContractError("metadata repair requires non-empty frozen updates")
+        if any(not key.strip() or key in {"uuid", "status"} for key, _value in updates):
+            raise IntegrationContractError("metadata repair cannot update UUID or status")
+        object.__setattr__(self, "updates", updates)
+
+    @classmethod
+    def from_mapping(cls, task_uuid: str, updates: dict[str, object]) -> "MetadataRepairPayload":
+        if not isinstance(updates, dict):
+            raise IntegrationContractError("metadata repair updates must be an object")
+        return cls(task_uuid, _freeze_pairs(updates))
+
+    def to_dict(self) -> dict[str, object]:
+        return {key: _thaw(value) for key, value in self.updates}
+
+
+MutationPayload: TypeAlias = (
+    ChildImportPayload
+    | ParentLinkPayload
+    | ChainDisablePayload
+    | NativeUntilRepairPayload
+    | MetadataRepairPayload
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MutationRequest:
+    """One named mutation with a typed guard and operation payload."""
+
+    operation: MutationOperation
+    guard: MutationGuard
+    payload: MutationPayload
+
+    def __post_init__(self) -> None:
+        try:
+            operation = MutationOperation(self.operation)
+        except (TypeError, ValueError) as exc:
+            raise IntegrationContractError("invalid mutation request operation") from exc
+        if not isinstance(self.guard, MutationGuard):
+            raise IntegrationContractError("mutation request requires a MutationGuard")
+        expected = {
+            MutationOperation.CHILD_IMPORT: ChildImportPayload,
+            MutationOperation.PARENT_LINK: ParentLinkPayload,
+            MutationOperation.CHAIN_DISABLE: ChainDisablePayload,
+            MutationOperation.NATIVE_UNTIL_REPAIR: NativeUntilRepairPayload,
+            MutationOperation.METADATA_REPAIR: MetadataRepairPayload,
+        }[operation]
+        if not isinstance(self.payload, expected):
+            raise IntegrationContractError(
+                f"{operation.value} request requires {expected.__name__}"
+            )
+        task_uuid = getattr(self.payload, "task_uuid", None)
+        if task_uuid is None and isinstance(self.payload, (ChildImportPayload, ParentLinkPayload)):
+            task_uuid = self.payload.parent_uuid
+        if str(task_uuid).strip().lower() != self.guard.task_uuid.lower():
+            raise IntegrationContractError("mutation payload and guard task UUID differ")
+        if isinstance(self.payload, ChildImportPayload):
+            if self.payload.chain_id != self.guard.chain_id:
+                raise IntegrationContractError("child payload and guard chainID differ")
+            if self.payload.target_link <= self.guard.link:
+                raise IntegrationContractError("child target link must follow the guarded parent link")
+        object.__setattr__(self, "operation", operation)
+
+
+class TaskwarriorMutationPort(Protocol):
+    """Named mutation surface shared by lifecycle and operator adapters."""
+
+    def apply(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def import_child(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def link_parent(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def disable_chain(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def repair_native_until(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def repair_metadata(self, request: MutationRequest) -> MutationOutcome: ...
+
+
 class OutboxStage(str, Enum):
     PERSISTED = "persisted"
     CLAIMED = "claimed"
@@ -483,6 +721,8 @@ class OutboxOutcome:
 __all__ = (
     "Absent",
     "CommandFailureKind",
+    "ChainDisablePayload",
+    "ChildImportPayload",
     "FailureEvidence",
     "Found",
     "GuardTimestamp",
@@ -492,11 +732,17 @@ __all__ = (
     "MutationOperation",
     "MutationOutcome",
     "MutationOutcomeKind",
+    "MutationPayload",
     "MutationPostcondition",
+    "MutationRequest",
+    "MetadataRepairPayload",
+    "NativeUntilRepairPayload",
     "OutboxIntent",
     "OutboxOutcome",
     "OutboxOutcomeKind",
     "OutboxStage",
+    "ParentLinkPayload",
+    "TaskwarriorMutationPort",
     "TaskCommand",
     "TaskCommandResult",
     "TaskRead",

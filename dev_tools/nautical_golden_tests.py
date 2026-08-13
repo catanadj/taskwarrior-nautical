@@ -1283,6 +1283,82 @@ def test_taskwarrior_client_retries_only_transient_failures():
     expect(timed_out.returncode == 124 and timed_out.duration < 1.0, f"timeout was not bounded: {timed_out}")
 
 
+def test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation():
+    """Invocation reads carry provenance and cannot survive a mutation epoch."""
+    from nautical_core.integration_context import (
+        IntegrationAccess,
+        IntegrationContext,
+        SilentDiagnostics,
+        SystemClock,
+        ValidatedNauticalConfiguration,
+    )
+    from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
+
+    with tempfile.TemporaryDirectory() as td:
+        context = IntegrationContext(
+            Path(td),
+            "test",
+            (sys.executable,),
+            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
+            timezone.utc,
+            SilentDiagnostics(),
+            SystemClock(),
+            "uow-cache-test",
+            3,
+            IntegrationAccess.MUTATION,
+        )
+        uow = TaskwarriorUnitOfWork.create(context)
+        scope = QueryScope(QueryScopeKind.UUID, "task-uuid", ("pending",))
+        cached = uow.cache_read(scope, {"uuid": "task-uuid"})
+        expect(cached.provenance.scope is scope, f"cache scope provenance changed: {cached}")
+        expect(cached.provenance.mutation_epoch == 0, f"initial epoch changed: {cached}")
+        expect(uow.cached_read(scope) is cached, "authoritative read was not reused")
+
+        expect(uow.record_mutation(affected=(scope,)) == 1, "mutation epoch did not advance")
+        expect(uow.cached_read(scope) is None, "post-mutation read observed stale cache data")
+        uow.cache_read(scope, {"uuid": "task-uuid", "modified": "later"})
+        uow.record_mutation(uncertain=True)
+        expect(uow.mutation_epoch == 2 and uow.reads.size == 0, "uncertain mutation retained cached reads")
+
+
+def test_taskwarrior_uow_observes_budget_without_blocking_commands():
+    """Command budgets remain observable and advisory."""
+    from nautical_core.integration_context import (
+        IntegrationAccess,
+        IntegrationContext,
+        SystemClock,
+        ValidatedNauticalConfiguration,
+    )
+    from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+    events = []
+
+    class Diagnostics:
+        def emit(self, event):
+            events.append(event)
+
+    with tempfile.TemporaryDirectory() as td:
+        context = IntegrationContext(
+            Path(td),
+            "test",
+            (sys.executable,),
+            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
+            timezone.utc,
+            Diagnostics(),
+            SystemClock(),
+            "uow-budget-test",
+            1,
+            IntegrationAccess.READ_ONLY,
+        )
+        uow = TaskwarriorUnitOfWork.create(context)
+        first = uow.client.execute(("-c", "print('one')"), purpose="read one", timeout=1.0)
+        second = uow.client.execute(("-c", "print('two')"), purpose="read two", timeout=1.0)
+        expect(first.ok and second.ok, "advisory budget blocked a command")
+        expect(uow.commands.calls == 2 and uow.commands.attempts == 2, f"command counts changed: {uow.commands}")
+        expect(uow.commands.budget_exceeded, "budget excess was not observable")
+        expect(len(events) == 1 and events[0].stage == "command_budget", f"budget diagnostic changed: {events}")
+
+
 def test_integration_mutation_models_enforce_guards_and_postconditions():
     """Mutation outcomes require complete guards and operation-specific proof."""
     from nautical_core.integration_models import (
@@ -35527,6 +35603,8 @@ TESTS = [
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
+    test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,
+    test_taskwarrior_uow_observes_budget_without_blocking_commands,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,

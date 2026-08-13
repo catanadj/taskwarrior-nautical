@@ -3876,7 +3876,9 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
 
     mod._run_task = _fake_run_task
     mod.TW_DATA_DIR = "/tmp/nautical_test_data"
-    mod._USE_RC_DATA_LOCATION = True
+    mod._INTEGRATION_CONTEXT = SimpleNamespace(
+        command_prefix=("task", f"rc.data.location={mod.TW_DATA_DIR}"),
+    )
 
     mod._export_uuid("beeswax")
     mod._update_parent_nextlink("parent-uuid", "childshort")
@@ -4211,7 +4213,7 @@ def test_core_config_paths_trust_override_allows_parent_traversal_in_env():
     expect(got[0] == os.path.abspath(os.path.expanduser("../nautical.toml")), f"unexpected trusted path: {got!r}")
 
 
-def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
+def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
     hook = _find_hook_file(hook_name)
     prev_core = os.environ.get("NAUTICAL_CORE_PATH")
     prev_argv = list(sys.argv)
@@ -4231,8 +4233,8 @@ def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
                 raise AssertionError("expected hook import to fail without core data resolver")
             except Exception as e:
                 expect(
-                    "resolve_task_data_context" in str(e),
-                    f"unexpected error when resolver missing: {e!r}",
+                    "integration_context.py is required" in str(e),
+                    f"unexpected error when context module is missing: {e!r}",
                 )
         finally:
             sys.argv = prev_argv
@@ -4241,17 +4243,17 @@ def _assert_hook_requires_core_data_context(hook_name: str, module_name: str):
             else:
                 os.environ["NAUTICAL_CORE_PATH"] = prev_core
 
-def test_on_add_requires_core_data_context_helper():
-    """on-add should fail closed when core data-context resolver is unavailable."""
-    _assert_hook_requires_core_data_context("on-add.nautical", "_nautical_on_add_requires_core_data_ctx_test")
+def test_on_add_requires_integration_context_helper():
+    """on-add should fail closed when the integration context is unavailable."""
+    _assert_hook_requires_integration_context("on-add.nautical", "_nautical_on_add_requires_context_test")
 
-def test_on_modify_requires_core_data_context_helper():
-    """on-modify should fail closed when core data-context resolver is unavailable."""
-    _assert_hook_requires_core_data_context("on-modify.nautical", "_nautical_on_modify_requires_core_data_ctx_test")
+def test_on_modify_requires_integration_context_helper():
+    """on-modify should fail closed when the integration context is unavailable."""
+    _assert_hook_requires_integration_context("on-modify.nautical", "_nautical_on_modify_requires_context_test")
 
-def test_on_exit_requires_core_data_context_helper():
-    """on-exit should fail closed when core data-context resolver is unavailable."""
-    _assert_hook_requires_core_data_context("on-exit.nautical", "_nautical_on_exit_requires_core_data_ctx_test")
+def test_on_exit_requires_integration_context_helper():
+    """on-exit should fail closed when the integration context is unavailable."""
+    _assert_hook_requires_integration_context("on-exit.nautical", "_nautical_on_exit_requires_context_test")
 
 def test_on_modify_promotes_chain_when_task_becomes_nautical():
     """Tasks that gain Nautical fields on modify should be promoted to chain:on."""
@@ -35768,9 +35770,9 @@ TESTS = [
     test_core_resolve_task_data_context_rejects_parent_traversal_segments,
     test_core_config_paths_rejects_parent_traversal_in_env,
     test_core_config_paths_trust_override_allows_parent_traversal_in_env,
-    test_on_add_requires_core_data_context_helper,
-    test_on_modify_requires_core_data_context_helper,
-    test_on_exit_requires_core_data_context_helper,
+    test_on_add_requires_integration_context_helper,
+    test_on_modify_requires_integration_context_helper,
+    test_on_exit_requires_integration_context_helper,
     test_on_modify_carry_wall_clock_across_dst,
     test_on_modify_build_child_carries_until_across_dst,
     test_on_modify_native_until_calendar_and_exact_carry_policy,

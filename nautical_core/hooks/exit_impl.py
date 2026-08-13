@@ -3620,7 +3620,12 @@ def run_hook(
     TW_DIR = HOOK_DIR.parent
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
-    _initialize_integration_context()
+    try:
+        _initialize_integration_context()
+    except _hook_runtime_module().HookIntegrationContextError as exc:
+        globals()["core"] = exc.core
+        _emit_exit_feedback(f"[nautical] on-exit: {exc.stage}: {exc.detail}")
+        return 1
 
     state_dir = TW_DATA_DIR / ".nautical-state"
     lock_dir = TW_DATA_DIR / ".nautical-locks"

@@ -5443,7 +5443,12 @@ def run_hook(
     TW_DIR = HOOK_DIR.parent
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
-    _initialize_integration_context()
+    try:
+        _initialize_integration_context()
+    except _hook_runtime_module().HookIntegrationContextError as exc:
+        globals()["core"] = exc.core
+        title = "Invalid Nautical configuration" if exc.stage in {"configuration", "timezone"} else "Nautical integration unavailable"
+        _fail_and_exit(title, exc.detail)
 
     state_dir = TW_DATA_DIR / ".nautical-state"
     lock_dir = TW_DATA_DIR / ".nautical-locks"

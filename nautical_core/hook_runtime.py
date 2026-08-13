@@ -7,6 +7,17 @@ from pathlib import Path
 from typing import Any
 
 
+class HookIntegrationContextError(RuntimeError):
+    """Retain the loaded core so hooks can explain context validation failures."""
+
+    def __init__(self, core: Any, cause: Exception):
+        self.core = core
+        self.cause = cause
+        self.stage = str(getattr(cause, "stage", "context") or "context")
+        self.detail = str(getattr(cause, "detail", "") or cause or type(cause).__name__)
+        super().__init__(f"{self.stage}: {self.detail}")
+
+
 @dataclass(slots=True)
 class HookModuleAccess:
     namespace: dict[str, Any]
@@ -85,12 +96,15 @@ def initialize_integration_context(
             f"in ~/.task or NAUTICAL_CORE_PATH (resolved base: {core_base})"
         )
     context_module = module_access.module("integration_context")
-    context = context_module.build_integration_context(
-        core=core,
-        argv=argv,
-        env=os.environ,
-        tw_dir=tw_dir,
-        task_binary=os.environ.get("NAUTICAL_BENCH_TASK_BIN", "task"),
-        access=context_module.IntegrationAccess(access),
-    )
+    try:
+        context = context_module.build_integration_context(
+            core=core,
+            argv=argv,
+            env=os.environ,
+            tw_dir=tw_dir,
+            task_binary=os.environ.get("NAUTICAL_BENCH_TASK_BIN", "task"),
+            access=context_module.IntegrationAccess(access),
+        )
+    except Exception as exc:
+        raise HookIntegrationContextError(core, exc) from exc
     return core, target, context

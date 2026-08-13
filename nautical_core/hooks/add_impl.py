@@ -2155,7 +2155,12 @@ def run_hook(
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
 
-    _initialize_integration_context()
+    try:
+        _initialize_integration_context()
+    except _hook_runtime_module().HookIntegrationContextError as exc:
+        globals()["core"] = exc.core
+        title = "Invalid Nautical configuration" if exc.stage in {"configuration", "timezone"} else "Nautical integration unavailable"
+        _fail_and_exit(title, exc.detail)
     if protocol is None:
         protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(
             _CORE_BASE,

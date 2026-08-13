@@ -593,6 +593,9 @@ _RECONCILE = None
 _RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
+_INTEGRATION_CONTEXT_MODULE = None
+_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED = False
+_INTEGRATION_CONTEXT = None
 _HOOK_MODULE_ACCESS = None
 _RECURRENCE_EVALUATOR = None
 _RECURRENCE_EVALUATOR_LOAD_FAILED = False
@@ -604,6 +607,12 @@ _MODULE_SPECS = {
         "_HOOK_RUNTIME_LOAD_FAILED",
         "hook_runtime.py",
         "nautical_core.hook_runtime",
+    ),
+    "integration_context": (
+        "_INTEGRATION_CONTEXT_MODULE",
+        "_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED",
+        "integration_context.py",
+        "nautical_core.integration_context",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -796,8 +805,9 @@ def _resolve_task_data_context() -> tuple[str, bool]:
         env=os.environ,
     )
 
-_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_TASKDATA_RAW = ""
+_USE_RC_DATA_LOCATION = False
+TW_DATA_DIR = Path(TW_DIR).expanduser()
 
 
 def _hook_runtime_module():
@@ -824,25 +834,37 @@ def _build_hook_runtime_context():
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
         hook_name="on-modify",
-        taskdata_dir=str(TW_DATA_DIR),
-        use_rc_data_location=_USE_RC_DATA_LOCATION,
-        tw_dir=str(TW_DIR),
+        integration_context=_INTEGRATION_CONTEXT,
         hook_dir=str(HOOK_DIR),
         import_ms=_IMPORT_MS,
     )
 
 
 def _task_cmd_prefix() -> list[str]:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.build_task_cmd_prefix(
-            use_rc_data_location=_USE_RC_DATA_LOCATION,
-            tw_data_dir=TW_DATA_DIR,
-        )
-    cmd = ["task"]
-    if _USE_RC_DATA_LOCATION:
-        cmd.append(f"rc.data.location={TW_DATA_DIR}")
-    return cmd
+    if _INTEGRATION_CONTEXT is None:
+        raise RuntimeError("on-modify integration context is unavailable")
+    return list(_INTEGRATION_CONTEXT.command_prefix)
+
+
+def _initialize_integration_context() -> None:
+    global core, _CORE_IMPORT_TARGET, _INTEGRATION_CONTEXT
+    global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    if _INTEGRATION_CONTEXT is not None:
+        return
+    hook_runtime = _hook_runtime_module()
+    core, target, context = hook_runtime.initialize_integration_context(
+        module_access=_hook_module_access(),
+        hook_bootstrap=hook_bootstrap,
+        core_base=_CORE_BASE,
+        argv=tuple(sys.argv[1:]),
+        tw_dir=str(TW_DIR),
+        access="read_only",
+    )
+    _CORE_IMPORT_TARGET = target
+    _INTEGRATION_CONTEXT = context
+    TW_DATA_DIR = context.taskdata
+    _TASKDATA_RAW = str(context.taskdata)
+    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
 # ------------------------------------------------------------------------------
 # Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
@@ -877,26 +899,7 @@ def _load_core() -> None:
     global core, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
     if core is not None and _CORE_READY:
         return
-    if core is None:
-        module, target, import_error = hook_bootstrap.import_core_package(_CORE_BASE)
-        if target is not None:
-            globals()["_CORE_IMPORT_TARGET"] = target
-        if import_error is not None:
-            globals()["_CORE_IMPORT_ERROR"] = import_error
-        if module is not None:
-            core = module
-    if core is None:
-        msg = (
-            "nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
-            f"(resolved base: {_CORE_BASE})"
-        )
-        raise ModuleNotFoundError(msg)
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    if callable(reload_config):
-        if _USE_RC_DATA_LOCATION:
-            reload_config(TW_DATA_DIR)
-    elif getattr(core, "__file__", None):
-        raise RuntimeError("nautical_core does not provide validated configuration reload")
+    _initialize_integration_context()
     try:
         core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
     except Exception:
@@ -5440,8 +5443,7 @@ def run_hook(
     TW_DIR = HOOK_DIR.parent
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
-    _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-    TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+    _initialize_integration_context()
 
     state_dir = TW_DATA_DIR / ".nautical-state"
     lock_dir = TW_DATA_DIR / ".nautical-locks"

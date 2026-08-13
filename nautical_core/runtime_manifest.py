@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-_SHARED_HOOK_MODULES = ("hook_runtime",)
+_SHARED_HOOK_MODULES = ("hook_runtime", "integration_context")
 
 
 HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {

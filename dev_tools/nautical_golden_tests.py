@@ -1639,6 +1639,43 @@ def test_integration_context_resolves_and_validates_invocation_once():
             raise AssertionError("invalid scheduling configuration was accepted")
 
 
+def test_full_hooks_receive_one_explicit_integration_context():
+    """Full hooks share one context and on-modify cannot acquire mutation access."""
+    from pathlib import Path
+
+    from nautical_core.integration_context import IntegrationAccess
+
+    cases = (
+        ("on-add.nautical", "_nautical_context_add", IntegrationAccess.READ_ONLY),
+        ("on-modify.nautical", "_nautical_context_modify", IntegrationAccess.READ_ONLY),
+        ("on-exit.nautical", "_nautical_context_exit", IntegrationAccess.MUTATION),
+    )
+    previous_argv = list(sys.argv)
+    previous_taskdata = os.environ.get("TASKDATA")
+    try:
+        os.environ.pop("TASKDATA", None)
+        with tempfile.TemporaryDirectory(prefix="nautical_hook_context_") as td:
+            taskdata = Path(td).resolve()
+            for hook_name, module_name, expected_access in cases:
+                sys.argv = [hook_name, f"data:{taskdata}"]
+                module = _load_hook_module(_find_hook_file(hook_name), module_name)
+                context = module._INTEGRATION_CONTEXT
+                expect(context is not None, f"{hook_name} did not construct an integration context")
+                expect(context.taskdata == taskdata, f"{hook_name} changed its Taskdata")
+                expect(context.access is expected_access, f"{hook_name} acquired {context.access.value}")
+                request_context = module._build_hook_runtime_context()
+                expect(
+                    request_context.integration is context,
+                    f"{hook_name} built a second request context",
+                )
+    finally:
+        sys.argv = previous_argv
+        if previous_taskdata is None:
+            os.environ.pop("TASKDATA", None)
+        else:
+            os.environ["TASKDATA"] = previous_taskdata
+
+
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
     """Batch decisions are explicit, unique, and partitionable before mutation."""
     from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
@@ -3806,14 +3843,15 @@ def test_on_exit_reads_data_arg_from_hook_argv():
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-exit.nautical", "api:2", "command:modify", "data:/tmp/nautical_data_arg_test"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is not None:
-            os.environ["TASKDATA"] = prev_taskdata
-    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_data_arg_test"), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
+    with tempfile.TemporaryDirectory(prefix="nautical_data_arg_exit_") as data_dir:
+        sys.argv = ["on-exit.nautical", "api:2", "command:modify", f"data:{data_dir}"]
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_test")
+        finally:
+            sys.argv = prev_argv
+            if prev_taskdata is not None:
+                os.environ["TASKDATA"] = prev_taskdata
+        expect(Path(mod.TW_DATA_DIR) == Path(data_dir), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
     expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
 
 def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
@@ -3852,14 +3890,15 @@ def test_on_modify_reads_data_arg_from_hook_argv():
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-modify.nautical", "api:2", "command:modify", "data:/tmp/nautical_data_arg_mod_test"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is not None:
-            os.environ["TASKDATA"] = prev_taskdata
-    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_data_arg_mod_test"), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
+    with tempfile.TemporaryDirectory(prefix="nautical_data_arg_modify_") as data_dir:
+        sys.argv = ["on-modify.nautical", "api:2", "command:modify", f"data:{data_dir}"]
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_test")
+        finally:
+            sys.argv = prev_argv
+            if prev_taskdata is not None:
+                os.environ["TASKDATA"] = prev_taskdata
+        expect(Path(mod.TW_DATA_DIR) == Path(data_dir), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
     expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
 
 def test_on_add_no_explicit_taskdata_skips_rc_data_location():
@@ -3897,14 +3936,15 @@ def test_on_add_reads_data_arg_from_hook_argv():
     prev_argv = list(sys.argv)
     if "TASKDATA" in os.environ:
         del os.environ["TASKDATA"]
-    sys.argv = ["on-add.nautical", "api:2", "command:add", "data:/tmp/nautical_data_arg_add_test"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_add_data_arg_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is not None:
-            os.environ["TASKDATA"] = prev_taskdata
-    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_data_arg_add_test"), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
+    with tempfile.TemporaryDirectory(prefix="nautical_data_arg_add_") as data_dir:
+        sys.argv = ["on-add.nautical", "api:2", "command:add", f"data:{data_dir}"]
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_add_data_arg_test")
+        finally:
+            sys.argv = prev_argv
+            if prev_taskdata is not None:
+                os.environ["TASKDATA"] = prev_taskdata
+        expect(Path(mod.TW_DATA_DIR) == Path(data_dir), f"unexpected TW_DATA_DIR: {mod.TW_DATA_DIR}")
     expect(bool(getattr(mod, "_USE_RC_DATA_LOCATION", False)), "rc.data.location should be enabled when data arg is present")
 
 def test_on_exit_data_arg_overrides_taskdata_env():
@@ -3912,51 +3952,54 @@ def test_on_exit_data_arg_overrides_taskdata_env():
     hook = _find_hook_file("on-exit.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
-    os.environ["TASKDATA"] = "/tmp/nautical_env_exit_test"
-    sys.argv = ["on-exit.nautical", "api:2", "command:modify", "data:/tmp/nautical_arg_exit_test"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_precedence_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is None:
-            os.environ.pop("TASKDATA", None)
-        else:
-            os.environ["TASKDATA"] = prev_taskdata
-    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_arg_exit_test"), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
+    with tempfile.TemporaryDirectory(prefix="nautical_env_exit_") as env_dir, tempfile.TemporaryDirectory(prefix="nautical_arg_exit_") as arg_dir:
+        os.environ["TASKDATA"] = env_dir
+        sys.argv = ["on-exit.nautical", "api:2", "command:modify", f"data:{arg_dir}"]
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_exit_data_arg_precedence_test")
+        finally:
+            sys.argv = prev_argv
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+        expect(Path(mod.TW_DATA_DIR) == Path(arg_dir), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
 
 def test_on_modify_data_arg_overrides_taskdata_env():
     """on-modify should prefer hook argv data: over TASKDATA env when both are present."""
     hook = _find_hook_file("on-modify.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
-    os.environ["TASKDATA"] = "/tmp/nautical_env_modify_test"
-    sys.argv = ["on-modify.nautical", "api:2", "command:modify", "data:/tmp/nautical_arg_modify_test"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_precedence_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is None:
-            os.environ.pop("TASKDATA", None)
-        else:
-            os.environ["TASKDATA"] = prev_taskdata
-    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_arg_modify_test"), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
+    with tempfile.TemporaryDirectory(prefix="nautical_env_modify_") as env_dir, tempfile.TemporaryDirectory(prefix="nautical_arg_modify_") as arg_dir:
+        os.environ["TASKDATA"] = env_dir
+        sys.argv = ["on-modify.nautical", "api:2", "command:modify", f"data:{arg_dir}"]
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_modify_data_arg_precedence_test")
+        finally:
+            sys.argv = prev_argv
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+        expect(Path(mod.TW_DATA_DIR) == Path(arg_dir), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
 
 def test_on_add_data_arg_overrides_taskdata_env():
     """on-add should prefer hook argv data: over TASKDATA env when both are present."""
     hook = _find_hook_file("on-add.nautical")
     prev_taskdata = os.environ.get("TASKDATA")
     prev_argv = list(sys.argv)
-    os.environ["TASKDATA"] = "/tmp/nautical_env_add_test"
-    sys.argv = ["on-add.nautical", "api:2", "command:add", "data:/tmp/nautical_arg_add_test"]
-    try:
-        mod = _load_hook_module(hook, "_nautical_on_add_data_arg_precedence_test")
-    finally:
-        sys.argv = prev_argv
-        if prev_taskdata is None:
-            os.environ.pop("TASKDATA", None)
-        else:
-            os.environ["TASKDATA"] = prev_taskdata
-    expect(str(mod.TW_DATA_DIR).endswith("/tmp/nautical_arg_add_test"), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
+    with tempfile.TemporaryDirectory(prefix="nautical_env_add_") as env_dir, tempfile.TemporaryDirectory(prefix="nautical_arg_add_") as arg_dir:
+        os.environ["TASKDATA"] = env_dir
+        sys.argv = ["on-add.nautical", "api:2", "command:add", f"data:{arg_dir}"]
+        try:
+            mod = _load_hook_module(hook, "_nautical_on_add_data_arg_precedence_test")
+        finally:
+            sys.argv = prev_argv
+            if prev_taskdata is None:
+                os.environ.pop("TASKDATA", None)
+            else:
+                os.environ["TASKDATA"] = prev_taskdata
+        expect(Path(mod.TW_DATA_DIR) == Path(arg_dir), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
 
 def test_core_resolve_task_data_context_precedence():
     """core resolver should prefer argv data:, then TASKDATA env, then tw_dir fallback."""
@@ -35359,6 +35402,7 @@ TESTS = [
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
+    test_full_hooks_receive_one_explicit_integration_context,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

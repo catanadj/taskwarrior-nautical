@@ -210,33 +210,16 @@ def _modify_implementation_path(path: Path) -> Path:
     return next((candidate for candidate in candidates if candidate.is_file()), path)
 
 
-def _run_task(
-    task_bin: str,
-    args: list[str],
-    *,
-    input_text: str | None = None,
-    timeout: float = 60.0,
-    read_only: bool = False,
-):
-    return task_command.run_task_command(
-        task_bin,
-        args,
-        input_text=input_text,
-        timeout=timeout,
-        retry_locks=read_only,
-        purpose="reconcile read" if read_only else "reconcile mutation",
-    )
-
-
 def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> list[dict[str, Any]]:
     _EXPORT_STATS["calls"] += 1
     started = time.perf_counter()
     try:
-        proc = _run_task(
+        proc = task_command.run_task_command(
             task_bin,
             ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", *filters, "export"],
             timeout=timeout,
-            read_only=True,
+            retry_locks=True,
+            purpose="reconcile read",
         )
         payload = task_command.load_json_result(proc, "task export", empty=[])
         if isinstance(payload, dict):
@@ -682,7 +665,7 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
     link = reconcile.int_or_default(row.get("link"), 0)
     if not uuid or not chain_id or link <= 0:
         raise RuntimeError("native until repair lacks task identity")
-    proc = _run_task(
+    proc = task_command.run_task_command(
         task_bin,
         [
             "rc.hooks=off",
@@ -696,9 +679,10 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
             f"until:{new_until}",
         ],
         timeout=30.0,
+        purpose="reconcile native-until mutation",
     )
     if proc.returncode != 0:
-        raise RuntimeError(task_command.failure_message(proc, "native until repair"))
+        raise task_command.TaskCommandFailure(proc, "native until repair")
 
 
 def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bool:
@@ -857,7 +841,7 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
     filters = _parent_guard_filters(parent)
     updates = ["link:1"] if _is_legacy_root_without_link(parent) else []
     updates.append(f"nextLink:{child_short}")
-    proc = _run_task(
+    proc = task_command.run_task_command(
         task_bin,
         [
             "rc.hooks=off",
@@ -868,16 +852,17 @@ def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: 
             *updates,
         ],
         timeout=30.0,
+        purpose="reconcile parent-link mutation",
     )
     if proc.returncode != 0:
-        raise RuntimeError(task_command.failure_message(proc, "parent nextLink update"))
+        raise task_command.TaskCommandFailure(proc, "parent nextLink update")
 
 
 def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
     filters = _parent_guard_filters(parent)
     updates = ["link:1"] if _is_legacy_root_without_link(parent) else []
     updates.append("chain:off")
-    proc = _run_task(
+    proc = task_command.run_task_command(
         task_bin,
         [
             "rc.hooks=off",
@@ -888,9 +873,10 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
             *updates,
         ],
         timeout=30.0,
+        purpose="reconcile chain-disable mutation",
     )
     if proc.returncode != 0:
-        raise RuntimeError(task_command.failure_message(proc, "parent chain update"))
+        raise task_command.TaskCommandFailure(proc, "parent chain update")
 
 
 def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
@@ -1569,7 +1555,8 @@ class _ReconcileLifecycleServices:
             reason = str(exc).strip() or type(exc).__name__
             state = (
                 OperationState.UNAVAILABLE
-                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                if isinstance(exc, (TimeoutError, ConnectionError, task_command.TaskCommandFailure))
+                and (not isinstance(exc, task_command.TaskCommandFailure) or exc.retryable)
                 else OperationState.FAILED
             )
             return self._result(state, reason=f"chain disablement failed: {reason}")
@@ -1582,7 +1569,8 @@ class _ReconcileLifecycleServices:
             reason = str(exc).strip() or type(exc).__name__
             state = (
                 OperationState.UNAVAILABLE
-                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                if isinstance(exc, (TimeoutError, ConnectionError, task_command.TaskCommandFailure))
+                and (not isinstance(exc, task_command.TaskCommandFailure) or exc.retryable)
                 else OperationState.CONFLICT
             )
             return self._result(state, reason=f"terminal chain verification failed: {reason}")
@@ -1622,7 +1610,8 @@ class _ReconcileLifecycleServices:
             reason = str(exc).strip() or type(exc).__name__
             state = (
                 OperationState.UNAVAILABLE
-                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                if isinstance(exc, (TimeoutError, ConnectionError, task_command.TaskCommandFailure))
+                and (not isinstance(exc, task_command.TaskCommandFailure) or exc.retryable)
                 else OperationState.FAILED
             )
             return self._result(state, reason=f"child import failed: {reason}")
@@ -1687,7 +1676,8 @@ class _ReconcileLifecycleServices:
             reason = str(exc).strip() or type(exc).__name__
             state = (
                 OperationState.UNAVAILABLE
-                if isinstance(exc, (TimeoutError, ConnectionError)) or "lock" in reason.lower()
+                if isinstance(exc, (TimeoutError, ConnectionError, task_command.TaskCommandFailure))
+                and (not isinstance(exc, task_command.TaskCommandFailure) or exc.retryable)
                 else OperationState.FAILED
             )
             return self._result(state, reason=f"parent patch failed: {reason}")
@@ -1705,7 +1695,11 @@ class _ReconcileLifecycleServices:
             )
         except Exception as exc:
             reason = str(exc).strip() or type(exc).__name__
-            state = OperationState.UNAVAILABLE if "lock" in reason.lower() else OperationState.CONFLICT
+            state = (
+                OperationState.UNAVAILABLE
+                if isinstance(exc, task_command.TaskCommandFailure) and exc.retryable
+                else OperationState.CONFLICT
+            )
             return self._result(state, reason=f"parent linkage verification failed: {reason}")
         child.clear()
         child.update(verified)
@@ -1716,10 +1710,11 @@ class _ReconcileLifecycleServices:
         if not child_uuid:
             return self._result(OperationState.FAILED, reason="imported child has no UUID for compensation")
         try:
-            result = _run_task(
+            result = task_command.run_task_command(
                 self.task_bin,
                 ["rc.hooks=off", "rc.confirmation=off", f"uuid:{child_uuid}", "delete"],
                 timeout=30.0,
+                purpose="reconcile child compensation",
             )
             if result.returncode == 0:
                 return self._result(OperationState.APPLIED)

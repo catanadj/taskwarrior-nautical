@@ -24,22 +24,13 @@ from nautical_core.integration_context import (  # noqa: E402
 )
 
 
-def _run_task(command_prefix: tuple[str, ...], args: list[str], *, timeout: float = 60.0, read_only: bool = False):
-    return task_command.run_task_command(
-        command_prefix[0],
-        [*command_prefix[1:], *args],
-        timeout=timeout,
-        retry_locks=read_only,
-        purpose="chain repair read" if read_only else "chain repair mutation",
-    )
-
-
 def _export(command_prefix: tuple[str, ...]) -> list[dict[str, Any]]:
-    proc = _run_task(
-        command_prefix,
-        ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID.not:", "export"],
+    proc = task_command.run_task_command(
+        command_prefix[0],
+        [*command_prefix[1:], "rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID.not:", "export"],
         timeout=120.0,
-        read_only=True,
+        retry_locks=True,
+        purpose="chain repair read",
     )
     payload = task_command.load_json_result(proc, "task export", empty=[])
     if isinstance(payload, dict):
@@ -50,9 +41,10 @@ def _export(command_prefix: tuple[str, ...]) -> list[dict[str, Any]]:
 
 
 def _apply_repair(command_prefix: tuple[str, ...], repair: chain_repair.LinkRepair) -> None:
-    proc = _run_task(
-        command_prefix,
+    proc = task_command.run_task_command(
+        command_prefix[0],
         [
+            *command_prefix[1:],
             "rc.hooks=off",
             "rc.confirmation=off",
             "rc.verbose=nothing",
@@ -61,9 +53,10 @@ def _apply_repair(command_prefix: tuple[str, ...], repair: chain_repair.LinkRepa
             f"{repair.field}:{repair.new}",
         ],
         timeout=30.0,
+        purpose="chain repair mutation",
     )
     if proc.returncode != 0:
-        raise RuntimeError(task_command.failure_message(proc, f"failed to update {repair.short}"))
+        raise task_command.TaskCommandFailure(proc, f"failed to update {repair.short}")
 
 
 def _print_repair(repair: chain_repair.LinkRepair, *, applied: bool) -> None:

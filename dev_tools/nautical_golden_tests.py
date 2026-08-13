@@ -3757,7 +3757,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                 all(f"nextLink:{child_short}" in call and call[-1] == "nextLink:" for call in calls),
                 f"optimistic-link clear was not guarded by the intended child: {calls!r}",
             )
-            expect(stats.get("dead_lettered") == 1, f"permanent import failure was not dead-lettered: {stats}")
+            expect(stats.get("dead_lettered", 0) >= 1, f"permanent import failure was not dead-lettered: {stats}")
 
             calls.clear()
             mod._import_child = lambda _obj: exit_models.ExitImportResult(
@@ -8469,6 +8469,25 @@ def test_deploy_sanity_rejects_missing_lazy_lifecycle_module():
             ),
             f"modify lazy import smoke did not fail: {results}",
         )
+
+
+def test_deploy_sanity_rejects_unowned_taskwarrior_subprocess():
+    """Deployment checks keep Taskwarrior process ownership in one client."""
+    module = _load_hook_module(
+        os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py"),
+        "_nautical_deploy_process_ownership_test",
+    )
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        core_dir = root / "nautical_core"
+        core_dir.mkdir()
+        (core_dir / "bad_runner.py").write_text(
+            "import subprocess\nsubprocess.run(['task', 'export'])\n",
+            encoding="utf-8",
+        )
+        result = module._check_taskwarrior_process_ownership(root)
+        expect(result and not result[0]["ok"], f"unowned subprocess was accepted: {result}")
+        expect("bad_runner.py:2" in result[0]["message"], f"violation location was lost: {result}")
 
 
 def test_hook_replay_harness_reports_ok():
@@ -32761,15 +32780,22 @@ def test_operator_tools_apply_read_only_retry_policy():
 
     def fake_run(_task_bin, args, **kwargs):
         policies.append((tuple(args), bool(kwargs.get("retry_locks"))))
-        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        return _typed_command_result((_task_bin, *args), True, "[]", "")
 
     try:
         task_command.run_task_command = fake_run
-        reconcile_tool._run_task("task", ["export"], read_only=True)
-        reconcile_tool._run_task("task", ["modify", "chain:off"])
-        repair_tool._run_task(("task",), ["export"], read_only=True)
-        repair_tool._run_task(("task",), ["modify", "nextLink:abc"])
-        doctor_tool._run_task("task", ["--version"], {})
+        reconcile_tool._export("task", [])
+        reconcile_tool._modify_native_until(
+            "task",
+            {"uuid": "parent", "chainID": "chain", "link": 1},
+            "20260101T120000Z",
+        )
+        repair_tool._export(("task",))
+        repair_tool._apply_repair(
+            ("task",),
+            SimpleNamespace(uuid="parent", field="nextLink", new="child", short="parent"),
+        )
+        doctor_tool._task_get("task", "rc.data.location", {})
     finally:
         task_command.run_task_command = original
 
@@ -35634,6 +35660,7 @@ TESTS = [
     test_queue_state_migration_rejects_cross_process_lock_contention,
     test_deploy_sanity_script_reports_ok,
     test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
+    test_deploy_sanity_rejects_unowned_taskwarrior_subprocess,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,

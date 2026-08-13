@@ -120,7 +120,7 @@ class TaskwarriorMutationGateway:
             purpose="import reconciled child",
         )
         if not result.ok:
-            raise RuntimeError(task_command.failure_message(result, "child import"))
+            raise task_command.TaskCommandFailure(result, "child import")
         return child_short or child_uuid[:8], set()
 
     def spawn_child(self, child: dict[str, Any], parent: dict[str, Any] | None = None) -> tuple[str, set[str]]:

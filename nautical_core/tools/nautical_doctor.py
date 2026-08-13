@@ -106,28 +106,26 @@ def _finding(
     findings.append(item)
 
 
-def _run_task(task_bin: str, args: list[str], env: dict[str, str], timeout: float = 30.0):
-    return task_command.run_task_command(
+def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
+    proc = task_command.run_task_command(
         task_bin,
-        args,
+        ["_get", key],
         env=env,
-        timeout=timeout,
+        timeout=30.0,
         retry_locks=True,
         purpose="doctor Taskwarrior query",
     )
-
-
-def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
-    proc = _run_task(task_bin, ["_get", key], env)
     return proc.returncode == 0, (proc.stdout or "").strip()
 
 
 def _task_export(task_bin: str, env: dict[str, str]) -> tuple[bool, list[dict[str, Any]], str]:
-    proc = _run_task(
+    proc = task_command.run_task_command(
         task_bin,
         ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "export"],
-        env,
+        env=env,
         timeout=120.0,
+        retry_locks=True,
+        purpose="doctor Taskwarrior query",
     )
     try:
         payload = task_command.load_json_result(proc, "task export", empty=[])
@@ -220,7 +218,14 @@ def _check_runtime(
     taskdata: Path,
     env: dict[str, str],
 ) -> Path:
-    proc = _run_task(task_bin, ["--version"], env)
+    proc = task_command.run_task_command(
+        task_bin,
+        ["--version"],
+        env=env,
+        timeout=30.0,
+        retry_locks=True,
+        purpose="doctor Taskwarrior query",
+    )
     if proc.returncode != 0:
         _finding(
             findings,

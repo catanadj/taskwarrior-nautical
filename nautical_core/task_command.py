@@ -10,6 +10,19 @@ from .integration_models import CommandFailureKind, TaskCommandResult
 from .taskwarrior_client import TaskwarriorClient
 
 
+class TaskCommandFailure(RuntimeError):
+    """A failed Taskwarrior command with its typed boundary evidence."""
+
+    def __init__(self, result: TaskCommandResult, operation: str):
+        self.result = result
+        self.operation = str(operation or "Taskwarrior command")
+        super().__init__(failure_message(result, self.operation))
+
+    @property
+    def retryable(self) -> bool:
+        return self.result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT}
+
+
 def run_command_once(
     argv: Sequence[str],
     *,
@@ -66,7 +79,7 @@ def failure_message(result: TaskCommandResult, operation: str) -> str:
 def load_json_result(result: TaskCommandResult, operation: str, *, empty: Any) -> Any:
     """Decode JSON after the process boundary has established success."""
     if not result.ok:
-        raise RuntimeError(failure_message(result, operation))
+        raise TaskCommandFailure(result, operation)
     raw = result.stdout.strip()
     if not raw:
         return empty
@@ -78,6 +91,7 @@ def load_json_result(result: TaskCommandResult, operation: str, *, empty: Any) -
 
 __all__ = (
     "CommandFailureKind",
+    "TaskCommandFailure",
     "TaskCommandResult",
     "failure_message",
     "load_json_result",

@@ -306,6 +306,40 @@ def _check_scheduler_ownership(root: Path) -> list[dict]:
     }]
 
 
+def _check_taskwarrior_process_ownership(root: Path) -> list[dict]:
+    """Reject direct subprocess boundaries outside their explicit owners."""
+    allowed = {
+        Path("nautical_core/taskwarrior_client.py"),
+        Path("nautical_core/install_runtime.py"),
+    }
+    violations: list[str] = []
+    for path in sorted((root / "nautical_core").rglob("*.py")):
+        relative = path.relative_to(root)
+        if relative in allowed:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError) as exc:
+            violations.append(f"{relative}: parse failed: {exc}")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            owner = node.func.value
+            if (
+                isinstance(owner, ast.Name)
+                and owner.id == "subprocess"
+                and node.func.attr in {"run", "Popen", "call", "check_call", "check_output"}
+            ):
+                violations.append(f"{relative}:{node.lineno} subprocess.{node.func.attr}")
+    return [{
+        "kind": "process-ownership",
+        "name": "taskwarrior-client",
+        "ok": not violations,
+        "message": "ok" if not violations else "; ".join(violations),
+    }]
+
+
 def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
     out: list[dict] = []
     pkg_init = root / "nautical_core" / "__init__.py"
@@ -474,6 +508,7 @@ def main() -> int:
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
         results.extend(_check_scheduler_ownership(root))
+        results.extend(_check_taskwarrior_process_ownership(root))
         results.extend(_check_performance_workflow(root))
         results.extend(_check_workflow_script_references(root))
         results.extend(_check_hook_contracts(root, taskdata))

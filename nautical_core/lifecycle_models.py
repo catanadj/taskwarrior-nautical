@@ -66,13 +66,6 @@ class TaskLifecycleState(str, Enum):
     TERMINAL = "terminal"
 
 
-class QueueProcessingState(str, Enum):
-    QUEUED = "queued"
-    PROCESSING = "processing"
-    FINALIZED = "finalized"
-    DEAD_LETTERED = "dead_lettered"
-
-
 class DeletionDisposition(str, Enum):
     """Evidence-based classification for a deleted Nautical occurrence."""
 
@@ -554,7 +547,6 @@ __all__ = (
     "LifecycleOutcomeKind",
     "LifecyclePlan",
     "ParentGuard",
-    "QueueProcessingState",
     "TaskLifecycleState",
     "TaskSnapshot",
     "recurrence_fingerprint",

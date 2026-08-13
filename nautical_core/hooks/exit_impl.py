@@ -318,9 +318,9 @@ def _load_core() -> None:
         return
     _initialize_integration_context()
     _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
-    globals()["_QUEUE_MAX_LINES"] = _env_int(
-        "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
-        int(getattr(core, "SPAWN_QUEUE_DRAIN_MAX_ITEMS", 200)),
+    globals()["_OUTBOX_BATCH_MAX_ITEMS"] = _env_int(
+        "NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS",
+        int(getattr(core, "OUTBOX_DRAIN_MAX_ITEMS", 200)),
         min_value=1,
         max_value=100000,
     )
@@ -391,7 +391,6 @@ def _build_hook_runtime_context():
 
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 # When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -425,27 +424,27 @@ def _env_int(
     )
 
 
-_QUEUE_MAX_LINES = _env_int(
-    "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
+_OUTBOX_BATCH_MAX_ITEMS = _env_int(
+    "NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS",
     200,
     min_value=1,
     max_value=100000,
 )
-_QUEUE_RETRY_MAX = _env_int("NAUTICAL_QUEUE_RETRY_MAX", 6, min_value=0, max_value=100)
+_OUTBOX_RETRY_MAX = _env_int("NAUTICAL_OUTBOX_RETRY_MAX", 6, min_value=0, max_value=100)
 _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0, min_value=0.1, max_value=300.0)
 _TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0, min_value=0.1, max_value=300.0)
 _TASK_TIMEOUT_MODIFY = _env_float("NAUTICAL_TASK_TIMEOUT_MODIFY", 4.0, min_value=0.1, max_value=300.0)
 _TASK_RETRIES_EXPORT = _env_int("NAUTICAL_TASK_RETRIES_EXPORT", 2, min_value=0, max_value=20)
 _TASK_RETRIES_MODIFY = _env_int("NAUTICAL_TASK_RETRIES_MODIFY", 2, min_value=0, max_value=20)
 _TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2, min_value=0.0, max_value=10.0)
-_QUEUE_LOCK_RETRIES = _env_int("NAUTICAL_QUEUE_LOCK_RETRIES", 6, min_value=0, max_value=100)
-_QUEUE_LOCK_SLEEP_BASE = _env_float("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", 0.03, min_value=0.0, max_value=10.0)
-_QUEUE_LOCK_STALE_AFTER = _env_float("NAUTICAL_QUEUE_LOCK_STALE_AFTER", 30.0, min_value=0.0, max_value=86400.0)
+_PARENT_LOCK_RETRIES = _env_int("NAUTICAL_PARENT_LOCK_RETRIES", 6, min_value=0, max_value=100)
+_PARENT_LOCK_SLEEP_BASE = _env_float("NAUTICAL_PARENT_LOCK_SLEEP_BASE", 0.03, min_value=0.0, max_value=10.0)
+_PARENT_LOCK_STALE_AFTER = _env_float("NAUTICAL_PARENT_LOCK_STALE_AFTER", 30.0, min_value=0.0, max_value=86400.0)
 _LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8, min_value=0, max_value=1000)
 _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05, min_value=0.0, max_value=60.0)
 _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0, min_value=0.0, max_value=300.0)
-_QUEUE_PROCESSING_STALE_AFTER = _env_float(
-    "NAUTICAL_QUEUE_PROCESSING_STALE_AFTER",
+_OUTBOX_LEASE_SECONDS = _env_float(
+    "NAUTICAL_OUTBOX_LEASE_SECONDS",
     300.0,
     min_value=0.0,
     max_value=7 * 86400.0,
@@ -935,7 +934,7 @@ def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
 def _sleep(secs: float) -> None:
     time.sleep(secs)
 
-def _record_queue_lock_failure() -> None:
+def _record_outbox_lock_failure() -> None:
     state = _exit_runtime_state()
     state.outbox_lock_failures_this_run += 1
     now = time.time()
@@ -961,9 +960,9 @@ def _lock_parent_nextlink(parent_uuid: str):
     lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
     with lock_fn(
         _parent_nextlink_lock_path(parent_uuid),
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
+        retries=_PARENT_LOCK_RETRIES,
+        sleep_base=_PARENT_LOCK_SLEEP_BASE,
+        stale_after=_PARENT_LOCK_STALE_AFTER,
     ) as acquired:
         yield acquired
 
@@ -984,7 +983,7 @@ def _lock_backoff_delay(streak: int) -> float:
 
 def _lifecycle_outbox_repository():
     outbox = _module("lifecycle_outbox")
-    return outbox.LifecycleOutboxRepository(TW_DATA_DIR, durable=_DURABLE_QUEUE)
+    return outbox.LifecycleOutboxRepository(TW_DATA_DIR)
 
 
 def _outbox_execution_entry(record) -> dict:
@@ -1014,12 +1013,12 @@ def _take_lifecycle_outbox_batch():
     token = f"exit-{os.getpid()}-{os.urandom(8).hex()}"
     result, records = _lifecycle_outbox_repository().claim_batch(
         owner=token,
-        lease_seconds=max(1.0, _QUEUE_PROCESSING_STALE_AFTER),
-        limit=_QUEUE_MAX_LINES,
+        lease_seconds=max(1.0, _OUTBOX_LEASE_SECONDS),
+        limit=_OUTBOX_BATCH_MAX_ITEMS,
     )
     if not result.ok:
         if result.lock_busy:
-            _record_queue_lock_failure()
+            _record_outbox_lock_failure()
         else:
             _diag(f"lifecycle outbox claim failed: {result.reason or 'unknown error'}")
         return exit_models.ExitQueueBatch(entries=[])
@@ -1813,7 +1812,7 @@ class _DrainState:
 
 
 def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
-    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+    if _bump_attempts(entry) > _OUTBOX_RETRY_MAX:
         state.dead_letter(entry, "exceeded retry budget")
     else:
         state.requeue.append(entry)
@@ -1863,7 +1862,7 @@ def _handle_lifecycle_postcondition_failure(entry: dict, idx: int, state: _Drain
     message = str(reason or "lifecycle postcondition verification failed")
     _diag(f"lifecycle postcondition verification deferred: {message}")
     entry["__outbox_retry_reason"] = message
-    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
+    if _bump_attempts(entry) > _OUTBOX_RETRY_MAX:
         state.dead_letter(entry, message)
     else:
         state.requeue.append(entry)
@@ -2005,7 +2004,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
         if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.UNAVAILABLE:
             reason = batch_decision.reason or "lifecycle batch preflight unavailable"
             _diag(f"lifecycle batch preflight deferred: {reason}")
-            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+            if _bump_attempts(ctx.entry) > _OUTBOX_RETRY_MAX:
                 state.dead_letter(ctx.entry, reason)
             else:
                 state.requeue.append(ctx.entry)
@@ -2033,7 +2032,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
         ):
             reason = "lifecycle child batch import unavailable"
             _diag(f"lifecycle batch import deferred (intent={ctx.spawn_intent_id})")
-            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+            if _bump_attempts(ctx.entry) > _OUTBOX_RETRY_MAX:
                 state.dead_letter(ctx.entry, reason)
             else:
                 state.requeue.append(ctx.entry)
@@ -2303,7 +2302,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
         retry_reason = outcome.reason or "lifecycle transition retry"
         _diag(f"lifecycle transition retry: {retry_reason}")
         ctx.entry["__outbox_retry_reason"] = retry_reason
-        if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
+        if _bump_attempts(ctx.entry) > _OUTBOX_RETRY_MAX:
             state.dead_letter(ctx.entry, retry_reason)
         else:
             state.requeue.append(ctx.entry)

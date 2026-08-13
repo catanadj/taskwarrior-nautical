@@ -13,8 +13,6 @@ Files in this directory:
 
 ```bash
 export NAUTICAL_DIAG_LOG=1
-# optional safety-over-speed mode
-export NAUTICAL_DURABLE_QUEUE=1
 # keep strict mode off during bake-in
 export NAUTICAL_EXIT_STRICT=0
 ```

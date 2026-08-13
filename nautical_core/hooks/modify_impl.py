@@ -802,8 +802,6 @@ def _initialize_integration_context() -> None:
     _TASKDATA_RAW = str(context.taskdata)
     _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
-_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
-
 def _load_core() -> None:
     global core, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
     if core is not None and _CORE_READY:
@@ -1410,10 +1408,7 @@ def _enqueue_spawn_intent(plan) -> tuple[bool, str]:
         return False, "invalid lifecycle plan"
     configuration = _INTEGRATION_CONTEXT.configuration
     outbox = _module("lifecycle_outbox")
-    result = outbox.LifecycleOutboxRepository(
-        TW_DATA_DIR,
-        durable=_DURABLE_QUEUE,
-    ).enqueue(
+    result = outbox.LifecycleOutboxRepository(TW_DATA_DIR).enqueue(
         plan,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,

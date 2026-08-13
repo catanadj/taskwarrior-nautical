@@ -784,28 +784,21 @@ def test_hooks_survive_malformed_numeric_environment():
     """Malformed numeric overrides must not break hook output or disable the full implementations."""
     malformed_names = (
         "NAUTICAL_PROFILE",
-        "NAUTICAL_DEAD_LETTER_RETENTION_DAYS",
-        "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
-        "NAUTICAL_DEAD_LETTER_MAX_BYTES",
-        "NAUTICAL_QUEUE_RETRY_MAX",
+        "NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS",
+        "NAUTICAL_OUTBOX_RETRY_MAX",
         "NAUTICAL_TASK_TIMEOUT_EXPORT",
         "NAUTICAL_TASK_TIMEOUT_IMPORT",
         "NAUTICAL_TASK_TIMEOUT_MODIFY",
         "NAUTICAL_TASK_RETRIES_EXPORT",
         "NAUTICAL_TASK_RETRIES_MODIFY",
         "NAUTICAL_TASK_RETRY_DELAY",
-        "NAUTICAL_QUEUE_LOCK_RETRIES",
-        "NAUTICAL_QUEUE_LOCK_SLEEP_BASE",
-        "NAUTICAL_QUEUE_LOCK_STALE_AFTER",
-        "NAUTICAL_INTENT_LOG_MAX_BYTES",
-        "NAUTICAL_INTENT_LOG_MAX_ENTRIES",
+        "NAUTICAL_PARENT_LOCK_RETRIES",
+        "NAUTICAL_PARENT_LOCK_SLEEP_BASE",
+        "NAUTICAL_PARENT_LOCK_STALE_AFTER",
         "NAUTICAL_LOCK_STORM_THRESHOLD",
         "NAUTICAL_LOCK_BACKOFF_BASE",
         "NAUTICAL_LOCK_BACKOFF_MAX",
-        "NAUTICAL_QUEUE_PROCESSING_STALE_AFTER",
-        "NAUTICAL_QUEUE_DB_CONNECT_RETRIES",
-        "NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX",
-        "NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE",
+        "NAUTICAL_OUTBOX_LEASE_SECONDS",
         "NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE",
         "NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100",
         "NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX",
@@ -1174,9 +1167,9 @@ def test_lifecycle_models_enforce_transition_contract():
         LifecycleOutcomeKind,
         LifecyclePlan,
         ParentGuard,
-        QueueProcessingState,
         TaskLifecycleState,
     )
+    from nautical_core.lifecycle_outbox import OutboxProcessingState
 
     guard = ParentGuard.from_mapping(
         {
@@ -1199,7 +1192,7 @@ def test_lifecycle_models_enforce_transition_contract():
     expect(plan.child_dict()["nested"] == {"unicode": "Répéter 🌊"}, "child payload was not restored")
     expect(plan.parent_patch_dict() == {"nextLink": "child-uuid"}, "parent patch was not restored")
     expect(plan.identity.key.endswith(":complete"), "identity key omitted event")
-    expect(TaskLifecycleState.ACTIVE.value != QueueProcessingState.QUEUED.value, "state domains overlap")
+    expect(TaskLifecycleState.ACTIVE.value != OutboxProcessingState.READY.value, "state domains overlap")
 
     outcome = LifecycleOutcome(
         LifecycleOutcomeKind.APPLIED,
@@ -2598,8 +2591,8 @@ def test_on_exit_claims_and_advances_lifecycle_outbox_only():
         hook = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
         mod = _load_hook_module(hook, "_nautical_on_exit_outbox_adapter_test")
         mod.TW_DATA_DIR = root
-        mod._QUEUE_MAX_LINES = 4
-        mod._QUEUE_PROCESSING_STALE_AFTER = 30.0
+        mod._OUTBOX_BATCH_MAX_ITEMS = 4
+        mod._OUTBOX_LEASE_SECONDS = 30.0
         batch = mod._take_queue_batch()
         expect(len(batch.entries) == 1, f"on-exit did not claim lifecycle outbox entry: {batch.entries}")
         entry = batch.entries[0]
@@ -8619,7 +8612,7 @@ def test_doctor_reports_authoritative_config_schema_findings():
         findings,
         {
             "verify_import": False,
-            "spawn_queue_drain_max_items": 0,
+            "outbox_drain_max_items": 0,
             "panel_mode": "sparkle",
             "setting_typo": True,
         },
@@ -8636,7 +8629,7 @@ def test_doctor_reports_authoritative_config_schema_findings():
         f"doctor schema findings were incomplete: {findings!r}",
     )
     expect(all(item.get("fix") for item in findings), f"schema finding lacked an actionable fix: {findings!r}")
-    drain = next(item for item in findings if (item.get("details") or {}).get("key") == "spawn_queue_drain_max_items")
+    drain = next(item for item in findings if (item.get("details") or {}).get("key") == "outbox_drain_max_items")
     expect(
         (drain.get("details") or {}).get("effective") == 1,
         f"doctor omitted the effective drain limit: {findings!r}",
@@ -10747,22 +10740,22 @@ def test_on_modify_expands_and_clears_description_uda_aliases():
         mod.core.ENABLE_UDA_ALIASES = previous
 
 
-def test_spawn_queue_drain_limit_config_and_env_override():
-    """on-exit should use the config drain limit unless the process env overrides it."""
+def test_outbox_drain_limit_config_and_env_override():
+    """on-exit should use the outbox drain limit unless the process env overrides it."""
     with tempfile.TemporaryDirectory() as td:
         config_path = Path(td) / "nautical.toml"
         config_path.write_text("\n", encoding="utf-8")
         script = (
             "import json\n"
-            "from nautical_core import SPAWN_QUEUE_DRAIN_MAX_ITEMS\n"
+            "from nautical_core import OUTBOX_DRAIN_MAX_ITEMS\n"
             "from nautical_core.hooks import exit_impl\n"
             "exit_impl._load_core()\n"
-            "print(json.dumps([SPAWN_QUEUE_DRAIN_MAX_ITEMS, exit_impl._QUEUE_MAX_LINES]))\n"
+            "print(json.dumps([OUTBOX_DRAIN_MAX_ITEMS, exit_impl._OUTBOX_BATCH_MAX_ITEMS]))\n"
         )
         env = os.environ.copy()
         env["NAUTICAL_CONFIG"] = str(config_path)
         env["TASKDATA"] = td
-        env.pop("NAUTICAL_SPAWN_QUEUE_MAX_LINES", None)
+        env.pop("NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS", None)
         defaulted = subprocess.run(
             [sys.executable, "-c", script],
             cwd=ROOT,
@@ -10771,10 +10764,10 @@ def test_spawn_queue_drain_limit_config_and_env_override():
             capture_output=True,
             timeout=8.0,
         )
-        expect(defaulted.returncode == 0, f"default queue drain import failed: {defaulted.stderr!r}")
+        expect(defaulted.returncode == 0, f"default outbox drain import failed: {defaulted.stderr!r}")
         expect(json.loads(defaulted.stdout) == [32, 32], f"unexpected default drain limit: {defaulted.stdout!r}")
 
-        config_path.write_text("spawn_queue_drain_max_items = 7\n", encoding="utf-8")
+        config_path.write_text("outbox_drain_max_items = 7\n", encoding="utf-8")
         configured = subprocess.run(
             [sys.executable, "-c", script],
             cwd=ROOT,
@@ -10783,10 +10776,10 @@ def test_spawn_queue_drain_limit_config_and_env_override():
             capture_output=True,
             timeout=8.0,
         )
-        expect(configured.returncode == 0, f"configured queue drain import failed: {configured.stderr!r}")
+        expect(configured.returncode == 0, f"configured outbox drain import failed: {configured.stderr!r}")
         expect(json.loads(configured.stdout) == [7, 7], f"config drain limit was not effective: {configured.stdout!r}")
 
-        env["NAUTICAL_SPAWN_QUEUE_MAX_LINES"] = "3"
+        env["NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS"] = "3"
         overridden = subprocess.run(
             [sys.executable, "-c", script],
             cwd=ROOT,
@@ -10798,7 +10791,7 @@ def test_spawn_queue_drain_limit_config_and_env_override():
         expect(overridden.returncode == 0, f"queue drain override import failed: {overridden.stderr!r}")
         expect(
             json.loads(overridden.stdout) == [7, 3],
-            f"environment queue drain override did not win: {overridden.stdout!r}",
+            f"environment outbox drain override did not win: {overridden.stdout!r}",
         )
 
 
@@ -10843,7 +10836,7 @@ def test_config_schema_reports_retired_unknown_and_ineffective_values():
         {
             "verify_import": False,
             "show_analytics": "yes",
-            "spawn_queue_drain_max_items": 0,
+            "outbox_drain_max_items": 0,
             "panel_mode": "sparkle",
             "setting_typo": True,
         }
@@ -10853,7 +10846,7 @@ def test_config_schema_reports_retired_unknown_and_ineffective_values():
         {"deprecated", "type", "range", "choice", "unknown"} <= kinds,
         f"schema issues were incomplete: {issues!r}",
     )
-    drain = next(issue for issue in issues if issue["key"] == "spawn_queue_drain_max_items")
+    drain = next(issue for issue in issues if issue["key"] == "outbox_drain_max_items")
     expect(drain.get("effective") == 1, f"drain limit effective value was not reported: {issues!r}")
     panel = next(issue for issue in issues if issue["key"] == "panel_mode")
     expect(panel.get("effective") == "rich", f"panel fallback was not reported: {issues!r}")
@@ -36412,7 +36405,7 @@ TESTS = [
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
     test_hook_on_add_disabled_uda_aliases_leave_description_untouched,
     test_on_modify_expands_and_clears_description_uda_aliases,
-    test_spawn_queue_drain_limit_config_and_env_override,
+    test_outbox_drain_limit_config_and_env_override,
     test_shipped_config_keeps_hook_toggles_top_level,
     test_shipped_config_matches_authoritative_schema,
     test_config_schema_reports_retired_unknown_and_ineffective_values,

@@ -485,8 +485,7 @@ LIVE_PANEL_DURATION_MS = conf_schema_int("live_panel_duration_ms")
 LIVE_PANEL_FOOTER = conf_schema_str("live_panel_footer")
 FAST_COLOR = conf_schema_bool("fast_color")
 EXIT_PROGRESS = conf_schema_bool("exit_progress")
-SPAWN_QUEUE_MAX_BYTES = conf_schema_int("spawn_queue_max_bytes")
-SPAWN_QUEUE_DRAIN_MAX_ITEMS = conf_schema_int("spawn_queue_drain_max_items")
+OUTBOX_DRAIN_MAX_ITEMS = conf_schema_int("outbox_drain_max_items")
 MAX_CHAIN_WALK = conf_schema_int("max_chain_walk")
 MAX_ANCHOR_ITER = conf_schema_int("max_anchor_iterations")
 MAX_LINK_NUMBER = conf_schema_int("max_link_number")
@@ -544,8 +543,7 @@ def _refresh_config_exports() -> None:
             "LIVE_PANEL_FOOTER": conf_schema_str("live_panel_footer"),
             "FAST_COLOR": conf_schema_bool("fast_color"),
             "EXIT_PROGRESS": conf_schema_bool("exit_progress"),
-            "SPAWN_QUEUE_MAX_BYTES": conf_schema_int("spawn_queue_max_bytes"),
-            "SPAWN_QUEUE_DRAIN_MAX_ITEMS": conf_schema_int("spawn_queue_drain_max_items"),
+            "OUTBOX_DRAIN_MAX_ITEMS": conf_schema_int("outbox_drain_max_items"),
             "MAX_CHAIN_WALK": conf_schema_int("max_chain_walk"),
             "MAX_ANCHOR_ITER": conf_schema_int("max_anchor_iterations"),
             "MAX_LINK_NUMBER": conf_schema_int("max_link_number"),

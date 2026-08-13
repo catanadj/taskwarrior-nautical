@@ -238,13 +238,11 @@ class LifecycleOutboxRepository:
         taskdata: Path,
         *,
         connect_timeout: float = 2.0,
-        durable: bool = False,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.taskdata = Path(taskdata).resolve()
         self.path = lifecycle_outbox_path(self.taskdata)
         self.connect_timeout = max(0.1, float(connect_timeout))
-        self.durable = bool(durable)
         self._clock = clock
 
     def _connect(self) -> sqlite3.Connection:
@@ -253,7 +251,7 @@ class LifecycleOutboxRepository:
         conn = sqlite3.connect(str(self.path), timeout=self.connect_timeout)
         os.chmod(self.path, 0o600)
         conn.row_factory = sqlite3.Row
-        conn.execute(f"PRAGMA synchronous={'FULL' if self.durable else 'NORMAL'}")
+        conn.execute("PRAGMA synchronous=FULL")
         conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
         return conn
 

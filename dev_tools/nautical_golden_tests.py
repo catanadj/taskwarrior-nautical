@@ -1428,6 +1428,135 @@ def test_integration_outbox_models_enforce_deterministic_identity_and_progress()
         raise AssertionError("invalid outbox contract was accepted")
 
 
+def test_integration_contract_covers_all_mutation_and_outbox_states():
+    """Every tagged integration outcome has one valid constructible shape."""
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        GuardTimestamp,
+        GuardTimestampField,
+        MutationGuard,
+        MutationOperation,
+        MutationOutcome,
+        MutationOutcomeKind,
+        MutationPostcondition,
+        OutboxIntent,
+        OutboxOutcome,
+        OutboxOutcomeKind,
+        OutboxStage,
+        TaskCommand,
+    )
+    from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+
+    guard = MutationGuard(
+        "parent-uuid",
+        "completed",
+        "chain-3",
+        2,
+        "rf1-states",
+        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T090000Z"),),
+        0,
+    )
+    command = TaskCommand(("task", "export"), "verify mutation", 10.0)
+    busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.1, True, "lock active")
+    expected = {
+        MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+        MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+        MutationOperation.CHAIN_DISABLE: MutationPostcondition.CHAIN_DISABLED,
+        MutationOperation.NATIVE_UNTIL_REPAIR: MutationPostcondition.NATIVE_UNTIL_REPAIRED,
+        MutationOperation.METADATA_REPAIR: MutationPostcondition.METADATA_REPAIRED,
+    }
+    for operation, postcondition in expected.items():
+        outcome = MutationOutcome(
+            operation,
+            MutationOutcomeKind.APPLIED,
+            guard,
+            (postcondition,),
+        )
+        expect(outcome.operation is operation, f"failed to construct {operation.value} outcome")
+
+    mutation_states = {
+        MutationOutcomeKind.APPLIED: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.APPLIED,
+            guard,
+            (MutationPostcondition.CHAIN_DISABLED,),
+        ),
+        MutationOutcomeKind.ALREADY_APPLIED: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.ALREADY_APPLIED,
+            guard,
+            (MutationPostcondition.CHAIN_DISABLED,),
+        ),
+        MutationOutcomeKind.RETRYABLE: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.RETRYABLE,
+            guard,
+            reason="busy",
+            failure=busy,
+        ),
+        MutationOutcomeKind.REJECTED: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.REJECTED,
+            guard,
+            reason="rejected",
+        ),
+        MutationOutcomeKind.CONFLICT: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.CONFLICT,
+            guard,
+            reason="conflict",
+        ),
+        MutationOutcomeKind.MANUAL_REVIEW: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.MANUAL_REVIEW,
+            guard,
+            reason="review",
+        ),
+    }
+    expect(set(mutation_states) == set(MutationOutcomeKind), "mutation outcome coverage is incomplete")
+
+    identity = LifecycleIdentity("chain-3", "parent-uuid", 2, None, LifecycleEvent.MANUAL_DELETE)
+    intent = OutboxIntent(
+        identity,
+        guard,
+        (MutationOperation.CHAIN_DISABLE,),
+        (MutationPostcondition.CHAIN_DISABLED,),
+    )
+    applied = mutation_states[MutationOutcomeKind.APPLIED]
+    retryable = mutation_states[MutationOutcomeKind.RETRYABLE]
+    conflict = mutation_states[MutationOutcomeKind.CONFLICT]
+    outbox_states = {
+        OutboxOutcomeKind.ADVANCED: OutboxOutcome(
+            intent,
+            OutboxStage.APPLYING,
+            OutboxOutcomeKind.ADVANCED,
+            (),
+        ),
+        OutboxOutcomeKind.FINALIZED: OutboxOutcome(
+            intent,
+            OutboxStage.FINALIZED,
+            OutboxOutcomeKind.FINALIZED,
+            (applied,),
+        ),
+        OutboxOutcomeKind.RETRYABLE: OutboxOutcome(
+            intent,
+            OutboxStage.RETRYABLE,
+            OutboxOutcomeKind.RETRYABLE,
+            (retryable,),
+            "retry later",
+        ),
+        OutboxOutcomeKind.MANUAL_REVIEW: OutboxOutcome(
+            intent,
+            OutboxStage.MANUAL_REVIEW,
+            OutboxOutcomeKind.MANUAL_REVIEW,
+            (conflict,),
+            "guard conflict",
+        ),
+    }
+    expect(set(outbox_states) == set(OutboxOutcomeKind), "outbox outcome coverage is incomplete")
+
+
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
     """Batch decisions are explicit, unique, and partitionable before mutation."""
     from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
@@ -35146,6 +35275,7 @@ TESTS = [
     test_integration_command_and_read_models_enforce_contract,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
+    test_integration_contract_covers_all_mutation_and_outbox_states,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

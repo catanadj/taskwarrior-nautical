@@ -43,6 +43,8 @@ def _required_text(value: object, field: str) -> str:
 
 
 def _non_negative_float(value: object, field: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise IntegrationContractError(f"{field} must be a finite number")
     try:
         number = float(value)
     except (TypeError, ValueError) as exc:
@@ -240,7 +242,10 @@ class MutationGuard:
             or self.expected_mutation_epoch < 0
         ):
             raise IntegrationContractError("guard mutation epoch must be a non-negative integer")
-        timestamps = tuple(self.timestamps)
+        try:
+            timestamps = tuple(self.timestamps)
+        except TypeError as exc:
+            raise IntegrationContractError("guard requires typed timestamp evidence") from exc
         if not timestamps or any(not isinstance(item, GuardTimestamp) for item in timestamps):
             raise IntegrationContractError("guard requires typed timestamp evidence")
         fields = tuple(item.field for item in timestamps)
@@ -318,6 +323,8 @@ class MutationOutcome:
         reason = str(self.reason or "").strip()
         if not succeeded and not reason:
             raise IntegrationContractError(f"{kind.value} mutation outcome requires a reason")
+        if self.failure is not None and not isinstance(self.failure, FailureEvidence):
+            raise IntegrationContractError("mutation failure must be structured evidence")
         if succeeded and self.failure is not None:
             raise IntegrationContractError("successful mutation outcome cannot carry failure evidence")
         if kind is MutationOutcomeKind.RETRYABLE:
@@ -325,8 +332,6 @@ class MutationOutcome:
                 raise IntegrationContractError("retryable mutation outcome requires retryable failure evidence")
         elif self.failure is not None and self.failure.retryable:
             raise IntegrationContractError("retryable failure evidence requires a retryable mutation outcome")
-        if self.failure is not None and not isinstance(self.failure, FailureEvidence):
-            raise IntegrationContractError("mutation failure must be structured evidence")
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "postconditions", postconditions)
@@ -422,7 +427,10 @@ class OutboxOutcome:
             kind = OutboxOutcomeKind(self.kind)
         except (TypeError, ValueError) as exc:
             raise IntegrationContractError("invalid outbox stage or outcome kind") from exc
-        mutations = tuple(self.mutations)
+        try:
+            mutations = tuple(self.mutations)
+        except TypeError as exc:
+            raise IntegrationContractError("outbox outcome requires typed mutation outcomes") from exc
         if any(not isinstance(item, MutationOutcome) for item in mutations):
             raise IntegrationContractError("outbox outcome requires typed mutation outcomes")
         operations = tuple(item.operation for item in mutations)
@@ -460,6 +468,8 @@ class OutboxOutcome:
             }
             if not any(item.kind in review_kinds for item in mutations):
                 raise IntegrationContractError("manual-review outbox outcome requires review evidence")
+        elif any(item.kind not in success_kinds for item in mutations):
+            raise IntegrationContractError("advanced outbox outcome can contain only successful mutations")
 
         reason = str(self.reason or "").strip()
         if kind in {OutboxOutcomeKind.RETRYABLE, OutboxOutcomeKind.MANUAL_REVIEW} and not reason:

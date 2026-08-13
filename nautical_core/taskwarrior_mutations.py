@@ -73,6 +73,14 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def _link_text(value: object) -> str:
+    text = _text(value)
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError, OverflowError):
+        return text
+
+
 def _failure_from_command(result: TaskCommandResult, detail: str) -> FailureEvidence:
     kind = result.kind
     if kind in {CommandFailureKind.SUCCESS, CommandFailureKind.ABSENT}:
@@ -282,7 +290,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             if (
                 _text(row.get("chainID")) == request.payload.chain_id
                 and _text(row.get("prevLink")).lower() == request.guard.task_uuid[:8].lower()
-                and _text(row.get("link")) == str(request.payload.target_link)
+                and _link_text(row.get("link")) == str(request.payload.target_link)
             ):
                 return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="unrelated task already owns child UUID")
@@ -305,7 +313,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             lambda row: (
                 _text(row.get("uuid")).lower() == request.payload.child_uuid.lower()
                 and _text(row.get("chainID")) == request.payload.chain_id
-                and _text(row.get("link")) == str(request.payload.target_link)
+                and _link_text(row.get("link")) == str(request.payload.target_link)
             ),
             target_uuid=request.payload.child_uuid,
         )

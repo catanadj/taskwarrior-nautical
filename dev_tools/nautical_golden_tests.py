@@ -2077,6 +2077,9 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     )
     imported = service.apply(request(MutationOperation.CHILD_IMPORT, child, 0))
     expect(imported.kind is MutationOutcomeKind.APPLIED, f"child import was not applied: {imported}")
+    uow.repository.rows[child_uuid]["link"] = 8.0
+    replay = service.apply(request(MutationOperation.CHILD_IMPORT, child, 1))
+    expect(replay.kind is MutationOutcomeKind.ALREADY_APPLIED, f"numeric child link replay was not normalized: {replay}")
     linked = service.apply(
         request(
             MutationOperation.PARENT_LINK,
@@ -6726,22 +6729,23 @@ def test_health_check_json_ok_empty_taskdata():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "ok", f"unexpected status: {obj}")
 
-def test_health_check_critical_queue_bytes():
-    """health check should return critical when queue exceeds crit threshold."""
+def test_health_check_critical_outbox_bytes():
+    """health check should return critical when the lifecycle outbox exceeds its byte budget."""
     path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
-        q = td_path / ".nautical_spawn_queue.jsonl"
-        q.write_text("x" * 64, encoding="utf-8")
+        outbox = td_path / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+        outbox.parent.mkdir()
+        outbox.write_text("x" * 64, encoding="utf-8")
         p = subprocess.run(
             [
                 sys.executable,
                 path,
                 "--taskdata",
                 td,
-                "--queue-warn-bytes",
+                "--outbox-warn-bytes",
                 "32",
-                "--queue-crit-bytes",
+                "--outbox-crit-bytes",
                 "48",
                 "--json",
             ],
@@ -6753,32 +6757,25 @@ def test_health_check_critical_queue_bytes():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "crit", f"unexpected status: {obj}")
 
-def test_health_check_critical_queue_db_rows():
-    """health check should return critical when sqlite queue rows exceed crit threshold."""
+def test_health_check_critical_outbox_rows():
+    """health check should return critical when lifecycle outbox rows exceed their budget."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
     path = os.path.join(DEV_TOOLS, "nautical_health_check.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
-        db = td_path / ".nautical_queue.db"
-        with sqlite3.connect(str(db)) as conn:
+        repo = LifecycleOutboxRepository(td_path)
+        expect(repo.open().ok, "outbox health test setup failed")
+        with sqlite3.connect(str(repo.path)) as conn:
             conn.execute(
                 """
-                CREATE TABLE queue_entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    spawn_intent_id TEXT,
-                    payload TEXT NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL DEFAULT 'queued',
-                    claim_token TEXT,
-                    claimed_at REAL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
-                "VALUES (?, ?, 0, 'queued', 1.0, 1.0)",
-                ("si_hc", json.dumps({"spawn_intent_id": "si_hc"})),
+                INSERT INTO lifecycle_outbox (
+                    intent_id, plan_json, plan_fingerprint, parent_guard_json,
+                    configuration_fingerprint, schedule_fingerprint,
+                    lifecycle_stage, processing_state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("health-row", "{}", "test", "{}", "test", "test", "planned", "ready", 1.0, 1.0),
             )
             conn.commit()
         p = subprocess.run(
@@ -6787,13 +6784,13 @@ def test_health_check_critical_queue_db_rows():
                 path,
                 "--taskdata",
                 td,
-                "--queue-warn-bytes",
+                "--outbox-warn-bytes",
                 "1048576",
-                "--queue-crit-bytes",
+                "--outbox-crit-bytes",
                 "10485760",
-                "--queue-db-warn-rows",
+                "--outbox-warn-rows",
                 "1",
-                "--queue-db-crit-rows",
+                "--outbox-crit-rows",
                 "1",
                 "--json",
             ],
@@ -6804,8 +6801,8 @@ def test_health_check_critical_queue_db_rows():
         expect(p.returncode == 2, f"expected critical exit code 2, got {p.returncode}. stderr={p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "crit", f"unexpected status: {obj}")
-        metrics = obj.get("metrics") or {}
-        expect(int(metrics.get("queue_db_rows") or 0) == 1, f"expected queue_db_rows=1, got {metrics}")
+        outbox = obj.get("outbox") or {}
+        expect(int(outbox.get("rows") or 0) == 1, f"expected one outbox row, got {outbox}")
 
 
 def test_queue_schema_initializes_and_adopts_legacy_rows():
@@ -9068,12 +9065,12 @@ def test_perf_budget_config_covers_cache_io_checks():
     expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
     expect("build_hints_cold" in budgets, "build_hints_cold budget missing")
     expect("build_hints_warm" in budgets, "build_hints_warm budget missing")
-    expect("queue_schema_hot" in budgets, "queue_schema_hot budget missing")
-    expect("queue_schema_cold" in budgets, "queue_schema_cold budget missing")
+    expect("outbox_schema_hot" in budgets, "outbox_schema_hot budget missing")
+    expect("outbox_schema_cold" in budgets, "outbox_schema_cold budget missing")
     expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
     expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
-    expect("queue_schema_hot_rounds" in workload, "queue_schema_hot_rounds missing from workload")
-    expect("queue_schema_cold_rounds" in workload, "queue_schema_cold_rounds missing from workload")
+    expect("outbox_schema_hot_rounds" in workload, "outbox_schema_hot_rounds missing from workload")
+    expect("outbox_schema_cold_rounds" in workload, "outbox_schema_cold_rounds missing from workload")
     expressions = set(workload.get("expressions") or [])
     expect("y:d60,d-1" in expressions, "year-day latency workload missing")
     expect("y:w20 + w:mon" in expressions, "ISO-week latency workload missing")
@@ -35968,8 +35965,8 @@ TESTS = [
     test_on_add_rejects_oversized_stdin_early,
     test_on_modify_rejects_oversized_stdin_early,
     test_health_check_json_ok_empty_taskdata,
-    test_health_check_critical_queue_bytes,
-    test_health_check_critical_queue_db_rows,
+    test_health_check_critical_outbox_bytes,
+    test_health_check_critical_outbox_rows,
     test_queue_schema_initializes_and_adopts_legacy_rows,
     test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe,
     test_lifecycle_stage_advancement_requires_claim_and_valid_transition,

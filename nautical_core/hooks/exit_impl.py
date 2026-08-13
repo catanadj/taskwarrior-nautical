@@ -14,6 +14,7 @@ import importlib
 import importlib.util
 from contextlib import contextmanager
 from pathlib import Path
+from collections.abc import Mapping
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
 HOOK_DIR = _IMPL_CORE_DIR.parent
@@ -1276,12 +1277,13 @@ def _prepare_lifecycle_batch(entries: list[dict]):
             ))
             continue
         parent = _read_value(parent_res)
-        if not isinstance(parent, dict):
+        if not isinstance(parent, Mapping):
             decisions.append(exit_models.LifecycleBatchDecision(
                 sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
                 reason="parent task is missing",
             ))
             continue
+        parent = dict(parent)
         expected_short = str(plan.parent_patch_dict().get("nextLink") or "").strip()
         parent_linked = (
             expected_short
@@ -1423,7 +1425,7 @@ def _cleanup_lifecycle_batch(state) -> None:
             _record_orphan_cleanup_evidence(child_uuid, sid, reason)
             continue
         parent = _read_value(parent_res)
-        if isinstance(parent, dict) and str(parent.get("nextLink") or "").strip() == str(child_short or "").strip():
+        if isinstance(parent, Mapping) and str(parent.get("nextLink") or "").strip() == str(child_short or "").strip():
             reason = "cleanup skipped because parent link is now present"
             state.lifecycle_cleanup_failures[child_uuid] = reason
             _record_orphan_cleanup_evidence(child_uuid, sid, reason)
@@ -1480,16 +1482,16 @@ def _finalize_lifecycle_batch(state) -> None:
         return
     snapshot = _read_value(read)
     rows = list(snapshot.rows) if snapshot is not None else []
-    by_uuid = {str(row.get("uuid") or "").strip(): row for row in rows if isinstance(row, dict)}
+    by_uuid = {str(row.get("uuid") or "").strip(): dict(row) for row in rows if isinstance(row, Mapping)}
     flow = _module("exit_entry_flow")
     lifecycle_models = _module("lifecycle_models")
     for sid, (ctx, plan, expected_child) in pending.items():
         child = by_uuid.get(ctx.child_uuid)
         parent = by_uuid.get(ctx.parent_uuid)
         reason = ""
-        if not isinstance(child, dict):
+        if not isinstance(child, Mapping):
             reason = "child postcondition missing after lifecycle batch"
-        elif not isinstance(parent, dict):
+        elif not isinstance(parent, Mapping):
             reason = "parent postcondition missing after lifecycle batch"
         else:
             for field in ("chainID", "link", "prevLink"):
@@ -1699,7 +1701,10 @@ def _requeue_entries_result(entries: list[dict]):
         result = repository.release_retry(
             intent_id=intent_id,
             owner=owner,
-            failure=outbox.OutboxFailure("deferred", "lifecycle execution deferred"),
+            failure=outbox.OutboxFailure(
+                "deferred",
+                str(entry.get("__outbox_retry_reason") or "lifecycle execution deferred"),
+            ),
         )
         if not result.ok:
             outbox_failed += 1
@@ -1864,6 +1869,7 @@ def _handle_lifecycle_postcondition_failure(entry: dict, idx: int, state: _Drain
     """Retry a failed final read, bounded by the normal queue retry budget."""
     message = str(reason or "lifecycle postcondition verification failed")
     _diag(f"lifecycle postcondition verification deferred: {message}")
+    entry["__outbox_retry_reason"] = message
     if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
         state.dead_letter(entry, message)
     else:
@@ -2016,7 +2022,10 @@ def _execute_lifecycle_queue_entry(ctx, state):
         # executor advances it to linkage/verification.
         if (
             isinstance(batch_decision.child, dict)
-            and plan.stage is lifecycle_models.ExecutionStage.PERSISTED
+            and plan.stage in {
+                lifecycle_models.ExecutionStage.PLANNED,
+                lifecycle_models.ExecutionStage.PERSISTED,
+            }
             and not (
                 batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
                 and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
@@ -2120,10 +2129,10 @@ def _execute_lifecycle_queue_entry(ctx, state):
                         reason=_read_reason(exact, "child export unavailable"),
                     )
                 exact_task = _read_value(exact)
-                if isinstance(exact_task, dict):
+                if isinstance(exact_task, Mapping):
                     return _lifecycle_operation_result(
                         lifecycle_executor.OperationState.FOUND,
-                        value=exact_task,
+                        value=dict(exact_task),
                     )
             equivalent = _existing_equivalent_child(child, current_plan.identity.parent_uuid)
             if _read_unavailable(equivalent):
@@ -2132,10 +2141,10 @@ def _execute_lifecycle_queue_entry(ctx, state):
                     reason=_read_reason(equivalent, "equivalent child lookup unavailable"),
                 )
             equivalent_task = _read_value(equivalent)
-            if isinstance(equivalent_task, dict):
+            if isinstance(equivalent_task, Mapping):
                 return _lifecycle_operation_result(
                     lifecycle_executor.OperationState.FOUND,
-                    value=equivalent_task,
+                    value=dict(equivalent_task),
                 )
             return _lifecycle_operation_result(lifecycle_executor.OperationState.ABSENT)
 
@@ -2181,13 +2190,13 @@ def _execute_lifecycle_queue_entry(ctx, state):
                     reason=_read_reason(result, "child verification unavailable"),
                 )
             verified_child = _read_value(result)
-            if not isinstance(verified_child, dict):
+            if not isinstance(verified_child, Mapping):
                 return _lifecycle_operation_result(
                     lifecycle_executor.OperationState.CONFLICT,
                     reason="child postcondition is missing",
                 )
             child.clear()
-            child.update(verified_child)
+            child.update(dict(verified_child))
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
         def apply_parent_patch(self, current_plan, child):
@@ -2298,9 +2307,11 @@ def _execute_lifecycle_queue_entry(ctx, state):
     if outcome.kind in {
         lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
     }:
-        _diag(f"lifecycle transition retry: {outcome.reason or 'reason unavailable'}")
+        retry_reason = outcome.reason or "lifecycle transition retry"
+        _diag(f"lifecycle transition retry: {retry_reason}")
+        ctx.entry["__outbox_retry_reason"] = retry_reason
         if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
-            state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition retry limit reached")
+            state.dead_letter(ctx.entry, retry_reason)
         else:
             state.requeue.append(ctx.entry)
         return False
@@ -2354,97 +2365,6 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         return False
     return _execute_lifecycle_queue_entry(ctx, state)
 
-    # The lifecycle outbox always carries a typed plan.  The former raw queue
-    # executor remains below only until its focused deletion pass.
-    guard_action = _precheck_parent_guard(ctx)
-    if guard_action == "break":
-        return True
-    if guard_action == "continue":
-        return False
-
-    exact_child = _export_uuid(child_uuid)
-    if _read_unavailable(exact_child):
-        return _requeue_or_dead_letter_for_lock(entry, idx, state)
-    child_already_exists = _read_found(exact_child)
-    if not child_already_exists:
-        equivalent = _existing_equivalent_child(child, parent_uuid)
-        if _read_unavailable(equivalent):
-            return _requeue_or_dead_letter_for_lock(entry, idx, state)
-        existing_obj = _read_value(equivalent)
-        if isinstance(existing_obj, dict):
-            child_uuid = (existing_obj.get("uuid") or "").strip()
-            child_short = _short_uuid(child_uuid)
-            child_already_exists = bool(child_uuid)
-            if child_short:
-                if spawn_intent_id:
-                    _diag(
-                        f"equivalent child already exists; binding intent {spawn_intent_id} "
-                        f"to child {child_short}"
-                    )
-                else:
-                    _diag(f"equivalent child already exists; binding to child {child_short}")
-
-    ctx.child_short = child_short
-    ctx.child_uuid = child_uuid
-
-    link_action, parent_linked_already = _precheck_parent_link_state(ctx)
-    if link_action == "break":
-        return True
-    if link_action == "continue":
-        return False
-
-    if child_already_exists:
-        child_action, imported = ("ok", False)
-    else:
-        guard_action = _precheck_parent_guard(ctx)
-        if guard_action == "break":
-            return True
-        if guard_action == "continue":
-            return False
-        child_action, imported = _ensure_child_exists_for_entry(ctx, initial_export_res=exact_child)
-    if child_action == "break":
-        return True
-    if child_action == "continue":
-        return False
-
-    lifecycle_models = _module("lifecycle_models")
-    child_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
-    if not child_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, child_stage)
-
-    parent_action = _apply_parent_update_for_entry(
-        ctx,
-        parent_linked_already=parent_linked_already,
-        imported=imported,
-    )
-    if parent_action == "break":
-        return True
-    if parent_action == "continue":
-        return False
-
-    parent_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.PARENT_LINKED)
-    if not parent_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, parent_stage)
-
-    verification_action, verification_reason = _verify_lifecycle_postconditions(ctx)
-    if verification_action != "ok":
-        return _handle_lifecycle_postcondition_failure(queue_entry, idx, state, verification_reason)
-    verified_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.VERIFIED)
-    if not verified_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, verified_stage)
-    finalized_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.FINALIZED)
-    if not finalized_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, finalized_stage)
-
-    if not state.mark_final(queue_entry, "done", "processed"):
-        state.errors += 1
-        state.requeue.append(queue_entry)
-        _diag("finalized intent write failed; retaining queue entry for retry")
-        return False
-    state.processed += 1
-    state.reset_lock_streak()
-    return False
-
 
 def _drain_queue_result(unit_of_work):
     _reset_exit_runtime_state()
@@ -2459,7 +2379,7 @@ def _drain_queue_result(unit_of_work):
         retry_delay=_TASK_RETRY_DELAY,
     )
     exit_drain_flow = _module("exit_drain_flow")
-    return exit_drain_flow.drain_queue_result(
+    result = exit_drain_flow.drain_queue_result(
         services=exit_drain_flow.ExitDrainServices(
             take_queue_batch=_take_queue_batch,
             exit_progress_scope=_exit_progress_scope,
@@ -2473,6 +2393,14 @@ def _drain_queue_result(unit_of_work):
             drain_state_factory=_DrainState,
         )
     )
+    commands = getattr(unit_of_work, "commands", None)
+    if commands is not None:
+        state.diag_stats.update(
+            run_task_calls=max(0, int(getattr(commands, "calls", 0) or 0)),
+            run_task_failures=max(0, int(getattr(commands, "failures", 0) or 0)),
+            run_task_seconds=max(0.0, float(getattr(commands, "duration", 0.0) or 0.0)),
+        )
+    return result
 
 
 def _drain_queue(unit_of_work) -> dict:
@@ -2520,37 +2448,6 @@ def _emit_drain_stats_diag(stats: dict) -> None:
     task_stats = {
         "run_task_calls": diag_stats.get("run_task_calls", 0),
         "run_task_failures": diag_stats.get("run_task_failures", 0),
-        "run_task_calls_export_uuid": diag_stats.get("run_task_calls_export_uuid", 0),
-        "run_task_calls_export_equivalent_child": diag_stats.get("run_task_calls_export_equivalent_child", 0),
-        "run_task_calls_import": diag_stats.get("run_task_calls_import", 0),
-        "run_task_calls_modify_parent_nextlink": diag_stats.get("run_task_calls_modify_parent_nextlink", 0),
-        "run_task_calls_modify_cleanup": diag_stats.get("run_task_calls_modify_cleanup", 0),
-        "run_task_calls_modify_other": diag_stats.get("run_task_calls_modify_other", 0),
-        "run_task_calls_export_other": diag_stats.get("run_task_calls_export_other", 0),
-        "run_task_calls_other": diag_stats.get("run_task_calls_other", 0),
-        "run_task_failures_export_uuid": diag_stats.get("run_task_failures_export_uuid", 0),
-        "run_task_failures_export_equivalent_child": diag_stats.get("run_task_failures_export_equivalent_child", 0),
-        "run_task_failures_import": diag_stats.get("run_task_failures_import", 0),
-        "run_task_failures_modify_parent_nextlink": diag_stats.get("run_task_failures_modify_parent_nextlink", 0),
-        "run_task_failures_modify_cleanup": diag_stats.get("run_task_failures_modify_cleanup", 0),
-        "run_task_failures_modify_other": diag_stats.get("run_task_failures_modify_other", 0),
-        "run_task_failures_export_other": diag_stats.get("run_task_failures_export_other", 0),
-        "run_task_failures_other": diag_stats.get("run_task_failures_other", 0),
-        "run_task_seconds_export_uuid": round(float(diag_stats.get("run_task_seconds_export_uuid", 0.0)), 4),
-        "run_task_seconds_export_equivalent_child": round(float(diag_stats.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
-        "run_task_seconds_import": round(float(diag_stats.get("run_task_seconds_import", 0.0)), 4),
-        "equivalent_child_cache_hits": diag_stats.get("equivalent_child_cache_hits", 0),
-        "equivalent_child_cache_misses": diag_stats.get("equivalent_child_cache_misses", 0),
-        "equivalent_child_cache_seeded": diag_stats.get("equivalent_child_cache_seeded", 0),
-        "equivalent_child_preload_slots": diag_stats.get("equivalent_child_preload_slots", 0),
-        "equivalent_child_preload_hits": diag_stats.get("equivalent_child_preload_hits", 0),
-        "equivalent_child_preload_misses": diag_stats.get("equivalent_child_preload_misses", 0),
-        "equivalent_child_preload_chunks": diag_stats.get("equivalent_child_preload_chunks", 0),
-        "run_task_seconds_modify_parent_nextlink": round(float(diag_stats.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
-        "run_task_seconds_modify_cleanup": round(float(diag_stats.get("run_task_seconds_modify_cleanup", 0.0)), 4),
-        "run_task_seconds_modify_other": round(float(diag_stats.get("run_task_seconds_modify_other", 0.0)), 4),
-        "run_task_seconds_export_other": round(float(diag_stats.get("run_task_seconds_export_other", 0.0)), 4),
-        "run_task_seconds_other": round(float(diag_stats.get("run_task_seconds_other", 0.0)), 4),
         "run_task_seconds": round(float(diag_stats.get("run_task_seconds", 0.0)), 4),
     }
     _diag_block("on-exit task stats", task_stats.items(), columns=3)

@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """Heavy on-exit implementation loaded lazily by the executable wrapper.
 
-Drains Nautical spawn intents after Taskwarrior releases its lock.
-Reads JSONL queue entries, imports child tasks, and updates parent nextLink.
+Drains typed Nautical lifecycle outbox intents after Taskwarrior releases its lock.
 """
 
 from __future__ import annotations
@@ -105,7 +104,6 @@ if (
 
 import json
 import random
-import sqlite3
 from contextlib import contextmanager
 from typing import Any
 
@@ -147,10 +145,6 @@ _EXIT_SIDE_EFFECTS = None
 _EXIT_SIDE_EFFECTS_LOAD_FAILED = False
 _EXIT_ENTRY_FLOW = None
 _EXIT_ENTRY_FLOW_LOAD_FAILED = False
-_QUEUE_STORE = None
-_QUEUE_STORE_LOAD_FAILED = False
-_QUEUE_MODELS = None
-_QUEUE_MODELS_LOAD_FAILED = False
 _EXIT_MODELS = None
 _EXIT_MODELS_LOAD_FAILED = False
 _EXIT_RUNTIME = None
@@ -182,6 +176,8 @@ _LIFECYCLE_EXECUTOR = None
 _LIFECYCLE_EXECUTOR_LOAD_FAILED = False
 _LIFECYCLE_OUTBOX = None
 _LIFECYCLE_OUTBOX_LOAD_FAILED = False
+_LIFECYCLE_STATE = None
+_LIFECYCLE_STATE_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -225,18 +221,6 @@ _MODULE_SPECS = {
         "exit_entry_flow.py",
         "nautical_core.exit_entry_flow",
     ),
-    "queue_store": (
-        "_QUEUE_STORE",
-        "_QUEUE_STORE_LOAD_FAILED",
-        "queue_store.py",
-        "nautical_core.queue_store",
-    ),
-    "queue_models": (
-        "_QUEUE_MODELS",
-        "_QUEUE_MODELS_LOAD_FAILED",
-        "queue_models.py",
-        "nautical_core.queue_models",
-    ),
     "exit_models": (
         "_EXIT_MODELS",
         "_EXIT_MODELS_LOAD_FAILED",
@@ -266,6 +250,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_OUTBOX_LOAD_FAILED",
         "lifecycle_outbox.py",
         "nautical_core.lifecycle_outbox",
+    ),
+    "lifecycle_state": (
+        "_LIFECYCLE_STATE",
+        "_LIFECYCLE_STATE_LOAD_FAILED",
+        "lifecycle_state.py",
+        "nautical_core.lifecycle_state",
     ),
     "exit_runtime": (
         "_EXIT_RUNTIME",
@@ -398,48 +388,11 @@ def _build_hook_runtime_context():
         import_ms=_IMPORT_MS,
     )
 
-def _nautical_state_dir_path() -> Path:
-    tw_data_dir = _tw_data_dir_path()
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_state_dir_path(tw_data_dir)
-    return tw_data_dir / ".nautical-state"
-
-def _nautical_lock_dir_path() -> Path:
-    tw_data_dir = _tw_data_dir_path()
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_lock_dir_path(tw_data_dir)
-    return tw_data_dir / ".nautical-locks"
-
-# Do not import queue_store merely to construct defaults.  run_hook refreshes
-# these paths after the lightweight TASKDATA resolver has run.
-_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
-_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
-_ORPHAN_CLEANUP_EVIDENCE_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_orphan_cleanup.jsonl"
-_ORPHAN_CLEANUP_EVIDENCE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_orphan_cleanup.lock"
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-_QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed"
-_QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed.count"
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
 # When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
-
-def _migrate_legacy_nautical_state() -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        issues = queue_store.migrate_nautical_state(
-            tw_data_dir=TW_DATA_DIR,
-            extra_file_pairs=((_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),),
-        )
-        for issue in issues:
-            _diag(f"queue state migration failed: {issue.current} from {issue.legacy}: {issue.error}")
-        globals()["_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
-        return
 
 def _env_float(
     name: str,
@@ -471,14 +424,12 @@ def _env_int(
     )
 
 
-_DEAD_LETTER_RETENTION_DAYS = _env_int("NAUTICAL_DEAD_LETTER_RETENTION_DAYS", 30, min_value=0, max_value=3650)
 _QUEUE_MAX_LINES = _env_int(
     "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
     200,
     min_value=1,
     max_value=100000,
 )
-_DEAD_LETTER_MAX_BYTES = _env_int("NAUTICAL_DEAD_LETTER_MAX_BYTES", 524288, min_value=0, max_value=100 * 1024 * 1024)
 _QUEUE_RETRY_MAX = _env_int("NAUTICAL_QUEUE_RETRY_MAX", 6, min_value=0, max_value=100)
 _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0, min_value=0.1, max_value=300.0)
 _TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0, min_value=0.1, max_value=300.0)
@@ -489,8 +440,6 @@ _TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2, min_value=0.0, 
 _QUEUE_LOCK_RETRIES = _env_int("NAUTICAL_QUEUE_LOCK_RETRIES", 6, min_value=0, max_value=100)
 _QUEUE_LOCK_SLEEP_BASE = _env_float("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", 0.03, min_value=0.0, max_value=10.0)
 _QUEUE_LOCK_STALE_AFTER = _env_float("NAUTICAL_QUEUE_LOCK_STALE_AFTER", 30.0, min_value=0.0, max_value=86400.0)
-_INTENT_LOG_MAX_BYTES = _env_int("NAUTICAL_INTENT_LOG_MAX_BYTES", 524288, min_value=0, max_value=100 * 1024 * 1024)
-_INTENT_LOG_MAX_ENTRIES = _env_int("NAUTICAL_INTENT_LOG_MAX_ENTRIES", 20000, min_value=0, max_value=1000000)
 _LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8, min_value=0, max_value=1000)
 _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05, min_value=0.0, max_value=60.0)
 _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0, min_value=0.0, max_value=300.0)
@@ -499,19 +448,6 @@ _QUEUE_PROCESSING_STALE_AFTER = _env_float(
     300.0,
     min_value=0.0,
     max_value=7 * 86400.0,
-)
-_QUEUE_DB_CONNECT_RETRIES = _env_int("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", 3, min_value=1, max_value=20)
-_QUEUE_DB_CONNECT_TIMEOUT_MAX = _env_float(
-    "NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX",
-    60.0,
-    min_value=1.0,
-    max_value=300.0,
-)
-_QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float(
-    "NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE",
-    0.05,
-    min_value=0.0,
-    max_value=10.0,
 )
 
 _EXIT_RUNTIME_STATE = None
@@ -680,33 +616,6 @@ def _preload_export_uuids(entries: list[dict]) -> None:
             complete_chain_history=True,
         )
     _diag_count_exit("preload_export_chunks")
-
-
-def _queue_db_begin_run() -> None:
-    state = _exit_runtime_state()
-    state.run_queue_db_active = True
-    state.run_queue_db_conn = None
-    state.queue_db_open_count = 0
-    state.queue_db_reuse_count = 0
-    state.queue_lock_failures_this_run = 0
-    state.last_queue_lock_diag_ts = 0.0
-    state.task_phase = ""
-    _reset_exit_diag_stats()
-    state.lifecycle_parent_preflight.clear()
-    state.lifecycle_batch_imported.clear()
-    state.lifecycle_batch_import_failed.clear()
-
-
-def _queue_db_end_run() -> None:
-    state = _exit_runtime_state()
-    state.run_queue_db_active = False
-    conn = state.run_queue_db_conn
-    state.run_queue_db_conn = None
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
 def _local_lock_sleep_once(sleep_base: float) -> None:
@@ -1030,129 +939,20 @@ def _record_queue_lock_failure() -> None:
     state.queue_lock_failures_this_run += 1
     now = time.time()
     if now - state.last_queue_lock_diag_ts >= 60.0:
-        _diag("queue lock not acquired; drain deferred")
+        _diag("lifecycle outbox lock not acquired; drain deferred")
         state.last_queue_lock_diag_ts = now
-    try:
-        payload: dict[str, Any] = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "reason": "queue lock busy",
-        }
-        _QUEUE_LOCK_FAIL_MARKER.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(_QUEUE_LOCK_FAIL_MARKER), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-    try:
-        count = 0
-        if _QUEUE_LOCK_FAIL_COUNT.exists():
-            try:
-                data = json.loads(_QUEUE_LOCK_FAIL_COUNT.read_text(encoding="utf-8") or "{}")
-                count = int(data.get("count") or 0)
-            except Exception:
-                count = 0
-        count += 1
-        payload = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "count": count,
-        }
-        _QUEUE_LOCK_FAIL_COUNT.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(_QUEUE_LOCK_FAIL_COUNT), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-
-
-@contextmanager
-def _lock_dead_letter():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _DEAD_LETTER_LOCK,
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-@contextmanager
-def _lock_orphan_cleanup_evidence():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _ORPHAN_CLEANUP_EVIDENCE_LOCK,
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
 
 
 def _record_orphan_cleanup_evidence(child_uuid: str, spawn_intent_id: str, reason: str) -> None:
-    """Persist cleanup failures separately from the original lifecycle conflict."""
-    queue_store = _module("queue_store", required=False)
-    if queue_store is None:
-        _diag(f"orphan cleanup evidence unavailable: {reason}")
-        return
-    payload = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "hook": "on-exit",
-        "hook_version": NAUTICAL_HOOK_VERSION,
-        "kind": "orphan_cleanup",
-        "child_uuid": str(child_uuid or "").strip(),
-        "spawn_intent_id": str(spawn_intent_id or "").strip(),
-        "reason": str(reason or "cleanup unavailable").strip(),
-    }
-    ok = queue_store.append_dead_letter_jsonl(
-        path=_ORPHAN_CLEANUP_EVIDENCE_PATH,
-        payload=payload,
-        durable=True,
-        acquire_lock=_lock_orphan_cleanup_evidence,
-        diag=_diag,
+    _diag(
+        "orphan cleanup requires manual review "
+        f"(intent={str(spawn_intent_id or '').strip() or '-'} child={str(child_uuid or '').strip()[:8] or '-'}): "
+        f"{str(reason or 'cleanup unavailable').strip()}"
     )
-    if not ok:
-        _diag(f"orphan cleanup evidence write failed (child={child_uuid[:8]}): {reason}")
-
-
-def _intent_log_path() -> Path:
-    return _nautical_state_dir_path() / ".nautical_spawn_intents.jsonl"
-
-
-def _intent_log_lock_path() -> Path:
-    return _nautical_lock_dir_path() / ".nautical_spawn_intents.lock"
-
-
-@contextmanager
-def _lock_intent_log():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _intent_log_lock_path(),
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
 
 
 def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.parent_nextlink_lock_path(_tw_data_dir_path(), parent_uuid)
-    raw = (parent_uuid or "").strip().lower()
-    safe = "".join(ch for ch in raw if ch.isalnum())
-    if not safe:
-        safe = "unknown"
-    if len(safe) > 64:
-        safe = safe[:64]
-    return _nautical_lock_dir_path() / f".nautical_parent_nextlink.{safe}.lock"
+    return _module("lifecycle_state").parent_nextlink_lock_path(_tw_data_dir_path(), parent_uuid)
 
 
 @contextmanager
@@ -1167,155 +967,6 @@ def _lock_parent_nextlink(parent_uuid: str):
         yield acquired
 
 
-def _intent_log_collect_final_states(path: Path) -> dict[str, str] | None:
-    final_states: dict[str, str] = {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                ln = line.strip()
-                if not ln:
-                    continue
-                try:
-                    obj = json.loads(ln)
-                except Exception:
-                    continue
-                sid = (obj.get("spawn_intent_id") or "").strip()
-                status = (obj.get("status") or "").strip().lower()
-                if not sid or status not in {"done", "dead"}:
-                    continue
-                if sid in final_states:
-                    final_states.pop(sid, None)
-                final_states[sid] = status
-        return final_states
-    except Exception as e:
-        _diag(f"intent log read failed: {e}")
-        return None
-
-
-def _intent_log_needs_compact(path: Path, final_states: dict[str, str]) -> bool:
-    try:
-        st_size = path.stat().st_size
-    except Exception:
-        st_size = 0
-    return bool(
-        (_INTENT_LOG_MAX_BYTES > 0 and st_size > _INTENT_LOG_MAX_BYTES)
-        or (_INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES)
-    )
-
-
-def _intent_log_trim_states(final_states: dict[str, str]) -> None:
-    if _INTENT_LOG_MAX_ENTRIES <= 0:
-        return
-    if len(final_states) <= _INTENT_LOG_MAX_ENTRIES:
-        return
-    drop_n = len(final_states) - _INTENT_LOG_MAX_ENTRIES
-    for sid in list(final_states.keys())[:drop_n]:
-        final_states.pop(sid, None)
-
-
-def _intent_log_compact(path: Path, final_states: dict[str, str]) -> None:
-    tmp_path = path.with_suffix(".staging")
-    try:
-        fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for sid, status in final_states.items():
-                payload = {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "hook": "on-exit",
-                    "hook_version": NAUTICAL_HOOK_VERSION,
-                    "status": status,
-                    "spawn_intent_id": sid,
-                    "reason": "compacted",
-                }
-                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-            if _DURABLE_QUEUE:
-                try:
-                    f.flush()
-                    os.fsync(f.fileno())
-                except Exception:
-                    pass
-        os.replace(tmp_path, path)
-        if _DURABLE_QUEUE:
-            _fsync_dir(path.parent)
-    except Exception as e:
-        _diag(f"intent log compaction failed: {e}")
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except Exception:
-            pass
-
-
-def _load_finalized_intents() -> tuple[set[str], bool]:
-    """Return finalized spawn_intent_id set, with best-effort compaction."""
-    p = _intent_log_path()
-    with _lock_intent_log() as locked:
-        if not locked:
-            _diag("intent log lock busy; idempotency disabled for this drain")
-            return set(), False
-        try:
-            if not p.exists():
-                return set(), True
-        except Exception:
-            return set(), True
-        final_states = _intent_log_collect_final_states(p)
-        if final_states is None:
-            return set(), False
-
-        needs_compact = _intent_log_needs_compact(p, final_states)
-        _intent_log_trim_states(final_states)
-        if needs_compact:
-            _intent_log_compact(p, final_states)
-    return set(final_states.keys()), True
-
-
-def _mark_intent_status(spawn_intent_id: str, status: str, reason: str = "") -> bool:
-    sid = (spawn_intent_id or "").strip()
-    st = (status or "").strip().lower()
-    if not sid or st not in {"done", "dead"}:
-        return False
-    payload = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "hook": "on-exit",
-        "hook_version": NAUTICAL_HOOK_VERSION,
-        "status": st,
-        "spawn_intent_id": sid,
-        "reason": reason,
-    }
-    p = _intent_log_path()
-    with _lock_intent_log() as locked:
-        if not locked:
-            _diag(f"intent log lock busy; could not mark {sid} as {st}")
-            return False
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(p), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                if _DURABLE_QUEUE:
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                        _fsync_dir(p.parent)
-                    except Exception:
-                        pass
-            return True
-        except Exception as e:
-            _diag(f"intent log write failed ({sid}={st}): {e}")
-            return False
-
-
 def _lock_backoff_delay(streak: int) -> float:
     if streak <= 0:
         return 0.0
@@ -1328,140 +979,6 @@ def _lock_backoff_delay(streak: int) -> float:
     delay = min(delay, cap if cap > 0 else delay)
     jitter = random.uniform(0.0, base) if base > 0 else 0.0
     return delay + jitter
-
-
-def _write_dead_letter(entry: dict, reason: str) -> bool:
-    queue_store = _module("queue_store")
-    payload = queue_store.build_dead_letter_payload(
-        hook="on-exit",
-        hook_version=NAUTICAL_HOOK_VERSION,
-        entry=entry,
-        reason=reason,
-    )
-    return bool(queue_store.append_dead_letter_jsonl(
-        path=_DEAD_LETTER_PATH,
-        payload=payload,
-        durable=_DURABLE_QUEUE,
-        acquire_lock=_lock_dead_letter,
-        diag=_diag,
-        max_bytes=_DEAD_LETTER_MAX_BYTES,
-        retention_days=_DEAD_LETTER_RETENTION_DAYS,
-    ))
-
-def _fsync_dir(path: Path) -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        queue_store.fsync_dir(path)
-        return
-    try:
-        fd = os.open(str(path), os.O_DIRECTORY)
-    except Exception:
-        return
-    try:
-        os.fsync(fd)
-    except Exception:
-        pass
-    finally:
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-
-def _queue_db_connect_result():
-    state = _exit_runtime_state()
-    queue_store = _module("queue_store")
-    db_path = _QUEUE_DB_PATH
-    timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
-    timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
-    result = queue_store.connect_queue_db_result(
-        db_path,
-        attempts=max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1)),
-        timeout_base=timeout_base,
-        timeout_max=timeout_max,
-        backoff_base=float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0),
-        durable=_DURABLE_QUEUE,
-        row_factory=sqlite3.Row,
-        diag=_diag,
-        sleep_fn=_sleep,
-    )
-    if result.conn is not None:
-        state.queue_db_open_count += 1
-    return result
-
-
-def _queue_db_init(conn: sqlite3.Connection) -> None:
-    queue_store = _module("queue_store")
-    queue_store.init_queue_db(conn)
-
-
-def _queue_db_open_ready() -> sqlite3.Connection | None:
-    state = _exit_runtime_state()
-    if state.run_queue_db_active and state.run_queue_db_conn is not None:
-        try:
-            state.run_queue_db_conn.execute("SELECT 1")
-            state.queue_db_reuse_count += 1
-            return state.run_queue_db_conn
-        except Exception:
-            _queue_close_silent(state.run_queue_db_conn)
-            state.run_queue_db_conn = None
-    queue_store = _module("queue_store")
-    db_path = _QUEUE_DB_PATH
-    result = queue_store.open_ready_queue_db_result(
-        db_path,
-        connect_fn=_queue_db_connect_result,
-        init_fn=_queue_db_init,
-        close_fn=_queue_close_silent,
-        diag=_diag,
-    )
-    conn = result.conn
-    if state.run_queue_db_active and conn is not None:
-        state.run_queue_db_conn = conn
-    return conn
-
-
-def _queue_db_open_fresh_ready() -> sqlite3.Connection | None:
-    queue_store = _module("queue_store")
-    db_path = _QUEUE_DB_PATH
-    result = queue_store.open_ready_queue_db_result(
-        db_path,
-        connect_fn=_queue_db_connect_result,
-        init_fn=_queue_db_init,
-        close_fn=_queue_close_silent,
-        diag=_diag,
-    )
-    return result.conn
-
-
-def _queue_close_silent(conn: sqlite3.Connection) -> None:
-    if conn is None:
-        return
-    state = _exit_runtime_state()
-    if state.run_queue_db_active and conn is state.run_queue_db_conn:
-        return
-    queue_store = _module("queue_store")
-    queue_store.close_silent(conn)
-
-
-def _take_queue_entries_sqlite_batch():
-    conn = _queue_db_open_ready()
-    exit_models = _module("exit_models")
-    if conn is None:
-        return exit_models.ExitQueueBatch(entries=[])
-    token = f"drain-{os.getpid()}-{os.urandom(8).hex()}"
-    now = time.time()
-    queue_store = _module("queue_store")
-    claim = queue_store.claim_rows_sqlite_result(
-        conn,
-        token=token,
-        now=now,
-        processing_stale_after=_QUEUE_PROCESSING_STALE_AFTER,
-        max_lines=_QUEUE_MAX_LINES,
-        diag=_diag,
-        on_lock_busy=_record_queue_lock_failure,
-    )
-    entries = queue_store.rows_to_entries_result(claim.rows).entries
-    _queue_close_silent(conn)
-    return exit_models.ExitQueueBatch(entries=entries)
 
 
 def _lifecycle_outbox_repository():
@@ -1508,53 +1025,6 @@ def _take_lifecycle_outbox_batch():
     return exit_models.ExitQueueBatch(entries=[_outbox_execution_entry(record) for record in records])
 
 
-def _ack_queue_entries_sqlite_result(entry_claims: list[tuple[int, str]]):
-    conn = _queue_db_open_fresh_ready()
-    exit_models = _module("exit_models")
-    claims = [
-        (int(raw_id), str(raw_token or "").strip())
-        for raw_id, raw_token in (entry_claims or [])
-        if str(raw_id).isdigit() and int(raw_id) > 0 and str(raw_token or "").strip()
-    ]
-    if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(claims))
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.ack_entry_claims_sqlite_result(
-            conn,
-            claims,
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-    finally:
-        _queue_close_silent(conn)
-
-
-def _requeue_entries_sqlite_result(entries: list[dict]):
-    conn = _queue_db_open_fresh_ready()
-    exit_models = _module("exit_models")
-    items = [
-        entry
-        for entry in (entries or [])
-        if isinstance(entry, dict) and entry.get("__queue_backend") == "sqlite" and entry.get("__queue_id")
-    ]
-    if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.requeue_entries_sqlite_result(
-            conn,
-            items,
-            now=time.time(),
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-    finally:
-        _queue_close_silent(conn)
-
-
 def _advance_lifecycle_stage(entry: dict, stage):
     """Advance one claimed lifecycle outbox plan."""
     exit_models = _module("exit_models")
@@ -1584,30 +1054,6 @@ def _advance_lifecycle_stage(entry: dict, stage):
         result.reason,
         result.lock_busy,
     )
-
-
-def _enqueue_entries_sqlite_result(entries: list[dict]):
-    conn = _queue_db_open_ready()
-    exit_models = _module("exit_models")
-    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
-    if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.enqueue_entries_sqlite_result(
-            conn,
-            items,
-            now=time.time(),
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-    finally:
-        _queue_close_silent(conn)
-
-
-def _normalize_queue_entry(entry: dict) -> dict:
-    return dict(entry) if isinstance(entry, dict) else {}
 
 
 def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
@@ -2882,7 +2328,6 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if _handle_entry_gate(entry, state):
         return False
     queue_entry = entry
-    entry = _normalize_queue_entry(entry)
 
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
     parent_uuid = (entry.get("parent_uuid") or "").strip()
@@ -3002,8 +2447,12 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
 
 
 def _drain_queue_result(unit_of_work):
-    _exit_runtime_state().unit_of_work = unit_of_work
-    _exit_runtime_state().repository = unit_of_work.repository
+    _reset_exit_runtime_state()
+    state = _exit_runtime_state()
+    state.unit_of_work = unit_of_work
+    state.repository = unit_of_work.repository
+    state.task_phase = ""
+    _reset_exit_diag_stats()
     unit_of_work.repository.configure_commands(
         timeout=_TASK_TIMEOUT_EXPORT,
         attempts=_TASK_RETRIES_EXPORT,
@@ -3232,9 +2681,6 @@ def run_hook(
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
-    global _QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
-    global _ORPHAN_CLEANUP_EVIDENCE_PATH, _ORPHAN_CLEANUP_EVIDENCE_LOCK
-    global _QUEUE_LOCK_FAIL_MARKER, _QUEUE_LOCK_FAIL_COUNT
 
     HOOK_DIR = Path(hook_dir)
     TW_DIR = HOOK_DIR.parent
@@ -3247,15 +2693,6 @@ def run_hook(
         _emit_exit_feedback(f"[nautical] on-exit: {exc.stage}: {exc.detail}")
         return 1
 
-    state_dir = TW_DATA_DIR / ".nautical-state"
-    lock_dir = TW_DATA_DIR / ".nautical-locks"
-    _QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
-    _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
-    _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
-    _ORPHAN_CLEANUP_EVIDENCE_PATH = state_dir / ".nautical_orphan_cleanup.jsonl"
-    _ORPHAN_CLEANUP_EVIDENCE_LOCK = lock_dir / ".nautical_orphan_cleanup.lock"
-    _QUEUE_LOCK_FAIL_MARKER = lock_dir / ".nautical_spawn_queue.lock_failed"
-    _QUEUE_LOCK_FAIL_COUNT = lock_dir / ".nautical_spawn_queue.lock_failed.count"
     return main()
 
 
@@ -3268,8 +2705,4 @@ if __name__ == "__main__":
         _diag(f"on-exit unexpected error: {e}")
         err_text = _diag_redact_msg(f"{type(e).__name__}: {e}")
         _emit_exit_feedback(f"[nautical] on-exit: unexpected error: {err_text}")
-        try:
-            _write_dead_letter({"error": "unexpected_error"}, "on-exit exception")
-        except Exception:
-            pass
         raise SystemExit(1)

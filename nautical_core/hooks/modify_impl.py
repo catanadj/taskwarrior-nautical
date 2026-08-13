@@ -107,7 +107,6 @@ import atexit
 import hashlib
 import random
 import re
-import sqlite3
 import stat
 import tempfile
 import time as _time
@@ -135,9 +134,6 @@ _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
-# Spawn intent queue guards (override via env for heavy workloads).
-# spawn_queue_max_bytes: warn when queue exceeds this size (on-exit drains).
-_DEFAULT_SPAWN_QUEUE_MAX_BYTES = 524288
 # Panel chain index and chain caches live in the per-run modify runtime state.
 _MODIFY_RUNTIME_STATE = None
 _HOOK_CONTEXT = None
@@ -153,7 +149,6 @@ _HOOK_RESULTS_LOAD_FAILED = False
 _DEFAULT_DEBUG_WAIT_SCHED = False
 _LAST_WAIT_SCHED_DEBUG: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
-_WARNED_SPAWN_QUEUE_GROWTH = False
 
 
 def _diag(msg: str) -> None:
@@ -536,10 +531,6 @@ _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
 _MODIFY_EXPIRATION = None
 _MODIFY_EXPIRATION_LOAD_FAILED = False
-_QUEUE_STORE = None
-_QUEUE_STORE_LOAD_FAILED = False
-_QUEUE_MODELS = None
-_QUEUE_MODELS_LOAD_FAILED = False
 _RECONCILE = None
 _RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
@@ -703,18 +694,6 @@ _MODULE_SPECS = {
         "panel_diagnostics.py",
         "nautical_core.panel_diagnostics",
     ),
-    "queue_store": (
-        "_QUEUE_STORE",
-        "_QUEUE_STORE_LOAD_FAILED",
-        "queue_store.py",
-        "nautical_core.queue_store",
-    ),
-    "queue_models": (
-        "_QUEUE_MODELS",
-        "_QUEUE_MODELS_LOAD_FAILED",
-        "queue_models.py",
-        "nautical_core.queue_models",
-    ),
     "reconcile": (
         "_RECONCILE",
         "_RECONCILE_LOAD_FAILED",
@@ -823,34 +802,7 @@ def _initialize_integration_context() -> None:
     _TASKDATA_RAW = str(context.taskdata)
     _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
-# ------------------------------------------------------------------------------
-# Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
-# ------------------------------------------------------------------------------
-# Keep import-time state path setup dependency-free.  The queue adapter is
-# loaded by the lifecycle that actually needs it and run_hook refreshes these
-# paths after resolving TASKDATA/rc.data.location.
-_SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock"
-_SPAWN_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
-_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
-_SPAWN_LOCK_RETRIES = 6
-_SPAWN_LOCK_SLEEP_BASE = 0.03
-_SPAWN_LOCK_STALE_AFTER = 30.0
-_DEAD_LETTER_LOCK_RETRIES = _SPAWN_LOCK_RETRIES
-_DEAD_LETTER_LOCK_SLEEP_BASE = _SPAWN_LOCK_SLEEP_BASE
-_WARNED_SPAWN_QUEUE_LOCK = False
 _DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
-
-def _migrate_legacy_nautical_state() -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        issues = queue_store.migrate_nautical_state(tw_data_dir=TW_DATA_DIR)
-        for issue in issues:
-            _diag(f"queue state migration failed: {issue.current} from {issue.legacy}: {issue.error}")
-        globals()["_SPAWN_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
-        return
 
 def _load_core() -> None:
     global core, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
@@ -888,13 +840,12 @@ _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
-_SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
 
 def _apply_core_config() -> None:
     global _CHAIN_COLOR_PER_CHAIN, _SHOW_TIMELINE_GAPS, _SHOW_ANALYTICS, _ANALYTICS_STYLE
     global _ANALYTICS_ONTIME_TOL_SECS, _CHECK_CHAIN_INTEGRITY
-    global _DEBUG_WAIT_SCHED, _RECURRENCE_UPDATE_UDAS, _SPAWN_QUEUE_MAX_BYTES, _MAX_CHAIN_WALK
+    global _DEBUG_WAIT_SCHED, _RECURRENCE_UPDATE_UDAS, _MAX_CHAIN_WALK
     if core is None:
         return
     _CHAIN_COLOR_PER_CHAIN = core.CHAIN_COLOR_PER_CHAIN
@@ -905,7 +856,6 @@ def _apply_core_config() -> None:
     _CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
     _DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
     _RECURRENCE_UPDATE_UDAS = tuple(core.RECURRENCE_UPDATE_UDAS) if hasattr(core, "RECURRENCE_UPDATE_UDAS") else ()
-    _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
     _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
 # ------------------------------------------------------------------------------
 # Small cached helpers for speed + consistency
@@ -1269,204 +1219,6 @@ def _format_next_cp_rows(
 # ------------------------------------------------------------------------------
 _TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
-
-
-
-def _spawn_queue_db_size_bytes() -> int:
-    total = 0
-    paths = (
-        _SPAWN_QUEUE_DB_PATH,
-        Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal"),
-        Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm"),
-    )
-    for p in paths:
-        try:
-            if p.exists():
-                total += p.stat().st_size
-        except Exception:
-            continue
-    return total
-
-
-def _spawn_queue_total_bytes() -> int:
-    return _spawn_queue_db_size_bytes()
-
-
-def _spawn_queue_warn_growth(queue_path: Path, size: int) -> None:
-    global _WARNED_SPAWN_QUEUE_GROWTH
-    try:
-        if _WARNED_SPAWN_QUEUE_GROWTH:
-            return
-        if _SPAWN_QUEUE_MAX_BYTES <= 0:
-            return
-        if size > _SPAWN_QUEUE_MAX_BYTES:
-            _WARNED_SPAWN_QUEUE_GROWTH = True
-            _panel(
-                "⚠ Spawn queue growing",
-                [
-                    ("Queue", str(queue_path)),
-                    ("Size", f"{size} bytes"),
-                    ("Limit", f"{_SPAWN_QUEUE_MAX_BYTES} bytes"),
-                    ("Hint", "Run the on-exit hook or reduce load."),
-                ],
-                kind="warning",
-            )
-    except Exception:
-        pass
-
-
-def _handle_enqueue_lock_busy(task_obj: dict) -> tuple[bool, str]:
-    _write_dead_letter(task_obj, "queue lock busy")
-    _diag("queue lock busy; intent dead-lettered")
-    _diag_count("queue_lock_failures")
-    global _WARNED_SPAWN_QUEUE_LOCK
-    if not _WARNED_SPAWN_QUEUE_LOCK:
-        _WARNED_SPAWN_QUEUE_LOCK = True
-        _panel(
-            "⚠ Spawn queue busy",
-            [
-                ("Queue", str(_SPAWN_QUEUE_DB_PATH)),
-                ("Hint", "Queue lock busy; spawn intent not queued."),
-            ],
-            kind="warning",
-        )
-    return False, "queue lock busy"
-
-
-def _spawn_queue_db_connect_result():
-    queue_store = _module("queue_store")
-    timeout_base = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
-    return queue_store.connect_queue_db_result(
-        _SPAWN_QUEUE_DB_PATH,
-        attempts=2,
-        timeout_base=timeout_base,
-        timeout_max=timeout_base,
-        backoff_base=0.0,
-        durable=_DURABLE_QUEUE,
-        diag=_diag,
-    )
-
-
-
-
-def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
-    queue_store = _module("queue_store")
-    queue_store.init_queue_db(conn)
-
-
-def _queue_close_silent(conn: sqlite3.Connection) -> None:
-    queue_store = _module("queue_store")
-    queue_store.close_silent(conn)
-
-
-def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
-    queue_store = _module("queue_store")
-    return queue_store.open_ready_queue_db_result(
-        _SPAWN_QUEUE_DB_PATH,
-        connect_fn=_spawn_queue_db_connect_result,
-        init_fn=_spawn_queue_db_init,
-        close_fn=_queue_close_silent,
-        diag=_diag,
-    ).conn
-
-
-def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:
-    if _SPAWN_QUEUE_MAX_BYTES <= 0:
-        return None
-    try:
-        if _spawn_queue_total_bytes() > _SPAWN_QUEUE_MAX_BYTES:
-            _write_dead_letter(task_obj, "spawn queue full")
-            _diag("spawn queue full; intent dropped")
-            return False, "spawn queue full"
-    except Exception as exc:
-        reason = f"spawn queue capacity check unavailable: {exc}"
-        _write_dead_letter(task_obj, reason)
-        _diag(reason)
-        return False, reason
-    return None
-
-def _spawn_queue_write_failure(task_obj: dict, err: Exception) -> tuple[bool, str]:
-    fail_reason = f"spawn queue write failed: {err}"
-    _write_dead_letter(task_obj, fail_reason)
-    _diag(fail_reason)
-    return False, fail_reason
-
-
-def _enqueue_deferred_spawn_sqlite(
-    task_obj: dict,
-    *,
-    require_lifecycle_plan: bool = False,
-) -> tuple[bool, str]:
-    guard = _spawn_queue_capacity_guard(task_obj)
-    if guard is not None:
-        return guard
-
-    conn = _spawn_queue_db_open_ready()
-    if conn is None:
-        return False, "spawn queue db unavailable"
-    lock_busy = {"value": False}
-    errors: list[str] = []
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.enqueue_entries_sqlite_result(
-            conn,
-            [task_obj],
-            now=_time.time(),
-            diag=lambda msg: errors.append(str(msg)),
-            on_lock_busy=lambda: lock_busy.__setitem__("value", True),
-            require_lifecycle_plan=require_lifecycle_plan,
-            max_payload_bytes=_SPAWN_QUEUE_MAX_BYTES,
-        )
-        if result.ok:
-            queue_store.repair_sqlite_permissions(_SPAWN_QUEUE_DB_PATH)
-            _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
-            return True, ""
-        if lock_busy["value"]:
-            return _handle_enqueue_lock_busy(task_obj)
-        err = result.err or (errors[-1] if errors else "spawn queue write failed")
-        return _spawn_queue_write_failure(task_obj, RuntimeError(err))
-    finally:
-        _queue_close_silent(conn)
-
-
-def _enqueue_deferred_spawn(
-    task_obj: dict,
-    *,
-    require_lifecycle_plan: bool = False,
-) -> tuple[bool, str]:
-    return _enqueue_deferred_spawn_sqlite(task_obj, require_lifecycle_plan=require_lifecycle_plan)
-
-
-def _write_dead_letter(entry: dict, reason: str) -> None:
-    if not _require_core():
-        return
-    queue_store = _module("queue_store")
-    payload = queue_store.build_dead_letter_payload(
-        hook="on-modify",
-        hook_version=NAUTICAL_HOOK_VERSION,
-        entry=entry,
-        reason=reason,
-        now_fn=lambda: _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
-    )
-    try:
-        queue_store.append_dead_letter_jsonl(
-            path=_DEAD_LETTER_PATH,
-            payload=payload,
-            durable=_DURABLE_QUEUE,
-            acquire_lock=lambda: core.safe_lock(
-                _DEAD_LETTER_LOCK,
-                retries=_DEAD_LETTER_LOCK_RETRIES,
-                sleep_base=_DEAD_LETTER_LOCK_SLEEP_BASE,
-                jitter=_DEAD_LETTER_LOCK_SLEEP_BASE,
-                mkdir=True,
-                stale_after=_SPAWN_LOCK_STALE_AFTER,
-            ),
-            diag=_diag,
-        )
-    except Exception:
-        pass
-
-
 
 def _short(u):
     return (u or "")[:8]
@@ -4962,7 +4714,6 @@ def run_hook(
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
-    global _SPAWN_QUEUE_LOCK, _SPAWN_QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
 
     HOOK_DIR = Path(hook_dir)
     TW_DIR = HOOK_DIR.parent
@@ -4974,13 +4725,6 @@ def run_hook(
         globals()["core"] = exc.core
         title = "Invalid Nautical configuration" if exc.stage in {"configuration", "timezone"} else "Nautical integration unavailable"
         _fail_and_exit(title, exc.detail)
-
-    state_dir = TW_DATA_DIR / ".nautical-state"
-    lock_dir = TW_DATA_DIR / ".nautical-locks"
-    _SPAWN_QUEUE_LOCK = lock_dir / ".nautical_spawn_queue.lock"
-    _SPAWN_QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
-    _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
-    _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
 
     if protocol is None:
         protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(

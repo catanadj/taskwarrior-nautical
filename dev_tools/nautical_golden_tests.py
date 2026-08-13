@@ -3880,7 +3880,12 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
             "    raise AssertionError('mismatched implementation must not run')\n",
             encoding="utf-8",
         )
-        (root / ".nautical_spawn_queue.jsonl").write_text("{}\n", encoding="utf-8")
+        state_dir = root / ".nautical-state"
+        state_dir.mkdir(exist_ok=True)
+        with sqlite3.connect(str(state_dir / ".nautical_lifecycle_outbox.db")) as conn:
+            conn.execute("CREATE TABLE lifecycle_outbox (intent_id TEXT PRIMARY KEY, processing_state TEXT NOT NULL)")
+            conn.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
+            conn.commit()
         exit_mismatch = subprocess.run(
             [sys.executable, str(hooks_dir / "on-exit.nautical")],
             text=True,
@@ -4056,13 +4061,24 @@ def test_on_exit_active_sqlite_queue_uses_full_drain():
 def test_hook_stdout_empty_on_exit():
     """on-exit should not emit stdout (stdout is redirected to /dev/null)."""
     hook = _find_hook_file("on-exit.nautical")
-    env = {"NAUTICAL_DIAG": "1"}
-    p = _run_hook_script_raw(hook, "", env_extra=env)
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text('tz = "UTC"\n', encoding="utf-8")
+        p = _run_hook_script_raw(
+            hook,
+            "",
+            env_extra={
+                "NAUTICAL_DIAG": "1",
+                "TASKDATA": td,
+                "NAUTICAL_CONFIG": str(config),
+                "NAUTICAL_TRUST_CONFIG_PATH": "1",
+            },
+        )
     expect(p.returncode == 0, f"on-exit returned {p.returncode}")
     expect((p.stdout or "") == "", f"on-exit expected empty stdout, got: {p.stdout!r}")
 
 def test_hook_files_are_private_permissions():
-    """Queue/dead-letter/lock files should not be group/world-readable."""
+    """Lifecycle outbox and lock files should not be group/world-readable."""
     lock_path = None
     with tempfile.TemporaryDirectory() as td:
         prev_taskdata = os.environ.get("TASKDATA")
@@ -4076,23 +4092,14 @@ def test_hook_files_are_private_permissions():
                 mode = stat.S_IMODE(os.stat(lock_path).st_mode)
                 expect((mode & 0o077) == 0, f"lock file has group/other perms: {oct(mode)}")
 
-            hook_modify = _find_hook_file("on-modify.nautical")
-            mod_modify = _load_hook_module(hook_modify, "_nautical_on_modify_perm_test")
-            mod_modify._enqueue_deferred_spawn(
-                {"spawn_intent_id": "si_perm", "child": {"uuid": "00000000-0000-0000-0000-000000000999"}}
-            )
-            db_path = mod_modify._SPAWN_QUEUE_DB_PATH
-            expect(db_path.exists(), f"sqlite queue not created: {db_path}")
-            mode = stat.S_IMODE(db_path.stat().st_mode)
-            expect((mode & 0o077) == 0, f"sqlite queue file has group/other perms: {oct(mode)}")
+            from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
-            hook_exit = _find_hook_file("on-exit.nautical")
-            mod_exit = _load_hook_module(hook_exit, "_nautical_on_exit_perm_test")
-            mod_exit._write_dead_letter({"uuid": "00000000-0000-0000-0000-000000000888"}, "perm test")
-            dl_path = mod_exit._DEAD_LETTER_PATH
-            expect(dl_path.exists(), f"dead-letter not created: {dl_path}")
-            mode = stat.S_IMODE(dl_path.stat().st_mode)
-            expect((mode & 0o077) == 0, f"dead-letter has group/other perms: {oct(mode)}")
+            db_path = LifecycleOutboxRepository(Path(td)).path
+            opened = LifecycleOutboxRepository(Path(td)).open()
+            expect(opened.ok, f"lifecycle outbox did not open: {opened.reason}")
+            expect(db_path.exists(), f"lifecycle outbox not created: {db_path}")
+            mode = stat.S_IMODE(db_path.stat().st_mode)
+            expect((mode & 0o077) == 0, f"lifecycle outbox has group/other perms: {oct(mode)}")
         finally:
             if prev_taskdata is None:
                 os.environ.pop("TASKDATA", None)
@@ -8240,7 +8247,7 @@ def test_doctor_discovers_effective_taskdata_directory():
 
 
 def test_operator_doctor_loads_colocated_queue_helper():
-    """installed doctor should load queue status from nautical_core/tools."""
+    """installed doctor should load lifecycle outbox status from nautical_core/tools."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         p = subprocess.run(
@@ -8252,8 +8259,8 @@ def test_operator_doctor_loads_colocated_queue_helper():
         expect(p.returncode == 2, f"operator doctor returned {p.returncode}: {p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         ids = {item.get("id") for item in obj.get("findings") or []}
-        expect("queue.state" in ids, f"operator doctor did not inspect queue state: {obj}")
-        expect("queue.unreadable" not in ids, f"operator doctor could not load queue helper: {obj}")
+        expect("outbox.state" in ids, f"operator doctor did not inspect outbox state: {obj}")
+        expect("outbox.unreadable" not in ids, f"operator doctor could not load outbox helper: {obj}")
 
 
 def test_nautical_dispatches_supported_subcommands():
@@ -35916,7 +35923,6 @@ TESTS = [
     test_plain_hook_fast_paths_do_not_import_core_package,
     test_full_hook_modules_defer_core_import,
     test_full_hooks_reuse_wrapper_protocol_probe,
-    test_on_exit_active_sqlite_queue_uses_full_drain,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
     test_hook_bootstrap_numeric_env_parsing_is_bounded,
     test_hooks_survive_malformed_numeric_environment,
@@ -35926,15 +35932,10 @@ TESTS = [
     test_safe_lock_fallback_contention,
     test_safe_lock_fallback_stale_cleanup,
     test_safe_lock_fallback_stale_pid_cleanup,
-    test_on_modify_queue_repairs_permissions,
-    test_on_exit_repairs_queue_and_dead_letter_permissions,
-    test_on_exit_timeouts_configurable,
-    test_on_exit_queue_db_connect_retries_and_scales_busy_timeout,
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,
     test_diag_log_structured_fields,
-    test_on_exit_requeues_when_task_lock_recent,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_core_cache_dir_rejects_symlink_override,
@@ -35948,7 +35949,6 @@ TESTS = [
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
-    test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete,
     test_on_modify_expiration_panel_explains_carry,
     test_on_modify_expiration_delegates_to_extracted_orchestration,
     test_on_modify_expiration_internal_failure_remains_recoverable,
@@ -35967,21 +35967,12 @@ TESTS = [
     test_health_check_json_ok_empty_taskdata,
     test_health_check_critical_outbox_bytes,
     test_health_check_critical_outbox_rows,
-    test_queue_schema_initializes_and_adopts_legacy_rows,
-    test_lifecycle_plan_queue_envelope_is_versioned_and_legacy_safe,
-    test_lifecycle_stage_advancement_requires_claim_and_valid_transition,
-    test_lifecycle_queue_capacity_guard_is_atomic,
     test_lifecycle_executor_uses_typed_order_and_compensation,
     test_lifecycle_terminal_executor_guards_disablement,
     test_lifecycle_executor_fault_matrix_fails_closed_at_each_boundary,
     test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor,
-    test_queue_database_durable_mode_uses_full_synchronous,
-    test_queue_schema_rejects_incompatible_databases_without_quarantine,
-    test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
-    test_queue_claim_quarantines_invalid_lifecycle_plan_schema,
-    test_queue_claim_recovers_processing_row_without_claim_timestamp,
     test_queue_status_json_ok_empty_taskdata,
     test_doctor_json_has_stable_schema_marker,
     test_operator_queue_status_json_ok_empty_taskdata,
@@ -36021,9 +36012,6 @@ TESTS = [
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
     test_hook_runtime_retains_module_import_failure_details,
-    test_queue_state_migration_returns_typed_failure_details,
-    test_queue_state_migration_moves_database_sidecars_under_one_lock,
-    test_queue_state_migration_rejects_cross_process_lock_contention,
     test_deploy_sanity_script_reports_ok,
     test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
     test_deploy_sanity_rejects_unowned_taskwarrior_subprocess,
@@ -36031,10 +36019,6 @@ TESTS = [
     test_mixed_recurrence_loop_harness_reports_ok,
     test_soak_runner_reports_ok,
     test_ops_templates_present_and_runner_executable,
-    test_on_modify_queue_full_drops_with_dead_letter,
-    test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
-    test_on_modify_enqueue_uses_sqlite_only_queue_backend,
-    test_on_modify_enqueue_recovers_from_corrupt_sqlite_db,
     test_tw_export_chain_extra_validation,
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_modify_diag_blocks_pretty_print,
@@ -36097,24 +36081,15 @@ TESTS = [
     test_on_modify_read_two_fuzz_inputs,
     test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser,
     test_on_add_dnf_cache_quarantines_central_corruption,
-    test_on_exit_spawn_intents_drain,
     test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links,
     test_cross_device_spawn_intents_converge_in_either_merge_order,
-    test_on_exit_take_queue_recovers_from_corrupt_sqlite_db,
-    test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_drain_updates_progress_per_entry,
-    test_on_exit_dead_letter_on_missing_fields,
     test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states,
     test_on_exit_batches_orphan_cleanup_and_records_unavailable_evidence,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,
     test_on_exit_preloads_equivalent_child_slots_for_early_checks,
     test_on_exit_combines_uuid_and_equivalent_slot_preloads,
-    test_on_exit_preloads_uuid_exports_for_early_checks,
-    test_on_exit_successful_import_reuses_initial_child_export,
-    test_on_exit_dead_letter_on_import_failure,
     test_on_exit_dead_letter_write_failure_keeps_entry_recoverable,
-    test_on_exit_large_queue_bounded_drain,
-    test_on_exit_queue_drain_idempotent,
     test_on_exit_rolls_back_parent_nextlink_on_missing_child,
     test_on_exit_guarded_parent_clear_preserves_changed_link,
     test_on_exit_parent_update_uses_compare_and_set_selector,
@@ -36308,21 +36283,8 @@ TESTS = [
     test_ui_live_mode_non_tty_falls_back_without_live_control_codes,
     test_ui_render_panel_routes_live_mode_without_static_duplicate,
     test_ui_live_failure_preserves_rows_for_static_fallback,
-    test_on_exit_import_error_but_child_exists,
-    test_on_exit_parent_nextlink_changed_dead_letter,
-    test_on_exit_parent_update_lock_busy_requeues,
-    test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter,
-    test_on_exit_post_import_parent_conflict_cleans_orphan,
-    test_on_exit_idempotent_skip_for_finalized_intent,
-    test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip,
-    test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id,
-    test_on_exit_take_queue_reclaims_stale_sqlite_processing_row,
-    test_on_exit_take_queue_skips_fresh_sqlite_processing_row,
-    test_on_exit_requeue_sqlite_clears_claim_metadata,
-    test_queue_claim_owner_blocks_stale_ack_and_requeue,
     test_on_exit_finalization_record_failure_retains_claimed_entry,
     test_on_exit_finalized_intent_compaction_is_atomic_and_bounded,
-    test_on_exit_lock_storm_circuit_requeues_remaining,
     test_cache_metrics_emits_when_enabled,
     test_sanitize_task_strings_removes_controls,
     test_clear_all_caches_env,
@@ -36342,17 +36304,13 @@ TESTS = [
     test_rand_determinism_with_seed,
     test_next_after_expr_branch_characterization,
     test_on_exit_local_safe_lock_fails_closed_on_network_mount_without_fcntl,
-    test_on_exit_dead_letter_rotation,
     test_on_exit_dead_letter_carries_spawn_intent_id,
-    test_on_exit_requeue_failure_leaves_sqlite_entry_processing,
     test_on_exit_export_uuid_malformed_stdout_is_unavailable,
     test_on_exit_equivalent_child_malformed_stdout_is_retryable,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
-    test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet,
     test_on_exit_parent_nextlink_lock_uses_dedicated_dir,
     test_on_exit_state_files_use_dedicated_dir,
     test_on_exit_run_task_accepts_env,
-    test_on_exit_normalize_queue_entry_strips_fields,
     test_hooks_require_package_core_layout,
     test_core_import_deterministic,
     test_core_import_defers_optional_stacks,

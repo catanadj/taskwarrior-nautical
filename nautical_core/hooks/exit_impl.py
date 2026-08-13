@@ -522,15 +522,15 @@ def _exit_progress_enabled(entries_total: int) -> bool:
 
 def _exit_progress_counts(state: object | None) -> str:
     if state is None:
-        return "ok:0 skip:0 rq:0 dead:0"
+        return "ok:0 skip:0 retry:0 review:0"
     try:
         ok = int(getattr(state, "processed", 0) or 0)
         skip = int(getattr(state, "skipped_idempotent", 0) or 0)
         rq = len(getattr(state, "requeue", []) or [])
-        dead = int(getattr(state, "dead_lettered", 0) or 0)
-        return f"ok:{ok} skip:{skip} rq:{rq} dead:{dead}"
+        reviewed = int(getattr(state, "manual_reviewed", 0) or 0)
+        return f"ok:{ok} skip:{skip} retry:{rq} review:{reviewed}"
     except Exception:
-        return "ok:0 skip:0 rq:0 dead:0"
+        return "ok:0 skip:0 retry:0 review:0"
 
 
 @contextmanager
@@ -937,11 +937,11 @@ def _sleep(secs: float) -> None:
 
 def _record_queue_lock_failure() -> None:
     state = _exit_runtime_state()
-    state.queue_lock_failures_this_run += 1
+    state.outbox_lock_failures_this_run += 1
     now = time.time()
-    if now - state.last_queue_lock_diag_ts >= 60.0:
+    if now - state.last_outbox_lock_diag_ts >= 60.0:
         _diag("lifecycle outbox lock not acquired; drain deferred")
-        state.last_queue_lock_diag_ts = now
+        state.last_outbox_lock_diag_ts = now
 
 
 def _record_orphan_cleanup_evidence(child_uuid: str, spawn_intent_id: str, reason: str) -> None:
@@ -1726,7 +1726,7 @@ class _DrainState:
         self.processed = 0
         self.errors = 0
         self.requeue: list[dict] = []
-        self.dead_lettered = 0
+        self.manual_reviewed = 0
         self.skipped_idempotent = 0
         self.lock_events = 0
         self.lock_streak = 0
@@ -1766,7 +1766,7 @@ class _DrainState:
             self.errors += 1
             _diag(f"lifecycle outbox manual-review transition failed: {result.reason or 'unknown error'}")
             return
-        self.dead_lettered += 1
+        self.manual_reviewed += 1
         self.errors += 1
 
     def record_lock_event(self, idx: int) -> bool:
@@ -1797,20 +1797,13 @@ class _DrainState:
             errors=self.errors,
             requeued=len(self.requeue) if requeue_ok else 0,
             requeue_failed=requeue_failed,
-            dead_lettered=self.dead_lettered,
-            queue_lock_failures=_exit_runtime_state().queue_lock_failures_this_run,
+            manual_reviewed=self.manual_reviewed,
+            outbox_lock_failures=_exit_runtime_state().outbox_lock_failures_this_run,
             entries_total=self.entries_total,
             entries_skipped_idempotent=self.skipped_idempotent,
             lock_events=self.lock_events,
             lock_streak_max=self.lock_streak_max,
             circuit_breaks=self.circuit_breaks,
-            intent_log_ready=1,
-            intent_log_size=0,
-            intent_log_load_ms=0.0,
-            intent_mark_ok=0,
-            intent_mark_fail=0,
-            queue_db_opens=0,
-            queue_db_reuses=0,
             preload_export_uuids=int(_exit_runtime_state().diag_stats.get("preload_export_uuids", 0)),
             preload_export_hits=int(_exit_runtime_state().diag_stats.get("preload_export_hits", 0)),
             preload_export_misses=int(_exit_runtime_state().diag_stats.get("preload_export_misses", 0)),
@@ -2425,18 +2418,11 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         ("errors", stats.get("errors", 0)),
         ("requeued", stats.get("requeued", 0)),
         ("requeue_failed", stats.get("requeue_failed", 0)),
-        ("dead_lettered", stats.get("dead_lettered", 0)),
-        ("queue_lock_failures", stats.get("queue_lock_failures", 0)),
+        ("manual_reviewed", stats.get("manual_reviewed", 0)),
+        ("outbox_lock_failures", stats.get("outbox_lock_failures", 0)),
         ("lock_events", stats.get("lock_events", 0)),
         ("lock_streak_max", stats.get("lock_streak_max", 0)),
         ("circuit_breaks", stats.get("circuit_breaks", 0)),
-        ("intent_log_ready", stats.get("intent_log_ready", 0)),
-        ("intent_log_size", stats.get("intent_log_size", 0)),
-        ("intent_mark_ok", stats.get("intent_mark_ok", 0)),
-        ("intent_mark_fail", stats.get("intent_mark_fail", 0)),
-        ("intent_log_load_ms", stats.get("intent_log_load_ms", 0)),
-        ("queue_db_opens", stats.get("queue_db_opens", 0)),
-        ("queue_db_reuses", stats.get("queue_db_reuses", 0)),
         ("preload_export_uuids", stats.get("preload_export_uuids", 0)),
         ("preload_export_hits", stats.get("preload_export_hits", 0)),
         ("preload_export_misses", stats.get("preload_export_misses", 0)),
@@ -2455,13 +2441,14 @@ def _emit_drain_stats_diag(stats: dict) -> None:
 
 def _strict_exit_feedback_message(stats: dict) -> str | None:
     errors = stats.get("errors", 0)
-    dead_lettered = stats.get("dead_lettered", 0)
-    queue_lock_failures = stats.get("queue_lock_failures", 0)
-    if not (_EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0)):
+    manual_reviewed = stats.get("manual_reviewed", 0)
+    outbox_lock_failures = stats.get("outbox_lock_failures", 0)
+    if not (_EXIT_STRICT and (errors > 0 or manual_reviewed > 0 or outbox_lock_failures > 0)):
         return None
     return (
-        f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
-        "Check .nautical-state/.nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
+        f"[nautical] on-exit: {manual_reviewed} manual-review intents, {errors} errors, "
+        f"{outbox_lock_failures} outbox lock failures. Check nautical queue-status "
+        "(set NAUTICAL_EXIT_STRICT=0 to disable)"
     )
 
 
@@ -2476,18 +2463,18 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
             return 0
 
     errors = count("errors")
-    dead_lettered = count("dead_lettered")
+    manual_reviewed = count("manual_reviewed")
     requeue_failed = count("requeue_failed")
-    if not (errors or dead_lettered or requeue_failed):
+    if not (errors or manual_reviewed or requeue_failed):
         return
 
     problems = []
-    if dead_lettered:
-        problems.append(f"{dead_lettered} dead-lettered")
+    if manual_reviewed:
+        problems.append(f"{manual_reviewed} manual-review intents")
     if requeue_failed:
         suffix = "" if requeue_failed == 1 else "s"
         problems.append(f"{requeue_failed} requeue write{suffix} failed")
-    other_errors = max(0, errors - dead_lettered - requeue_failed)
+    other_errors = max(0, errors - manual_reviewed - requeue_failed)
     if other_errors:
         suffix = "" if other_errors == 1 else "s"
         problems.append(f"{other_errors} other drain error{suffix}")
@@ -2496,14 +2483,14 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
         ("Action", "Run nautical queue-status"),
         ("Problems", "; ".join(problems) or f"{errors} drain errors"),
     ]
-    if dead_lettered:
-        rows.append(("State", ".nautical-state/.nautical_dead_letter.jsonl"))
+    if manual_reviewed:
+        rows.append(("Review", "Run nautical queue-status"))
     requeued = count("requeued")
     if requeued:
         rows.append(("Retrying", str(requeued)))
-    queue_lock_failures = count("queue_lock_failures")
-    if queue_lock_failures:
-        rows.append(("Lock events", str(queue_lock_failures)))
+    outbox_lock_failures = count("outbox_lock_failures")
+    if outbox_lock_failures:
+        rows.append(("Lock events", str(outbox_lock_failures)))
 
     core.render_panel(
         "⚠ Nautical spawn drain failed",

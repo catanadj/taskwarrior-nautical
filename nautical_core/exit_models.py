@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 class ExitDrainStateProtocol(Protocol):
     requeue: list[dict[str, Any]]
     errors: int
-    sqlite_acked_claims: dict[int, str]
     lifecycle_defer_verification: bool
     lifecycle_batch_discovery: bool
     lifecycle_batch_plan: LifecycleBatchPlan | None
@@ -224,20 +223,13 @@ class ExitDrainStats:
     errors: int
     requeued: int
     requeue_failed: int
-    dead_lettered: int
-    queue_lock_failures: int
+    manual_reviewed: int
+    outbox_lock_failures: int
     entries_total: int
     entries_skipped_idempotent: int
     lock_events: int
     lock_streak_max: int
     circuit_breaks: int
-    intent_log_ready: int
-    intent_log_size: int
-    intent_log_load_ms: float
-    intent_mark_ok: int
-    intent_mark_fail: int
-    queue_db_opens: int
-    queue_db_reuses: int
     preload_export_uuids: int
     preload_export_hits: int
     preload_export_misses: int
@@ -250,20 +242,13 @@ class ExitDrainStats:
             "errors": self.errors,
             "requeued": self.requeued,
             "requeue_failed": self.requeue_failed,
-            "dead_lettered": self.dead_lettered,
-            "queue_lock_failures": self.queue_lock_failures,
+            "manual_reviewed": self.manual_reviewed,
+            "outbox_lock_failures": self.outbox_lock_failures,
             "entries_total": self.entries_total,
             "entries_skipped_idempotent": self.entries_skipped_idempotent,
             "lock_events": self.lock_events,
             "lock_streak_max": self.lock_streak_max,
             "circuit_breaks": self.circuit_breaks,
-            "intent_log_ready": self.intent_log_ready,
-            "intent_log_size": self.intent_log_size,
-            "intent_log_load_ms": self.intent_log_load_ms,
-            "intent_mark_ok": self.intent_mark_ok,
-            "intent_mark_fail": self.intent_mark_fail,
-            "queue_db_opens": self.queue_db_opens,
-            "queue_db_reuses": self.queue_db_reuses,
             "preload_export_uuids": self.preload_export_uuids,
             "preload_export_hits": self.preload_export_hits,
             "preload_export_misses": self.preload_export_misses,

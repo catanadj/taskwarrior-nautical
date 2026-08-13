@@ -248,12 +248,21 @@ class LifecycleOutboxRepository:
         self._clock = clock
 
     def _connect(self) -> sqlite3.Connection:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.path.parent, 0o700)
         conn = sqlite3.connect(str(self.path), timeout=self.connect_timeout)
+        os.chmod(self.path, 0o600)
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA synchronous={'FULL' if self.durable else 'NORMAL'}")
         conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
         return conn
+
+    def _secure_state_files(self) -> None:
+        """Keep the outbox and SQLite sidecars private to the Taskwarrior user."""
+        os.chmod(self.path.parent, 0o700)
+        for path in (self.path, self.path.with_name(f"{self.path.name}-wal"), self.path.with_name(f"{self.path.name}-shm")):
+            if path.exists():
+                os.chmod(path, 0o600)
 
     def open(self) -> OutboxResult:
         last: Exception | None = None
@@ -262,6 +271,7 @@ class LifecycleOutboxRepository:
             try:
                 conn = self._connect()
                 self._initialize(conn)
+                self._secure_state_files()
                 return OutboxResult(OutboxResultKind.APPLIED)
             except sqlite3.OperationalError as exc:
                 last = exc
@@ -347,7 +357,9 @@ class LifecycleOutboxRepository:
         try:
             conn = self._connect()
             self._initialize(conn)
-            return operation(conn)
+            result = operation(conn)
+            self._secure_state_files()
+            return result
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
         except LifecycleOutboxError as exc:

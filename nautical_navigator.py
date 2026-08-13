@@ -144,11 +144,11 @@ def _find_nautical_core() -> Optional[Any]:
 
 core = _find_nautical_core()
 try:
-    from nautical_core import task_command as _task_command
+    from nautical_core.integration_models import Absent, Found, Unavailable
     from nautical_core.integration_context import IntegrationAccess
     from nautical_core.taskwarrior_uow import build_operator_uow
 except Exception:
-    _task_command = None
+    Absent = Found = Unavailable = None
     IntegrationAccess = None
     build_operator_uow = None
 
@@ -167,33 +167,24 @@ except Exception:
 
 def _run_task_export(filters: tuple[str, ...]) -> Any:
     """Run a read-only Taskwarrior export through Nautical's command boundary."""
-    if _task_command is None:
-        raise RuntimeError("Nautical Taskwarrior command support is unavailable")
     if _UNIT_OF_WORK is None:
         raise RuntimeError("Navigator integration context is unavailable")
-    prefix = _UNIT_OF_WORK.context.command_prefix
-    result = _task_command.run_task_command(
-        prefix[0],
-        [
-            *prefix[1:],
-            "rc.hooks=off",
-            "rc.json.array=1",
-            "rc.verbose=nothing",
-            "rc.color=off",
-            *filters,
-            "export",
-        ],
-        timeout=30.0,
-        retry_locks=True,
+    repository = _UNIT_OF_WORK.repository
+    repository.configure_commands(timeout=30.0, attempts=2, retry_delay=0.05)
+    identity = "navigator:" + (" ".join(filters) if filters else "all")
+    read = repository.broad_snapshot(
+        identity=identity,
+        filters=filters,
+        statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+        complete_chain_history=True,
     )
-    # Taskwarrior reports an empty filter result as a non-zero "No matches"
-    # command result.  For Navigator this is a valid empty collection, not a
-    # retrieval failure; preserve all other command failures as errors.
-    if result.returncode != 0:
-        detail = "\n".join((str(result.stderr or ""), str(result.stdout or ""))).lower()
-        if "no matches" in detail:
-            return []
-    return _task_command.load_json_result(result, "Navigator Taskwarrior export", empty=[])
+    if Found is not None and isinstance(read, Found):
+        return [dict(row) for row in read.value.rows]
+    if Absent is not None and isinstance(read, Absent):
+        return []
+    if Unavailable is not None and isinstance(read, Unavailable):
+        raise RuntimeError(f"Navigator task read unavailable: {read.evidence.detail}")
+    raise RuntimeError("Navigator task repository returned an invalid result")
 
 
 def _reload_navigator_configuration() -> None:

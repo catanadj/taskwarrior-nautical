@@ -17,6 +17,8 @@ if str(BASE_DIR) not in sys.path:
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import chain_repair, task_command  # noqa: E402
+from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
+from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
@@ -24,20 +26,21 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 
 
-def _export(command_prefix: tuple[str, ...]) -> list[dict[str, Any]]:
-    proc = task_command.run_task_command(
-        command_prefix[0],
-        [*command_prefix[1:], "rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID.not:", "export"],
-        timeout=120.0,
-        retry_locks=True,
-        purpose="chain repair read",
+def _export(repository: TaskReadRepository) -> list[dict[str, Any]]:
+    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    read = repository.broad_snapshot(
+        identity="chain-repair",
+        filters=("chainID.not:",),
+        statuses=ALL_TASK_STATUSES,
+        complete_chain_history=True,
     )
-    payload = task_command.load_json_result(proc, "task export", empty=[])
-    if isinstance(payload, dict):
-        payload = [payload]
-    if not isinstance(payload, list):
-        raise RuntimeError("task export returned a non-list payload")
-    return [row for row in payload if isinstance(row, dict)]
+    if isinstance(read, Found):
+        return [dict(row) for row in read.value.rows]
+    if isinstance(read, Absent):
+        return []
+    if isinstance(read, Unavailable):
+        raise RuntimeError(f"chain repair task read unavailable: {read.evidence.detail}")
+    raise RuntimeError("chain repair task repository returned an invalid result")
 
 
 def _apply_repair(command_prefix: tuple[str, ...], repair: chain_repair.LinkRepair) -> None:
@@ -124,7 +127,7 @@ def main(
             return _failure(args, "integration_context", exc)
     command_prefix = _unit_of_work.context.command_prefix
     try:
-        tasks = _export(command_prefix)
+        tasks = _export(_unit_of_work.repository)
     except Exception as exc:
         return _failure(args, "task_export", exc)
     repairs, issues = chain_repair.plan_chain_link_repairs(tasks)

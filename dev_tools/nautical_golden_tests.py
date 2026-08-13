@@ -7147,14 +7147,26 @@ def test_doctor_reports_healthy_installation():
         rows = [
             {
                 "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "status": "completed",
+                "chain": "on",
                 "cp": "1d",
+                "chain": "on",
+                "status": "completed",
+                "chain": "on",
+                "status": "completed",
                 "chainID": "cid",
                 "link": 1,
                 "nextLink": "bbbbbbbb",
             },
             {
                 "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "status": "pending",
+                "chain": "on",
                 "cp": "1d",
+                "chain": "on",
+                "status": "pending",
+                "chain": "on",
+                "status": "pending",
                 "chainID": "cid",
                 "link": 2,
                 "prevLink": "aaaaaaaa",
@@ -7615,6 +7627,8 @@ def test_doctor_discovers_effective_taskdata_directory():
         rows = [
             {
                 "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "status": "completed",
+                "chain": "on",
                 "cp": "1d",
                 "chainID": "cid",
                 "link": 1,
@@ -7622,6 +7636,8 @@ def test_doctor_discovers_effective_taskdata_directory():
             },
             {
                 "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "status": "pending",
+                "chain": "on",
                 "cp": "1d",
                 "chainID": "cid",
                 "link": 2,
@@ -24263,30 +24279,24 @@ def test_navigator_fallback_export_uses_empty_filter():
     calls = []
     try:
         loader.exec_module(navigator)
-        navigator._UNIT_OF_WORK = SimpleNamespace(context=SimpleNamespace(command_prefix=("task",)))
-        original_run = navigator._task_command.run_task_command
+        uow = _test_operator_uow()
 
-        def fake_run(task_bin, args, **_kwargs):
-            calls.append(list(args))
-            if "chainID.not:" in args:
-                return SimpleNamespace(ok=True, returncode=0, stdout="[]", stderr="", kind="ok")
-            if list(args) == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "export"]:
-                return SimpleNamespace(
-                    ok=True,
-                    returncode=0,
-                    stdout=json.dumps([{"id": 1, "uuid": "u1", "chainID": "c1", "link": 1}]),
-                    stderr="",
-                    kind="ok",
-                )
-            raise AssertionError(f"unexpected fallback command: {args!r}")
+        class Client:
+            def execute(self, args, *, purpose, timeout, **_kwargs):
+                calls.append(list(args))
+                rows = []
+                if "chainID.not:" not in args:
+                    rows = [{"id": 1, "uuid": "u1", "chainID": "c1", "link": 1, "status": "pending"}]
+                return _typed_command_result(("task", *args), True, json.dumps(rows))
 
-        navigator._task_command.run_task_command = fake_run
+        uow.client = Client()
+        navigator._UNIT_OF_WORK = uow
+
         tasks = navigator.TaskAnalyzer().get_all_chained_tasks()
         expect(len(tasks) == 1 and tasks[0].get("chainID") == "c1", f"fallback export failed: {tasks!r}")
-        expect(any(call[-1:] == ["export"] and "chainID.not:" not in call for call in calls), f"missing empty-filter export: {calls!r}")
+        expect(any("chainID.not:" not in call for call in calls), f"missing empty-filter export: {calls!r}")
         expect(not any("all" in call for call in calls), f"invalid Taskwarrior 'all' filter remains: {calls!r}")
     finally:
-        navigator._task_command.run_task_command = original_run
         sys.modules.pop(module_name, None)
 
 
@@ -26405,29 +26415,32 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
     }
 
     calls = []
-    original_run = navigator._task_command.run_task_command
+    uow = _test_operator_uow()
 
-    def fake_run(task_bin, args, **_kwargs):
-        cmd = [task_bin, *args]
-        calls.append(cmd)
-        if list(args) == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "2", "export"]:
-            return SimpleNamespace(ok=True, returncode=0, stdout=json.dumps([mid]), stderr="", kind="ok")
-        if list(args) == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID:cid123", "export"]:
-            return SimpleNamespace(ok=True, returncode=0, stdout=json.dumps([root, mid, tail]), stderr="", kind="ok")
-        raise AssertionError(f"unexpected task command: {cmd!r}")
+    class Client:
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            calls.append(tuple(args))
+            if "2" in args:
+                rows = [mid]
+            elif "chainID:cid123" in args:
+                rows = [root, mid, tail]
+            else:
+                raise AssertionError(f"unexpected task command: {args!r}")
+            return _typed_command_result(("task", *args), True, json.dumps(rows))
 
-    navigator._task_command.run_task_command = fake_run
+    uow.client = Client()
+    navigator._UNIT_OF_WORK = uow
     try:
         analyzer = navigator.TaskAnalyzer()
         chain = analyzer.build_chain_from_tasks(2)
         expect([task["uuid"] for task in chain] == [root["uuid"], mid["uuid"], tail["uuid"]],
                f"unexpected rebuilt chain: {chain!r}")
-        expect(any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID:cid123", "export"] for cmd in calls),
+        expect(any("chainID:cid123" in cmd for cmd in calls),
                f"expected targeted chainID export, got: {calls!r}")
-        expect(not any(cmd[1:] == ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chain:on", "all", "export"] for cmd in calls),
+        expect(not any("chain:on" in cmd and "all" in cmd for cmd in calls),
                f"direct task selection should not export all chains: {calls!r}")
     finally:
-        navigator._task_command.run_task_command = original_run
+        navigator._UNIT_OF_WORK = None
 
 
 def test_navigator_empty_task_export_treats_no_matches_as_empty():
@@ -26439,17 +26452,23 @@ def test_navigator_empty_task_export_treats_no_matches_as_empty():
     sys.modules[module_name] = navigator
     try:
         loader.exec_module(navigator)
-        navigator._UNIT_OF_WORK = SimpleNamespace(context=SimpleNamespace(command_prefix=("task",)))
-        original_run = navigator._task_command.run_task_command
-        try:
-            navigator._task_command.run_task_command = lambda *_args, **_kwargs: SimpleNamespace(
-                ok=False, returncode=1, stdout="", stderr="No matches.", kind="nonzero"
-            )
-            expect(navigator._run_task_export(("chain:on", "all")) == [], "No matches was not treated as an empty export")
+        uow = _test_operator_uow()
 
-            navigator._task_command.run_task_command = lambda *_args, **_kwargs: SimpleNamespace(
-                ok=False, returncode=1, stdout="", stderr="database is locked", kind="lock_busy"
-            )
+        class Client:
+            result = _typed_command_result(("task", "export"), True, "")
+
+            def execute(self, *_args, **_kwargs):
+                return self.result
+
+        client = Client()
+        uow.client = client
+        navigator._UNIT_OF_WORK = uow
+        try:
+            expect(navigator._run_task_export(("chain:on", "all")) == [], "No matches was not treated as an empty export")
+            from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+            command = TaskCommand(("task", "export"), "navigator test", 1.0)
+            client.result = TaskCommandResult(command, 1, "", "database is locked", CommandFailureKind.BUSY, 1, 0.0)
+            uow.record_mutation()
             try:
                 navigator._run_task_export(("chain:on", "all"))
             except RuntimeError as exc:
@@ -26457,7 +26476,7 @@ def test_navigator_empty_task_export_treats_no_matches_as_empty():
             else:
                 raise AssertionError("non-empty export failure was silently ignored")
         finally:
-            navigator._task_command.run_task_command = original_run
+            navigator._UNIT_OF_WORK = None
     finally:
         sys.modules.pop(module_name, None)
 
@@ -33198,13 +33217,11 @@ def test_operator_tools_apply_read_only_retry_policy():
 
     try:
         task_command.run_task_command = fake_run
-        reconcile_tool._export("task", [])
         reconcile_tool._modify_native_until(
             "task",
             {"uuid": "parent", "chainID": "chain", "link": 1},
             "20260101T120000Z",
         )
-        repair_tool._export(("task",))
         repair_tool._apply_repair(
             ("task",),
             SimpleNamespace(uuid="parent", field="nextLink", new="child", short="parent"),
@@ -33214,7 +33231,7 @@ def test_operator_tools_apply_read_only_retry_policy():
         task_command.run_task_command = original
 
     expect(
-        [retry for _args, retry in policies] == [True, False, True, False, True],
+        [retry for _args, retry in policies] == [False, False, True],
         f"operator command policies were not separated: {policies}",
     )
 

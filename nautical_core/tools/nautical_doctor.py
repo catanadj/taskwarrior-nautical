@@ -12,6 +12,7 @@ import sys
 import tomllib
 import zoneinfo
 from collections import defaultdict
+from datetime import timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,9 +27,17 @@ if str(ROOT) not in sys.path:
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
+from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
-from nautical_core.integration_context import IntegrationAccess  # noqa: E402
-from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
+from nautical_core.integration_context import (  # noqa: E402
+    IntegrationAccess,
+    IntegrationContext,
+    SilentDiagnostics,
+    SystemClock,
+    ValidatedNauticalConfiguration,
+)
+from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
@@ -119,24 +128,42 @@ def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
     return proc.returncode == 0, (proc.stdout or "").strip()
 
 
-def _task_export(task_bin: str, env: dict[str, str]) -> tuple[bool, list[dict[str, Any]], str]:
-    proc = task_command.run_task_command(
-        task_bin,
-        ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "export"],
-        env=env,
-        timeout=120.0,
-        retry_locks=True,
-        purpose="doctor Taskwarrior query",
+def _task_export(repository: TaskReadRepository) -> tuple[bool, list[dict[str, Any]], str]:
+    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    read = repository.broad_snapshot(
+        identity="doctor-chain-inspection",
+        filters=(),
+        statuses=ALL_TASK_STATUSES,
+        complete_chain_history=True,
     )
-    try:
-        payload = task_command.load_json_result(proc, "task export", empty=[])
-    except Exception as exc:
-        return False, [], str(exc)
-    if isinstance(payload, dict):
-        payload = [payload]
-    if not isinstance(payload, list):
-        return False, [], "task export returned a non-list payload"
-    return True, [row for row in payload if isinstance(row, dict)], ""
+    if isinstance(read, Found):
+        return True, [dict(row) for row in read.value.rows], ""
+    if isinstance(read, Absent):
+        return True, [], ""
+    if isinstance(read, Unavailable):
+        return False, [], read.evidence.detail
+    return False, [], "task repository returned an invalid result"
+
+
+def _diagnostic_read_uow(
+    taskdata: Path,
+    task_bin: str,
+    env: dict[str, str],
+) -> TaskwarriorUnitOfWork:
+    """Read Taskwarrior state without claiming valid scheduling configuration."""
+    context = IntegrationContext(
+        taskdata.resolve(),
+        "doctor-recovery",
+        (str(task_bin), f"rc.data.location={taskdata.resolve()}"),
+        ValidatedNauticalConfiguration("doctor", "unavailable", "unavailable", "UTC", ()),
+        timezone.utc,
+        SilentDiagnostics(),
+        SystemClock(),
+        "doctor-diagnostic-read",
+        256,
+        IntegrationAccess.READ_ONLY,
+    )
+    return TaskwarriorUnitOfWork.create(context, env=env)
 
 
 def _resolve_hooks_dir(task_bin: str, taskdata: Path, env: dict[str, str]) -> Path:
@@ -997,10 +1024,14 @@ def _check_reconcile_plans(
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
-    task_bin: str,
-    env: dict[str, str],
+    repository: TaskReadRepository | None,
 ) -> dict[str, int]:
-    ok, rows, err = _task_export(task_bin, env)
+    if repository is None:
+        ok = False
+        rows: list[dict[str, Any]] = []
+        err = "validated integration context is unavailable"
+    else:
+        ok, rows, err = _task_export(repository)
     if not ok:
         _finding(
             findings,
@@ -1324,6 +1355,7 @@ def main() -> int:
 
     env = os.environ.copy()
     findings: list[dict[str, Any]] = []
+    unit_of_work = None
     try:
         unit_of_work = build_operator_uow(
             core=nautical_core_package,
@@ -1364,6 +1396,7 @@ def main() -> int:
             fix="Correct the reported scheduling configuration before using Nautical hooks or mutations.",
             details={"error": str(exc)},
         )
+        unit_of_work = _diagnostic_read_uow(taskdata, args.task_bin, env)
     else:
         taskdata = unit_of_work.context.taskdata
         args.task_bin = unit_of_work.context.command_prefix[0]
@@ -1396,8 +1429,7 @@ def main() -> int:
     queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
     counts = _check_chains(
         findings,
-        task_bin=args.task_bin,
-        env=env,
+        repository=unit_of_work.repository if unit_of_work is not None else None,
     )
 
     status = _overall_status(findings)

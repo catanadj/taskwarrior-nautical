@@ -28,6 +28,7 @@ from .integration_models import (
     MutationRequest,
     NativeUntilRepairPayload,
     ParentLinkPayload,
+    ParentLinkClearPayload,
     TaskCommandResult,
     TaskRead,
     TaskwarriorMutationPort,
@@ -150,6 +151,11 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 and _text(row.get("chain")).lower() == "off"
             ):
                 return row, None
+            if (
+                request.operation is MutationOperation.CHILD_COMPENSATION
+                and _text(row.get("status")).lower() == "deleted"
+            ):
+                return row, None
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
         return row, None
 
@@ -200,19 +206,6 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         self._uow.record_mutation(uncertain=False)
         return None
 
-    def _run_delete(self, request: MutationRequest, selectors: Sequence[str]) -> MutationOutcome | None:
-        result = self._uow.client.execute(
-            [*selectors, "delete"],
-            purpose=f"lifecycle {request.operation.value}",
-            timeout=self._timeout,
-            attempts=1,
-        )
-        if not result.ok:
-            self._uow.record_mutation(uncertain=True)
-            return self._command_failure(request, result)
-        self._uow.record_mutation(uncertain=True)
-        return None
-
     def _verify(
         self,
         request: MutationRequest,
@@ -233,17 +226,6 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="postcondition does not match")
         return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
 
-    def _verify_absent(self, request: MutationRequest, postcondition: MutationPostcondition) -> MutationOutcome:
-        result = self._uow.repository.by_uuid(request.guard.task_uuid, refresh=True)
-        if isinstance(result, Absent):
-            return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
-        if isinstance(result, Unavailable):
-            kind = MutationOutcomeKind.RETRYABLE if result.retryable else MutationOutcomeKind.MANUAL_REVIEW
-            return self._outcome(request, kind, reason=result.evidence.detail, failure=result.evidence)
-        if isinstance(result, Found):
-            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="deleted child still exists")
-        return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid deletion verification result")
-
     def apply(self, request: MutationRequest) -> MutationOutcome:
         if not isinstance(request, MutationRequest):
             raise TypeError("mutation service requires a MutationRequest")
@@ -251,6 +233,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             MutationOperation.CHILD_IMPORT: self.import_child,
             MutationOperation.CHILD_COMPENSATION: self.compensate_child,
             MutationOperation.PARENT_LINK: self.link_parent,
+            MutationOperation.PARENT_LINK_CLEAR: self.clear_parent_link,
             MutationOperation.CHAIN_DISABLE: self.disable_chain,
             MutationOperation.NATIVE_UNTIL_REPAIR: self.repair_native_until,
             MutationOperation.METADATA_REPAIR: self.repair_metadata,
@@ -264,12 +247,22 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert child is not None
+        if _text(child.get("status")).lower() == "deleted":
+            return self._outcome(
+                request,
+                MutationOutcomeKind.ALREADY_APPLIED,
+                postcondition=MutationPostcondition.CHILD_COMPENSATED,
+            )
         if _text(child.get("status")).lower() != request.payload.expected_status:
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="child status changed before compensation")
-        failure = self._run_delete(request, self._selectors(request.guard))
+        failure = self._run_modify(request, self._selectors(request.guard), ("status:deleted",))
         if failure is not None:
             return failure
-        return self._verify_absent(request, MutationPostcondition.CHILD_COMPENSATED)
+        return self._verify(
+            request,
+            MutationPostcondition.CHILD_COMPENSATED,
+            lambda row: _text(row.get("status")).lower() == "deleted",
+        )
 
     def import_child(self, request: MutationRequest) -> MutationOutcome:
         if request.operation is not MutationOperation.CHILD_IMPORT or not isinstance(request.payload, ChildImportPayload):
@@ -357,6 +350,31 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         return self._verify(request, MutationPostcondition.CHAIN_DISABLED, lambda row: _text(row.get("chain")).lower() == "off")
+
+    def clear_parent_link(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.PARENT_LINK_CLEAR or not isinstance(request.payload, ParentLinkClearPayload):
+            raise TypeError("parent-link clearing requires a parent-link-clear request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        current = _text(parent.get("nextLink"))
+        if not current:
+            return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINK_CLEARED)
+        if current.casefold() != request.payload.expected_next_link.casefold():
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent nextLink changed")
+        failure = self._run_modify(
+            request,
+            self._selectors(request.guard, extra=(f"nextLink:{current}",)),
+            ("nextLink:",),
+        )
+        if failure is not None:
+            return failure
+        return self._verify(
+            request,
+            MutationPostcondition.PARENT_LINK_CLEARED,
+            lambda row: not _text(row.get("nextLink")),
+        )
 
     def repair_native_until(self, request: MutationRequest) -> MutationOutcome:
         if request.operation is not MutationOperation.NATIVE_UNTIL_REPAIR or not isinstance(request.payload, NativeUntilRepairPayload):

@@ -1675,13 +1675,6 @@ def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
     )
 
 
-def _record_exit_mutation(*, uncertain: bool = False) -> None:
-    state = _exit_runtime_state()
-    if state.unit_of_work is None:
-        raise RuntimeError("on-exit Taskwarrior unit of work is unavailable")
-    state.unit_of_work.record_mutation(uncertain=uncertain)
-
-
 def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
     repository = _exit_runtime_state().repository
     if repository is None:
@@ -1715,6 +1708,41 @@ def _exit_mutation_guard(parent_uuid: str, parent_guard: dict[str, Any] | None):
         timestamps=(models.GuardTimestamp(models.GuardTimestampField.MODIFIED, modified),),
         expected_mutation_epoch=_exit_runtime_state().unit_of_work.mutation_epoch,
         chain=str(guard.get("chain") or "on"),
+    )
+
+
+def _exit_row_mutation_guard(row: dict[str, Any]):
+    """Build a complete guard from one authoritative Taskwarrior row."""
+    lifecycle_models = _module("lifecycle_models")
+    if not isinstance(row, dict):
+        raise ValueError("mutation target is not a task object")
+    task_uuid = str(row.get("uuid") or "").strip()
+    modified = str(row.get("modified") or "").strip()
+    chain_id = str(row.get("chainID") or "").strip()
+    status = str(row.get("status") or "").strip()
+    if not task_uuid or not modified or not chain_id or not status:
+        raise ValueError("mutation target has incomplete identity")
+    try:
+        link = int(float(str(row.get("link") or "").strip()))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("mutation target has no integer link") from exc
+    return _module("integration_models").MutationGuard(
+        task_uuid=task_uuid,
+        status=status,
+        chain_id=chain_id,
+        link=link,
+        recurrence_identity=lifecycle_models.recurrence_fingerprint(
+            row,
+            parse_datetime=getattr(core, "parse_dt_any", None),
+        ),
+        timestamps=(
+            _module("integration_models").GuardTimestamp(
+                _module("integration_models").GuardTimestampField.MODIFIED,
+                modified,
+            ),
+        ),
+        expected_mutation_epoch=_exit_runtime_state().unit_of_work.mutation_epoch,
+        chain=str(row.get("chain") or "on"),
     )
 
 
@@ -1761,19 +1789,6 @@ def _import_child(ctx):
         return _mutation_exit_result(outcome, import_result=True)
     except Exception as exc:
         return exit_models.ExitImportResult(False, str(exc).strip() or type(exc).__name__)
-
-
-def _import_children(children: list[dict]):
-    exit_side_effects = _module("exit_side_effects")
-    result = exit_side_effects.import_children(
-        children,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_import=_TASK_TIMEOUT_IMPORT,
-    )
-    if result.ok and children:
-        _record_exit_mutation()
-    return result
 
 
 def _lifecycle_batch_link_token(value: Any) -> str:
@@ -1928,15 +1943,27 @@ def _apply_lifecycle_batch(plan) -> None:
     missing = plan.for_kind(exit_models.LifecycleBatchDecisionKind.MISSING_CHILD)
     if not missing:
         return
-    result = _import_children([decision.plan.child_dict() for decision in missing])
-    if not result.ok:
-        _diag(f"lifecycle child batch import failed: {result.err or 'unknown error'}")
-        state.lifecycle_batch_import_failed.update(decision.spawn_intent_id for decision in missing)
-        return
     for decision in missing:
         child = decision.plan.child_dict()
         child_uuid = str(child.get("uuid") or "").strip()
         if not child_uuid:
+            state.lifecycle_batch_import_failed.add(decision.spawn_intent_id)
+            continue
+        context = _build_exit_entry_context(
+            decision.entry,
+            -1,
+            state,
+            parent_uuid=decision.plan.identity.parent_uuid,
+            child_short=str(decision.plan.parent_patch_dict().get("nextLink") or _short_uuid(child_uuid)).strip(),
+            expected_parent_nextlink=str(decision.entry.get("parent_nextlink") or "").strip() or None,
+            parent_guard=decision.plan.parent_guard.to_dict(),
+            child=child,
+            child_uuid=child_uuid,
+            spawn_intent_id=decision.spawn_intent_id,
+        )
+        result = _import_child(context)
+        if not result.ok:
+            _diag(f"lifecycle child batch import failed: {result.err or 'unknown error'}")
             state.lifecycle_batch_import_failed.add(decision.spawn_intent_id)
             continue
         state.lifecycle_batch_imported.add(decision.spawn_intent_id)
@@ -1975,22 +2002,12 @@ def _cleanup_lifecycle_batch(state) -> None:
         if not _read_found(child_res):
             continue
         safe.append((child_uuid, parent_uuid, sid))
-    if safe:
-        result = _cleanup_orphan_children([child_uuid for child_uuid, _parent, _sid in safe])
+    for child_uuid, _parent, sid in safe:
+        result = _cleanup_orphan_child(child_uuid, sid)
         if not result.ok:
-            for child_uuid, _parent, sid in safe:
-                reason = result.err or "batched orphan cleanup failed"
-                state.lifecycle_cleanup_failures[child_uuid] = reason
-                _record_orphan_cleanup_evidence(child_uuid, sid, reason)
-        else:
-            for child_uuid, _parent, sid in safe:
-                verified = _export_uuid(child_uuid, prefer_cache=False)
-                verified_task = _read_value(verified)
-                status = str((verified_task or {}).get("status") or "").strip().lower()
-                if _read_unavailable(verified) or not _read_found(verified) or status != "deleted":
-                    reason = "batched orphan cleanup postcondition unavailable"
-                    state.lifecycle_cleanup_failures[child_uuid] = reason
-                    _record_orphan_cleanup_evidence(child_uuid, sid, reason)
+            reason = result.err or "batched orphan cleanup failed"
+            state.lifecycle_cleanup_failures[child_uuid] = reason
+            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
 
 
 def _finalize_lifecycle_batch(state) -> None:
@@ -2123,21 +2140,43 @@ def _update_parent_nextlink(
 
 
 def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
-    exit_side_effects = _module("exit_side_effects")
-    result = exit_side_effects.clear_parent_nextlink_if_matches(
-        parent_uuid,
-        child_short,
-        lock_parent_nextlink=_lock_parent_nextlink,
-        export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=False),
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-    )
-    if result.ok and result.state == "cleared":
-        _record_exit_mutation()
-    return result
+    exit_models = _module("exit_models")
+    state = _exit_runtime_state()
+    if state.unit_of_work is None:
+        return exit_models.ExitParentUpdateResult(False, "on-exit mutation unit of work is unavailable")
+    if not parent_uuid or not child_short:
+        return exit_models.ExitParentUpdateResult(False, "missing parent or child", "invalid")
+    with _lock_parent_nextlink(parent_uuid) as locked:
+        if not locked:
+            return exit_models.ExitParentUpdateResult(False, "parent lock busy", "locked", True)
+        parent_res = _export_uuid(parent_uuid, prefer_cache=False)
+        if _read_unavailable(parent_res):
+            return exit_models.ExitParentUpdateResult(
+                False,
+                _read_reason(parent_res, "parent export unavailable"),
+                "locked",
+                True,
+            )
+        parent = _read_value(parent_res)
+        if not isinstance(parent, dict):
+            return exit_models.ExitParentUpdateResult(True, "", "already")
+        current = str(parent.get("nextLink") or "").strip()
+        if current != child_short:
+            return exit_models.ExitParentUpdateResult(True, "", "already")
+        try:
+            models = _module("integration_models")
+            request = models.MutationRequest(
+                models.MutationOperation.PARENT_LINK_CLEAR,
+                _exit_row_mutation_guard(parent),
+                models.ParentLinkClearPayload(parent_uuid, child_short),
+            )
+            outcome = _module("taskwarrior_mutations").TaskwarriorMutationService(
+                state.unit_of_work,
+                timeout=_TASK_TIMEOUT_MODIFY,
+            ).apply(request)
+            return _mutation_exit_result(outcome)
+        except Exception as exc:
+            return exit_models.ExitParentUpdateResult(False, str(exc).strip() or type(exc).__name__, "conflict")
 
 
 def _parent_nextlink_state(
@@ -2160,34 +2199,49 @@ def _parent_nextlink_state(
     )
 
 
-def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
-    exit_side_effects = _module("exit_side_effects")
-    exit_side_effects.cleanup_orphan_child(
-        child_uuid,
-        spawn_intent_id=spawn_intent_id,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-        diag=_diag,
-    )
-    _record_exit_mutation(uncertain=True)
+def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = ""):
+    exit_models = _module("exit_models")
+    state = _exit_runtime_state()
+    if state.unit_of_work is None:
+        return exit_models.ExitImportResult(False, "on-exit mutation unit of work is unavailable")
+    child_res = _export_uuid(child_uuid, prefer_cache=False)
+    if _read_unavailable(child_res):
+        reason = _read_reason(child_res, "child export unavailable")
+        _diag(f"orphan cleanup unavailable (intent={spawn_intent_id or '-'} child={child_uuid[:8]}): {reason}")
+        return exit_models.ExitImportResult(False, reason, True)
+    child = _read_value(child_res)
+    if not isinstance(child, dict):
+        return exit_models.ExitImportResult(True, "")
+    try:
+        models = _module("integration_models")
+        request = models.MutationRequest(
+            models.MutationOperation.CHILD_COMPENSATION,
+            _exit_row_mutation_guard(child),
+            models.ChildCompensationPayload(child_uuid, str(child.get("status") or "pending")),
+        )
+        outcome = _module("taskwarrior_mutations").TaskwarriorMutationService(
+            state.unit_of_work,
+            timeout=_TASK_TIMEOUT_MODIFY,
+        ).apply(request)
+        result = _mutation_exit_result(outcome, import_result=True)
+        if not result.ok:
+            _diag(f"orphan cleanup failed (intent={spawn_intent_id or '-'} child={child_uuid[:8]}): {result.err}")
+        return result
+    except Exception as exc:
+        reason = str(exc).strip() or type(exc).__name__
+        _diag(f"orphan cleanup failed (intent={spawn_intent_id or '-'} child={child_uuid[:8]}): {reason}")
+        return exit_models.ExitImportResult(False, reason)
 
 
 def _cleanup_orphan_children(child_uuids: list[str]):
-    exit_side_effects = _module("exit_side_effects")
-    result = exit_side_effects.cleanup_orphan_children(
-        child_uuids,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-    )
-    if result.ok and child_uuids:
-        _record_exit_mutation()
-    return result
+    exit_models = _module("exit_models")
+    for child_uuid in dict.fromkeys(str(value or "").strip() for value in child_uuids or []):
+        if not child_uuid:
+            continue
+        result = _cleanup_orphan_child(child_uuid)
+        if not result.ok:
+            return result
+    return exit_models.ExitImportResult(True, "")
 
 
 def _take_queue_batch():
@@ -2833,7 +2887,14 @@ def _execute_lifecycle_queue_entry(ctx, state):
                         (ctx.parent_uuid, ctx.child_short, ctx.spawn_intent_id),
                     )
                 else:
-                    _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
+                    cleanup = _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
+                    if not cleanup.ok:
+                        return _lifecycle_operation_result(
+                            lifecycle_executor.OperationState.UNAVAILABLE
+                            if cleanup.retryable
+                            else lifecycle_executor.OperationState.FAILED,
+                            reason=cleanup.err or "orphan cleanup failed",
+                        )
             return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
 
     if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported:

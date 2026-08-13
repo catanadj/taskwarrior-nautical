@@ -2021,7 +2021,9 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
                 self.repo.rows.pop(uuid_token.split(":", 1)[1].lower(), None)
             else:
                 update_at = args.index("modify") + 1
-                target = self.repo.rows[parent_uuid]
+                uuid_token = next((item for item in args if item.startswith("uuid:")), "")
+                target_uuid = uuid_token.split(":", 1)[1].lower() if uuid_token else parent_uuid
+                target = self.repo.rows[target_uuid]
                 for token in args[update_at:]:
                     key, value = token.split(":", 1)
                     target[key] = value
@@ -19588,60 +19590,6 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
             expect(key in stats, f"missing metric key: {key}")
 
 
-def test_on_exit_import_child_retries_on_lock():
-    """on-exit should retry child import on lock errors with backoff."""
-    hook = _find_hook_file("on-exit.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_exit_retry_test")
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as td:
-        mod.TW_DATA_DIR = Path(td)
-        calls = {"count": 0}
-        sleeps: list[float] = []
-
-        def _run_task_stub(_cmd, **_kwargs):
-            calls["count"] += 1
-            if calls["count"] < 3:
-                return False, "", "database is locked"
-            return True, "", ""
-
-        mod._run_task = _run_task_stub
-        mod._sleep = lambda secs: sleeps.append(secs)
-        mod.random.uniform = lambda _a, _b: 0.0
-
-        result = mod._import_child({"uuid": "00000000-0000-0000-0000-000000000abc"})
-        expect(result.ok, f"import should succeed after retries, err={result.err}")
-        expect(calls["count"] == 3, f"unexpected retry count: {calls['count']}")
-        expect(len(sleeps) == 2, f"unexpected sleep calls: {sleeps}")
-
-
-def test_on_exit_import_children_batches_payloads():
-    """Lifecycle child batches use one import command and preserve JSON lines."""
-    hook = _find_hook_file("on-exit.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_exit_batch_import_test")
-    side_effects = mod._module("exit_side_effects")
-    calls = []
-
-    def run_task(cmd, **kwargs):
-        calls.append((cmd, kwargs))
-        return True, "", ""
-
-    children = [{"uuid": "child-1", "link": 2}, {"uuid": "child-2", "link": 3}]
-    result = side_effects.import_children(
-        children,
-        run_task=run_task,
-        task_cmd_prefix=["task"],
-        timeout_import=3.0,
-    )
-    expect(result.ok, f"batch import should succeed: {result}")
-    expect(len(calls) == 1, f"batch import should use one command: {calls!r}")
-    payload = calls[0][1].get("input_text") or ""
-    expect(payload.count("\n") == 2, f"batch import should send two JSON lines: {payload!r}")
-    expect(json.loads(payload.splitlines()[0])["uuid"] == "child-1", f"first child was not preserved: {payload!r}")
-    expect(json.loads(payload.splitlines()[1])["uuid"] == "child-2", f"second child was not preserved: {payload!r}")
-
-
 def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
     """Preflight must partition mixed queue state before importing any child."""
     hook = _find_hook_file("on-exit.nautical")
@@ -19704,8 +19652,9 @@ def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
 
     mod._reset_exit_runtime_state()
     mod._export_uuid = export
+    mod._existing_equivalent_child = lambda _child, _parent_uuid="": _absent_task()
     captured = []
-    mod._import_children = lambda children: (captured.extend(children) or exit_models.ExitImportResult(True, ""))
+    mod._import_child = lambda context: (captured.append(context.child) or exit_models.ExitImportResult(True, ""))
     plan = mod._prepare_lifecycle_batch(entries)
     expect(plan is not None, "mixed lifecycle batch did not produce a plan")
     by_intent = plan.by_intent()
@@ -19770,16 +19719,13 @@ def test_on_exit_batches_orphan_cleanup_and_records_unavailable_evidence():
             status = "deleted" if uuid_str in deleted else "pending"
             return _found_task({"uuid": uuid_str, "status": status})
 
-        def batch_cleanup(child_uuids):
-            batch_calls.append(list(child_uuids))
-            deleted.update(child_uuids)
-            return exit_models.ExitImportResult(True, "")
-
         mod._preload_export_uuids = lambda _entries: None
         mod._export_uuid = export_uuid
-        mod._cleanup_orphan_children = batch_cleanup
+        mod._cleanup_orphan_child = lambda child_uuid, _sid="": (
+            batch_calls.append(child_uuid) or deleted.add(child_uuid) or exit_models.ExitImportResult(True, "")
+        )
         mod._cleanup_lifecycle_batch(state)
-        expect(batch_calls == [["child-1", "child-2"]], f"unsafe/unavailable child entered batch cleanup: {batch_calls!r}")
+        expect(batch_calls == ["child-1", "child-2"], f"unsafe/unavailable child entered batch cleanup: {batch_calls!r}")
         expect("child-3" in state.lifecycle_cleanup_failures, "unavailable cleanup was not recorded")
         evidence = mod._ORPHAN_CLEANUP_EVIDENCE_PATH.read_text(encoding="utf-8")
         expect("child-3" in evidence and "unavailable" in evidence, f"missing durable cleanup evidence: {evidence!r}")
@@ -36012,8 +35958,6 @@ TESTS = [
     test_on_exit_drain_skips_finalized_sqlite_intent,
     test_on_exit_drain_updates_progress_per_entry,
     test_on_exit_dead_letter_on_missing_fields,
-    test_on_exit_import_child_retries_on_lock,
-    test_on_exit_import_children_batches_payloads,
     test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states,
     test_on_exit_batches_orphan_cleanup_and_records_unavailable_evidence,
     test_on_exit_equivalent_child_cache_reuses_slot_lookup,

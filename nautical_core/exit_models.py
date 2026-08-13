@@ -64,7 +64,7 @@ class ExitClearParentCallback(Protocol):
 
 
 class ExitCleanupCallback(Protocol):
-    def __call__(self, child_uuid: str, spawn_intent_id: str = "") -> None: ...
+    def __call__(self, child_uuid: str, spawn_intent_id: str = "") -> "ExitImportResult": ...
 
 
 class ExitParentGuardCallback(Protocol):

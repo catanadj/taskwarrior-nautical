@@ -291,6 +291,7 @@ class MutationOperation(str, Enum):
     CHILD_IMPORT = "child_import"
     CHILD_COMPENSATION = "child_compensation"
     PARENT_LINK = "parent_link"
+    PARENT_LINK_CLEAR = "parent_link_clear"
     CHAIN_DISABLE = "chain_disable"
     NATIVE_UNTIL_REPAIR = "native_until_repair"
     METADATA_REPAIR = "metadata_repair"
@@ -300,6 +301,7 @@ class MutationPostcondition(str, Enum):
     CHILD_IMPORTED = "child_imported"
     CHILD_COMPENSATED = "child_compensated"
     PARENT_LINKED = "parent_linked"
+    PARENT_LINK_CLEARED = "parent_link_cleared"
     CHAIN_DISABLED = "chain_disabled"
     NATIVE_UNTIL_REPAIRED = "native_until_repaired"
     METADATA_REPAIRED = "metadata_repaired"
@@ -309,6 +311,7 @@ _OPERATION_POSTCONDITION = {
     MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
     MutationOperation.CHILD_COMPENSATION: MutationPostcondition.CHILD_COMPENSATED,
     MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+    MutationOperation.PARENT_LINK_CLEAR: MutationPostcondition.PARENT_LINK_CLEARED,
     MutationOperation.CHAIN_DISABLE: MutationPostcondition.CHAIN_DISABLED,
     MutationOperation.NATIVE_UNTIL_REPAIR: MutationPostcondition.NATIVE_UNTIL_REPAIRED,
     MutationOperation.METADATA_REPAIR: MutationPostcondition.METADATA_REPAIRED,
@@ -433,7 +436,7 @@ class ChildImportPayload:
 
 @dataclass(frozen=True, slots=True)
 class ChildCompensationPayload:
-    """Delete one imported child whose guarded linkage could not complete."""
+    """Mark one imported child deleted when guarded linkage cannot complete."""
 
     task_uuid: str
     expected_status: str = "pending"
@@ -468,6 +471,18 @@ class ParentLinkPayload:
         object.__setattr__(self, "parent_uuid", _required_text(self.parent_uuid, "parent UUID"))
         object.__setattr__(self, "child_short_uuid", _required_text(self.child_short_uuid, "child short UUID"))
         object.__setattr__(self, "expected_next_link", str(self.expected_next_link or "").strip())
+
+
+@dataclass(frozen=True, slots=True)
+class ParentLinkClearPayload:
+    """Clear one optimistic parent link only when its expected value remains."""
+
+    parent_uuid: str
+    expected_next_link: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parent_uuid", _required_text(self.parent_uuid, "parent UUID"))
+        object.__setattr__(self, "expected_next_link", _required_text(self.expected_next_link, "expected parent nextLink"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,6 +574,7 @@ MutationPayload: TypeAlias = (
     ChildImportPayload
     | ChildCompensationPayload
     | ParentLinkPayload
+    | ParentLinkClearPayload
     | ChainDisablePayload
     | NativeUntilRepairPayload
     | MetadataRepairPayload
@@ -584,6 +600,7 @@ class MutationRequest:
             MutationOperation.CHILD_IMPORT: ChildImportPayload,
             MutationOperation.CHILD_COMPENSATION: ChildCompensationPayload,
             MutationOperation.PARENT_LINK: ParentLinkPayload,
+            MutationOperation.PARENT_LINK_CLEAR: ParentLinkClearPayload,
             MutationOperation.CHAIN_DISABLE: ChainDisablePayload,
             MutationOperation.NATIVE_UNTIL_REPAIR: NativeUntilRepairPayload,
             MutationOperation.METADATA_REPAIR: MetadataRepairPayload,
@@ -593,7 +610,7 @@ class MutationRequest:
                 f"{operation.value} request requires {expected.__name__}"
             )
         task_uuid = getattr(self.payload, "task_uuid", None)
-        if task_uuid is None and isinstance(self.payload, (ChildImportPayload, ParentLinkPayload)):
+        if task_uuid is None and isinstance(self.payload, (ChildImportPayload, ParentLinkPayload, ParentLinkClearPayload)):
             task_uuid = self.payload.parent_uuid
         if str(task_uuid).strip().lower() != self.guard.task_uuid.lower():
             raise IntegrationContractError("mutation payload and guard task UUID differ")
@@ -615,6 +632,8 @@ class TaskwarriorMutationPort(Protocol):
     def compensate_child(self, request: MutationRequest) -> MutationOutcome: ...
 
     def link_parent(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def clear_parent_link(self, request: MutationRequest) -> MutationOutcome: ...
 
     def disable_chain(self, request: MutationRequest) -> MutationOutcome: ...
 
@@ -790,6 +809,7 @@ __all__ = (
     "OutboxOutcomeKind",
     "OutboxStage",
     "ParentLinkPayload",
+    "ParentLinkClearPayload",
     "TaskwarriorMutationPort",
     "TaskCommand",
     "TaskCommandResult",

@@ -250,11 +250,16 @@ class MutationGuard:
     recurrence_identity: str
     timestamps: tuple[GuardTimestamp, ...]
     expected_mutation_epoch: int
+    chain: str = "on"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "guard task UUID"))
         object.__setattr__(self, "status", _required_text(self.status, "guard task status"))
         object.__setattr__(self, "chain_id", _required_text(self.chain_id, "guard chainID"))
+        chain = _required_text(self.chain, "guard chain state").lower()
+        if chain not in {"on", "off"}:
+            raise IntegrationContractError("guard chain state must be on or off")
+        object.__setattr__(self, "chain", chain)
         object.__setattr__(
             self,
             "recurrence_identity",

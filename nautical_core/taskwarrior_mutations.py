@@ -129,6 +129,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         row = result.value
         mismatch = self._guard_mismatch(request.guard, row)
         if mismatch:
+            if (
+                request.operation is MutationOperation.CHAIN_DISABLE
+                and request.guard.chain == "on"
+                and _text(row.get("chain")).lower() == "off"
+            ):
+                return row, None
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
         return row, None
 
@@ -136,6 +142,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def _guard_mismatch(guard: MutationGuard, row: Mapping[str, Any]) -> str:
         values = {
             "status": guard.status,
+            "chain": guard.chain,
             "chainID": guard.chain_id,
             "link": str(guard.link),
         }

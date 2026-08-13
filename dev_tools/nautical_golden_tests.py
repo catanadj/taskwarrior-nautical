@@ -6926,13 +6926,18 @@ def test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor():
     original_fresh = tool._fresh_parent
     original_children = tool._existing_children
     try:
-        tool._fresh_parent = lambda _task_bin, _parent: dict(parent, chain="off")
+        tool._fresh_parent = lambda _parent: dict(parent, chain="off")
         tool._existing_children = lambda *_args, **_kwargs: []
-        services = tool._ReconcileLifecycleServices("task", SimpleNamespace(), parent)
+        services = tool._ReconcileLifecycleServices(
+            "task",
+            SimpleNamespace(),
+            parent,
+            unit_of_work=_test_operator_uow("/tmp/nautical-reconcile-terminal-state-test"),
+        )
         already = services.validate_terminal(lifecycle_plan)
         expect(already.state is tool.OperationState.ALREADY, f"disabled terminal was not idempotent: {already!r}")
 
-        tool._fresh_parent = lambda _task_bin, _parent: dict(parent, chain="off", nextLink="22222222")
+        tool._fresh_parent = lambda _parent: dict(parent, chain="off", nextLink="22222222")
         conflict = services.validate_terminal(lifecycle_plan)
         expect(conflict.state is tool.OperationState.CONFLICT, f"linked terminal was not rejected: {conflict!r}")
         try:
@@ -6942,7 +6947,7 @@ def test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor():
         else:
             raise AssertionError("terminal verification accepted a linked successor")
 
-        tool._fresh_parent = lambda _task_bin, _parent: dict(parent, chain="on")
+        tool._fresh_parent = lambda _parent: dict(parent, chain="on")
         tool._existing_children = lambda *_args, **_kwargs: [{"uuid": "22222222", "link": 3}]
         persisted = services.validate_terminal(lifecycle_plan)
         expect(

@@ -5,12 +5,14 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .integration_context import IntegrationContext
+from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
 @dataclass(slots=True)
 class HookRuntimeContext:
     hook_name: str
     integration: IntegrationContext
+    uow: TaskwarriorUnitOfWork
     hook_dir: str
     profile_level: int = 0
     import_ms: float | None = None
@@ -59,6 +61,7 @@ def build_hook_runtime_context(
     *,
     hook_name: str,
     integration: IntegrationContext,
+    uow: TaskwarriorUnitOfWork,
     hook_dir: str,
     profile_level: int = 0,
     import_ms: float | None = None,
@@ -66,6 +69,7 @@ def build_hook_runtime_context(
     return HookRuntimeContext(
         hook_name=hook_name,
         integration=integration,
+        uow=uow,
         hook_dir=hook_dir,
         profile_level=int(profile_level or 0),
         import_ms=float(import_ms) if import_ms is not None else None,

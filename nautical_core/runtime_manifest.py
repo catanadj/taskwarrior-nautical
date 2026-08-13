@@ -5,6 +5,12 @@ from __future__ import annotations
 
 _SHARED_HOOK_MODULES = ("hook_runtime", "integration_context")
 
+_INTEGRATION_FILES = (
+    "integration_models.py",
+    "taskwarrior_client.py",
+    "taskwarrior_uow.py",
+)
+
 
 HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
     "on-add": (
@@ -84,9 +90,9 @@ _HOOK_IMPL = {
 }
 
 _HOOK_SUPPORT_FILES = {
-    "on-add": ("hook_bootstrap.py", "hook_protocol.py"),
-    "on-modify": ("hook_bootstrap.py", "hook_protocol.py"),
-    "on-exit": ("hook_bootstrap.py", "config_support.py", "exit_probe.py"),
+    "on-add": ("hook_bootstrap.py", "hook_protocol.py", *_INTEGRATION_FILES),
+    "on-modify": ("hook_bootstrap.py", "hook_protocol.py", *_INTEGRATION_FILES),
+    "on-exit": ("hook_bootstrap.py", "config_support.py", "exit_probe.py", *_INTEGRATION_FILES),
 }
 
 HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {

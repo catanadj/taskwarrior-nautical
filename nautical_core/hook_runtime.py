@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .taskwarrior_uow import build_taskwarrior_uow
+
 
 class HookIntegrationContextError(RuntimeError):
     """Retain the loaded core so hooks can explain context validation failures."""
@@ -64,9 +66,11 @@ def build_hook_runtime_context(
     import_ms: float | None = None,
 ):
     hook_context = module_access.module("hook_context")
+    uow = build_taskwarrior_uow(integration_context, env=os.environ)
     return hook_context.build_hook_runtime_context(
         hook_name=hook_name,
         integration=integration_context,
+        uow=uow,
         hook_dir=hook_dir,
         profile_level=profile_level,
         import_ms=import_ms,

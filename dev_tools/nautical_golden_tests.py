@@ -1839,6 +1839,14 @@ def test_full_hooks_receive_one_explicit_integration_context():
                     request_context.integration is context,
                     f"{hook_name} built a second request context",
                 )
+                expect(request_context.uow.context is context, f"{hook_name} UOW changed its context")
+                expect(request_context.uow.reads.size == 0, f"{hook_name} UOW did not start empty")
+                second_context = module._build_hook_runtime_context()
+                expect(second_context.uow is not request_context.uow, f"{hook_name} reused its UOW")
+                expect(
+                    second_context.uow.reads is not request_context.uow.reads,
+                    f"{hook_name} shared invocation read state",
+                )
     finally:
         sys.argv = previous_argv
         if previous_taskdata is None:
@@ -5229,12 +5237,11 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
 def test_hook_engine_retains_completion_lifecycle_result_on_runtime_context():
     """Completion routing should retain its typed result without changing JSON output."""
     from nautical_core import hook_engine
-    from nautical_core.hook_context import HookRuntimeContext
     from nautical_core.hook_results import HookJsonResult
     from nautical_core.modify_models import CompletionLifecycleResult
 
     lifecycle = CompletionLifecycleResult(state="retryable", reason="planner unavailable")
-    runtime = HookRuntimeContext("on-modify", "", False, "", "")
+    runtime = SimpleNamespace(lifecycle_result=None)
     request = SimpleNamespace(
         old={"uuid": "00000000-0000-0000-0000-000000000303", "status": "pending", "chainID": "chain303"},
         new={"uuid": "00000000-0000-0000-0000-000000000303", "status": "completed", "chainID": "chain303"},

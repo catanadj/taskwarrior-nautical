@@ -1455,6 +1455,73 @@ def test_taskwarrior_uow_observes_budget_without_blocking_commands():
         expect(len(events) == 1 and events[0].stage == "command_budget", f"budget diagnostic changed: {events}")
 
 
+def test_task_read_snapshot_preserves_scope_and_builds_indexes():
+    """Authoritative exports retain status scope and indexed domain identities."""
+    from nautical_core.task_read_repository import (
+        AuthoritativeTaskSnapshot,
+        TaskQueryKind,
+        TaskSnapshotScope,
+    )
+
+    result = _typed_command_result(("task", "export"), True, "[]")
+    scope = TaskSnapshotScope(
+        TaskQueryKind.BROAD,
+        "active-nautical",
+        ("waiting", "pending", "pending"),
+        complete_chain_history=False,
+    )
+    source = {
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
+        "chainID": "chain-a",
+        "link": 2.0,
+        "status": "pending",
+    }
+    sibling = {
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000002",
+        "chainID": "chain-a",
+        "link": 3,
+        "status": "waiting",
+    }
+    snapshot = AuthoritativeTaskSnapshot(scope, (source, sibling), result)
+
+    expect(scope.statuses == ("pending", "waiting"), f"scope statuses were not normalized: {scope}")
+    expect(not scope.complete_chain_history, "filtered snapshot claimed complete history")
+    expect(snapshot.uuid_matches(source["uuid"]) == (snapshot.rows[0],), "full UUID index missed")
+    expect(snapshot.uuid_matches("aaaaaaaa") == (snapshot.rows[0],), "short UUID index missed")
+    expect(snapshot.chain_rows("chain-a") == snapshot.rows, "chain index missed rows")
+    expect(snapshot.slot_rows("chain-a", 3) == (snapshot.rows[1],), "slot index missed row")
+    source["status"] = "deleted"
+    expect(snapshot.rows[0]["status"] == "pending", "snapshot retained mutable caller state")
+    try:
+        snapshot.rows[0]["status"] = "completed"
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("snapshot rows are mutable")
+
+
+def test_task_read_snapshot_retains_ambiguous_indexes():
+    """Indexes preserve duplicates so repository reads can fail closed."""
+    from nautical_core.task_read_repository import (
+        AuthoritativeTaskSnapshot,
+        TaskQueryKind,
+        TaskSnapshotScope,
+    )
+
+    result = _typed_command_result(("task", "export"), True, "[]")
+    rows = (
+        {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "chainID": "chain-a", "link": 2},
+        {"uuid": "aaaaaaaa-1111-0000-0000-000000000002", "chainID": "chain-a", "link": 2},
+    )
+    snapshot = AuthoritativeTaskSnapshot(
+        TaskSnapshotScope(TaskQueryKind.CHAIN, "chain-a", ("pending",), complete_chain_history=True),
+        rows,
+        result,
+    )
+    expect(len(snapshot.uuid_matches("aaaaaaaa")) == 2, "ambiguous short UUID was collapsed")
+    expect(len(snapshot.slot_rows("chain-a", 2)) == 2, "duplicate exact slot was collapsed")
+
+
 def test_integration_mutation_models_enforce_guards_and_postconditions():
     """Mutation outcomes require complete guards and operation-specific proof."""
     from nautical_core.integration_models import (
@@ -35712,6 +35779,8 @@ TESTS = [
     test_taskwarrior_uow_broad_snapshot_declares_narrow_coverage,
     test_taskwarrior_uow_isolates_invocations_over_one_taskdata,
     test_taskwarrior_uow_observes_budget_without_blocking_commands,
+    test_task_read_snapshot_preserves_scope_and_builds_indexes,
+    test_task_read_snapshot_retains_ambiguous_indexes,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,

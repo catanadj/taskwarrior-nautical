@@ -7,6 +7,7 @@ _SHARED_HOOK_MODULES = ("hook_runtime", "integration_context")
 
 _INTEGRATION_FILES = (
     "integration_models.py",
+    "task_read_repository.py",
     "taskwarrior_client.py",
     "taskwarrior_uow.py",
 )

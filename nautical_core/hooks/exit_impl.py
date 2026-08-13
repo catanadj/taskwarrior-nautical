@@ -356,12 +356,6 @@ def _hook_module_access():
 def _module(name: str, *, required: bool = True):
     return _hook_module_access().module(name, required=required)
 
-def _task_cmd_prefix() -> list[str]:
-    if _INTEGRATION_CONTEXT is None:
-        raise RuntimeError("on-exit integration context is unavailable")
-    return list(_INTEGRATION_CONTEXT.command_prefix)
-
-
 def _initialize_integration_context() -> None:
     global core, _CORE_IMPORT_TARGET, _INTEGRATION_CONTEXT
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
@@ -558,42 +552,6 @@ def _task_phase(name: str):
         yield
     finally:
         state.task_phase = previous
-
-
-def _run_task_diag_bucket(cmd: list[str]) -> str:
-    try:
-        parts = []
-        for p in (cmd or ()):
-            parts.extend(str(p).split())
-        parts = tuple(parts)
-    except Exception:
-        return "other"
-    if not parts:
-        return "other"
-    if "import" in parts:
-        return "import"
-    if "modify" in parts:
-        if any(p.startswith("nextLink:") for p in parts):
-            return "modify_parent_nextlink"
-        if "status:deleted" in parts:
-            return "modify_cleanup"
-        return "modify_other"
-    if "export" in parts:
-        if any(p.startswith("uuid:") for p in parts):
-            return "export_uuid"
-        if any(p.startswith("chainID:") for p in parts):
-            return "export_equivalent_child"
-        return "export_other"
-    return "other"
-
-
-def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
-    bucket = _run_task_diag_bucket(cmd)
-    _diag_count_exit(f"run_task_calls_phase_{_exit_runtime_state().task_phase or 'unclassified'}")
-    _diag_count_exit(f"run_task_calls_{bucket}")
-    _diag_count_exit(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
-    if not ok:
-        _diag_count_exit(f"run_task_failures_{bucket}")
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -1041,37 +999,6 @@ def _emit_exit_feedback(msg: str) -> None:
             stream.flush()
         except Exception:
             pass
-
-
-def _run_task_result(
-    cmd: list[str],
-    *,
-    env: dict[str, str] | None = None,
-    input_text: str | None = None,
-    timeout: float = 6.0,
-    retries: int = 1,
-    retry_delay: float = 0.0,
-):
-    """Execute one on-exit Taskwarrior command through the shared client."""
-    from nautical_core.runtime_command import run_task_result
-
-    started = time.perf_counter()
-    result = run_task_result(
-        cmd,
-        env=env,
-        input_text=input_text,
-        timeout=timeout,
-        retries=retries,
-        retry_delay=retry_delay,
-        purpose=f"on-exit {_run_task_diag_bucket(cmd)}",
-    )
-    elapsed = time.perf_counter() - started
-    _diag_count_exit("run_task_calls")
-    _diag_count_exit("run_task_seconds", elapsed)
-    _diag_record_run_task(cmd, ok=result.ok, elapsed=elapsed)
-    if not result.ok:
-        _diag_count_exit("run_task_failures")
-    return result
 
 
 def _tw_lock_path() -> Path:

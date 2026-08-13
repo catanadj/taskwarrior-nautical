@@ -1966,6 +1966,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         MutationRequest,
         MetadataRepairPayload,
         NativeUntilRepairPayload,
+        ParentLinkClearPayload,
         ParentLinkPayload,
         TaskCommand,
         TaskCommandResult,
@@ -2084,16 +2085,33 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         )
     )
     expect(linked.kind is MutationOutcomeKind.APPLIED, f"parent link was not applied: {linked}")
-    disabled = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 2))
+    cleared = service.apply(
+        MutationRequest(
+            MutationOperation.PARENT_LINK_CLEAR,
+            MutationGuard(
+                parent_uuid,
+                "completed",
+                "chain-service",
+                7,
+                recurrence_fingerprint(parent),
+                (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+                2,
+                "on",
+            ),
+            ParentLinkClearPayload(parent_uuid, child_uuid[:8]),
+        )
+    )
+    expect(cleared.kind is MutationOutcomeKind.APPLIED, f"parent link clear was not applied: {cleared}")
+    disabled = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 3))
     expect(disabled.kind is MutationOutcomeKind.APPLIED, f"chain disablement was not applied: {disabled}")
-    replay = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 3))
+    replay = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 4))
     expect(replay.kind is MutationOutcomeKind.ALREADY_APPLIED, f"chain replay was not idempotent: {replay}")
     parent["until"] = "20260813T200000Z"
     native = service.apply(
         request(
             MutationOperation.NATIVE_UNTIL_REPAIR,
             NativeUntilRepairPayload(parent_uuid, parent["until"], "20260814T200000Z"),
-            3,
+            4,
             chain="off",
         )
     )
@@ -2102,7 +2120,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         request(
             MutationOperation.METADATA_REPAIR,
             MetadataRepairPayload.from_mapping(parent_uuid, {"chainMax": "5"}, expected={"chainMax": ""}),
-            4,
+            5,
             chain="off",
         )
     )
@@ -2115,7 +2133,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         8,
         recurrence_fingerprint(child_row),
         (GuardTimestamp(GuardTimestampField.MODIFIED, child_row["modified"]),),
-        5,
+        6,
         "on",
     )
     compensated = service.apply(
@@ -2136,7 +2154,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
                 8,
                 child_guard.recurrence_identity,
                 child_guard.timestamps,
-                6,
+                7,
                 "on",
             ),
             ChildCompensationPayload(child_uuid),
@@ -2147,9 +2165,9 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         f"child compensation replay was not idempotent: {replay_compensation}",
     )
     uow.repository.unavailable = True
-    unavailable = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 6))
+    unavailable = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 7))
     expect(unavailable.kind is MutationOutcomeKind.RETRYABLE, f"unavailable guard was not retryable: {unavailable}")
-    expect(len(uow.client.calls) == 6, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
+    expect(len(uow.client.calls) == 7, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
 
 
 def test_on_exit_mutation_callbacks_use_typed_gateway_context():

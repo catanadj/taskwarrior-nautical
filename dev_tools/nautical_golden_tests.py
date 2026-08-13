@@ -2424,6 +2424,90 @@ def test_integration_outbox_models_enforce_deterministic_identity_and_progress()
         raise AssertionError("invalid outbox contract was accepted")
 
 
+def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
+    """The durable outbox owns immutable plans, leases, stages, and poison rows."""
+    from nautical_core.lifecycle_models import (
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleIdentity,
+        LifecyclePlan,
+        ParentGuard,
+    )
+    from nautical_core.lifecycle_outbox import (
+        LifecycleOutboxRepository,
+        OutboxFailure,
+        OutboxProcessingState,
+        OutboxResultKind,
+    )
+
+    now = [1000.0]
+
+    def clock():
+        return now[0]
+
+    def plan_for(link: int) -> LifecyclePlan:
+        parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
+        child_uuid = f"10000000-0000-0000-0000-{link:012d}"
+        return LifecyclePlan.from_mappings(
+            identity=LifecycleIdentity("outbox-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("completed", "on", "outbox-chain", link, "rf1-test"),
+            child_payload={
+                "uuid": child_uuid,
+                "chainID": "outbox-chain",
+                "link": link + 1,
+                "prevLink": parent_uuid[:8],
+            },
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td), clock=clock)
+        plan = plan_for(1)
+        first = repo.enqueue(plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
+        expect(first.kind is OutboxResultKind.APPLIED, f"outbox enqueue failed: {first}")
+        duplicate = repo.enqueue(plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
+        expect(duplicate.kind is OutboxResultKind.ALREADY_APPLIED, "outbox duplicate enqueue was not idempotent")
+        conflict = repo.enqueue(plan, configuration_fingerprint="cf2", schedule_fingerprint="sf1")
+        expect(conflict.kind is OutboxResultKind.CONFLICT, "outbox accepted divergent immutable intent")
+
+        claimed, records = repo.claim_batch(owner="first-worker", lease_seconds=5, limit=10)
+        expect(claimed.ok and len(records) == 1, f"outbox claim failed: {claimed}, {records}")
+        intent_id = records[0].intent_id
+        child = repo.advance_stage(intent_id=intent_id, owner="first-worker", stage="child_present")
+        expect(child.ok, f"outbox child stage failed: {child}")
+        released = repo.release_retry(
+            intent_id=intent_id,
+            owner="first-worker",
+            failure=OutboxFailure("task_busy", "Taskwarrior lock active"),
+        )
+        expect(released.ok, f"outbox retry release failed: {released}")
+        now[0] += 1
+        reclaimed, records = repo.claim_batch(owner="second-worker", lease_seconds=5, limit=10)
+        expect(reclaimed.ok and len(records) == 1, f"outbox retry claim failed: {reclaimed}, {records}")
+        record = records[0]
+        expect(record.stage.value == "child_present", "outbox retry lost verified child progress")
+        expect(record.attempts == 2, "outbox retry did not increment attempts")
+        expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="parent_linked").ok, "outbox parent stage failed")
+        expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="verified").ok, "outbox verification stage failed")
+        expect(repo.acknowledge(intent_id=intent_id, owner="second-worker").ok, "outbox acknowledgement failed")
+
+        poison_plan = plan_for(9)
+        expect(repo.enqueue(poison_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1").ok, "poison test enqueue failed")
+        with sqlite3.connect(str(repo.path)) as conn:
+            conn.execute("UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?", (poison_plan.identity.idempotency_key,))
+        now[0] += 1
+        claimed, records = repo.claim_batch(owner="poison-worker", lease_seconds=5, limit=10)
+        expect(claimed.ok and not records, f"poison outbox row was claimed: {claimed}, {records}")
+        status_result, status = repo.status()
+        expect(status_result.ok, f"outbox status failed: {status_result}")
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.QUARANTINED.value) == 1,
+            f"poison row was not quarantined: {status}",
+        )
+
+
 def test_integration_contract_covers_all_mutation_and_outbox_states():
     """Every tagged integration outcome has one valid constructible shape."""
     from nautical_core.integration_models import (
@@ -35767,6 +35851,7 @@ TESTS = [
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_on_exit_mutation_callbacks_use_typed_gateway_context,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
+    test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
     test_full_hooks_receive_one_explicit_integration_context,

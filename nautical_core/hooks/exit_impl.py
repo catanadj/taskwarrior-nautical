@@ -106,7 +106,6 @@ if (
 import json
 import random
 import sqlite3
-import subprocess
 from contextlib import contextmanager
 from typing import Any
 
@@ -1158,139 +1157,6 @@ def _emit_exit_feedback(msg: str) -> None:
             pass
 
 
-def _run_task_retry_or_stop(attempt: int, attempts: int, delay: float) -> bool:
-    if attempt >= attempts or delay <= 0:
-        return False
-    jitter = random.uniform(0.0, delay)
-    _sleep(delay * (2 ** (attempt - 1)) + jitter)
-    return True
-
-
-def _run_task_terminate(proc: subprocess.Popen | None) -> None:
-    if proc is None:
-        return
-    try:
-        proc.kill()
-    except Exception:
-        pass
-    try:
-        proc.wait(timeout=1.0)
-    except Exception:
-        pass
-
-
-def _run_task_attempt(
-    cmd: list[str],
-    *,
-    env: dict[str, str],
-    input_text: str | None,
-    timeout: float,
-) -> tuple[bool, str, str]:
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-            env=env,
-        )
-        try:
-            out, err = proc.communicate(input=input_text, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                proc.kill()
-            try:
-                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-            except Exception:
-                out, err = "", ""
-            return False, out or "", "timeout"
-        out = out or ""
-        err = err or ""
-        if proc.returncode == 0:
-            return True, out, err
-        return False, out, err
-    except subprocess.TimeoutExpired:
-        _run_task_terminate(proc)
-        return False, "", "timeout"
-    except Exception as e:
-        _run_task_terminate(proc)
-        return False, "", str(e)
-
-
-def _run_task(
-    cmd: list[str],
-    *,
-    env: dict[str, str] | None = None,
-    input_text: str | None = None,
-    timeout: float = 6.0,
-    retries: int = 1,
-    retry_delay: float = 0.0,
-) -> tuple[bool, str, str]:
-    started = time.perf_counter()
-    ok = False
-    env_map = env or os.environ.copy()
-    run_fn = core.run_task if core is not None else None
-    hook_support = _module("hook_support", required=False)
-    try:
-        if hook_support is not None:
-            result = hook_support.run_task(
-                cmd,
-                core_run_task=run_fn,
-                env=env_map,
-                input_text=input_text,
-                timeout=timeout,
-                retries=max(1, int(retries)),
-                retry_delay=max(0.0, float(retry_delay)),
-            )
-            ok = bool(result[0]) if isinstance(result, tuple) and result else False
-            return result
-        if run_fn is not None:
-            result = run_fn(
-                cmd,
-                env=env_map,
-                input_text=input_text,
-                timeout=timeout,
-                retries=max(1, int(retries)),
-                retry_delay=max(0.0, float(retry_delay)),
-            )
-            ok = bool(result[0]) if isinstance(result, tuple) and result else False
-            return result
-        attempts = max(1, int(retries))
-        delay = max(0.0, float(retry_delay))
-        last_out = ""
-        last_err = ""
-        for attempt in range(1, attempts + 1):
-            ok, out, err = _run_task_attempt(
-                cmd,
-                env=env_map,
-                input_text=input_text,
-                timeout=timeout,
-            )
-            last_out = out or ""
-            last_err = err or ""
-            if ok:
-                return True, last_out, last_err
-            if _run_task_retry_or_stop(attempt, attempts, delay):
-                continue
-            return (False, last_out, last_err)
-        return (False, last_out, last_err)
-    finally:
-        elapsed = time.perf_counter() - started
-        _diag_count_exit("run_task_calls")
-        _diag_count_exit("run_task_seconds", elapsed)
-        _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
-        if not ok:
-            _diag_count_exit("run_task_failures")
-
-
-_DEFAULT_RUN_TASK = _run_task
-
-
 def _run_task_result(
     cmd: list[str],
     *,
@@ -1300,73 +1166,26 @@ def _run_task_result(
     retries: int = 1,
     retry_delay: float = 0.0,
 ):
-    """Return typed command state while retaining the legacy tuple wrapper."""
-    core_runner = (
-        getattr(core, "run_task_result", None)
-        if core is not None and _run_task is _DEFAULT_RUN_TASK
-        else None
-    )
-    if _run_task is not _DEFAULT_RUN_TASK:
-        from nautical_core.task_command import coerce_command_result
-        return coerce_command_result(
-            _run_task(
-                cmd,
-                env=env,
-                input_text=input_text,
-                timeout=timeout,
-                retries=retries,
-                retry_delay=retry_delay,
-            ),
-            cmd,
-            timeout=timeout,
-            attempts=retries,
-        )
-    if callable(core_runner):
-        started = time.perf_counter()
-        ok = False
-        try:
-            result = core_runner(
-                cmd,
-                env=env,
-                input_text=input_text,
-                timeout=timeout,
-                retries=retries,
-                retry_delay=retry_delay,
-            )
-            ok = bool(getattr(result, "ok", False))
-            return result
-        finally:
-            elapsed = time.perf_counter() - started
-            _diag_count_exit("run_task_calls")
-            _diag_count_exit("run_task_seconds", elapsed)
-            _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
-            if not ok:
-                _diag_count_exit("run_task_failures")
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.run_task_result(
-            run_task=_run_task,
-            cmd=cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
-    from nautical_core.task_command import coerce_command_result
-    return coerce_command_result(
-        _run_task(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        ),
+    """Execute one on-exit Taskwarrior command through the shared client."""
+    from nautical_core.runtime_command import run_task_result
+
+    started = time.perf_counter()
+    result = run_task_result(
         cmd,
+        env=env,
+        input_text=input_text,
         timeout=timeout,
-        attempts=retries,
+        retries=retries,
+        retry_delay=retry_delay,
+        purpose=f"on-exit {_run_task_diag_bucket(cmd)}",
     )
+    elapsed = time.perf_counter() - started
+    _diag_count_exit("run_task_calls")
+    _diag_count_exit("run_task_seconds", elapsed)
+    _diag_record_run_task(cmd, ok=result.ok, elapsed=elapsed)
+    if not result.ok:
+        _diag_count_exit("run_task_failures")
+    return result
 
 
 def _is_lock_error(err: str) -> bool:

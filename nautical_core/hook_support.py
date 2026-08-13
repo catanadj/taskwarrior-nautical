@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import os
-import random
-import time
 import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence, TypeAlias
 
-from .task_command import TaskCommandResult, coerce_command_result, failure_message, run_command_once
+from .integration_models import CommandFailureKind, TaskCommandResult
+from .task_command import failure_message
 
 
 TaskRow: TypeAlias = dict[str, Any]
-RawCommandResult: TypeAlias = TaskCommandResult | tuple[bool, str, str]
-CommandRunner: TypeAlias = Callable[..., RawCommandResult]
-LegacyCommandRunner: TypeAlias = Callable[..., tuple[bool, str, str]]
+CommandRunner: TypeAlias = Callable[..., TaskCommandResult]
 DiagnosticCallback: TypeAlias = Callable[[str], object]
 
 
@@ -66,86 +63,6 @@ def build_task_cmd_prefix(*, use_rc_data_location: bool, tw_data_dir: object) ->
     return cmd
 
 
-def run_subprocess_once(
-    cmd: Sequence[str],
-    *,
-    env: Mapping[str, str],
-    input_text: str | None,
-    timeout: float,
-) -> tuple[bool, str, str]:
-    """Run one bounded Taskwarrior subprocess with consistent cleanup semantics."""
-    result = run_command_once(cmd, env=env, input_text=input_text, timeout=timeout)
-    stderr = result.stderr or ("timeout" if result.kind == "timeout" else "")
-    return result.ok, result.stdout, stderr
-
-
-def _run_task_attempt(
-    cmd: Sequence[str],
-    *,
-    env: Mapping[str, str],
-    input_text: str | None,
-    timeout: float,
-) -> tuple[bool, str, str]:
-    return run_subprocess_once(cmd, env=env, input_text=input_text, timeout=timeout)
-
-
-def run_task(
-    cmd: Sequence[str],
-    *,
-    core_run_task: LegacyCommandRunner | None = None,
-    env: Mapping[str, str] | None = None,
-    input_text: str | None = None,
-    timeout: float = 6.0,
-    retries: int = 1,
-    retry_delay: float = 0.0,
-    use_tempfiles: bool = False,
-) -> tuple[bool, str, str]:
-    if callable(core_run_task):
-        return core_run_task(
-            cmd,
-            env=(env or os.environ.copy()),
-            input_text=input_text,
-            timeout=timeout,
-            retries=max(1, int(retries)),
-            retry_delay=max(0.0, float(retry_delay)),
-            use_tempfiles=use_tempfiles,
-        )
-
-    env_map = env or os.environ.copy()
-    attempts = max(1, int(retries))
-    delay = max(0.0, float(retry_delay))
-    last_out = ""
-    last_err = ""
-    for attempt in range(1, attempts + 1):
-        ok, out, err = _run_task_attempt(
-            cmd,
-            env=env_map,
-            input_text=input_text,
-            timeout=timeout,
-        )
-        last_out = out or ""
-        last_err = err or ""
-        if ok:
-            return True, last_out, last_err
-        retryable = str(last_err or "").strip().lower() == "timeout" or any(
-            marker in str(last_err or "").lower()
-            for marker in (
-                "database is locked",
-                "unable to lock",
-                "resource temporarily unavailable",
-                "another task is running",
-                "lock file",
-                "lockfile",
-                "locked by",
-            )
-        )
-        if attempt >= attempts or delay <= 0 or not retryable:
-            break
-        jitter = random.uniform(0.0, delay)
-        time.sleep(delay * (2 ** (attempt - 1)) + jitter)
-    return False, last_out, last_err
-
-
 def run_task_result(
     *,
     run_task: CommandRunner,
@@ -157,7 +74,7 @@ def run_task_result(
     retry_delay: float = 0.0,
     use_tempfiles: bool = False,
 ) -> TaskCommandResult:
-    """Adapt the hook runner to the typed command-result boundary."""
+    """Invoke a typed hook runner without tuple or failure coercion."""
     runner_kwargs = {
         "env": env,
         "input_text": input_text,
@@ -167,13 +84,10 @@ def run_task_result(
     }
     if use_tempfiles:
         runner_kwargs["use_tempfiles"] = True
-    raw_result = run_task(cmd, **runner_kwargs)
-    return coerce_command_result(
-        raw_result,
-        cmd,
-        timeout=timeout,
-        attempts=max(1, int(retries or 1)),
-    )
+    result = run_task(cmd, **runner_kwargs)
+    if not isinstance(result, TaskCommandResult):
+        raise TypeError("Taskwarrior command runner returned an untyped result")
+    return result
 
 
 def parse_export_array_result(
@@ -359,7 +273,7 @@ def export_uuid_status(
         retry_delay=retry_delay,
     )
     if not result.ok:
-        retryable = bool(is_lock_error(result.stderr)) if callable(is_lock_error) else result.kind == "lock_busy"
+        retryable = result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT}
         return {"exists": False, "retryable": retryable, "err": failure_message(result, "UUID status lookup"), "obj": None}
     raw_stdout = (result.stdout or "").strip()
     if not raw_stdout:

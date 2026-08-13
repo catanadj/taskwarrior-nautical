@@ -117,6 +117,7 @@ class TaskwarriorMutationGateway:
             ["rc.hooks=off", "import", "-"],
             input_text=json.dumps(payload, ensure_ascii=False) + "\n",
             timeout=10.0,
+            purpose="import reconciled child",
         )
         if not result.ok:
             raise RuntimeError(task_command.failure_message(result, "child import"))

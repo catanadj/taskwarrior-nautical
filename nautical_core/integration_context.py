@@ -234,6 +234,7 @@ def build_integration_context(
             env=env_map,
             timeout=10.0,
             retry_locks=True,
+            purpose="discover Taskdata location",
         )
         if not result.ok:
             raise IntegrationContextError(

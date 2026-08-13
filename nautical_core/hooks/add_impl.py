@@ -123,7 +123,6 @@ if __name__ == "__main__":
 import atexit
 import random
 import re
-import subprocess
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -512,86 +511,6 @@ def _diag(msg: str) -> None:
             pass
 
 
-def _run_task(
-    cmd: list[str],
-    *,
-    env: dict | None = None,
-    input_text: str | None = None,
-    timeout: float = 3.0,
-    retries: int = 2,
-    retry_delay: float = 0.15,
-) -> tuple[bool, str, str]:
-    load_err: Exception | None = None
-    if core is None:
-        try:
-            _load_core()
-        except Exception as e:
-            load_err = e
-    core_runner = getattr(core, "run_task", None) if core is not None else None
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        if load_err is not None and not callable(core_runner):
-            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-        return hook_support.run_task(
-            cmd,
-            core_run_task=core_runner,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
-    if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
-    if load_err is not None:
-        _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-    env = env or os.environ.copy()
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-            env=env,
-        )
-        out, err = proc.communicate(input=input_text, timeout=timeout)
-        return (proc.returncode == 0, out or "", err or "")
-    except subprocess.TimeoutExpired:
-        if proc is not None:
-            proc.kill()
-        try:
-            out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-        except Exception:
-            out, err = "", ""
-        return (False, out or "", "timeout")
-    except Exception as e:
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=1.0)
-            except Exception:
-                pass
-        return (False, "", str(e))
-
-
-_DEFAULT_RUN_TASK = _run_task
-
-
 def _run_task_result(
     cmd: list[str],
     *,
@@ -602,62 +521,18 @@ def _run_task_result(
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ):
-    """Return the typed subprocess result; retain ``_run_task`` for compatibility."""
-    try:
-        _load_core()
-    except Exception:
-        # A loaded core with invalid scheduling configuration must block the
-        # command; only an unavailable core may use the compatibility runner.
-        if core is not None:
-            raise
-    core_runner = (
-        getattr(core, "run_task_result", None)
-        if core is not None and _run_task is _DEFAULT_RUN_TASK
-        else None
-    )
-    if _run_task is not _DEFAULT_RUN_TASK:
-        from nautical_core.task_command import coerce_command_result
-        return coerce_command_result(
-            _run_task(cmd, env=env, input_text=input_text, timeout=timeout, retries=retries, retry_delay=retry_delay),
-            cmd,
-            timeout=timeout,
-            attempts=retries,
-        )
-    if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.run_task_result(
-            run_task=_run_task,
-            cmd=cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    from nautical_core.task_command import coerce_command_result
-    return coerce_command_result(
-        _run_task(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        ),
+    """Execute one on-add Taskwarrior command through the shared client."""
+    from nautical_core.runtime_command import run_task_result
+
+    return run_task_result(
         cmd,
+        env=env,
+        input_text=input_text,
         timeout=timeout,
-        attempts=retries,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+        purpose="on-add Taskwarrior command",
     )
 
 

@@ -30,6 +30,7 @@ def _run_task(command_prefix: tuple[str, ...], args: list[str], *, timeout: floa
         [*command_prefix[1:], *args],
         timeout=timeout,
         retry_locks=read_only,
+        purpose="chain repair read" if read_only else "chain repair mutation",
     )
 
 

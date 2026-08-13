@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Callable
 
+from .integration_models import CommandFailureKind
+
 if TYPE_CHECKING:
     from nautical_core.exit_models import (
         ExitExportResult,
@@ -11,10 +13,11 @@ if TYPE_CHECKING:
         ExitParentNextlinkStateResult,
         ExitParentUpdateResult,
     )
+    from nautical_core.integration_models import TaskCommandResult
 
 
 def _typed_result(run_task, cmd, *, input_text=None, timeout: float, retries: int = 1, retry_delay: float = 0.0):
-    """Use one command-result adapter for typed and legacy runners."""
+    """Use one typed command-result callback."""
     from . import hook_support
 
     return hook_support.run_task_result(
@@ -30,7 +33,7 @@ def _typed_result(run_task, cmd, *, input_text=None, timeout: float, retries: in
 def import_child(
     obj: dict[str, Any],
     *,
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_import: float,
     is_lock_error: Callable[[str], bool],
@@ -38,34 +41,25 @@ def import_child(
     random_uniform: Callable[[float, float], float],
 ) -> ExitImportResult:
     payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n"
-    max_retries = 4
-    last_err = ""
-    for attempt in range(max_retries):
-        result = _typed_result(
-            run_task,
-            task_cmd_prefix + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
-            input_text=payload,
-            timeout=timeout_import,
-        )
-        if result.ok:
-            from nautical_core.exit_models import ExitImportResult
-            return ExitImportResult(True, "")
-        last_err = result.stderr or ""
-        if result.kind != "lock_busy" and not is_lock_error(last_err):
-            from nautical_core.exit_models import ExitImportResult
-            return ExitImportResult(False, last_err)
-        if attempt < max_retries - 1:
-            base = 0.2 * (2 ** attempt)
-            jitter = random_uniform(0.0, 0.1)
-            sleep(base + jitter)
+    del is_lock_error, sleep, random_uniform
+    result = _typed_result(
+        run_task,
+        task_cmd_prefix + ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+        input_text=payload,
+        timeout=timeout_import,
+        retries=4,
+        retry_delay=0.2,
+    )
     from nautical_core.exit_models import ExitImportResult
-    return ExitImportResult(False, last_err)
+    if result.ok:
+        return ExitImportResult(True, "")
+    return ExitImportResult(False, result.stderr or result.kind.value)
 
 
 def import_children(
     children: list[dict[str, Any]],
     *,
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_import: float,
 ) -> ExitImportResult:
@@ -132,7 +126,7 @@ def update_parent_nextlink(
     expected_prev: str | None,
     lock_parent_nextlink: Callable[[str], Any],
     parent_nextlink_state_fn: ExitParentNextlinkStateCallback,
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_modify: float,
     retries_modify: int,
@@ -242,7 +236,7 @@ def clear_parent_nextlink_if_matches(
     *,
     lock_parent_nextlink: Callable[[str], Any],
     export_uuid: Callable[[str], ExitExportResult],
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_modify: float,
     retries_modify: int,
@@ -286,7 +280,7 @@ def cleanup_orphan_child(
     child_uuid: str,
     *,
     spawn_intent_id: str = "",
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_modify: float,
     retries_modify: int,
@@ -318,7 +312,7 @@ def cleanup_orphan_child(
 def cleanup_orphan_children(
     child_uuids: list[str],
     *,
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_modify: float,
     retries_modify: int,

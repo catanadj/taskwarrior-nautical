@@ -224,6 +224,7 @@ def _run_task(
         input_text=input_text,
         timeout=timeout,
         retry_locks=read_only,
+        purpose="reconcile read" if read_only else "reconcile mutation",
     )
 
 

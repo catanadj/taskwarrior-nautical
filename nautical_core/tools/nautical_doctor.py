@@ -113,6 +113,7 @@ def _run_task(task_bin: str, args: list[str], env: dict[str, str], timeout: floa
         env=env,
         timeout=timeout,
         retry_locks=True,
+        purpose="doctor Taskwarrior query",
     )
 
 

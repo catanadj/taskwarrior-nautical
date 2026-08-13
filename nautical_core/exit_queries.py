@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Callable
 
+from .integration_models import CommandFailureKind
+
 if TYPE_CHECKING:
     from nautical_core.exit_models import ExitEquivalentChildResult, ExitExportResult
+    from nautical_core.integration_models import TaskCommandResult
 
 
 def _typed_result(run_task, cmd, *, timeout: float, retries: int, retry_delay: float = 0.0):
-    """Use the shared adapter for typed and legacy command callbacks."""
+    """Use the shared typed command callback."""
     from . import hook_support
 
     return hook_support.run_task_result(
@@ -36,7 +39,7 @@ def export_uuid(
     uuid_str: str,
     *,
     hook_support: Any,
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout: float,
     retries: int,
@@ -75,7 +78,12 @@ def export_uuid(
         retry_delay=retry_delay,
     )
     if not result.ok:
-        return ExitExportResult(False, result.kind == "lock_busy" or is_lock_error(result.stderr), result.stderr or "", None)
+        return ExitExportResult(
+            False,
+            result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT},
+            result.stderr or "",
+            None,
+        )
     raw_stdout = (result.stdout or "").strip()
     if not raw_stdout:
         return ExitExportResult(False, False, "not found", None)
@@ -93,7 +101,7 @@ def existing_equivalent_child(
     *,
     parent_uuid: str = "",
     task_cmd_prefix: list[str],
-    run_task: Callable[..., tuple[bool, str, str]],
+    run_task: Callable[..., TaskCommandResult],
     timeout: float,
     retries: int,
     retry_delay: float,
@@ -137,7 +145,12 @@ def existing_equivalent_child(
         retry_delay=retry_delay,
     )
     if not result.ok:
-        return ExitEquivalentChildResult(False, result.kind == "lock_busy" or is_lock_error(result.stderr), result.stderr or "", None)
+        return ExitEquivalentChildResult(
+            False,
+            result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT},
+            result.stderr or "",
+            None,
+        )
     try:
         rows = json.loads(result.stdout.strip() or "[]")
     except Exception:

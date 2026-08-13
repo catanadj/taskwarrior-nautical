@@ -105,8 +105,7 @@ class TaskwarriorClient:
         use_tempfiles: bool,
     ) -> TaskCommandResult:
         started = time.monotonic()
-        stdout_file: BinaryIO | None = tempfile.TemporaryFile() if use_tempfiles else None
-        stderr_file: BinaryIO | None = tempfile.TemporaryFile() if use_tempfiles else None
+        stdout_file, stderr_file = self._temporary_outputs(use_tempfiles)
         proc: subprocess.Popen[bytes] | None = None
         stdout = ""
         stderr = ""
@@ -161,6 +160,19 @@ class TaskwarriorClient:
             attempt,
             time.monotonic() - started,
         )
+
+    @staticmethod
+    def _temporary_outputs(use_tempfiles: bool) -> tuple[BinaryIO | None, BinaryIO | None]:
+        if not use_tempfiles:
+            return None, None
+        stdout_file: BinaryIO | None = None
+        try:
+            stdout_file = tempfile.TemporaryFile()
+            return stdout_file, tempfile.TemporaryFile()
+        except OSError:
+            if stdout_file is not None:
+                stdout_file.close()
+            return None, None
 
     @staticmethod
     def _collect_output(

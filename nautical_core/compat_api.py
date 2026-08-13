@@ -41,7 +41,7 @@ PUBLIC_EXPORTS = (
     'cp_sequence_interval_for_link', 'cp_sequence_interval_for_token', 'parse_dt_any',
     'pick_hhmm_from_dnf_for_date', 'py', 'random', 'render_panel',
     'resolve_anchor_presets', 'resolve_business_calendar_config', 'resolve_omit_presets',
-    'resolve_task_data_context', 'run_task', 'safe_lock',
+    'resolve_task_data_context', 'safe_lock',
     'sanitize_task_strings', 'short_uuid', 'strip_rich_markup', 'tempfile',
     'term_width_stderr', 'time', 'to_local', 'utc_to_local_naive', 'local_naive_to_utc',
     'use_business_calendar', 'use_task_business_calendar', 'validate_anchor_expr_strict',

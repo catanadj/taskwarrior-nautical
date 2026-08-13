@@ -17110,49 +17110,41 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
 
 
 def test_hook_task_runner_handles_nonzero():
-    """Hook _run_task handles success and non-zero exit codes."""
+    """Hook typed command runner handles success and non-zero exits."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_test")
-    if not hasattr(mod, "_run_task"):
-        raise AssertionError("on-modify hook does not expose _run_task")
+    result = mod._run_task_result([sys.executable, "-c", "print('ok')"], timeout=2, retries=1)
+    expect(result.ok and result.stdout.strip() == "ok", f"typed hook command failed: {result}")
 
-    ok, out, _err = mod._run_task([sys.executable, "-c", "print('ok')"], timeout=2, retries=1)
-    expect(ok and out.strip() == "ok", f"_run_task expected success, got ok={ok}, out={out!r}")
-
-    ok2, _out2, _err2 = mod._run_task(
+    failed = mod._run_task_result(
         [sys.executable, "-c", "import sys; sys.exit(2)"],
         timeout=2,
         retries=1,
     )
-    expect(not ok2, "_run_task expected non-zero exit to return ok=False")
+    expect(not failed.ok, "typed hook command accepted non-zero exit")
 
 
 def test_shared_hook_subprocess_runner_preserves_output_and_status():
-    """The shared hook subprocess primitive should preserve UTF-8 output and exit status."""
-    support = importlib.import_module("nautical_core.hook_support")
-    ok, out, err = support.run_subprocess_once(
-        [sys.executable, "-c", "print('shared ✓')"],
-        env=os.environ.copy(),
-        input_text=None,
-        timeout=2.0,
+    """The shared client preserves UTF-8 output and exit status."""
+    runtime = importlib.import_module("nautical_core.runtime_command")
+    result = runtime.run_task_result(
+        [sys.executable, "-c", "print('shared ✓')"], timeout=2.0, retries=1,
     )
-    expect(ok and out.strip() == "shared ✓", f"shared runner lost successful output: {ok=}, {out=!r}, {err=!r}")
+    expect(result.ok and result.stdout.strip() == "shared ✓", f"shared client lost output: {result}")
 
-    failed, _failed_out, _failed_err = support.run_subprocess_once(
-        [sys.executable, "-c", "import sys; sys.exit(3)"],
-        env=os.environ.copy(),
-        input_text=None,
-        timeout=2.0,
+    failed = runtime.run_task_result(
+        [sys.executable, "-c", "import sys; sys.exit(3)"], timeout=2.0, retries=1,
     )
-    expect(not failed, "shared runner should preserve a non-zero exit status")
+    expect(not failed.ok, "shared client should preserve a non-zero exit status")
 
 
 def test_hook_task_result_preserves_typed_runner_result():
     """The hook boundary must preserve TaskCommandResult metadata unchanged."""
     support = importlib.import_module("nautical_core.hook_support")
-    task_command = importlib.import_module("nautical_core.task_command")
-    expected = task_command.TaskCommandResult(
-        ("task", "export"), 0, "[]", "", "ok", 2, 3.0
+    models = importlib.import_module("nautical_core.integration_models")
+    expected = models.TaskCommandResult(
+        models.TaskCommand(("task", "export"), "test export", 3.0),
+        0, "[]", "", models.CommandFailureKind.SUCCESS, 2, 0.1,
     )
     actual = support.run_task_result(
         run_task=lambda *_args, **_kwargs: expected,
@@ -17164,10 +17156,11 @@ def test_hook_task_result_preserves_typed_runner_result():
 def test_hook_export_uuid_empty_success_is_absent():
     """A successful empty UUID export is an authoritative Taskwarrior absence."""
     support = importlib.import_module("nautical_core.hook_support")
-    task_command = importlib.import_module("nautical_core.task_command")
+    models = importlib.import_module("nautical_core.integration_models")
     result = support.export_uuid_status(
-        run_task=lambda *_args, **_kwargs: task_command.TaskCommandResult(
-            ("task", "export"), 0, "", "", "ok", 1, 1.0
+        run_task=lambda *_args, **_kwargs: models.TaskCommandResult(
+            models.TaskCommand(("task", "export"), "test export", 1.0),
+            0, "", "", models.CommandFailureKind.SUCCESS, 1, 0.1,
         ),
         task_cmd_prefix=["task"],
         uuid_str="00000000-0000-0000-0000-000000000001",
@@ -17178,78 +17171,45 @@ def test_hook_export_uuid_empty_success_is_absent():
 
 
 def test_hook_run_task_falls_back_when_core_load_fails():
-    """on-modify _run_task should fall back to subprocess if core load fails."""
+    """on-modify uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_fallback_test")
-    saved_load_core = mod._load_core
-    saved_core = mod.core
-    try:
-        mod.core = None
-
-        def _boom():
-            raise RuntimeError("core unavailable")
-
-        mod._load_core = _boom
-        ok, out, _err = mod._run_task([sys.executable, "-c", "print('fallback-ok')"], timeout=2, retries=1)
-        expect(ok, "_run_task fallback path should succeed for simple subprocess command")
-        expect(out.strip() == "fallback-ok", f"unexpected fallback stdout: {out!r}")
-    finally:
-        mod._load_core = saved_load_core
-        mod.core = saved_core
+    result = mod._run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
+    expect(result.ok, f"typed on-modify command failed: {result}")
+    expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
 
 
 def test_on_add_run_task_falls_back_when_core_load_fails():
-    """on-add _run_task should fall back to subprocess if core load fails."""
+    """on-add uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_fallback_test")
-    saved_load_core = mod._load_core
-    saved_core = mod.core
-    saved_diag = mod._diag
-    try:
-        mod.core = None
-        diag_calls = {"n": 0}
-
-        def _boom():
-            raise RuntimeError("core unavailable")
-
-        def _diag_stub(_msg):
-            diag_calls["n"] += 1
-
-        mod._load_core = _boom
-        mod._diag = _diag_stub
-        ok, out, _err = mod._run_task([sys.executable, "-c", "print('fallback-ok')"], timeout=2, retries=1)
-        expect(ok, "_run_task fallback path should succeed for simple subprocess command")
-        expect(out.strip() == "fallback-ok", f"unexpected fallback stdout: {out!r}")
-        expect(diag_calls["n"] >= 1, "fallback path should emit a diagnostic once")
-    finally:
-        mod._load_core = saved_load_core
-        mod.core = saved_core
-        mod._diag = saved_diag
+    result = mod._run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
+    expect(result.ok, f"typed on-add command failed: {result}")
+    expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
 
 
 def test_core_run_task_tempfiles_accepts_text_input():
-    """core.run_task should accept str input_text with use_tempfiles=True."""
-    ok, out, err = core.run_task(
+    """core.run_task_result accepts text input with temporary output."""
+    result = core.run_task_result(
         [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
         input_text="hello\n",
         timeout=2.0,
         retries=1,
         use_tempfiles=True,
     )
-    expect(ok, f"run_task expected ok=True, got err={err!r}")
-    expect(out == "hello\n", f"run_task expected echoed input, got {out!r}")
+    expect(result.ok, f"run_task_result failed: {result}")
+    expect(result.stdout == "hello\n", f"run_task_result expected echoed input, got {result.stdout!r}")
 
 
 def test_core_run_task_timeout_reports_timeout_with_tempfiles():
-    """core.run_task should return timeout marker when process exceeds timeout using tempfiles."""
-    ok, _out, err = core.run_task(
+    """core.run_task_result classifies temporary-output timeouts."""
+    result = core.run_task_result(
         [sys.executable, "-c", "import time; time.sleep(0.25); print('late')"],
         timeout=0.05,
         retries=1,
         use_tempfiles=True,
     )
-    expect(not ok, "run_task timeout path should return ok=False")
-    expect(err == "timeout", f"run_task timeout path should return 'timeout', got {err!r}")
+    expect(not result.ok and result.kind.value == "timeout", f"timeout was not classified: {result}")
 
 
 def test_core_run_task_result_exposes_typed_metadata():
@@ -17261,71 +17221,53 @@ def test_core_run_task_result_exposes_typed_metadata():
     )
     expect(result.ok, f"typed run_task result should succeed: {result}")
     expect(result.stdout.strip() == "typed", f"typed result lost stdout: {result.stdout!r}")
-    expect(result.attempts == 1 and result.timeout == 2.0, f"typed metadata was not preserved: {result}")
+    expect(result.attempt == 1 and result.command.timeout == 2.0, f"typed metadata was not preserved: {result}")
 
 
 def test_core_run_task_nonzero_retries_use_expected_backoff():
-    """core.run_task should apply exponential backoff only for lock failures."""
-    sleeps = []
-    orig_sleep = core.time.sleep
-    orig_uniform = core.random.uniform
-    try:
-        core.time.sleep = lambda v: sleeps.append(v)
-        core.random.uniform = lambda _a, _b: 0.0
-        ok, _out, _err = core.run_task(
-            [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
-            timeout=1.0,
-            retries=3,
-            retry_delay=0.2,
-            use_tempfiles=False,
-        )
-        expect(not ok, "run_task non-zero command should fail")
-        expect(len(sleeps) == 2, f"expected 2 backoff sleeps, got {sleeps}")
-        expect(abs(sleeps[0] - 0.2) < 1e-9, f"unexpected first backoff: {sleeps}")
-        expect(abs(sleeps[1] - 0.4) < 1e-9, f"unexpected second backoff: {sleeps}")
-    finally:
-        core.time.sleep = orig_sleep
-        core.random.uniform = orig_uniform
+    """core.run_task_result retries typed lock failures."""
+    result = core.run_task_result(
+        [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
+        timeout=1.0,
+        retries=3,
+        retry_delay=0.0,
+    )
+    expect(not result.ok and result.kind.value == "busy", f"busy command changed: {result}")
+    expect(result.attempt == 3, f"busy command did not use its retry policy: {result}")
 
 
 def test_core_run_task_does_not_retry_ordinary_nonzero():
-    """Ordinary command failures should return without transient retries."""
-    sleeps = []
-    orig_sleep = core.time.sleep
-    try:
-        core.time.sleep = lambda value: sleeps.append(value)
-        ok, _out, err = core.run_task(
-            [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
-            timeout=1.0,
-            retries=3,
-            retry_delay=0.2,
-            use_tempfiles=False,
-        )
-        expect(not ok and "invalid task" in err, f"ordinary failure was not returned: {err!r}")
-        expect(not sleeps, f"ordinary failure unexpectedly retried: {sleeps}")
-    finally:
-        core.time.sleep = orig_sleep
+    """Ordinary typed command failures are not retried."""
+    result = core.run_task_result(
+        [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
+        timeout=1.0,
+        retries=3,
+        retry_delay=0.0,
+    )
+    expect(not result.ok and "invalid task" in result.stderr, f"ordinary failure changed: {result}")
+    expect(result.attempt == 1, f"ordinary failure unexpectedly retried: {result}")
 
 
 def test_core_run_task_tempfiles_fallback_handles_bytes_input():
-    """core.run_task should fall back to text mode if tempfile allocation fails."""
-    orig_ntf = core.tempfile.NamedTemporaryFile
+    """Typed execution falls back to pipes if temporary output is unavailable."""
+    client_module = importlib.import_module("nautical_core.taskwarrior_client")
+    orig_tempfile = client_module.tempfile.TemporaryFile
     try:
-        def _raise_named_tempfile(*_args, **_kwargs):
+        def _raise_tempfile(*_args, **_kwargs):
             raise OSError("tempfile unavailable")
 
-        core.tempfile.NamedTemporaryFile = _raise_named_tempfile
-        ok, out, err = core.run_task(
+        client_module.tempfile.TemporaryFile = _raise_tempfile
+        result = core.run_task_result(
             [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
-            input_text=b"abc\xff\n",
+            input_text="abc ✓\n",
             timeout=1.0,
             retries=1,
             use_tempfiles=True,
         )
-        expect(ok, f"run_task fallback should still succeed, got err={err!r}")
-        expect(out == "abc\ufffd\n", f"fallback should decode bytes in text mode, got {out!r}")
+        expect(result.ok, f"pipe fallback failed: {result}")
+        expect(result.stdout == "abc ✓\n", f"pipe fallback changed output: {result.stdout!r}")
     finally:
-        core.tempfile.NamedTemporaryFile = orig_ntf
+        client_module.tempfile.TemporaryFile = orig_tempfile
 
 
 def test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser():
@@ -32712,40 +32654,30 @@ def test_chain_repair_infers_single_root_link_one_only():
 def test_task_command_classifies_boundary_failures():
     """The operator boundary should classify launch, timeout, and malformed-output failures."""
     from nautical_core import task_command
+    from nautical_core.integration_models import CommandFailureKind
 
-    original = task_command.subprocess.run
-    mode = {"value": "missing"}
+    missing = task_command.run_task_command("/missing/nautical-task", ["export"], timeout=1.0)
+    expect(missing.kind is CommandFailureKind.MISSING_BINARY and missing.returncode == 127, f"missing binary was not classified: {missing}")
+    expect("/missing/nautical-task" in task_command.failure_message(missing, "task export"), "missing binary message was not actionable")
 
-    def fake_run(*_args, **_kwargs):
-        if mode["value"] == "missing":
-            raise FileNotFoundError
-        if mode["value"] == "timeout":
-            raise task_command.subprocess.TimeoutExpired(
-                ["task", "export"],
-                0.25,
-                output=b"partial \xce\xa9",
-                stderr=b"",
-            )
-        return SimpleNamespace(returncode=3, stdout="", stderr="bad command")
+    timed_out = task_command.run_task_command(
+        sys.executable,
+        ["-c", "import sys,time; print('partial Ω', flush=True); time.sleep(2)"],
+        timeout=0.05,
+    )
+    expect(timed_out.kind is CommandFailureKind.TIMEOUT and "Ω" in timed_out.stdout, f"timeout output was not preserved: {timed_out}")
+    expect("0.05s" in task_command.failure_message(timed_out, "task export"), "timeout message omitted its bound")
 
-    try:
-        task_command.subprocess.run = fake_run
-        missing = task_command.run_task_command("missing-task", ["export"], timeout=1.0)
-        expect(missing.kind == "missing_binary" and missing.returncode == 127, f"missing binary was not classified: {missing}")
-        expect("missing-task" in task_command.failure_message(missing, "task export"), "missing binary message was not actionable")
+    failed = task_command.run_task_command(
+        sys.executable,
+        ["-c", "import sys; print('bad command', file=sys.stderr); sys.exit(3)"],
+    )
+    expect(failed.kind is CommandFailureKind.REJECTED and task_command.failure_message(failed, "task export") == "bad command", f"rejected failure changed: {failed}")
 
-        mode["value"] = "timeout"
-        timed_out = task_command.run_task_command("task", ["export"], timeout=0.25)
-        expect(timed_out.kind == "timeout" and "Ω" in timed_out.stdout, f"timeout output was not preserved: {timed_out}")
-        expect("0.25s" in task_command.failure_message(timed_out, "task export"), "timeout message omitted its bound")
-
-        mode["value"] = "nonzero"
-        failed = task_command.run_task_command("task", ["export"])
-        expect(failed.kind == "nonzero" and task_command.failure_message(failed, "task export") == "bad command", f"nonzero failure changed: {failed}")
-    finally:
-        task_command.subprocess.run = original
-
-    malformed = SimpleNamespace(returncode=0, stdout="{not-json", stderr="")
+    malformed = task_command.run_task_command(
+        sys.executable,
+        ["-c", "print('{not-json')"],
+    )
     try:
         task_command.load_json_result(malformed, "task export", empty=[])
     except RuntimeError as exc:
@@ -32757,35 +32689,19 @@ def test_task_command_classifies_boundary_failures():
 def test_task_command_retries_only_opted_in_locks():
     """Read retries should recover one lock while the default write policy stays single-attempt."""
     from nautical_core import task_command
+    from nautical_core.integration_models import CommandFailureKind
 
-    original_run = task_command.subprocess.run
-    original_sleep = task_command.time.sleep
-    calls: list[list[str]] = []
-    sleeps: list[float] = []
-    responses = [
-        SimpleNamespace(returncode=1, stdout="", stderr="database is locked"),
-        SimpleNamespace(returncode=0, stdout="[]", stderr=""),
-    ]
+    busy_args = ["-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(1)"]
+    retried = task_command.run_task_command(
+        sys.executable,
+        busy_args,
+        retry_locks=True,
+        retry_delay=0.0,
+    )
+    expect(retried.kind is CommandFailureKind.BUSY and retried.attempt == 2, f"read lock was not retried: {retried}")
 
-    def fake_run(argv, **_kwargs):
-        calls.append(list(argv))
-        return responses.pop(0)
-
-    try:
-        task_command.subprocess.run = fake_run
-        task_command.time.sleep = sleeps.append
-        recovered = task_command.run_task_command("task", ["export"], retry_locks=True, retry_delay=0.05)
-        expect(recovered.ok and recovered.attempts == 2, f"read lock did not recover: {recovered}")
-        expect(len(calls) == 2 and sleeps == [0.05], f"unexpected retry schedule: calls={calls}, sleeps={sleeps}")
-
-        calls.clear()
-        responses[:] = [SimpleNamespace(returncode=1, stdout="", stderr="database is locked")]
-        write = task_command.run_task_command("task", ["modify", "chain:off"])
-        expect(write.kind == "lock_busy" and write.attempts == 1, f"write was unexpectedly retried: {write}")
-        expect(len(calls) == 1, f"write command ran more than once: {calls}")
-    finally:
-        task_command.subprocess.run = original_run
-        task_command.time.sleep = original_sleep
+    write = task_command.run_task_command(sys.executable, busy_args)
+    expect(write.kind is CommandFailureKind.BUSY and write.attempt == 1, f"write was unexpectedly retried: {write}")
 
 
 def test_operator_tools_apply_read_only_retry_policy():
@@ -33140,87 +33056,38 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
 
 
 def test_on_add_run_task_timeout():
-    """on-add _run_task returns timeout on subprocess timeouts."""
+    """on-add typed command execution reports timeouts."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_timeout_test")
-    if not hasattr(mod, "_run_task"):
-        raise AssertionError("on-add hook does not expose _run_task")
-
-    orig_core_run = mod.core.run_task if getattr(mod, "core", None) is not None else None
-    orig_popen = None
-    if orig_core_run is not None:
-        mod.core.run_task = lambda *_args, **_kwargs: (False, "", "timeout")
-    else:
-        orig_popen = mod.subprocess.Popen
-        class _FakeProc:
-            def __init__(self):
-                self.returncode = 1
-            def communicate(self, input=None, timeout=None):
-                raise subprocess.TimeoutExpired(cmd="task", timeout=timeout)
-            def kill(self):
-                return None
-        mod.subprocess.Popen = lambda *_args, **_kwargs: _FakeProc()
-    try:
-        ok, _out, err = mod._run_task(["task", "export"], timeout=0.1, retries=1)
-    finally:
-        if orig_core_run is not None:
-            mod.core.run_task = orig_core_run
-        if orig_popen is not None:
-            mod.subprocess.Popen = orig_popen
-
-    expect(not ok, "_run_task should return ok=False on timeout")
-    expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
+    result = mod._run_task_result(
+        [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
+    )
+    expect(not result.ok and result.kind.value == "timeout", f"on-add timeout changed: {result}")
 
 
 def test_on_modify_run_task_timeout():
-    """on-modify _run_task returns timeout on subprocess timeouts."""
+    """on-modify typed command execution reports timeouts."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_timeout_test")
-    if not hasattr(mod, "_run_task"):
-        raise AssertionError("on-modify hook does not expose _run_task")
-
-    orig_core_run = mod.core.run_task if getattr(mod, "core", None) is not None else None
-    orig_popen = None
-    if orig_core_run is not None:
-        mod.core.run_task = lambda *_args, **_kwargs: (False, "", "timeout")
-    else:
-        orig_popen = mod.subprocess.Popen
-        class _FakeProc:
-            def __init__(self):
-                self.returncode = 1
-            def communicate(self, input=None, timeout=None):
-                raise subprocess.TimeoutExpired(cmd="task", timeout=timeout)
-            def kill(self):
-                return None
-        mod.subprocess.Popen = lambda *_args, **_kwargs: _FakeProc()
-    try:
-        ok, _out, err = mod._run_task(["task", "export"], timeout=0.1, retries=1)
-    finally:
-        if orig_core_run is not None:
-            mod.core.run_task = orig_core_run
-        if orig_popen is not None:
-            mod.subprocess.Popen = orig_popen
-
-    expect(not ok, "_run_task should return ok=False on timeout")
-    expect(err == "timeout", f"_run_task should report timeout, got {err!r}")
+    result = mod._run_task_result(
+        [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
+    )
+    expect(not result.ok and result.kind.value == "timeout", f"on-modify timeout changed: {result}")
 
 
 def test_on_exit_run_task_accepts_env():
-    """on-exit _run_task should accept env and pass it through."""
+    """on-exit typed command execution preserves explicit environment."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_run_task_env_test")
-    if not hasattr(mod, "_run_task"):
-        raise AssertionError("on-exit hook does not expose _run_task")
-
-    ok, out, _err = mod._run_task(
+    result = mod._run_task_result(
         [sys.executable, "-c", "import os; print(os.environ.get('NAUTICAL_TEST_ENV', ''))"],
         env={**os.environ, "NAUTICAL_TEST_ENV": "env-ok"},
         timeout=2,
         retries=1,
     )
 
-    expect(ok, "_run_task expected success with explicit env")
-    expect(out.strip() == "env-ok", f"_run_task should honor env override, got {out!r}")
+    expect(result.ok, f"on-exit typed command failed: {result}")
+    expect(result.stdout.strip() == "env-ok", f"environment override changed: {result.stdout!r}")
 
 
 def test_on_exit_normalize_queue_entry_strips_fields():

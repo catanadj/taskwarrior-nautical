@@ -2080,6 +2080,117 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     expect(len(uow.client.calls) == 3, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
 
 
+def test_on_exit_mutation_callbacks_use_typed_gateway_context():
+    """on-exit import and parent-link callbacks carry complete guard context."""
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        Found,
+        TaskCommand,
+        TaskCommandResult,
+    )
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_typed_mutation_callbacks_test")
+    parent_uuid = "00000000-0000-0000-0000-000000000926"
+    child_uuid = "00000000-0000-0000-0000-000000000927"
+    parent = {
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "exit-service",
+        "link": 4,
+        "modified": "20260813T110000Z",
+        "anchor": "w:mon",
+        "cp": "1d",
+    }
+
+    class Repo:
+        def __init__(self):
+            self.rows = {parent_uuid: parent}
+
+        def by_uuid(self, uuid_value, *, refresh=False):
+            del refresh
+            row = self.rows.get(str(uuid_value).lower())
+            return Found(row, f"uuid:{uuid_value}") if row else Absent(f"uuid:{uuid_value}", "not present")
+
+    class Client:
+        def __init__(self, repo):
+            self.repo = repo
+
+        def execute(self, args, *, purpose, timeout, input_text=None, attempts=1):
+            del attempts
+            command = TaskCommand(("task", *args), purpose, timeout, input_text)
+            args = list(args)
+            if "import" in args:
+                row = json.loads(input_text or "{}")
+                self.repo.rows[str(row["uuid"]).lower()] = row
+            else:
+                target = self.repo.rows[parent_uuid]
+                update_at = args.index("modify") + 1
+                for token in args[update_at:]:
+                    key, value = token.split(":", 1)
+                    target[key] = value
+            return TaskCommandResult(command, 0, "", "", CommandFailureKind.SUCCESS, 1, 0.01)
+
+    class Uow:
+        def __init__(self):
+            self.repository = Repo()
+            self.client = Client(self.repository)
+            self.mutation_epoch = 0
+
+        def record_mutation(self, *, uncertain=False):
+            del uncertain
+            self.mutation_epoch += 1
+            return self.mutation_epoch
+
+    state = mod._exit_runtime_state()
+    previous_uow, previous_repository = state.unit_of_work, state.repository
+    try:
+        uow = Uow()
+        state.unit_of_work = uow
+        state.repository = uow.repository
+        guard = {
+            "status": parent["status"],
+            "chain": parent["chain"],
+            "chainID": parent["chainID"],
+            "link": parent["link"],
+            "modified": parent["modified"],
+            "recurrence_fingerprint": recurrence_fingerprint(parent),
+        }
+        entry = {"spawn_intent_id": "exit-service-intent"}
+        ctx = mod._build_exit_entry_context(
+            entry,
+            0,
+            state,
+            parent_uuid=parent_uuid,
+            child_short=child_uuid[:8],
+            expected_parent_nextlink="",
+            parent_guard=guard,
+            child={
+                "uuid": child_uuid,
+                "chainID": parent["chainID"],
+                "link": 5,
+                "prevLink": parent_uuid[:8],
+                "description": "exit child",
+            },
+            child_uuid=child_uuid,
+            spawn_intent_id=entry["spawn_intent_id"],
+        )
+        imported = mod._import_child(ctx)
+        expect(imported.ok, f"typed on-exit child import failed: {imported}")
+        updated = mod._update_parent_nextlink(
+            parent_uuid,
+            child_uuid[:8],
+            parent_guard=guard,
+        )
+        expect(updated.ok and updated.state == "ok", f"typed on-exit parent link failed: {updated}")
+        expect(uow.mutation_epoch == 2, f"on-exit mutation epoch was not advanced twice: {uow.mutation_epoch}")
+    finally:
+        state.unit_of_work, state.repository = previous_uow, previous_repository
+
+
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
     """Outbox work is deterministic and cannot finalize without verified mutations."""
     from nautical_core.integration_models import (
@@ -35663,6 +35774,7 @@ TESTS = [
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_mutation_requests_use_named_typed_payloads,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
+    test_on_exit_mutation_callbacks_use_typed_gateway_context,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,

@@ -169,6 +169,8 @@ _INTEGRATION_CONTEXT_MODULE = None
 _INTEGRATION_CONTEXT_MODULE_LOAD_FAILED = False
 _INTEGRATION_MODELS = None
 _INTEGRATION_MODELS_LOAD_FAILED = False
+_TASKWARRIOR_MUTATIONS = None
+_TASKWARRIOR_MUTATIONS_LOAD_FAILED = False
 _INTEGRATION_CONTEXT = None
 _CORE_READY = False
 _HOOK_MODULE_ACCESS = None
@@ -196,6 +198,12 @@ _MODULE_SPECS = {
         "_INTEGRATION_MODELS_LOAD_FAILED",
         "integration_models.py",
         "nautical_core.integration_models",
+    ),
+    "taskwarrior_mutations": (
+        "_TASKWARRIOR_MUTATIONS",
+        "_TASKWARRIOR_MUTATIONS_LOAD_FAILED",
+        "taskwarrior_mutations.py",
+        "nautical_core.taskwarrior_mutations",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -1686,17 +1694,73 @@ def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
     )
 
 
-def _import_child(obj: dict):
-    exit_side_effects = _module("exit_side_effects")
-    result = exit_side_effects.import_child(
-        obj,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_import=_TASK_TIMEOUT_IMPORT,
+def _exit_mutation_guard(parent_uuid: str, parent_guard: dict[str, Any] | None):
+    models = _module("integration_models")
+    guard = parent_guard if isinstance(parent_guard, dict) else {}
+    modified = str(guard.get("modified") or "").strip()
+    recurrence_identity = str(guard.get("recurrence_fingerprint") or "").strip()
+    chain_id = str(guard.get("chainID") or "").strip()
+    if not modified or not recurrence_identity or not chain_id:
+        raise ValueError("exit mutation requires complete parent guard evidence")
+    try:
+        link = int(float(str(guard.get("link") or "").strip()))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("exit mutation guard requires an integer parent link") from exc
+    return models.MutationGuard(
+        task_uuid=parent_uuid,
+        status=str(guard.get("status") or ""),
+        chain_id=chain_id,
+        link=link,
+        recurrence_identity=recurrence_identity,
+        timestamps=(models.GuardTimestamp(models.GuardTimestampField.MODIFIED, modified),),
+        expected_mutation_epoch=_exit_runtime_state().unit_of_work.mutation_epoch,
+        chain=str(guard.get("chain") or "on"),
     )
-    if result.ok:
-        _record_exit_mutation()
-    return result
+
+
+def _mutation_exit_result(outcome, *, import_result: bool = False):
+    exit_models = _module("exit_models")
+    models = _module("integration_models")
+    if import_result:
+        if outcome.kind in {models.MutationOutcomeKind.APPLIED, models.MutationOutcomeKind.ALREADY_APPLIED}:
+            return exit_models.ExitImportResult(True, "")
+        return exit_models.ExitImportResult(
+            False,
+            outcome.reason or outcome.kind.value,
+            outcome.kind is models.MutationOutcomeKind.RETRYABLE,
+        )
+    if outcome.kind is models.MutationOutcomeKind.APPLIED:
+        return exit_models.ExitParentUpdateResult(True, "", "ok")
+    if outcome.kind is models.MutationOutcomeKind.ALREADY_APPLIED:
+        return exit_models.ExitParentUpdateResult(True, "", "already")
+    return exit_models.ExitParentUpdateResult(
+        False,
+        outcome.reason or outcome.kind.value,
+        "locked" if outcome.kind is models.MutationOutcomeKind.RETRYABLE else "conflict",
+        outcome.kind is models.MutationOutcomeKind.RETRYABLE,
+    )
+
+
+def _import_child(ctx):
+    exit_models = _module("exit_models")
+    state = _exit_runtime_state()
+    if state.unit_of_work is None:
+        return exit_models.ExitImportResult(False, "on-exit mutation unit of work is unavailable")
+    try:
+        guard = _exit_mutation_guard(ctx.parent_uuid, ctx.parent_guard)
+        payload = _module("integration_models").ChildImportPayload.from_mapping(
+            dict(ctx.child),
+            parent_uuid=ctx.parent_uuid,
+        )
+        request = _module("integration_models").MutationRequest(
+            _module("integration_models").MutationOperation.CHILD_IMPORT,
+            guard,
+            payload,
+        )
+        outcome = _module("taskwarrior_mutations").TaskwarriorMutationService(state.unit_of_work).apply(request)
+        return _mutation_exit_result(outcome, import_result=True)
+    except Exception as exc:
+        return exit_models.ExitImportResult(False, str(exc).strip() or type(exc).__name__)
 
 
 def _import_children(children: list[dict]):
@@ -2031,35 +2095,31 @@ def _update_parent_nextlink(
     parent_guard: dict[str, Any] | None = None,
     parent_snapshot: dict[str, Any] | None = None,
 ):
-    exit_side_effects = _module("exit_side_effects")
-    with _task_phase("parent_update"):
-        result = exit_side_effects.update_parent_nextlink(
-        parent_uuid,
-        child_short,
-        expected_prev=expected_prev,
-        lock_parent_nextlink=_lock_parent_nextlink,
-        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev, **kwargs: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=False, **kwargs
-        ),
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-        parent_guard=parent_guard,
-        parent_snapshot=parent_snapshot,
-        guard_mismatch_fn=lambda parent, guard: _module("exit_entry_flow")._parent_guard_mismatch(
-            parent,
+    exit_models = _module("exit_models")
+    state = _exit_runtime_state()
+    if state.unit_of_work is None:
+        return exit_models.ExitParentUpdateResult(False, "on-exit mutation unit of work is unavailable")
+    if not isinstance(parent_guard, dict):
+        return exit_models.ExitParentUpdateResult(False, "parent guard evidence is unavailable", "conflict")
+    try:
+        guard = _exit_mutation_guard(parent_uuid, parent_guard)
+        models = _module("integration_models")
+        request = models.MutationRequest(
+            models.MutationOperation.PARENT_LINK,
             guard,
-            recurrence_fingerprint=lambda task: _module("lifecycle_models").recurrence_fingerprint(
-                task,
-                parse_datetime=getattr(core, "parse_dt_any", None),
-            ),
-        ),
+            models.ParentLinkPayload(parent_uuid, child_short, str(expected_prev or "").strip()),
         )
-    if result.ok and result.state == "ok":
-        _record_exit_mutation()
-    return result
+        with _lock_parent_nextlink(parent_uuid) as locked:
+            if not locked:
+                return exit_models.ExitParentUpdateResult(False, "parent lock busy", "locked", True)
+            with _task_phase("parent_update"):
+                outcome = _module("taskwarrior_mutations").TaskwarriorMutationService(
+                    state.unit_of_work,
+                    timeout=_TASK_TIMEOUT_MODIFY,
+                ).apply(request)
+        return _mutation_exit_result(outcome)
+    except Exception as exc:
+        return exit_models.ExitParentUpdateResult(False, str(exc).strip() or type(exc).__name__, "conflict")
 
 
 def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
@@ -2638,7 +2698,20 @@ def _execute_lifecycle_queue_entry(ctx, state):
 
         def import_child(self, current_plan):
             child = current_plan.child_dict()
-            imported = _import_child(child)
+            child_uuid = str(child.get("uuid") or "").strip()
+            import_ctx = _build_exit_entry_context(
+                ctx.entry,
+                ctx.idx,
+                state,
+                parent_uuid=current_plan.identity.parent_uuid,
+                child_short=ctx.child_short or _short_uuid(child_uuid),
+                expected_parent_nextlink=ctx.expected_parent_nextlink,
+                parent_guard=current_plan.parent_guard.to_dict(),
+                child=child,
+                child_uuid=child_uuid,
+                spawn_intent_id=ctx.spawn_intent_id,
+            )
+            imported = _import_child(import_ctx)
             if imported.ok:
                 stage_result = stage(lifecycle_models.ExecutionStage.CHILD_PRESENT)
                 return stage_result

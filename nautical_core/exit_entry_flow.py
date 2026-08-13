@@ -126,7 +126,7 @@ def ensure_child_exists_for_entry(
             if ctx.spawn_intent_id:
                 services.diag(f"task lock active; requeue (intent={ctx.spawn_intent_id})")
             return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-        import_res = services.import_child(ctx.child)
+        import_res = services.import_child(ctx)
         if not import_res.ok:
             if import_res.retryable:
                 return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
@@ -168,7 +168,12 @@ def apply_parent_update_for_entry(
                 services.cleanup_orphan_child(ctx.child_uuid, ctx.spawn_intent_id)
             return guard_action
 
-    update_res = services.update_parent_nextlink(ctx.parent_uuid, ctx.child_short, ctx.expected_parent_nextlink)
+    update_res = services.update_parent_nextlink(
+        ctx.parent_uuid,
+        ctx.child_short,
+        ctx.expected_parent_nextlink,
+        parent_guard=ctx.parent_guard,
+    )
     if update_res.ok:
         return "ok"
 

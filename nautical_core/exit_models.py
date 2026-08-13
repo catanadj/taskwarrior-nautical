@@ -45,7 +45,7 @@ class ExitParentNextlinkStateCallback(Protocol):
 
 
 class ExitImportCallback(Protocol):
-    def __call__(self, child: dict[str, Any]) -> ExitImportResult: ...
+    def __call__(self, ctx: "ExitEntryContext") -> ExitImportResult: ...
 
 
 class ExitParentUpdateCallback(Protocol):

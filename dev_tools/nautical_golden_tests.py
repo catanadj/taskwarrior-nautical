@@ -1196,6 +1196,73 @@ def test_integration_command_and_read_models_enforce_contract():
         raise AssertionError("integration command was mutable")
 
 
+def test_taskwarrior_client_preserves_evidence_and_redacts_observation():
+    """The process boundary preserves evidence without observing command contents."""
+    from nautical_core.integration_models import CommandFailureKind
+    from nautical_core.taskwarrior_client import TaskwarriorClient
+
+    observations = []
+
+    class Observer:
+        def observe(self, observation):
+            observations.append(observation)
+
+    client = TaskwarriorClient((sys.executable,), observer=Observer())
+    result = client.execute(
+        ("-c", "import sys; print('Répéter 🌊'); print('warning', file=sys.stderr)"),
+        purpose="test export",
+        timeout=2.0,
+        use_tempfiles=True,
+    )
+    expect(result.ok, f"typed client command failed: {result}")
+    expect(result.stdout.strip() == "Répéter 🌊", f"stdout evidence changed: {result.stdout!r}")
+    expect(result.stderr.strip() == "warning", f"stderr evidence changed: {result.stderr!r}")
+    expect(result.command.timeout == 2.0 and result.attempt == 1, f"command metadata changed: {result}")
+    expect(result.duration >= 0.0, f"command duration was invalid: {result.duration}")
+    expect(len(observations) == 1, f"observer did not receive one attempt: {observations!r}")
+    observation = observations[0]
+    expect(observation.purpose == "test export", f"observer lost purpose: {observation}")
+    expect(observation.kind is CommandFailureKind.SUCCESS, f"observer lost outcome: {observation}")
+    expect(not hasattr(observation, "argv") and not hasattr(observation, "stdout"), "observer exposed task contents")
+
+
+def test_taskwarrior_client_retries_only_transient_failures():
+    """Busy commands retry with bounded backoff while rejection remains final."""
+    from nautical_core.integration_models import CommandFailureKind
+    from nautical_core.taskwarrior_client import TaskwarriorClient
+
+    sleeps = []
+    busy = TaskwarriorClient((sys.executable,), sleeper=sleeps.append).execute(
+        ("-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(1)"),
+        purpose="busy export",
+        timeout=2.0,
+        attempts=3,
+        retry_delay=0.01,
+    )
+    expect(busy.kind is CommandFailureKind.BUSY and busy.attempt == 3, f"busy evidence changed: {busy}")
+    expect(sleeps == [0.01, 0.02], f"unexpected backoff schedule: {sleeps}")
+
+    sleeps.clear()
+    rejected = TaskwarriorClient((sys.executable,), sleeper=sleeps.append).execute(
+        ("-c", "import sys; print('invalid filter', file=sys.stderr); sys.exit(2)"),
+        purpose="rejected export",
+        timeout=2.0,
+        attempts=3,
+        retry_delay=0.01,
+    )
+    expect(rejected.kind is CommandFailureKind.REJECTED and rejected.attempt == 1, f"rejection was retried: {rejected}")
+    expect(not sleeps, f"rejection unexpectedly slept: {sleeps}")
+
+    timed_out = TaskwarriorClient((sys.executable,)).execute(
+        ("-c", "import time; time.sleep(2)"),
+        purpose="bounded export",
+        timeout=0.02,
+        attempts=1,
+    )
+    expect(timed_out.kind is CommandFailureKind.TIMEOUT, f"timeout was not classified: {timed_out}")
+    expect(timed_out.returncode == 124 and timed_out.duration < 1.0, f"timeout was not bounded: {timed_out}")
+
+
 def test_integration_mutation_models_enforce_guards_and_postconditions():
     """Mutation outcomes require complete guards and operation-specific proof."""
     from nautical_core.integration_models import (
@@ -35528,6 +35595,8 @@ TESTS = [
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
     test_integration_command_and_read_models_enforce_contract,
+    test_taskwarrior_client_preserves_evidence_and_redacts_observation,
+    test_taskwarrior_client_retries_only_transient_failures,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,

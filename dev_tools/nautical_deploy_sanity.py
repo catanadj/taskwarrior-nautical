@@ -29,6 +29,7 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/runtime_manifest.py",
     "nautical_core/runtime_command.py",
     "nautical_core/task_command.py",
+    "nautical_core/taskwarrior_client.py",
     "nautical_core/hooks/__init__.py",
     "nautical_core/hooks/add_impl.py",
     "nautical_core/hooks/exit_impl.py",

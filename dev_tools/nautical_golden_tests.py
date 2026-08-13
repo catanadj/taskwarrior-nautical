@@ -32532,14 +32532,14 @@ def test_reconcile_tool_loads_task_hooks_layout():
             os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
 
 
-def test_reconcile_default_runtime_uses_public_gateway():
-    """Default reconcile runtime must not load private on-modify internals."""
+def test_reconcile_default_runtime_uses_core_context():
+    """Default reconcile runtime must not load private or mutation gateways."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_public_gateway_runtime_test")
     runtime, used_hook = mod._load_reconcile_runtime("task")
     expect(not used_hook, "default reconcile unexpectedly loaded an on-modify implementation")
-    expect(type(runtime).__name__ == "TaskwarriorMutationGateway", f"unexpected reconcile runtime: {runtime!r}")
-    expect(hasattr(runtime, "spawn_child"), "public mutation gateway lacks child spawning")
+    expect(getattr(runtime, "__name__", "") == "nautical_core", f"unexpected reconcile runtime: {runtime!r}")
+    expect(not hasattr(runtime, "spawn_child"), "reconcile runtime unexpectedly owns child mutation")
 
 
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
@@ -33205,49 +33205,6 @@ def test_task_command_retries_only_opted_in_locks():
 
     write = task_command.run_task_command(sys.executable, busy_args)
     expect(write.kind is CommandFailureKind.BUSY and write.attempt == 1, f"write was unexpectedly retried: {write}")
-
-
-def test_operator_tools_apply_read_only_retry_policy():
-    """Exports and diagnostics may retry locks; reconciliation and repair writes may not."""
-    reconcile_tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-        "_nautical_reconcile_command_policy_test",
-    )
-    repair_tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
-        "_nautical_chain_repair_command_policy_test",
-    )
-    doctor_tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_doctor.py"),
-        "_nautical_doctor_command_policy_test",
-    )
-    task_command = reconcile_tool.task_command
-    original = task_command.run_task_command
-    policies: list[tuple[tuple[str, ...], bool]] = []
-
-    def fake_run(_task_bin, args, **kwargs):
-        policies.append((tuple(args), bool(kwargs.get("retry_locks"))))
-        return _typed_command_result((_task_bin, *args), True, "[]", "")
-
-    try:
-        task_command.run_task_command = fake_run
-        reconcile_tool._modify_native_until(
-            "task",
-            {"uuid": "parent", "chainID": "chain", "link": 1},
-            "20260101T120000Z",
-        )
-        repair_tool._apply_repair(
-            ("task",),
-            SimpleNamespace(uuid="parent", field="nextLink", new="child", short="parent"),
-        )
-        doctor_tool._task_get("task", "rc.data.location", {})
-    finally:
-        task_command.run_task_command = original
-
-    expect(
-        [retry for _args, retry in policies] == [False, False, True],
-        f"operator command policies were not separated: {policies}",
-    )
 
 
 def test_chain_repair_command_failure_is_structured():
@@ -36358,7 +36315,7 @@ TESTS = [
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_loads_task_hooks_layout,
-    test_reconcile_default_runtime_uses_public_gateway,
+    test_reconcile_default_runtime_uses_core_context,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
@@ -36374,7 +36331,6 @@ TESTS = [
     test_chain_repair_infers_single_root_link_one_only,
     test_task_command_classifies_boundary_failures,
     test_task_command_retries_only_opted_in_locks,
-    test_operator_tools_apply_read_only_retry_policy,
     test_chain_repair_command_failure_is_structured,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,

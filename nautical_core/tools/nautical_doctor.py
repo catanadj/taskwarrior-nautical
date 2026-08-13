@@ -38,7 +38,6 @@ from nautical_core.integration_context import (  # noqa: E402
     ValidatedNauticalConfiguration,
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
-from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -907,9 +906,16 @@ def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, A
 
 def _safe_parse_datetime(runtime: Any, value: Any):
     parser = getattr(runtime, "safe_parse_datetime", None) or getattr(runtime, "_safe_parse_datetime", None)
+    if callable(parser):
+        return parser(value)
+    parser = getattr(runtime, "parse_dt_any", None)
     if not callable(parser):
         return None, "datetime parser unavailable"
-    return parser(value)
+    try:
+        parsed = parser(value)
+    except Exception as exc:
+        return None, str(exc).strip() or type(exc).__name__
+    return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
 
 
 def _check_reconcile_plans(
@@ -930,7 +936,7 @@ def _check_reconcile_plans(
     try:
         import nautical_core as core
 
-        hook = TaskwarriorMutationGateway(core)
+        hook = core
         generation = ChainGenerationService.from_core(
             core,
             recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
@@ -959,7 +965,7 @@ def _check_reconcile_plans(
             if plan.action == "spawn" and isinstance(plan.child, dict) and hook is not None:
                 try:
                     until_dt, until_err = _safe_parse_datetime(hook, plan.child.get("until"))
-                    now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
+                    now_utc = getattr(hook, "now_utc", None)
                     planned_until_elapsed = (
                         not until_err
                         and until_dt is not None

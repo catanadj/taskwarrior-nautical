@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -25,6 +26,7 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
+from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.lifecycle_executor import (  # noqa: E402
@@ -42,7 +44,6 @@ from nautical_core.lifecycle_models import (  # noqa: E402
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
-from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
     ChildCompensationPayload,
     Absent,
@@ -76,6 +77,7 @@ _RECONCILE_LOCK_STALE_SECONDS = 300.0
 _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
 _RECONCILE_PROTOCOL = 2
+_STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
 _EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, "snapshot_hits": 0}
@@ -157,6 +159,10 @@ def _action_style(action: str) -> str:
     }.get(action, "cyan")
 
 
+def _runtime_core(runtime: Any) -> Any:
+    return getattr(runtime, "core", runtime)
+
+
 def _format_local_until(hook: Any, value: Any) -> str:
     """Render a repaired native-until target in configured local time when possible."""
     raw = str(value or "").strip()
@@ -165,11 +171,11 @@ def _format_local_until(hook: Any, value: Any) -> str:
     parser = getattr(hook, "safe_parse_datetime", None)
     if not callable(parser):
         parser = getattr(hook, "_safe_parse_datetime", None)
-    formatter = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
-    if not callable(parser) or not callable(formatter):
+    formatter = getattr(_runtime_core(hook), "fmt_dt_local", None)
+    if not callable(formatter):
         return raw
     try:
-        parsed, error = parser(raw)
+        parsed, error = _safe_parse_datetime(hook, raw)
         if parsed is not None and not error:
             return str(formatter(parsed))
     except Exception:
@@ -187,19 +193,31 @@ def _safe_parse_datetime(hook: Any, value: Any):
         parser = getattr(hook, "_safe_parse_datetime", None)
     if callable(parser):
         return parser(value)
-    return None, "datetime parser unavailable"
+    parser = getattr(_runtime_core(hook), "parse_dt_any", None)
+    if not callable(parser):
+        return None, "datetime parser unavailable"
+    try:
+        parsed = parser(value)
+    except Exception as exc:
+        return None, str(exc).strip() or type(exc).__name__
+    return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
 
 
 def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any]) -> str:
     resolver = getattr(hook, "stable_child_uuid", None)
-    return str(resolver(parent, child) or "") if callable(resolver) else ""
-
-
-def _spawn_child(hook: Any, child: dict[str, Any], parent: dict[str, Any]) -> tuple[str, set[str]]:
-    spawn = getattr(hook, "spawn_child", None)
-    if not callable(spawn):
-        raise RuntimeError("Taskwarrior mutation gateway does not provide child spawning")
-    return spawn(child, parent)
+    if callable(resolver):
+        return str(resolver(parent, child) or "")
+    core = _runtime_core(hook)
+    coerce_int = getattr(core, "coerce_int", None)
+    if not callable(coerce_int):
+        return ""
+    return modify_spawn_prep.stable_child_uuid(
+        parent,
+        child,
+        task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
+        coerce_int=coerce_int,
+        stable_child_uuid_namespace=_STABLE_CHILD_UUID_NAMESPACE,
+    )
 
 
 def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
@@ -270,32 +288,13 @@ _DEFAULT_LOAD_ON_MODIFY = _load_on_modify
 
 
 def _load_reconcile_runtime(task_bin: str, hook_path: str | None = None):
-    """Load the lightweight operator runtime; legacy hooks remain opt-in."""
+    """Load validated core context; an explicit hook path is read-only."""
     if hook_path is not None or _load_on_modify is not _DEFAULT_LOAD_ON_MODIFY:
         return _load_on_modify(hook_path), True
     import nautical_core as core
 
-    return TaskwarriorMutationGateway(core, task_bin=task_bin), False
-
-
-def _bind_hook_task_bin(hook: Any, task_bin: str) -> None:
-    original_prefix = getattr(hook, "task_cmd_prefix", None)
-    if not callable(original_prefix):
-        original_prefix = getattr(hook, "_task_cmd_prefix", None)
-    if not callable(original_prefix):
-        # Public gateway runtimes do not need a hook command prefix. Test and
-        # embedded runtimes may expose only the historical private spelling;
-        # absence of either is a protocol error, not a reason to fabricate a
-        # Taskwarrior command.
-        raise RuntimeError("on-modify reconcile protocol is missing task command prefix")
-
-    def _task_cmd_prefix() -> list[str]:
-        prefix = list(original_prefix())
-        if prefix:
-            prefix[0] = task_bin
-        return prefix
-
-    hook.task_cmd_prefix = _task_cmd_prefix
+    del task_bin
+    return core, False
 
 
 def _validate_hook_protocol(hook: Any) -> None:
@@ -332,7 +331,7 @@ def _configuration_drift_reason(hook: Any) -> str:
 
 def _configuration_verification(hook: Any) -> _ConfigurationVerification:
     """Return valid, drifted, or unavailable configuration state."""
-    core = getattr(hook, "core", None)
+    core = _runtime_core(hook)
     checker = getattr(core, "configuration_drift", None)
     if not callable(checker):
         # Lightweight operator-test doubles predate the facade verifier. A
@@ -575,22 +574,24 @@ def _native_until_repairs(
                 repair_error = f"previous link is invalid: {previous_reason}"
             else:
                 kind = reconcile.recurrence_kind(row)
+                core = _runtime_core(hook)
                 repaired, repair_error = reconcile.repair_native_until_from_previous(
                     previous,
                     row,
                     kind=kind,
                     safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-                    fmt_isoz=hook.core.fmt_isoz,
-                    utc_to_local_naive=hook.core.utc_to_local_naive,
-                    local_naive_to_utc=hook.core.local_naive_to_utc,
+                    fmt_isoz=core.fmt_isoz,
+                    utc_to_local_naive=core.utc_to_local_naive,
+                    local_naive_to_utc=core.local_naive_to_utc,
                 )
         if repair_error or not repaired:
+            core = _runtime_core(hook)
             fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
                 row,
                     safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-                fmt_isoz=hook.core.fmt_isoz,
-                utc_to_local_naive=hook.core.utc_to_local_naive,
-                local_naive_to_utc=hook.core.local_naive_to_utc,
+                fmt_isoz=core.fmt_isoz,
+                utc_to_local_naive=core.utc_to_local_naive,
+                local_naive_to_utc=core.local_naive_to_utc,
             )
             if fallback_error or not fallback:
                 item["action"] = "manual_review"
@@ -938,7 +939,7 @@ def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
     provided = getattr(hook, "chain_generation_service", None)
     if isinstance(provided, ChainGenerationService):
         return provided
-    core = getattr(hook, "core", None)
+    core = _runtime_core(hook)
     if core is None:
         raise RuntimeError("configured Nautical core is unavailable")
     if not callable(getattr(core, "parse_cp_sequence_tokens", None)):
@@ -1778,11 +1779,12 @@ def _describe_plan(plan: reconcile.ReconcilePlan, *, hook: Any, fmt_dt_local=Non
     if plan.child_due is None:
         return evidence
     try:
-        add_validation = hook.core._import_sibling("add_validation")
+        core = _runtime_core(hook)
+        add_validation = core._import_sibling("add_validation")
         carry = add_validation.describe_native_until_carry(
             until_dt,
             plan.child_due,
-            to_local=hook.core.to_local,
+            to_local=core.to_local,
         )
     except Exception:
         carry = None
@@ -1934,17 +1936,10 @@ def main(
         return _startup_failure(args, "hook_load", exc)
     try:
         if legacy_hook:
-            if isinstance(hook, ModuleType):
-                # A real hook module is only a source of validated core
-                # configuration here. Mutation and child generation belong to
-                # the public operator gateway, not modify_impl internals.
-                _validate_hook_protocol(hook)
-                hook = TaskwarriorMutationGateway(hook.core, task_bin=args.task_bin)
-                legacy_hook = False
-            else:
-                _bind_hook_task_bin(hook, args.task_bin)
-        fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None)
-        now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
+            _validate_hook_protocol(hook)
+        core = _runtime_core(hook)
+        fmt_dt_local = getattr(core, "fmt_dt_local", None)
+        now_utc = getattr(core, "now_utc", None)
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
         return _startup_failure(args, "hook_protocol" if legacy_hook else "runtime", exc)

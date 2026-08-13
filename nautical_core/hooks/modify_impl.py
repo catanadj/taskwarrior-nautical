@@ -528,6 +528,8 @@ _LIFECYCLE_PLANNER = None
 _LIFECYCLE_PLANNER_LOAD_FAILED = False
 _LIFECYCLE_EXECUTOR = None
 _LIFECYCLE_EXECUTOR_LOAD_FAILED = False
+_LIFECYCLE_OUTBOX = None
+_LIFECYCLE_OUTBOX_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
@@ -640,6 +642,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
         "lifecycle_executor.py",
         "nautical_core.lifecycle_executor",
+    ),
+    "lifecycle_outbox": (
+        "_LIFECYCLE_OUTBOX",
+        "_LIFECYCLE_OUTBOX_LOAD_FAILED",
+        "lifecycle_outbox.py",
+        "nautical_core.lifecycle_outbox",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",
@@ -1641,41 +1649,26 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
     return ("unknown", True)
 
 
-def _spawn_intent_entry(
-    parent_uuid: str,
-    child_obj: dict,
-    child_short: str,
-    parent_nextlink: str | None = None,
-    spawn_intent_id: str | None = None,
-    parent_guard: dict | None = None,
-    lifecycle_plan: dict | None = None,
-) -> dict:
-    intent_id = (spawn_intent_id or "").strip()
-    if not intent_id:
-        intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    queue_models = _module("queue_models")
-    return queue_models.normalize_spawn_queue_entry(
-        {
-            "parent_uuid": parent_uuid,
-            "parent_nextlink": (parent_nextlink or "").strip(),
-            "child_short": child_short,
-            "child": child_obj,
-            "spawn_intent_id": intent_id,
-            "parent_guard": parent_guard,
-            "lifecycle_plan": lifecycle_plan,
-        }
+def _enqueue_spawn_intent(plan) -> tuple[bool, str]:
+    """Persist one immutable lifecycle plan without a queue envelope."""
+    if _INTEGRATION_CONTEXT is None:
+        return False, "validated integration context is unavailable"
+    lifecycle_models = _module("lifecycle_models")
+    if not isinstance(plan, lifecycle_models.LifecyclePlan):
+        return False, "invalid lifecycle plan"
+    configuration = _INTEGRATION_CONTEXT.configuration
+    outbox = _module("lifecycle_outbox")
+    result = outbox.LifecycleOutboxRepository(
+        TW_DATA_DIR,
+        durable=_DURABLE_QUEUE,
+    ).enqueue(
+        plan,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
     )
-
-
-def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
-    if not isinstance(entry, dict):
-        return False, "invalid spawn intent"
-    queue_models = _module("queue_models")
-    try:
-        normalized = queue_models.normalize_spawn_queue_entry(entry)
-    except Exception as e:
-        return False, str(e)
-    return _enqueue_deferred_spawn(normalized, require_lifecycle_plan=True)
+    if result.ok:
+        return True, ""
+    return False, result.reason or "lifecycle outbox enqueue failed"
 
 
 def _lifecycle_spawn_identity(parent: dict, child: dict):
@@ -1760,17 +1753,8 @@ def _spawn_child_atomic(
         child_payload=child_obj,
         parent_patch={"nextLink": child_short},
         expected_postconditions=("child_present", "parent_linked", "verified"),
-    ).to_dict()
-    entry = _spawn_intent_entry(
-        parent_task_with_nextlink.get("uuid") or "",
-        child_obj,
-        child_short,
-        parent_task_with_nextlink.get("nextLink") or "",
-        spawn_intent_id,
-        parent_guard=parent_guard,
-        lifecycle_plan=lifecycle_plan,
     )
-    queued, queue_reason = _enqueue_spawn_intent(entry)
+    queued, queue_reason = _enqueue_spawn_intent(lifecycle_plan)
     if not queued:
         return (
             child_short,

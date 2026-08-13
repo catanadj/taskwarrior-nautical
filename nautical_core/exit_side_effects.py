@@ -3,17 +3,16 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Callable
 
-from .integration_models import CommandFailureKind
+from .integration_models import CommandFailureKind, Found, Unavailable
 
 if TYPE_CHECKING:
     from nautical_core.exit_models import (
-        ExitExportResult,
         ExitImportResult,
         ExitParentNextlinkStateCallback,
         ExitParentNextlinkStateResult,
         ExitParentUpdateResult,
     )
-    from nautical_core.integration_models import TaskCommandResult
+    from nautical_core.integration_models import TaskCommandResult, TaskRead
 
 
 def _typed_result(run_task, cmd, *, input_text=None, timeout: float, retries: int = 1, retry_delay: float = 0.0):
@@ -83,7 +82,7 @@ def parent_nextlink_state(
     child_short: str,
     *,
     expected_prev: str | None,
-    export_uuid: Callable[[str], ExitExportResult],
+    export_uuid: Callable[[str], TaskRead[dict[str, Any]]],
     parent_guard: dict[str, Any] | None = None,
     guard_mismatch_fn: Callable[[dict[str, Any], dict[str, Any]], str] | None = None,
 ) -> ExitParentNextlinkStateResult:
@@ -91,10 +90,10 @@ def parent_nextlink_state(
         from nautical_core.exit_models import ExitParentNextlinkStateResult
         return ExitParentNextlinkStateResult("invalid", "missing parent or child")
     res = export_uuid(parent_uuid)
-    if res.retryable:
+    if isinstance(res, Unavailable):
         from nautical_core.exit_models import ExitParentNextlinkStateResult
         return ExitParentNextlinkStateResult("locked", "parent export locked")
-    parent = res.obj
+    parent = res.value if isinstance(res, Found) else None
     if not parent:
         from nautical_core.exit_models import ExitParentNextlinkStateResult
         return ExitParentNextlinkStateResult("missing", "parent missing")
@@ -250,7 +249,7 @@ def clear_parent_nextlink_if_matches(
     child_short: str,
     *,
     lock_parent_nextlink: Callable[[str], Any],
-    export_uuid: Callable[[str], ExitExportResult],
+    export_uuid: Callable[[str], TaskRead[dict[str, Any]]],
     run_task: Callable[..., TaskCommandResult],
     task_cmd_prefix: list[str],
     timeout_modify: float,
@@ -266,13 +265,13 @@ def clear_parent_nextlink_if_matches(
         if not locked:
             return ExitParentUpdateResult(False, "parent lock busy", retryable=True)
         parent_res = export_uuid(parent_uuid)
-        if parent_res.retryable:
+        if isinstance(parent_res, Unavailable):
             return ExitParentUpdateResult(
                 False,
-                parent_res.err or "parent export locked",
+                parent_res.evidence.detail or "parent export locked",
                 retryable=True,
             )
-        parent = parent_res.obj
+        parent = parent_res.value if isinstance(parent_res, Found) else None
         if not parent:
             return ExitParentUpdateResult(True, "")
         current = str(parent.get("nextLink") or "").strip()

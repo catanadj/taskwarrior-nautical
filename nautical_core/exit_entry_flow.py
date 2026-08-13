@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from nautical_core.integration_models import Found, Unavailable
+
 if TYPE_CHECKING:
     from nautical_core.exit_models import (
         ExitApplyParentUpdateServices,
@@ -60,9 +62,9 @@ def precheck_parent_guard(
     # Guard reads must bypass the request cache: this is the last decision
     # before an external child import or parent-link mutation.
     parent_res = services.export_uuid(ctx.parent_uuid, prefer_cache=False)
-    if parent_res.retryable:
+    if isinstance(parent_res, Unavailable):
         return "break" if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else "continue"
-    parent = parent_res.obj
+    parent = parent_res.value if isinstance(parent_res, Found) else None
     if not isinstance(parent, dict):
         ctx.state.dead_letter(ctx.entry, "stale spawn intent: parent missing")
         ctx.state.reset_lock_streak()
@@ -119,8 +121,8 @@ def ensure_child_exists_for_entry(
 ) -> tuple[str, bool]:
     export_res = initial_export_res if initial_export_res is not None else services.export_uuid(ctx.child_uuid)
     imported = False
-    if not export_res.exists:
-        if export_res.retryable:
+    if not isinstance(export_res, Found):
+        if isinstance(export_res, Unavailable):
             if ctx.spawn_intent_id:
                 services.diag(f"task lock active; requeue (intent={ctx.spawn_intent_id})")
             return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
@@ -128,7 +130,7 @@ def ensure_child_exists_for_entry(
         if not import_res.ok:
             if import_res.retryable:
                 return ("break", False) if services.requeue_or_dead_letter_for_lock(ctx.entry, ctx.idx, ctx.state) else ("continue", False)
-            if not services.export_uuid(ctx.child_uuid, prefer_cache=False).exists:
+            if not isinstance(services.export_uuid(ctx.child_uuid, prefer_cache=False), Found):
                 if ctx.spawn_intent_id:
                     services.diag(f"child import failed (intent={ctx.spawn_intent_id}): {import_res.err}")
                 else:

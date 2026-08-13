@@ -5,6 +5,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from nautical_core.integration_models import TaskRead
     from nautical_core.lifecycle_models import LifecyclePlan
 
 
@@ -27,7 +28,7 @@ class ExitDrainStateProtocol(Protocol):
 
 
 class ExitExportCallback(Protocol):
-    def __call__(self, uuid_str: str, *, prefer_cache: bool = True) -> ExitExportResult: ...
+    def __call__(self, uuid_str: str, *, prefer_cache: bool = True) -> TaskRead[dict[str, Any]]: ...
 
 
 class ExitParentNextlinkStateCallback(Protocol):
@@ -122,30 +123,6 @@ class ExitApplyParentUpdateServices:
     diag: ExitDiagnosticCallback
     requeue_or_dead_letter_for_lock: ExitRequeueCallback
     recheck_parent_guard: ExitParentGuardCallback | None = None
-
-
-@dataclass(slots=True)
-class ExitExportResult:
-    exists: bool
-    retryable: bool
-    err: str
-    obj: dict[str, Any] | None
-
-    @property
-    def state(self) -> str:
-        return "found" if self.exists else ("unavailable" if self.retryable else "absent")
-
-
-@dataclass(slots=True)
-class ExitEquivalentChildResult:
-    exists: bool
-    retryable: bool
-    err: str
-    obj: dict[str, Any] | None
-
-    @property
-    def state(self) -> str:
-        return "found" if self.exists else ("unavailable" if self.retryable else "absent")
 
 
 @dataclass(slots=True)

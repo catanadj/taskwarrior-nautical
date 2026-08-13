@@ -66,7 +66,6 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
     "on-exit": (
         *_SHARED_HOOK_MODULES,
         "hook_support",
-        "exit_queries",
         "exit_side_effects",
         "exit_entry_flow",
         "queue_store",

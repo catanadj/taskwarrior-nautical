@@ -23,6 +23,8 @@ from nautical_core.exit_models import (
 
 @dataclass(slots=True)
 class ExitRuntimeState:
+    unit_of_work: Any | None = None
+    repository: Any | None = None
     run_queue_db_conn: sqlite3.Connection | None = None
     run_queue_db_active: bool = False
     queue_db_open_count: int = 0
@@ -32,8 +34,6 @@ class ExitRuntimeState:
     diag_stats: dict[str, Any] = field(default_factory=dict)
     task_phase: str = ""
     startup_stats: dict[str, float | int] = field(default_factory=dict)
-    export_cache: dict[str, Any] = field(default_factory=dict)
-    equiv_child_cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
     lifecycle_parent_preflight: dict[str, dict[str, Any]] = field(default_factory=dict)
     lifecycle_batch_imported: set[str] = field(default_factory=set)
     lifecycle_batch_import_failed: set[str] = field(default_factory=set)

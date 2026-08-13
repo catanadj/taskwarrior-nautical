@@ -180,6 +180,21 @@ class TaskReadRepository:
     def __init__(self, unit_of_work: "TaskwarriorUnitOfWork") -> None:
         self._uow = unit_of_work
         self._snapshots: list[tuple[int, AuthoritativeTaskSnapshot]] = []
+        self._timeout = 30.0
+        self._attempts = 2
+        self._retry_delay = 0.05
+
+    def configure_commands(
+        self,
+        *,
+        timeout: float,
+        attempts: int,
+        retry_delay: float,
+    ) -> None:
+        """Set one invocation's bounded Taskwarrior read policy."""
+        self._timeout = max(0.05, float(timeout))
+        self._attempts = max(1, int(attempts))
+        self._retry_delay = max(0.0, float(retry_delay))
 
     @staticmethod
     def _query_name(scope: TaskSnapshotScope) -> str:
@@ -231,8 +246,8 @@ class TaskReadRepository:
         *,
         empty_output_is_absent: bool,
         refresh: bool = False,
-        timeout: float = 30.0,
-        attempts: int = 2,
+        timeout: float | None = None,
+        attempts: int | None = None,
         use_tempfiles: bool = False,
     ) -> TaskRead[AuthoritativeTaskSnapshot]:
         query = self._query_name(scope)
@@ -251,9 +266,9 @@ class TaskReadRepository:
                 "export",
             ),
             purpose=f"task read {scope.kind.value}",
-            timeout=timeout,
-            attempts=attempts,
-            retry_delay=0.05,
+            timeout=self._timeout if timeout is None else timeout,
+            attempts=self._attempts if attempts is None else attempts,
+            retry_delay=self._retry_delay,
             use_tempfiles=use_tempfiles,
         )
         if result.kind is CommandFailureKind.ABSENT and empty_output_is_absent:
@@ -362,6 +377,20 @@ class TaskReadRepository:
                 return snapshot
         return None
 
+    def _evidence_for_slot(
+        self,
+        chain_id: str,
+        link: int,
+        statuses: Sequence[str],
+    ) -> AuthoritativeTaskSnapshot | None:
+        wanted = frozenset(str(status).strip().lower() for status in statuses)
+        for epoch, snapshot in reversed(self._snapshots):
+            if epoch != self._uow.mutation_epoch or not wanted.issubset(snapshot.scope.statuses):
+                continue
+            if snapshot.slot_rows(chain_id, link):
+                return snapshot
+        return None
+
     def broad_snapshot(
         self,
         *,
@@ -430,9 +459,26 @@ class TaskReadRepository:
         link: int,
         *,
         statuses: Sequence[str] = ALL_TASK_STATUSES,
+        expected_prev_link: str = "",
         refresh: bool = False,
     ) -> TaskRead[TaskRow]:
-        return self._slot_read(TaskQueryKind.CHILD_SLOT, chain_id, link, statuses=statuses, refresh=refresh)
+        read = self._slot_read(TaskQueryKind.CHILD_SLOT, chain_id, link, statuses=statuses, refresh=refresh)
+        expected = str(expected_prev_link or "").strip().lower()
+        if not expected or not isinstance(read, Found):
+            return read
+        actual = str(read.value.get("prevLink") or "").strip().lower()
+        if actual == expected:
+            return read
+        chain = str(chain_id or "").strip()
+        snapshot = self._evidence_for_slot(chain, int(link), statuses)
+        if snapshot is None:
+            raise RuntimeError("task repository lost command evidence for an exact-slot read")
+        return self._failure(
+            snapshot.command_result,
+            read.query,
+            kind=CommandFailureKind.INVALID_RESPONSE,
+            detail=f"chain slot predecessor mismatch: expected {expected}, found {actual or '-'}",
+        )
 
     def predecessor_slot(
         self,

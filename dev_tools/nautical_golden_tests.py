@@ -115,7 +115,6 @@ def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
         TaskCommand,
         TaskCommandResult,
     )
-
     kind = CommandFailureKind.SUCCESS if ok else CommandFailureKind.REJECTED
     return TaskCommandResult(
         TaskCommand(tuple(str(part) for part in cmd), "isolated hook test", 1.0),
@@ -126,6 +125,69 @@ def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
         1,
         0.0,
     )
+
+
+def _found_task(row):
+    from nautical_core.integration_models import Found
+    return Found(row, "isolated test read")
+
+
+def _absent_task(reason: str = "not found"):
+    from nautical_core.integration_models import Absent
+    return Absent("isolated test read", reason)
+
+
+def _unavailable_task(reason: str = "database is locked"):
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        TaskCommand,
+        Unavailable,
+    )
+    command = TaskCommand(("task", "export"), "isolated test read", 1.0)
+    evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.0, True, reason)
+    return Unavailable("isolated test read", evidence)
+
+def _bind_exit_test_repository(mod, taskdata: str | Path, runner):
+    """Bind an on-exit module to the same typed read boundary as production."""
+    from nautical_core.integration_models import TaskCommandResult
+
+    uow = _test_operator_uow(taskdata)
+
+    def _typed_runner(cmd, **kwargs):
+        try:
+            result = runner(cmd, **kwargs)
+        except TypeError:
+            result = runner(cmd)
+        if isinstance(result, TaskCommandResult):
+            return result
+        ok, stdout, stderr = result
+        return _typed_command_result(cmd, bool(ok), stdout, stderr)
+
+    class _Client:
+        def execute(self, args, *, purpose, timeout, **kwargs):
+            del purpose, kwargs
+            cmd = [*mod._task_cmd_prefix(), *args]
+            return _typed_runner(cmd, timeout=timeout)
+
+    uow.client = _Client()
+    state = mod._exit_runtime_state()
+    state.unit_of_work = uow
+    state.repository = uow.repository
+    uow.repository.configure_commands(
+        timeout=getattr(mod, "_TASK_TIMEOUT_EXPORT", 30.0),
+        attempts=getattr(mod, "_TASK_RETRIES_EXPORT", 1),
+        retry_delay=getattr(mod, "_TASK_RETRY_DELAY", 0.0),
+    )
+    mod._run_task_result = _typed_runner
+    return uow
+
+
+def _drain_exit_for_test(mod):
+    """Enter the strict on-exit API with an isolated test unit of work."""
+    runner = getattr(mod, "_run_task", lambda *_args, **_kwargs: (True, "", ""))
+    uow = _bind_exit_test_repository(mod, getattr(mod, "TW_DATA_DIR", "/tmp"), runner)
+    return mod._drain_queue(uow)
 
 def build_preview(expr, mode="ALL", due=None):
     """
@@ -3606,10 +3668,12 @@ def test_on_exit_timeouts_configurable():
             def _fake_run_task(cmd, *, input_text=None, timeout=0.0, **_kwargs):
                 timeouts.append(timeout)
                 if "export" in cmd:
-                    return True, json.dumps({"uuid": "u1"}), ""
+                    uuid_filter = next((part for part in cmd if str(part).startswith("uuid:")), "uuid:u1")
+                    return True, json.dumps([{"uuid": uuid_filter.split(":", 1)[1], "status": "pending"}]), ""
                 return True, "", ""
 
             mod._run_task = _fake_run_task
+            _bind_exit_test_repository(mod, td, _fake_run_task)
             mod._export_uuid("u1")
             mod._import_child({"uuid": "u2"})
             mod._update_parent_nextlink("p", "c")
@@ -3873,7 +3937,7 @@ def test_on_exit_requeues_when_task_lock_recent():
                 return True, "", ""
 
             mod._run_task = _run_task_stub
-            stats = mod._drain_queue()
+            stats = _drain_exit_for_test(mod)
             expect(stats.get("requeued") == 1, f"expected requeue when lock active, got {stats}")
         finally:
             if prev_taskdata is None:
@@ -4115,10 +4179,10 @@ def test_on_exit_queue_drain_idempotent():
             ]
             _seed_sqlite_queue(mod_exit._QUEUE_DB_PATH, entries)
 
-            stats1 = mod_exit._drain_queue()
+            stats1 = _drain_exit_for_test(mod_exit)
             expect(stats1.get("requeued") == 1, f"expected one requeue, got {stats1}")
 
-            stats2 = mod_exit._drain_queue()
+            stats2 = _drain_exit_for_test(mod_exit)
             expect(stats2.get("errors") == 0, f"second drain should be clean, got {stats2}")
             expect(import_calls == 2, f"expected 2 imports total, got {import_calls}")
             expect(modify_calls == 3, f"expected 3 modify calls, got {modify_calls}")
@@ -4168,7 +4232,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
                 "spawn_intent_id": "si_test",
             }
             _seed_sqlite_queue(mod._QUEUE_DB_PATH, [entry])
-            stats = mod._drain_queue()
+            stats = _drain_exit_for_test(mod)
             expect(calls, f"failed child import did not clear its optimistic link: {calls!r}")
             expect(
                 all(f"nextLink:{child_short}" in call and call[-1] == "nextLink:" for call in calls),
@@ -4182,7 +4246,7 @@ def test_on_exit_rolls_back_parent_nextlink_on_missing_child():
             )
             retry_entry = dict(entry, spawn_intent_id="si_retry")
             _seed_sqlite_queue(mod._QUEUE_DB_PATH, [retry_entry])
-            retry_stats = mod._drain_queue()
+            retry_stats = _drain_exit_for_test(mod)
             expect(retry_stats.get("requeued") == 1, f"retryable import failure was not requeued: {retry_stats}")
             expect(not calls, f"retryable import failure cleared the optimistic link: {calls!r}")
         finally:
@@ -4208,11 +4272,8 @@ def test_on_exit_guarded_parent_clear_preserves_changed_link():
         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         "bbbbbbbb",
         lock_parent_nextlink=locked,
-        export_uuid=lambda _uuid: exit_models.ExitExportResult(
-            True,
-            False,
-            "",
-            {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "nextLink": "cccccccc"},
+        export_uuid=lambda _uuid: _found_task(
+            {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "nextLink": "cccccccc"}
         ),
         run_task=lambda *args, **kwargs: calls.append((args, kwargs)) or (True, "", ""),
         task_cmd_prefix=["task"],
@@ -4377,7 +4438,7 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     def _fake_run_task(cmd, **_kwargs):
         calls.append(cmd)
         if "export" in cmd:
-            return True, json.dumps({"uuid": "beeswax"}), ""
+            return True, json.dumps([{"uuid": "beeswax", "status": "pending"}]), ""
         return True, "", ""
 
     mod._run_task = _fake_run_task
@@ -4385,6 +4446,7 @@ def test_on_exit_uses_tw_data_dir_for_export_and_modify():
     mod._INTEGRATION_CONTEXT = SimpleNamespace(
         command_prefix=("task", f"rc.data.location={mod.TW_DATA_DIR}"),
     )
+    _bind_exit_test_repository(mod, mod.TW_DATA_DIR, _fake_run_task)
 
     mod._export_uuid("beeswax")
     mod._update_parent_nextlink("parent-uuid", "childshort")
@@ -4412,9 +4474,10 @@ def test_on_exit_no_explicit_taskdata_skips_rc_data_location():
 
     def _fake_run_task(cmd, **_kwargs):
         calls.append(cmd)
-        return True, json.dumps({"uuid": "beeswax"}), ""
+        return True, json.dumps([{"uuid": "beeswax", "status": "pending"}]), ""
 
     mod._run_task = _fake_run_task
+    _bind_exit_test_repository(mod, getattr(mod, "TW_DATA_DIR", "/tmp"), _fake_run_task)
     mod._export_uuid("beeswax")
     expect(calls, "expected _run_task to be called")
     expect(
@@ -5374,7 +5437,6 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
 def test_chainid_legacy_reads_do_not_drive_chain_identity():
     """Lowercase chainid should no longer participate in chain identity helpers."""
     import uuid
-    import nautical_core.exit_queries as exit_queries
     import nautical_core.modify_spawn_prep as modify_spawn_prep
 
     parent = {"chainid": "legacy-1", "uuid": "parent-uuid"}
@@ -5406,10 +5468,6 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
     expect(
         _new_lifecycle_read_service().existing_next_lookup({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ).is_absent,
         "legacy chainid should not drive existing next task lookup",
-    )
-    expect(
-        exit_queries.existing_equivalent_child({"chainid": "legacy-1", "link": 2}, task_cmd_prefix=["task"], run_task=lambda *_args, **_kwargs: (False, "", ""), timeout=0.1, retries=0, retry_delay=0.0, is_lock_error=lambda _err: False, short_uuid_fn=lambda value: value).err == "missing chain slot",
-        "legacy chainid should not satisfy equivalent-child lookup",
     )
 
 
@@ -9317,7 +9375,7 @@ def test_on_exit_drain_updates_progress_per_entry():
     mod._process_queue_entry = lambda _idx, _entry, _state: False
     mod._exit_progress_scope = _fake_progress_scope
 
-    stats = mod._drain_queue_result()
+    stats = mod._drain_queue_result(_test_operator_uow())
     expect(stats.entries_total == 2, f"unexpected stats total: {stats}")
     expect([u["phase"] for u in updates[:2]] == ["preload", "drain"], f"unexpected initial phases: {updates}")
     expect([u["advance"] for u in updates if u["advance"]] == [1, 1], f"expected one progress advance per entry, got {updates}")
@@ -17989,10 +18047,7 @@ def test_on_exit_stale_parent_guard_prevents_child_import():
     def export_uuid(uuid_str, *, prefer_cache=True):
         _ = prefer_cache
         if uuid_str == parent_uuid:
-            return exit_models.ExitExportResult(
-                True,
-                False,
-                "",
+            return _found_task(
                 {
                     "uuid": parent_uuid,
                     "status": "completed",
@@ -18004,7 +18059,7 @@ def test_on_exit_stale_parent_guard_prevents_child_import():
                 },
             )
         calls["child_export"] += 1
-        return exit_models.ExitExportResult(False, False, "not found", None)
+        return _absent_task()
 
     try:
         mod._export_uuid = export_uuid
@@ -18069,13 +18124,8 @@ def test_on_exit_spawn_intents_drain():
 
         def _run_task_stub(cmd, **_kwargs):
             cmd_s = " ".join(cmd)
-            if "export" in cmd_s and f"uuid:{child_uuid}" in cmd_s:
-                if imported["ok"]:
-                    return True, json.dumps({"uuid": child_uuid}), ""
-                return True, "{}", ""
-            if "export" in cmd_s and f"uuid:{parent_uuid}" in cmd_s:
-                return True, json.dumps(
-                    {
+            if "export" in cmd_s:
+                parent = {
                         "uuid": parent_uuid,
                         "status": "completed",
                         "chain": "on",
@@ -18083,7 +18133,14 @@ def test_on_exit_spawn_intents_drain():
                         "link": 1,
                         "nextLink": parent_next["value"],
                     }
-                ), ""
+                child = {"uuid": child_uuid, "status": "pending"}
+                if f"uuid:{child_uuid}" in cmd_s:
+                    rows = [child] if imported["ok"] else []
+                elif f"uuid:{parent_uuid}" in cmd_s:
+                    rows = [parent]
+                else:
+                    rows = [parent, *([child] if imported["ok"] else [])]
+                return True, json.dumps(rows), ""
             if "import" in cmd_s:
                 imported["ok"] = True
                 return True, "", ""
@@ -18094,7 +18151,7 @@ def test_on_exit_spawn_intents_drain():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("errors") == 0, f"drain errors: {stats}")
         expect(stats.get("processed") == 1, f"unexpected drain processed: {stats}")
         expect(imported["ok"], "child import did not run")
@@ -18121,7 +18178,6 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
         "update_parent": mod._update_parent_nextlink,
         "cleanup": mod._cleanup_orphan_child,
         "mark": mod._mark_intent_status,
-        "seed": mod._seed_equivalent_child_cache,
         "sleep": mod._sleep,
     }
 
@@ -18156,7 +18212,7 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
             _ = prefer_cache
             exists = uuid_str in world["children"]
             obj = {"uuid": uuid_str, "status": "pending"} if exists else None
-            return exit_models.ExitExportResult(exists, False, "" if exists else "not found", obj)
+            return _found_task(obj) if exists else _absent_task()
 
         def existing_equivalent_child(_child, _parent_uuid=""):
             if equivalent:
@@ -18168,8 +18224,8 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
                     "prevLink": parent_uuid[:8],
                 }
                 world["children"].add(equivalent_uuid)
-                return exit_models.ExitEquivalentChildResult(True, False, "", obj)
-            return exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+                return _found_task(obj)
+            return _absent_task()
 
         def parent_nextlink_state(_parent_uuid, child_short, expected_prev=None, *, prefer_cache=True):
             _ = (expected_prev, prefer_cache)
@@ -18201,7 +18257,6 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
         mod._update_parent_nextlink = update_parent
         mod._cleanup_orphan_child = lambda *_a, **_k: world.__setitem__("cleanups", world["cleanups"] + 1)
         mod._mark_intent_status = lambda sid, status, reason="": world["marks"].append((sid, status, reason)) or True
-        mod._seed_equivalent_child_cache = lambda *_a, **_k: None
         mod._sleep = lambda _seconds: None
 
         finalized_intents = {entry["spawn_intent_id"]} if finalized else set()
@@ -18250,7 +18305,6 @@ def test_spawn_lifecycle_matrix_is_idempotent_and_repairs_links():
         mod._update_parent_nextlink = saved["update_parent"]
         mod._cleanup_orphan_child = saved["cleanup"]
         mod._mark_intent_status = saved["mark"]
-        mod._seed_equivalent_child_cache = saved["seed"]
         mod._sleep = saved["sleep"]
 
 
@@ -18259,7 +18313,6 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_cross_device_spawn_test")
     exit_models = mod._module("exit_models")
-    exit_queries = mod._module("exit_queries")
 
     parent_uuid = "11111111-0000-0000-0000-000000000111"
     device_uuids = {
@@ -18274,7 +18327,7 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
         "cleanup": mod._cleanup_orphan_child,
         "mark": mod._mark_intent_status,
         "sleep": mod._sleep,
-        "equivalent_query": exit_queries.existing_equivalent_child,
+        "equivalent": mod._existing_equivalent_child,
     }
 
     def make_entry(device: str, child_uuid: str) -> dict:
@@ -18294,7 +18347,6 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
         }
 
     def run_case(order: tuple[str, str], *, divergent_uuids: bool) -> None:
-        mod._reset_exit_equiv_child_cache()
         uuids = dict(device_uuids)
         if not divergent_uuids:
             uuids["b"] = uuids["a"]
@@ -18311,12 +18363,7 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
         def export_uuid(uuid_str, *, prefer_cache=True):
             _ = prefer_cache
             obj = world["children"].get(uuid_str)
-            return exit_models.ExitExportResult(
-                obj is not None,
-                False,
-                "" if obj is not None else "not found",
-                obj,
-            )
+            return _found_task(obj) if obj is not None else _absent_task()
 
         def equivalent_query(child, **_kwargs):
             for existing in world["children"].values():
@@ -18325,8 +18372,8 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
                     and existing.get("link") == child.get("link")
                     and existing.get("prevLink") == child.get("prevLink")
                 ):
-                    return exit_models.ExitEquivalentChildResult(True, False, "", existing)
-            return exit_models.ExitEquivalentChildResult(False, False, "not found", None)
+                    return _found_task(existing)
+            return _absent_task()
 
         def parent_nextlink_state(_parent_uuid, child_short, expected_prev=None, *, prefer_cache=True):
             _ = (expected_prev, prefer_cache)
@@ -18348,7 +18395,7 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
             return exit_models.ExitParentUpdateResult(True, "")
 
         mod._export_uuid = export_uuid
-        exit_queries.existing_equivalent_child = equivalent_query
+        mod._existing_equivalent_child = equivalent_query
         mod._parent_nextlink_state = parent_nextlink_state
         mod._import_child = import_child
         mod._update_parent_nextlink = update_parent
@@ -18396,7 +18443,7 @@ def test_cross_device_spawn_intents_converge_in_either_merge_order():
         mod._cleanup_orphan_child = saved["cleanup"]
         mod._mark_intent_status = saved["mark"]
         mod._sleep = saved["sleep"]
-        exit_queries.existing_equivalent_child = saved["equivalent_query"]
+        mod._existing_equivalent_child = saved["equivalent"]
 
 
 def test_on_exit_take_queue_recovers_from_corrupt_sqlite_db():
@@ -18494,7 +18541,7 @@ def test_on_exit_drain_skips_finalized_sqlite_intent():
             )
             conn.commit()
 
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("entries_total") == 1, f"unexpected entries_total: {stats}")
         expect(stats.get("entries_skipped_idempotent") == 1, f"expected idempotent skip: {stats}")
         expect(stats.get("processed") == 1, f"expected processed=1 due to skip accounting: {stats}")
@@ -19006,7 +19053,7 @@ def test_on_exit_dead_letter_on_missing_fields():
         }
         _seed_sqlite_queue(mod._QUEUE_DB_PATH, [entry_missing_spawn, entry_missing_child_uuid])
 
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("errors") == 2, f"expected 2 errors, got: {stats}")
         expect(mod._DEAD_LETTER_PATH.exists(), "dead letter file not created")
         reasons = []
@@ -19062,7 +19109,7 @@ def test_on_exit_parent_nextlink_changed_dead_letter():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("errors") == 1, f"expected 1 error, got: {stats}")
         expect(mod._DEAD_LETTER_PATH.exists(), "dead letter file not created")
         lines = mod._DEAD_LETTER_PATH.read_text(encoding="utf-8").splitlines()
@@ -19125,14 +19172,14 @@ def test_on_exit_parent_update_lock_busy_requeues():
         # Precheck passes and child is considered present; contention happens at parent update lock.
         exit_models = mod._module("exit_models")
         mod._parent_nextlink_state = lambda *_args, **_kwargs: exit_models.ExitParentNextlinkStateResult("ok", "")
-        mod._export_uuid = lambda uuid_str: exit_models.ExitExportResult(True, False, "", {"uuid": uuid_str})
+        mod._export_uuid = lambda uuid_str: _found_task({"uuid": uuid_str})
 
         @contextlib.contextmanager
         def _busy_parent_lock(_parent_uuid: str):
             yield False
 
         mod._lock_parent_nextlink = _busy_parent_lock
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("requeued") == 1, f"expected one requeued entry, got: {stats}")
         expect(stats.get("errors") == 0, f"lock-busy parent update should be retryable: {stats}")
         expect(not mod._DEAD_LETTER_PATH.exists(), "lock-busy parent update should not dead-letter")
@@ -19184,7 +19231,7 @@ def test_on_exit_retry_budget_after_post_import_lock_counts_dead_letter():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("errors") == 1, f"expected one error, got: {stats}")
         expect(stats.get("dead_lettered") == 1, f"expected one dead-lettered entry, got: {stats}")
 
@@ -19239,7 +19286,7 @@ def test_on_exit_post_import_parent_conflict_cleans_orphan():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("errors") == 1, f"expected one error, got: {stats}")
         expect(stats.get("dead_lettered") == 1, f"expected dead-lettered conflict, got: {stats}")
         expect(state["cleanup_called"], "orphan cleanup should run after post-import parent conflict")
@@ -19279,7 +19326,7 @@ def test_on_exit_idempotent_skip_for_finalized_intent():
             raise AssertionError("task subprocess should not be called for finalized intent")
 
         mod._run_task = _run_task_should_not_call
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("processed") == 1, f"expected one processed (skipped) entry, got: {stats}")
         expect(stats.get("entries_skipped_idempotent") == 1, f"expected one idempotent skip, got: {stats}")
         expect(stats.get("errors") == 0, f"expected no errors, got: {stats}")
@@ -19345,7 +19392,7 @@ def test_on_exit_sqlite_payload_uses_row_spawn_intent_id_for_finalized_skip():
             raise AssertionError("task subprocess should not be called for finalized sqlite intent")
 
         mod._run_task = _run_task_should_not_call
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("processed") == 0, f"malformed sqlite row was processed, got: {stats}")
         expect(stats.get("entries_skipped_idempotent") == 0, f"malformed sqlite row was skipped, got: {stats}")
         expect(stats.get("errors") == 0, f"expected no sqlite errors, got: {stats}")
@@ -19396,7 +19443,7 @@ def test_on_exit_sqlite_malformed_payload_dead_letter_keeps_spawn_intent_id():
             )
             conn.commit()
 
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("errors") == 0, f"expected no sqlite payload processing error, got: {stats}")
         expect(not mod._DEAD_LETTER_PATH.exists(), "quarantined sqlite payload should not be dead-lettered")
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
@@ -19442,7 +19489,7 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
         mod._LOCK_BACKOFF_BASE = 0.0
         mod._LOCK_BACKOFF_MAX = 0.0
         exit_models = mod._module("exit_models")
-        mod._export_uuid = lambda _u: exit_models.ExitExportResult(False, True, "database is locked", None)
+        mod._export_uuid = lambda _u: _unavailable_task()
 
         captured = {"count": 0}
 
@@ -19451,7 +19498,7 @@ def test_on_exit_lock_storm_circuit_requeues_remaining():
             return exit_models.ExitRequeueResult(True, 0)
 
         mod._requeue_entries_result = _requeue_capture
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("circuit_breaks") == 1, f"expected one circuit break, got: {stats}")
         expect(stats.get("requeued") == 3, f"expected three requeued entries, got: {stats}")
         expect(captured["count"] == 3, f"expected three entries passed to requeue, got: {captured}")
@@ -19570,9 +19617,9 @@ def test_on_exit_lifecycle_batch_classifies_and_applies_mixed_states():
 
     def export(uuid_str: str, *, prefer_cache=True):
         if uuid_str == records["unavailable"][0]:
-            return exit_models.ExitExportResult(False, True, "database is locked", None)
+            return _unavailable_task()
         obj = rows.get(uuid_str)
-        return exit_models.ExitExportResult(obj is not None, False, "" if obj else "not found", obj)
+        return _found_task(obj) if obj is not None else _absent_task()
 
     mod._reset_exit_runtime_state()
     mod._export_uuid = export
@@ -19633,32 +19680,22 @@ def test_on_exit_batches_orphan_cleanup_and_records_unavailable_evidence():
         deleted: set[str] = set()
         batch_calls = []
 
-        def preload(entries):
-            for entry in entries:
-                parent_uuid = str(entry.get("parent_uuid") or "").strip()
-                child = entry.get("child") or {}
-                child_uuid = str(child.get("uuid") or "").strip()
-                if parent_uuid:
-                    if parent_uuid == "parent-3":
-                        mod._export_cache_set(parent_uuid, exit_models.ExitExportResult(False, True, "locked", None))
-                    else:
-                        mod._export_cache_set(
-                            parent_uuid,
-                            exit_models.ExitExportResult(True, False, "", {"uuid": parent_uuid, "nextLink": ""}),
-                        )
-                if child_uuid:
-                    status = "deleted" if child_uuid in deleted else "pending"
-                    mod._export_cache_set(
-                        child_uuid,
-                        exit_models.ExitExportResult(True, False, "", {"uuid": child_uuid, "status": status}),
-                    )
+        def export_uuid(uuid_str, *, prefer_cache=True):
+            del prefer_cache
+            if uuid_str == "parent-3":
+                return _unavailable_task("locked")
+            if uuid_str.startswith("parent-"):
+                return _found_task({"uuid": uuid_str, "nextLink": ""})
+            status = "deleted" if uuid_str in deleted else "pending"
+            return _found_task({"uuid": uuid_str, "status": status})
 
         def batch_cleanup(child_uuids):
             batch_calls.append(list(child_uuids))
             deleted.update(child_uuids)
             return exit_models.ExitImportResult(True, "")
 
-        mod._preload_export_uuids = preload
+        mod._preload_export_uuids = lambda _entries: None
+        mod._export_uuid = export_uuid
         mod._cleanup_orphan_children = batch_cleanup
         mod._cleanup_lifecycle_batch(state)
         expect(batch_calls == [["child-1", "child-2"]], f"unsafe/unavailable child entered batch cleanup: {batch_calls!r}")
@@ -19721,7 +19758,7 @@ def test_on_exit_dead_letter_on_import_failure():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("processed") == 0, f"unexpected processed: {stats}")
         expect(stats.get("errors") == 1, f"unexpected errors: {stats}")
 
@@ -28817,49 +28854,39 @@ def test_ui_live_failure_preserves_rows_for_static_fallback():
 
 
 def test_on_exit_equivalent_child_cache_reuses_slot_lookup():
-    """on-exit should reuse equivalent-child lookups for the same slot within one run."""
+    """on-exit should reuse one typed exact-slot read within an invocation."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_equiv_cache_test")
-
-    mod._reset_exit_equiv_child_cache()
     child = {"chainID": "cid-1", "link": 3, "prevLink": "abc12345"}
-    calls = {"live": 0}
-
-    def _fake_existing_equivalent_child(*_args, **_kwargs):
-        calls["live"] += 1
-        return mod._module("exit_models").ExitEquivalentChildResult(False, False, "not found", None)
-
-    exit_queries = mod._module("exit_queries")
-    orig = exit_queries.existing_equivalent_child
-    try:
-        exit_queries.existing_equivalent_child = _fake_existing_equivalent_child
+    calls = []
+    with tempfile.TemporaryDirectory() as td:
+        _bind_exit_test_repository(
+            mod,
+            td,
+            lambda cmd: (calls.append(cmd) or (True, "", "")),
+        )
         first = mod._existing_equivalent_child(child, "")
         second = mod._existing_equivalent_child(child, "")
-    finally:
-        exit_queries.existing_equivalent_child = orig
-
-    expect(not first.exists and not second.exists, "expected cached miss results")
-    expect(calls["live"] == 1, f"expected one live equivalent-child lookup, got: {calls}")
+    from nautical_core.integration_models import Absent
+    expect(isinstance(first, Absent) and isinstance(second, Absent), "expected typed cached absence")
+    expect(len(calls) == 1, f"expected one exact-slot export, got: {calls}")
 
 
 def test_on_exit_preloads_equivalent_child_slots_for_early_checks():
-    """on-exit should bulk-preload equivalent-child slots and satisfy early lookups from cache."""
+    """One authoritative chain snapshot should satisfy exact-slot reads."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_equiv_preload_test")
 
-    mod._reset_exit_equiv_child_cache()
-    mod._reset_exit_diag_stats()
     child_a = {"chainID": "cid-a", "link": 2}
     child_b = {"chainID": "cid-b", "link": 3, "prevLink": "bbb22222"}
     entries = [
         {"parent_uuid": "aaa11111-0000-0000-0000-000000000000", "child": child_a},
         {"parent_uuid": "", "child": child_b},
     ]
-    calls = {"run": 0, "live": 0}
+    calls = []
 
-    def _fake_run_task(cmd, **_kwargs):
-        calls["run"] += 1
-        expect(cmd.count("or") == 1, f"expected one OR batch for equivalent-child preload: {cmd}")
+    def _fake_run_task(cmd):
+        calls.append(cmd)
         rows = [
             {
                 "uuid": "11111111-0000-0000-0000-000000000000",
@@ -28871,34 +28898,22 @@ def test_on_exit_preloads_equivalent_child_slots_for_early_checks():
         ]
         return True, json.dumps(rows), ""
 
-    def _fake_existing_equivalent_child(*_args, **_kwargs):
-        calls["live"] += 1
-        raise AssertionError("live equivalent-child lookup should not be used after preload")
-
-    mod._run_task = _fake_run_task
-    exit_queries = mod._module("exit_queries")
-    orig = exit_queries.existing_equivalent_child
-    try:
-        exit_queries.existing_equivalent_child = _fake_existing_equivalent_child
+    with tempfile.TemporaryDirectory() as td:
+        _bind_exit_test_repository(mod, td, _fake_run_task)
+        mod._preload_export_uuids(entries)
         mod._preload_equivalent_child_slots(entries)
         res_a = mod._existing_equivalent_child(child_a, "aaa11111-0000-0000-0000-000000000000")
         res_b = mod._existing_equivalent_child(child_b, "")
-    finally:
-        exit_queries.existing_equivalent_child = orig
-
-    expect(calls["run"] == 1, f"expected one preload batch run, got: {calls}")
-    expect(calls["live"] == 0, f"expected no live equivalent-child lookup after preload, got: {calls}")
-    expect(res_a.exists and isinstance(res_a.obj, dict), f"expected positive preloaded equivalent-child match: {res_a}")
-    expect(not res_b.exists and not res_b.retryable, f"expected negative preloaded equivalent-child miss: {res_b}")
+    from nautical_core.integration_models import Absent, Found
+    expect(len(calls) == 1, f"expected one broad preload export, got: {calls}")
+    expect(isinstance(res_a, Found), f"expected positive indexed slot match: {res_a}")
+    expect(isinstance(res_b, Absent), f"expected authoritative indexed slot absence: {res_b}")
 
 
 def test_on_exit_combines_uuid_and_equivalent_slot_preloads():
-    """One export should seed exact UUID and equivalent-slot caches for a normal queue entry."""
+    """One repository snapshot should serve UUID and exact-slot reads."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_combined_preload_test")
-    mod._reset_exit_export_cache()
-    mod._reset_exit_equiv_child_cache()
-    mod._reset_exit_diag_stats()
 
     parent_uuid = "aaaaaaaa-0000-0000-0000-000000000001"
     child_uuid = "bbbbbbbb-0000-0000-0000-000000000002"
@@ -28912,13 +28927,10 @@ def test_on_exit_combines_uuid_and_equivalent_slot_preloads():
     entries = [{"parent_uuid": parent_uuid, "child": child}]
     calls = []
 
-    def _fake_run_task(cmd, **_kwargs):
+    def _fake_run_task(cmd):
         calls.append(cmd)
-        expect(f"uuid:{parent_uuid}" in cmd, f"combined preload omitted parent UUID: {cmd}")
-        expect(f"uuid:{child_uuid}" in cmd, f"combined preload omitted child UUID: {cmd}")
-        expect("chainID:cid-a" in cmd and "link:2" in cmd, f"combined preload omitted slot filter: {cmd}")
         rows = [
-            {"uuid": parent_uuid, "nextLink": ""},
+            {"uuid": parent_uuid, "nextLink": "", "chain": "on", "status": "completed"},
             {
                 "uuid": existing_uuid,
                 "chainID": "cid-a",
@@ -28929,15 +28941,16 @@ def test_on_exit_combines_uuid_and_equivalent_slot_preloads():
         ]
         return True, json.dumps(rows), ""
 
-    mod._run_task = _fake_run_task
-    mod._preload_export_uuids(entries)
-    mod._preload_equivalent_child_slots(entries)
-
-    exact = mod._export_uuid(child_uuid)
-    equivalent = mod._existing_equivalent_child(child, parent_uuid)
+    with tempfile.TemporaryDirectory() as td:
+        _bind_exit_test_repository(mod, td, _fake_run_task)
+        mod._preload_export_uuids(entries)
+        mod._preload_equivalent_child_slots(entries)
+        exact = mod._export_uuid(child_uuid)
+        equivalent = mod._existing_equivalent_child(child, parent_uuid)
+    from nautical_core.integration_models import Absent, Found
     expect(len(calls) == 1, f"expected one combined preload export, got {len(calls)}: {calls!r}")
-    expect(not exact.exists and not exact.retryable, f"missing exact child should be negatively cached: {exact}")
-    expect(equivalent.exists and equivalent.obj.get("uuid") == existing_uuid, f"equivalent child was not cached: {equivalent}")
+    expect(isinstance(exact, Absent), f"missing exact child should be authoritative absence: {exact}")
+    expect(isinstance(equivalent, Found) and equivalent.value.get("uuid") == existing_uuid, f"equivalent child was not indexed: {equivalent}")
 
 
 def test_on_exit_preloads_uuid_exports_for_early_checks():
@@ -29000,7 +29013,7 @@ def test_on_exit_preloads_uuid_exports_for_early_checks():
             return False, "", f"unexpected {cmd_s}"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("processed") == 2, f"unexpected processed: {stats}")
         expect(state["bulk"] == 1, f"expected one bulk preload export, got: {state}")
         expect(state["parent_live"] == 2, f"expected one live parent recheck per entry, got: {state}")
@@ -29059,7 +29072,7 @@ def test_on_exit_successful_import_reuses_initial_child_export():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("processed") == 1, f"unexpected processed: {stats}")
         expect(state["bulk"] == 1, f"expected one preload export: {state}")
         expect(state["child_export"] == 0, f"child should not need a live export after preload: {state}")
@@ -29112,7 +29125,7 @@ def test_on_exit_import_error_but_child_exists():
             return False, "", "unexpected"
 
         mod._run_task = _run_task_stub
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("processed") == 1, f"unexpected processed: {stats}")
 
 
@@ -29850,10 +29863,10 @@ def test_on_exit_requeue_failure_leaves_sqlite_entry_processing():
             conn.commit()
 
         exit_models = mod._module("exit_models")
-        mod._export_uuid = lambda _u: exit_models.ExitExportResult(False, True, "database is locked", None)
+        mod._export_uuid = lambda _u: _unavailable_task()
         mod._requeue_entries_result = lambda _entries: exit_models.ExitRequeueResult(False, 1)
 
-        stats = mod._drain_queue()
+        stats = _drain_exit_for_test(mod)
         expect(stats.get("requeue_failed") == 1, f"expected one requeue failure, got {stats}")
         expect(stats.get("errors", 0) >= 1, f"expected error count incremented, got {stats}")
         with sqlite3.connect(str(mod._QUEUE_DB_PATH)) as conn:
@@ -29869,41 +29882,33 @@ def test_on_exit_export_uuid_malformed_stdout_is_unavailable():
     mod = _load_hook_module(hook, "_nautical_on_exit_export_uuid_noisy_test")
     calls = []
 
-    def _run_task_noisy(*_a, **_k):
+    def _run_task_noisy(_cmd):
         calls.append(True)
         return True, "WARN something\n00000000-0000-0000-0000-000000000111\n", ""
 
-    mod._run_task = _run_task_noisy
     uuid_str = "00000000-0000-0000-0000-000000000111"
-    obj = mod._export_uuid(uuid_str)
-    again = mod._export_uuid(uuid_str)
-    expect(obj and obj.state == "unavailable", f"malformed stdout should be unavailable: {obj!r}")
-    expect(again and again.state == "unavailable" and len(calls) == 2, "unavailable result was negatively cached")
+    with tempfile.TemporaryDirectory() as td:
+        _bind_exit_test_repository(mod, td, _run_task_noisy)
+        obj = mod._export_uuid(uuid_str)
+        again = mod._export_uuid(uuid_str)
+    from nautical_core.integration_models import Unavailable
+    expect(isinstance(obj, Unavailable), f"malformed stdout should be unavailable: {obj!r}")
+    expect(isinstance(again, Unavailable) and len(calls) == 1, "unavailable evidence was not reused within the invocation")
 
 
 def test_on_exit_equivalent_child_malformed_stdout_is_retryable():
     """Malformed equivalent-child output must requeue instead of spawning."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_equivalent_malformed_test")
-    exit_queries = mod._module("exit_queries")
-
-    def _run_task_malformed(*_a, **_k):
-        task_command = importlib.import_module("nautical_core.task_command")
-        return task_command.TaskCommandResult(
-            ("task", "export"), 0, "warning\n[not-json", "", "ok", 1, 0.1
+    with tempfile.TemporaryDirectory() as td:
+        _bind_exit_test_repository(
+            mod,
+            td,
+            lambda _cmd: (True, "warning\n[not-json", ""),
         )
-
-    result = exit_queries.existing_equivalent_child(
-        {"chainID": "chain-a", "link": 2},
-        task_cmd_prefix=["task"],
-        run_task=_run_task_malformed,
-        timeout=0.1,
-        retries=0,
-        retry_delay=0.0,
-        is_lock_error=lambda _err: False,
-        short_uuid_fn=lambda value: value[:8],
-    )
-    expect(result.state == "unavailable", f"malformed equivalent lookup was not retryable: {result!r}")
+        result = mod._existing_equivalent_child({"chainID": "chain-a", "link": 2})
+    from nautical_core.integration_models import Unavailable
+    expect(isinstance(result, Unavailable) and result.retryable is False, f"malformed equivalent lookup was not unavailable: {result!r}")
 
 
 def test_on_exit_emit_exit_feedback_reaches_stdout_contract():

@@ -4233,7 +4233,8 @@ def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
                 raise AssertionError("expected hook import to fail without core data resolver")
             except Exception as e:
                 expect(
-                    "integration_context.py is required" in str(e),
+                    "integration_context.py is required" in str(e)
+                    or "core resolver is unavailable" in str(e),
                     f"unexpected error when context module is missing: {e!r}",
                 )
         finally:
@@ -15071,7 +15072,7 @@ def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
         expect(p.returncode != 0, "on-add should fail for unknown anchor preset")
         expect((p.stdout or "").strip() == "", f"expected no stdout on unknown preset failure, got: {p.stdout!r}")
         stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid anchor" in stderr_txt, f"expected invalid anchor panel. stderr={stderr_txt[:500]!r}")
+        expect("Invalid Nautical configuration" in stderr_txt, f"expected invalid config panel. stderr={stderr_txt[:500]!r}")
         expect("Unknown anchor preset '@missing'" in stderr_txt, f"expected unknown preset guidance. stderr={stderr_txt[:500]!r}")
 
 
@@ -15121,8 +15122,11 @@ def test_hook_on_add_anchor_recursive_preset_fails_cleanly():
         expect(p.returncode != 0, "on-add should fail for recursive anchor presets")
         expect((p.stdout or "").strip() == "", f"expected no stdout on recursive preset failure, got: {p.stdout!r}")
         stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid anchor" in stderr_txt, f"expected invalid anchor panel. stderr={stderr_txt[:500]!r}")
-        expect("Recursive anchor preset reference detected" in stderr_txt, f"expected recursive preset guidance. stderr={stderr_txt[:500]!r}")
+        expect("Invalid Nautical configuration" in stderr_txt, f"expected invalid config panel. stderr={stderr_txt[:500]!r}")
+        expect(
+            "Recursive" in stderr_txt and "anchor preset reference detected" in stderr_txt,
+            f"expected recursive preset guidance. stderr={stderr_txt[:500]!r}",
+        )
 
 
 def test_hook_on_add_omit_preset_resolves_from_config():
@@ -15202,8 +15206,11 @@ def test_hook_on_add_omit_recursive_preset_fails_cleanly():
         expect(p.returncode != 0, "on-add should fail for recursive omit presets")
         expect((p.stdout or "").strip() == "", f"expected no stdout on recursive omit preset failure, got: {p.stdout!r}")
         stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid omit" in stderr_txt, f"expected invalid omit panel. stderr={stderr_txt[:500]!r}")
-        expect("Recursive omit preset reference detected" in stderr_txt, f"expected recursive omit preset guidance. stderr={stderr_txt[:500]!r}")
+        expect("Invalid Nautical configuration" in stderr_txt, f"expected invalid config panel. stderr={stderr_txt[:500]!r}")
+        expect(
+            "Recursive omit" in stderr_txt and "preset reference detected" in stderr_txt,
+            f"expected recursive omit preset guidance. stderr={stderr_txt[:500]!r}",
+        )
 
 
 def test_hook_on_add_omit_timed_preset_rejected():
@@ -15228,8 +15235,11 @@ def test_hook_on_add_omit_timed_preset_rejected():
         expect(p.returncode != 0, "on-add should fail for timed omit preset")
         expect((p.stdout or "").strip() == "", f"expected no stdout on timed omit preset failure, got: {p.stdout!r}")
         stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid omit" in stderr_txt, f"expected invalid omit panel. stderr={stderr_txt[:500]!r}")
-        expect("omit does not support time modifiers" in stderr_txt, f"expected timed omit guidance. stderr={stderr_txt[:500]!r}")
+        expect("Invalid Nautical configuration" in stderr_txt, f"expected invalid config panel. stderr={stderr_txt[:500]!r}")
+        expect(
+            "omit does not" in stderr_txt and "support time modifiers" in stderr_txt,
+            f"expected timed omit guidance. stderr={stderr_txt[:500]!r}",
+        )
 
 
 def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():

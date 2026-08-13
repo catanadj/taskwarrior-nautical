@@ -53,6 +53,7 @@ from nautical_core.integration_models import (  # noqa: E402
     MutationOutcome,
     MutationOutcomeKind,
     MutationRequest,
+    NativeUntilRepairPayload,
     ParentLinkPayload,
     ChainDisablePayload,
     Unavailable,
@@ -661,29 +662,36 @@ def _native_until_repairs(
 
 
 def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> None:
+    del task_bin
+    if _UNIT_OF_WORK is None:
+        raise RuntimeError("native until repair requires an integration unit of work")
     uuid = str(row.get("uuid") or "").strip()
     chain_id = str(row.get("chainID") or "").strip()
     link = reconcile.int_or_default(row.get("link"), 0)
-    if not uuid or not chain_id or link <= 0:
+    modified = str(row.get("modified") or "").strip()
+    expected_until = str(row.get("until") or "").strip()
+    if not uuid or not chain_id or link <= 0 or not modified or not expected_until:
         raise RuntimeError("native until repair lacks task identity")
-    proc = task_command.run_task_command(
-        task_bin,
-        [
-            "rc.hooks=off",
-            "rc.confirmation=off",
-            "rc.verbose=nothing",
-            f"uuid:{uuid}",
-            "chain:on",
-            f"chainID:{chain_id}",
-            f"link:{link}",
-            "modify",
-            f"until:{new_until}",
-        ],
-        timeout=30.0,
-        purpose="reconcile native-until mutation",
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+
+    guard = MutationGuard(
+        task_uuid=uuid,
+        status=str(row.get("status") or ""),
+        chain_id=chain_id,
+        link=link,
+        recurrence_identity=recurrence_fingerprint(row),
+        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+        expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
+        chain=str(row.get("chain") or "on"),
     )
-    if proc.returncode != 0:
-        raise task_command.TaskCommandFailure(proc, "native until repair")
+    request = MutationRequest(
+        MutationOperation.NATIVE_UNTIL_REPAIR,
+        guard,
+        NativeUntilRepairPayload(uuid, expected_until, str(new_until)),
+    )
+    outcome = TaskwarriorMutationService(_UNIT_OF_WORK).apply(request)
+    if outcome.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
+        raise RuntimeError(outcome.reason or outcome.kind.value)
 
 
 def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bool:

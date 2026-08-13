@@ -130,6 +130,14 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         mismatch = self._guard_mismatch(request.guard, row)
         if mismatch:
             if (
+                request.operation is MutationOperation.METADATA_REPAIR
+                and isinstance(request.payload, MetadataRepairPayload)
+                and request.payload.expected_dict().get("link") == ""
+                and not _text(row.get("link"))
+                and mismatch.startswith("guard link changed")
+            ):
+                return row, None
+            if (
                 request.operation is MutationOperation.CHAIN_DISABLE
                 and request.guard.chain == "on"
                 and _text(row.get("chain")).lower() == "off"
@@ -339,9 +347,19 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         updates = request.payload.to_dict()
         if all(_text(parent.get(key)) == _text(value) for key, value in updates.items()):
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.METADATA_REPAIRED)
+        expected = request.payload.expected_dict()
+        for key, value in expected.items():
+            if _text(parent.get(key)) != _text(value):
+                return self._outcome(request, MutationOutcomeKind.CONFLICT, reason=f"metadata field {key} changed")
         failure = self._run_modify(
             request,
-            self._selectors(request.guard),
+            self._selectors(
+                request.guard,
+                include_link=not (
+                    "link" in request.payload.expected_dict()
+                    and request.payload.expected_dict().get("link") == ""
+                ),
+            ),
             tuple(f"{key}:{value}" for key, value in updates.items()),
         )
         if failure is not None:
@@ -353,13 +371,20 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         )
 
     @staticmethod
-    def _selectors(guard: MutationGuard, *, extra: Sequence[str] = ()) -> tuple[str, ...]:
+    def _selectors(
+        guard: MutationGuard,
+        *,
+        extra: Sequence[str] = (),
+        include_link: bool = True,
+    ) -> tuple[str, ...]:
         selectors = (
             f"uuid:{guard.task_uuid}",
             f"status:{guard.status}",
+            f"chain:{guard.chain}",
             f"chainID:{guard.chain_id}",
-            f"link:{guard.link}",
         )
+        if include_link:
+            selectors = (*selectors, f"link:{guard.link}")
         modified = next(
             (timestamp.value for timestamp in guard.timestamps if timestamp.field.value == "modified"),
             "",

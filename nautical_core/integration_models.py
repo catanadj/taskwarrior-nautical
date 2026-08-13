@@ -494,6 +494,7 @@ class MetadataRepairPayload:
 
     task_uuid: str
     updates: FrozenPairs
+    expected: FrozenPairs = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "metadata task UUID"))
@@ -505,16 +506,35 @@ class MetadataRepairPayload:
             raise IntegrationContractError("metadata repair requires non-empty frozen updates")
         if any(not key.strip() or key in {"uuid", "status"} for key, _value in updates):
             raise IntegrationContractError("metadata repair cannot update UUID or status")
+        expected = tuple(self.expected)
+        if any(
+            not isinstance(item, tuple) or len(item) != 2 or not isinstance(item[0], str)
+            for item in expected
+        ):
+            raise IntegrationContractError("metadata repair expected values must be frozen key/value pairs")
+        update_keys = {key for key, _value in updates}
+        if any(key not in update_keys for key, _value in expected):
+            raise IntegrationContractError("metadata repair expected values must name updated fields")
         object.__setattr__(self, "updates", updates)
+        object.__setattr__(self, "expected", expected)
 
     @classmethod
-    def from_mapping(cls, task_uuid: str, updates: dict[str, object]) -> "MetadataRepairPayload":
+    def from_mapping(
+        cls,
+        task_uuid: str,
+        updates: dict[str, object],
+        *,
+        expected: dict[str, object] | None = None,
+    ) -> "MetadataRepairPayload":
         if not isinstance(updates, dict):
             raise IntegrationContractError("metadata repair updates must be an object")
-        return cls(task_uuid, _freeze_pairs(updates))
+        return cls(task_uuid, _freeze_pairs(updates), _freeze_pairs(expected or {}))
 
     def to_dict(self) -> dict[str, object]:
         return {key: _thaw(value) for key, value in self.updates}
+
+    def expected_dict(self) -> dict[str, object]:
+        return {key: _thaw(value) for key, value in self.expected}
 
 
 MutationPayload: TypeAlias = (

@@ -16,7 +16,7 @@ from nautical_core.exit_models import (
     ExitParentNextlinkStateResult,
     ExitParentUpdateCallback,
     ExitPrecheckServices,
-    ExitRequeueCallback,
+    ExitRetryOrManualReviewCallback,
 )
 
 
@@ -42,7 +42,7 @@ def new_runtime_state() -> ExitRuntimeState:
 class ExitRuntimeServices:
     state: ExitRuntimeState
     parent_nextlink_state: ExitParentNextlinkStateCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
     export_uuid: ExitExportCallback
     import_child: ExitImportCallback
     diag: ExitDiagnosticCallback
@@ -83,7 +83,7 @@ def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckService
         export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
         diag=runtime.diag,
-        requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
+        retry_or_manual_review_for_lock=runtime.retry_or_manual_review_for_lock,
     )
 
 
@@ -93,7 +93,7 @@ def build_ensure_child_services(runtime: ExitRuntimeServices) -> ExitEnsureChild
         import_child=runtime.import_child,
         clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
         diag=runtime.diag,
-        requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
+        retry_or_manual_review_for_lock=runtime.retry_or_manual_review_for_lock,
     )
 
 
@@ -102,7 +102,7 @@ def build_apply_parent_update_services(runtime: ExitRuntimeServices) -> ExitAppl
         update_parent_nextlink=runtime.update_parent_nextlink,
         cleanup_orphan_child=runtime.cleanup_orphan_child,
         diag=runtime.diag,
-        requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
+        retry_or_manual_review_for_lock=runtime.retry_or_manual_review_for_lock,
     )
 
 

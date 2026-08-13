@@ -187,7 +187,7 @@ def _drain_exit_for_test(mod):
     """Enter the strict on-exit API with an isolated test unit of work."""
     runner = getattr(mod, "_run_task", lambda *_args, **_kwargs: (True, "", ""))
     uow = _bind_exit_test_repository(mod, getattr(mod, "TW_DATA_DIR", "/tmp"), runner)
-    return mod._drain_queue(uow)
+    return mod._drain_outbox(uow)
 
 def build_preview(expr, mode="ALL", due=None):
     """
@@ -2422,6 +2422,8 @@ def test_integration_outbox_models_enforce_deterministic_identity_and_progress()
 
 def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
     """The durable outbox owns immutable plans, leases, stages, and poison rows."""
+    import threading
+
     from nautical_core.lifecycle_models import (
         LifecycleAction,
         LifecycleEvent,
@@ -2488,6 +2490,70 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="parent_linked").ok, "outbox parent stage failed")
         expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="verified").ok, "outbox verification stage failed")
         expect(repo.acknowledge(intent_id=intent_id, owner="second-worker").ok, "outbox acknowledgement failed")
+
+        stage_sequences = (
+            (),
+            ("child_present",),
+            ("child_present", "parent_linked"),
+            ("child_present", "parent_linked", "verified"),
+        )
+        for link, prior_stages in enumerate(stage_sequences, start=2):
+            staged_plan = plan_for(link)
+            expect(
+                repo.enqueue(staged_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1").ok,
+                f"stage recovery enqueue failed for link {link}",
+            )
+            claimed, records = repo.claim_batch(owner=f"stalled-{link}", lease_seconds=5, limit=1)
+            expect(claimed.ok and len(records) == 1, f"stage recovery claim failed for link {link}: {claimed}")
+            for stage in prior_stages:
+                expect(
+                    repo.advance_stage(
+                        intent_id=records[0].intent_id,
+                        owner=f"stalled-{link}",
+                        stage=stage,
+                    ).ok,
+                    f"stage recovery could not persist {stage}",
+                )
+            now[0] += 6
+            recovered, records = repo.claim_batch(owner=f"recovered-{link}", lease_seconds=5, limit=1)
+            expect(recovered.ok and len(records) == 1, f"expired lease was not recovered for link {link}")
+            expected_stage = prior_stages[-1] if prior_stages else "planned"
+            expect(records[0].stage.value == expected_stage, f"recovery lost {expected_stage} progress")
+            expect(
+                repo.manual_review(
+                    intent_id=records[0].intent_id,
+                    owner=f"recovered-{link}",
+                    failure=OutboxFailure("test_cleanup", "stage recovery test complete"),
+                ).ok,
+                f"stage recovery cleanup failed for link {link}",
+            )
+
+        concurrent_plan = plan_for(7)
+        expect(
+            repo.enqueue(concurrent_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1").ok,
+            "concurrent claim enqueue failed",
+        )
+        claim_barrier = threading.Barrier(2)
+        concurrent_claims: list[tuple[bool, tuple[object, ...]]] = []
+        claims_lock = threading.Lock()
+
+        def claim_once(worker: str) -> None:
+            claim_barrier.wait()
+            result, records = LifecycleOutboxRepository(Path(td), clock=clock).claim_batch(
+                owner=worker,
+                lease_seconds=5,
+                limit=1,
+            )
+            with claims_lock:
+                concurrent_claims.append((result.ok, records))
+
+        workers = [threading.Thread(target=claim_once, args=(f"concurrent-{index}",)) for index in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+        claimed_records = [record for ok, records in concurrent_claims if ok for record in records]
+        expect(len(concurrent_claims) == 2 and len(claimed_records) == 1, "concurrent outbox claim was not exclusive")
 
         poison_plan = plan_for(9)
         expect(repo.enqueue(poison_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1").ok, "poison test enqueue failed")
@@ -2556,6 +2622,14 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         expect(rejected.kind is OutboxResultKind.REJECTED, f"future outbox schema was accepted: {rejected}")
         expect("newer than supported" in rejected.reason, f"future schema rejection was not actionable: {rejected}")
 
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        path = root / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+        path.parent.mkdir()
+        path.write_bytes(b"not a sqlite database")
+        rejected = LifecycleOutboxRepository(root).open()
+        expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
+
 
 def test_on_exit_claims_and_advances_lifecycle_outbox_only():
     """The on-exit adapter claims durable plans without queue-row conversion."""
@@ -2593,7 +2667,7 @@ def test_on_exit_claims_and_advances_lifecycle_outbox_only():
         mod.TW_DATA_DIR = root
         mod._OUTBOX_BATCH_MAX_ITEMS = 4
         mod._OUTBOX_LEASE_SECONDS = 30.0
-        batch = mod._take_queue_batch()
+        batch = mod._take_outbox_batch()
         expect(len(batch.entries) == 1, f"on-exit did not claim lifecycle outbox entry: {batch.entries}")
         entry = batch.entries[0]
         expect(entry.get("__outbox_backend") == "lifecycle", "on-exit entry retained queue backend")
@@ -9863,7 +9937,7 @@ def test_on_modify_run_task_diag_bucket_stats():
 
 
 def test_on_exit_drain_updates_progress_per_entry():
-    """on-exit drain should advance progress once per processed queue entry."""
+    """on-exit drain should advance progress once per processed outbox entry."""
     hook = _find_hook_file("on-exit.nautical")
     mod = _load_hook_module(hook, "_nautical_on_exit_progress_updates_test")
     exit_models = mod._module("exit_models")
@@ -9883,14 +9957,14 @@ def test_on_exit_drain_updates_progress_per_entry():
 
         yield _update
 
-    mod._take_queue_batch = lambda: exit_models.ExitQueueBatch(entries=[{"id": 1}, {"id": 2}])
+    mod._take_outbox_batch = lambda: exit_models.ExitOutboxBatch(entries=[{"id": 1}, {"id": 2}])
     mod._load_finalized_intents = lambda: (set(), True)
     mod._preload_export_uuids = lambda _entries: None
     mod._preload_equivalent_child_slots = lambda _entries: None
-    mod._process_queue_entry = lambda _idx, _entry, _state: False
+    mod._process_outbox_entry = lambda _idx, _entry, _state: False
     mod._exit_progress_scope = _fake_progress_scope
 
-    stats = mod._drain_queue_result(_test_operator_uow())
+    stats = mod._drain_outbox_result(_test_operator_uow())
     expect(stats.entries_total == 2, f"unexpected stats total: {stats}")
     expect([u["phase"] for u in updates[:2]] == ["preload", "drain"], f"unexpected initial phases: {updates}")
     expect([u["advance"] for u in updates if u["advance"]] == [1, 1], f"expected one progress advance per entry, got {updates}")

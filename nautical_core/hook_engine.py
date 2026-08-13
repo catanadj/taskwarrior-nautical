@@ -58,12 +58,12 @@ def handle_on_exit(
     *,
     exit_result_cls,
     redirect_stdout_to_devnull,
-    drain_queue,
+    drain_outbox,
     strict_exit_result,
 ):
     _ = request.runtime
     redirect_stdout_to_devnull()
-    stats = drain_queue(request.runtime.uow)
+    stats = drain_outbox(request.runtime.uow)
     strict_msg = strict_exit_result(stats)
     if strict_msg:
         return exit_result_cls(exit_code=1, feedback_message=strict_msg, stats=stats)

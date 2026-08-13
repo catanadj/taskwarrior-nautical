@@ -10,19 +10,19 @@ if TYPE_CHECKING:
 
 
 class ExitDrainStateProtocol(Protocol):
-    requeue: list[dict[str, Any]]
+    retry_entries: list[dict[str, Any]]
     errors: int
     lifecycle_defer_verification: bool
     lifecycle_batch_discovery: bool
     lifecycle_batch_plan: LifecycleBatchPlan | None
 
-    def dead_letter(self, entry: dict[str, Any], reason: str) -> None: ...
+    def manual_review(self, entry: dict[str, Any], reason: str) -> None: ...
     def record_lock_event(self, idx: int) -> bool: ...
     def to_stats_model(
         self,
         drain_t0: float,
-        requeue_ok: bool,
-        requeue_failed: int,
+        retry_release_ok: bool,
+        retry_release_failed: int,
     ) -> ExitDrainStats: ...
 
 
@@ -78,7 +78,7 @@ class ExitRecurrenceFingerprintCallback(Protocol):
     def __call__(self, task: dict[str, Any]) -> str: ...
 
 
-class ExitRequeueCallback(Protocol):
+class ExitRetryOrManualReviewCallback(Protocol):
     def __call__(self, entry: dict[str, Any], idx: int, state: ExitDrainStateProtocol) -> bool: ...
 
 
@@ -102,7 +102,7 @@ class ExitPrecheckServices:
     export_uuid: ExitExportCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
     diag: ExitDiagnosticCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
     recurrence_fingerprint: ExitRecurrenceFingerprintCallback | None = None
 
 
@@ -112,7 +112,7 @@ class ExitEnsureChildServices:
     import_child: ExitImportCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
     diag: ExitDiagnosticCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
 
 
 @dataclass(slots=True)
@@ -120,7 +120,7 @@ class ExitApplyParentUpdateServices:
     update_parent_nextlink: ExitParentUpdateCallback
     cleanup_orphan_child: ExitCleanupCallback
     diag: ExitDiagnosticCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
     recheck_parent_guard: ExitParentGuardCallback | None = None
 
 
@@ -166,7 +166,7 @@ class LifecycleBatchDecision:
 
 @dataclass(frozen=True, slots=True)
 class LifecycleBatchPlan:
-    """Validated, mutation-free classification of one claimed queue batch."""
+    """Validated, mutation-free classification of one claimed outbox batch."""
 
     decisions: tuple[LifecycleBatchDecision, ...] = ()
 
@@ -203,7 +203,7 @@ class ExitParentUpdateResult:
 
 
 @dataclass(slots=True)
-class ExitQueueBatch:
+class ExitOutboxBatch:
     entries: list[dict[str, Any]]
 
     @property
@@ -212,7 +212,7 @@ class ExitQueueBatch:
 
 
 @dataclass(slots=True)
-class ExitRequeueResult:
+class ExitRetryReleaseResult:
     ok: bool
     failed: int
 
@@ -221,8 +221,8 @@ class ExitRequeueResult:
 class ExitDrainStats:
     processed: int
     errors: int
-    requeued: int
-    requeue_failed: int
+    retry_released: int
+    retry_release_failed: int
     manual_reviewed: int
     outbox_lock_failures: int
     entries_total: int
@@ -240,8 +240,8 @@ class ExitDrainStats:
         return {
             "processed": self.processed,
             "errors": self.errors,
-            "requeued": self.requeued,
-            "requeue_failed": self.requeue_failed,
+            "retry_released": self.retry_released,
+            "retry_release_failed": self.retry_release_failed,
             "manual_reviewed": self.manual_reviewed,
             "outbox_lock_failures": self.outbox_lock_failures,
             "entries_total": self.entries_total,
@@ -258,7 +258,7 @@ class ExitDrainStats:
 
 
 @dataclass(slots=True)
-class ExitQueueWriteResult:
+class ExitOutboxWriteResult:
     ok: bool
     count: int
     err: str = ""

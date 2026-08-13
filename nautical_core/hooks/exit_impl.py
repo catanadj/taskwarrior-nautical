@@ -391,7 +391,7 @@ def _build_hook_runtime_context():
 
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-# When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
+# When set, exit 1 if any lifecycle plans require manual review or errored.
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
 
 def _env_float(
@@ -525,7 +525,7 @@ def _exit_progress_counts(state: object | None) -> str:
     try:
         ok = int(getattr(state, "processed", 0) or 0)
         skip = int(getattr(state, "skipped_idempotent", 0) or 0)
-        rq = len(getattr(state, "requeue", []) or [])
+        rq = len(getattr(state, "retry_entries", []) or [])
         reviewed = int(getattr(state, "manual_reviewed", 0) or 0)
         return f"ok:{ok} skip:{skip} retry:{rq} review:{reviewed}"
     except Exception:
@@ -1021,8 +1021,8 @@ def _take_lifecycle_outbox_batch():
             _record_outbox_lock_failure()
         else:
             _diag(f"lifecycle outbox claim failed: {result.reason or 'unknown error'}")
-        return exit_models.ExitQueueBatch(entries=[])
-    return exit_models.ExitQueueBatch(entries=[_outbox_execution_entry(record) for record in records])
+        return exit_models.ExitOutboxBatch(entries=[])
+    return exit_models.ExitOutboxBatch(entries=[_outbox_execution_entry(record) for record in records])
 
 
 def _advance_lifecycle_stage(entry: dict, stage):
@@ -1031,12 +1031,12 @@ def _advance_lifecycle_stage(entry: dict, stage):
     intent_id = str(entry.get("__outbox_intent_id") or "").strip() if isinstance(entry, dict) else ""
     owner = str(entry.get("__outbox_owner") or "").strip() if isinstance(entry, dict) else ""
     if not intent_id or not owner:
-        return exit_models.ExitQueueWriteResult(False, 1, "outbox claim identity is missing")
+        return exit_models.ExitOutboxWriteResult(False, 1, "outbox claim identity is missing")
     lifecycle_models = _module("lifecycle_models")
     try:
         target = lifecycle_models.ExecutionStage(stage)
     except (TypeError, ValueError):
-        return exit_models.ExitQueueWriteResult(False, 1, "invalid lifecycle stage")
+        return exit_models.ExitOutboxWriteResult(False, 1, "invalid lifecycle stage")
     repository = _lifecycle_outbox_repository()
     if target is lifecycle_models.ExecutionStage.FINALIZED:
         result = repository.acknowledge(intent_id=intent_id, owner=owner)
@@ -1048,7 +1048,7 @@ def _advance_lifecycle_stage(entry: dict, stage):
             entry["lifecycle_plan"] = plan.with_stage(target).to_dict()
         except Exception:
             pass
-    return exit_models.ExitQueueWriteResult(
+    return exit_models.ExitOutboxWriteResult(
         result.ok,
         1 if result.ok else 0,
         result.reason,
@@ -1056,7 +1056,7 @@ def _advance_lifecycle_stage(entry: dict, stage):
     )
 
 
-def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
+def _validate_outbox_entry(entry: dict) -> tuple[bool, str]:
     try:
         if not isinstance(entry, dict) or str(entry.get("__outbox_backend") or "") != "lifecycle":
             return False, "entry was not claimed from the lifecycle outbox"
@@ -1532,7 +1532,7 @@ def _finalize_lifecycle_batch(state) -> None:
             continue
         if not state.mark_final(ctx.entry, "done", "processed"):
             state.errors += 1
-            state.requeue.append(ctx.entry)
+            state.retry_entries.append(ctx.entry)
             continue
         state.processed += 1
         state.reset_lock_streak()
@@ -1678,19 +1678,19 @@ def _cleanup_orphan_children(child_uuids: list[str]):
     return exit_models.ExitImportResult(True, "")
 
 
-def _take_queue_batch():
+def _take_outbox_batch():
     return _take_lifecycle_outbox_batch()
 
 
-def _take_queue_entries():
-    return _take_queue_batch().entries
+def _take_outbox_entries():
+    return _take_outbox_batch().entries
 
 
-def _requeue_entries_result(entries: list[dict]):
+def _release_retry_entries_result(entries: list[dict]):
     exit_models = _module("exit_models")
     items = [e for e in (entries or []) if isinstance(e, dict)]
     if not items:
-        return exit_models.ExitRequeueResult(ok=True, failed=0)
+        return exit_models.ExitRetryReleaseResult(ok=True, failed=0)
     outbox_failed = 0
     outbox = _module("lifecycle_outbox")
     repository = _lifecycle_outbox_repository()
@@ -1708,10 +1708,10 @@ def _requeue_entries_result(entries: list[dict]):
         if not result.ok:
             outbox_failed += 1
             if result.lock_busy:
-                _record_queue_lock_failure()
+                _record_outbox_lock_failure()
             else:
                 _diag(f"lifecycle outbox retry release failed: {result.reason or 'unknown error'}")
-    return exit_models.ExitRequeueResult(ok=outbox_failed == 0, failed=outbox_failed)
+    return exit_models.ExitRetryReleaseResult(ok=outbox_failed == 0, failed=outbox_failed)
 
 
 class _DrainState:
@@ -1724,7 +1724,7 @@ class _DrainState:
         self.entries_total = entries_total
         self.processed = 0
         self.errors = 0
-        self.requeue: list[dict] = []
+        self.retry_entries: list[dict] = []
         self.manual_reviewed = 0
         self.skipped_idempotent = 0
         self.lock_events = 0
@@ -1741,9 +1741,6 @@ class _DrainState:
     def mark_final(self, entry: dict, status: str, reason: str) -> bool:
         return True
 
-    def queue_backend(self, entry: dict) -> str:
-        return "outbox"
-
     def entry_clean(self, entry: dict) -> dict:
         if not isinstance(entry, dict):
             return {}
@@ -1753,7 +1750,7 @@ class _DrainState:
         out.pop("__outbox_owner", None)
         return out
 
-    def dead_letter(self, entry: dict, reason: str) -> None:
+    def manual_review(self, entry: dict, reason: str) -> None:
         outbox = _module("lifecycle_outbox")
         result = _lifecycle_outbox_repository().manual_review(
             intent_id=str(entry.get("__outbox_intent_id") or ""),
@@ -1761,7 +1758,7 @@ class _DrainState:
             failure=outbox.OutboxFailure("manual_review", str(reason or "lifecycle execution failed")),
         )
         if not result.ok:
-            self.requeue.append(entry)
+            self.retry_entries.append(entry)
             self.errors += 1
             _diag(f"lifecycle outbox manual-review transition failed: {result.reason or 'unknown error'}")
             return
@@ -1778,10 +1775,10 @@ class _DrainState:
             _sleep(delay)
         if _LOCK_STORM_THRESHOLD > 0 and self.lock_streak >= _LOCK_STORM_THRESHOLD and (idx + 1) < self.entries_total:
             self.circuit_breaks += 1
-            self.requeue.extend(self.entries[idx + 1:])
+            self.retry_entries.extend(self.entries[idx + 1:])
             _diag(
                 f"lock storm detected (streak={self.lock_streak}); "
-                f"requeued remaining {self.entries_total - (idx + 1)} entries"
+                f"deferred retry for remaining {self.entries_total - (idx + 1)} entries"
             )
             return True
         return False
@@ -1789,13 +1786,13 @@ class _DrainState:
     def reset_lock_streak(self) -> None:
         self.lock_streak = 0
 
-    def to_stats_model(self, drain_t0: float, requeue_ok: bool, requeue_failed: int):
+    def to_stats_model(self, drain_t0: float, retry_release_ok: bool, retry_release_failed: int):
         exit_models = _module("exit_models")
         return exit_models.ExitDrainStats(
             processed=self.processed,
             errors=self.errors,
-            requeued=len(self.requeue) if requeue_ok else 0,
-            requeue_failed=requeue_failed,
+            retry_released=len(self.retry_entries) if retry_release_ok else 0,
+            retry_release_failed=retry_release_failed,
             manual_reviewed=self.manual_reviewed,
             outbox_lock_failures=_exit_runtime_state().outbox_lock_failures_this_run,
             entries_total=self.entries_total,
@@ -1811,27 +1808,27 @@ class _DrainState:
         )
 
 
-def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
+def _retry_or_manual_review_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
     if _bump_attempts(entry) > _OUTBOX_RETRY_MAX:
-        state.dead_letter(entry, "exceeded retry budget")
+        state.manual_review(entry, "exceeded retry budget")
     else:
-        state.requeue.append(entry)
+        state.retry_entries.append(entry)
     return state.record_lock_event(idx)
 
 
 def _handle_lifecycle_stage_failure(entry: dict, idx: int, state: _DrainState, result) -> bool:
     """Keep a claimed plan retryable, or quarantine a structurally invalid one."""
     error = str(getattr(result, "err", "") or "lifecycle stage update failed")
-    _diag(f"lifecycle stage update failed for queue entry {entry.get('__queue_id')}: {error}")
+    _diag(f"lifecycle stage update failed for outbox entry {entry.get('__outbox_intent_id')}: {error}")
     if bool(getattr(result, "lock_busy", False)):
-        return _requeue_or_dead_letter_for_lock(entry, idx, state)
+        return _retry_or_manual_review_for_lock(entry, idx, state)
     if "claim ownership lost" in error.lower():
         # Another worker owns recovery now; requeueing would itself fail the
         # ownership check and could obscure the original race.
         state.errors += 1
         _diag(f"lifecycle stage update abandoned after claim loss: {error}")
         return True
-    state.dead_letter(entry, f"lifecycle stage update failed: {error}")
+    state.manual_review(entry, f"lifecycle stage update failed: {error}")
     return False
 
 
@@ -1863,17 +1860,17 @@ def _handle_lifecycle_postcondition_failure(entry: dict, idx: int, state: _Drain
     _diag(f"lifecycle postcondition verification deferred: {message}")
     entry["__outbox_retry_reason"] = message
     if _bump_attempts(entry) > _OUTBOX_RETRY_MAX:
-        state.dead_letter(entry, message)
+        state.manual_review(entry, message)
     else:
-        state.requeue.append(entry)
+        state.retry_entries.append(entry)
     return False
 
 
 def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
-    valid, reason = _validate_queue_entry(entry)
+    valid, reason = _validate_outbox_entry(entry)
     if not valid:
-        _diag(f"queue entry rejected before lifecycle execution: {reason}")
-        state.dead_letter(entry, reason)
+        _diag(f"outbox entry rejected before lifecycle execution: {reason}")
+        state.manual_review(entry, reason)
         state.reset_lock_streak()
         return True
     return False
@@ -1912,7 +1909,7 @@ def _exit_runtime_services():
     return exit_runtime.ExitRuntimeServices(
         state=_exit_runtime_state(),
         parent_nextlink_state=_parent_nextlink_state,
-        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
+        retry_or_manual_review_for_lock=_retry_or_manual_review_for_lock,
         export_uuid=_export_uuid,
         import_child=_import_child,
         diag=_diag,
@@ -1976,8 +1973,8 @@ def _lifecycle_operation_result(state, *, value=None, reason=""):
     return lifecycle_executor.OperationResult(state, value=value, reason=reason)
 
 
-def _execute_lifecycle_queue_entry(ctx, state):
-    """Execute a validated queue plan through the shared typed executor."""
+def _execute_lifecycle_outbox_entry(ctx, state):
+    """Execute a validated outbox plan through the shared typed executor."""
     lifecycle_models = _module("lifecycle_models")
     lifecycle_executor = _module("lifecycle_executor")
     exit_models = _module("exit_models")
@@ -1985,7 +1982,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
         plan = lifecycle_models.LifecyclePlan.from_dict(ctx.entry["lifecycle_plan"])
     except Exception as exc:
         _diag(f"lifecycle executor rejected plan: {exc}")
-        state.dead_letter(ctx.entry, f"invalid lifecycle plan: {exc}")
+        state.manual_review(ctx.entry, f"invalid lifecycle plan: {exc}")
         state.reset_lock_streak()
         return False
 
@@ -1995,7 +1992,7 @@ def _execute_lifecycle_queue_entry(ctx, state):
         batch_decision = batch_plan.by_intent().get(ctx.spawn_intent_id)
     if batch_decision is not None:
         if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING:
-            state.dead_letter(
+            state.manual_review(
                 ctx.entry,
                 f"lifecycle batch preflight conflict: {batch_decision.reason or 'state changed'}",
             )
@@ -2005,9 +2002,9 @@ def _execute_lifecycle_queue_entry(ctx, state):
             reason = batch_decision.reason or "lifecycle batch preflight unavailable"
             _diag(f"lifecycle batch preflight deferred: {reason}")
             if _bump_attempts(ctx.entry) > _OUTBOX_RETRY_MAX:
-                state.dead_letter(ctx.entry, reason)
+                state.manual_review(ctx.entry, reason)
             else:
-                state.requeue.append(ctx.entry)
+                state.retry_entries.append(ctx.entry)
             return False
         # A partial batch import may have created a child before Taskwarrior
         # returned failure. On retry, promote that durable plan before the
@@ -2033,9 +2030,9 @@ def _execute_lifecycle_queue_entry(ctx, state):
             reason = "lifecycle child batch import unavailable"
             _diag(f"lifecycle batch import deferred (intent={ctx.spawn_intent_id})")
             if _bump_attempts(ctx.entry) > _OUTBOX_RETRY_MAX:
-                state.dead_letter(ctx.entry, reason)
+                state.manual_review(ctx.entry, reason)
             else:
-                state.requeue.append(ctx.entry)
+                state.retry_entries.append(ctx.entry)
             return False
 
     def planned_decision():
@@ -2303,12 +2300,12 @@ def _execute_lifecycle_queue_entry(ctx, state):
         _diag(f"lifecycle transition retry: {retry_reason}")
         ctx.entry["__outbox_retry_reason"] = retry_reason
         if _bump_attempts(ctx.entry) > _OUTBOX_RETRY_MAX:
-            state.dead_letter(ctx.entry, retry_reason)
+            state.manual_review(ctx.entry, retry_reason)
         else:
-            state.requeue.append(ctx.entry)
+            state.retry_entries.append(ctx.entry)
         return False
     if outcome.kind is lifecycle_models.LifecycleOutcomeKind.MANUAL_REVIEW:
-        state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition requires manual review")
+        state.manual_review(ctx.entry, outcome.reason or "lifecycle transition requires manual review")
         state.reset_lock_streak()
         return False
     if getattr(state, "lifecycle_defer_verification", False):
@@ -2319,18 +2316,18 @@ def _execute_lifecycle_queue_entry(ctx, state):
         return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, final_stage)
     if not state.mark_final(ctx.entry, "done", "processed"):
         state.errors += 1
-        state.requeue.append(ctx.entry)
-        _diag("finalized intent write failed; retaining queue entry for retry")
+        state.retry_entries.append(ctx.entry)
+        _diag("finalized intent write failed; retaining outbox entry for retry")
         return False
     state.processed += 1
     state.reset_lock_streak()
     return False
 
 
-def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
+def _process_outbox_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     if _handle_entry_gate(entry, state):
         return False
-    queue_entry = entry
+    outbox_entry = entry
 
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
     parent_uuid = (entry.get("parent_uuid") or "").strip()
@@ -2340,7 +2337,7 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
     child_short = (entry.get("child_short") or "").strip()
     child_uuid = (child.get("uuid") or "").strip()
     ctx = _build_exit_entry_context(
-        queue_entry,
+        outbox_entry,
         idx,
         state,
         parent_uuid=parent_uuid,
@@ -2352,13 +2349,13 @@ def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
         spawn_intent_id=spawn_intent_id,
     )
 
-    if not isinstance(queue_entry.get("lifecycle_plan"), dict):
-        state.dead_letter(queue_entry, "outbox entry is missing a lifecycle plan")
+    if not isinstance(outbox_entry.get("lifecycle_plan"), dict):
+        state.manual_review(outbox_entry, "outbox entry is missing a lifecycle plan")
         return False
-    return _execute_lifecycle_queue_entry(ctx, state)
+    return _execute_lifecycle_outbox_entry(ctx, state)
 
 
-def _drain_queue_result(unit_of_work):
+def _drain_outbox_result(unit_of_work):
     _reset_exit_runtime_state()
     state = _exit_runtime_state()
     state.unit_of_work = unit_of_work
@@ -2371,17 +2368,17 @@ def _drain_queue_result(unit_of_work):
         retry_delay=_TASK_RETRY_DELAY,
     )
     exit_drain_flow = _module("exit_drain_flow")
-    result = exit_drain_flow.drain_queue_result(
+    result = exit_drain_flow.drain_outbox_result(
         services=exit_drain_flow.ExitDrainServices(
-            take_queue_batch=_take_queue_batch,
+            take_outbox_batch=_take_outbox_batch,
             exit_progress_scope=_exit_progress_scope,
             preload_export_uuids=_preload_export_uuids,
             preload_equivalent_child_slots=_preload_equivalent_child_slots,
             prepare_lifecycle_batch=_prepare_lifecycle_batch,
             apply_lifecycle_batch=_apply_lifecycle_batch,
             finalize_lifecycle_batch=_finalize_lifecycle_batch,
-            process_queue_entry=_process_queue_entry,
-            requeue_entries_result=_requeue_entries_result,
+            process_outbox_entry=_process_outbox_entry,
+            release_retry_entries_result=_release_retry_entries_result,
             drain_state_factory=_DrainState,
         )
     )
@@ -2395,8 +2392,8 @@ def _drain_queue_result(unit_of_work):
     return result
 
 
-def _drain_queue(unit_of_work) -> dict:
-    return _drain_queue_result(unit_of_work).to_dict()
+def _drain_outbox(unit_of_work) -> dict:
+    return _drain_outbox_result(unit_of_work).to_dict()
 
 
 def _redirect_stdout_to_devnull() -> None:
@@ -2415,8 +2412,8 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         ("idempotent_skipped", stats.get("entries_skipped_idempotent", 0)),
         ("processed", stats.get("processed", 0)),
         ("errors", stats.get("errors", 0)),
-        ("requeued", stats.get("requeued", 0)),
-        ("requeue_failed", stats.get("requeue_failed", 0)),
+        ("retry_released", stats.get("retry_released", 0)),
+        ("retry_release_failed", stats.get("retry_release_failed", 0)),
         ("manual_reviewed", stats.get("manual_reviewed", 0)),
         ("outbox_lock_failures", stats.get("outbox_lock_failures", 0)),
         ("lock_events", stats.get("lock_events", 0)),
@@ -2463,17 +2460,17 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
 
     errors = count("errors")
     manual_reviewed = count("manual_reviewed")
-    requeue_failed = count("requeue_failed")
-    if not (errors or manual_reviewed or requeue_failed):
+    retry_release_failed = count("retry_release_failed")
+    if not (errors or manual_reviewed or retry_release_failed):
         return
 
     problems = []
     if manual_reviewed:
         problems.append(f"{manual_reviewed} manual-review intents")
-    if requeue_failed:
-        suffix = "" if requeue_failed == 1 else "s"
-        problems.append(f"{requeue_failed} requeue write{suffix} failed")
-    other_errors = max(0, errors - manual_reviewed - requeue_failed)
+    if retry_release_failed:
+        suffix = "" if retry_release_failed == 1 else "s"
+        problems.append(f"{retry_release_failed} retry release{suffix} failed")
+    other_errors = max(0, errors - manual_reviewed - retry_release_failed)
     if other_errors:
         suffix = "" if other_errors == 1 else "s"
         problems.append(f"{other_errors} other drain error{suffix}")
@@ -2484,9 +2481,9 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
     ]
     if manual_reviewed:
         rows.append(("Review", "Run nautical queue-status"))
-    requeued = count("requeued")
-    if requeued:
-        rows.append(("Retrying", str(requeued)))
+    retry_released = count("retry_released")
+    if retry_released:
+        rows.append(("Retrying", str(retry_released)))
     outbox_lock_failures = count("outbox_lock_failures")
     if outbox_lock_failures:
         rows.append(("Lock events", str(outbox_lock_failures)))
@@ -2530,7 +2527,7 @@ def main() -> int:
         request,
         exit_result_cls=hook_results.ExitHookResponse,
         redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
-        drain_queue=_drain_queue,
+        drain_outbox=_drain_outbox,
         strict_exit_result=_strict_exit_feedback_message,
     )
     stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()

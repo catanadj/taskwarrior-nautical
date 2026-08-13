@@ -476,6 +476,7 @@ class LifecycleOutboxRepository:
         try:
             conn = self._connect()
             self._initialize(conn)
+            self._secure_state_files()
             with _transaction(conn):
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
@@ -650,6 +651,7 @@ class LifecycleOutboxRepository:
         try:
             conn = self._connect()
             self._initialize(conn)
+            self._secure_state_files()
             states = {
                 str(row[0]): int(row[1])
                 for row in conn.execute(

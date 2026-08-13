@@ -6,9 +6,8 @@ from typing import Any, Callable, Protocol
 
 from nautical_core.exit_models import (
     ExitDrainStateProtocol,
-    ExitQueueBatch,
-    ExitQueueWriteResult,
-    ExitRequeueResult,
+    ExitOutboxBatch,
+    ExitRetryReleaseResult,
     ExitDrainStats,
     LifecycleBatchPlan,
 )
@@ -16,13 +15,13 @@ from nautical_core.exit_models import (
 
 Entry = dict[str, Any]
 
-TakeQueueBatch = Callable[[], ExitQueueBatch]
+TakeOutboxBatch = Callable[[], ExitOutboxBatch]
 PreloadEntries = Callable[[list[Entry]], None]
 PrepareLifecycleBatch = Callable[[list[Entry]], LifecycleBatchPlan | None]
 ApplyLifecycleBatch = Callable[[LifecycleBatchPlan], None]
 FinalizeBatch = Callable[[ExitDrainStateProtocol], None]
-ProcessQueueEntry = Callable[[int, Entry, ExitDrainStateProtocol], bool]
-RequeueEntries = Callable[[list[Entry]], ExitRequeueResult]
+ProcessOutboxEntry = Callable[[int, Entry, ExitDrainStateProtocol], bool]
+ReleaseRetryEntries = Callable[[list[Entry]], ExitRetryReleaseResult]
 Diagnostic = Callable[[str], None]
 
 
@@ -51,23 +50,23 @@ class ExitDrainStateFactory(Protocol):
 
 @dataclass(slots=True)
 class ExitDrainServices:
-    take_queue_batch: TakeQueueBatch
+    take_outbox_batch: TakeOutboxBatch
     exit_progress_scope: ExitProgressScope
     preload_export_uuids: PreloadEntries
     preload_equivalent_child_slots: PreloadEntries
     prepare_lifecycle_batch: PrepareLifecycleBatch | None
     apply_lifecycle_batch: ApplyLifecycleBatch | None
     finalize_lifecycle_batch: FinalizeBatch | None
-    process_queue_entry: ProcessQueueEntry
-    requeue_entries_result: RequeueEntries
+    process_outbox_entry: ProcessOutboxEntry
+    release_retry_entries_result: ReleaseRetryEntries
     drain_state_factory: ExitDrainStateFactory
 
 
-def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
+def drain_outbox_result(*, services: ExitDrainServices) -> ExitDrainStats:
     import time
 
     drain_t0 = time.perf_counter()
-    batch = services.take_queue_batch()
+    batch = services.take_outbox_batch()
     entries = batch.entries
     state = services.drain_state_factory(entries=entries, entries_total=batch.entries_total)
     lifecycle_count = len(entries)
@@ -89,7 +88,7 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
             progress_update(phase="drain", state=state)
 
         for idx, entry in enumerate(entries):
-            should_break = services.process_queue_entry(idx, entry, state)
+            should_break = services.process_outbox_entry(idx, entry, state)
             if progress_update is not None:
                 progress_update(advance=1, phase="drain", state=state)
             if should_break:
@@ -101,18 +100,18 @@ def drain_queue_result(*, services: ExitDrainServices) -> ExitDrainStats:
         if progress_update is not None:
             progress_update(phase="finalize", state=state)
 
-        requeue_result = (
-            services.requeue_entries_result(state.requeue)
-            if state.requeue
-            else ExitRequeueResult(ok=True, failed=0)
+        retry_release_result = (
+            services.release_retry_entries_result(state.retry_entries)
+            if state.retry_entries
+            else ExitRetryReleaseResult(ok=True, failed=0)
         )
-    if not requeue_result.ok:
-        state.errors += requeue_result.failed
+    if not retry_release_result.ok:
+        state.errors += retry_release_result.failed
 
-    return state.to_stats_model(drain_t0, requeue_result.ok, requeue_result.failed)
+    return state.to_stats_model(drain_t0, retry_release_result.ok, retry_release_result.failed)
 
 
 __all__ = (
     "ExitDrainServices",
-    "drain_queue_result",
+    "drain_outbox_result",
 )

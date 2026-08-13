@@ -1522,6 +1522,176 @@ def test_task_read_snapshot_retains_ambiguous_indexes():
     expect(len(snapshot.slot_rows("chain-a", 2)) == 2, "duplicate exact slot was collapsed")
 
 
+def test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly():
+    """Compatible reads reuse broad authority while excluded history stays narrow."""
+    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
+
+    class ScriptedClient:
+        def __init__(self, outputs):
+            self.outputs = list(outputs)
+            self.calls = []
+
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            self.calls.append((tuple(args), purpose))
+            stdout = self.outputs.pop(0)
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(command, 0, stdout, "", CommandFailureKind.SUCCESS, 1, 0.001)
+
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        broad_rows = [
+            {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "chainID": "chain-a", "link": 1, "chain": "on", "status": "pending"},
+            {"uuid": "bbbbbbbb-0000-0000-0000-000000000002", "chainID": "chain-a", "link": 2, "chain": "on", "status": "completed"},
+        ]
+        predecessor = {
+            "uuid": "cccccccc-0000-0000-0000-000000000003",
+            "chainID": "chain-a",
+            "link": 0,
+            "status": "deleted",
+        }
+        client = ScriptedClient((json.dumps(broad_rows), json.dumps([predecessor]), json.dumps([broad_rows[0]])))
+        uow.client = client
+        repository = uow.repository
+
+        broad = repository.broad_snapshot(
+            identity="lifecycle",
+            filters=("chain:on",),
+            statuses=("pending", "completed"),
+        )
+        expect(isinstance(broad, Found), f"broad read failed: {broad}")
+        uuid_read = repository.by_uuid("aaaaaaaa", statuses=("pending",))
+        child_read = repository.exact_child_slot("chain-a", 2, statuses=("completed",))
+        expect(isinstance(uuid_read, Found) and isinstance(child_read, Found), "broad indexes were not reused")
+        expect(len(client.calls) == 1, f"compatible reads repeated the broad export: {client.calls!r}")
+
+        first_predecessor = repository.predecessor_slot("chain-a", 0)
+        second_predecessor = repository.predecessor_slot("chain-a", 0)
+        expect(isinstance(first_predecessor, Found) and isinstance(second_predecessor, Found), "narrow predecessor failed")
+        expect(len(client.calls) == 2, f"narrow predecessor was not cached: {client.calls!r}")
+
+        verified = repository.verification(broad_rows[0]["uuid"], statuses=("pending",))
+        expect(isinstance(verified, Found), f"verification refresh failed: {verified}")
+        expect(len(client.calls) == 3, "explicit verification refresh did not issue a fresh read")
+
+
+def test_task_read_repository_fails_closed_on_untrusted_output():
+    """Malformed, mismatched, duplicate, and failed reads never prove absence."""
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+
+    class ScriptedClient:
+        def __init__(self, outputs):
+            self.outputs = list(outputs)
+            self.calls = 0
+
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            self.calls += 1
+            kind, stdout, stderr = self.outputs.pop(0)
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(command, 0 if kind is CommandFailureKind.SUCCESS else 1, stdout, stderr, kind, 1, 0.001)
+
+    duplicate = [
+        {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "status": "pending"},
+        {"uuid": "aaaaaaaa-1111-0000-0000-000000000002", "status": "pending"},
+    ]
+    mismatched = [{"uuid": "bbbbbbbb-0000-0000-0000-000000000003", "status": "pending"}]
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        client = ScriptedClient(
+            (
+                (CommandFailureKind.SUCCESS, '{"uuid":', ""),
+                (CommandFailureKind.SUCCESS, json.dumps(mismatched), ""),
+                (CommandFailureKind.SUCCESS, json.dumps(duplicate), ""),
+                (CommandFailureKind.BUSY, "", "database is locked"),
+                (CommandFailureKind.SUCCESS, "", ""),
+            )
+        )
+        uow.client = client
+        repository = uow.repository
+
+        malformed = repository.by_uuid("11111111", statuses=("pending",))
+        mismatched_read = repository.by_uuid("22222222", statuses=("pending",))
+        duplicate_read = repository.by_uuid("aaaaaaaa", statuses=("pending",))
+        busy = repository.by_uuid("33333333", statuses=("pending",))
+        absent = repository.by_uuid("44444444", statuses=("pending",))
+        expect(isinstance(malformed, Unavailable), f"malformed JSON became authoritative: {malformed}")
+        expect(isinstance(mismatched_read, Unavailable), f"mismatched UUID became absent: {mismatched_read}")
+        expect(isinstance(duplicate_read, Unavailable), f"duplicate UUID became found: {duplicate_read}")
+        expect(isinstance(busy, Unavailable) and busy.retryable, f"busy read classification changed: {busy}")
+        expect(isinstance(absent, Absent), f"contractual empty UUID export was not absent: {absent}")
+
+
+def test_task_read_repository_mutation_epoch_prevents_stale_reuse():
+    """A mutation invalidates both exact and broad repository authority."""
+    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            self.calls += 1
+            row = {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "status": "pending", "modified": str(self.calls)}
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(command, 0, json.dumps([row]), "", CommandFailureKind.SUCCESS, 1, 0.001)
+
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        client = Client()
+        uow.client = client
+        first = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
+        repeated = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
+        expect(isinstance(first, Found) and isinstance(repeated, Found), "initial UUID read failed")
+        expect(client.calls == 1, "repeated read did not reuse authoritative data")
+        uow.record_mutation()
+        fresh = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
+        expect(isinstance(fresh, Found) and fresh.value["modified"] == "2", "post-mutation read stayed stale")
+        expect(client.calls == 2, "post-mutation read did not refresh")
+
+
+def test_task_read_repository_exposes_all_domain_reads():
+    """Chain, root, and lifecycle reads share the same typed repository contract."""
+    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
+
+    class Client:
+        def __init__(self, payloads):
+            self.payloads = list(payloads)
+
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(
+                command,
+                0,
+                json.dumps(self.payloads.pop(0)),
+                "",
+                CommandFailureKind.SUCCESS,
+                1,
+                0.001,
+            )
+
+    chain_rows = [
+        {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "chainID": "chain-a", "link": 1, "chain": "on", "status": "pending"},
+        {"uuid": "bbbbbbbb-0000-0000-0000-000000000002", "chainID": "chain-a", "link": 2, "chain": "on", "status": "completed"},
+    ]
+    roots = [chain_rows[0]]
+    candidates = [chain_rows[1]]
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        uow.client = Client((chain_rows, roots, candidates))
+        repository = uow.repository
+        chain = repository.chain_snapshot("chain-a", statuses=("pending", "completed"))
+        active = repository.active_recurrence_roots()
+        lifecycle = repository.lifecycle_candidates(statuses=("completed",))
+        expect(isinstance(chain, Found) and len(chain.value) == 2, f"chain snapshot failed: {chain}")
+        expect(isinstance(active, Found) and active.value[0]["link"] == 1, f"active-root read failed: {active}")
+        expect(isinstance(lifecycle, Found) and lifecycle.value[0]["link"] == 2, f"candidate read failed: {lifecycle}")
+
+
 def test_integration_mutation_models_enforce_guards_and_postconditions():
     """Mutation outcomes require complete guards and operation-specific proof."""
     from nautical_core.integration_models import (
@@ -35781,6 +35951,10 @@ TESTS = [
     test_taskwarrior_uow_observes_budget_without_blocking_commands,
     test_task_read_snapshot_preserves_scope_and_builds_indexes,
     test_task_read_snapshot_retains_ambiguous_indexes,
+    test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly,
+    test_task_read_repository_fails_closed_on_untrusted_output,
+    test_task_read_repository_mutation_epoch_prevents_stale_reuse,
+    test_task_read_repository_exposes_all_domain_reads,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,

@@ -7,7 +7,7 @@ from enum import Enum
 import os
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from .integration_context import (
     DiagnosticEvent,
@@ -18,6 +18,9 @@ from .integration_context import (
 )
 from .integration_models import CommandFailureKind
 from .taskwarrior_client import CommandObservation, TaskwarriorClient
+
+if TYPE_CHECKING:
+    from .task_read_repository import TaskReadRepository
 
 
 class QueryScopeKind(str, Enum):
@@ -199,7 +202,13 @@ class TaskwarriorUnitOfWork:
     outbox: OutboxBinding
     commands: CommandLedger
     diagnostics: InvocationDiagnostics
+    repository: "TaskReadRepository" = field(init=False)
     mutation_epoch: int = 0
+
+    def __post_init__(self) -> None:
+        from .task_read_repository import TaskReadRepository
+
+        self.repository = TaskReadRepository(self)
 
     @classmethod
     def create(

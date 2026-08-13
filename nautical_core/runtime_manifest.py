@@ -9,6 +9,7 @@ _INTEGRATION_FILES = (
     "integration_models.py",
     "task_read_repository.py",
     "taskwarrior_client.py",
+    "taskwarrior_mutations.py",
     "taskwarrior_uow.py",
 )
 

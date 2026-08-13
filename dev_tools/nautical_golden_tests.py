@@ -1948,6 +1948,138 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         raise AssertionError("untyped or mismatched mutation request was accepted")
 
 
+def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
+    """Named mutations re-read, verify, classify replay, and preserve failures."""
+    from nautical_core.integration_models import (
+        Absent,
+        ChainDisablePayload,
+        ChildImportPayload,
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        GuardTimestamp,
+        GuardTimestampField,
+        MutationGuard,
+        MutationOperation,
+        MutationOutcomeKind,
+        MutationRequest,
+        ParentLinkPayload,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+
+    parent_uuid = "00000000-0000-0000-0000-000000000924"
+    child_uuid = "00000000-0000-0000-0000-000000000925"
+    parent = {
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "chain-service",
+        "link": 7,
+        "modified": "20260813T100000Z",
+        "anchor": "w:mon",
+        "cp": "1d",
+    }
+
+    class Repo:
+        def __init__(self):
+            self.rows = {parent_uuid: parent}
+            self.unavailable = False
+
+        def by_uuid(self, uuid_value, *, refresh=False):
+            del refresh
+            command = TaskCommand(("task", "export"), "test read", 1.0)
+            if self.unavailable:
+                evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active")
+                return Unavailable(f"uuid:{uuid_value}", evidence)
+            row = self.rows.get(str(uuid_value).lower())
+            if row is None:
+                return Absent(f"uuid:{uuid_value}", "not present")
+            return Found(row, f"uuid:{uuid_value}")
+
+    class Client:
+        def __init__(self, repo):
+            self.repo = repo
+            self.calls = []
+
+        def execute(self, args, *, purpose, timeout, input_text=None, attempts=1):
+            del attempts
+            args = list(args)
+            self.calls.append((args, purpose))
+            command = TaskCommand(("task", *args), purpose, timeout, input_text)
+            if args[0:3] == ["rc.hooks=off", "rc.verbose=nothing", "import"]:
+                row = json.loads(input_text or "{}")
+                self.repo.rows[str(row["uuid"]).lower()] = row
+            else:
+                update_at = args.index("modify") + 1
+                target = self.repo.rows[parent_uuid]
+                for token in args[update_at:]:
+                    key, value = token.split(":", 1)
+                    target[key] = value
+            return TaskCommandResult(command, 0, "", "", CommandFailureKind.SUCCESS, 1, 0.01)
+
+    class Uow:
+        def __init__(self):
+            self.repository = Repo()
+            self.client = Client(self.repository)
+            self.mutation_epoch = 0
+
+        def record_mutation(self, *, uncertain=False):
+            del uncertain
+            self.mutation_epoch += 1
+            return self.mutation_epoch
+
+    uow = Uow()
+
+    def request(operation, payload, epoch):
+        return MutationRequest(
+            operation,
+            MutationGuard(
+                parent_uuid,
+                "completed",
+                "chain-service",
+                7,
+                recurrence_fingerprint(parent),
+                (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+                epoch,
+            ),
+            payload,
+        )
+
+    service = TaskwarriorMutationService(uow)
+    child = ChildImportPayload.from_mapping(
+        {
+            "uuid": child_uuid,
+            "chainID": "chain-service",
+            "link": 8,
+            "prevLink": parent_uuid[:8],
+            "description": "service child",
+        },
+        parent_uuid=parent_uuid,
+    )
+    imported = service.apply(request(MutationOperation.CHILD_IMPORT, child, 0))
+    expect(imported.kind is MutationOutcomeKind.APPLIED, f"child import was not applied: {imported}")
+    linked = service.apply(
+        request(
+            MutationOperation.PARENT_LINK,
+            ParentLinkPayload(parent_uuid, child_uuid[:8]),
+            1,
+        )
+    )
+    expect(linked.kind is MutationOutcomeKind.APPLIED, f"parent link was not applied: {linked}")
+    disabled = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 2))
+    expect(disabled.kind is MutationOutcomeKind.APPLIED, f"chain disablement was not applied: {disabled}")
+    replay = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 3))
+    expect(replay.kind is MutationOutcomeKind.ALREADY_APPLIED, f"chain replay was not idempotent: {replay}")
+    uow.repository.unavailable = True
+    unavailable = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 3))
+    expect(unavailable.kind is MutationOutcomeKind.RETRYABLE, f"unavailable guard was not retryable: {unavailable}")
+    expect(len(uow.client.calls) == 3, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
+
+
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
     """Outbox work is deterministic and cannot finalize without verified mutations."""
     from nautical_core.integration_models import (
@@ -35525,6 +35657,7 @@ TESTS = [
     test_task_read_repository_exposes_all_domain_reads,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_mutation_requests_use_named_typed_payloads,
+    test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,

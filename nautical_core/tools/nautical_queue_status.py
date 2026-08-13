@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""Detailed read-only Nautical queue/state inspector."""
+"""Read-only lifecycle outbox inspector used by Nautical operators and doctor."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+from pathlib import Path
 import sqlite3
 import sys
 import time
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -19,360 +18,173 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import queue_store  # noqa: E402
+from nautical_core.lifecycle_outbox import OUTBOX_SCHEMA_VERSION, lifecycle_outbox_path  # noqa: E402
 
-_JSON_SCHEMA = "nautical.queue_status"
+
+_JSON_SCHEMA = "nautical.lifecycle_outbox_status"
 _JSON_SCHEMA_VERSION = 1
-
-
-def _prefer_path(primary: Path, legacy: Path) -> Path:
-    try:
-        if primary.exists():
-            return primary
-    except Exception:
-        pass
-    try:
-        if legacy.exists():
-            return legacy
-    except Exception:
-        pass
-    return primary
 
 
 def _safe_stat(path: Path) -> dict[str, object]:
     try:
-        exists = path.exists()
-    except Exception:
-        return {"path": str(path), "exists": False, "bytes": -1, "mtime": 0.0, "error": "unreadable"}
-    if not exists:
-        return {"path": str(path), "exists": False, "bytes": 0, "mtime": 0.0}
-    try:
-        st = path.stat()
-        return {"path": str(path), "exists": True, "bytes": int(st.st_size), "mtime": float(st.st_mtime)}
-    except Exception:
-            return {"path": str(path), "exists": True, "bytes": -1, "mtime": 0.0, "error": "unreadable"}
-
-
-def _safe_int(value: Any) -> int:
-    try:
-        return int(value)
-    except Exception:
-        return 0
-
-
-def _safe_line_count(path: Path) -> int:
-    try:
         if not path.exists():
-            return 0
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return sum(1 for line in f if line.strip())
-    except Exception:
-        return -1
+            return {"path": str(path), "exists": False, "bytes": 0, "mtime": 0.0}
+        stat = path.stat()
+        return {"path": str(path), "exists": True, "bytes": int(stat.st_size), "mtime": float(stat.st_mtime)}
+    except OSError as exc:
+        return {"path": str(path), "exists": False, "bytes": -1, "mtime": 0.0, "error": str(exc)}
 
 
-def _safe_json_count(path: Path, field: str) -> int:
-    try:
-        if not path.exists():
-            return 0
-        data = json.loads(path.read_text(encoding="utf-8") or "{}")
-        return int(data.get(field) or 0)
-    except Exception:
-        return -1
-
-
-def _safe_glob_count(path: Path, pattern: str) -> int:
-    try:
-        if not path.exists():
-            return 0
-        return sum(1 for _ in path.glob(pattern))
-    except Exception:
-        return -1
-
-
-def _safe_sqlite_summary(path: Path, stale_after: float, limit: int) -> tuple[dict[str, object], list[str]]:
-    summary: dict[str, object] = {
+def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], list[str]]:
+    summary: dict[str, Any] = {
         "exists": False,
-        "queued": 0,
-        "processing": 0,
-        "quarantined": 0,
-        "stale_processing": 0,
-        "max_attempts": 0,
-        "oldest_claimed_age_s": 0,
-        "sample": [],
-        "schema": {
-            "status": "absent",
-            "version": 0,
-            "expected_version": queue_store.QUEUE_DB_SCHEMA_VERSION,
-            "compatible": True,
-            "table_present": False,
-            "error": "",
-        },
+        "schema": {"status": "absent", "version": 0, "expected_version": OUTBOX_SCHEMA_VERSION},
         "integrity": "not_checked",
+        "states": {},
+        "stale_claims": 0,
+        "max_attempts": 0,
+        "sample": [],
     }
     issues: list[str] = []
-    try:
-        if not path.exists():
-            return summary, issues
-    except Exception:
-        summary["error"] = "unreadable"
-        issues.append("queue db unreadable")
+    if not path.exists():
         return summary, issues
-
     summary["exists"] = True
-    conn = None
+    conn: sqlite3.Connection | None = None
     now = time.time()
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.5)
+        conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=0.5)
         integrity_row = conn.execute("PRAGMA quick_check").fetchone()
         integrity = str(integrity_row[0] if integrity_row else "unknown")
         summary["integrity"] = integrity
         if integrity.lower() != "ok":
-            issues.append(f"queue db integrity check failed: {integrity}")
-
-        schema = queue_store.queue_schema_status(conn)
-        summary["schema"] = schema
-        schema_status = str(schema.get("status") or "error")
-        if schema_status == "error":
-            issues.append(f"queue db schema error: {schema.get('error') or 'incompatible schema'}")
-            return summary, issues
-        if schema_status == "legacy":
+            issues.append(f"lifecycle outbox integrity check failed: {integrity}")
+        version_row = conn.execute("PRAGMA user_version").fetchone()
+        version = int(version_row[0] if version_row else 0)
+        schema = summary["schema"]
+        schema["version"] = version
+        if version != OUTBOX_SCHEMA_VERSION:
+            schema["status"] = "error"
             issues.append(
-                f"queue db schema migration pending: v0 to v{queue_store.QUEUE_DB_SCHEMA_VERSION}"
+                f"lifecycle outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
             )
-            if not schema.get("table_present"):
-                return summary, issues
-
-        row = conn.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END), 0) AS queued_rows,
-                COALESCE(SUM(CASE WHEN state='processing' THEN 1 ELSE 0 END), 0) AS processing_rows,
-                COALESCE(SUM(CASE WHEN state='quarantined' THEN 1 ELSE 0 END), 0) AS quarantined_rows,
-                COALESCE(SUM(CASE WHEN state='processing' AND claimed_at IS NOT NULL AND claimed_at < ? THEN 1 ELSE 0 END), 0) AS stale_processing_rows,
-                COALESCE(MAX(attempts), 0) AS max_attempts,
-                MIN(CASE WHEN state='processing' AND claimed_at IS NOT NULL THEN claimed_at END) AS min_claimed_at
-            FROM queue_entries
-            """,
-            (now - stale_after,),
-        ).fetchone()
-        if row:
-            queued = int(row[0] or 0)
-            processing = int(row[1] or 0)
-            quarantined = int(row[2] or 0)
-            stale_processing = int(row[3] or 0)
-            max_attempts = int(row[4] or 0)
-            min_claimed_at = float(row[5] or 0.0)
-            summary.update(
-                {
-                    "queued": queued,
-                    "processing": processing,
-                    "quarantined": quarantined,
-                    "stale_processing": stale_processing,
-                    "max_attempts": max_attempts,
-                    "oldest_claimed_age_s": max(0, int(now - min_claimed_at)) if min_claimed_at > 0 else 0,
-                }
-            )
-            if queued > 0:
-                issues.append(f"{queued} queued sqlite entries")
-            if processing > 0:
-                issues.append(f"{processing} processing sqlite entries")
-            if quarantined > 0:
-                issues.append(f"{quarantined} quarantined malformed sqlite entries")
-            if stale_processing > 0:
-                issues.append(f"{stale_processing} stale sqlite processing entries")
-
-        sample = []
-        for r in conn.execute(
-            """
-            SELECT id, spawn_intent_id, state, attempts, claimed_at, payload
-            FROM queue_entries
-            ORDER BY attempts DESC, updated_at ASC, id ASC
-            LIMIT ?
-            """,
+            return summary, issues
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
+        required = {"intent_id", "processing_state", "lifecycle_stage", "attempts", "lease_expires_at", "failure_json"}
+        missing = sorted(required - columns)
+        if missing:
+            schema["status"] = "error"
+            issues.append(f"lifecycle outbox schema missing {', '.join(missing)}")
+            return summary, issues
+        schema["status"] = "ok"
+        states = {
+            str(row[0]): int(row[1])
+            for row in conn.execute("SELECT processing_state, COUNT(*) FROM lifecycle_outbox GROUP BY processing_state")
+        }
+        summary["states"] = states
+        stale = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE processing_state='claimed' AND lease_expires_at <= ?",
+                (now - max(0.0, stale_after),),
+            ).fetchone()[0]
+            or 0
+        )
+        summary["stale_claims"] = stale
+        summary["max_attempts"] = int(
+            conn.execute("SELECT COALESCE(MAX(attempts), 0) FROM lifecycle_outbox").fetchone()[0] or 0
+        )
+        if stale:
+            issues.append(f"{stale} stale lifecycle outbox claim{'s' if stale != 1 else ''}")
+        for state in ("retry", "manual_review", "quarantined"):
+            count = int(states.get(state, 0))
+            if count:
+                issues.append(f"{count} lifecycle intent{'s' if count != 1 else ''} in {state}")
+        for row in conn.execute(
+            "SELECT intent_id, processing_state, lifecycle_stage, attempts, lease_expires_at, failure_json "
+            "FROM lifecycle_outbox ORDER BY updated_at ASC, intent_id ASC LIMIT ?",
             (max(0, int(limit)),),
         ):
-            claimed_at = float(r[4] or 0.0)
-            item = {
-                "id": int(r[0]),
-                "spawn_intent_id": str(r[1] or ""),
-                "state": str(r[2] or ""),
-                "attempts": int(r[3] or 0),
-                "claimed_age_s": max(0, int(now - claimed_at)) if claimed_at > 0 else 0,
+            item: dict[str, Any] = {
+                "intent_id": str(row[0]),
+                "state": str(row[1]),
+                "stage": str(row[2]),
+                "attempts": int(row[3] or 0),
+                "lease_age_s": max(0, int(now - float(row[4] or 0))) if row[4] else 0,
             }
-            if item["state"] == "quarantined":
+            if row[5]:
                 try:
-                    poison = json.loads(str(r[5] or ""))
-                except Exception:
-                    poison = {}
-                if isinstance(poison, dict) and poison.get("reason"):
-                    item["reason"] = str(poison["reason"])
-            sample.append(item)
-        summary["sample"] = sample
+                    failure = json.loads(str(row[5]))
+                    if isinstance(failure, dict):
+                        item["reason"] = str(failure.get("message") or "")
+                        item["failure_code"] = str(failure.get("code") or "")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    item["reason"] = "invalid failure evidence"
+            summary["sample"].append(item)
         return summary, issues
-    except sqlite3.OperationalError as e:
-        if "no such table" in str(e).lower():
-            return summary, issues
-        summary["error"] = str(e)
-        issues.append(f"queue db error: {e}")
-        return summary, issues
-    except Exception as e:
-        summary["error"] = str(e)
-        issues.append(f"queue db error: {e}")
+    except (OSError, sqlite3.Error) as exc:
+        summary["error"] = str(exc)
+        summary["schema"]["status"] = "error"
+        issues.append(f"lifecycle outbox error: {exc}")
         return summary, issues
     finally:
-        try:
-            if conn is not None:
-                conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            conn.close()
 
 
-def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[str, object]:
-    state_dir = taskdata / ".nautical-state"
-    lock_dir = taskdata / ".nautical-locks"
-
-    queue_jsonl = _prefer_path(state_dir / ".nautical_spawn_queue.jsonl", taskdata / ".nautical_spawn_queue.jsonl")
-    processing_jsonl = _prefer_path(
-        state_dir / ".nautical_spawn_queue.processing.jsonl",
-        taskdata / ".nautical_spawn_queue.processing.jsonl",
-    )
-    queue_db = _prefer_path(state_dir / ".nautical_queue.db", taskdata / ".nautical_queue.db")
-    queue_db_wal = state_dir / ".nautical_queue.db-wal" if queue_db.parent == state_dir else taskdata / ".nautical_queue.db-wal"
-    queue_db_shm = state_dir / ".nautical_queue.db-shm" if queue_db.parent == state_dir else taskdata / ".nautical_queue.db-shm"
-    dead_letter = _prefer_path(state_dir / ".nautical_dead_letter.jsonl", taskdata / ".nautical_dead_letter.jsonl")
-    quarantine = _prefer_path(state_dir / ".nautical_spawn_queue.bad.jsonl", taskdata / ".nautical_spawn_queue.bad.jsonl")
-    intent_log = _prefer_path(state_dir / ".nautical_spawn_intents.jsonl", taskdata / ".nautical_spawn_intents.jsonl")
-    queue_lock_fail_count = _prefer_path(
-        lock_dir / ".nautical_spawn_queue.lock_failed.count",
-        taskdata / ".nautical_spawn_queue.lock_failed.count",
-    )
-    queue_lock_fail_marker = _prefer_path(
-        lock_dir / ".nautical_spawn_queue.lock_failed",
-        taskdata / ".nautical_spawn_queue.lock_failed",
-    )
-
-    files = {
-        "queue_jsonl": {**_safe_stat(queue_jsonl), "lines": _safe_line_count(queue_jsonl)},
-        "processing_jsonl": {**_safe_stat(processing_jsonl), "lines": _safe_line_count(processing_jsonl)},
-        "queue_db": {
-            **_safe_stat(queue_db),
-            "wal_bytes": _safe_int(_safe_stat(queue_db_wal).get("bytes")),
-            "shm_bytes": _safe_int(_safe_stat(queue_db_shm).get("bytes")),
-        },
-        "dead_letter": {**_safe_stat(dead_letter), "lines": _safe_line_count(dead_letter)},
-        "quarantine": {**_safe_stat(quarantine), "lines": _safe_line_count(quarantine)},
-        "intent_log": {**_safe_stat(intent_log), "lines": _safe_line_count(intent_log)},
-    }
-
-    queue, issues = _safe_sqlite_summary(queue_db, stale_after, limit)
-    locks = {
-        "queue_lock_failure_count": _safe_json_count(queue_lock_fail_count, "count"),
-        "queue_lock_failure_marker": bool(_safe_stat(queue_lock_fail_marker).get("exists")),
-        "all_lock_files": _safe_glob_count(lock_dir, "*.lock"),
-        "parent_nextlink_lock_files": _safe_glob_count(lock_dir, ".nautical_parent_nextlink.*.lock"),
-    }
-
-    if _safe_int(files["dead_letter"]["lines"]) > 0:
-        issues.append(f"{files['dead_letter']['lines']} dead-letter lines")
-    if _safe_int(files["quarantine"]["lines"]) > 0:
-        issues.append(f"{files['quarantine']['lines']} quarantine lines")
-    if int(locks["queue_lock_failure_count"]) > 0:
-        issues.append(f"{locks['queue_lock_failure_count']} recorded queue lock failures")
-    if locks["queue_lock_failure_marker"]:
-        issues.append("queue lock failure marker present")
-
-    schema = queue.get("schema") if isinstance(queue.get("schema"), dict) else {}
-    schema_error = schema.get("status") == "error"
-    integrity_error = str(queue.get("integrity") or "").lower() not in {"ok", "not_checked"}
-    status = "error" if schema_error or integrity_error else ("warn" if issues else "ok")
+def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[str, Any]:
+    taskdata = Path(taskdata).expanduser().resolve()
+    outbox_path = lifecycle_outbox_path(taskdata)
+    outbox, issues = _outbox_summary(outbox_path, stale_after=stale_after, limit=limit)
+    status = "error" if outbox["schema"].get("status") == "error" or outbox["integrity"] not in {"ok", "not_checked"} else ("warn" if issues else "ok")
     return {
         "schema": _JSON_SCHEMA,
         "schema_version": _JSON_SCHEMA_VERSION,
         "status": status,
         "taskdata": str(taskdata),
-        "paths": {
-            "state_dir": str(state_dir),
-            "lock_dir": str(lock_dir),
-        },
-        "queue": queue,
-        "files": files,
-        "locks": locks,
+        "paths": {"state_dir": str(outbox_path.parent), "outbox_db": str(outbox_path)},
+        "outbox": outbox,
         "issues": issues,
     }
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Detailed Nautical queue/state inspector")
-    ap.add_argument("--taskdata", default=os.environ.get("TASKDATA", "~/.task"), help="Taskwarrior data dir")
-    ap.add_argument("--json", action="store_true", help="emit JSON only")
-    ap.add_argument("--limit", type=int, default=5, help="number of sample sqlite rows to include")
-    ap.add_argument(
-        "--stale-after-seconds",
-        type=float,
-        default=float(os.environ.get("NAUTICAL_QUEUE_PROCESSING_STALE_AFTER") or 300.0),
-        help="processing claim age considered stale",
+    parser = argparse.ArgumentParser(description="Read-only Nautical lifecycle outbox inspector")
+    parser.add_argument("--taskdata", default=os.environ.get("TASKDATA", "~/.task"))
+    parser.add_argument("--json", action="store_true", help="emit JSON only")
+    parser.add_argument("--limit", type=int, default=5, help="number of sample intents")
+    parser.add_argument("--stale-after-seconds", type=float, default=300.0)
+    args = parser.parse_args()
+    payload = _status_payload(
+        Path(args.taskdata),
+        stale_after=max(0.0, float(args.stale_after_seconds)),
+        limit=max(0, int(args.limit)),
     )
-    args = ap.parse_args()
-
-    td = Path(args.taskdata).expanduser().resolve()
-    payload = _status_payload(td, stale_after=max(0.0, float(args.stale_after_seconds)), limit=max(0, int(args.limit)))
-
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     else:
+        outbox = payload["outbox"]
         print(f"status={payload['status']} taskdata={payload['taskdata']}")
-        queue = cast(dict[str, Any], payload["queue"])
         print(
-            "queue:"
-            f" queued={queue.get('queued', 0)}"
-            f" processing={queue.get('processing', 0)}"
-            f" quarantined={queue.get('quarantined', 0)}"
-            f" stale_processing={queue.get('stale_processing', 0)}"
-            f" max_attempts={queue.get('max_attempts', 0)}"
+            "outbox:"
+            f" states={outbox.get('states', {})}"
+            f" stale_claims={outbox.get('stale_claims', 0)}"
+            f" max_attempts={outbox.get('max_attempts', 0)}"
         )
-        schema = cast(dict[str, Any], queue.get("schema") or {})
+        schema = outbox["schema"]
         print(
             "schema:"
-            f" status={schema.get('status', 'unknown')}"
-            f" version={schema.get('version', '?')}"
-            f" expected={schema.get('expected_version', '?')}"
-            f" integrity={queue.get('integrity', 'unknown')}"
+            f" status={schema.get('status')} version={schema.get('version')}"
+            f" expected={schema.get('expected_version')} integrity={outbox.get('integrity')}"
         )
-        files = cast(dict[str, dict[str, Any]], payload["files"])
-        print(
-            "files:"
-            f" dead_letter_lines={files['dead_letter'].get('lines', 0)}"
-            f" quarantine_lines={files['quarantine'].get('lines', 0)}"
-            f" queue_db_bytes={files['queue_db'].get('bytes', 0)}"
-        )
-        locks = cast(dict[str, Any], payload["locks"])
-        print(
-            "locks:"
-            f" queue_lock_failure_count={locks.get('queue_lock_failure_count', 0)}"
-            f" parent_nextlink_lock_files={locks.get('parent_nextlink_lock_files', 0)}"
-        )
-        issues = payload.get("issues") or []
-        if issues:
-            print("issues:")
-            for issue in issues:
-                print(f"  - {issue}")
-        sample = queue.get("sample") or []
-        if sample:
-            print("sample:")
-            for row in sample:
-                line = (
-                    "  - "
-                    f"id={row.get('id')} sid={row.get('spawn_intent_id') or '-'} "
-                    f"state={row.get('state')} attempts={row.get('attempts')} "
-                    f"claimed_age_s={row.get('claimed_age_s')}"
-                )
-                if row.get("reason"):
-                    line += f" reason={row.get('reason')}"
-                print(line)
-
-    if payload["status"] == "error":
-        return 2
-    return 1 if payload["status"] == "warn" else 0
+        for issue in payload["issues"]:
+            print(f"issue: {issue}")
+        for record in outbox.get("sample", []):
+            print(
+                "intent:"
+                f" id={record.get('intent_id')} state={record.get('state')}"
+                f" stage={record.get('stage')} attempts={record.get('attempts')}"
+                + (f" reason={record['reason']}" if record.get("reason") else "")
+            )
+    return 2 if payload["status"] == "error" else 1 if payload["status"] == "warn" else 0
 
 
 if __name__ == "__main__":

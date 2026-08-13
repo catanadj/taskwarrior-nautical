@@ -7434,8 +7434,8 @@ def test_queue_schema_migration_rolls_back_and_serializes_concurrent_openers():
 
 
 def test_queue_status_and_doctor_report_schema_health():
-    """Operator diagnostics should distinguish healthy, legacy, and incompatible schemas."""
-    from nautical_core import queue_store
+    """Operator diagnostics should distinguish healthy and incompatible outboxes."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     status_path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
     doctor = _load_hook_module(
@@ -7444,10 +7444,9 @@ def test_queue_status_and_doctor_report_schema_health():
     )
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
-        db_path = taskdata / ".nautical-state/.nautical_queue.db"
-        db_path.parent.mkdir()
-        with sqlite3.connect(str(db_path)) as conn:
-            queue_store.init_queue_db(conn)
+        repo = LifecycleOutboxRepository(taskdata)
+        expect(repo.open().ok, "lifecycle outbox did not initialize")
+        db_path = repo.path
 
         proc = subprocess.run(
             [sys.executable, status_path, "--taskdata", td, "--json"],
@@ -7457,14 +7456,14 @@ def test_queue_status_and_doctor_report_schema_health():
         )
         expect(proc.returncode == 0, f"healthy schema status failed: {proc.stderr!r}")
         payload = json.loads(proc.stdout)
-        expect(payload.get("schema") == "nautical.queue_status", f"queue status schema missing: {payload!r}")
+        expect(payload.get("schema") == "nautical.lifecycle_outbox_status", f"outbox status schema missing: {payload!r}")
         expect(payload.get("schema_version") == 1, f"queue status schema version missing: {payload!r}")
-        schema = (payload.get("queue") or {}).get("schema") or {}
+        schema = (payload.get("outbox") or {}).get("schema") or {}
         expect(schema.get("status") == "ok", f"healthy schema was not reported: {payload!r}")
-        expect((payload.get("queue") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
+        expect((payload.get("outbox") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
 
         with sqlite3.connect(str(db_path)) as conn:
-            conn.execute(f"PRAGMA user_version = {queue_store.QUEUE_DB_SCHEMA_VERSION + 1}")
+            conn.execute("PRAGMA user_version = 2")
         proc = subprocess.run(
             [sys.executable, status_path, "--taskdata", td, "--json"],
             text=True,
@@ -7476,13 +7475,13 @@ def test_queue_status_and_doctor_report_schema_health():
         expect(payload.get("status") == "error", f"future schema status was not error: {payload!r}")
 
         findings = []
-        doctor._check_queue(findings, taskdata, 300.0)
-        schema_finding = next(item for item in findings if item.get("id") == "queue.schema")
+        doctor._check_lifecycle_outbox(findings, taskdata, 300.0)
+        schema_finding = next(item for item in findings if item.get("id") == "outbox.schema")
         expect(schema_finding.get("severity") == "error", f"Doctor missed future schema: {findings!r}")
 
 
 def test_queue_status_json_ok_empty_taskdata():
-    """queue status should report ok for empty taskdata."""
+    """Lifecycle outbox status should report ok for empty taskdata."""
     path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
     with tempfile.TemporaryDirectory() as td:
         p = subprocess.run(
@@ -7494,8 +7493,9 @@ def test_queue_status_json_ok_empty_taskdata():
         expect(p.returncode == 0, f"queue status returned {p.returncode}: {p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "ok", f"unexpected queue status: {obj}")
-        expect((obj.get("queue") or {}).get("queued") == 0, f"unexpected queued count: {obj}")
-        expect((obj.get("queue") or {}).get("processing") == 0, f"unexpected processing count: {obj}")
+        outbox = obj.get("outbox") or {}
+        expect(outbox.get("states") == {}, f"unexpected lifecycle states: {obj}")
+        expect((outbox.get("schema") or {}).get("status") == "absent", f"unexpected outbox schema: {obj}")
 
 
 def test_doctor_json_has_stable_schema_marker():
@@ -7540,53 +7540,46 @@ def test_operator_queue_status_json_ok_empty_taskdata():
 
 
 def test_queue_status_warns_on_stale_processing_and_dead_letters():
-    """queue status should report stale processing, dead letters, and lock failures."""
+    """Lifecycle outbox status should report expired leases and retry work."""
     path = os.path.join(DEV_TOOLS, "nautical_queue_status.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         state_dir = td_path / ".nautical-state"
-        lock_dir = td_path / ".nautical-locks"
         state_dir.mkdir(parents=True, exist_ok=True)
-        lock_dir.mkdir(parents=True, exist_ok=True)
 
-        db = state_dir / ".nautical_queue.db"
+        db = state_dir / ".nautical_lifecycle_outbox.db"
         with sqlite3.connect(str(db)) as conn:
+            conn.execute("PRAGMA user_version = 1")
             conn.execute(
                 """
-                CREATE TABLE queue_entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    spawn_intent_id TEXT,
-                    payload TEXT NOT NULL,
+                CREATE TABLE lifecycle_outbox (
+                    intent_id TEXT PRIMARY KEY,
+                    plan_json TEXT NOT NULL,
+                    plan_fingerprint TEXT NOT NULL,
+                    parent_guard_json TEXT NOT NULL,
+                    configuration_fingerprint TEXT NOT NULL,
+                    schedule_fingerprint TEXT NOT NULL,
+                    lifecycle_stage TEXT NOT NULL,
+                    processing_state TEXT NOT NULL,
+                    lease_owner TEXT NOT NULL DEFAULT '',
+                    lease_expires_at REAL NOT NULL DEFAULT 0,
                     attempts INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL DEFAULT 'queued',
-                    claim_token TEXT,
-                    claimed_at REAL,
+                    failure_json TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
+                    updated_at REAL NOT NULL,
+                    acknowledged_at REAL NOT NULL DEFAULT 0
                 )
                 """
             )
             conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
-                "VALUES (?, ?, 1, 'queued', 1.0, 1.0)",
-                ("si_qs_queued", json.dumps({"spawn_intent_id": "si_qs_queued"})),
-            )
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, claim_token, claimed_at, created_at, updated_at) "
-                "VALUES (?, ?, 3, 'processing', 'old-claim', 1.0, 1.0, 1.0)",
-                ("si_qs_processing", json.dumps({"spawn_intent_id": "si_qs_processing"})),
+                "INSERT INTO lifecycle_outbox "
+                "(intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
+                "schedule_fingerprint, lifecycle_stage, processing_state, lease_owner, lease_expires_at, "
+                "attempts, failure_json, created_at, updated_at) "
+                "VALUES (?, '{}', 'pf', '{}', 'cf', 'sf', 'planned', 'claimed', 'old-worker', 1.0, 3, '', 1.0, 1.0)",
+                ("outbox-stale",),
             )
             conn.commit()
-
-        (state_dir / ".nautical_dead_letter.jsonl").write_text(
-            json.dumps({"ts": "2026-01-01T00:00:00Z", "reason": "test"}) + "\n",
-            encoding="utf-8",
-        )
-        (lock_dir / ".nautical_spawn_queue.lock_failed.count").write_text(
-            json.dumps({"count": 2}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        (lock_dir / ".nautical_parent_nextlink.abcd.lock").write_text("", encoding="utf-8")
 
         p = subprocess.run(
             [
@@ -7607,17 +7600,12 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
         expect(p.returncode == 1, f"expected warn exit 1, got {p.returncode}: {p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "warn", f"unexpected queue status: {obj}")
-        queue = obj.get("queue") or {}
-        expect(int(queue.get("queued") or 0) == 1, f"unexpected queued count: {queue}")
-        expect(int(queue.get("processing") or 0) == 1, f"unexpected processing count: {queue}")
-        expect(int(queue.get("stale_processing") or 0) == 1, f"unexpected stale count: {queue}")
-        expect(int(queue.get("max_attempts") or 0) == 3, f"unexpected max attempts: {queue}")
-        locks = obj.get("locks") or {}
-        expect(int(locks.get("queue_lock_failure_count") or 0) == 2, f"unexpected lock fail count: {locks}")
-        expect(int(locks.get("parent_nextlink_lock_files") or 0) == 1, f"unexpected parent lock count: {locks}")
-        files = obj.get("files") or {}
-        expect(int((files.get("dead_letter") or {}).get("lines") or 0) == 1, f"unexpected dead letter metrics: {files}")
-        expect(len(queue.get("sample") or []) >= 1, f"expected sample rows: {queue}")
+        outbox = obj.get("outbox") or {}
+        states = outbox.get("states") or {}
+        expect(int(states.get("claimed") or 0) == 1, f"unexpected outbox states: {outbox}")
+        expect(int(outbox.get("stale_claims") or 0) == 1, f"unexpected stale count: {outbox}")
+        expect(int(outbox.get("max_attempts") or 0) == 3, f"unexpected max attempts: {outbox}")
+        expect(len(outbox.get("sample") or []) >= 1, f"expected sample rows: {outbox}")
 
 
 def _write_fake_task_for_doctor(path: Path) -> None:
@@ -19112,75 +19100,37 @@ def test_on_exit_finalized_intent_compaction_is_atomic_and_bounded():
 
 
 def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
-    """Malformed SQLite rows must leave the queue atomically and remain visible to diagnostics."""
-    from nautical_core import queue_store
+    """Quarantined lifecycle intents remain visible to operator diagnostics."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     from nautical_core.tools import nautical_doctor
     from nautical_core.tools import nautical_queue_status
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / ".nautical_queue.db"
-        with sqlite3.connect(str(db_path)) as conn:
-            queue_store.init_queue_db(conn)
+        root = Path(td)
+        repository = LifecycleOutboxRepository(root)
+        expect(repository.open().ok, "lifecycle outbox did not initialize")
+        with sqlite3.connect(str(repository.path)) as conn:
             conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, 'queued', ?, ?)",
-                (
-                    "si_valid_after_poison",
-                    json.dumps({"spawn_intent_id": "si_valid_after_poison", "child": {"uuid": "valid"}}),
-                    0,
-                    1.0,
-                    1.0,
-                ),
-            )
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, 'queued', ?, ?)",
-                ("si_poison", "{\"child\": {\"uuid\": \"poison\"}}", "broken", 1.0, 1.0),
-            )
-            conn.execute(
-                "INSERT INTO queue_entries (spawn_intent_id, payload, attempts, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, 'queued', ?, ?)",
-                ("si_malformed_json", "{malformed", 0, 1.0, 1.0),
-            )
-            conn.commit()
-
-        with sqlite3.connect(str(db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            claim = queue_store.claim_rows_sqlite_result(
-                conn,
-                token="claim-poison",
-                now=10.0,
-                processing_stale_after=30.0,
-                max_lines=10,
-            )
-            expect(len(claim.rows) == 1, f"valid queue row was not claimed: {claim}")
-            expect(claim.quarantined == 2, f"poison rows were not quarantined: {claim}")
-            expect("invalid attempts" in " ".join(claim.poison_reasons), f"poison reason missing: {claim}")
-            expect("invalid queue payload JSON" in " ".join(claim.poison_reasons), "malformed JSON reason missing")
-            states = conn.execute("SELECT state, payload FROM queue_entries ORDER BY id").fetchall()
-            expect(states[0][0] == "processing", f"valid row was not claimed: {states!r}")
-            expect(states[1][0] == "quarantined", f"poison row remained queued: {states!r}")
-            expect(states[2][0] == "quarantined", f"malformed JSON row remained queued: {states!r}")
-            poison = json.loads(states[1][1])
-            expect(
-                poison.get("reason", "").endswith("invalid attempts"),
-                f"poison envelope missing reason: {poison!r}",
-            )
-            malformed = json.loads(states[2][1])
-            expect(
-                "invalid queue payload JSON" in malformed.get("reason", ""),
-                f"malformed JSON quarantine reason missing: {malformed!r}",
+                "INSERT INTO lifecycle_outbox "
+                "(intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
+                "schedule_fingerprint, lifecycle_stage, processing_state, attempts, failure_json, created_at, updated_at) "
+                "VALUES (?, '{}', 'poison', '{}', 'cf', 'sf', 'planned', 'quarantined', 1, ?, 1.0, 1.0)",
+                ("outbox-poison", json.dumps({"code": "poison_row", "message": "invalid lifecycle plan JSON"})),
             )
 
-        summary, issues = nautical_queue_status._safe_sqlite_summary(db_path, 300.0, 5)
-        expect(summary.get("quarantined") == 2, f"queue status missed quarantined rows: {summary!r}")
+        summary, issues = nautical_queue_status._outbox_summary(
+            repository.path,
+            stale_after=300.0,
+            limit=5,
+        )
+        expect(summary.get("states", {}).get("quarantined") == 1, f"outbox status missed quarantined row: {summary!r}")
         expect(
-            any("quarantined malformed" in issue for issue in issues),
+            any("quarantined" in issue for issue in issues),
             f"queue status missed poison issue: {issues!r}",
         )
         findings = []
-        nautical_doctor._check_queue(findings, Path(td), 300.0)
-        poison_finding = next((item for item in findings if item.get("id") == "queue.poison_rows"), None)
+        nautical_doctor._check_lifecycle_outbox(findings, root, 300.0)
+        poison_finding = next((item for item in findings if item.get("id") == "outbox.poison_rows"), None)
         expect(poison_finding and poison_finding.get("severity") == "error", f"doctor missed poison row: {findings!r}")
 
 

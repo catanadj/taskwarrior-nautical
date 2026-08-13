@@ -25,7 +25,8 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
+from nautical_core import reconcile, safe_lock, task_command  # noqa: E402
+from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
 from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
@@ -747,7 +748,7 @@ def _expiration_hop_limit(value: str) -> int:
 
 @contextmanager
 def _parent_apply_lock(taskdata: Path, parent_uuid: str):
-    lock_path = queue_store.parent_nextlink_lock_path(taskdata, parent_uuid)
+    lock_path = parent_nextlink_lock_path(taskdata, parent_uuid)
     with safe_lock(
         lock_path,
         retries=_PARENT_LOCK_RETRIES,
@@ -760,7 +761,7 @@ def _parent_apply_lock(taskdata: Path, parent_uuid: str):
 @contextmanager
 def _reconcile_apply_lock(taskdata: Path):
     """Serialize reconciler mutations without blocking a second invocation."""
-    lock_path = queue_store.reconcile_lock_path(taskdata)
+    lock_path = reconcile_lock_path(taskdata)
     with safe_lock(
         lock_path,
         retries=1,

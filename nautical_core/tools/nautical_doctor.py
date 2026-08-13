@@ -14,6 +14,7 @@ import zoneinfo
 from collections import defaultdict
 from datetime import timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
@@ -785,7 +786,7 @@ def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) ->
         )
 
 
-def _load_queue_status():
+def _load_queue_status() -> ModuleType:
     path = TOOLS_DIR / "nautical_queue_status.py"
     spec = importlib.util.spec_from_file_location("_nautical_doctor_queue_status", path)
     if spec is None or spec.loader is None:
@@ -795,74 +796,68 @@ def _load_queue_status():
     return module
 
 
-def _check_queue(findings: list[dict[str, Any]], taskdata: Path, stale_after: float) -> dict[str, Any]:
+def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stale_after: float) -> dict[str, Any]:
     try:
         module = _load_queue_status()
         payload = module._status_payload(taskdata, stale_after=stale_after, limit=5)
+        if not isinstance(payload, dict):
+            raise RuntimeError("lifecycle outbox status returned an invalid payload")
     except Exception as exc:
         _finding(
             findings,
-            "queue.unreadable",
+            "outbox.unreadable",
             "error",
-            "Nautical queue state could not be inspected.",
+            "Nautical lifecycle outbox could not be inspected.",
             details={"error": str(exc)},
         )
         return {}
-    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
-    quarantined = int(queue.get("quarantined") or 0)
+    outbox = payload.get("outbox") if isinstance(payload.get("outbox"), dict) else {}
+    states = outbox.get("states") if isinstance(outbox.get("states"), dict) else {}
+    quarantined = int(states.get("quarantined") or 0)
     if quarantined:
         _finding(
             findings,
-            "queue.poison_rows",
+            "outbox.poison_rows",
             "error",
-            f"{quarantined} malformed SQLite queue row{'s' if quarantined != 1 else ''} quarantined.",
-            fix="Inspect nautical queue-status and repair or remove the quarantined queue entries.",
-            details={"count": quarantined, "sample": queue.get("sample") or []},
+            f"{quarantined} malformed lifecycle intent{'s' if quarantined != 1 else ''} quarantined.",
+            fix="Inspect nautical queue-status and resolve the quarantined lifecycle intents.",
+            details={"count": quarantined, "sample": outbox.get("sample") or []},
         )
-    schema = queue.get("schema") if isinstance(queue.get("schema"), dict) else {}
+    schema = outbox.get("schema") if isinstance(outbox.get("schema"), dict) else {}
     schema_status = str(schema.get("status") or "absent")
     if schema_status == "error":
         _finding(
             findings,
-            "queue.schema",
+            "outbox.schema",
             "error",
-            "Queue database schema is incompatible with this Nautical runtime.",
-            fix="Preserve the database, then upgrade Nautical or restore a compatible queue database.",
-            details=schema,
-        )
-    elif schema_status == "legacy":
-        _finding(
-            findings,
-            "queue.schema",
-            "warn",
-            "Queue database uses the compatible unversioned schema.",
-            fix="The next queue write or drain will migrate it transactionally.",
+            "Lifecycle outbox schema is incompatible with this Nautical runtime.",
+            fix="Preserve the database, then upgrade Nautical or restore a compatible lifecycle outbox.",
             details=schema,
         )
     else:
         _finding(
             findings,
-            "queue.schema",
+            "outbox.schema",
             "ok",
             (
-                f"Queue database schema v{schema.get('version')} is compatible."
+                f"Lifecycle outbox schema v{schema.get('version')} is compatible."
                 if schema_status == "ok"
-                else "Queue database has not been created yet."
+                else "Lifecycle outbox has not been created yet."
             ),
             details=schema,
         )
 
     issues = payload.get("issues") or []
-    queue_status = str(payload.get("status") or "ok")
+    outbox_status = str(payload.get("status") or "ok")
     _finding(
         findings,
-        "queue.state",
-        "error" if queue_status == "error" else ("warn" if issues else "ok"),
-        "Queue state has findings." if issues else "Queue and dead-letter state are clean.",
-        fix="Run nautical queue-status for queue details." if issues else "",
+        "outbox.state",
+        "error" if outbox_status == "error" else ("warn" if issues else "ok"),
+        "Lifecycle outbox has findings." if issues else "Lifecycle outbox is clean.",
+        fix="Run nautical queue-status for lifecycle outbox details." if issues else "",
         details={"issues": issues} if issues else None,
     )
-    return payload
+    return dict(payload)
 
 
 def _short_uuid(value: object) -> str:
@@ -1432,7 +1427,7 @@ def main() -> int:
             "Anchor cache cleanup completed." if not gc_errors else "Anchor cache cleanup completed with errors.",
             details=gc_result,
         )
-    queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
+    outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
     counts = _check_chains(
         findings,
         repository=unit_of_work.repository if unit_of_work is not None else None,
@@ -1446,7 +1441,7 @@ def main() -> int:
         "taskdata": str(taskdata),
         "hooks_dir": str(hooks_dir),
         "counts": counts,
-        "queue": queue,
+        "outbox": outbox,
         "findings": findings,
     }
     if args.json:

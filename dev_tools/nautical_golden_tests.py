@@ -15072,7 +15072,7 @@ def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
         expect(p.returncode != 0, "on-add should fail for unknown anchor preset")
         expect((p.stdout or "").strip() == "", f"expected no stdout on unknown preset failure, got: {p.stdout!r}")
         stderr_txt = _strip_markup(p.stderr)
-        expect("Invalid Nautical configuration" in stderr_txt, f"expected invalid config panel. stderr={stderr_txt[:500]!r}")
+        expect("Invalid anchor" in stderr_txt, f"expected invalid anchor panel. stderr={stderr_txt[:500]!r}")
         expect("Unknown anchor preset '@missing'" in stderr_txt, f"expected unknown preset guidance. stderr={stderr_txt[:500]!r}")
 
 

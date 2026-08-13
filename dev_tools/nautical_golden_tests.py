@@ -1119,6 +1119,75 @@ def test_lifecycle_models_enforce_transition_contract():
         raise AssertionError("invalid lifecycle model was accepted")
 
 
+def test_integration_command_and_read_models_enforce_contract():
+    """Integration reads cannot confuse unavailable data with absence."""
+    from dataclasses import FrozenInstanceError
+
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        IntegrationContractError,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+
+    command = TaskCommand(("task", "rc.hooks=off", "export"), "chain snapshot", 12.0)
+    result = TaskCommandResult(
+        command,
+        0,
+        '[{"description":"Répéter 🌊"}]',
+        "",
+        CommandFailureKind.SUCCESS,
+        1,
+        0.25,
+    )
+    expect(result.ok, "successful integration command result was not successful")
+
+    evidence = FailureEvidence(
+        command,
+        CommandFailureKind.BUSY,
+        1,
+        2,
+        0.4,
+        True,
+        "Taskwarrior lock active",
+    )
+    found = Found({"uuid": "task-uuid"}, "uuid lookup")
+    absent = Absent("uuid lookup", "authoritative export contained no match")
+    unavailable = Unavailable("uuid lookup", evidence)
+    expect(found.value["uuid"] == "task-uuid", "found read changed its value")
+    expect(absent != unavailable, "unavailable read compared equal to absence")
+    expect(unavailable.retryable, "retryable failure evidence was lost")
+
+    invalid_cases = (
+        lambda: TaskCommand((), "query", 1.0),
+        lambda: TaskCommand(("task",), "", 1.0),
+        lambda: TaskCommand(("task",), "query", 0.0),
+        lambda: TaskCommandResult(command, 1, "", "", CommandFailureKind.SUCCESS, 1, 0.1),
+        lambda: FailureEvidence(command, CommandFailureKind.ABSENT, 1, 1, 0.1, False),
+        lambda: FailureEvidence(command, CommandFailureKind.REJECTED, 1, 1, 0.1, True),
+        lambda: Found(None, "uuid lookup"),
+        lambda: Absent("uuid lookup", ""),
+        lambda: Unavailable("uuid lookup", object()),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except IntegrationContractError:
+            continue
+        raise AssertionError("invalid integration model was accepted")
+
+    try:
+        command.purpose = "changed"  # type: ignore[misc]
+    except FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("integration command was mutable")
+
+
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
     """Batch decisions are explicit, unique, and partitionable before mutation."""
     from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
@@ -34834,6 +34903,7 @@ TESTS = [
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
+    test_integration_command_and_read_models_enforce_contract,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

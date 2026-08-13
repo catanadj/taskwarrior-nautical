@@ -17,9 +17,10 @@ import uuid
 class IntegrationContextError(RuntimeError):
     """Raised when a full Nautical invocation cannot be validated safely."""
 
-    def __init__(self, stage: str, detail: str):
+    def __init__(self, stage: str, detail: str, *, taskdata: Path | None = None):
         self.stage = str(stage or "context").strip()
         self.detail = str(detail or "unavailable").strip()
+        self.taskdata = taskdata
         super().__init__(f"{self.stage}: {self.detail}")
 
 
@@ -273,21 +274,36 @@ def build_integration_context(
             raise RuntimeError(scheduling_error)
         snapshot = snapshot_fn()
     except Exception as exc:
-        raise IntegrationContextError("configuration", str(exc) or type(exc).__name__) from exc
+        raise IntegrationContextError(
+            "configuration",
+            str(exc) or type(exc).__name__,
+            taskdata=taskdata,
+        ) from exc
     if not isinstance(reload_result, Mapping) or not bool(reload_result.get("ok")):
-        raise IntegrationContextError("configuration", "validated reload did not succeed")
+        raise IntegrationContextError("configuration", "validated reload did not succeed", taskdata=taskdata)
     if not isinstance(snapshot, Mapping):
-        raise IntegrationContextError("configuration", "validated snapshot is unavailable")
+        raise IntegrationContextError("configuration", "validated snapshot is unavailable", taskdata=taskdata)
 
     local_timezone = getattr(core, "_LOCAL_TZ", None)
     timezone_name = str(getattr(core, "LOCAL_TZ_NAME", "") or "").strip()
     if not isinstance(local_timezone, tzinfo):
-        raise IntegrationContextError("timezone", f"configured timezone is unavailable: {timezone_name or 'unknown'}")
-    configuration = ValidatedNauticalConfiguration.from_snapshot(
-        snapshot,
-        scheduler_fingerprint=str(reload_result.get("scheduler_fingerprint") or ""),
-        timezone_name=timezone_name,
-    )
+        raise IntegrationContextError(
+            "timezone",
+            f"configured timezone is unavailable: {timezone_name or 'unknown'}",
+            taskdata=taskdata,
+        )
+    try:
+        configuration = ValidatedNauticalConfiguration.from_snapshot(
+            snapshot,
+            scheduler_fingerprint=str(reload_result.get("scheduler_fingerprint") or ""),
+            timezone_name=timezone_name,
+        )
+    except Exception as exc:
+        raise IntegrationContextError(
+            "configuration",
+            str(exc) or type(exc).__name__,
+            taskdata=taskdata,
+        ) from exc
 
     diagnostic_sink: DiagnosticsSink
     if diagnostics is not None:

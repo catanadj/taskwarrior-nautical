@@ -121,11 +121,6 @@ def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
     return proc.returncode == 0, (proc.stdout or "").strip()
 
 
-def _discover_taskdata(task_bin: str, env: dict[str, str]) -> str:
-    ok, raw = _task_get(task_bin, "rc.data.location", env)
-    return raw if ok else ""
-
-
 def _task_export(task_bin: str, env: dict[str, str]) -> tuple[bool, list[dict[str, Any]], str]:
     proc = _run_task(
         task_bin,
@@ -1332,7 +1327,8 @@ def main() -> int:
         )
     except Exception as exc:
         stage = str(getattr(exc, "stage", "context") or "context")
-        if stage != "configuration":
+        failed_taskdata = getattr(exc, "taskdata", None)
+        if stage not in {"configuration", "timezone"} or not isinstance(failed_taskdata, Path):
             message = f"Integration context unavailable: {exc}"
             if args.json:
                 print(
@@ -1352,12 +1348,7 @@ def main() -> int:
             else:
                 print(f"Nautical doctor: ERROR\nContext: {message}")
             return 1
-        raw_taskdata = str(args.taskdata or _discover_taskdata(args.task_bin, env) or "").strip()
-        if not raw_taskdata:
-            message = f"Integration context unavailable: {exc}"
-            print(message if not args.json else json.dumps({"status": "error", "error": message}, ensure_ascii=False))
-            return 1
-        taskdata = Path(raw_taskdata).expanduser().resolve()
+        taskdata = failed_taskdata
         _finding(
             findings,
             "integration.context",

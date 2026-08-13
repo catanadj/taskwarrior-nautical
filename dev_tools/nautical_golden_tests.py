@@ -1689,7 +1689,11 @@ def test_operator_context_discovers_taskdata_once():
     from pathlib import Path
     from types import ModuleType
 
-    from nautical_core.integration_context import IntegrationAccess, build_operator_context
+    from nautical_core.integration_context import (
+        IntegrationAccess,
+        IntegrationContextError,
+        build_operator_context,
+    )
 
     with tempfile.TemporaryDirectory(prefix="nautical_operator_context_") as td:
         root = Path(td)
@@ -1733,6 +1737,21 @@ def test_operator_context_discovers_taskdata_once():
         expect(context.taskdata_source == "taskwarrior", "operator discovery source was not retained")
         expect(context.mutation_capable, "operator mutation capability was lost")
         expect(calls == {"resolve": 1, "reload": 1}, "operator context repeated discovery or reload")
+
+        core.reload_taskdata_config = lambda _selected: (_ for _ in ()).throw(
+            RuntimeError("malformed operator config")
+        )
+        try:
+            build_operator_context(
+                core=core,
+                task_binary=str(task_binary),
+                env={"PATH": os.environ.get("PATH", "")},
+            )
+        except IntegrationContextError as exc:
+            expect(exc.stage == "configuration", f"wrong failure stage: {exc.stage!r}")
+            expect(exc.taskdata == taskdata, f"validated Taskdata was lost from the failure: {exc.taskdata!r}")
+        else:
+            raise AssertionError("operator context accepted malformed configuration")
 
 
 def test_lifecycle_batch_plan_classifies_typed_outcomes():

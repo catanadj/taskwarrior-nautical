@@ -53,6 +53,7 @@ class QueryScope:
 @dataclass(frozen=True, slots=True)
 class SnapshotProvenance:
     scope: QueryScope
+    covers: tuple[QueryScope, ...]
     mutation_epoch: int
     command_count: int
 
@@ -80,14 +81,17 @@ class InvocationReadCache:
         scope: QueryScope,
         value: Any,
         *,
+        covers: tuple[QueryScope, ...] = (),
         mutation_epoch: int,
         command_count: int,
     ) -> CachedAuthoritativeRead:
+        covered_scopes = tuple(dict.fromkeys((scope, *covers)))
         entry = CachedAuthoritativeRead(
             value,
-            SnapshotProvenance(scope, mutation_epoch, command_count),
+            SnapshotProvenance(scope, covered_scopes, mutation_epoch, command_count),
         )
-        self._entries[scope] = entry
+        for covered_scope in covered_scopes:
+            self._entries[covered_scope] = entry
         return entry
 
     def invalidate(self, affected: tuple[QueryScope, ...] = ()) -> None:
@@ -118,10 +122,46 @@ class OutboxBinding:
 
 
 @dataclass(slots=True)
+class InvocationDiagnostics:
+    """Keep diagnostic history local while forwarding configured output."""
+
+    sink: DiagnosticsSink
+    events: list[DiagnosticEvent] = field(default_factory=list)
+
+    def emit(self, event: DiagnosticEvent) -> None:
+        self.events.append(event)
+        self.sink.emit(event)
+
+
+@dataclass(frozen=True, slots=True)
+class MutationObservation:
+    epoch: int
+    uncertain: bool
+    affected: tuple[QueryScope, ...]
+
+
+@dataclass(slots=True)
+class MutationLedger:
+    observations: list[MutationObservation] = field(default_factory=list)
+
+    def record(
+        self,
+        *,
+        epoch: int,
+        uncertain: bool,
+        affected: tuple[QueryScope, ...],
+    ) -> MutationObservation:
+        observation = MutationObservation(epoch, uncertain, affected)
+        self.observations.append(observation)
+        return observation
+
+
+@dataclass(slots=True)
 class CommandLedger:
     """Content-free per-invocation command metrics and budget observation."""
 
     context: IntegrationContext
+    diagnostics: DiagnosticsSink
     calls: int = 0
     attempts: int = 0
     duration: float = 0.0
@@ -141,7 +181,7 @@ class CommandLedger:
         if self.calls > self.context.command_budget:
             self.budget_exceeded = True
             if not self._budget_reported:
-                self.context.diagnostics.emit(DiagnosticEvent(
+                self.diagnostics.emit(DiagnosticEvent(
                     "command_budget",
                     f"invocation exceeded advisory command budget {self.context.command_budget}",
                 ))
@@ -155,8 +195,10 @@ class TaskwarriorUnitOfWork:
     context: IntegrationContext
     client: TaskwarriorClient
     reads: InvocationReadCache
+    mutations: MutationLedger
     outbox: OutboxBinding
     commands: CommandLedger
+    diagnostics: InvocationDiagnostics
     mutation_epoch: int = 0
 
     @classmethod
@@ -168,7 +210,8 @@ class TaskwarriorUnitOfWork:
     ) -> "TaskwarriorUnitOfWork":
         if not isinstance(context, IntegrationContext):
             raise TypeError("Taskwarrior unit of work requires an IntegrationContext")
-        ledger = CommandLedger(context)
+        diagnostics = InvocationDiagnostics(context.diagnostics)
+        ledger = CommandLedger(context, diagnostics)
         client = TaskwarriorClient(
             context.command_prefix,
             env=dict(os.environ if env is None else env),
@@ -178,21 +221,26 @@ class TaskwarriorUnitOfWork:
             context=context,
             client=client,
             reads=InvocationReadCache(),
+            mutations=MutationLedger(),
             outbox=OutboxBinding(context.taskdata),
             commands=ledger,
+            diagnostics=diagnostics,
         )
-
-    @property
-    def diagnostics(self) -> DiagnosticsSink:
-        return self.context.diagnostics
 
     def cached_read(self, scope: QueryScope) -> CachedAuthoritativeRead | None:
         return self.reads.get(scope, mutation_epoch=self.mutation_epoch)
 
-    def cache_read(self, scope: QueryScope, value: Any) -> CachedAuthoritativeRead:
+    def cache_read(
+        self,
+        scope: QueryScope,
+        value: Any,
+        *,
+        covers: tuple[QueryScope, ...] = (),
+    ) -> CachedAuthoritativeRead:
         return self.reads.put(
             scope,
             value,
+            covers=covers,
             mutation_epoch=self.mutation_epoch,
             command_count=self.commands.calls,
         )
@@ -204,9 +252,16 @@ class TaskwarriorUnitOfWork:
         uncertain: bool = False,
     ) -> int:
         """Advance freshness after any applied or uncertain external mutation."""
-        del uncertain
         self.mutation_epoch += 1
-        self.reads.invalidate(affected)
+        self.mutations.record(
+            epoch=self.mutation_epoch,
+            uncertain=bool(uncertain),
+            affected=affected,
+        )
+        # A mutation changes the authority epoch for the entire snapshot. A
+        # later repository may selectively reload, but no pre-mutation entry
+        # remains eligible for a decision.
+        self.reads.invalidate()
         return self.mutation_epoch
 
 
@@ -243,6 +298,9 @@ __all__ = (
     "CachedAuthoritativeRead",
     "CommandLedger",
     "InvocationReadCache",
+    "InvocationDiagnostics",
+    "MutationLedger",
+    "MutationObservation",
     "OutboxBinding",
     "QueryScope",
     "QueryScopeKind",

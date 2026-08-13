@@ -1329,6 +1329,7 @@ def test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation():
         scope = QueryScope(QueryScopeKind.UUID, "task-uuid", ("pending",))
         cached = uow.cache_read(scope, {"uuid": "task-uuid"})
         expect(cached.provenance.scope is scope, f"cache scope provenance changed: {cached}")
+        expect(cached.provenance.covers == (scope,), f"cache coverage changed: {cached}")
         expect(cached.provenance.mutation_epoch == 0, f"initial epoch changed: {cached}")
         expect(uow.cached_read(scope) is cached, "authoritative read was not reused")
 
@@ -1337,6 +1338,83 @@ def test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation():
         uow.cache_read(scope, {"uuid": "task-uuid", "modified": "later"})
         uow.record_mutation(uncertain=True)
         expect(uow.mutation_epoch == 2 and uow.reads.size == 0, "uncertain mutation retained cached reads")
+        expect(uow.mutations.observations[-1].uncertain, "uncertain mutation was not retained as evidence")
+
+
+def test_taskwarrior_uow_broad_snapshot_declares_narrow_coverage():
+    """Broad authority may serve declared scopes without hiding a narrow read."""
+    from nautical_core.integration_context import (
+        IntegrationAccess,
+        IntegrationContext,
+        SilentDiagnostics,
+        SystemClock,
+        ValidatedNauticalConfiguration,
+    )
+    from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
+
+    with tempfile.TemporaryDirectory() as td:
+        context = IntegrationContext(
+            Path(td),
+            "test",
+            (sys.executable,),
+            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
+            timezone.utc,
+            SilentDiagnostics(),
+            SystemClock(),
+            "uow-broad-test",
+            8,
+            IntegrationAccess.READ_ONLY,
+        )
+        uow = TaskwarriorUnitOfWork.create(context)
+        broad = QueryScope(QueryScopeKind.BROAD, "taskdata", ("pending", "completed"))
+        task = QueryScope(QueryScopeKind.UUID, "task-uuid", ("pending", "completed"))
+        predecessor = QueryScope(QueryScopeKind.PREDECESSOR, "previous-uuid", ("completed", "deleted"))
+        snapshot = [{"uuid": "task-uuid", "status": "pending"}]
+
+        cached = uow.cache_read(broad, snapshot, covers=(task,))
+        expect(uow.cached_read(task) is cached, "declared broad coverage did not serve the task scope")
+        expect(cached.provenance.scope is broad, "narrow cache hit lost broad snapshot provenance")
+        expect(uow.cached_read(predecessor) is None, "broad snapshot invented predecessor coverage")
+        narrow = uow.cache_read(predecessor, {"uuid": "previous-uuid"})
+        expect(uow.cached_read(predecessor) is narrow, "required narrow predecessor read was not retained")
+
+
+def test_taskwarrior_uow_isolates_invocations_over_one_taskdata():
+    """Only the durable outbox location is shared by independent invocations."""
+    from nautical_core.integration_context import (
+        IntegrationAccess,
+        IntegrationContext,
+        SilentDiagnostics,
+        SystemClock,
+        ValidatedNauticalConfiguration,
+    )
+    from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
+
+    with tempfile.TemporaryDirectory() as td:
+        context = IntegrationContext(
+            Path(td),
+            "test",
+            (sys.executable,),
+            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
+            timezone.utc,
+            SilentDiagnostics(),
+            SystemClock(),
+            "uow-isolation-test",
+            8,
+            IntegrationAccess.MUTATION,
+        )
+        first = TaskwarriorUnitOfWork.create(context)
+        second = TaskwarriorUnitOfWork.create(context)
+        scope = QueryScope(QueryScopeKind.UUID, "task-uuid")
+        first.cache_read(scope, {"uuid": "task-uuid"})
+        first.record_mutation(affected=(scope,))
+
+        expect(first.reads is not second.reads, "independent invocations shared read caches")
+        expect(first.mutations is not second.mutations, "independent invocations shared mutation history")
+        expect(first.commands is not second.commands, "independent invocations shared command counters")
+        expect(first.diagnostics is not second.diagnostics, "independent invocations shared diagnostics")
+        expect(second.mutation_epoch == 0 and second.reads.size == 0, "one invocation changed another")
+        expect(first.outbox == second.outbox, "same Taskdata did not retain one durable outbox location")
 
 
 def test_taskwarrior_uow_observes_budget_without_blocking_commands():
@@ -35631,6 +35709,8 @@ TESTS = [
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
     test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,
+    test_taskwarrior_uow_broad_snapshot_declares_narrow_coverage,
+    test_taskwarrior_uow_isolates_invocations_over_one_taskdata,
     test_taskwarrior_uow_observes_budget_without_blocking_commands,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,

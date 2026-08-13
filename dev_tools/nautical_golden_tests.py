@@ -1557,6 +1557,88 @@ def test_integration_contract_covers_all_mutation_and_outbox_states():
     expect(set(outbox_states) == set(OutboxOutcomeKind), "outbox outcome coverage is incomplete")
 
 
+def test_integration_context_resolves_and_validates_invocation_once():
+    """A full invocation freezes one authoritative Taskdata/configuration view."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+    from types import ModuleType
+
+    from nautical_core.integration_context import (
+        IntegrationAccess,
+        IntegrationContextError,
+        SilentDiagnostics,
+        build_integration_context,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td).resolve()
+        core = ModuleType("integration_context_test_core")
+        calls = {"resolve": 0, "reload": 0, "snapshot": 0}
+
+        def resolve_task_data_context(**_kwargs):
+            calls["resolve"] += 1
+            return str(taskdata), True, "test"
+
+        def reload_taskdata_config(selected):
+            calls["reload"] += 1
+            expect(Path(selected) == taskdata, "configuration reloaded for the wrong Taskdata")
+            return {"ok": True, "scheduler_fingerprint": "scheduler-fp"}
+
+        def effective_config_snapshot():
+            calls["snapshot"] += 1
+            return {
+                "source": str(taskdata / "nautical.toml"),
+                "fingerprint": "config-fp",
+                "values": {"tz": "UTC", "anchor_presets": {"weekday": "w:mon..fri"}},
+            }
+
+        core.resolve_task_data_context = resolve_task_data_context
+        core.reload_taskdata_config = reload_taskdata_config
+        core.effective_config_snapshot = effective_config_snapshot
+        core.scheduling_configuration_error = lambda: ""
+        core.LOCAL_TZ_NAME = "UTC"
+        core._LOCAL_TZ = timezone.utc
+
+        class FixedClock:
+            def now_utc(self):
+                return datetime(2026, 8, 13, 9, 0, tzinfo=timezone.utc)
+
+        context = build_integration_context(
+            core=core,
+            argv=(f"data:{taskdata}",),
+            env={"PATH": os.environ.get("PATH", "")},
+            tw_dir=str(taskdata),
+            task_binary=sys.executable,
+            access=IntegrationAccess.READ_ONLY,
+            command_budget=17,
+            diagnostics=SilentDiagnostics(),
+            clock=FixedClock(),
+            invocation_id="invocation-1",
+        )
+        expect(context.taskdata == taskdata, "context changed resolved Taskdata")
+        expect(context.command_prefix[0] == str(Path(sys.executable).resolve()), "task binary was not resolved")
+        expect(context.command_prefix[1] == f"rc.data.location={taskdata}", "Taskdata override was omitted")
+        expect(context.configuration.fingerprint == "config-fp", "configuration fingerprint was lost")
+        expect(context.local_timezone is timezone.utc, "context changed the validated timezone")
+        expect(not context.mutation_capable, "read-only context acquired mutation access")
+        expect(context.clock.now_utc() == datetime(2026, 8, 13, 9, 0, tzinfo=timezone.utc), "clock changed")
+        expect(calls == {"resolve": 1, "reload": 1, "snapshot": 1}, "context probed invocation state repeatedly")
+
+        core.scheduling_configuration_error = lambda: "invalid astronomy profile"
+        try:
+            build_integration_context(
+                core=core,
+                env={"PATH": os.environ.get("PATH", "")},
+                tw_dir=str(taskdata),
+                task_binary=sys.executable,
+            )
+        except IntegrationContextError as exc:
+            expect(exc.stage == "configuration", f"wrong failure stage: {exc.stage}")
+            expect("astronomy" in exc.detail, f"configuration error lost its cause: {exc}")
+        else:
+            raise AssertionError("invalid scheduling configuration was accepted")
+
+
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
     """Batch decisions are explicit, unique, and partitionable before mutation."""
     from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
@@ -35276,6 +35358,7 @@ TESTS = [
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_integration_contract_covers_all_mutation_and_outbox_states,
+    test_integration_context_resolves_and_validates_invocation_once,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

@@ -911,59 +911,6 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
         out.append(f"{key}:{value}")
     return out
 
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
-    if not chain_id:
-        return []
-    hook_support = _module("hook_support", required=False)
-    args = None
-    if hook_support is not None:
-        args = hook_support.build_chain_export_args(
-            task_cmd_prefix=_task_cmd_prefix(),
-            chain_id=chain_id,
-            since=since,
-            extra=extra,
-            limit=None,
-            parse_extra_tokens=_parse_extra_tokens,
-            diag=_diag,
-        )
-    if args is None and hook_support is None:
-        args = _task_cmd_prefix()
-        args += ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
-        if since:
-            args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
-        if extra:
-            extra_tokens = _parse_extra_tokens(extra)
-            if extra_tokens is None:
-                _diag(f"tw_export_chain rejected extra: {extra!r}")
-                return []
-            args += extra_tokens
-        args.append("export")
-    if args is None:
-        return []
-    if hook_support is not None:
-        result = hook_support.run_task_result(
-            run_task=_run_task_result,
-            cmd=args,
-            timeout=3.0,
-            retries=2,
-        )
-        parsed_ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
-        if not parsed_ok:
-            _diag(f"tw_export_chain failed (chainID={chain_id}): {error}")
-            return []
-        return rows
-    result = _run_task_result(args, timeout=3.0, retries=2)
-    if not result.ok:
-        _diag(f"tw_export_chain failed (chainID={chain_id}): {result.stderr.strip()}")
-        return []
-    try:
-        data = json.loads(result.stdout.strip() or "[]")
-        return data if isinstance(data, list) else [data]
-    except Exception as e:
-        _diag(f"tw_export_chain JSON parse failed: {e}")
-        return []
-
-
 def _stamp_chain_id_on_add(task: dict) -> None:
     # [CHAINID] Stamp short root id on new recurring roots (anchor/anchor_file/cp)
     has_recurrence = any(

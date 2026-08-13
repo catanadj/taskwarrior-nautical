@@ -4564,18 +4564,10 @@ def test_on_add_no_explicit_taskdata_skips_rc_data_location():
         sys.argv = prev_argv
         if prev_taskdata is not None:
             os.environ["TASKDATA"] = prev_taskdata
-    calls = []
-
-    def _fake_run_task(cmd, **_kwargs):
-        calls.append(cmd)
-        return True, "[]", ""
-
-    mod._run_task = _fake_run_task
-    _ = mod.tw_export_chain("cid-test")
-    expect(calls, "expected _run_task to be called")
+    command_prefix = mod._task_cmd_prefix()
     expect(
-        all(not str(part).startswith("rc.data.location=") for part in calls[0]),
-        f"should not force rc.data.location without explicit data dir: {calls[0]!r}",
+        all(not str(part).startswith("rc.data.location=") for part in command_prefix),
+        f"should not force rc.data.location without explicit data dir: {command_prefix!r}",
     )
 
 def test_on_add_reads_data_arg_from_hook_argv():
@@ -9262,23 +9254,6 @@ def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
     out = mod.tw_export_chain("cid", extra="status:pending -rc.hooks=on")
     expect(out == [], "dash-prefixed token should be rejected")
     expect(not called["run"], "rejected extra must not execute task")
-
-
-def test_on_add_tw_export_chain_extra_validation():
-    """on-add tw_export_chain should reject unsafe extra arguments."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_chain_export_extra_test")
-    called = {"run": False}
-
-    def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0, **_kwargs):
-        _ = (env, timeout, retries)
-        called["run"] = True
-        return True, "[]", ""
-
-    mod._run_task = _fake_run_task
-    out = mod.tw_export_chain("cid", extra="status:pending; rm -rf /")
-    expect(out == [], "unsafe extra should return empty list")
-    expect(not called["run"], "unsafe extra should not call task")
 
 
 def test_on_modify_diag_blocks_pretty_print():
@@ -36110,7 +36085,6 @@ TESTS = [
     test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
-    test_on_add_tw_export_chain_extra_validation,
     test_on_modify_diag_blocks_pretty_print,
     test_on_modify_lifecycle_diagnostics_are_gated_to_stderr,
     test_on_modify_run_task_diag_bucket_stats,

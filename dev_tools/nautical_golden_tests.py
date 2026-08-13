@@ -30847,7 +30847,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
 
 
 def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
-    """Candidate exports should exclude linked parents and return stable chain/link order."""
+    """Repository candidates exclude linked parents and retain stable order."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_candidate_order_test")
     rows = [
@@ -30870,20 +30870,12 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
             "link": 2,
         },
     ]
-    filters_seen = []
-    original = tool._export
-    try:
-        def fake_export(_task_bin, filters, **_kwargs):
-            filters_seen.append(list(filters))
-            status = "completed" if "status:completed" in filters else "deleted"
-            return [row for row in reversed(rows) if row["status"] == status]
+    class Repository:
+        def lifecycle_candidates(self, **_kwargs):
+            return _found_task(tuple(reversed(rows)))
 
-        tool._export = fake_export
-        found = tool._candidate_rows("task", SimpleNamespace())
-    finally:
-        tool._export = original
-
-    expect(all("nextLink:" in filters for filters in filters_seen), f"candidate export was too broad: {filters_seen}")
+    snapshot = tool._ReconcileSnapshot(Repository())
+    found = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
     expect(
         [(row["chainID"], row["link"]) for row in found] == [("a-chain", 2), ("z-chain", 3)],
         f"candidate order was not deterministic: {found}",
@@ -30895,7 +30887,7 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
 
 
 def test_reconcile_snapshot_reuses_initial_chain_export():
-    """Active and candidate scans use bounded snapshot views instead of history."""
+    """Active and candidate scans reuse one authoritative repository snapshot."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_snapshot_reuse_test")
     rows = [
@@ -30916,35 +30908,19 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
         },
     ]
     calls = []
-    original = tool._export
-    try:
-        def fake_export(_task_bin, filters, **_kwargs):
-            filters = list(filters)
-            calls.append(filters)
-            if "status:completed" in filters:
-                return [rows[0]]
-            if "status:deleted" in filters:
-                return []
-            return [rows[1]]
 
-        tool._export = fake_export
-        snapshot = tool._ReconcileSnapshot("task")
-        candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
-        tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
-        tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
-    finally:
-        tool._export = original
+    class Repository:
+        def lifecycle_candidates(self, **kwargs):
+            calls.append(kwargs)
+            return _found_task(tuple(rows))
+
+    snapshot = tool._ReconcileSnapshot(Repository())
+    candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
+    tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     expect(candidates == [rows[0]], f"candidate view included non-candidates: {candidates!r}")
-    expect(len(calls) == 3, f"snapshot views did not use bounded exports: {calls!r}")
-    expect(
-        any("status.not:completed" in filters and "status.not:deleted" in filters for filters in calls),
-        f"active snapshot was not status-filtered: {calls!r}",
-    )
-    expect(
-        all("nextLink:" in filters for filters in calls if "status:completed" in filters or "status:deleted" in filters),
-        f"candidate exports were not narrow: {calls!r}",
-    )
-    expect(tool._EXPORT_STATS["snapshot_hits"] == 1, f"snapshot hit was not recorded: {tool._EXPORT_STATS!r}")
+    expect(len(calls) == 1, f"snapshot views repeated the lifecycle export: {calls!r}")
+    expect(tool._EXPORT_STATS["snapshot_hits"] == 2, f"snapshot hits were not recorded: {tool._EXPORT_STATS!r}")
 
 
 def test_reconcile_empty_snapshot_is_authoritative():
@@ -30952,36 +30928,35 @@ def test_reconcile_empty_snapshot_is_authoritative():
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_empty_snapshot_test")
     calls = []
-    original = tool._export
-    try:
-        tool._export = lambda _task_bin, filters, **_kwargs: calls.append(list(filters)) or []
-        snapshot = tool._ReconcileSnapshot("task")
-        candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
-        active = tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
-    finally:
-        tool._export = original
+
+    class Repository:
+        def lifecycle_candidates(self, **kwargs):
+            calls.append(kwargs)
+            return _absent_task("no lifecycle candidates")
+
+    snapshot = tool._ReconcileSnapshot(Repository())
+    candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    active = tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
-    expect(len(calls) == 3, f"empty snapshot triggered unexpected exports: {calls!r}")
+    expect(len(calls) == 1, f"empty snapshot triggered repeated exports: {calls!r}")
 
 
 def test_reconcile_export_diagnostics_include_elapsed_time():
-    """Export diagnostics should report total and slowest elapsed time."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_export_timing_test")
-    original_run = tool._run_task
-    original_clock = tool.time.perf_counter
-    ticks = iter((10.0, 10.125))
-    try:
-        tool._EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
-        tool._run_task = lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout='[{"uuid":"u1"}]', stderr="")
-        tool.time.perf_counter = lambda: next(ticks)
-        rows = tool._export("task", ["chain:on"])
-    finally:
-        tool._run_task = original_run
-        tool.time.perf_counter = original_clock
-    expect(rows == [{"uuid": "u1"}], f"timed export returned wrong rows: {rows!r}")
-    expect(tool._EXPORT_STATS["seconds"] == 0.125, f"total export timing missing: {tool._EXPORT_STATS!r}")
-    expect(tool._EXPORT_STATS["slowest_seconds"] == 0.125, f"slowest export timing missing: {tool._EXPORT_STATS!r}")
+    """Repository metrics retain total and slowest command timing."""
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+
+        class Client:
+            def execute(self, args, *, purpose, timeout, **_kwargs):
+                from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+                command = TaskCommand(("task", *args), purpose, timeout)
+                return TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.125)
+
+        uow.client = Client()
+        uow.repository.lifecycle_candidates()
+        metrics = uow.repository.metrics()
+    expect(metrics["seconds"] == 0.125, f"total export timing missing: {metrics!r}")
+    expect(metrics["slowest_seconds"] == 0.125, f"slowest export timing missing: {metrics!r}")
 
 
 def test_reconcile_json_startup_failures_are_structured():

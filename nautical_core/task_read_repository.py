@@ -183,6 +183,10 @@ class TaskReadRepository:
         self._timeout = 30.0
         self._attempts = 2
         self._retry_delay = 0.05
+        self._command_count = 0
+        self._row_count = 0
+        self._command_seconds = 0.0
+        self._slowest_command_seconds = 0.0
 
     def configure_commands(
         self,
@@ -195,6 +199,16 @@ class TaskReadRepository:
         self._timeout = max(0.05, float(timeout))
         self._attempts = max(1, int(attempts))
         self._retry_delay = max(0.0, float(retry_delay))
+
+    def metrics(self) -> Mapping[str, float | int]:
+        return MappingProxyType(
+            {
+                "calls": self._command_count,
+                "rows": self._row_count,
+                "seconds": self._command_seconds,
+                "slowest_seconds": self._slowest_command_seconds,
+            }
+        )
 
     @staticmethod
     def _query_name(scope: TaskSnapshotScope) -> str:
@@ -271,6 +285,9 @@ class TaskReadRepository:
             retry_delay=self._retry_delay,
             use_tempfiles=use_tempfiles,
         )
+        self._command_count += 1
+        self._command_seconds += result.duration
+        self._slowest_command_seconds = max(self._slowest_command_seconds, result.duration)
         if result.kind is CommandFailureKind.ABSENT and empty_output_is_absent:
             return self._store(scope, Absent(query, "Taskwarrior authoritatively returned no matches"))
         if not result.ok:
@@ -328,6 +345,7 @@ class TaskReadRepository:
                 ),
             )
         snapshot = AuthoritativeTaskSnapshot(scope, tuple(payload), result)
+        self._row_count += len(payload)
         return self._store(scope, Found(snapshot, query))
 
     def _broad_for(

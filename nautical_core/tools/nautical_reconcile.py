@@ -42,6 +42,8 @@ from nautical_core.lifecycle_models import (  # noqa: E402
 )
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
+from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
+from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
@@ -60,6 +62,7 @@ _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
 _EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, "snapshot_hits": 0}
 _LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
+_READ_REPOSITORY: TaskReadRepository | None = None
 
 
 class _ConfigurationDrift(RuntimeError):
@@ -210,29 +213,20 @@ def _modify_implementation_path(path: Path) -> Path:
     return next((candidate for candidate in candidates if candidate.is_file()), path)
 
 
-def _export(task_bin: str, filters: list[str], *, timeout: float = 120.0) -> list[dict[str, Any]]:
-    _EXPORT_STATS["calls"] += 1
-    started = time.perf_counter()
-    try:
-        proc = task_command.run_task_command(
-            task_bin,
-            ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", *filters, "export"],
-            timeout=timeout,
-            retry_locks=True,
-            purpose="reconcile read",
-        )
-        payload = task_command.load_json_result(proc, "task export", empty=[])
-        if isinstance(payload, dict):
-            payload = [payload]
-        if not isinstance(payload, list):
-            raise RuntimeError("task export returned a non-list payload")
-        rows = [row for row in payload if isinstance(row, dict)]
-        _EXPORT_STATS["rows"] += len(rows)
-        return rows
-    finally:
-        elapsed = time.perf_counter() - started
-        _EXPORT_STATS["seconds"] += elapsed
-        _EXPORT_STATS["slowest_seconds"] = max(_EXPORT_STATS["slowest_seconds"], elapsed)
+def _repository() -> TaskReadRepository:
+    if _READ_REPOSITORY is None:
+        raise RuntimeError("reconcile task read repository is unavailable")
+    return _READ_REPOSITORY
+
+
+def _read_value(read: Any, subject: str) -> Any | None:
+    if isinstance(read, Found):
+        return read.value
+    if isinstance(read, Absent):
+        return None
+    if isinstance(read, Unavailable):
+        raise _PlanReadUnavailable(f"{subject} unavailable: {read.evidence.detail}")
+    raise _PlanReadUnavailable(f"{subject} returned an invalid typed result")
 
 
 def _load_on_modify(hook_path: str | None = None):
@@ -375,35 +369,35 @@ class _ReconcileSnapshot:
     row actually needs repair.
     """
 
-    def __init__(self, task_bin: str):
-        self.task_bin = task_bin
-        self._active_rows: list[dict[str, Any]] | None = None
-        self._candidate_rows: list[dict[str, Any]] | None = None
+    def __init__(self, repository: TaskReadRepository):
+        self.repository = repository
+        self._rows: tuple[dict[str, Any], ...] | None = None
+
+    def _all_rows(self) -> tuple[dict[str, Any], ...]:
+        if self._rows is None:
+            value = _read_value(
+                self.repository.lifecycle_candidates(statuses=ALL_TASK_STATUSES),
+                "reconcile lifecycle snapshot",
+            )
+            self._rows = tuple(dict(row) for row in (value or ()))
+        else:
+            _EXPORT_STATS["snapshot_hits"] += 1
+        return self._rows
 
     def active_rows(self) -> list[dict[str, Any]]:
-        if self._active_rows is None:
-            self._active_rows = _export(
-                self.task_bin,
-                ["chain:on", "chainID.not:", "status.not:completed", "status.not:deleted"],
-            )
-        else:
-            _EXPORT_STATS["snapshot_hits"] += 1
-        return self._active_rows
+        return [
+            row for row in self._all_rows()
+            if str(row.get("chainID") or "").strip()
+            and str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+        ]
 
     def candidate_rows(self) -> list[dict[str, Any]]:
-        if self._candidate_rows is None:
-            completed = _export(
-                self.task_bin,
-                ["status:completed", "chain:on", "chainID.not:", "nextLink:"],
-            )
-            deleted = _export(
-                self.task_bin,
-                ["status:deleted", "chain:on", "chainID.not:", "nextLink:"],
-            )
-            self._candidate_rows = completed + deleted
-        else:
-            _EXPORT_STATS["snapshot_hits"] += 1
-        return self._candidate_rows
+        return [
+            row for row in self._all_rows()
+            if str(row.get("chainID") or "").strip()
+            and not str(row.get("nextLink") or "").strip()
+            and str(row.get("status") or "").strip().lower() in {"completed", "deleted"}
+        ]
 
 
 _READ_SNAPSHOT: _ReconcileSnapshot | None = None
@@ -431,11 +425,7 @@ def _candidate_rows(
             and reconcile.is_orphan_deleted_chain_candidate(row)
         )
         return sorted(candidates, key=_candidate_sort_key)
-    completed = _export(task_bin, ["status:completed", "chain:on", "chainID.not:", "nextLink:"])
-    deleted = _export(task_bin, ["status:deleted", "chain:on", "chainID.not:", "nextLink:"])
-    rows = [row for row in completed if reconcile.is_orphan_completion_candidate(row)]
-    rows.extend(row for row in deleted if reconcile.is_orphan_deleted_chain_candidate(row))
-    return sorted(rows, key=_candidate_sort_key)
+    raise RuntimeError("reconcile candidate reads require an authoritative snapshot")
 
 
 def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
@@ -464,11 +454,9 @@ def _active_chain_rows(
     snapshot: _ReconcileSnapshot | None = None,
 ) -> list[dict[str, Any]]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
-    rows = (
-        snapshot.active_rows()
-        if snapshot is not None
-        else _export(task_bin, ["chain:on", "chainID.not:", "status.not:completed", "status.not:deleted"])
-    )
+    if snapshot is None:
+        raise RuntimeError("active-chain reads require an authoritative snapshot")
+    rows = snapshot.active_rows()
     return sorted(
         (
             row
@@ -499,19 +487,16 @@ def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -
     return None
 
 
-def _fresh_native_until_previous(task_bin: str, row: dict[str, Any]) -> dict[str, Any] | None:
+def _fresh_native_until_previous(row: dict[str, Any]) -> dict[str, Any] | None:
     chain_id = str(row.get("chainID") or "").strip()
     link = reconcile.int_or_default(row.get("link"), 0)
     if not chain_id or link <= 1:
         return None
-    rows = _export(task_bin, [f"chainID:{chain_id}", f"link:{link - 1}"], timeout=30.0)
-    matches = [
-        candidate
-        for candidate in rows
-        if str(candidate.get("chainID") or "").strip() == chain_id
-        and reconcile.int_or_default(candidate.get("link"), 0) == link - 1
-    ]
-    return matches[0] if len(matches) == 1 else None
+    value = _read_value(
+        _repository().predecessor_slot(chain_id, link - 1, refresh=True),
+        f"predecessor {chain_id}:{link - 1}",
+    )
+    return dict(value) if value is not None else None
 
 
 def _native_until_repairs(
@@ -549,7 +534,7 @@ def _native_until_repairs(
         if previous is None:
             # Historical predecessors are deliberately outside the active
             # snapshot; fetch only the predecessor needed by this invalid row.
-            previous = _fresh_native_until_previous(task_bin, row)
+            previous = _fresh_native_until_previous(row)
         item = {
             "task": reconcile.short_uuid(row.get("uuid")),
             "chainID": chain_id,
@@ -618,9 +603,9 @@ def _native_until_repairs(
                             item["action"] = "repair_error"
                             item["repair_error"] = "native-until repair lock busy"
                         else:
-                            fresh = _fresh_parent(task_bin, row)
+                            fresh = _fresh_parent(row)
                             guard_error = _native_until_guard_error(row, fresh) if fresh else "native-until target disappeared"
-                            fresh_previous = _fresh_native_until_previous(task_bin, fresh or row)
+                            fresh_previous = _fresh_native_until_previous(fresh or row)
                             if not guard_error:
                                 if (previous is None) != (fresh_previous is None):
                                     guard_error = "native-until predecessor changed during repair"
@@ -640,7 +625,7 @@ def _native_until_repairs(
                                     return repairs, errors
                                 try:
                                     _modify_native_until(task_bin, fresh, repaired)
-                                    verified = _fresh_parent(task_bin, fresh)
+                                    verified = _fresh_parent(fresh)
                                     if verified is None or not _native_until_matches(verified, repaired, hook):
                                         actual = str((verified or {}).get("until") or "<missing>")
                                         item["action"] = "repair_error"
@@ -698,12 +683,16 @@ def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bo
         return False
 
 
-def _existing_children(task_bin: str, parent: dict[str, Any]) -> list[dict[str, Any]]:
+def _existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
     next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
     if not chain_id:
         return []
-    return _export(task_bin, [f"chainID:{chain_id}", f"link:{next_link}"], timeout=30.0)
+    value = _read_value(
+        _repository().exact_child_slot(chain_id, next_link, refresh=True),
+        f"child slot {chain_id}:{next_link}",
+    )
+    return [dict(value)] if value is not None else []
 
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
@@ -714,7 +703,7 @@ def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any
         )
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return []
-    return _existing_children(task_bin, parent)
+    return _existing_children(parent)
 
 
 def _expiration_hop_limit(value: str) -> int:
@@ -764,16 +753,15 @@ def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool):
         yield acquired
 
 
-def _fresh_parent(task_bin: str, parent: dict[str, Any]) -> dict[str, Any] | None:
+def _fresh_parent(parent: dict[str, Any]) -> dict[str, Any] | None:
     parent_uuid = str(parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
-    rows = _export(task_bin, [f"uuid:{parent_uuid}"], timeout=30.0)
-    wanted = parent_uuid.lower()
-    for row in rows:
-        if str(row.get("uuid") or "").strip().lower() == wanted:
-            return row
-    return None
+    value = _read_value(
+        _repository().verification(parent_uuid),
+        f"parent {parent_uuid}",
+    )
+    return dict(value) if value is not None else None
 
 
 def _is_legacy_root_without_link(parent: dict[str, Any]) -> bool:
@@ -881,7 +869,7 @@ def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
 
 def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
     """Re-export a terminal parent before reporting chain disablement as applied."""
-    fresh_parent = _fresh_parent(task_bin, parent)
+    fresh_parent = _fresh_parent(parent)
     if fresh_parent is None:
         raise RuntimeError("post-apply verification could not re-export the disabled parent")
     if str(fresh_parent.get("chain") or "").strip().lower() != "off":
@@ -907,7 +895,7 @@ def _verify_applied_child(
     expected_child = str(child_short or "").strip().lower()
     if not expected_child:
         raise RuntimeError("post-apply verification has no child identity")
-    fresh_parent = _fresh_parent(task_bin, parent)
+    fresh_parent = _fresh_parent(parent)
     if fresh_parent is None:
         raise RuntimeError("post-apply verification could not re-export the parent")
     if str(fresh_parent.get("chainID") or "").strip() != str(parent.get("chainID") or "").strip():
@@ -918,7 +906,7 @@ def _verify_applied_child(
         raise RuntimeError(
             f"post-apply verification found parent nextLink {shown}; expected {child_short}"
         )
-    rows = _existing_children(task_bin, fresh_parent)
+    rows = _existing_children(fresh_parent)
     resolved, child_error = reconcile.resolve_existing_child(
         fresh_parent,
         rows,
@@ -985,7 +973,7 @@ def _refresh_plan(
     *,
     generation: ChainGenerationService | None = None,
 ) -> reconcile.ReconcilePlan:
-    parent = _fresh_parent(task_bin, original_parent)
+    parent = _fresh_parent(original_parent)
     if parent is None:
         return _stale_plan(original_parent, "parent no longer exists")
     status = str(parent.get("status") or "").strip().lower()
@@ -1252,7 +1240,6 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
 
 
 def _next_recovery_child(
-    task_bin: str,
     parent: dict[str, Any],
     child_short: str,
 ) -> dict[str, Any]:
@@ -1260,17 +1247,16 @@ def _next_recovery_child(
     if not wanted:
         raise RuntimeError("recovery action did not identify its child")
     try:
-        rows = _export(task_bin, [f"uuid:{wanted}"], timeout=30.0)
+        value = _read_value(
+            _repository().by_uuid(wanted, refresh=True),
+            f"recovery child {wanted}",
+        )
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _RecoveryLookupUnavailable(
             f"recovery child {wanted} lookup unavailable: {reason}"
         ) from exc
-    matches = [
-        row
-        for row in rows
-        if str(row.get("uuid") or "").strip().lower().startswith(wanted)
-    ]
+    matches = [value] if value is not None else []
     if len(matches) != 1:
         raise RuntimeError(
             f"recovery child {wanted} lookup returned {len(matches)} exact match(es)"
@@ -1423,7 +1409,7 @@ def _reconcile_candidate(
                 ):
                     child = cached_child
                 else:
-                    child = _next_recovery_child(task_bin, plan.parent, child_short)
+                    child = _next_recovery_child(plan.parent, child_short)
             except _RecoveryLookupUnavailable as exc:
                 outcomes.append((_recovery_partial(plan.parent, str(exc)), ""))
                 break
@@ -1483,7 +1469,7 @@ class _ReconcileLifecycleServices:
 
     def validate_parent(self, plan: LifecyclePlan) -> OperationResult:
         try:
-            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
         except Exception as exc:
             return self._result(OperationState.UNAVAILABLE, reason=f"parent export unavailable: {exc}")
         if parent is None:
@@ -1518,7 +1504,7 @@ class _ReconcileLifecycleServices:
 
     def validate_terminal(self, plan: LifecyclePlan) -> OperationResult:
         try:
-            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
         except Exception as exc:
             return self._result(OperationState.UNAVAILABLE, reason=f"terminal parent export unavailable: {exc}")
         if parent is None:
@@ -1530,7 +1516,7 @@ class _ReconcileLifecycleServices:
             )
         if plan.identity.event is not LifecycleEvent.MANUAL_DELETE:
             try:
-                successors = _existing_children(self.task_bin, parent)
+                successors = _existing_children(parent)
             except Exception as exc:
                 return self._result(OperationState.UNAVAILABLE, reason=f"successor lookup unavailable: {exc}")
             if successors:
@@ -1544,7 +1530,7 @@ class _ReconcileLifecycleServices:
 
     def disable_chain(self, plan: LifecyclePlan) -> OperationResult:
         try:
-            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
             if parent is None:
                 return self._result(OperationState.UNAVAILABLE, reason="terminal parent export unavailable")
             if str(parent.get("chain") or "").strip().lower() == "off":
@@ -1577,7 +1563,7 @@ class _ReconcileLifecycleServices:
 
     def _rows_for_child(self, plan: LifecyclePlan) -> list[dict[str, Any]]:
         parent = {"chainID": plan.identity.chain_id, "link": plan.identity.source_link}
-        return _existing_children(self.task_bin, parent)
+        return _existing_children(parent)
 
     def find_equivalent_child(self, plan: LifecyclePlan) -> OperationResult:
         child = plan.child_dict()
@@ -1636,7 +1622,11 @@ class _ReconcileLifecycleServices:
                 return self._result(OperationState.APPLIED)
         if wanted_uuid and wanted_uuid.count("-") == 0:
             try:
-                direct_rows = _export(self.task_bin, [f"uuid:{wanted_uuid}"], timeout=30.0)
+                direct = _read_value(
+                    _repository().by_uuid(wanted_uuid, refresh=True),
+                    f"child verification {wanted_uuid}",
+                )
+                direct_rows = [direct] if direct is not None else []
             except Exception as exc:
                 return self._result(OperationState.UNAVAILABLE, reason=f"child verification unavailable: {exc}")
             for row in direct_rows:
@@ -1662,7 +1652,7 @@ class _ReconcileLifecycleServices:
         if not child_short:
             return self._result(OperationState.CONFLICT, reason="parent patch has no child identity")
         try:
-            parent = _fresh_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
+            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
             if parent is None:
                 return self._result(OperationState.UNAVAILABLE, reason="parent export unavailable")
             current = str(parent.get("nextLink") or "").strip().lower()
@@ -1933,8 +1923,10 @@ def main(
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
         return _startup_failure(args, "hook_protocol" if legacy_hook else "runtime", exc)
-    global _READ_SNAPSHOT
-    snapshot = _ReconcileSnapshot(args.task_bin)
+    global _READ_REPOSITORY, _READ_SNAPSHOT
+    _READ_REPOSITORY = _unit_of_work.repository
+    _READ_REPOSITORY.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    snapshot = _ReconcileSnapshot(_READ_REPOSITORY)
     _READ_SNAPSHOT = snapshot
     try:
         candidates = _candidate_rows(args.task_bin, hook)
@@ -2113,6 +2105,13 @@ def main(
     total_errors = plan_errors + native_until_error_count
     has_errors = total_errors > 0
 
+    read_metrics = _repository().metrics()
+    _EXPORT_STATS.update(
+        calls=int(read_metrics["calls"]),
+        rows=int(read_metrics["rows"]),
+        seconds=float(read_metrics["seconds"]),
+        slowest_seconds=float(read_metrics["slowest_seconds"]),
+    )
     summary = {
         "schema": _JSON_SCHEMA,
         "schema_version": _JSON_SCHEMA_VERSION,

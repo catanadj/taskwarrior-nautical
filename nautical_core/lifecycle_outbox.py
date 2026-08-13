@@ -178,10 +178,6 @@ def lifecycle_outbox_path(taskdata: Path) -> Path:
     return Path(taskdata) / ".nautical-state" / ".nautical_lifecycle_outbox.db"
 
 
-def obsolete_queue_path(taskdata: Path) -> Path:
-    return Path(taskdata) / ".nautical-state" / ".nautical_queue.db"
-
-
 def _busy(exc: BaseException) -> bool:
     text = str(exc).lower()
     return "locked" in text or "busy" in text
@@ -202,6 +198,16 @@ def _decode_plan(value: Any) -> LifecyclePlan:
         return LifecyclePlan.from_dict(raw)
     except (LifecycleContractError, TypeError, ValueError) as exc:
         raise LifecycleOutboxError(f"invalid lifecycle plan: {exc}") from exc
+
+
+def _canonical_object_json(value: Any, *, field: str) -> str:
+    try:
+        decoded = json.loads(str(value or ""))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise LifecycleOutboxError(f"invalid outbox {field} JSON: {exc}") from exc
+    if not isinstance(decoded, dict):
+        raise LifecycleOutboxError(f"invalid outbox {field} JSON: expected object")
+    return json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _transition_allowed(current: ExecutionStage, target: ExecutionStage) -> bool:
@@ -337,9 +343,6 @@ class LifecycleOutboxRepository:
             raise LifecycleOutboxError(f"outbox schema is incomplete: missing {', '.join(missing)}")
 
     def _with_connection(self, operation: Callable[[sqlite3.Connection], OutboxResult]) -> OutboxResult:
-        opened = self.open()
-        if not opened.ok:
-            return opened
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
@@ -358,13 +361,23 @@ class LifecycleOutboxRepository:
     @staticmethod
     def _from_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
         plan = _decode_plan(row["plan_json"])
+        intent_id = str(row["intent_id"])
+        if intent_id != plan.identity.idempotency_key:
+            raise LifecycleOutboxError("outbox row intent id differs from lifecycle plan identity")
+        if str(row["plan_fingerprint"] or "") != plan.semantic_key():
+            raise LifecycleOutboxError("outbox row plan fingerprint differs from immutable lifecycle plan")
+        expected_guard = json.dumps(
+            plan.parent_guard.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        if _canonical_object_json(row["parent_guard_json"], field="parent guard") != expected_guard:
+            raise LifecycleOutboxError("outbox row parent guard differs from immutable lifecycle plan")
         try:
             state = OutboxProcessingState(str(row["processing_state"]))
             stage = ExecutionStage(str(row["lifecycle_stage"]))
         except (TypeError, ValueError) as exc:
             raise LifecycleOutboxError("outbox row has invalid state or stage") from exc
         return LifecycleOutboxRecord(
-            intent_id=str(row["intent_id"]),
+            intent_id=intent_id,
             plan=plan,
             configuration_fingerprint=str(row["configuration_fingerprint"]),
             schedule_fingerprint=str(row["schedule_fingerprint"]),
@@ -443,73 +456,12 @@ class LifecycleOutboxRepository:
 
         return self._with_connection(operation)
 
-    def claim(self, *, owner: str, lease_seconds: float, limit: int) -> OutboxResult:
-        owner = str(owner or "").strip()
-        if not owner:
-            return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires an owner")
-        if lease_seconds <= 0 or limit <= 0:
-            return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires positive lease and limit")
-        now = self._clock()
-        expires = now + float(lease_seconds)
-
-        def operation(conn: sqlite3.Connection) -> OutboxResult:
-            with _transaction(conn):
-                conn.execute(
-                    """
-                    UPDATE lifecycle_outbox
-                    SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=?
-                    WHERE processing_state=? AND lease_expires_at <= ?
-                    """,
-                    (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
-                )
-                rows = conn.execute(
-                    """
-                    SELECT intent_id FROM lifecycle_outbox
-                    WHERE processing_state IN (?, ?)
-                    ORDER BY created_at, intent_id LIMIT ?
-                    """,
-                    (*_ACTIVE_STATES, int(limit)),
-                ).fetchall()
-                intent_ids = [str(row[0]) for row in rows]
-                for intent_id in intent_ids:
-                    conn.execute(
-                        """
-                        UPDATE lifecycle_outbox
-                        SET processing_state=?, lease_owner=?, lease_expires_at=?, attempts=attempts+1,
-                            failure_json='', updated_at=?
-                        WHERE intent_id=? AND processing_state IN (?, ?)
-                        """,
-                        (
-                            OutboxProcessingState.CLAIMED.value, owner, expires, now,
-                            intent_id, *_ACTIVE_STATES,
-                        ),
-                    )
-                records: list[LifecycleOutboxRecord] = []
-                for intent_id in intent_ids:
-                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
-                    if row is None:
-                        raise LifecycleOutboxError("claimed outbox row disappeared")
-                    try:
-                        records.append(self._from_row(row))
-                    except LifecycleOutboxError as exc:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                # The ordinary result carries one record for direct callers;
-                # batched drains obtain the complete deterministic list here.
-                if not records:
-                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED)
-                return OutboxResult(OutboxResultKind.APPLIED, record=records[0])
-
-        return self._with_connection(operation)
-
     def claim_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and limit"), ()
         now = self._clock()
         expires = now + float(lease_seconds)
-        opened = self.open()
-        if not opened.ok:
-            return opened, ()
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
@@ -683,10 +635,7 @@ class LifecycleOutboxRepository:
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
     def status(self, *, limit: int = 20) -> tuple[OutboxResult, dict[str, Any]]:
-        opened = self.open()
         empty = {"schema_version": OUTBOX_SCHEMA_VERSION, "states": {}, "records": []}
-        if not opened.ok:
-            return opened, empty
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
@@ -743,5 +692,4 @@ __all__ = (
     "OutboxResult",
     "OutboxResultKind",
     "lifecycle_outbox_path",
-    "obsolete_queue_path",
 )

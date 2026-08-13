@@ -2507,6 +2507,59 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             f"poison row was not quarantined: {status}",
         )
 
+        tampered_plan = plan_for(10)
+        expect(repo.enqueue(tampered_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1").ok, "guard test enqueue failed")
+        with sqlite3.connect(str(repo.path)) as conn:
+            conn.execute(
+                "UPDATE lifecycle_outbox SET parent_guard_json=? WHERE intent_id=?",
+                ('{"chain":"off"}', tampered_plan.identity.idempotency_key),
+            )
+        claimed, records = repo.claim_batch(owner="integrity-worker", lease_seconds=5, limit=10)
+        expect(claimed.ok and not records, f"tampered immutable row was claimed: {claimed}, {records}")
+        status_result, status = repo.status()
+        expect(status_result.ok, f"outbox integrity status failed: {status_result}")
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.QUARANTINED.value) == 2,
+            f"tampered immutable row was not quarantined: {status}",
+        )
+        reasons = [record.get("reason", "") for record in status.get("records", [])]
+        expect(any("parent guard differs" in reason for reason in reasons), f"integrity reason was not preserved: {status}")
+
+
+def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema():
+    """First-open races are bounded, WAL-backed, and never silently downgrade schema."""
+    import threading
+
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OUTBOX_SCHEMA_VERSION, OutboxResultKind
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        barrier = threading.Barrier(4)
+        outcomes = []
+        outcomes_lock = threading.Lock()
+
+        def open_repository() -> None:
+            barrier.wait()
+            result = LifecycleOutboxRepository(root, connect_timeout=0.1).open()
+            with outcomes_lock:
+                outcomes.append(result)
+
+        threads = [threading.Thread(target=open_repository) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        expect(len(outcomes) == 4 and all(result.ok for result in outcomes), f"concurrent outbox initialization failed: {outcomes}")
+
+        repo = LifecycleOutboxRepository(root)
+        with sqlite3.connect(str(repo.path)) as conn:
+            journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            expect(journal_mode == "wal", f"outbox did not retain WAL journal mode: {journal_mode}")
+            conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION + 1}")
+        rejected = repo.open()
+        expect(rejected.kind is OutboxResultKind.REJECTED, f"future outbox schema was accepted: {rejected}")
+        expect("newer than supported" in rejected.reason, f"future schema rejection was not actionable: {rejected}")
+
 
 def test_on_exit_claims_and_advances_lifecycle_outbox_only():
     """The on-exit adapter claims durable plans without queue-row conversion."""
@@ -35843,6 +35896,7 @@ TESTS = [
     test_on_exit_mutation_callbacks_use_typed_gateway_context,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
+    test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     test_on_exit_claims_and_advances_lifecycle_outbox_only,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,

@@ -17,10 +17,10 @@ if str(BASE_DIR) not in sys.path:
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import chain_repair, task_command  # noqa: E402
-from nautical_core.integration_context import (  # noqa: E402
-    IntegrationAccess,
-    IntegrationContext,
-    build_operator_context,
+from nautical_core.integration_context import IntegrationAccess  # noqa: E402
+from nautical_core.taskwarrior_uow import (  # noqa: E402
+    TaskwarriorUnitOfWork,
+    build_operator_uow,
 )
 
 
@@ -105,7 +105,7 @@ def _failure(args: argparse.Namespace, stage: str, exc: Exception) -> int:
 def main(
     argv: list[str] | None = None,
     *,
-    _integration_context: IntegrationContext | None = None,
+    _unit_of_work: TaskwarriorUnitOfWork | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Repair deterministic Nautical chain link gaps.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
@@ -113,16 +113,16 @@ def main(
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     args = parser.parse_args(argv)
 
-    if _integration_context is None:
+    if _unit_of_work is None:
         try:
-            _integration_context = build_operator_context(
+            _unit_of_work = build_operator_uow(
                 core=nautical_core_package,
                 task_binary=args.task_bin,
                 access=IntegrationAccess.MUTATION if args.apply else IntegrationAccess.READ_ONLY,
             )
         except Exception as exc:
             return _failure(args, "integration_context", exc)
-    command_prefix = _integration_context.command_prefix
+    command_prefix = _unit_of_work.context.command_prefix
     try:
         tasks = _export(command_prefix)
     except Exception as exc:

@@ -145,13 +145,14 @@ def _find_nautical_core() -> Optional[Any]:
 core = _find_nautical_core()
 try:
     from nautical_core import task_command as _task_command
-    from nautical_core.integration_context import IntegrationAccess, build_operator_context
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.taskwarrior_uow import build_operator_uow
 except Exception:
     _task_command = None
     IntegrationAccess = None
-    build_operator_context = None
+    build_operator_uow = None
 
-_INTEGRATION_CONTEXT = None
+_UNIT_OF_WORK = None
 
 # Resolve the display timezone only after Nautical core has loaded.  The core
 # profile is authoritative; the host timezone remains a safe fallback when
@@ -168,9 +169,9 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
     """Run a read-only Taskwarrior export through Nautical's command boundary."""
     if _task_command is None:
         raise RuntimeError("Nautical Taskwarrior command support is unavailable")
-    if _INTEGRATION_CONTEXT is None:
+    if _UNIT_OF_WORK is None:
         raise RuntimeError("Navigator integration context is unavailable")
-    prefix = _INTEGRATION_CONTEXT.command_prefix
+    prefix = _UNIT_OF_WORK.context.command_prefix
     result = _task_command.run_task_command(
         prefix[0],
         [
@@ -199,10 +200,10 @@ def _reload_navigator_configuration() -> None:
     """Apply and validate the same Taskdata configuration used by hooks."""
     if core is None:
         raise RuntimeError("Nautical core package is unavailable")
-    if build_operator_context is None or IntegrationAccess is None:
+    if build_operator_uow is None or IntegrationAccess is None:
         raise RuntimeError("Nautical integration context support is unavailable")
     try:
-        context = build_operator_context(
+        unit_of_work = build_operator_uow(
             core=core,
             task_binary=shutil.which("task") or "task",
             env=os.environ,
@@ -210,9 +211,9 @@ def _reload_navigator_configuration() -> None:
         )
     except Exception as exc:
         raise RuntimeError(f"Navigator configuration validation failed: {exc}") from exc
-    global LOCAL_ZONE, _INTEGRATION_CONTEXT
-    _INTEGRATION_CONTEXT = context
-    LOCAL_ZONE = context.local_timezone
+    global LOCAL_ZONE, _UNIT_OF_WORK
+    _UNIT_OF_WORK = unit_of_work
+    LOCAL_ZONE = unit_of_work.context.local_timezone
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Navigator helpers (explain/validate/self-check)

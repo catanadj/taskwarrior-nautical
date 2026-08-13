@@ -6,9 +6,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 import os
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Mapping
 
-from .integration_context import DiagnosticEvent, DiagnosticsSink, IntegrationContext
+from .integration_context import (
+    DiagnosticEvent,
+    DiagnosticsSink,
+    IntegrationAccess,
+    IntegrationContext,
+    build_operator_context,
+)
 from .integration_models import CommandFailureKind
 from .taskwarrior_client import CommandObservation, TaskwarriorClient
 
@@ -211,6 +218,27 @@ def build_taskwarrior_uow(
     return TaskwarriorUnitOfWork.create(context, env=env)
 
 
+def build_operator_uow(
+    *,
+    core: ModuleType,
+    task_binary: str,
+    taskdata: str | None = None,
+    env: Mapping[str, str] | None = None,
+    access: IntegrationAccess = IntegrationAccess.READ_ONLY,
+    command_budget: int = 256,
+) -> TaskwarriorUnitOfWork:
+    """Build the sole unit of work for one operator invocation."""
+    context = build_operator_context(
+        core=core,
+        task_binary=task_binary,
+        taskdata=taskdata,
+        env=env,
+        access=access,
+        command_budget=command_budget,
+    )
+    return build_taskwarrior_uow(context, env=env)
+
+
 __all__ = (
     "CachedAuthoritativeRead",
     "CommandLedger",
@@ -220,5 +248,6 @@ __all__ = (
     "QueryScopeKind",
     "SnapshotProvenance",
     "TaskwarriorUnitOfWork",
+    "build_operator_uow",
     "build_taskwarrior_uow",
 )

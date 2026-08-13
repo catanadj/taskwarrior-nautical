@@ -27,7 +27,8 @@ if str(ROOT) not in sys.path:
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
-from nautical_core.integration_context import IntegrationAccess, build_operator_context  # noqa: E402
+from nautical_core.integration_context import IntegrationAccess  # noqa: E402
+from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
@@ -1324,7 +1325,7 @@ def main() -> int:
     env = os.environ.copy()
     findings: list[dict[str, Any]] = []
     try:
-        integration = build_operator_context(
+        unit_of_work = build_operator_uow(
             core=nautical_core_package,
             task_binary=args.task_bin,
             taskdata=args.taskdata,
@@ -1364,8 +1365,8 @@ def main() -> int:
             details={"error": str(exc)},
         )
     else:
-        taskdata = integration.taskdata
-        args.task_bin = integration.command_prefix[0]
+        taskdata = unit_of_work.context.taskdata
+        args.task_bin = unit_of_work.context.command_prefix[0]
     env["TASKDATA"] = str(taskdata)
 
     hooks_dir = _check_runtime(

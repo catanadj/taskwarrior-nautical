@@ -26,11 +26,7 @@ os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import queue_store, reconcile, safe_lock, task_command  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
-from nautical_core.integration_context import (  # noqa: E402
-    IntegrationAccess,
-    IntegrationContext,
-    build_operator_context,
-)
+from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.lifecycle_executor import (  # noqa: E402
     LifecycleTerminalExecutor,
     LifecycleTransitionExecutor,
@@ -47,6 +43,10 @@ from nautical_core.lifecycle_models import (  # noqa: E402
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
+from nautical_core.taskwarrior_uow import (  # noqa: E402
+    TaskwarriorUnitOfWork,
+    build_operator_uow,
+)
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -1872,7 +1872,7 @@ def main(
     *,
     _apply_lease_held: bool = False,
     _locked_taskdata: Path | None = None,
-    _integration_context: IntegrationContext | None = None,
+    _unit_of_work: TaskwarriorUnitOfWork | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Repair Nautical chains after hookless completion, expiration, or deletion.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
@@ -1889,9 +1889,9 @@ def main(
     args = parser.parse_args(argv)
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
-    if _integration_context is None:
+    if _unit_of_work is None:
         try:
-            _integration_context = build_operator_context(
+            _unit_of_work = build_operator_uow(
                 core=nautical_core_package,
                 task_binary=args.task_bin,
                 env=os.environ,
@@ -1899,8 +1899,8 @@ def main(
             )
         except Exception as exc:
             return _startup_failure(args, "integration_context", exc)
-    args.task_bin = _integration_context.command_prefix[0]
-    resolved_taskdata = _integration_context.taskdata
+    args.task_bin = _unit_of_work.context.command_prefix[0]
+    resolved_taskdata = _unit_of_work.context.taskdata
     if args.apply and not _apply_lease_held:
         with _reconcile_apply_lock(resolved_taskdata) as acquired:
             if not acquired:
@@ -1910,7 +1910,7 @@ def main(
                 argv,
                 _apply_lease_held=True,
                 _locked_taskdata=resolved_taskdata,
-                _integration_context=_integration_context,
+                _unit_of_work=_unit_of_work,
             )
 
     try:

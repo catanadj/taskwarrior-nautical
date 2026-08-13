@@ -1953,6 +1953,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     from nautical_core.integration_models import (
         Absent,
         ChainDisablePayload,
+        ChildCompensationPayload,
         ChildImportPayload,
         CommandFailureKind,
         FailureEvidence,
@@ -2015,6 +2016,9 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             if args[0:3] == ["rc.hooks=off", "rc.verbose=nothing", "import"]:
                 row = json.loads(input_text or "{}")
                 self.repo.rows[str(row["uuid"]).lower()] = row
+            elif "delete" in args:
+                uuid_token = next((item for item in args if item.startswith("uuid:")), "")
+                self.repo.rows.pop(uuid_token.split(":", 1)[1].lower(), None)
             else:
                 update_at = args.index("modify") + 1
                 target = self.repo.rows[parent_uuid]
@@ -2060,6 +2064,11 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             "link": 8,
             "prevLink": parent_uuid[:8],
             "description": "service child",
+            "status": "pending",
+            "chain": "on",
+            "modified": "20260813T100000Z",
+            "anchor": "w:mon",
+            "cp": "1d",
         },
         parent_uuid=parent_uuid,
     )
@@ -2096,10 +2105,49 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         )
     )
     expect(metadata.kind is MutationOutcomeKind.APPLIED, f"metadata repair was not applied: {metadata}")
+    child_row = uow.repository.rows[child_uuid]
+    child_guard = MutationGuard(
+        child_uuid,
+        "pending",
+        "chain-service",
+        8,
+        recurrence_fingerprint(child_row),
+        (GuardTimestamp(GuardTimestampField.MODIFIED, child_row["modified"]),),
+        5,
+        "on",
+    )
+    compensated = service.apply(
+        MutationRequest(
+            MutationOperation.CHILD_COMPENSATION,
+            child_guard,
+            ChildCompensationPayload(child_uuid),
+        )
+    )
+    expect(compensated.kind is MutationOutcomeKind.APPLIED, f"child compensation was not applied: {compensated}")
+    replay_compensation = service.apply(
+        MutationRequest(
+            MutationOperation.CHILD_COMPENSATION,
+            MutationGuard(
+                child_uuid,
+                "pending",
+                "chain-service",
+                8,
+                child_guard.recurrence_identity,
+                child_guard.timestamps,
+                6,
+                "on",
+            ),
+            ChildCompensationPayload(child_uuid),
+        )
+    )
+    expect(
+        replay_compensation.kind is MutationOutcomeKind.ALREADY_APPLIED,
+        f"child compensation replay was not idempotent: {replay_compensation}",
+    )
     uow.repository.unavailable = True
-    unavailable = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 5))
+    unavailable = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 6))
     expect(unavailable.kind is MutationOutcomeKind.RETRYABLE, f"unavailable guard was not retryable: {unavailable}")
-    expect(len(uow.client.calls) == 5, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
+    expect(len(uow.client.calls) == 6, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
 
 
 def test_on_exit_mutation_callbacks_use_typed_gateway_context():

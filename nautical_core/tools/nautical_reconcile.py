@@ -39,10 +39,12 @@ from nautical_core.lifecycle_models import (  # noqa: E402
     LifecyclePlan,
     LifecycleOutcomeKind,
     TaskSnapshot,
+    recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
 from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
+    ChildCompensationPayload,
     Absent,
     ChildImportPayload,
     Found,
@@ -847,48 +849,6 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
         "link:" if legacy_root else f"link:{link}",
         "nextLink:",
     ]
-
-
-def _modify_parent_nextlink(task_bin: str, parent: dict[str, Any], child_short: str) -> None:
-    filters = _parent_guard_filters(parent)
-    updates = ["link:1"] if _is_legacy_root_without_link(parent) else []
-    updates.append(f"nextLink:{child_short}")
-    proc = task_command.run_task_command(
-        task_bin,
-        [
-            "rc.hooks=off",
-            "rc.confirmation=off",
-            "rc.verbose=nothing",
-            *filters,
-            "modify",
-            *updates,
-        ],
-        timeout=30.0,
-        purpose="reconcile parent-link mutation",
-    )
-    if proc.returncode != 0:
-        raise task_command.TaskCommandFailure(proc, "parent nextLink update")
-
-
-def _disable_parent_chain(task_bin: str, parent: dict[str, Any]) -> None:
-    filters = _parent_guard_filters(parent)
-    updates = ["link:1"] if _is_legacy_root_without_link(parent) else []
-    updates.append("chain:off")
-    proc = task_command.run_task_command(
-        task_bin,
-        [
-            "rc.hooks=off",
-            "rc.confirmation=off",
-            "rc.verbose=nothing",
-            *filters,
-            "modify",
-            *updates,
-        ],
-        timeout=30.0,
-        purpose="reconcile chain-disable mutation",
-    )
-    if proc.returncode != 0:
-        raise task_command.TaskCommandFailure(proc, "parent chain update")
 
 
 def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
@@ -1752,15 +1712,28 @@ class _ReconcileLifecycleServices:
         if not child_uuid:
             return self._result(OperationState.FAILED, reason="imported child has no UUID for compensation")
         try:
-            result = task_command.run_task_command(
-                self.task_bin,
-                ["rc.hooks=off", "rc.confirmation=off", f"uuid:{child_uuid}", "delete"],
-                timeout=30.0,
-                purpose="reconcile child compensation",
+            status = str(child.get("status") or "").strip().lower()
+            chain_id = str(child.get("chainID") or "").strip()
+            modified = str(child.get("modified") or "").strip()
+            link = self._link(child.get("link"))
+            if status not in {"pending", "waiting", "recurring"} or not chain_id or not modified or link is None:
+                return self._result(OperationState.CONFLICT, reason="imported child has incomplete compensation identity")
+            guard = MutationGuard(
+                task_uuid=child_uuid,
+                status=status,
+                chain_id=chain_id,
+                link=link,
+                recurrence_identity=recurrence_fingerprint(child),
+                timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+                expected_mutation_epoch=self.unit_of_work.mutation_epoch,
+                chain=str(child.get("chain") or "on"),
             )
-            if result.returncode == 0:
-                return self._result(OperationState.APPLIED)
-            return self._result(OperationState.FAILED, reason=task_command.failure_message(result, "child compensation"))
+            request = MutationRequest(
+                MutationOperation.CHILD_COMPENSATION,
+                guard,
+                ChildCompensationPayload(child_uuid, status),
+            )
+            return self._mutation_result(self.mutations.apply(request))
         except Exception as exc:
             return self._result(OperationState.FAILED, reason=f"child compensation failed: {exc}")
 

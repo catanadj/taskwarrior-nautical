@@ -289,6 +289,7 @@ class MutationGuard:
 
 class MutationOperation(str, Enum):
     CHILD_IMPORT = "child_import"
+    CHILD_COMPENSATION = "child_compensation"
     PARENT_LINK = "parent_link"
     CHAIN_DISABLE = "chain_disable"
     NATIVE_UNTIL_REPAIR = "native_until_repair"
@@ -297,6 +298,7 @@ class MutationOperation(str, Enum):
 
 class MutationPostcondition(str, Enum):
     CHILD_IMPORTED = "child_imported"
+    CHILD_COMPENSATED = "child_compensated"
     PARENT_LINKED = "parent_linked"
     CHAIN_DISABLED = "chain_disabled"
     NATIVE_UNTIL_REPAIRED = "native_until_repaired"
@@ -305,6 +307,7 @@ class MutationPostcondition(str, Enum):
 
 _OPERATION_POSTCONDITION = {
     MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+    MutationOperation.CHILD_COMPENSATION: MutationPostcondition.CHILD_COMPENSATED,
     MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
     MutationOperation.CHAIN_DISABLE: MutationPostcondition.CHAIN_DISABLED,
     MutationOperation.NATIVE_UNTIL_REPAIR: MutationPostcondition.NATIVE_UNTIL_REPAIRED,
@@ -428,6 +431,21 @@ class ChildImportPayload:
         return {key: _thaw(value) for key, value in self.fields}
 
 
+@dataclass(frozen=True, slots=True)
+class ChildCompensationPayload:
+    """Delete one imported child whose guarded linkage could not complete."""
+
+    task_uuid: str
+    expected_status: str = "pending"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "compensation task UUID"))
+        status = _required_text(self.expected_status, "compensation task status").lower()
+        if status not in {"pending", "waiting", "recurring"}:
+            raise IntegrationContractError("child compensation requires a mutable task status")
+        object.__setattr__(self, "expected_status", status)
+
+
 def _coerce_payload_link(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -539,6 +557,7 @@ class MetadataRepairPayload:
 
 MutationPayload: TypeAlias = (
     ChildImportPayload
+    | ChildCompensationPayload
     | ParentLinkPayload
     | ChainDisablePayload
     | NativeUntilRepairPayload
@@ -563,6 +582,7 @@ class MutationRequest:
             raise IntegrationContractError("mutation request requires a MutationGuard")
         expected = {
             MutationOperation.CHILD_IMPORT: ChildImportPayload,
+            MutationOperation.CHILD_COMPENSATION: ChildCompensationPayload,
             MutationOperation.PARENT_LINK: ParentLinkPayload,
             MutationOperation.CHAIN_DISABLE: ChainDisablePayload,
             MutationOperation.NATIVE_UNTIL_REPAIR: NativeUntilRepairPayload,
@@ -591,6 +611,8 @@ class TaskwarriorMutationPort(Protocol):
     def apply(self, request: MutationRequest) -> MutationOutcome: ...
 
     def import_child(self, request: MutationRequest) -> MutationOutcome: ...
+
+    def compensate_child(self, request: MutationRequest) -> MutationOutcome: ...
 
     def link_parent(self, request: MutationRequest) -> MutationOutcome: ...
 
@@ -747,6 +769,7 @@ __all__ = (
     "Absent",
     "CommandFailureKind",
     "ChainDisablePayload",
+    "ChildCompensationPayload",
     "ChildImportPayload",
     "FailureEvidence",
     "Found",

@@ -14,6 +14,7 @@ from typing import Any, Mapping, Protocol, Sequence
 from .integration_models import (
     Absent,
     ChainDisablePayload,
+    ChildCompensationPayload,
     ChildImportPayload,
     CommandFailureKind,
     FailureEvidence,
@@ -123,6 +124,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             kind = MutationOutcomeKind.RETRYABLE if result.retryable else MutationOutcomeKind.MANUAL_REVIEW
             return None, self._outcome(request, kind, reason=result.evidence.detail, failure=result.evidence)
         if isinstance(result, Absent):
+            if request.operation is MutationOperation.CHILD_COMPENSATION:
+                return None, self._outcome(
+                    request,
+                    MutationOutcomeKind.ALREADY_APPLIED,
+                    postcondition=MutationPostcondition.CHILD_COMPENSATED,
+                )
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason="guard task is absent")
         if not isinstance(result, Found):
             return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard read result")
@@ -193,6 +200,19 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         self._uow.record_mutation(uncertain=False)
         return None
 
+    def _run_delete(self, request: MutationRequest, selectors: Sequence[str]) -> MutationOutcome | None:
+        result = self._uow.client.execute(
+            [*selectors, "delete"],
+            purpose=f"lifecycle {request.operation.value}",
+            timeout=self._timeout,
+            attempts=1,
+        )
+        if not result.ok:
+            self._uow.record_mutation(uncertain=True)
+            return self._command_failure(request, result)
+        self._uow.record_mutation(uncertain=True)
+        return None
+
     def _verify(
         self,
         request: MutationRequest,
@@ -213,17 +233,43 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="postcondition does not match")
         return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
 
+    def _verify_absent(self, request: MutationRequest, postcondition: MutationPostcondition) -> MutationOutcome:
+        result = self._uow.repository.by_uuid(request.guard.task_uuid, refresh=True)
+        if isinstance(result, Absent):
+            return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
+        if isinstance(result, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if result.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return self._outcome(request, kind, reason=result.evidence.detail, failure=result.evidence)
+        if isinstance(result, Found):
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="deleted child still exists")
+        return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid deletion verification result")
+
     def apply(self, request: MutationRequest) -> MutationOutcome:
         if not isinstance(request, MutationRequest):
             raise TypeError("mutation service requires a MutationRequest")
         handlers = {
             MutationOperation.CHILD_IMPORT: self.import_child,
+            MutationOperation.CHILD_COMPENSATION: self.compensate_child,
             MutationOperation.PARENT_LINK: self.link_parent,
             MutationOperation.CHAIN_DISABLE: self.disable_chain,
             MutationOperation.NATIVE_UNTIL_REPAIR: self.repair_native_until,
             MutationOperation.METADATA_REPAIR: self.repair_metadata,
         }
         return handlers[request.operation](request)
+
+    def compensate_child(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.CHILD_COMPENSATION or not isinstance(request.payload, ChildCompensationPayload):
+            raise TypeError("child compensation requires a child-compensation request")
+        child, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert child is not None
+        if _text(child.get("status")).lower() != request.payload.expected_status:
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="child status changed before compensation")
+        failure = self._run_delete(request, self._selectors(request.guard))
+        if failure is not None:
+            return failure
+        return self._verify_absent(request, MutationPostcondition.CHILD_COMPENSATED)
 
     def import_child(self, request: MutationRequest) -> MutationOutcome:
         if request.operation is not MutationOperation.CHILD_IMPORT or not isinstance(request.payload, ChildImportPayload):

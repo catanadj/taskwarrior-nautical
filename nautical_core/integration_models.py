@@ -187,12 +187,162 @@ class Unavailable:
 TaskRead: TypeAlias = Found[T] | Absent | Unavailable
 
 
+class GuardTimestampField(str, Enum):
+    MODIFIED = "modified"
+    DUE = "due"
+    UNTIL = "until"
+    END = "end"
+
+
+@dataclass(frozen=True, slots=True)
+class GuardTimestamp:
+    field: GuardTimestampField
+    value: str
+
+    def __post_init__(self) -> None:
+        try:
+            field = GuardTimestampField(self.field)
+        except (TypeError, ValueError) as exc:
+            raise IntegrationContractError("invalid guard timestamp field") from exc
+        object.__setattr__(self, "field", field)
+        object.__setattr__(self, "value", _required_text(self.value, f"{field.value} guard timestamp"))
+
+
+@dataclass(frozen=True, slots=True)
+class MutationGuard:
+    """Authoritative task facts that must hold immediately before mutation."""
+
+    task_uuid: str
+    status: str
+    chain_id: str
+    link: int
+    recurrence_identity: str
+    timestamps: tuple[GuardTimestamp, ...]
+    expected_mutation_epoch: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "guard task UUID"))
+        object.__setattr__(self, "status", _required_text(self.status, "guard task status"))
+        object.__setattr__(self, "chain_id", _required_text(self.chain_id, "guard chainID"))
+        object.__setattr__(
+            self,
+            "recurrence_identity",
+            _required_text(self.recurrence_identity, "guard recurrence identity"),
+        )
+        if isinstance(self.link, bool) or not isinstance(self.link, int) or self.link < 0:
+            raise IntegrationContractError("guard link must be a non-negative integer")
+        if (
+            isinstance(self.expected_mutation_epoch, bool)
+            or not isinstance(self.expected_mutation_epoch, int)
+            or self.expected_mutation_epoch < 0
+        ):
+            raise IntegrationContractError("guard mutation epoch must be a non-negative integer")
+        timestamps = tuple(self.timestamps)
+        if not timestamps or any(not isinstance(item, GuardTimestamp) for item in timestamps):
+            raise IntegrationContractError("guard requires typed timestamp evidence")
+        fields = tuple(item.field for item in timestamps)
+        if len(fields) != len(set(fields)):
+            raise IntegrationContractError("guard timestamp fields must be unique")
+        if GuardTimestampField.MODIFIED not in fields:
+            raise IntegrationContractError("guard requires the task modified timestamp")
+        object.__setattr__(self, "timestamps", timestamps)
+
+
+class MutationOperation(str, Enum):
+    CHILD_IMPORT = "child_import"
+    PARENT_LINK = "parent_link"
+    CHAIN_DISABLE = "chain_disable"
+    NATIVE_UNTIL_REPAIR = "native_until_repair"
+    METADATA_REPAIR = "metadata_repair"
+
+
+class MutationPostcondition(str, Enum):
+    CHILD_IMPORTED = "child_imported"
+    PARENT_LINKED = "parent_linked"
+    CHAIN_DISABLED = "chain_disabled"
+    NATIVE_UNTIL_REPAIRED = "native_until_repaired"
+    METADATA_REPAIRED = "metadata_repaired"
+
+
+_OPERATION_POSTCONDITION = {
+    MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+    MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+    MutationOperation.CHAIN_DISABLE: MutationPostcondition.CHAIN_DISABLED,
+    MutationOperation.NATIVE_UNTIL_REPAIR: MutationPostcondition.NATIVE_UNTIL_REPAIRED,
+    MutationOperation.METADATA_REPAIR: MutationPostcondition.METADATA_REPAIRED,
+}
+
+
+class MutationOutcomeKind(str, Enum):
+    APPLIED = "applied"
+    ALREADY_APPLIED = "already_applied"
+    RETRYABLE = "retryable"
+    REJECTED = "rejected"
+    CONFLICT = "conflict"
+    MANUAL_REVIEW = "manual_review"
+
+
+@dataclass(frozen=True, slots=True)
+class MutationOutcome:
+    """Tagged result of one guarded, named Taskwarrior mutation."""
+
+    operation: MutationOperation
+    kind: MutationOutcomeKind
+    guard: MutationGuard
+    postconditions: tuple[MutationPostcondition, ...] = ()
+    reason: str = ""
+    failure: FailureEvidence | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            operation = MutationOperation(self.operation)
+            kind = MutationOutcomeKind(self.kind)
+            postconditions = tuple(MutationPostcondition(item) for item in self.postconditions)
+        except (TypeError, ValueError) as exc:
+            raise IntegrationContractError("invalid mutation operation, outcome, or postcondition") from exc
+        if not isinstance(self.guard, MutationGuard):
+            raise IntegrationContractError("mutation outcome requires a MutationGuard")
+        if len(postconditions) != len(set(postconditions)):
+            raise IntegrationContractError("mutation postconditions must be unique")
+        expected = _OPERATION_POSTCONDITION[operation]
+        succeeded = kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}
+        if succeeded and postconditions != (expected,):
+            raise IntegrationContractError(
+                f"{kind.value} {operation.value} outcome requires {expected.value} postcondition"
+            )
+        if not succeeded and expected in postconditions:
+            raise IntegrationContractError("unsuccessful mutation cannot claim its expected postcondition")
+        reason = str(self.reason or "").strip()
+        if not succeeded and not reason:
+            raise IntegrationContractError(f"{kind.value} mutation outcome requires a reason")
+        if succeeded and self.failure is not None:
+            raise IntegrationContractError("successful mutation outcome cannot carry failure evidence")
+        if kind is MutationOutcomeKind.RETRYABLE:
+            if self.failure is None or not self.failure.retryable:
+                raise IntegrationContractError("retryable mutation outcome requires retryable failure evidence")
+        elif self.failure is not None and self.failure.retryable:
+            raise IntegrationContractError("retryable failure evidence requires a retryable mutation outcome")
+        if self.failure is not None and not isinstance(self.failure, FailureEvidence):
+            raise IntegrationContractError("mutation failure must be structured evidence")
+        object.__setattr__(self, "operation", operation)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "postconditions", postconditions)
+        object.__setattr__(self, "reason", reason)
+
+
 __all__ = (
     "Absent",
     "CommandFailureKind",
     "FailureEvidence",
     "Found",
+    "GuardTimestamp",
+    "GuardTimestampField",
     "IntegrationContractError",
+    "MutationGuard",
+    "MutationOperation",
+    "MutationOutcome",
+    "MutationOutcomeKind",
+    "MutationPostcondition",
     "TaskCommand",
     "TaskCommandResult",
     "TaskRead",

@@ -1188,6 +1188,103 @@ def test_integration_command_and_read_models_enforce_contract():
         raise AssertionError("integration command was mutable")
 
 
+def test_integration_mutation_models_enforce_guards_and_postconditions():
+    """Mutation outcomes require complete guards and operation-specific proof."""
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        GuardTimestamp,
+        GuardTimestampField,
+        IntegrationContractError,
+        MutationGuard,
+        MutationOperation,
+        MutationOutcome,
+        MutationOutcomeKind,
+        MutationPostcondition,
+        TaskCommand,
+        Unavailable,
+    )
+
+    command = TaskCommand(("task", "uuid", "modify", "chain:off"), "disable chain", 12.0)
+    busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.2, True, "lock active")
+    guard = MutationGuard(
+        task_uuid="00000000-0000-0000-0000-000000000921",
+        status="pending",
+        chain_id="chain-1",
+        link=7,
+        recurrence_identity="rf1-example",
+        timestamps=(
+            GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),
+            GuardTimestamp(GuardTimestampField.DUE, "20260814T070000Z"),
+        ),
+        expected_mutation_epoch=2,
+    )
+    applied = MutationOutcome(
+        MutationOperation.CHAIN_DISABLE,
+        MutationOutcomeKind.APPLIED,
+        guard,
+        (MutationPostcondition.CHAIN_DISABLED,),
+    )
+    retryable = MutationOutcome(
+        MutationOperation.CHAIN_DISABLE,
+        MutationOutcomeKind.RETRYABLE,
+        guard,
+        reason="Taskwarrior is busy",
+        failure=busy,
+    )
+    expect(applied.postconditions == (MutationPostcondition.CHAIN_DISABLED,), "postcondition was lost")
+    expect(retryable.failure is busy, "mutation failure evidence was lost")
+
+    unavailable = Unavailable("guard lookup", busy)
+    invalid_cases = (
+        lambda: MutationGuard("", "pending", "chain-1", 7, "rf1", guard.timestamps, 0),
+        lambda: MutationGuard("uuid", "pending", "", 7, "rf1", guard.timestamps, 0),
+        lambda: MutationGuard("uuid", "pending", "chain-1", -1, "rf1", guard.timestamps, 0),
+        lambda: MutationGuard("uuid", "pending", "chain-1", 7, "", guard.timestamps, 0),
+        lambda: MutationGuard(
+            "uuid",
+            "pending",
+            "chain-1",
+            7,
+            "rf1",
+            (GuardTimestamp(GuardTimestampField.DUE, "20260814T070000Z"),),
+            0,
+        ),
+        lambda: MutationGuard("uuid", "pending", "chain-1", 7, "rf1", guard.timestamps * 2, 0),
+        lambda: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.APPLIED,
+            guard,
+            (),
+        ),
+        lambda: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.REJECTED,
+            guard,
+            (MutationPostcondition.CHAIN_DISABLED,),
+            "guard mismatch",
+        ),
+        lambda: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.RETRYABLE,
+            guard,
+            reason="busy without evidence",
+        ),
+        lambda: MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.APPLIED,
+            unavailable,  # type: ignore[arg-type]
+            (MutationPostcondition.CHAIN_DISABLED,),
+        ),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except IntegrationContractError:
+            continue
+        raise AssertionError("invalid mutation contract was accepted")
+
+
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
     """Batch decisions are explicit, unique, and partitionable before mutation."""
     from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
@@ -34904,6 +35001,7 @@ TESTS = [
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
     test_integration_command_and_read_models_enforce_contract,
+    test_integration_mutation_models_enforce_guards_and_postconditions,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

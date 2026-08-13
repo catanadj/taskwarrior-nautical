@@ -4517,19 +4517,10 @@ def test_on_modify_no_explicit_taskdata_skips_rc_data_location():
         sys.argv = prev_argv
         if prev_taskdata is not None:
             os.environ["TASKDATA"] = prev_taskdata
-    calls = []
-
-    def _fake_run_task(cmd, **_kwargs):
-        calls.append(cmd)
-        return True, json.dumps({"uuid": "beeswax"}), ""
-
-    mod._run_task = _fake_run_task
-    lookup = mod._task_lookup_by_uuid("beeswax", env={})
-    expect(lookup.is_found, f"typed UUID lookup rejected task: {lookup}")
-    expect(calls, "expected _run_task to be called")
+    command_prefix = mod._task_cmd_prefix()
     expect(
-        all(not str(part).startswith("rc.data.location=") for part in calls[0]),
-        f"should not force rc.data.location without explicit data dir: {calls[0]!r}",
+        all(not str(part).startswith("rc.data.location=") for part in command_prefix),
+        f"should not force rc.data.location without explicit data dir: {command_prefix!r}",
     )
 
 def test_on_modify_reads_data_arg_from_hook_argv():
@@ -5457,12 +5448,6 @@ def test_chainid_legacy_reads_do_not_drive_chain_identity():
         pass
     else:
         raise AssertionError("UUID-only parent should not provide a chain identity")
-    expect(
-        _new_lifecycle_read_service().existing_next_lookup({"chainid": "legacy-1", "link": 2}, 3, export_uuid_short_cached=lambda _ref: None, get_chain_export=lambda *_args, **_kwargs: [] ).is_absent,
-        "legacy chainid should not drive existing next task lookup",
-    )
-
-
 def test_on_add_lowercase_chainid_does_not_mark_nautical():
     """on-add should ignore lowercase chainid when deciding whether a task is Nautical."""
     hook = _find_hook_file("on-add.nautical")
@@ -9185,75 +9170,18 @@ def test_on_modify_enqueue_recovers_from_corrupt_sqlite_db():
             else:
                 os.environ["TASKDATA"] = prev_taskdata
 
-def test_on_modify_chain_export_timeout_scales():
-    """tw_export_chain should scale timeout based on cached chain size."""
-    hook = _find_hook_file("on-modify.nautical")
-    prev_base = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE")
-    prev_per = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100")
-    prev_max = os.environ.get("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX")
-    os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE"] = "1.5"
-    os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100"] = "1.0"
-    os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX"] = "5.0"
-    try:
-        mod = _load_hook_module(hook, "_nautical_chain_export_timeout_test")
-        mod._reset_modify_runtime_state()
-        mod._lifecycle_read_service().replace_chain_cache("cid", [{}] * 250)
-        mod._tw_lock_recent = lambda: False
-        captured = {}
-
-        def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0, **_kwargs):
-            captured["timeout"] = timeout
-            return True, "[]", ""
-
-        mod._run_task = _fake_run_task
-        mod.tw_export_chain("cid")
-        expect(captured.get("timeout") == 3.5, f"unexpected timeout: {captured.get('timeout')}")
-    finally:
-        if prev_base is None:
-            os.environ.pop("NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE", None)
-        else:
-            os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE"] = prev_base
-        if prev_per is None:
-            os.environ.pop("NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100", None)
-        else:
-            os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100"] = prev_per
-        if prev_max is None:
-            os.environ.pop("NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX", None)
-        else:
-            os.environ["NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX"] = prev_max
-
 def test_tw_export_chain_extra_validation():
-    """tw_export_chain should reject unsafe extra arguments."""
+    """Chain snapshot filters should reject shell-like extra arguments."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_test")
-    mod._tw_lock_recent = lambda: False
-    called = {"run": False}
-
-    def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0):
-        called["run"] = True
-        return True, "[]", ""
-
-    mod._run_task = _fake_run_task
-    out = mod.tw_export_chain("cid", extra="status:pending; rm -rf /")
-    expect(out == [], "unsafe extra should return empty list")
-    expect(not called["run"], "unsafe extra should not call task")
+    expect(mod._parse_extra_tokens("status:pending; rm -rf /") is None, "unsafe filter was accepted")
 
 
 def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
     """tw_export_chain extra parser should reject dash-prefixed tokens."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_dash_test")
-    mod._tw_lock_recent = lambda: False
-    called = {"run": False}
-
-    def _fake_run_task(_cmd, env=None, timeout=0.0, retries=0):
-        called["run"] = True
-        return True, "[]", ""
-
-    mod._run_task = _fake_run_task
-    out = mod.tw_export_chain("cid", extra="status:pending -rc.hooks=on")
-    expect(out == [], "dash-prefixed token should be rejected")
-    expect(not called["run"], "rejected extra must not execute task")
+    expect(mod._parse_extra_tokens("status:pending -rc.hooks=on") is None, "dash-prefixed token was accepted")
 
 
 def test_on_modify_diag_blocks_pretty_print():
@@ -9319,8 +9247,7 @@ def test_on_modify_run_task_diag_bucket_stats():
 
     mod._reset_modify_runtime_state()
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.verbose=nothing", "_get", "beeswax.entry"]) == "get", "_get should classify as get")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=off", "uuid:beeswax", "export"]) == "export_uuid_short", "short uuid export should classify correctly")
-    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=1", "export uuid:abcd",]) == "export_uuid_full", "full uuid export should classify correctly")
+    expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "uuid:beeswax", "export"]) == "other", "repository-owned UUID reads should not have a hook bucket")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "rc.json.array=on", "chainID:cid", "export"]) == "export_chain", "chain export should classify correctly")
     expect(mod._run_task_diag_bucket(["task", "rc.hooks=off", "import", "-"]) == "import", "import should classify correctly")
 
@@ -9330,11 +9257,10 @@ def test_on_modify_run_task_diag_bucket_stats():
 
     stats = mod._modify_runtime_state().diag_stats
     expect(stats.get("run_task_calls_get") == 1, f"unexpected get call stats: {stats}")
-    expect(stats.get("run_task_calls_export_uuid_short") == 1, f"unexpected short export call stats: {stats}")
     expect(stats.get("run_task_calls_export_chain") == 1, f"unexpected chain export call stats: {stats}")
-    expect(stats.get("run_task_failures_export_uuid_short") == 1, f"unexpected short export failure stats: {stats}")
+    expect(stats.get("run_task_failures_other") == 1, f"unexpected repository-owned read fallback stats: {stats}")
     expect(abs(float(stats.get("run_task_seconds_get", 0.0)) - 0.25) < 1e-9, f"unexpected get seconds: {stats}")
-    expect(abs(float(stats.get("run_task_seconds_export_uuid_short", 0.0)) - 0.5) < 1e-9, f"unexpected short export seconds: {stats}")
+    expect(abs(float(stats.get("run_task_seconds_other", 0.0)) - 0.5) < 1e-9, f"unexpected fallback command seconds: {stats}")
     expect(abs(float(stats.get("run_task_seconds_export_chain", 0.0)) - 0.75) < 1e-9, f"unexpected chain export seconds: {stats}")
 
 
@@ -9456,7 +9382,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     def _reader():
         try:
             for _ in range(600):
-                s = mod._export_uuid_short("aaaaaaaa")
+                s, _chain_id = mod._lifecycle_read_service().lookup_short("aaaaaaaa")
                 if s is not None:
                     expect(isinstance(s, dict), f"short cache read should return dict, got {type(s)}")
                     hits["short"] += 1
@@ -9609,148 +9535,6 @@ def test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads():
     expect(calls["export"] == 0, f"full snapshot filter unexpectedly exported Taskwarrior: {calls}")
 
 
-def test_lifecycle_read_service_checked_export_is_typed_and_cached():
-    """Checked lifecycle exports distinguish failures and reuse valid request reads."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    missing = object()
-    stored = {}
-    calls = {"run": 0}
-
-    def _read(kind, key):
-        return stored.get((kind, key), missing)
-
-    def _write(kind, key, value):
-        stored[(kind, key)] = list(value)
-
-    def _run(_args, _env, _timeout):
-        calls["run"] += 1
-        return read_service.ChainReadResult.success([{"uuid": "aaaaaaaa", "link": 1}])
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda _extra: [],
-        token_matcher=lambda _row, _token: True,
-        read_query_get=_read,
-        read_query_set=_write,
-        chain_cache_get=lambda _chain_id: None,
-        export_chain_cached=lambda *_args: (),
-        max_chain_walk=10,
-    )
-    kwargs = dict(
-        since=None,
-        extra=None,
-        env=None,
-        limit=10,
-        build_args=lambda *_args, **_kwargs: ["chainID:cid", "export"],
-        run_export=_run,
-        timeout_for_chain=lambda _chain_id: 1.0,
-        read_query_missing=missing,
-    )
-    first = service.checked_export("cid", **kwargs)
-    second = service.checked_export("cid", **kwargs)
-    expect(first.ok and first.rows and second.ok, f"typed checked export failed: {first}, {second}")
-    expect(calls["run"] == 1, f"valid checked export was not reused: {calls}")
-
-    failed = service.checked_export(
-        "cid-2",
-        **{**kwargs, "run_export": lambda *_args: read_service.ChainReadResult.failure("unavailable")},
-    )
-    expect(not failed.ok and failed.error == "unavailable", f"failure lost typed detail: {failed}")
-
-
-def test_lifecycle_read_service_export_chain_checked_owns_runner_boundary():
-    """The service wrapper must compose validation, runner, parsing, and caching."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    missing = object()
-    stored = {}
-    calls = {"run": 0, "parse": 0}
-
-    def _read(kind, key):
-        return stored.get((kind, key), missing)
-
-    def _write(kind, key, value):
-        stored[(kind, key)] = list(value)
-
-    def _run(_args, **_kwargs):
-        calls["run"] += 1
-        return type("Result", (), {"ok": True, "stdout": "[{\"uuid\": \"service-child\"}]", "stderr": ""})()
-
-    def _parse(result):
-        calls["parse"] += 1
-        return result.ok, json.loads(result.stdout), result.stderr
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda _extra: [],
-        token_matcher=lambda _row, _token: True,
-        read_query_get=_read,
-        read_query_set=_write,
-        chain_cache_get=lambda _chain_id: None,
-        export_chain_cached=lambda *_args: (),
-        max_chain_walk=10,
-    )
-    kwargs = dict(
-        since=None,
-        extra=None,
-        env=None,
-        limit=10,
-        run_task_result=_run,
-        parse_result=_parse,
-        timeout_for_chain=lambda _chain_id: 1.0,
-        read_query_missing=missing,
-    )
-    first = service.export_chain_checked("service-chain", **kwargs)
-    second = service.export_chain_checked("service-chain", **kwargs)
-    expect(first.ok and second.ok and first.rows == second.rows, "service export wrapper lost rows")
-    expect(calls == {"run": 1, "parse": 1}, f"service export was not cached: {calls}")
-
-
-def test_lifecycle_read_service_completion_snapshot_promotes_full_reads():
-    """A full completion snapshot should populate the general chain read cache."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    missing = object()
-    stored = {}
-    calls = {"load": 0}
-
-    def _read(kind, key):
-        return stored.get((kind, key), missing)
-
-    def _write(kind, key, value):
-        stored[(kind, key)] = list(value)
-
-    def _load(_chain_id, _links):
-        calls["load"] += 1
-        return read_service.ChainReadResult.success([{"uuid": "aaaaaaaa", "link": 1}])
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda _extra: [],
-        token_matcher=lambda _row, _token: True,
-        read_query_get=_read,
-        read_query_set=_write,
-        chain_cache_get=lambda _chain_id: None,
-        export_chain_cached=lambda *_args: (),
-        max_chain_walk=10,
-    )
-    first = service.completion_snapshot(
-        "cid",
-        mode="full",
-        links=None,
-        load_snapshot=_load,
-        read_query_missing=missing,
-    )
-    second = service.get_chain_export(
-        "cid",
-        read_query_missing=missing,
-        read_query_key=read_service.chain_read_key,
-    )
-    expect(first.loaded and second and second[0].get("link") == 1, f"full snapshot was not promoted: {first}, {second}")
-    expect(calls["load"] == 1, f"full snapshot loaded more than once: {calls}")
-
-
 def test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed():
     """The request cache store keeps rows and indexes together per chain."""
     import nautical_core.lifecycle_read_service as read_service
@@ -9771,72 +9555,6 @@ def test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed():
     expect(rows and rows[0].get("link") == 1, f"cache store did not retain rows: {rows}")
     expect(store.indexes and store.indexes.by_short["aaaaaaaa"]["link"] == 1, "cache indexes were not retained")
     expect(service.cached_chain_rows("other") is None, "cache leaked across chain IDs")
-
-
-def test_lifecycle_read_service_builds_strict_chain_export_args():
-    """The lifecycle service owns safe chain-export command construction."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda extra: None if str(extra) == "-bad" else str(extra or "").split(),
-        token_matcher=lambda _row, _token: True,
-        read_query_get=lambda _kind, _key: object(),
-        chain_cache_get=lambda _chain_id: None,
-        export_chain_cached=lambda *_args: (),
-        max_chain_walk=10,
-        task_cmd_prefix=lambda: ["task", "rc.data.location=/tmp/taskdata"],
-    )
-    args = service.build_export_args(
-        "cid",
-        since=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
-        extra="status:pending",
-        limit=4,
-    )
-    expect(args and args[-2:] == ["status:pending", "export"], f"unexpected export args: {args}")
-    expect(service.build_export_args("cid", since=None, extra="-bad", limit=None) is None, "unsafe filter was accepted")
-
-
-def test_lifecycle_read_service_runs_checked_export_with_typed_failure():
-    """The lifecycle service owns runner timing and strict export outcomes."""
-    import nautical_core.lifecycle_read_service as read_service
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        TaskCommand,
-        TaskCommandResult,
-    )
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda _extra: [],
-        token_matcher=lambda _row, _token: True,
-        read_query_get=lambda _kind, _key: object(),
-        chain_cache_get=lambda _chain_id: None,
-        export_chain_cached=lambda *_args: (),
-        max_chain_walk=10,
-    )
-    failures = []
-    success = []
-    result = service.run_checked_export(
-        "cid",
-        ["task", "chainID:cid", "export"],
-        env=None,
-        timeout=1.0,
-        run_task_result=lambda *_args, **_kwargs: TaskCommandResult(
-            TaskCommand(("task", "chainID:cid", "export"), "test chain export", 1.0),
-            0,
-            "malformed",
-            "",
-            CommandFailureKind.SUCCESS,
-            1,
-            0.01,
-        ),
-        parse_result=lambda _result: (False, [], "malformed export"),
-        on_failure=lambda error, timeout, _kind: failures.append((error, timeout)),
-        on_success=lambda elapsed: success.append(elapsed),
-    )
-    expect(not result.ok and result.error == "malformed export", f"unexpected typed failure: {result}")
-    expect(failures and not success, f"runner callbacks were not classified correctly: {failures}, {success}")
 
 
 def test_chain_integrity_warnings_detects_issues():
@@ -10997,64 +10715,6 @@ def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
     panel = _strip_markup(proc.stderr)
     expect("DST adjusted" in panel, f"DST adjustment row is missing: {panel!r}")
     expect("02:15 -> 02:45" in panel, f"DST adjustment clocks are missing: {panel!r}")
-
-
-def test_on_modify_chain_export_cache_key_includes_params():
-    """Chain export cache should include since/extra in its key."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_cache_key_test")
-    calls = []
-
-    def _fake(chain_id: str, since=None, extra=None, env=None, limit=None):
-        calls.append((chain_id, since, extra, limit))
-        return [{"uuid": "x"}]
-
-    mod.tw_export_chain = _fake
-    mod._module("lifecycle_read_service").clear_cached_chain_exports()
-    mod._reset_modify_runtime_state()
-
-    since = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    service = mod._lifecycle_read_service()
-    _ = service.get_chain_export("abc", since=since, extra="status:pending")
-    _ = service.get_chain_export("abc", since=since, extra="status:pending")
-    _ = service.get_chain_export("abc", since=since, extra="status:completed")
-    expect(len(calls) == 2, f"cache key ignored params, calls={calls}")
-
-
-def test_on_modify_chain_export_malformed_json_fails_closed_without_caching():
-    """Malformed chain exports must remain unavailable and retryable, never an empty cache hit."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_malformed_chain_export_test")
-    calls = []
-
-    def _fake_run_task(*_args, **_kwargs):
-        calls.append(True)
-        return True, "{not-json", ""
-
-    mod._run_task = _fake_run_task
-    mod._module("lifecycle_read_service").clear_cached_chain_exports()
-    service = mod._lifecycle_read_service()
-    first = service.get_chain_export("abc")
-    second = service.get_chain_export("abc")
-    expect(first is None and second is None, f"malformed export should fail closed: {first!r}, {second!r}")
-    expect(len(calls) == 2, f"malformed export was cached as empty: calls={calls}")
-
-def test_on_modify_chain_export_skips_when_locked():
-    """tw_export_chain should treat lock errors as non-fatal and return empty."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_lock_skip_test")
-    if not hasattr(mod, "tw_export_chain"):
-        raise AssertionError("on-modify hook does not expose tw_export_chain")
-    calls = []
-
-    def _fake_run_task(*_args, **_kwargs):
-        calls.append(True)
-        return False, "", "database is locked"
-
-    mod._run_task = _fake_run_task
-    out = mod.tw_export_chain("abc")
-    expect(out == [], "expected empty export when lock is active")
-    expect(len(calls) == 1, "tw_export_chain should attempt task once")
 
 
 def test_on_modify_collect_prev_two_prefers_live_statuses():
@@ -17705,23 +17365,6 @@ def test_hook_task_result_preserves_typed_runner_result():
     expect(actual is expected, "typed command result metadata was reconstructed or discarded")
 
 
-def test_hook_export_uuid_empty_success_is_absent():
-    """A successful empty UUID export is an authoritative Taskwarrior absence."""
-    support = importlib.import_module("nautical_core.hook_support")
-    models = importlib.import_module("nautical_core.integration_models")
-    result = support.export_uuid_status(
-        run_task=lambda *_args, **_kwargs: models.TaskCommandResult(
-            models.TaskCommand(("task", "export"), "test export", 1.0),
-            0, "", "", models.CommandFailureKind.SUCCESS, 1, 0.1,
-        ),
-        task_cmd_prefix=["task"],
-        uuid_str="00000000-0000-0000-0000-000000000001",
-        timeout=1.0,
-        retries=1,
-    )
-    expect(result == {"exists": False, "retryable": False, "err": "not found", "obj": None}, f"unexpected empty export result: {result!r}")
-
-
 def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-modify.nautical")
@@ -21279,17 +20922,6 @@ def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
     )
     expect(rows == [] and calls == [], f"empty snapshot triggered a full export: calls={calls}, rows={rows}")
 
-    existing = reads.existing_next_lookup(
-        {"chainID": "cid", "link": 5},
-        6,
-        export_uuid_short_cached=lambda *_a: (_ for _ in ()).throw(AssertionError("UUID export should not run")),
-        get_chain_export=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("second chain export should not run")),
-        snapshot_rows=[{"uuid": "next-uuid", "link": 6, "status": "pending"}],
-        snapshot_loaded=True,
-    )
-    expect(existing.is_found and existing.task.get("uuid") == "next-uuid", f"duplicate guard ignored snapshot: {existing}")
-
-
 def test_on_modify_completion_defers_chain_export_until_after_preflight():
     """completion handling should not export the chain before preflight succeeds."""
     hook = _find_hook_file("on-modify.nautical")
@@ -21301,7 +20933,6 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
     mod._completion_validate_cp_and_anchor = lambda *_a, **_k: ("P1D", "", "")
     mod._completion_preflight_context = lambda *_a, **_k: None
     mod._completion_compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
-    mod._export_uuid_short_cached = SimpleNamespace(cache_clear=lambda: None)
     mod._SHOW_ANALYTICS = True
     mod._SHOW_TIMELINE_GAPS = False
     mod._CHECK_CHAIN_INTEGRITY = False
@@ -27731,7 +27362,6 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     mod._format_next_cp_rows = lambda fb: fb
     mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
     mod._timeline_lines = lambda *_a, **_k: []
-    mod._export_uuid_short_cached = lambda _short: {}
 
     captured = {}
     mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
@@ -27859,7 +27489,6 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     mod._format_next_cp_rows = lambda fb: fb
     mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
     mod._timeline_lines = lambda *_a, **_k: []
-    mod._export_uuid_short_cached = lambda _short: {}
 
     captured = {}
     mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
@@ -27917,7 +27546,6 @@ def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
     mod._format_next_cp_rows = lambda fb: fb
     mod._format_root_and_age = lambda *_a, **_k: "abcd1234"
     mod._timeline_lines = lambda *_a, **_k: []
-    mod._export_uuid_short_cached = lambda _short: {}
 
     captured = {}
     mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("line mode should not be used"))
@@ -27967,7 +27595,6 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
     mod._format_next_cp_rows = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("feedback row formatting should not run in text mode"))
     mod._format_root_and_age = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("root formatting should not run in text mode"))
     mod._timeline_lines = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("timeline should not be built in text mode"))
-    mod._export_uuid_short_cached = lambda _short: {}
 
     captured = {}
     mod._panel_line = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel line should not be used in text mode"))
@@ -30074,11 +29701,6 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
         return ("beeswax", set(), False, True, "queued", "si_test1")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
-    mod._export_uuid_short_cached = lambda _short: {
-        "uuid": "beeswax-0000-0000-0000-000000000222",
-        "status": "pending",
-        "link": 2,
-    }
 
     old = {
         "uuid": "00000000-0000-0000-0000-000000000111",
@@ -30115,27 +29737,6 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     expect(out_task.get("nextLink") == "beeswax", "existing nextLink should be preserved")
 
 
-def test_on_modify_uuid_lookup_does_not_repeat_unavailable_export():
-    """An unavailable cached UUID export must not trigger a second subprocess read."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_uuid_lookup_once_test")
-    calls = {"n": 0}
-    saved_export = mod._export_uuid_short
-    try:
-        def unavailable(_short, env=None):
-            calls["n"] += 1
-            return None
-
-        mod._export_uuid_short = unavailable
-        mod._export_uuid_short_cached.cache_clear()
-        result = mod._export_uuid_short_lookup("beeswax")
-        expect(getattr(result, "is_unavailable", False), f"lookup did not retain unavailable state: {result!r}")
-        expect(calls["n"] == 1, f"unavailable UUID export was repeated: {calls}")
-    finally:
-        mod._export_uuid_short = saved_export
-        mod._export_uuid_short_cached.cache_clear()
-
-
 def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     """Re-completing should not spawn when link #N+1 already exists in chain even if nextLink is empty."""
     hook = _find_hook_file("on-modify.nautical")
@@ -30151,11 +29752,15 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
         return ("cafebabe", set(), False, True, "queued", "si_test2")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
-    mod._export_uuid_short_cached = lambda _short: None
     modify_models = mod._module("modify_models")
-    mod._completion_chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
+    mod._completion_chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
         mode="recent", rows=[], loaded=False, chain_id=str(chain_id)
     )
+    def _existing_next_guard(task, *_args, **_kwargs):
+        mod._print_task(task)
+        return False
+
+    mod._completion_existing_next_or_fail = _existing_next_guard
 
     def _get_chain_export_stub(chain_id, since=None, extra=None, env=None):
         if chain_id == "abcd1234" and extra and "link:2" in extra:
@@ -33169,18 +32774,6 @@ def test_task_command_classifies_boundary_failures():
     )
     expect(failed.kind is CommandFailureKind.REJECTED and task_command.failure_message(failed, "task export") == "bad command", f"rejected failure changed: {failed}")
 
-    malformed = task_command.run_task_command(
-        sys.executable,
-        ["-c", "print('{not-json')"],
-    )
-    try:
-        task_command.load_json_result(malformed, "task export", empty=[])
-    except RuntimeError as exc:
-        expect("task export returned invalid JSON" in str(exc), f"malformed output error was unclear: {exc}")
-    else:
-        raise AssertionError("malformed command JSON should be rejected")
-
-
 def test_task_command_retries_only_opted_in_locks():
     """Read retries should recover one lock while the default write policy stays single-attempt."""
     from nautical_core import task_command
@@ -33319,6 +32912,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
             "description": "cp spawn test",
             "cp": "P1D",
             "chainID": "abcd1234",
+            "chain": "on",
             "link": 1,
             "due": "20250101T090000Z",
             "entry": "2025-01-01T09:00:00Z",
@@ -33326,19 +32920,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
         }
     ]
 
-    def _run_task_stub(cmd, **_kwargs):
-        if "export" in cmd and any(str(part).startswith("chainID:") for part in cmd):
-            export_calls["count"] += 1
-            return True, json.dumps(chain_rows), ""
-        return True, "[]", ""
-
-    def _tw_export_chain_stub(chain_id, since=None, extra=None, env=None, limit=None):
-        export_calls["count"] += 1
-        return list(chain_rows)
-
     modify_models = mod._module("modify_models")
-    mod._run_task = _run_task_stub
-    mod.tw_export_chain = _tw_export_chain_stub
     mod._completion_compute_next_and_limits = lambda *_a, **_k: modify_models.CompletionComputeResult(
         child_due=child_due,
         meta={},
@@ -33369,7 +32951,6 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     mod._chain_health_advice = lambda *_a, **_k: None
     mod._append_next_wait_sched_rows = lambda *_a, **_k: None
     mod._module("lifecycle_read_service").clear_cached_chain_exports()
-    mod._export_uuid_short_cached.cache_clear()
     mod._reset_modify_runtime_state()
 
     old = {
@@ -33384,49 +32965,32 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     new = dict(old)
     new.update({"status": "completed", "end": "20250102T090000Z"})
 
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+
+    uow = _test_operator_uow()
+
+    class Client:
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            export_calls["count"] += 1
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(
+                command,
+                0,
+                json.dumps(chain_rows),
+                "",
+                CommandFailureKind.SUCCESS,
+                1,
+                0.001,
+            )
+
+    uow.client = Client()
+
     try:
-        mod._handle_completion_modify(old, new, _test_operator_uow())
+        mod._handle_completion_modify(old, new, uow)
     finally:
         mod.core.PANEL_MODE = prev_panel_mode
 
     expect(export_calls["count"] == 1, f"expected one underlying chain export, got {export_calls}")
-
-
-def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
-    """Read-only Taskwarrior exports should be shared only within one hook request."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_read_query_broker_test")
-    mod._reset_modify_runtime_state()
-    mod._module("lifecycle_read_service").clear_cached_chain_exports()
-    calls = {"count": 0}
-    original_run_task = mod._run_task
-    try:
-        def fake_run_task(_cmd, **_kwargs):
-            calls["count"] += 1
-            if any(str(part).startswith("chainID:") for part in _cmd):
-                payload = [{"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}]
-            else:
-                payload = {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}
-            return True, json.dumps(payload), ""
-
-        mod._run_task = fake_run_task
-        first = mod.tw_export_chain("broker01")
-        first[0]["link"] = 99
-        second = mod.tw_export_chain("broker01")
-        expect(calls["count"] == 1, f"duplicate chain reads launched extra Taskwarrior calls: {calls}")
-        expect(second[0]["link"] == 1, "cached chain rows were not returned as defensive copies")
-
-        uuid_task = mod._export_uuid_short("aaaaaaaa")
-        expect(uuid_task and uuid_task.get("uuid"), "UUID export did not return a task")
-        expect(mod._task_lookup_by_uuid("aaaaaaaa", None).is_found, "UUID lookup rejected cached task")
-        expect(calls["count"] == 2, f"UUID export and existence lookup were not shared: {calls}")
-
-        mod._invalidate_read_query_cache()
-        mod.tw_export_chain("broker01")
-        expect(calls["count"] == 3, f"cache invalidation did not force a fresh export: {calls}")
-    finally:
-        mod._run_task = original_run_task
-        mod._reset_modify_runtime_state()
 
 
 def test_on_modify_completion_snapshot_reuses_full_chain_read():
@@ -33481,11 +33045,11 @@ def test_on_modify_cp_completion_spawns_next_link():
         return ("beeswax", set(), False, True, "queued", "si_test3")
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
-    mod._export_uuid_short_cached = lambda _short: {}
     modify_models = mod._module("modify_models")
-    mod._completion_chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
+    mod._completion_chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
         mode="next", rows=[], loaded=True, chain_id=str(chain_id)
     )
+    mod._completion_existing_next_or_fail = lambda *_a, **_k: True
     # A confirmed empty chain is distinct from an unavailable Taskwarrior
     # export; keep this spawn-path test deterministic and network-free.
     mod._lifecycle_read_service().get_chain_export = lambda *_a, **_k: []
@@ -33622,123 +33186,15 @@ def test_on_exit_normalize_queue_entry_strips_fields():
     expect(entry["attempts"] == 2, f"unexpected attempts: {entry}")
 
 
-def test_on_modify_export_uuid_short_seeds_runtime_lookup_cache():
-    """Successful short UUID export should seed runtime lookup maps and later entry lookups."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_seed_cache_test")
-
-    calls = {"export": 0, "get": 0}
-    uuid_full = "beeswax-1111-2222-3333-444444444444"
-    entry = "2026-03-27T09:30:00Z"
-
-    def _run_task_stub(cmd, **_kwargs):
-        cmd_s = " ".join(cmd)
-        if "uuid:beeswax" in cmd_s and "export" in cmd_s:
-            calls["export"] += 1
-            return True, json.dumps({"uuid": uuid_full, "entry": entry, "id": 42}), ""
-        if " _get beeswax.entry" in f" {cmd_s}":
-            calls["get"] += 1
-            return True, entry, ""
-        return False, "", f"unexpected command: {cmd_s}"
-
-    orig = mod._run_task
-    mod._run_task = _run_task_stub
-    try:
-        obj = mod._export_uuid_short("beeswax")
-        expect(isinstance(obj, dict), f"expected dict export result, got {obj!r}")
-        expect(obj.get("uuid") == uuid_full, f"unexpected exported uuid: {obj}")
-        service = mod._lifecycle_read_service()
-        short_obj, _chain_id = service.lookup_short("beeswax")
-        expect(short_obj and short_obj.get("uuid") == uuid_full, f"short map not seeded: {short_obj}")
-        full_obj = service.lookup_uuid(uuid_full)
-        expect(full_obj and full_obj.get("entry") == entry, f"full map not seeded: {full_obj}")
-        got_entry = mod._tw_get_cached("beeswax.entry")
-    finally:
-        mod._run_task = orig
-
-    expect(got_entry == entry, f"expected cached entry lookup, got {got_entry!r}")
-    expect(calls == {"export": 1, "get": 0}, f"expected export seeding to avoid _get call, got {calls}")
-
-
-def test_on_modify_export_uuid_short_invalid_json():
-    """on-modify _export_uuid_short returns None on invalid JSON."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_invalid_json_test")
-    if not hasattr(mod, "_export_uuid_short"):
-        raise AssertionError("on-modify hook does not expose _export_uuid_short")
-
-    def _run_task_bad(*_args, **_kwargs):
-        return True, "not-json", ""
-
-    orig = mod._run_task
-    mod._run_task = _run_task_bad
-    try:
-        obj = mod._export_uuid_short("beeswax")
-    finally:
-        mod._run_task = orig
-
-    expect(obj is None, "Invalid JSON should yield None from _export_uuid_short")
-
-
-def test_on_modify_export_uuid_short_prefix_mismatch():
-    """on-modify _export_uuid_short returns None on prefix mismatch."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_export_uuid_prefix_mismatch_test")
-    if not hasattr(mod, "_export_uuid_short"):
-        raise AssertionError("on-modify hook does not expose _export_uuid_short")
-
-    def _run_task_ok(*_args, **_kwargs):
-        return True, json.dumps({"uuid": "00000000-0000-0000-0000-000000000001"}), ""
-
-    orig = mod._run_task
-    mod._run_task = _run_task_ok
-    try:
-        obj = mod._export_uuid_short("beeswax")
-    finally:
-        mod._run_task = orig
-
-    expect(obj is None, "Prefix mismatch should yield None from _export_uuid_short")
-
-
-def test_hook_lookup_result_distinguishes_absent_and_unavailable():
-    """Mutation-sensitive UUID reads must preserve empty versus failed results."""
-    support = core._import_sibling("hook_support")
-
-    def lookup(stdout, ok=True, stderr=""):
-        return support.export_uuid_short_result(
-            run_task=lambda *_a, **_k: (ok, stdout, stderr),
-            task_cmd_prefix=["task"],
-            uuid_short="beeswax",
-        )
-
-    expect(lookup("").is_absent, "empty UUID export should be confirmed absent")
-    expect(lookup('{"uuid":"beeswax-0000"}').is_found, "valid UUID export should be found")
-    expect(lookup("not-json").is_unavailable, "malformed UUID export should be unavailable")
-    expect(lookup("", ok=False, stderr="lock busy").is_unavailable, "failed UUID export should be unavailable")
-
-
-def test_existing_next_lookup_fails_closed_on_chain_export_failure():
-    """A failed chain read must not become a spawn-allowed empty result."""
-    reads = _new_lifecycle_read_service()
-    result = reads.existing_next_lookup(
-        {"chainID": "abcd1234", "link": 1},
-        2,
-        export_uuid_short_cached=lambda _ref: core._import_sibling("hook_support").LookupResult.absent(),
-        get_chain_export=lambda *_a, **_k: None,
-    )
-    expect(result.is_unavailable, f"failed chain export was not preserved: {result}")
-
-
 def test_completion_preflight_stops_on_unavailable_next_lookup():
     """Completion must stop before spawn when the next-link lookup is unavailable."""
     preflight = core._import_sibling("modify_completion_preflight")
     panels = []
     printed = []
-    support = core._import_sibling("hook_support")
     ok = preflight.completion_existing_next_or_fail(
         {"uuid": "parent", "link": 1},
         2,
-        existing_next_lookup=lambda *_a: support.LookupResult.unavailable("lock busy"),
+        existing_next_lookup=lambda *_a: _unavailable_task("lock busy"),
         short=lambda value: str(value)[:8],
         panel=lambda *args, **kwargs: panels.append((args, kwargs)),
         print_task=lambda task: printed.append(task),
@@ -35931,7 +35387,6 @@ TESTS = [
     test_hook_task_runner_handles_nonzero,
     test_shared_hook_subprocess_runner_preserves_output_and_status,
     test_hook_task_result_preserves_typed_runner_result,
-    test_hook_export_uuid_empty_success_is_absent,
     test_hook_run_task_falls_back_when_core_load_fails,
     test_on_add_run_task_falls_back_when_core_load_fails,
     test_core_run_task_tempfiles_accepts_text_input,
@@ -36113,7 +35568,6 @@ TESTS = [
     test_on_modify_enqueue_uses_sqlite_when_legacy_empty,
     test_on_modify_enqueue_uses_sqlite_only_queue_backend,
     test_on_modify_enqueue_recovers_from_corrupt_sqlite_db,
-    test_on_modify_chain_export_timeout_scales,
     test_tw_export_chain_extra_validation,
     test_tw_export_chain_extra_rejects_dash_prefixed_tokens,
     test_on_modify_diag_blocks_pretty_print,
@@ -36127,12 +35581,7 @@ TESTS = [
     test_on_modify_chain_cache_preserves_repository_unavailability,
     test_lifecycle_read_service_indexes_and_merges_chain_rows,
     test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
-    test_lifecycle_read_service_checked_export_is_typed_and_cached,
-    test_lifecycle_read_service_export_chain_checked_owns_runner_boundary,
-    test_lifecycle_read_service_completion_snapshot_promotes_full_reads,
     test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed,
-    test_lifecycle_read_service_builds_strict_chain_export_args,
-    test_lifecycle_read_service_runs_checked_export_with_typed_failure,
     test_next_for_and_no_progress_fails_fast,
     test_next_for_and_transient_stall_recovers,
     test_roll_apply_has_guard,
@@ -36154,9 +35603,6 @@ TESTS = [
     test_reconcile_protocol_requires_public_datetime_converters,
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
-    test_on_modify_chain_export_cache_key_includes_params,
-    test_on_modify_chain_export_malformed_json_fails_closed_without_caching,
-    test_on_modify_chain_export_skips_when_locked,
     test_on_modify_collect_prev_two_prefers_live_statuses,
     test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
@@ -36449,7 +35895,6 @@ TESTS = [
     test_on_modify_spawn_intent_entry_rejects_missing_child_uuid,
     test_on_modify_spawn_intent_records_parent_guard,
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
-    test_on_modify_uuid_lookup_does_not_repeat_unavailable_export,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
     test_reconcile_plan_uses_task_business_calendar_context,
@@ -36514,17 +35959,11 @@ TESTS = [
     test_operator_tools_apply_read_only_retry_policy,
     test_chain_repair_command_failure_is_structured,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
-    test_on_modify_read_query_broker_deduplicates_and_invalidates_exports,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
-    test_on_modify_export_uuid_short_seeds_runtime_lookup_cache,
-    test_on_modify_export_uuid_short_invalid_json,
-    test_on_modify_export_uuid_short_prefix_mismatch,
-    test_hook_lookup_result_distinguishes_absent_and_unavailable,
-    test_existing_next_lookup_fails_closed_on_chain_export_failure,
     test_completion_preflight_stops_on_unavailable_next_lookup,
     test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,

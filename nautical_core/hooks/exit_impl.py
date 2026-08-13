@@ -109,8 +109,6 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any
 
-from nautical_core.integration_models import Absent, Found, Unavailable
-
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
@@ -118,21 +116,22 @@ except Exception:
 
 
 def _read_found(read) -> bool:
-    return isinstance(read, Found)
+    return isinstance(read, _module("integration_models").Found)
 
 
 def _read_unavailable(read) -> bool:
-    return isinstance(read, Unavailable)
+    return isinstance(read, _module("integration_models").Unavailable)
 
 
 def _read_value(read):
-    return read.value if isinstance(read, Found) else None
+    return read.value if _read_found(read) else None
 
 
 def _read_reason(read, fallback: str) -> str:
-    if isinstance(read, Unavailable):
+    models = _module("integration_models")
+    if isinstance(read, models.Unavailable):
         return read.evidence.detail or fallback
-    if isinstance(read, Absent):
+    if isinstance(read, models.Absent):
         return read.reason or fallback
     return fallback
 
@@ -168,6 +167,8 @@ _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
 _INTEGRATION_CONTEXT_MODULE = None
 _INTEGRATION_CONTEXT_MODULE_LOAD_FAILED = False
+_INTEGRATION_MODELS = None
+_INTEGRATION_MODELS_LOAD_FAILED = False
 _INTEGRATION_CONTEXT = None
 _CORE_READY = False
 _HOOK_MODULE_ACCESS = None
@@ -189,6 +190,12 @@ _MODULE_SPECS = {
         "_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED",
         "integration_context.py",
         "nautical_core.integration_context",
+    ),
+    "integration_models": (
+        "_INTEGRATION_MODELS",
+        "_INTEGRATION_MODELS_LOAD_FAILED",
+        "integration_models.py",
+        "nautical_core.integration_models",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",

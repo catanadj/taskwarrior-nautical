@@ -253,11 +253,6 @@ def _run_task_diag_bucket(cmd: list[str]) -> str:
     if "export" in parts:
         if any(p.startswith("chainID:") for p in parts):
             return "export_chain"
-        if any(p.startswith("uuid:") for p in parts):
-            if "rc.json.array=off" in parts:
-                return "export_uuid_short"
-            if "rc.json.array=1" in parts:
-                return "export_uuid_full"
         return "other"
     return "other"
 
@@ -2282,15 +2277,12 @@ def _lifecycle_read_service():
         parse_extra_tokens=_parse_extra_tokens,
         token_matcher=_cached_chain_token_match,
         read_query_get=_read_query_get,
-        read_query_set=_read_query_set,
-        read_query_delete=_read_query_delete,
         chain_cache_get=lambda _chain_id: None,
         export_chain_cached=_chain_export_for_cache,
         max_chain_walk=_MAX_CHAIN_WALK,
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,
         cache_store=state.chain_cache_store,
-        task_cmd_prefix=_task_cmd_prefix,
         read_query_missing=_READ_QUERY_MISSING,
     )
     state.lifecycle_read_service = service

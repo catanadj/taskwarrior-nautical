@@ -3,8 +3,7 @@
 
 from __future__ import annotations
 
-import json
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from .integration_models import CommandFailureKind, TaskCommandResult
 from .taskwarrior_client import TaskwarriorClient
@@ -76,25 +75,11 @@ def failure_message(result: TaskCommandResult, operation: str) -> str:
     return f"{operation} failed with exit code {result.returncode}"
 
 
-def load_json_result(result: TaskCommandResult, operation: str, *, empty: Any) -> Any:
-    """Decode JSON after the process boundary has established success."""
-    if not result.ok:
-        raise TaskCommandFailure(result, operation)
-    raw = result.stdout.strip()
-    if not raw:
-        return empty
-    try:
-        return json.loads(raw)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"{operation} returned invalid JSON: {exc}") from exc
-
-
 __all__ = (
     "CommandFailureKind",
     "TaskCommandFailure",
     "TaskCommandResult",
     "failure_message",
-    "load_json_result",
     "run_command_once",
     "run_task_command",
 )

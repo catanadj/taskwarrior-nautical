@@ -180,6 +180,8 @@ _LIFECYCLE_PLANNER = None
 _LIFECYCLE_PLANNER_LOAD_FAILED = False
 _LIFECYCLE_EXECUTOR = None
 _LIFECYCLE_EXECUTOR_LOAD_FAILED = False
+_LIFECYCLE_OUTBOX = None
+_LIFECYCLE_OUTBOX_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -258,6 +260,12 @@ _MODULE_SPECS = {
         "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
         "lifecycle_executor.py",
         "nautical_core.lifecycle_executor",
+    ),
+    "lifecycle_outbox": (
+        "_LIFECYCLE_OUTBOX",
+        "_LIFECYCLE_OUTBOX_LOAD_FAILED",
+        "lifecycle_outbox.py",
+        "nautical_core.lifecycle_outbox",
     ),
     "exit_runtime": (
         "_EXIT_RUNTIME",
@@ -1456,6 +1464,50 @@ def _take_queue_entries_sqlite_batch():
     return exit_models.ExitQueueBatch(entries=entries)
 
 
+def _lifecycle_outbox_repository():
+    outbox = _module("lifecycle_outbox")
+    return outbox.LifecycleOutboxRepository(TW_DATA_DIR, durable=_DURABLE_QUEUE)
+
+
+def _outbox_execution_entry(record) -> dict:
+    """Expose one claimed immutable plan to the lifecycle executor."""
+    plan = record.plan.with_stage(record.stage)
+    child = plan.child_dict()
+    child_uuid = str(child.get("uuid") or "").strip()
+    parent_patch = plan.parent_patch_dict()
+    child_short = str(parent_patch.get("nextLink") or _short_uuid(child_uuid)).strip()
+    return {
+        "parent_uuid": plan.identity.parent_uuid,
+        "parent_nextlink": "",
+        "child_short": child_short,
+        "child": child,
+        "spawn_intent_id": record.intent_id,
+        "parent_guard": plan.parent_guard.to_dict(),
+        "lifecycle_plan": plan.to_dict(),
+        "attempts": record.attempts,
+        "__outbox_backend": "lifecycle",
+        "__outbox_intent_id": record.intent_id,
+        "__outbox_owner": record.lease_owner,
+    }
+
+
+def _take_lifecycle_outbox_batch():
+    exit_models = _module("exit_models")
+    token = f"exit-{os.getpid()}-{os.urandom(8).hex()}"
+    result, records = _lifecycle_outbox_repository().claim_batch(
+        owner=token,
+        lease_seconds=max(1.0, _QUEUE_PROCESSING_STALE_AFTER),
+        limit=_QUEUE_MAX_LINES,
+    )
+    if not result.ok:
+        if result.lock_busy:
+            _record_queue_lock_failure()
+        else:
+            _diag(f"lifecycle outbox claim failed: {result.reason or 'unknown error'}")
+        return exit_models.ExitQueueBatch(entries=[])
+    return exit_models.ExitQueueBatch(entries=[_outbox_execution_entry(record) for record in records])
+
+
 def _ack_queue_entries_sqlite_result(entry_claims: list[tuple[int, str]]):
     conn = _queue_db_open_fresh_ready()
     exit_models = _module("exit_models")
@@ -1505,6 +1557,32 @@ def _requeue_entries_sqlite_result(entries: list[dict]):
 
 def _advance_lifecycle_stage(entry: dict, stage):
     """Advance a durable plan while retaining the claimed queue row."""
+    exit_models = _module("exit_models")
+    intent_id = str(entry.get("__outbox_intent_id") or "").strip() if isinstance(entry, dict) else ""
+    owner = str(entry.get("__outbox_owner") or "").strip() if isinstance(entry, dict) else ""
+    if intent_id and owner:
+        lifecycle_models = _module("lifecycle_models")
+        try:
+            target = lifecycle_models.ExecutionStage(stage)
+        except (TypeError, ValueError):
+            return exit_models.ExitQueueWriteResult(False, 1, "invalid lifecycle stage")
+        repository = _lifecycle_outbox_repository()
+        if target is lifecycle_models.ExecutionStage.FINALIZED:
+            result = repository.acknowledge(intent_id=intent_id, owner=owner)
+        else:
+            result = repository.advance_stage(intent_id=intent_id, owner=owner, stage=target)
+        if result.ok and isinstance(entry.get("lifecycle_plan"), dict):
+            try:
+                plan = lifecycle_models.LifecyclePlan.from_dict(entry["lifecycle_plan"])
+                entry["lifecycle_plan"] = plan.with_stage(target).to_dict()
+            except Exception:
+                pass
+        return exit_models.ExitQueueWriteResult(
+            result.ok,
+            1 if result.ok else 0,
+            result.reason,
+            result.lock_busy,
+        )
     queue_store = _module("queue_store")
     if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
         # Legacy rows remain owned by the compatibility executor.
@@ -1552,12 +1630,22 @@ def _enqueue_entries_sqlite_result(entries: list[dict]):
 
 
 def _normalize_queue_entry(entry: dict) -> dict:
+    if isinstance(entry, dict) and str(entry.get("__outbox_backend") or "") == "lifecycle":
+        return dict(entry)
     queue_models = _module("queue_models")
     return queue_models.normalize_spawn_queue_entry(entry)
 
 
 def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
     try:
+        if isinstance(entry, dict) and str(entry.get("__outbox_backend") or "") == "lifecycle":
+            lifecycle_models = _module("lifecycle_models")
+            plan = lifecycle_models.LifecyclePlan.from_dict(entry.get("lifecycle_plan") or {})
+            if str(entry.get("__outbox_intent_id") or "").strip() != plan.identity.idempotency_key:
+                return False, "outbox intent identity differs from lifecycle plan"
+            if not str(entry.get("__outbox_owner") or "").strip():
+                return False, "outbox claim owner is missing"
+            return True, ""
         _normalize_queue_entry(entry)
         return True, ""
     except Exception as e:
@@ -2172,7 +2260,7 @@ def _cleanup_orphan_children(child_uuids: list[str]):
 
 
 def _take_queue_batch():
-    return _take_queue_entries_sqlite_batch()
+    return _take_lifecycle_outbox_batch()
 
 
 def _take_queue_entries():
@@ -2184,6 +2272,29 @@ def _requeue_entries_result(entries: list[dict]):
     items = [e for e in (entries or []) if isinstance(e, dict)]
     if not items:
         return exit_models.ExitRequeueResult(ok=True, failed=0)
+    outbox_entries = [entry for entry in items if entry.get("__outbox_backend") == "lifecycle"]
+    outbox_failed = 0
+    if outbox_entries:
+        outbox = _module("lifecycle_outbox")
+        repository = _lifecycle_outbox_repository()
+        for entry in outbox_entries:
+            intent_id = str(entry.get("__outbox_intent_id") or "").strip()
+            owner = str(entry.get("__outbox_owner") or "").strip()
+            result = repository.release_retry(
+                intent_id=intent_id,
+                owner=owner,
+                failure=outbox.OutboxFailure("deferred", "lifecycle execution deferred"),
+            )
+            if not result.ok:
+                outbox_failed += 1
+                if result.lock_busy:
+                    _record_queue_lock_failure()
+                else:
+                    _diag(f"lifecycle outbox retry release failed: {result.reason or 'unknown error'}")
+        remaining = [entry for entry in items if entry not in outbox_entries]
+        if not remaining:
+            return exit_models.ExitRequeueResult(ok=outbox_failed == 0, failed=outbox_failed)
+        items = remaining
     claimed: list[dict] = []
     fresh: list[dict] = []
     for e in items:
@@ -2193,8 +2304,8 @@ def _requeue_entries_result(entries: list[dict]):
             fresh.append(e)
     claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else exit_models.ExitQueueWriteResult(ok=True, count=0)
     fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else exit_models.ExitQueueWriteResult(ok=True, count=0)
-    ok = claimed_result.ok and fresh_result.ok
-    failed = (claimed_result.count if not claimed_result.ok else 0) + (fresh_result.count if not fresh_result.ok else 0)
+    ok = outbox_failed == 0 and claimed_result.ok and fresh_result.ok
+    failed = outbox_failed + (claimed_result.count if not claimed_result.ok else 0) + (fresh_result.count if not fresh_result.ok else 0)
     return exit_models.ExitRequeueResult(ok=ok, failed=failed)
 
 
@@ -2232,6 +2343,8 @@ class _DrainState:
         self.lifecycle_cleanup_failures: dict[str, str] = {}
 
     def mark_final(self, entry: dict, status: str, reason: str) -> bool:
+        if self.queue_backend(entry) == "outbox":
+            return True
         sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
         if not sid:
             return True
@@ -2246,6 +2359,8 @@ class _DrainState:
     def queue_backend(self, entry: dict) -> str:
         if not isinstance(entry, dict):
             return "sqlite"
+        if str(entry.get("__outbox_backend") or "") == "lifecycle":
+            return "outbox"
         b = (entry.get("__queue_backend") or "").strip().lower()
         return b if b else "sqlite"
 
@@ -2264,6 +2379,9 @@ class _DrainState:
         out.pop("__queue_backend", None)
         out.pop("__queue_id", None)
         out.pop("__queue_claim_token", None)
+        out.pop("__outbox_backend", None)
+        out.pop("__outbox_intent_id", None)
+        out.pop("__outbox_owner", None)
         return out
 
     def ack_sqlite(self, entry: dict) -> None:
@@ -2275,6 +2393,21 @@ class _DrainState:
             self.sqlite_acked_claims[rid] = token
 
     def dead_letter(self, entry: dict, reason: str) -> None:
+        if self.queue_backend(entry) == "outbox":
+            outbox = _module("lifecycle_outbox")
+            result = _lifecycle_outbox_repository().manual_review(
+                intent_id=str(entry.get("__outbox_intent_id") or ""),
+                owner=str(entry.get("__outbox_owner") or ""),
+                failure=outbox.OutboxFailure("manual_review", str(reason or "lifecycle execution failed")),
+            )
+            if not result.ok:
+                self.requeue.append(entry)
+                self.errors += 1
+                _diag(f"lifecycle outbox manual-review transition failed: {result.reason or 'unknown error'}")
+                return
+            self.dead_lettered += 1
+            self.errors += 1
+            return
         if not _write_dead_letter(self.entry_clean(entry), reason):
             # Keep the claimed row recoverable when the DLQ itself is
             # unavailable. It will be requeued below and retried later.
@@ -2403,7 +2536,11 @@ def _handle_lifecycle_postcondition_failure(entry: dict, idx: int, state: _Drain
 
 def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
     spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
-    if spawn_intent_id and spawn_intent_id in state.finalized_intents:
+    if (
+        state.queue_backend(entry) != "outbox"
+        and spawn_intent_id
+        and spawn_intent_id in state.finalized_intents
+    ):
         state.skipped_idempotent += 1
         state.processed += 1
         state.ack_sqlite(entry)
@@ -3165,7 +3302,6 @@ def main() -> int:
     # Queue draining and diagnostics use the configured core/UI services;
     # defer that package import until the lifecycle is actually entered.
     _load_core()
-    _migrate_legacy_nautical_state()
     _reset_exit_runtime_state()
     startup_t0 = time.perf_counter()
     module_t0 = time.perf_counter()

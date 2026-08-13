@@ -2508,6 +2508,58 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         )
 
 
+def test_on_exit_claims_and_advances_lifecycle_outbox_only():
+    """The on-exit adapter claims durable plans without queue-row conversion."""
+    from nautical_core.lifecycle_models import (
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleIdentity,
+        LifecyclePlan,
+        ParentGuard,
+    )
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxProcessingState
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        plan = LifecyclePlan.from_mappings(
+            identity=LifecycleIdentity(
+                "exit-outbox", "00000000-0000-0000-0000-000000000007", 7, 8, LifecycleEvent.COMPLETE
+            ),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("completed", "on", "exit-outbox", 7, "rf1-exit"),
+            child_payload={
+                "uuid": "10000000-0000-0000-0000-000000000008",
+                "chainID": "exit-outbox",
+                "link": 8,
+                "prevLink": "00000000",
+            },
+            parent_patch={"nextLink": "10000000"},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+        repo = LifecycleOutboxRepository(root)
+        expect(repo.enqueue(plan, configuration_fingerprint="cf-exit", schedule_fingerprint="sf-exit").ok, "exit outbox enqueue failed")
+
+        hook = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
+        mod = _load_hook_module(hook, "_nautical_on_exit_outbox_adapter_test")
+        mod.TW_DATA_DIR = root
+        mod._QUEUE_MAX_LINES = 4
+        mod._QUEUE_PROCESSING_STALE_AFTER = 30.0
+        batch = mod._take_queue_batch()
+        expect(len(batch.entries) == 1, f"on-exit did not claim lifecycle outbox entry: {batch.entries}")
+        entry = batch.entries[0]
+        expect(entry.get("__outbox_backend") == "lifecycle", "on-exit entry retained queue backend")
+        stages = mod._module("lifecycle_models").ExecutionStage
+        for stage in (stages.CHILD_PRESENT, stages.PARENT_LINKED, stages.VERIFIED, stages.FINALIZED):
+            result = mod._advance_lifecycle_stage(entry, stage)
+            expect(result.ok, f"on-exit outbox stage {stage.value} failed: {result.err}")
+        status_result, status = repo.status()
+        expect(status_result.ok, f"outbox status failed after on-exit acknowledgement: {status_result}")
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.ACKNOWLEDGED.value) == 1,
+            f"on-exit did not acknowledge lifecycle outbox entry: {status}",
+        )
+
+
 def test_integration_contract_covers_all_mutation_and_outbox_states():
     """Every tagged integration outcome has one valid constructible shape."""
     from nautical_core.integration_models import (
@@ -3499,54 +3551,43 @@ def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
 
 
 def test_exit_probe_is_conservative_across_queue_states():
-    """The exit probe should bypass only definitely empty queue state."""
+    """The exit probe bypasses only a definitely empty lifecycle outbox."""
     probe = _load_exit_probe_module("_nautical_exit_probe_state_test")
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         empty = probe.probe_exit_work(root)
-        expect(empty.definitely_empty, f"missing queue state should be empty: {empty.reason}")
-
-        legacy_dead_letter = root / ".nautical_dead_letter.jsonl"
-        legacy_dead_letter.write_text("", encoding="utf-8")
-        expect(probe.probe_exit_work(root).may_have_work, "pending legacy migration should force a full exit")
-        legacy_dead_letter.unlink()
+        expect(empty.definitely_empty, f"missing lifecycle outbox should be empty: {empty.reason}")
 
         state_dir = root / ".nautical-state"
         state_dir.mkdir()
-        legacy = state_dir / ".nautical_spawn_queue.jsonl"
-        legacy.write_text("", encoding="utf-8")
-        expect(probe.probe_exit_work(root).definitely_empty, "empty legacy queue should not force a drain")
-        legacy.write_text("{}\n", encoding="utf-8")
-        expect(probe.probe_exit_work(root).may_have_work, "non-empty legacy queue should force a drain")
-        legacy.write_text("", encoding="utf-8")
-
-        queue_db = state_dir / ".nautical_queue.db"
-        with sqlite3.connect(str(queue_db)) as conn:
+        outbox_db = state_dir / ".nautical_lifecycle_outbox.db"
+        with sqlite3.connect(str(outbox_db)) as conn:
             conn.execute(
-                "CREATE TABLE queue_entries (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL)"
+                "CREATE TABLE lifecycle_outbox (intent_id TEXT PRIMARY KEY, processing_state TEXT NOT NULL)"
             )
+            conn.execute("PRAGMA user_version = 1")
             conn.commit()
-        expect(probe.probe_exit_work(root).definitely_empty, "empty sqlite queue should not force a drain")
+        expect(probe.probe_exit_work(root).definitely_empty, "empty lifecycle outbox should not force a drain")
 
-        with sqlite3.connect(str(queue_db)) as conn:
+        with sqlite3.connect(str(outbox_db)) as conn:
             conn.execute("PRAGMA user_version = 2")
             conn.commit()
-        expect(probe.probe_exit_work(root).may_have_work, "future queue schema should force the full hook")
+        expect(probe.probe_exit_work(root).may_have_work, "future outbox schema should force the full hook")
 
-        with sqlite3.connect(str(queue_db)) as conn:
-            conn.execute("PRAGMA user_version = 0")
-            conn.execute("INSERT INTO queue_entries (payload, state) VALUES ('{}', 'queued')")
+        with sqlite3.connect(str(outbox_db)) as conn:
+            conn.execute("PRAGMA user_version = 1")
+            conn.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
             conn.commit()
-        expect(probe.probe_exit_work(root).may_have_work, "queued sqlite row should force a drain")
+        expect(probe.probe_exit_work(root).may_have_work, "ready outbox row should force a drain")
 
-        with sqlite3.connect(str(queue_db)) as conn:
-            conn.execute("UPDATE queue_entries SET state='processing'")
+        with sqlite3.connect(str(outbox_db)) as conn:
+            conn.execute("UPDATE lifecycle_outbox SET processing_state='claimed'")
             conn.commit()
-        expect(probe.probe_exit_work(root).may_have_work, "processing sqlite row should force a drain")
+        expect(probe.probe_exit_work(root).may_have_work, "claimed outbox row should force a drain")
 
-        queue_db.write_bytes(b"not-a-sqlite-database")
+        outbox_db.write_bytes(b"not-a-sqlite-database")
         corrupt = probe.probe_exit_work(root)
-        expect(corrupt.may_have_work, "corrupt sqlite state must fall through to the full drain")
+        expect(corrupt.may_have_work, "corrupt outbox state must fall through to the full drain")
 
 
 def test_light_taskdata_resolution_matches_hook_precedence():
@@ -35852,6 +35893,7 @@ TESTS = [
     test_on_exit_mutation_callbacks_use_typed_gateway_context,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
+    test_on_exit_claims_and_advances_lifecycle_outbox_only,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
     test_full_hooks_receive_one_explicit_integration_context,

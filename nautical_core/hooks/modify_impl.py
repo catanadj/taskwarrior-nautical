@@ -4893,7 +4893,6 @@ def main():
     # Keep module import cheap while preserving the existing full-hook
     # contract: all mutation decisions run with the validated core loaded.
     _load_core()
-    _migrate_legacy_nautical_state()
     _reset_modify_runtime_state()
     state = _modify_runtime_state()
     startup_t0 = _ptime.perf_counter()

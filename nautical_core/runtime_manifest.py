@@ -78,6 +78,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "lifecycle_models",
         "lifecycle_planner",
         "lifecycle_executor",
+        "lifecycle_outbox",
         "exit_runtime",
         "exit_drain_flow",
         "hook_context",

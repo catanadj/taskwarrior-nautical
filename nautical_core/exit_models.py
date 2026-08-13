@@ -276,3 +276,5 @@ class ExitDrainStats:
 class ExitQueueWriteResult:
     ok: bool
     count: int
+    err: str = ""
+    lock_busy: bool = False

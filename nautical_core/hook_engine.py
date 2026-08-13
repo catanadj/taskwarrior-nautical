@@ -99,7 +99,7 @@ def handle_on_modify(
         except Exception as exc:
             diag(f'core load failed: {exc}')
             fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-        handle_deleted_modify(old, new)
+        handle_deleted_modify(old, new, request.runtime.uow)
         return json_result_cls(task=new, sanitize=False)
 
     if route.is_deleted:
@@ -115,10 +115,10 @@ def handle_on_modify(
         fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
 
     if route.is_non_completion:
-        handle_non_completion_modify(old, new)
+        handle_non_completion_modify(old, new, request.runtime.uow)
         return None
 
-    lifecycle_result = handle_completion_modify(old, new)
+    lifecycle_result = handle_completion_modify(old, new, request.runtime.uow)
     try:
         request.runtime.lifecycle_result = lifecycle_result
     except Exception:

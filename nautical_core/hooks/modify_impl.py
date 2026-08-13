@@ -2450,24 +2450,6 @@ def _lifecycle_read_service():
     return service
 
 
-def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
-    hook_support = _module("hook_support", required=False)
-    if getattr(chain_snapshot, "is_unavailable", False) and hook_support is not None:
-        return hook_support.LookupResult.unavailable(
-            getattr(chain_snapshot, "error", "completion chain snapshot unavailable")
-        )
-    return _lifecycle_read_service().existing_next_lookup(
-        parent_task,
-        next_no,
-        export_uuid_short_cached=_export_uuid_short_lookup,
-        get_chain_export=lambda chain_id, **kwargs: _lifecycle_read_service().get_chain_export(
-            chain_id, **kwargs
-        ),
-        snapshot_rows=getattr(chain_snapshot, "rows", None),
-        snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
-    )
-
-
 def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = None) -> dict | None:
     if not isinstance(task, dict):
         return None
@@ -4560,7 +4542,8 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
     return False
 
 
-def _handle_non_completion_modify(old: dict, new: dict) -> None:
+def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
+    del unit_of_work
     modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
     services = modify_ordinary.OrdinaryModifyServices(
@@ -4697,12 +4680,15 @@ def _completion_chain_id_or_fail(new: dict) -> str | None:
     )
 
 
-def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot=None) -> bool:
+def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot, repository) -> bool:
     modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
-        existing_next_lookup=lambda task, link: _existing_next_lookup(task, link, chain_snapshot),
+        existing_next_lookup=lambda task, link: repository.exact_child_slot(
+            str(task.get("chainID") or ""),
+            link,
+        ),
         short=_short,
         panel=_panel,
         print_task=_print_task,
@@ -4718,48 +4704,39 @@ def _completion_chain_snapshot_mode() -> str:
     return "recent"
 
 
-def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
+def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int, repository):
+    del base_no, next_no
     modify_models = _module("modify_models")
-    modify_queries = _module("modify_queries")
-    hook_support = _module("hook_support", required=False)
-    parser = hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse
+    from nautical_core.integration_models import Absent, Found, Unavailable
+
     mode = _completion_chain_snapshot_mode()
-    links = None if mode == "full" else ([next_no] if mode == "next" else [base_no - 2, base_no - 1, next_no])
-    if links is not None:
-        links = sorted({link for link in links if link > 0})
-
-    def _load_snapshot(snapshot_chain_id: str, snapshot_links: list[int] | None):
-        snapshot_result = modify_queries.export_completion_chain_snapshot(
-            snapshot_chain_id,
-            snapshot_links,
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            parse_export_array=parser,
-            diag=_diag,
-            timeout=_chain_export_timeout(snapshot_chain_id),
-        )
-        lifecycle_read_service = _module("lifecycle_read_service")
-        if not snapshot_result.loaded:
-            return lifecycle_read_service.ChainReadResult.failure(snapshot_result.error)
-        return lifecycle_read_service.ChainReadResult.success(snapshot_result.rows)
-
-    snapshot = _lifecycle_read_service().completion_snapshot(
-        chain_id,
-        mode=mode,
-        links=links,
-        load_snapshot=_load_snapshot,
-        read_query_missing=_READ_QUERY_MISSING,
-    )
+    snapshot = repository.chain_snapshot(chain_id)
+    if isinstance(snapshot, Found):
+        rows = [dict(row) for row in snapshot.value]
+        loaded = True
+        error = ""
+    elif isinstance(snapshot, Absent):
+        rows = []
+        loaded = True
+        error = ""
+    elif isinstance(snapshot, Unavailable):
+        rows = []
+        loaded = False
+        error = snapshot.evidence.detail or snapshot.evidence.kind.value
+    else:
+        rows = []
+        loaded = False
+        error = "typed chain read returned an unsupported result"
     return modify_models.CompletionChainSnapshot(
-        mode=snapshot.mode,
-        rows=snapshot.rows,
-        loaded=snapshot.loaded,
-        chain_id=snapshot.chain_id,
-        error=snapshot.error,
+        mode=mode,
+        rows=rows,
+        loaded=loaded,
+        chain_id=chain_id,
+        error=error,
     )
 
 
-def _completion_preflight_context(new: dict, now_utc: datetime):
+def _completion_preflight_context(new: dict, now_utc: datetime, repository):
     modify_completion_preflight = _module("modify_completion_preflight")
     modify_runtime = _module("modify_runtime")
     services = modify_runtime.build_preflight_services(
@@ -4767,8 +4744,12 @@ def _completion_preflight_context(new: dict, now_utc: datetime):
         completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
         completion_kind_or_stop=_completion_kind_or_stop,
         completion_chain_id_or_fail=_completion_chain_id_or_fail,
-        completion_chain_snapshot=_completion_chain_snapshot,
-        completion_existing_next_or_fail=_completion_existing_next_or_fail,
+        completion_chain_snapshot=lambda chain_id, base_no, next_no: _completion_chain_snapshot(
+            chain_id, base_no, next_no, repository
+        ),
+        completion_existing_next_or_fail=lambda task, next_no, snapshot: _completion_existing_next_or_fail(
+            task, next_no, snapshot, repository
+        ),
     )
     return modify_completion_preflight.completion_preflight_context(
         new,
@@ -5044,7 +5025,7 @@ def _completion_build_and_spawn_child(
     )
 
 
-def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResult | None":
+def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
     # Prepare carry-forward fields on an isolated snapshot.  A malformed
     # carry must never leave the Taskwarrior response partially rewritten.
     prepared = dict(new)
@@ -5058,7 +5039,7 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
     new.clear()
     new.update(prepared)
     now_utc = core.now_utc()
-    ctx = _completion_preflight_context(new, now_utc)
+    ctx = _completion_preflight_context(new, now_utc, unit_of_work.repository)
     if ctx is None:
         return
     parent_short = ctx.parent_short
@@ -5163,7 +5144,8 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
     return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
 
 
-def _handle_deleted_modify(old: dict, new: dict) -> None:
+def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
+    del unit_of_work
     if str(old.get("status") or "").strip().lower() != "pending":
         return
     if not ((old.get("chainID") or new.get("chainID") or "").strip()):

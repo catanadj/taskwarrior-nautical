@@ -179,7 +179,7 @@ class TaskReadRepository:
 
     def __init__(self, unit_of_work: "TaskwarriorUnitOfWork") -> None:
         self._uow = unit_of_work
-        self._broad_snapshots: list[tuple[int, AuthoritativeTaskSnapshot]] = []
+        self._snapshots: list[tuple[int, AuthoritativeTaskSnapshot]] = []
 
     @staticmethod
     def _query_name(scope: TaskSnapshotScope) -> str:
@@ -220,12 +220,8 @@ class TaskReadRepository:
         read: TaskRead[AuthoritativeTaskSnapshot],
     ) -> TaskRead[AuthoritativeTaskSnapshot]:
         self._uow.cache_read(_query_scope(scope), read)
-        if isinstance(read, Found) and scope.kind in {
-            TaskQueryKind.BROAD,
-            TaskQueryKind.ACTIVE_ROOTS,
-            TaskQueryKind.LIFECYCLE_CANDIDATES,
-        }:
-            self._broad_snapshots.append((self._uow.mutation_epoch, read.value))
+        if isinstance(read, Found):
+            self._snapshots.append((self._uow.mutation_epoch, read.value))
         return read
 
     def _export(
@@ -326,12 +322,43 @@ class TaskReadRepository:
         require_complete_history: bool = False,
     ) -> AuthoritativeTaskSnapshot | None:
         wanted = frozenset(str(status).strip().lower() for status in statuses)
-        for epoch, snapshot in reversed(self._broad_snapshots):
+        for epoch, snapshot in reversed(self._snapshots):
             if epoch != self._uow.mutation_epoch:
+                continue
+            if snapshot.scope.kind not in {
+                TaskQueryKind.BROAD,
+                TaskQueryKind.ACTIVE_ROOTS,
+                TaskQueryKind.LIFECYCLE_CANDIDATES,
+            }:
                 continue
             if require_complete_history and not snapshot.scope.complete_chain_history:
                 continue
             if wanted.issubset(snapshot.scope.statuses):
+                return snapshot
+        return None
+
+    def _chain_authority_for(
+        self,
+        chain_id: str,
+        statuses: Sequence[str],
+        *,
+        require_complete_history: bool,
+    ) -> AuthoritativeTaskSnapshot | None:
+        wanted = frozenset(str(status).strip().lower() for status in statuses)
+        for epoch, snapshot in reversed(self._snapshots):
+            if epoch != self._uow.mutation_epoch:
+                continue
+            if not wanted.issubset(snapshot.scope.statuses):
+                continue
+            if require_complete_history and not snapshot.scope.complete_chain_history:
+                continue
+            if snapshot.scope.kind is TaskQueryKind.CHAIN and snapshot.scope.identity == chain_id:
+                return snapshot
+            if snapshot.scope.kind in {
+                TaskQueryKind.BROAD,
+                TaskQueryKind.ACTIVE_ROOTS,
+                TaskQueryKind.LIFECYCLE_CANDIDATES,
+            }:
                 return snapshot
         return None
 
@@ -438,7 +465,11 @@ class TaskReadRepository:
         link_no = int(link)
         scope = TaskSnapshotScope(kind, f"{chain}:{link_no}", tuple(statuses), require_complete_history)
         query = self._query_name(scope)
-        snapshot = None if refresh else self._broad_for(statuses, require_complete_history=require_complete_history)
+        snapshot = None if refresh else self._chain_authority_for(
+            chain,
+            statuses,
+            require_complete_history=require_complete_history,
+        )
         used_broad_snapshot = snapshot is not None
         if snapshot is None:
             read = self._export(
@@ -487,7 +518,11 @@ class TaskReadRepository:
         chain = str(chain_id or "").strip()
         scope = TaskSnapshotScope(TaskQueryKind.CHAIN, chain, tuple(statuses), complete_history)
         query = self._query_name(scope)
-        snapshot = None if refresh else self._broad_for(statuses, require_complete_history=complete_history)
+        snapshot = None if refresh else self._chain_authority_for(
+            chain,
+            statuses,
+            require_complete_history=complete_history,
+        )
         used_broad_snapshot = snapshot is not None
         if snapshot is None:
             read = self._export(scope, (f"chainID:{chain}",), empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)

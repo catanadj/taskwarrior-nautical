@@ -4951,7 +4951,7 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
 
         mod._panel = fake_panel
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new)
+        mod._handle_non_completion_modify(old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -4987,7 +4987,7 @@ def test_on_modify_promotes_cp_emits_period_explanation():
             title=title, rows=list(rows), kind=kind
         )
         mod._print_task = lambda task: None
-        mod._handle_non_completion_modify(old, new)
+        mod._handle_non_completion_modify(old, new, _test_operator_uow())
     finally:
         mod._panel = original_panel
         mod._print_task = original_print_task
@@ -5047,7 +5047,7 @@ def test_on_modify_disables_chain_emits_disabled_panel():
 
             mod._panel = fake_panel
             mod._print_task = lambda task: captured.setdefault("task", dict(task))
-            mod._handle_non_completion_modify(old, new)
+            mod._handle_non_completion_modify(old, new, _test_operator_uow())
         finally:
             mod._panel = orig_panel
             mod._print_task = orig_print_task
@@ -5104,7 +5104,7 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
 
         mod._panel = fake_panel
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new)
+        mod._handle_non_completion_modify(old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -5173,7 +5173,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
 
         mod._panel = fake_panel
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new)
+        mod._handle_non_completion_modify(old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -5241,7 +5241,7 @@ def test_on_modify_native_until_update_explains_carry():
     try:
         mod._panel = lambda title, rows, *, kind=None: captured.update(title=title, rows=list(rows), kind=kind)
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new)
+        mod._handle_non_completion_modify(old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -5280,8 +5280,8 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     try:
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
-        mod._handle_non_completion_modify(old, new)
-        mod._handle_non_completion_modify(new, cleared)
+        mod._handle_non_completion_modify(old, new, _test_operator_uow())
+        mod._handle_non_completion_modify(new, cleared, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -5517,13 +5517,14 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
         def __init__(self, old, new):
             self.old = old
             self.new = new
+            self.runtime = SimpleNamespace(uow=object())
 
     calls = {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}
 
     def load_core():
         calls["load"] += 1
 
-    def handle_deleted(old, new):
+    def handle_deleted(old, new, _unit_of_work):
         calls["deleted"] += 1
         expect(old.get("status") == "pending", f"delete handler should receive old pending task: {old!r}")
         expect(new.get("status") == "deleted", f"delete handler should receive new deleted task: {new!r}")
@@ -5574,7 +5575,7 @@ def test_hook_engine_retains_completion_lifecycle_result_on_runtime_context():
     from nautical_core.modify_models import CompletionLifecycleResult
 
     lifecycle = CompletionLifecycleResult(state="retryable", reason="planner unavailable")
-    runtime = SimpleNamespace(lifecycle_result=None)
+    runtime = SimpleNamespace(lifecycle_result=None, uow=object())
     request = SimpleNamespace(
         old={"uuid": "00000000-0000-0000-0000-000000000303", "status": "pending", "chainID": "chain303"},
         new={"uuid": "00000000-0000-0000-0000-000000000303", "status": "completed", "chainID": "chain303"},
@@ -5732,7 +5733,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         mod._panel = lambda title, rows, *, kind=None: captured["panels"].append((title, list(rows), kind))
         mod._end_chain_summary = lambda *_args, **_kwargs: captured.__setitem__("stopped", captured["stopped"] + 1)
 
-        mod._handle_deleted_modify(parent, expired)
+        mod._handle_deleted_modify(parent, expired, _test_operator_uow())
         expect(len(captured["children"]) == 1, f"expiration should queue one child: {captured!r}")
         child = captured["children"][0]
         child_due = mod.core.parse_dt_any(child.get("due"))
@@ -5755,14 +5756,14 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         expect(not captured["panels"], f"deferred expiration recovery should stay quiet: {captured!r}")
 
         manual = dict(parent, status="deleted", end="20260725T000000Z")
-        mod._handle_deleted_modify(parent, manual)
+        mod._handle_deleted_modify(parent, manual, _test_operator_uow())
         expect(captured["stopped"] == 1, "manual deletion before until should retain stopped-chain behavior")
         expect(manual.get("chain") == "off", f"manual deletion should persist a stopped chain: {manual!r}")
         expect(len(captured["children"]) == 1, "manual deletion must not queue another occurrence")
 
         capped_parent = dict(parent, chainMax=1)
         capped = dict(capped_parent, status="deleted", end="20260727T000000Z")
-        mod._handle_deleted_modify(capped_parent, capped)
+        mod._handle_deleted_modify(capped_parent, capped, _test_operator_uow())
         expect(capped.get("chain") == "off", f"expired final link should disable the chain: {capped!r}")
         expect(len(captured["children"]) == 1, "chainMax final expiration must not queue a child")
         expect(
@@ -5782,7 +5783,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         )
         retryable_parent = dict(parent, uuid="00000000-0000-0000-0000-000000000402")
         retryable = dict(retryable_parent, status="deleted", end="20260727T000000Z")
-        mod._handle_deleted_modify(retryable_parent, retryable)
+        mod._handle_deleted_modify(retryable_parent, retryable, _test_operator_uow())
         expect(
             retryable.get("chain") == "on" and not retryable.get("nextLink"),
             f"failed queue lost recovery state: {retryable!r}",
@@ -5803,7 +5804,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
             until="not-a-timestamp",
             end="20260727T000000Z",
         )
-        mod._handle_deleted_modify(parent, malformed)
+        mod._handle_deleted_modify(parent, malformed, _test_operator_uow())
         expect(
             malformed.get("chain") == "on",
             f"malformed expiration evidence must not disable the chain: {malformed!r}",
@@ -5822,7 +5823,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
         mod._safe_parse_datetime = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("Taskwarrior timestamp read unavailable")
         )
-        mod._handle_deleted_modify(parent, unavailable)
+        mod._handle_deleted_modify(parent, unavailable, _test_operator_uow())
         expect(
             unavailable.get("chain") == "on",
             f"unavailable expiration evidence must not disable the chain: {unavailable!r}",
@@ -5838,7 +5839,7 @@ def test_on_modify_expiration_queues_next_occurrence_and_preserves_manual_delete
             status="deleted",
             end="20260727T000000Z",
         )
-        mod._handle_deleted_modify(parent, failed_recovery)
+        mod._handle_deleted_modify(parent, failed_recovery, _test_operator_uow())
         expect(
             failed_recovery.get("chain") == "on",
             f"failed expiration recovery must not disable the chain: {failed_recovery!r}",
@@ -5940,7 +5941,7 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
         mod._handle_expired_deleted_modify = lambda _task: (_ for _ in ()).throw(RuntimeError("missing module"))
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
-        mod._handle_deleted_modify(old, new)
+        mod._handle_deleted_modify(old, new, _test_operator_uow())
     finally:
         mod._handle_expired_deleted_modify, mod._panel, mod._end_chain_summary = original
 
@@ -16603,7 +16604,7 @@ def test_on_modify_completion_reschedule_carries_native_until():
     try:
         mod._completion_preflight_context = lambda *_args, **_kwargs: None
         for new, expected_until in cases:
-            mod._handle_completion_modify(old, new)
+            mod._handle_completion_modify(old, new, _test_operator_uow())
             expect(new.get("until") == expected_until, f"completion reschedule lost expiration carry: {new!r}")
     finally:
         mod._completion_preflight_context = original_preflight
@@ -20294,23 +20295,23 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
     try:
         mod._print_task = lambda _task: None
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._handle_non_completion_modify(old, due_only)
-        mod._handle_non_completion_modify(old, explicit_scheduled)
-        mod._handle_non_completion_modify(old, explicit_wait)
-        mod._handle_non_completion_modify(old, explicit_both)
+        mod._handle_non_completion_modify(old, due_only, _test_operator_uow())
+        mod._handle_non_completion_modify(old, explicit_scheduled, _test_operator_uow())
+        mod._handle_non_completion_modify(old, explicit_wait, _test_operator_uow())
+        mod._handle_non_completion_modify(old, explicit_both, _test_operator_uow())
         for invalid_old, invalid in (
             (old, malformed),
             (malformed_scheduled_old, malformed_scheduled),
             (malformed_wait_old, malformed_wait),
         ):
             try:
-                mod._handle_non_completion_modify(invalid_old, invalid)
+                mod._handle_non_completion_modify(invalid_old, invalid, _test_operator_uow())
             except SystemExit as exc:
                 expect(exc.code == 1, f"carry failure exited with unexpected status: {exc.code!r}")
             else:
                 raise AssertionError(f"malformed carry was accepted: {invalid!r}")
         mod._completion_preflight_context = lambda *_args, **_kwargs: None
-        mod._handle_completion_modify(old, completed)
+        mod._handle_completion_modify(old, completed, _test_operator_uow())
     finally:
         mod._print_task = orig_print_task
         mod._completion_preflight_context = orig_preflight
@@ -20412,8 +20413,8 @@ def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
         mod._print_task = lambda _task: None
         for changed, _expected, _problem in cases:
             base = scheduled_only if "due" not in changed else old
-            mod._handle_non_completion_modify(base, changed)
-        mod._handle_non_completion_modify(old, valid)
+            mod._handle_non_completion_modify(base, changed, _test_operator_uow())
+        mod._handle_non_completion_modify(old, valid, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -20614,7 +20615,12 @@ def test_on_modify_completion_preflight_context_happy_path():
         "link": 2,
     }
 
-    ctx = mod._completion_preflight_context(new, mod.core.now_utc())
+    from nautical_core.integration_models import Absent
+
+    repository = SimpleNamespace(
+        exact_child_slot=lambda *_args, **_kwargs: Absent("child-slot", "no existing child")
+    )
+    ctx = mod._completion_preflight_context(new, mod.core.now_utc(), repository)
     expect(bool(ctx), f"expected preflight context, got {ctx}")
     expect(ctx.parent_short == "00000000", f"unexpected parent_short: {ctx}")
     expect(ctx.base_no == 2 and ctx.next_no == 3, f"unexpected link numbers: {ctx}")
@@ -21121,6 +21127,7 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         result = mod._handle_completion_modify(
             {"uuid": "parent", "status": "pending"},
             {"uuid": "parent", "status": "completed"},
+            _test_operator_uow(),
         )
     finally:
         mod._completion_validate_cp_and_anchor = original["validate"]
@@ -21136,60 +21143,69 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
 
 
 def test_on_modify_completion_chain_snapshot_modes_and_query():
-    """completion snapshots should broaden only for feedback or explicit full-chain features."""
+    """Completion presentation modes share one authoritative chain read."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_completion_snapshot_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    saved = (mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY, mod._run_task)
-    calls = []
+    from nautical_core.integration_models import Found
 
-    def fake_run_task(cmd, **_kwargs):
-        calls.append(list(cmd))
-        return True, "[]", ""
+    saved = (mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY)
+    calls = []
+    repository = SimpleNamespace(
+        chain_snapshot=lambda chain_id: calls.append(chain_id) or Found(tuple(), "chain snapshot")
+    )
 
     try:
-        mod._run_task = fake_run_task
         mod._SHOW_ANALYTICS = False
         mod._CHECK_CHAIN_INTEGRITY = False
         mod.core.PANEL_MODE = "line"
-        next_only = mod._completion_chain_snapshot("cid", 5, 6)
+        next_only = mod._completion_chain_snapshot("cid", 5, 6, repository)
         expect(next_only.mode == "next" and next_only.loaded, f"unexpected line snapshot: {next_only}")
-        expect("link:6" in calls[-1] and "link:3" not in calls[-1], f"line mode queried history: {calls[-1]}")
 
         mod.core.PANEL_MODE = "rich"
-        recent = mod._completion_chain_snapshot("cid", 5, 6)
-        expect(recent.mode == "recent" and calls[-1].count("or") == 2, f"unexpected recent query: {calls[-1]}")
-        expect(all(token in calls[-1] for token in ("link:3", "link:4", "link:6")), f"recent links missing: {calls[-1]}")
+        recent = mod._completion_chain_snapshot("cid", 5, 6, repository)
+        expect(recent.mode == "recent" and recent.loaded, f"unexpected recent snapshot: {recent}")
 
         mod._CHECK_CHAIN_INTEGRITY = True
-        full = mod._completion_chain_snapshot("cid", 5, 6)
-        expect(full.mode == "full" and not any(token.startswith("link:") for token in calls[-1]), f"full query was filtered: {calls[-1]}")
+        full = mod._completion_chain_snapshot("cid", 5, 6, repository)
+        expect(full.mode == "full" and full.loaded, f"unexpected full snapshot: {full}")
+        expect(calls == ["cid", "cid", "cid"], f"completion bypassed repository chain reads: {calls!r}")
     finally:
-        mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY, mod._run_task = saved
+        mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
 def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
     """Malformed completion exports must not become loaded empty snapshots."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_completion_snapshot_malformed_test")
-    saved = (mod._run_task, mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY)
+    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
+
+    saved = (mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY)
+    command = TaskCommand(("task", "export"), "completion snapshot", 3.0)
+    unavailable = Unavailable(
+        "chain snapshot",
+        FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 0, 1, 0.001, False, "malformed JSON"),
+    )
+    repository = SimpleNamespace(
+        chain_snapshot=lambda *_args, **_kwargs: unavailable,
+        exact_child_slot=lambda *_args, **_kwargs: unavailable,
+    )
     try:
-        mod._run_task = lambda *_args, **_kwargs: (True, "[not-json", "")
         mod.core.PANEL_MODE = "line"
         mod._SHOW_ANALYTICS = False
         mod._CHECK_CHAIN_INTEGRITY = False
-        snapshot = mod._completion_chain_snapshot("malformed01", 1, 2)
+        snapshot = mod._completion_chain_snapshot("malformed01", 1, 2, repository)
         expect(snapshot.is_unavailable, f"malformed snapshot was accepted: {snapshot!r}")
         expect(not snapshot.loaded and snapshot.rows == [], f"malformed snapshot changed lookup state: {snapshot!r}")
         panels = []
         mod._panel = lambda title, rows, **_kwargs: panels.append((title, rows))
         mod._print_task = lambda _task: None
-        allowed = mod._completion_existing_next_or_fail({}, 2, snapshot)
+        allowed = mod._completion_existing_next_or_fail({}, 2, snapshot, repository)
         expect(not allowed and panels and "unavailable" in panels[0][0].lower(), "unavailable snapshot did not stop spawn")
     finally:
-        mod._run_task, mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
+        mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
 def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
@@ -21245,7 +21261,7 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
     try:
         sys.stdin = io.TextIOWrapper(io.BytesIO(stdin_raw.encode("utf-8")), encoding="utf-8")
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            mod._handle_completion_modify(old, new)
+            mod._handle_completion_modify(old, new, _test_operator_uow())
     finally:
         sys.stdin = orig_stdin
 
@@ -33366,7 +33382,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     new.update({"status": "completed", "end": "20250102T090000Z"})
 
     try:
-        mod._handle_completion_modify(old, new)
+        mod._handle_completion_modify(old, new, _test_operator_uow())
     finally:
         mod.core.PANEL_MODE = prev_panel_mode
 
@@ -33411,41 +33427,38 @@ def test_on_modify_read_query_broker_deduplicates_and_invalidates_exports():
 
 
 def test_on_modify_completion_snapshot_reuses_full_chain_read():
-    """A full completion snapshot should satisfy a later unfiltered chain read."""
+    """A completion chain snapshot should satisfy the exact child-slot read."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_completion_snapshot_reuse_test")
     mod._reset_modify_runtime_state()
     saved_analytics = mod._SHOW_ANALYTICS
     mod._SHOW_ANALYTICS = True
-    modify_models = mod._module("modify_models")
+    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
+
+    uow = _test_operator_uow()
     calls = {"count": 0}
-    original_export_snapshot = mod._module("modify_queries").export_completion_chain_snapshot
-    original_run_task = mod._run_task
-    try:
-        rows = [{"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}]
 
-        def fake_snapshot(*_args, **_kwargs):
+    class Client:
+        def execute(self, args, *, purpose, timeout, **_kwargs):
             calls["count"] += 1
-            return modify_models.CompletionSnapshotResult(True, list(rows))
+            rows = [{
+                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "chainID": "reuse01",
+                "link": 2,
+                "chain": "on",
+                "status": "pending",
+            }]
+            command = TaskCommand(("task", *args), purpose, timeout)
+            return TaskCommandResult(command, 0, json.dumps(rows), "", CommandFailureKind.SUCCESS, 1, 0.001)
 
-        def unexpected_run_task(*_args, **_kwargs):
-            raise AssertionError("full chain reuse should not launch another Taskwarrior command")
-
-        queries = mod._module("modify_queries")
-        queries.export_completion_chain_snapshot = fake_snapshot
-        mod._run_task = unexpected_run_task
-        snapshot = mod._completion_chain_snapshot("reuse01", 1, 2)
+    uow.client = Client()
+    try:
+        snapshot = mod._completion_chain_snapshot("reuse01", 1, 2, uow.repository)
         expect(snapshot.loaded and snapshot.coverage == "full", f"unexpected full snapshot: {snapshot!r}")
-        service = mod._lifecycle_read_service()
-        reused = service.get_chain_export("reuse01")
-        expect(reused == rows, f"full snapshot was not reused: {reused!r}")
-        filtered = service.get_chain_export("reuse01", extra="status:completed")
-        expect(filtered == [], f"safe in-memory snapshot filter returned wrong rows: {filtered!r}")
+        reused = uow.repository.exact_child_slot("reuse01", 2)
+        expect(isinstance(reused, Found), f"full snapshot did not satisfy child-slot read: {reused!r}")
         expect(calls["count"] == 1, f"full snapshot was exported more than once: {calls}")
     finally:
-        queries = mod._module("modify_queries")
-        queries.export_completion_chain_snapshot = original_export_snapshot
-        mod._run_task = original_run_task
         mod._SHOW_ANALYTICS = saved_analytics
         mod._reset_modify_runtime_state()
 

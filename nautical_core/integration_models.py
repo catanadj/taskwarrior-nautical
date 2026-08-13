@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import math
 from typing import Generic, TypeAlias, TypeVar
+
+from .lifecycle_models import LifecycleIdentity
 
 
 class IntegrationContractError(ValueError):
@@ -330,6 +333,143 @@ class MutationOutcome:
         object.__setattr__(self, "reason", reason)
 
 
+class OutboxStage(str, Enum):
+    PERSISTED = "persisted"
+    CLAIMED = "claimed"
+    APPLYING = "applying"
+    VERIFYING = "verifying"
+    FINALIZED = "finalized"
+    RETRYABLE = "retryable"
+    MANUAL_REVIEW = "manual_review"
+
+
+class OutboxOutcomeKind(str, Enum):
+    ADVANCED = "advanced"
+    FINALIZED = "finalized"
+    RETRYABLE = "retryable"
+    MANUAL_REVIEW = "manual_review"
+
+
+_VALID_INTENT_OPERATIONS = frozenset(
+    {
+        (MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK),
+        (MutationOperation.CHAIN_DISABLE,),
+        (MutationOperation.NATIVE_UNTIL_REPAIR,),
+        (MutationOperation.METADATA_REPAIR,),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxIntent:
+    """Durable mutation work for one deterministic lifecycle transition."""
+
+    identity: LifecycleIdentity
+    guard: MutationGuard
+    operations: tuple[MutationOperation, ...]
+    expected_postconditions: tuple[MutationPostcondition, ...]
+    max_attempts: int = 3
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, LifecycleIdentity):
+            raise IntegrationContractError("outbox intent requires a LifecycleIdentity")
+        if not isinstance(self.guard, MutationGuard):
+            raise IntegrationContractError("outbox intent requires a MutationGuard")
+        try:
+            operations = tuple(MutationOperation(item) for item in self.operations)
+            postconditions = tuple(MutationPostcondition(item) for item in self.expected_postconditions)
+        except (TypeError, ValueError) as exc:
+            raise IntegrationContractError("invalid outbox operation or postcondition") from exc
+        if operations not in _VALID_INTENT_OPERATIONS:
+            raise IntegrationContractError("outbox intent has an unsupported mutation sequence")
+        expected = tuple(_OPERATION_POSTCONDITION[operation] for operation in operations)
+        if postconditions != expected:
+            raise IntegrationContractError("outbox postconditions must exactly match its mutation sequence")
+        if self.identity.parent_uuid != self.guard.task_uuid:
+            raise IntegrationContractError("outbox identity and guard UUID differ")
+        if self.identity.chain_id != self.guard.chain_id:
+            raise IntegrationContractError("outbox identity and guard chainID differ")
+        if self.identity.source_link != self.guard.link:
+            raise IntegrationContractError("outbox identity and guard link differ")
+        if MutationOperation.CHILD_IMPORT in operations and self.identity.target_link is None:
+            raise IntegrationContractError("child import intent requires a target lifecycle link")
+        if isinstance(self.max_attempts, bool) or not isinstance(self.max_attempts, int) or self.max_attempts < 1:
+            raise IntegrationContractError("outbox max_attempts must be a positive integer")
+        object.__setattr__(self, "operations", operations)
+        object.__setattr__(self, "expected_postconditions", postconditions)
+
+    @property
+    def intent_id(self) -> str:
+        digest = hashlib.sha256(self.identity.key.encode("utf-8")).hexdigest()[:24]
+        return f"ob1-{digest}"
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxOutcome:
+    """Validated durable progress for one outbox intent."""
+
+    intent: OutboxIntent
+    stage: OutboxStage
+    kind: OutboxOutcomeKind
+    mutations: tuple[MutationOutcome, ...] = ()
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.intent, OutboxIntent):
+            raise IntegrationContractError("outbox outcome requires an OutboxIntent")
+        try:
+            stage = OutboxStage(self.stage)
+            kind = OutboxOutcomeKind(self.kind)
+        except (TypeError, ValueError) as exc:
+            raise IntegrationContractError("invalid outbox stage or outcome kind") from exc
+        mutations = tuple(self.mutations)
+        if any(not isinstance(item, MutationOutcome) for item in mutations):
+            raise IntegrationContractError("outbox outcome requires typed mutation outcomes")
+        operations = tuple(item.operation for item in mutations)
+        if len(operations) != len(set(operations)):
+            raise IntegrationContractError("outbox outcome contains duplicate mutation operations")
+        if any(item.operation not in self.intent.operations or item.guard != self.intent.guard for item in mutations):
+            raise IntegrationContractError("outbox mutation outcome does not belong to its intent")
+
+        required_stage = {
+            OutboxOutcomeKind.FINALIZED: OutboxStage.FINALIZED,
+            OutboxOutcomeKind.RETRYABLE: OutboxStage.RETRYABLE,
+            OutboxOutcomeKind.MANUAL_REVIEW: OutboxStage.MANUAL_REVIEW,
+        }.get(kind)
+        if required_stage is not None and stage is not required_stage:
+            raise IntegrationContractError(f"{kind.value} outbox outcome requires {required_stage.value} stage")
+        if kind is OutboxOutcomeKind.ADVANCED and stage not in {
+            OutboxStage.CLAIMED,
+            OutboxStage.APPLYING,
+            OutboxStage.VERIFYING,
+        }:
+            raise IntegrationContractError("advanced outbox outcome requires an active processing stage")
+
+        success_kinds = {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}
+        if kind is OutboxOutcomeKind.FINALIZED:
+            if operations != self.intent.operations or any(item.kind not in success_kinds for item in mutations):
+                raise IntegrationContractError("finalized outbox outcome requires every mutation to succeed")
+        elif kind is OutboxOutcomeKind.RETRYABLE:
+            if not any(item.kind is MutationOutcomeKind.RETRYABLE for item in mutations):
+                raise IntegrationContractError("retryable outbox outcome requires a retryable mutation")
+        elif kind is OutboxOutcomeKind.MANUAL_REVIEW:
+            review_kinds = {
+                MutationOutcomeKind.REJECTED,
+                MutationOutcomeKind.CONFLICT,
+                MutationOutcomeKind.MANUAL_REVIEW,
+            }
+            if not any(item.kind in review_kinds for item in mutations):
+                raise IntegrationContractError("manual-review outbox outcome requires review evidence")
+
+        reason = str(self.reason or "").strip()
+        if kind in {OutboxOutcomeKind.RETRYABLE, OutboxOutcomeKind.MANUAL_REVIEW} and not reason:
+            raise IntegrationContractError(f"{kind.value} outbox outcome requires a reason")
+        object.__setattr__(self, "stage", stage)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "mutations", mutations)
+        object.__setattr__(self, "reason", reason)
+
+
 __all__ = (
     "Absent",
     "CommandFailureKind",
@@ -343,6 +483,10 @@ __all__ = (
     "MutationOutcome",
     "MutationOutcomeKind",
     "MutationPostcondition",
+    "OutboxIntent",
+    "OutboxOutcome",
+    "OutboxOutcomeKind",
+    "OutboxStage",
     "TaskCommand",
     "TaskCommandResult",
     "TaskRead",

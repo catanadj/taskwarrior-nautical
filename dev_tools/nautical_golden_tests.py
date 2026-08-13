@@ -1285,6 +1285,149 @@ def test_integration_mutation_models_enforce_guards_and_postconditions():
         raise AssertionError("invalid mutation contract was accepted")
 
 
+def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
+    """Outbox work is deterministic and cannot finalize without verified mutations."""
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        GuardTimestamp,
+        GuardTimestampField,
+        IntegrationContractError,
+        MutationGuard,
+        MutationOperation,
+        MutationOutcome,
+        MutationOutcomeKind,
+        MutationPostcondition,
+        OutboxIntent,
+        OutboxOutcome,
+        OutboxOutcomeKind,
+        OutboxStage,
+        TaskCommand,
+    )
+    from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+
+    identity = LifecycleIdentity("chain-2", "parent-uuid", 9, 10, LifecycleEvent.COMPLETE)
+    guard = MutationGuard(
+        "parent-uuid",
+        "completed",
+        "chain-2",
+        9,
+        "rf1-outbox",
+        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T080000Z"),),
+        0,
+    )
+    intent = OutboxIntent(
+        identity,
+        guard,
+        (MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK),
+        (MutationPostcondition.CHILD_IMPORTED, MutationPostcondition.PARENT_LINKED),
+    )
+    same_identity = OutboxIntent(
+        identity,
+        guard,
+        intent.operations,
+        intent.expected_postconditions,
+        max_attempts=8,
+    )
+    expect(intent.intent_id == same_identity.intent_id, "retry policy changed durable outbox identity")
+    expect(intent.intent_id.startswith("ob1-"), "outbox identity omitted its schema prefix")
+
+    imported = MutationOutcome(
+        MutationOperation.CHILD_IMPORT,
+        MutationOutcomeKind.APPLIED,
+        guard,
+        (MutationPostcondition.CHILD_IMPORTED,),
+    )
+    linked = MutationOutcome(
+        MutationOperation.PARENT_LINK,
+        MutationOutcomeKind.ALREADY_APPLIED,
+        guard,
+        (MutationPostcondition.PARENT_LINKED,),
+    )
+    finalized = OutboxOutcome(
+        intent,
+        OutboxStage.FINALIZED,
+        OutboxOutcomeKind.FINALIZED,
+        (imported, linked),
+    )
+    expect(finalized.intent.intent_id == intent.intent_id, "outbox outcome changed intent identity")
+
+    command = TaskCommand(("task", "import"), "import child", 12.0)
+    busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.1, True, "lock active")
+    retry = MutationOutcome(
+        MutationOperation.CHILD_IMPORT,
+        MutationOutcomeKind.RETRYABLE,
+        guard,
+        reason="Taskwarrior is busy",
+        failure=busy,
+    )
+    retryable = OutboxOutcome(
+        intent,
+        OutboxStage.RETRYABLE,
+        OutboxOutcomeKind.RETRYABLE,
+        (retry,),
+        "defer child import",
+    )
+    expect(retryable.kind is OutboxOutcomeKind.RETRYABLE, "retryable outbox state was lost")
+
+    wrong_guard = MutationGuard(
+        "other-parent",
+        "completed",
+        "chain-2",
+        9,
+        "rf1-outbox",
+        guard.timestamps,
+        0,
+    )
+    invalid_cases = (
+        lambda: OutboxIntent(
+            identity,
+            wrong_guard,
+            intent.operations,
+            intent.expected_postconditions,
+        ),
+        lambda: OutboxIntent(
+            identity,
+            guard,
+            (MutationOperation.PARENT_LINK, MutationOperation.CHILD_IMPORT),
+            intent.expected_postconditions,
+        ),
+        lambda: OutboxIntent(identity, guard, intent.operations, (MutationPostcondition.CHILD_IMPORTED,)),
+        lambda: OutboxIntent(
+            LifecycleIdentity("chain-2", "parent-uuid", 9, None, LifecycleEvent.COMPLETE),
+            guard,
+            intent.operations,
+            intent.expected_postconditions,
+        ),
+        lambda: OutboxOutcome(
+            intent,
+            OutboxStage.FINALIZED,
+            OutboxOutcomeKind.FINALIZED,
+            (imported,),
+        ),
+        lambda: OutboxOutcome(
+            intent,
+            OutboxStage.APPLYING,
+            OutboxOutcomeKind.RETRYABLE,
+            (retry,),
+            "wrong stage",
+        ),
+        lambda: OutboxOutcome(
+            intent,
+            OutboxStage.RETRYABLE,
+            OutboxOutcomeKind.RETRYABLE,
+            (imported,),
+            "no retry evidence",
+        ),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except IntegrationContractError:
+            continue
+        raise AssertionError("invalid outbox contract was accepted")
+
+
 def test_lifecycle_batch_plan_classifies_typed_outcomes():
     """Batch decisions are explicit, unique, and partitionable before mutation."""
     from nautical_core.exit_models import LifecycleBatchDecision, LifecycleBatchDecisionKind, LifecycleBatchPlan
@@ -35002,6 +35145,7 @@ TESTS = [
     test_lifecycle_models_enforce_transition_contract,
     test_integration_command_and_read_models_enforce_contract,
     test_integration_mutation_models_enforce_guards_and_postconditions,
+    test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_batch_plan_classifies_typed_outcomes,
     test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
     test_lifecycle_planner_is_pure_and_deterministic,

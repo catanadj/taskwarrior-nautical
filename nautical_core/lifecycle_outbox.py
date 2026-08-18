@@ -513,6 +513,58 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def claim_intent(self, *, owner: str, lease_seconds: float, intent_id: str) -> OutboxResult:
+        """Claim one specific intent by id, for a caller that must execute
+        exactly the record it just staged (e.g. reconcile, which holds a
+        per-parent lock and must not act on an unrelated claimed intent).
+        Reuses the same claim/lease/poison-row handling as `claim_batch`,
+        scoped to a single row instead of an ordered batch.
+        """
+        owner = str(owner or "").strip()
+        intent_id = str(intent_id or "").strip()
+        if not owner or lease_seconds <= 0 or not intent_id:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and intent_id")
+        now = self._clock()
+        expires = now + float(lease_seconds)
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            self._secure_state_files()
+            with _transaction(conn):
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
+                    "WHERE processing_state=? AND lease_expires_at <= ?",
+                    (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
+                )
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
+                    "attempts=attempts+1, failure_json='', updated_at=? "
+                    "WHERE intent_id=? AND processing_state IN (?, ?)",
+                    (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, *_ACTIVE_STATES),
+                )
+                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                if row is None:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
+                if str(row["lease_owner"]) != owner or str(row["processing_state"]) != OutboxProcessingState.CLAIMED.value:
+                    return OutboxResult(
+                        OutboxResultKind.CONFLICT,
+                        reason=f"lifecycle intent is not claimable (state={row['processing_state']!r})",
+                    )
+                try:
+                    record = self._from_row(row)
+                except LifecycleOutboxError as exc:
+                    self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
+                return OutboxResult(OutboxResultKind.APPLIED, record=record)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
+        finally:
+            if conn is not None:
+                conn.close()
+
     @staticmethod
     def _quarantine_row(conn: sqlite3.Connection, intent_id: str, now: float, failure: OutboxFailure) -> None:
         conn.execute(

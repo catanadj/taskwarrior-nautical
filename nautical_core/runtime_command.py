@@ -8,6 +8,19 @@ from .integration_models import CommandFailureKind, TaskCommandResult
 from .taskwarrior_client import TaskwarriorClient
 
 
+def command_prefix(context: Any, *, hook_name: str) -> list[str]:
+    """The one Taskwarrior command prefix, from the validated integration context.
+
+    Each hook keeps its own thin, identically-named wrapper (`_task_cmd_prefix`)
+    so its module stays self-contained and its public contract stable for
+    tests that call it by name; this is the single place the actual logic
+    lives.
+    """
+    if context is None:
+        raise RuntimeError(f"{hook_name} integration context is unavailable")
+    return list(context.command_prefix)
+
+
 def run_task_result(
     cmd: Sequence[str],
     *,
@@ -37,4 +50,4 @@ def is_retryable_result(result: TaskCommandResult) -> bool:
     return result.kind in {CommandFailureKind.BUSY, CommandFailureKind.TIMEOUT}
 
 
-__all__ = ("is_retryable_result", "run_task_result")
+__all__ = ("command_prefix", "is_retryable_result", "run_task_result")

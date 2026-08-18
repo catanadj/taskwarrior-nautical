@@ -189,6 +189,100 @@ def _drain_exit_for_test(mod):
     uow = _bind_exit_test_repository(mod, getattr(mod, "TW_DATA_DIR", "/tmp"), runner)
     return mod._drain_outbox(uow)
 
+
+def _section12_spawn_plan(link: int, *, chain_id: str = "section12-chain"):
+    """Build one well-formed SPAWN_CHILD plan for lifecycle application tests."""
+    from nautical_core.lifecycle_models import (
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleIdentity,
+        LifecyclePlan,
+        ParentGuard,
+    )
+
+    parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
+    child_uuid = f"10000000-0000-0000-0000-{link:012d}"
+    return LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity(chain_id, parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard(
+            "completed",
+            "on",
+            chain_id,
+            link,
+            "rf1-section12",
+            modified="20260813T100000Z",
+        ),
+        child_payload={
+            "uuid": child_uuid,
+            "chainID": chain_id,
+            "link": link + 1,
+            "prevLink": parent_uuid[:8],
+            "description": "section12 child",
+            "status": "pending",
+            "chain": "on",
+            "modified": "20260813T100000Z",
+        },
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+
+class _Section12ScriptedMutations:
+    """Record mutation calls and return scripted outcomes for lifecycle application tests."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+        self._kinds: dict = {}
+
+    def set_kinds(self, operation, kinds) -> None:
+        self._kinds[operation] = list(kinds)
+
+    def apply(self, request):
+        from nautical_core.integration_models import (
+            CommandFailureKind,
+            FailureEvidence,
+            MutationOperation,
+            MutationOutcome,
+            MutationOutcomeKind,
+            MutationPostcondition,
+            TaskCommand,
+        )
+
+        self.calls.append(request.operation)
+        queue = self._kinds.get(request.operation)
+        kind = queue.pop(0) if queue else MutationOutcomeKind.APPLIED
+        postconditions = {
+            MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+            MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+            MutationOperation.CHAIN_DISABLE: MutationPostcondition.CHAIN_DISABLED,
+            MutationOperation.METADATA_REPAIR: MutationPostcondition.METADATA_REPAIRED,
+        }
+        postcondition = postconditions.get(request.operation)
+        if kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
+            postcondition = None
+        reason = ""
+        failure = None
+        if kind is MutationOutcomeKind.RETRYABLE:
+            reason = "Taskwarrior is busy"
+            command = TaskCommand(("task", request.operation.value), "section12 scripted mutation", 1.0)
+            failure = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, reason)
+        elif kind is MutationOutcomeKind.CONFLICT:
+            reason = "conflict detected"
+        return MutationOutcome(
+            request.operation,
+            kind,
+            request.guard,
+            () if postcondition is None else (postcondition,),
+            reason,
+            failure,
+        )
+
+
+class _Section12UnitOfWork:
+    mutation_epoch = 0
+
+
 def build_preview(expr, mode="ALL", due=None):
     """
     Always use core.build_and_cache_hints if present (it computes upcoming),
@@ -2629,6 +2723,493 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         path.write_bytes(b"not a sqlite database")
         rejected = LifecycleOutboxRepository(root).open()
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
+
+
+def test_lifecycle_application_resumes_each_verified_spawn_stage():
+    """Crash recovery resumes from the last durable stage without duplicate mutations."""
+    from nautical_core.integration_models import MutationOperation
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+    from nautical_core.lifecycle_models import ExecutionStage
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    stage_sequences = (
+        ((), (MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK)),
+        ((ExecutionStage.CHILD_PRESENT,), (MutationOperation.PARENT_LINK,)),
+        ((ExecutionStage.CHILD_PRESENT, ExecutionStage.PARENT_LINKED), ()),
+        ((ExecutionStage.CHILD_PRESENT, ExecutionStage.PARENT_LINKED, ExecutionStage.VERIFIED), ()),
+    )
+    now = [3000.0]
+
+    def clock():
+        return now[0]
+
+    for link_offset, (prior_stages, expected_ops) in enumerate(stage_sequences, start=1):
+        with tempfile.TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td), clock=clock)
+            plan = _section12_spawn_plan(link_offset)
+            mutations = _Section12ScriptedMutations()
+            service = LifecycleApplicationService(
+                unit_of_work=_Section12UnitOfWork(),
+                mutations=mutations,
+                outbox=outbox,
+                owner="section12-setup",
+            )
+            staged = service.stage(plan, configuration_fingerprint="cf", schedule_fingerprint="sf")
+            expect(staged.ok, f"stage failed for link {link_offset}: {staged}")
+
+            claimed, records = outbox.claim_batch(owner="section12-setup", lease_seconds=30, limit=1)
+            expect(claimed.ok and len(records) == 1, f"setup claim failed for link {link_offset}: {claimed}")
+            intent_id = records[0].intent_id
+            for stage in prior_stages:
+                expect(
+                    outbox.advance_stage(intent_id=intent_id, owner="section12-setup", stage=stage).ok,
+                    f"could not persist {stage.value} before recovery for link {link_offset}",
+                )
+            now[0] += 60
+
+            recovery_mutations = _Section12ScriptedMutations()
+            recovery = LifecycleApplicationService(
+                unit_of_work=_Section12UnitOfWork(),
+                mutations=recovery_mutations,
+                outbox=outbox,
+                owner="section12-recovery",
+            )
+            outcome = recovery.execute_staged(
+                plan,
+                configuration_fingerprint="cf",
+                schedule_fingerprint="sf",
+            )
+            expect(outcome.ok, f"recovery did not complete for link {link_offset}: {outcome}")
+            expect(
+                recovery_mutations.calls == list(expected_ops),
+                f"recovery repeated completed stages for link {link_offset}: {recovery_mutations.calls}",
+            )
+            status_result, status = outbox.status()
+            expect(status_result.ok, f"outbox status failed for link {link_offset}: {status_result}")
+            expect(
+                status.get("states", {}).get("acknowledged") == 1,
+                f"recovered intent was not acknowledged for link {link_offset}: {status}",
+            )
+
+
+def test_lifecycle_application_execute_staged_targets_only_its_intent():
+    """Reconcile-style execution claims and drains exactly one staged intent."""
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxProcessingState
+
+    now = [4000.0]
+
+    def clock():
+        return now[0]
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td), clock=clock)
+        target = _section12_spawn_plan(1)
+        other = _section12_spawn_plan(2, chain_id="section12-other")
+        service = LifecycleApplicationService(
+            unit_of_work=_Section12UnitOfWork(),
+            mutations=_Section12ScriptedMutations(),
+            outbox=outbox,
+            owner="section12-stage",
+        )
+        expect(
+            service.stage(other, configuration_fingerprint="cf", schedule_fingerprint="sf").ok,
+            "other intent staging failed",
+        )
+        expect(
+            service.stage(target, configuration_fingerprint="cf", schedule_fingerprint="sf").ok,
+            "target intent staging failed",
+        )
+        outcome = service.execute_staged(
+            target,
+            configuration_fingerprint="cf",
+            schedule_fingerprint="sf",
+        )
+        expect(outcome.ok, f"targeted execution failed: {outcome}")
+        expect(outcome.intent_id == target.identity.idempotency_key, "targeted execution used the wrong intent")
+        status_result, status = outbox.status()
+        expect(status_result.ok, f"outbox status failed: {status_result}")
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.ACKNOWLEDGED.value) == 1,
+            f"target intent was not acknowledged: {status}",
+        )
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.READY.value, 0) >= 1,
+            f"unrelated intent was consumed by targeted execution: {status}",
+        )
+
+
+def test_lifecycle_application_retryable_mutation_releases_claim():
+    """Retryable mutations leave durable work reclaimable without duplicate children."""
+    from nautical_core.integration_models import MutationOperation, MutationOutcomeKind
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxProcessingState
+
+    now = [5000.0]
+
+    def clock():
+        return now[0]
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td), clock=clock)
+        plan = _section12_spawn_plan(11)
+        busy = _Section12ScriptedMutations()
+        busy.set_kinds(MutationOperation.CHILD_IMPORT, [MutationOutcomeKind.RETRYABLE])
+        service = LifecycleApplicationService(
+            unit_of_work=_Section12UnitOfWork(),
+            mutations=busy,
+            outbox=outbox,
+            owner="section12-busy",
+        )
+        expect(service.stage(plan, configuration_fingerprint="cf", schedule_fingerprint="sf").ok, "stage failed")
+        first = service.drain(limit=1, configuration_fingerprint="cf", schedule_fingerprint="sf")
+        expect(len(first.outcomes) == 1, f"drain did not process one record: {first}")
+        expect(
+            first.outcomes[0].kind is LifecycleApplicationOutcomeKind.RETRYABLE,
+            f"busy child import was not retryable: {first.outcomes[0]}",
+        )
+        expect(len(busy.calls) == 1, "retryable drain should not attempt parent link")
+
+        now[0] += 60
+        recovered = _Section12ScriptedMutations()
+        recovery = LifecycleApplicationService(
+            unit_of_work=_Section12UnitOfWork(),
+            mutations=recovered,
+            outbox=outbox,
+            owner="section12-retry",
+        )
+        second = recovery.drain(limit=1, configuration_fingerprint="cf", schedule_fingerprint="sf")
+        expect(second.outcomes[0].ok, f"retry recovery did not complete: {second.outcomes[0]}")
+        expect(
+            recovered.calls == [MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK],
+            f"retry recovery did not resume from planned stage: {recovered.calls}",
+        )
+        status_result, status = outbox.status()
+        expect(status_result.ok, f"outbox status failed: {status_result}")
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.ACKNOWLEDGED.value) == 1,
+            f"retry recovery was not acknowledged: {status}",
+        )
+
+
+def test_lifecycle_application_fingerprint_mismatch_is_manual_review():
+    """Changed configuration or schedule fingerprints defer execution for review."""
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxProcessingState
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        plan = _section12_spawn_plan(12)
+        service = LifecycleApplicationService(
+            unit_of_work=_Section12UnitOfWork(),
+            mutations=_Section12ScriptedMutations(),
+            outbox=outbox,
+            owner="section12-fingerprint",
+        )
+        expect(service.stage(plan, configuration_fingerprint="cf-old", schedule_fingerprint="sf").ok, "stage failed")
+        outcome = service.execute_staged(
+            plan,
+            configuration_fingerprint="cf-new",
+            schedule_fingerprint="sf",
+        )
+        expect(
+            outcome.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
+            f"fingerprint drift was not manual review: {outcome}",
+        )
+        status_result, status = outbox.status()
+        expect(status_result.ok, f"outbox status failed: {status_result}")
+        expect(
+            status.get("states", {}).get(OutboxProcessingState.MANUAL_REVIEW.value) == 1,
+            f"fingerprint mismatch was not persisted for review: {status}",
+        )
+
+
+def test_lifecycle_application_apply_immediate_terminal_and_update_parent():
+    """Single-mutation lifecycle plans apply inline without durable staging."""
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+
+    parent_uuid = "00000000-0000-0000-0000-000000000912"
+    disable_plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("section12-terminal", parent_uuid, 3, None, LifecycleEvent.MANUAL_DELETE),
+        action=LifecycleAction.DISABLE_CHAIN,
+        parent_guard=ParentGuard(
+            "completed",
+            "on",
+            "section12-terminal",
+            3,
+            "rf1-terminal",
+            modified="20260813T120000Z",
+        ),
+    )
+    update_plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("section12-terminal", parent_uuid, 3, None, LifecycleEvent.ACTIVATE),
+        action=LifecycleAction.UPDATE_PARENT,
+        parent_guard=ParentGuard(
+            "completed",
+            "off",
+            "section12-terminal",
+            3,
+            "rf1-terminal",
+            modified="20260813T120000Z",
+        ),
+        parent_patch={"chainMax": "7"},
+    )
+    with tempfile.TemporaryDirectory() as td:
+        from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+        outbox = LifecycleOutboxRepository(Path(td))
+        mutations = _Section12ScriptedMutations()
+        service = LifecycleApplicationService(
+            unit_of_work=_Section12UnitOfWork(),
+            mutations=mutations,
+            outbox=outbox,
+            owner="section12-immediate",
+        )
+        disabled = service.apply_immediate(disable_plan)
+        expect(disabled.kind is LifecycleApplicationOutcomeKind.APPLIED, f"disable chain failed: {disabled}")
+        updated = service.apply_immediate(update_plan)
+        expect(updated.kind is LifecycleApplicationOutcomeKind.APPLIED, f"metadata repair failed: {updated}")
+        spawn = service.apply_immediate(_section12_spawn_plan(13))
+        expect(
+            spawn.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
+            f"spawn plans must not use apply_immediate: {spawn}",
+        )
+
+
+def test_lifecycle_application_concurrent_drain_is_exclusive():
+    """Two drain workers cannot claim the same ready spawn intent."""
+    import threading
+
+    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    now = [6000.0]
+    barrier = threading.Barrier(2)
+    outcomes = []
+    outcomes_lock = threading.Lock()
+
+    def clock():
+        return now[0]
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td), clock=clock)
+        plan = _section12_spawn_plan(14)
+        service = LifecycleApplicationService(
+            unit_of_work=_Section12UnitOfWork(),
+            mutations=_Section12ScriptedMutations(),
+            outbox=outbox,
+            owner="section12-stage-only",
+        )
+        expect(service.stage(plan, configuration_fingerprint="cf", schedule_fingerprint="sf").ok, "stage failed")
+
+        def drain_once(worker: str) -> None:
+            barrier.wait()
+            local_outbox = LifecycleOutboxRepository(Path(td), clock=clock)
+            local_service = LifecycleApplicationService(
+                unit_of_work=_Section12UnitOfWork(),
+                mutations=_Section12ScriptedMutations(),
+                outbox=local_outbox,
+                owner=worker,
+            )
+            result = local_service.drain(limit=1, configuration_fingerprint="cf", schedule_fingerprint="sf")
+            with outcomes_lock:
+                outcomes.append(result)
+
+        threads = [threading.Thread(target=drain_once, args=(f"drain-{index}",)) for index in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        processed = [outcome for result in outcomes for outcome in result.outcomes if outcome.ok]
+        expect(len(outcomes) == 2, f"concurrent drain did not run twice: {outcomes}")
+        expect(len(processed) == 1, f"concurrent drain was not exclusive: {outcomes}")
+
+
+def test_taskwarrior_mutation_service_conflict_and_verification_unavailable():
+    """Guard conflicts and unavailable verification reads never report false success."""
+    from nautical_core.integration_models import (
+        Absent,
+        ChildImportPayload,
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        GuardTimestamp,
+        GuardTimestampField,
+        MutationGuard,
+        MutationOperation,
+        MutationOutcomeKind,
+        MutationRequest,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+
+    parent_uuid = "00000000-0000-0000-0000-000000000928"
+    child_uuid = "00000000-0000-0000-0000-000000000929"
+    other_uuid = "00000000-0000-0000-0000-000000000930"
+    parent = {
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "section12-conflict",
+        "link": 5,
+        "modified": "20260813T130000Z",
+        "anchor": "w:mon",
+        "cp": "1d",
+    }
+
+    class Repo:
+        def __init__(self):
+            self.rows = {parent_uuid: dict(parent)}
+            self.unavailable_after_import = False
+
+        def by_uuid(self, uuid_value, *, refresh=False):
+            del refresh
+            command = TaskCommand(("task", "export"), "test read", 1.0)
+            if self.unavailable_after_import and str(uuid_value).lower() == other_uuid:
+                evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, "verify lock active")
+                return Unavailable(f"uuid:{uuid_value}", evidence)
+            row = self.rows.get(str(uuid_value).lower())
+            if row is None:
+                return Absent(f"uuid:{uuid_value}", "not present")
+            return Found(row, f"uuid:{uuid_value}")
+
+    class Client:
+        def __init__(self, repo):
+            self.repo = repo
+
+        def execute(self, args, *, purpose, timeout, input_text=None, attempts=1):
+            del attempts
+            command = TaskCommand(("task", *args), purpose, timeout, input_text)
+            args = list(args)
+            if args[0:3] == ["rc.hooks=off", "rc.verbose=nothing", "import"]:
+                row = json.loads(input_text or "{}")
+                self.repo.rows[str(row["uuid"]).lower()] = row
+                self.repo.unavailable_after_import = True
+            return TaskCommandResult(command, 0, "", "", CommandFailureKind.SUCCESS, 1, 0.01)
+
+    class Uow:
+        def __init__(self):
+            self.repository = Repo()
+            self.client = Client(self.repository)
+            self.mutation_epoch = 0
+
+        def record_mutation(self, *, uncertain=False):
+            del uncertain
+            self.mutation_epoch += 1
+            return self.mutation_epoch
+
+    uow = Uow()
+    service = TaskwarriorMutationService(uow)
+
+    def request(operation, payload, epoch):
+        return MutationRequest(
+            operation,
+            MutationGuard(
+                parent_uuid,
+                "completed",
+                "section12-conflict",
+                5,
+                recurrence_fingerprint(parent),
+                (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+                epoch,
+                "on",
+            ),
+            payload,
+        )
+
+    unrelated = ChildImportPayload.from_mapping(
+        {
+            "uuid": child_uuid,
+            "chainID": "section12-conflict",
+            "link": 6,
+            "prevLink": parent_uuid[:8],
+            "description": "collision child",
+            "status": "pending",
+            "chain": "on",
+            "modified": "20260813T130000Z",
+        },
+        parent_uuid=parent_uuid,
+    )
+    uow.repository.rows[child_uuid] = {
+        "uuid": child_uuid,
+        "chainID": "other-chain",
+        "link": 99,
+        "prevLink": other_uuid[:8],
+        "status": "pending",
+        "chain": "on",
+        "modified": "20260813T130000Z",
+    }
+    collision = service.apply(request(MutationOperation.CHILD_IMPORT, unrelated, 0))
+    expect(
+        collision.kind is MutationOutcomeKind.CONFLICT,
+        f"unrelated child UUID collision was not a conflict: {collision}",
+    )
+
+    parent["modified"] = "20260813T140000Z"
+    changed_parent = ChildImportPayload.from_mapping(
+        {
+            "uuid": other_uuid,
+            "chainID": "section12-conflict",
+            "link": 6,
+            "prevLink": parent_uuid[:8],
+            "description": "changed parent child",
+            "status": "pending",
+            "chain": "on",
+            "modified": "20260813T130000Z",
+        },
+        parent_uuid=parent_uuid,
+    )
+    changed = service.apply(request(MutationOperation.CHILD_IMPORT, changed_parent, 0))
+    expect(
+        changed.kind is MutationOutcomeKind.CONFLICT,
+        f"changed parent guard was not a conflict: {changed}",
+    )
+
+    verify_uow = Uow()
+    verify_service = TaskwarriorMutationService(verify_uow)
+    verify_parent_modified = "20260813T130000Z"
+    verify_uow.repository.rows[parent_uuid]["modified"] = verify_parent_modified
+    fresh_child = ChildImportPayload.from_mapping(
+        {
+            "uuid": other_uuid,
+            "chainID": "section12-conflict",
+            "link": 6,
+            "prevLink": parent_uuid[:8],
+            "description": "verify unavailable child",
+            "status": "pending",
+            "chain": "on",
+            "modified": "20260813T130000Z",
+        },
+        parent_uuid=parent_uuid,
+    )
+    unavailable_verify = verify_service.apply(
+        MutationRequest(
+            MutationOperation.CHILD_IMPORT,
+            MutationGuard(
+                parent_uuid,
+                "completed",
+                "section12-conflict",
+                5,
+                recurrence_fingerprint(verify_uow.repository.rows[parent_uuid]),
+                (GuardTimestamp(GuardTimestampField.MODIFIED, verify_parent_modified),),
+                0,
+                "on",
+            ),
+            fresh_child,
+        )
+    )
+    expect(
+        unavailable_verify.kind is MutationOutcomeKind.RETRYABLE,
+        f"unavailable verification was not retryable: {unavailable_verify}",
+    )
+    expect(
+        unavailable_verify.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED},
+        "unavailable verification must not report a verified child import",
+    )
 
 
 def test_on_exit_claims_and_advances_lifecycle_outbox_only():
@@ -7148,215 +7729,6 @@ def test_lifecycle_queue_capacity_guard_is_atomic():
         )
         expect(not result.ok and "capacity exceeded" in result.err, f"oversized plan was accepted: {result}")
         expect(conn.execute("SELECT COUNT(1) FROM queue_entries").fetchone()[0] == 0, "capacity rejection was not atomic")
-
-
-def test_lifecycle_executor_uses_typed_order_and_compensation():
-    """The shared executor has one mutation order and compensates only imports."""
-    from nautical_core.lifecycle_executor import (
-        LifecycleTransitionExecutor,
-        OperationResult,
-        OperationState,
-    )
-    from nautical_core.lifecycle_models import (
-        LifecycleAction,
-        LifecycleEvent,
-        LifecycleOutcomeKind,
-        LifecyclePlan,
-        ParentGuard,
-        LifecycleIdentity,
-    )
-
-    plan = LifecyclePlan.from_mappings(
-        identity=LifecycleIdentity("chain-exec", "parent-exec", 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard.from_mapping(
-            {"status": "completed", "chain": "on", "chainID": "chain-exec", "link": "1"}
-        ),
-        child_payload={"uuid": "child-exec", "link": 2},
-        parent_patch={"nextLink": "child-ex"},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-        stage="persisted",
-    )
-
-    class Services:
-        def __init__(self, *, found: bool, fail_link: bool = False, unavailable_parent: bool = False):
-            self.found = found
-            self.fail_link = fail_link
-            self.unavailable_parent = unavailable_parent
-            self.calls: list[str] = []
-
-        def validate_parent(self, _plan):
-            self.calls.append("parent")
-            return OperationResult(
-                OperationState.UNAVAILABLE if self.unavailable_parent else OperationState.APPLIED,
-                reason="parent unavailable" if self.unavailable_parent else "",
-            )
-
-        def find_equivalent_child(self, _plan):
-            self.calls.append("find")
-            if self.found:
-                return OperationResult(OperationState.FOUND, {"uuid": "child-existing", "link": 2})
-            return OperationResult(OperationState.ABSENT)
-
-        def import_child(self, _plan):
-            self.calls.append("import")
-            return OperationResult(OperationState.APPLIED, {"uuid": "child-imported", "link": 2})
-
-        def verify_child(self, _plan, _child):
-            self.calls.append("verify_child")
-            return OperationResult(OperationState.APPLIED)
-
-        def apply_parent_patch(self, _plan, _child):
-            self.calls.append("patch")
-            return OperationResult(OperationState.CONFLICT if self.fail_link else OperationState.ALREADY)
-
-        def verify_linkage(self, _plan, _child):
-            self.calls.append("verify_link")
-            return OperationResult(OperationState.APPLIED)
-
-        def compensate_child(self, _plan, _child):
-            self.calls.append("compensate")
-            return OperationResult(OperationState.APPLIED)
-
-    existing = Services(found=True)
-    existing_outcome = LifecycleTransitionExecutor(existing).execute(plan)
-    expect(existing_outcome.kind is LifecycleOutcomeKind.APPLIED, f"existing child did not apply: {existing_outcome}")
-    expect(existing.calls == ["parent", "find", "verify_child", "patch", "verify_link"], f"unexpected existing order: {existing.calls}")
-
-    imported = Services(found=False, fail_link=True)
-    imported_outcome = LifecycleTransitionExecutor(imported).execute(plan)
-    expect(imported_outcome.kind is LifecycleOutcomeKind.MANUAL_REVIEW, f"failed link was not manual review: {imported_outcome}")
-    expect(imported.calls == ["parent", "find", "import", "verify_child", "patch", "compensate"], f"unexpected compensation order: {imported.calls}")
-
-    unavailable = Services(found=True, unavailable_parent=True)
-    unavailable_outcome = LifecycleTransitionExecutor(unavailable).execute(plan)
-    expect(unavailable_outcome.kind is LifecycleOutcomeKind.RETRYABLE, f"unavailable parent was not retryable: {unavailable_outcome}")
-    expect(unavailable.calls == ["parent"], f"executor mutated after unavailable guard: {unavailable.calls}")
-
-
-def test_lifecycle_terminal_executor_guards_disablement():
-    """Terminal transitions must validate, disable, and verify in that order."""
-    from nautical_core.lifecycle_executor import (
-        LifecycleTerminalExecutor,
-        OperationResult,
-        OperationState,
-    )
-    from nautical_core.lifecycle_models import (
-        LifecycleAction,
-        LifecycleEvent,
-        LifecycleOutcomeKind,
-        LifecyclePlan,
-        LifecycleIdentity,
-        ParentGuard,
-    )
-
-    plan = LifecyclePlan.from_mappings(
-        identity=LifecycleIdentity("chain-terminal", "parent-terminal", 3, None, LifecycleEvent.CHAIN_MAX),
-        action=LifecycleAction.FINALIZE_CHAIN,
-        parent_guard=ParentGuard.from_mapping(
-            {"status": "completed", "chain": "on", "chainID": "chain-terminal", "link": 3}
-        ),
-        parent_patch={"chain": "off"},
-        expected_postconditions=("terminal_chain", "no_successor"),
-    )
-
-    class Services:
-        def __init__(self, unavailable=False):
-            self.unavailable = unavailable
-            self.calls: list[str] = []
-
-        def validate_terminal(self, _plan):
-            self.calls.append("validate")
-            return OperationResult(
-                OperationState.UNAVAILABLE if self.unavailable else OperationState.APPLIED,
-                reason="terminal read unavailable" if self.unavailable else "",
-            )
-
-        def disable_chain(self, _plan):
-            self.calls.append("disable")
-            return OperationResult(OperationState.APPLIED)
-
-        def verify_terminal(self, _plan):
-            self.calls.append("verify")
-            return OperationResult(OperationState.APPLIED)
-
-    applied = Services()
-    outcome = LifecycleTerminalExecutor(applied).execute(plan)
-    expect(outcome.kind is LifecycleOutcomeKind.APPLIED, f"terminal transition did not apply: {outcome}")
-    expect(applied.calls == ["validate", "disable", "verify"], f"wrong terminal order: {applied.calls}")
-
-    unavailable = Services(unavailable=True)
-    outcome = LifecycleTerminalExecutor(unavailable).execute(plan)
-    expect(outcome.kind is LifecycleOutcomeKind.RETRYABLE, f"terminal outage was not retryable: {outcome}")
-    expect(unavailable.calls == ["validate"], f"terminal mutated after unavailable guard: {unavailable.calls}")
-
-
-def test_lifecycle_executor_fault_matrix_fails_closed_at_each_boundary():
-    """Injected lifecycle failures stop before unsafe later mutations."""
-    from nautical_core.lifecycle_executor import LifecycleTransitionExecutor, OperationResult, OperationState
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleOutcomeKind, LifecyclePlan, LifecycleIdentity, ParentGuard
-
-    plan = LifecyclePlan.from_mappings(
-        identity=LifecycleIdentity("chain-fault", "parent-fault", 1, 2, LifecycleEvent.COMPLETE),
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=ParentGuard.from_mapping(
-            {"status": "completed", "chain": "on", "chainID": "chain-fault", "link": "1"}
-        ),
-        child_payload={"uuid": "child-fault", "link": 2},
-        parent_patch={"nextLink": "child-fau"},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-
-    for failing_stage in ("parent", "find", "import", "verify_child", "patch", "verify_link"):
-        class Services:
-            def __init__(self):
-                self.calls: list[str] = []
-
-            def result(self, name: str, *, value=None):
-                self.calls.append(name)
-                if name == failing_stage:
-                    return OperationResult(OperationState.UNAVAILABLE, reason=f"{name} unavailable")
-                return OperationResult(OperationState.APPLIED, value=value)
-
-            def validate_parent(self, _plan):
-                return self.result("parent")
-
-            def find_equivalent_child(self, _plan):
-                if failing_stage == "find":
-                    return self.result("find")
-                self.calls.append("find")
-                return OperationResult(OperationState.ABSENT)
-
-            def import_child(self, _plan):
-                return self.result("import", value={"uuid": "child-fault", "link": 2})
-
-            def verify_child(self, _plan, _child):
-                return self.result("verify_child")
-
-            def apply_parent_patch(self, _plan, _child):
-                return self.result("patch")
-
-            def verify_linkage(self, _plan, _child):
-                return self.result("verify_link")
-
-            def compensate_child(self, _plan, _child):
-                return self.result("compensate")
-
-        services = Services()
-        outcome = LifecycleTransitionExecutor(services).execute(plan)
-        expect(outcome.kind is LifecycleOutcomeKind.RETRYABLE, f"{failing_stage} did not fail retryably: {outcome}")
-        expect(failing_stage in services.calls, f"{failing_stage} was not exercised: {services.calls}")
-        failure_index = services.calls.index(failing_stage)
-        later = set(services.calls[failure_index + 1:])
-        forbidden = {
-            "parent": {"find", "import", "verify_child", "patch", "verify_link", "compensate"},
-            "find": {"import", "verify_child", "patch", "verify_link", "compensate"},
-            "import": {"verify_child", "patch", "verify_link", "compensate"},
-            "verify_child": {"patch", "verify_link", "compensate"},
-            "patch": {"verify_link", "compensate"},
-            "verify_link": set(),
-        }[failing_stage]
-        expect(not forbidden.intersection(later), f"{failing_stage} continued after failure: {services.calls}")
 
 
 def test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor():
@@ -35968,6 +36340,13 @@ TESTS = [
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
+    test_lifecycle_application_resumes_each_verified_spawn_stage,
+    test_lifecycle_application_execute_staged_targets_only_its_intent,
+    test_lifecycle_application_retryable_mutation_releases_claim,
+    test_lifecycle_application_fingerprint_mismatch_is_manual_review,
+    test_lifecycle_application_apply_immediate_terminal_and_update_parent,
+    test_lifecycle_application_concurrent_drain_is_exclusive,
+    test_taskwarrior_mutation_service_conflict_and_verification_unavailable,
     test_on_exit_claims_and_advances_lifecycle_outbox_only,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
@@ -36034,9 +36413,6 @@ TESTS = [
     test_health_check_json_ok_empty_taskdata,
     test_health_check_critical_outbox_bytes,
     test_health_check_critical_outbox_rows,
-    test_lifecycle_executor_uses_typed_order_and_compensation,
-    test_lifecycle_terminal_executor_guards_disablement,
-    test_lifecycle_executor_fault_matrix_fails_closed_at_each_boundary,
     test_reconcile_terminal_state_is_idempotent_but_rejects_linked_successor,
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,

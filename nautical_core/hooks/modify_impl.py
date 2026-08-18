@@ -521,8 +521,8 @@ _LIFECYCLE_MODELS = None
 _LIFECYCLE_MODELS_LOAD_FAILED = False
 _LIFECYCLE_PLANNER = None
 _LIFECYCLE_PLANNER_LOAD_FAILED = False
-_LIFECYCLE_EXECUTOR = None
-_LIFECYCLE_EXECUTOR_LOAD_FAILED = False
+_LIFECYCLE_APPLICATION = None
+_LIFECYCLE_APPLICATION_LOAD_FAILED = False
 _LIFECYCLE_OUTBOX = None
 _LIFECYCLE_OUTBOX_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
@@ -628,11 +628,11 @@ _MODULE_SPECS = {
         "lifecycle_planner.py",
         "nautical_core.lifecycle_planner",
     ),
-    "lifecycle_executor": (
-        "_LIFECYCLE_EXECUTOR",
-        "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
-        "lifecycle_executor.py",
-        "nautical_core.lifecycle_executor",
+    "lifecycle_application": (
+        "_LIFECYCLE_APPLICATION",
+        "_LIFECYCLE_APPLICATION_LOAD_FAILED",
+        "lifecycle_application.py",
+        "nautical_core.lifecycle_application",
     ),
     "lifecycle_outbox": (
         "_LIFECYCLE_OUTBOX",
@@ -777,9 +777,9 @@ def _build_hook_runtime_context():
 
 
 def _task_cmd_prefix() -> list[str]:
-    if _INTEGRATION_CONTEXT is None:
-        raise RuntimeError("on-modify integration context is unavailable")
-    return list(_INTEGRATION_CONTEXT.command_prefix)
+    from nautical_core.runtime_command import command_prefix
+
+    return command_prefix(_INTEGRATION_CONTEXT, hook_name="on-modify")
 
 
 def _initialize_integration_context() -> None:
@@ -1400,22 +1400,27 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
 
 
 def _enqueue_spawn_intent(plan) -> tuple[bool, str]:
-    """Persist one immutable lifecycle plan without a queue envelope."""
+    """Stage one immutable lifecycle plan through the shared application service."""
     if _INTEGRATION_CONTEXT is None:
         return False, "validated integration context is unavailable"
     lifecycle_models = _module("lifecycle_models")
     if not isinstance(plan, lifecycle_models.LifecyclePlan):
         return False, "invalid lifecycle plan"
     configuration = _INTEGRATION_CONTEXT.configuration
-    outbox = _module("lifecycle_outbox")
-    result = outbox.LifecycleOutboxRepository(TW_DATA_DIR).enqueue(
+    lifecycle_application = _module("lifecycle_application")
+    outbox = _module("lifecycle_outbox").LifecycleOutboxRepository(TW_DATA_DIR)
+    # Staging-only: no unit_of_work/mutations here by design. On-modify must
+    # not construct a command-capable unit of work, to avoid re-entering
+    # Taskwarrior while it still holds the datastore lock for this task.
+    service = lifecycle_application.LifecycleApplicationService(outbox=outbox, owner="on-modify")
+    result = service.stage(
         plan,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
     )
     if result.ok:
         return True, ""
-    return False, result.reason or "lifecycle outbox enqueue failed"
+    return False, result.reason or "lifecycle outbox staging failed"
 
 
 def _lifecycle_spawn_identity(parent: dict, child: dict):

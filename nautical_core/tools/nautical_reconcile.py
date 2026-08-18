@@ -25,41 +25,30 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import reconcile, safe_lock, task_command  # noqa: E402
+from nautical_core import reconcile, safe_lock  # noqa: E402
 from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
 from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
-from nautical_core.lifecycle_executor import (  # noqa: E402
-    LifecycleTerminalExecutor,
-    LifecycleTransitionExecutor,
-    OperationResult,
-    OperationState,
-)
 from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,
+    LifecycleAction,
     LifecycleEvent,
     LifecyclePlan,
-    LifecycleOutcomeKind,
     TaskSnapshot,
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
-    ChildCompensationPayload,
     Absent,
-    ChildImportPayload,
     Found,
     GuardTimestamp,
     GuardTimestampField,
     MutationGuard,
     MutationOperation,
-    MutationOutcome,
     MutationOutcomeKind,
     MutationRequest,
     NativeUntilRepairPayload,
-    ParentLinkPayload,
-    ChainDisablePayload,
     Unavailable,
 )
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
@@ -1008,6 +997,101 @@ def _plan_for_parent(
     )
 
 
+def _lifecycle_application_service():
+    """One shared staging+execution service, built from the same unit of
+    work reconcile already constructs for reads and mutations. Reused by
+    both the spawn/backfill path (stage + execute_staged) and the terminal
+    path (apply_immediate) so reconcile and the live hooks apply lifecycle
+    transitions through identical logic.
+    """
+    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    if _UNIT_OF_WORK is None:
+        raise RuntimeError("reconcile lifecycle execution requires a mutation-capable unit of work")
+    outbox = LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
+    return LifecycleApplicationService(
+        unit_of_work=_UNIT_OF_WORK,
+        mutations=TaskwarriorMutationService(_UNIT_OF_WORK),
+        outbox=outbox,
+        owner=f"reconcile-{os.getpid()}",
+        lease_seconds=120.0,
+    )
+
+
+def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | None:
+    """Find a task already occupying this exact chain position, by uuid or
+    by (chainID, link, prevLink) match, regardless of whether it carries the
+    deterministic stable UUID. Preserves duplicate-avoidance for chains that
+    were manually or partially repaired before this run computed one.
+    """
+    child = lifecycle_plan.child_dict()
+    child_uuid = str(child.get("uuid") or "").strip().lower()
+    rows = _existing_children({"chainID": lifecycle_plan.identity.chain_id, "link": lifecycle_plan.identity.source_link})
+    parent_short = str(lifecycle_plan.identity.parent_uuid or "").strip().lower()[:8]
+    for row in rows:
+        row_uuid = str(row.get("uuid") or "").strip().lower()
+        if child_uuid and row_uuid == child_uuid:
+            return row
+        if (
+            str(row.get("chainID") or "").strip() == lifecycle_plan.identity.chain_id
+            and reconcile.int_or_default(row.get("link"), None) == lifecycle_plan.identity.target_link
+            and str(row.get("prevLink") or "").strip().lower() == parent_short
+        ):
+            return row
+    return None
+
+
+def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "reconcile.ReconcilePlan", hook: Any) -> LifecyclePlan:
+    """Ensure a SPAWN_CHILD plan's child payload targets a real, reproducible UUID.
+
+    Reconcile may re-run against the same broken chain more than once, and
+    may run against a chain a human already partially repaired by hand.
+    Prefer a task already occupying this exact chain position (found by uuid
+    or by chainID+link+prevLink), so a partially-repaired chain doesn't get
+    a duplicate child. Otherwise fall back to the deterministic stable UUID,
+    so repeated runs against a still-broken chain converge on the same child
+    rather than reserving a fresh random one every time.
+    """
+    lifecycle_plan = recon_plan.lifecycle_plan
+    if not isinstance(lifecycle_plan, LifecyclePlan) or lifecycle_plan.action is not LifecycleAction.SPAWN_CHILD:
+        return lifecycle_plan
+    child = lifecycle_plan.child_dict()
+    existing = _find_positional_child(lifecycle_plan)
+    resolved_uuid = str(existing.get("uuid") or "").strip() if existing is not None else ""
+    if not resolved_uuid:
+        resolved_uuid = _stable_child_uuid(hook, recon_plan.parent, child)
+    if not resolved_uuid or resolved_uuid == str(child.get("uuid") or "").strip():
+        return lifecycle_plan
+    child["uuid"] = resolved_uuid
+    patch = dict(lifecycle_plan.parent_patch_dict())
+    patch["nextLink"] = resolved_uuid[:8]
+    return LifecyclePlan.from_mappings(
+        identity=lifecycle_plan.identity,
+        action=lifecycle_plan.action,
+        parent_guard=lifecycle_plan.parent_guard,
+        child_payload=child,
+        parent_patch=patch,
+        expected_postconditions=lifecycle_plan.expected_postconditions,
+        max_attempts=lifecycle_plan.max_attempts,
+    )
+
+
+def _raise_for_lifecycle_outcome(outcome: Any, *, label: str) -> None:
+    """Preserve the retryable/manual-review exception contract callers depend on."""
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind
+
+    if outcome.ok:
+        return
+    if outcome.kind is LifecycleApplicationOutcomeKind.RETRYABLE:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] reconcile {label} retryable: {outcome.reason}", file=sys.stderr)
+        raise _LifecycleRetryable(f"lifecycle {label} retryable: {outcome.reason}")
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        print(f"[nautical] reconcile {label} review: {outcome.reason}", file=sys.stderr)
+    raise _LifecycleManualReview(f"lifecycle {label} requires review: {outcome.reason}")
+
+
 def _execute_reconcile_lifecycle_plan(
     task_bin: str,
     hook: Any,
@@ -1017,21 +1101,31 @@ def _execute_reconcile_lifecycle_plan(
     label: str,
     strict_uuid: bool,
 ) -> str:
-    """Execute and verify one reconcile spawn/backfill through the shared executor."""
+    """Stage and execute one reconcile spawn/backfill through the shared
+    lifecycle application service -- the same staging and execution path the
+    live hooks use, so a chain reconcile repairs converges identically to
+    whatever the on-exit hook would have produced from the same state.
+    """
     lifecycle_plan = getattr(plan, "lifecycle_plan", None)
     if not isinstance(lifecycle_plan, LifecyclePlan):
         raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
-    services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
-    outcome = LifecycleTransitionExecutor(services).execute(lifecycle_plan)
-    if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            print(f"[nautical] reconcile {label} retryable: {outcome.reason}", file=sys.stderr)
-        raise _LifecycleRetryable(f"lifecycle {label} retryable: {outcome.reason}")
-    if outcome.kind is not LifecycleOutcomeKind.APPLIED:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            print(f"[nautical] reconcile {label} review: {outcome.reason}", file=sys.stderr)
-        raise _LifecycleManualReview(f"lifecycle {label} requires review: {outcome.reason}")
-    child_short = services.last_child_short or plan.child_short
+    resolved_plan = _lifecycle_plan_with_resolved_child_uuid(plan, hook)
+    service = _lifecycle_application_service()
+    configuration = _UNIT_OF_WORK.context.configuration
+    staged = service.stage(
+        resolved_plan,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
+    if not staged.ok:
+        _raise_for_lifecycle_outcome(staged, label=f"{label} staging")
+    outcome = service.execute_staged(
+        resolved_plan,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
+    _raise_for_lifecycle_outcome(outcome, label=label)
+    child_short = resolved_plan.parent_patch_dict().get("nextLink") or plan.child_short
     if not child_short:
         raise RuntimeError(f"lifecycle {label} produced no child identity")
     verified = _verify_applied_child(
@@ -1075,19 +1169,13 @@ def _execute_reconcile_terminal_plan(
     hook: Any,
     plan: reconcile.ReconcilePlan,
 ) -> str:
-    """Apply a guarded terminal plan through the shared terminal executor."""
+    """Apply a guarded terminal plan through the shared lifecycle application service."""
     lifecycle_plan = _terminal_lifecycle_plan(plan)
-    services = _ReconcileLifecycleServices(task_bin, hook, plan.parent)
-    outcome = LifecycleTerminalExecutor(services).execute(lifecycle_plan)
-    if outcome.kind is LifecycleOutcomeKind.RETRYABLE:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            print(f"[nautical] reconcile terminal retryable: {outcome.reason}", file=sys.stderr)
-        raise _LifecycleRetryable(f"terminal transition retryable: {outcome.reason}")
-    if outcome.kind is not LifecycleOutcomeKind.APPLIED:
-        if os.environ.get("NAUTICAL_DIAG") == "1":
-            print(f"[nautical] reconcile terminal review: {outcome.reason}", file=sys.stderr)
-        raise _LifecycleManualReview(f"terminal transition requires review: {outcome.reason}")
+    service = _lifecycle_application_service()
+    outcome = service.apply_immediate(lifecycle_plan)
+    _raise_for_lifecycle_outcome(outcome, label="terminal transition")
     return "off"
+
 
 
 def _apply_parent_atomic(
@@ -1430,314 +1518,6 @@ def _reconcile_candidate(
         current = child
 
     return outcomes
-
-
-class _ReconcileLifecycleServices:
-    """Taskwarrior adapter for the shared lifecycle transition executor."""
-
-    def __init__(
-        self,
-        task_bin: str,
-        hook: Any,
-        parent: dict[str, Any] | None = None,
-        *,
-        unit_of_work: TaskwarriorUnitOfWork | None = None,
-    ):
-        self.task_bin = task_bin
-        self.hook = hook
-        self.parent = dict(parent or {})
-        self.imported = False
-        self.last_child_short = ""
-        self.unit_of_work = unit_of_work or _UNIT_OF_WORK
-        if self.unit_of_work is None:
-            raise RuntimeError("reconcile mutation service requires an integration unit of work")
-        self.mutations = TaskwarriorMutationService(self.unit_of_work)
-
-    def _mutation_guard(self, plan: LifecyclePlan) -> MutationGuard:
-        parent_guard = plan.parent_guard
-        modified = str(parent_guard.modified or "").strip()
-        if not modified:
-            raise RuntimeError("lifecycle mutation guard has no modified timestamp")
-        return MutationGuard(
-            task_uuid=plan.identity.parent_uuid,
-            status=parent_guard.status,
-            chain_id=parent_guard.chain_id,
-            link=parent_guard.link,
-            recurrence_identity=parent_guard.recurrence_fingerprint,
-            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
-            expected_mutation_epoch=self.unit_of_work.mutation_epoch,
-            chain=parent_guard.chain,
-        )
-
-    @staticmethod
-    def _mutation_result(outcome: MutationOutcome, *, value: Any = None) -> OperationResult:
-        if outcome.kind is MutationOutcomeKind.APPLIED:
-            return OperationResult(OperationState.APPLIED, value=value, reason=outcome.reason)
-        if outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
-            return OperationResult(OperationState.ALREADY, value=value, reason=outcome.reason)
-        if outcome.kind is MutationOutcomeKind.RETRYABLE:
-            return OperationResult(OperationState.UNAVAILABLE, reason=outcome.reason)
-        if outcome.kind is MutationOutcomeKind.CONFLICT:
-            return OperationResult(OperationState.CONFLICT, reason=outcome.reason)
-        return OperationResult(OperationState.FAILED, reason=outcome.reason or outcome.kind.value)
-
-    @staticmethod
-    def _result(state: OperationState, *, value: Any = None, reason: str = "") -> OperationResult:
-        return OperationResult(state, value=value, reason=reason)
-
-    @staticmethod
-    def _link(value: Any) -> int | None:
-        try:
-            return int(float(str(value).strip()))
-        except (TypeError, ValueError, OverflowError):
-            return None
-
-    def validate_parent(self, plan: LifecyclePlan) -> OperationResult:
-        try:
-            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
-        except Exception as exc:
-            return self._result(OperationState.UNAVAILABLE, reason=f"parent export unavailable: {exc}")
-        if parent is None:
-            return self._result(OperationState.CONFLICT, reason="parent task is unavailable")
-        guard = plan.parent_guard.to_dict()
-        for field in ("status", "chain", "chainID"):
-            expected = str(guard.get(field) or "").strip().casefold()
-            actual = str(parent.get(field) or "").strip().casefold()
-            if expected != actual:
-                return self._result(
-                    OperationState.CONFLICT,
-                    reason=f"parent {field} changed (expected {expected or '-'}, found {actual or '-'})",
-                )
-        expected_link = self._link(guard.get("link"))
-        actual_link = self._link(parent.get("link"))
-        if expected_link is None or actual_link is None or expected_link != actual_link:
-            return self._result(
-                OperationState.CONFLICT,
-                reason=f"parent link changed (expected {guard.get('link')}, found {parent.get('link')})",
-            )
-        expected_fingerprint = str(guard.get("recurrence_fingerprint") or "").strip()
-        if expected_fingerprint:
-            try:
-                from nautical_core.lifecycle_models import recurrence_fingerprint
-
-                actual_fingerprint = recurrence_fingerprint(parent)
-            except Exception as exc:
-                return self._result(OperationState.UNAVAILABLE, reason=f"parent fingerprint unavailable: {exc}")
-            if actual_fingerprint != expected_fingerprint:
-                return self._result(OperationState.CONFLICT, reason="parent recurrence inputs changed")
-        return self._result(OperationState.APPLIED)
-
-    def validate_terminal(self, plan: LifecyclePlan) -> OperationResult:
-        try:
-            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
-        except Exception as exc:
-            return self._result(OperationState.UNAVAILABLE, reason=f"terminal parent export unavailable: {exc}")
-        if parent is None:
-            return self._result(OperationState.UNAVAILABLE, reason="terminal parent export unavailable")
-        if str(parent.get("nextLink") or "").strip():
-            return self._result(
-                OperationState.CONFLICT,
-                reason="successor is already linked; retain it and review the terminal transition",
-            )
-        if plan.identity.event is not LifecycleEvent.MANUAL_DELETE:
-            try:
-                successors = _existing_children(parent)
-            except Exception as exc:
-                return self._result(OperationState.UNAVAILABLE, reason=f"successor lookup unavailable: {exc}")
-            if successors:
-                return self._result(
-                    OperationState.CONFLICT,
-                    reason="successor is already persisted; retain it and review the terminal transition",
-                )
-        if str(parent.get("chain") or "").strip().lower() == "off":
-            return self._result(OperationState.ALREADY)
-        return self.validate_parent(plan)
-
-    def disable_chain(self, plan: LifecyclePlan) -> OperationResult:
-        try:
-            request = MutationRequest(
-                MutationOperation.CHAIN_DISABLE,
-                self._mutation_guard(plan),
-                ChainDisablePayload(plan.identity.parent_uuid),
-            )
-            return self._mutation_result(self.mutations.apply(request))
-        except Exception as exc:
-            return self._result(OperationState.FAILED, reason=f"chain disablement failed: {exc}")
-
-    def verify_terminal(self, plan: LifecyclePlan) -> OperationResult:
-        try:
-            _verify_disabled_parent(self.task_bin, {"uuid": plan.identity.parent_uuid})
-            return self._result(OperationState.APPLIED)
-        except Exception as exc:
-            reason = str(exc).strip() or type(exc).__name__
-            state = (
-                OperationState.UNAVAILABLE
-                if isinstance(exc, (TimeoutError, ConnectionError, task_command.TaskCommandFailure))
-                and (not isinstance(exc, task_command.TaskCommandFailure) or exc.retryable)
-                else OperationState.CONFLICT
-            )
-            return self._result(state, reason=f"terminal chain verification failed: {reason}")
-
-    def _rows_for_child(self, plan: LifecyclePlan) -> list[dict[str, Any]]:
-        parent = {"chainID": plan.identity.chain_id, "link": plan.identity.source_link}
-        return _existing_children(parent)
-
-    def find_equivalent_child(self, plan: LifecyclePlan) -> OperationResult:
-        child = plan.child_dict()
-        child_uuid = str(child.get("uuid") or "").strip().lower()
-        try:
-            rows = self._rows_for_child(plan)
-        except Exception as exc:
-            return self._result(OperationState.UNAVAILABLE, reason=f"child lookup unavailable: {exc}")
-        for row in rows:
-            row_uuid = str(row.get("uuid") or "").strip().lower()
-            if child_uuid and row_uuid == child_uuid:
-                return self._result(OperationState.FOUND, value=row)
-            if (
-                str(row.get("chainID") or "").strip() == plan.identity.chain_id
-                and self._link(row.get("link")) == plan.identity.target_link
-                and str(row.get("prevLink") or "").strip().lower()
-                == str(plan.identity.parent_uuid or "").strip().lower()[:8]
-            ):
-                return self._result(OperationState.FOUND, value=row)
-        return self._result(OperationState.ABSENT)
-
-    def import_child(self, plan: LifecyclePlan) -> OperationResult:
-        child = plan.child_dict()
-        stable_uuid = _stable_child_uuid(self.hook, self.parent, child)
-        if not stable_uuid:
-            return self._result(OperationState.CONFLICT, reason="child import has no stable UUID")
-        child["uuid"] = stable_uuid
-        try:
-            request = MutationRequest(
-                MutationOperation.CHILD_IMPORT,
-                self._mutation_guard(plan),
-                ChildImportPayload.from_mapping(child, parent_uuid=plan.identity.parent_uuid),
-            )
-            outcome = self.mutations.apply(request)
-        except Exception as exc:
-            return self._result(OperationState.FAILED, reason=f"child import failed: {exc}")
-        if outcome.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
-            return self._mutation_result(outcome)
-        self.imported = outcome.kind is MutationOutcomeKind.APPLIED
-        child["_reconcile_child_short"] = stable_uuid[:8]
-        return self._mutation_result(outcome, value=child)
-
-    def verify_child(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
-        wanted_uuid = str(child.get("uuid") or "").strip()
-        try:
-            rows = self._rows_for_child(plan)
-        except Exception as exc:
-            return self._result(OperationState.UNAVAILABLE, reason=f"child verification unavailable: {exc}")
-        wanted_uuid = wanted_uuid.lower()
-        wanted_short = str(child.get("_reconcile_child_short") or "").strip().lower()
-        for row in rows:
-            actual = str(row.get("uuid") or "").strip().lower()
-            if (wanted_uuid and actual == wanted_uuid) or (wanted_short and actual.startswith(wanted_short)):
-                child.clear()
-                child.update(row)
-                return self._result(OperationState.APPLIED)
-        if wanted_uuid and wanted_uuid.count("-") == 0:
-            try:
-                direct = _read_value(
-                    _repository().by_uuid(wanted_uuid, refresh=True),
-                    f"child verification {wanted_uuid}",
-                )
-                direct_rows = [direct] if direct is not None else []
-            except Exception as exc:
-                return self._result(OperationState.UNAVAILABLE, reason=f"child verification unavailable: {exc}")
-            for row in direct_rows:
-                actual = str(row.get("uuid") or "").strip().lower()
-                if actual == wanted_uuid or actual.startswith(wanted_uuid):
-                    child.clear()
-                    child.update(row)
-                    return self._result(OperationState.APPLIED)
-        return self._result(OperationState.CONFLICT, reason="child postcondition is missing")
-
-    def _child_short(self, plan: LifecyclePlan, child: dict[str, Any]) -> str:
-        patch = plan.parent_patch_dict()
-        value = str(
-            patch.get("nextLink")
-            or child.get("_reconcile_child_short")
-            or str(child.get("uuid") or "")[:8]
-        ).strip()
-        self.last_child_short = value
-        return value
-
-    def apply_parent_patch(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
-        child_short = self._child_short(plan, child)
-        if not child_short:
-            return self._result(OperationState.CONFLICT, reason="parent patch has no child identity")
-        try:
-            parent = _fresh_parent({"uuid": plan.identity.parent_uuid})
-            if parent is None:
-                return self._result(OperationState.UNAVAILABLE, reason="parent export unavailable")
-            current = str(parent.get("nextLink") or "").strip().lower()
-            if current == child_short.casefold():
-                return self._result(OperationState.ALREADY)
-            if current:
-                return self._result(OperationState.CONFLICT, reason="parent nextLink already set")
-            request = MutationRequest(
-                MutationOperation.PARENT_LINK,
-                self._mutation_guard(plan),
-                ParentLinkPayload(plan.identity.parent_uuid, child_short, current),
-            )
-            return self._mutation_result(self.mutations.apply(request))
-        except Exception as exc:
-            return self._result(OperationState.FAILED, reason=f"parent patch failed: {exc}")
-
-    def verify_linkage(self, plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
-        child_short = self._child_short(plan, child)
-        try:
-            parent = {"uuid": plan.identity.parent_uuid, "chainID": plan.identity.chain_id}
-            verified = _verify_applied_child(
-                self.task_bin,
-                parent,
-                child_short,
-                hook=self.hook,
-                strict_uuid=bool(str(child.get("uuid") or "").count("-")),
-            )
-        except Exception as exc:
-            reason = str(exc).strip() or type(exc).__name__
-            state = (
-                OperationState.UNAVAILABLE
-                if isinstance(exc, task_command.TaskCommandFailure) and exc.retryable
-                else OperationState.CONFLICT
-            )
-            return self._result(state, reason=f"parent linkage verification failed: {reason}")
-        child.clear()
-        child.update(verified)
-        return self._result(OperationState.APPLIED)
-
-    def compensate_child(self, _plan: LifecyclePlan, child: dict[str, Any]) -> OperationResult:
-        child_uuid = str(child.get("uuid") or "").strip()
-        if not child_uuid:
-            return self._result(OperationState.FAILED, reason="imported child has no UUID for compensation")
-        try:
-            status = str(child.get("status") or "").strip().lower()
-            chain_id = str(child.get("chainID") or "").strip()
-            modified = str(child.get("modified") or "").strip()
-            link = self._link(child.get("link"))
-            if status not in {"pending", "waiting", "recurring"} or not chain_id or not modified or link is None:
-                return self._result(OperationState.CONFLICT, reason="imported child has incomplete compensation identity")
-            guard = MutationGuard(
-                task_uuid=child_uuid,
-                status=status,
-                chain_id=chain_id,
-                link=link,
-                recurrence_identity=recurrence_fingerprint(child),
-                timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
-                expected_mutation_epoch=self.unit_of_work.mutation_epoch,
-                chain=str(child.get("chain") or "on"),
-            )
-            request = MutationRequest(
-                MutationOperation.CHILD_COMPENSATION,
-                guard,
-                ChildCompensationPayload(child_uuid, status),
-            )
-            return self._mutation_result(self.mutations.apply(request))
-        except Exception as exc:
-            return self._result(OperationState.FAILED, reason=f"child compensation failed: {exc}")
 
 
 def _fmt_parent(parent: dict[str, Any]) -> str:

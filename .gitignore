@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+sync/.task_sync.lock/
+sync/last_sync_state
+sync/logs/

@@ -270,9 +270,9 @@ def _module(name: str, *, required: bool = True):
     return _hook_module_access().module(name, required=required)
 
 def _task_cmd_prefix() -> list[str]:
-    if _INTEGRATION_CONTEXT is None:
-        raise RuntimeError("on-add integration context is unavailable")
-    return list(_INTEGRATION_CONTEXT.command_prefix)
+    from nautical_core.runtime_command import command_prefix
+
+    return command_prefix(_INTEGRATION_CONTEXT, hook_name="on-add")
 
 
 def _initialize_integration_context() -> None:
@@ -1930,16 +1930,27 @@ def main():
     except Exception as exc:
         _error_and_exit([("Invalid business calendar", str(exc))])
         return
-    hook_context = _module("hook_context")
     hook_results = _module("hook_results")
-    hook_engine = _module("hook_engine")
-    runtime = _build_hook_runtime_context()
-    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
     displacement_context = (
         core.capture_business_calendar_displacements()
         if str(task.get("bc") or "").strip()
         else nullcontext()
     )
+    if not _task_has_nautical_fields(task):
+        # Reached the full implementation only via an alias hint or forced
+        # full-path profiling, but this task doesn't actually need Nautical
+        # processing. Emit the passthrough response without constructing a
+        # unit of work -- that construction is reserved for genuine Nautical
+        # additions below.
+        with calendar_context, displacement_context:
+            hook_results.emit_json_result(
+                hook_results.TaskHookResponse(task=task, sanitize=False, prof=prof), core=core
+            )
+        return
+    hook_context = _module("hook_context")
+    hook_engine = _module("hook_engine")
+    runtime = _build_hook_runtime_context()
+    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,

@@ -145,6 +145,32 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         row = result.value
         mismatch = self._guard_mismatch(request.guard, row)
         if mismatch:
+            # A successful parent link changes Taskwarrior's ``modified``
+            # timestamp.  If the process crashed after that external
+            # mutation but before the outbox stage was persisted, the next
+            # recovery read must recognize the requested link as converged.
+            # Keep all other guard fields strict: only the timestamp may have
+            # changed, and only for the parent-link operation.
+            if (
+                request.operation is MutationOperation.PARENT_LINK
+                and isinstance(request.payload, ParentLinkPayload)
+                and _text(row.get("nextLink")).casefold()
+                == request.payload.child_short_uuid.casefold()
+                and mismatch.startswith("guard modified changed")
+            ):
+                expected_modified = next(
+                    (
+                        timestamp.value
+                        for timestamp in request.guard.timestamps
+                        if timestamp.field.value == "modified"
+                    ),
+                    None,
+                )
+                if expected_modified is not None:
+                    normalized = dict(row)
+                    normalized["modified"] = expected_modified
+                    if not self._guard_mismatch(request.guard, normalized):
+                        return row, None
             if (
                 request.operation is MutationOperation.METADATA_REPAIR
                 and isinstance(request.payload, MetadataRepairPayload)

@@ -2167,14 +2167,33 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     uow.repository.rows[child_uuid]["link"] = 8.0
     replay = service.apply(request(MutationOperation.CHILD_IMPORT, child, 1))
     expect(replay.kind is MutationOutcomeKind.ALREADY_APPLIED, f"numeric child link replay was not normalized: {replay}")
-    linked = service.apply(
-        request(
+    link_payload = ParentLinkPayload(parent_uuid, child_uuid[:8])
+    linked = service.apply(request(MutationOperation.PARENT_LINK, link_payload, 1))
+    expect(linked.kind is MutationOutcomeKind.APPLIED, f"parent link was not applied: {linked}")
+    # Taskwarrior updates ``modified`` when the link succeeds.  Recovery can
+    # therefore see the desired nextLink with a newer timestamp before the
+    # outbox stage was persisted; that state must converge idempotently.
+    parent["modified"] = "20260813T100001Z"
+    recovered = service.apply(
+        MutationRequest(
             MutationOperation.PARENT_LINK,
-            ParentLinkPayload(parent_uuid, child_uuid[:8]),
-            1,
+            MutationGuard(
+                parent_uuid,
+                "completed",
+                "chain-service",
+                7,
+                recurrence_fingerprint(parent),
+                (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T100000Z"),),
+                2,
+                "on",
+            ),
+            link_payload,
         )
     )
-    expect(linked.kind is MutationOutcomeKind.APPLIED, f"parent link was not applied: {linked}")
+    expect(
+        recovered.kind is MutationOutcomeKind.ALREADY_APPLIED,
+        f"parent link recovery did not converge after modified changed: {recovered}",
+    )
     cleared = service.apply(
         MutationRequest(
             MutationOperation.PARENT_LINK_CLEAR,

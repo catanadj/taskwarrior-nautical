@@ -494,7 +494,6 @@ class LifecycleOutboxRepository:
                     if (
                         same_plan
                         and current.state in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}
-                        and current.plan.semantic_key() != plan.semantic_key()
                     ):
                         conn.execute(
                             "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "

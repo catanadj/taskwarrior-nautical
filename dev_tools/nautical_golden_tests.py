@@ -2659,6 +2659,7 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         *,
         legacy_null_anchor_file: bool = False,
         child_entry: str = "",
+        child_description: str = "",
     ) -> LifecyclePlan:
         parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
         child_uuid = f"10000000-0000-0000-0000-{link:012d}"
@@ -2672,6 +2673,8 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             child_payload["anchor_file"] = None
         if child_entry:
             child_payload["entry"] = child_entry
+        if child_description:
+            child_payload["description"] = child_description
         return LifecyclePlan.from_mappings(
             identity=LifecycleIdentity("outbox-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
@@ -2688,7 +2691,13 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         expect(first.kind is OutboxResultKind.APPLIED, f"outbox enqueue failed: {first}")
         duplicate = repo.enqueue(plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
         expect(duplicate.kind is OutboxResultKind.ALREADY_APPLIED, "outbox duplicate enqueue was not idempotent")
-        conflict = repo.enqueue(plan, configuration_fingerprint="cf2", schedule_fingerprint="sf1")
+        fingerprint_drift = repo.enqueue(plan, configuration_fingerprint="cf2", schedule_fingerprint="sf1")
+        expect(fingerprint_drift.kind is OutboxResultKind.ALREADY_APPLIED, "queued intent was blocked by fingerprint drift")
+        conflict = repo.enqueue(
+            plan_for(1, child_description="different immutable child"),
+            configuration_fingerprint="cf1",
+            schedule_fingerprint="sf1",
+        )
         expect(conflict.kind is OutboxResultKind.CONFLICT, "outbox accepted divergent immutable intent")
 
         claimed, records = repo.claim_batch(owner="first-worker", lease_seconds=5, limit=10)

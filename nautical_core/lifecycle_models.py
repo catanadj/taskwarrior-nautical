@@ -492,6 +492,22 @@ class LifecyclePlan:
         payload.pop("max_attempts", None)
         return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
 
+    def compatibility_key(self) -> str:
+        """Compare plans while tolerating legacy literal-null recurrence UDAs."""
+        payload = self.to_dict()
+        payload.pop("stage", None)
+        payload.pop("max_attempts", None)
+        child = payload.get("child_payload")
+        if isinstance(child, dict):
+            optional_fields = ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc")
+            for field in optional_fields:
+                value = child.get(field)
+                if isinstance(value, str) and value.strip().casefold() == "null":
+                    child.pop(field, None)
+            if isinstance(child.get("anchor_mode"), str) and child["anchor_mode"].strip().casefold() == "null":
+                child["anchor_mode"] = "skip"
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+
     def with_stage(self, stage: ExecutionStage) -> "LifecyclePlan":
         """Return the same immutable plan at a new durable execution stage."""
         return LifecyclePlan(

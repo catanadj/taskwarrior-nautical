@@ -489,7 +489,7 @@ class LifecycleOutboxRepository:
                 if row is not None:
                     current = self._from_row(row)
                     compatible = (
-                        str(row["plan_fingerprint"]) == plan_fingerprint
+                        current.plan.compatibility_key() == plan.compatibility_key()
                         and current.configuration_fingerprint == config
                         and current.schedule_fingerprint == schedule
                     )
@@ -497,7 +497,11 @@ class LifecycleOutboxRepository:
                         return OutboxResult(
                             OutboxResultKind.CONFLICT,
                             record=current,
-                            reason="deterministic lifecycle intent already exists with different immutable inputs",
+                            reason=(
+                                "deterministic lifecycle intent conflicts with an existing queued transition; "
+                                "run `nautical reconcile --apply` to drain it, then inspect the chain's "
+                                "nextLink and child before retrying"
+                            ),
                         )
                     return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
                 conn.execute(

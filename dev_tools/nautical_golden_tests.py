@@ -2654,19 +2654,22 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
     def clock():
         return now[0]
 
-    def plan_for(link: int) -> LifecyclePlan:
+    def plan_for(link: int, *, legacy_null_anchor_file: bool = False) -> LifecyclePlan:
         parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
         child_uuid = f"10000000-0000-0000-0000-{link:012d}"
+        child_payload = {
+            "uuid": child_uuid,
+            "chainID": "outbox-chain",
+            "link": link + 1,
+            "prevLink": parent_uuid[:8],
+        }
+        if legacy_null_anchor_file:
+            child_payload["anchor_file"] = "null"
         return LifecyclePlan.from_mappings(
             identity=LifecycleIdentity("outbox-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=ParentGuard("completed", "on", "outbox-chain", link, "rf1-test"),
-            child_payload={
-                "uuid": child_uuid,
-                "chainID": "outbox-chain",
-                "link": link + 1,
-                "prevLink": parent_uuid[:8],
-            },
+            child_payload=child_payload,
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
@@ -2701,6 +2704,18 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="parent_linked").ok, "outbox parent stage failed")
         expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="verified").ok, "outbox verification stage failed")
         expect(repo.acknowledge(intent_id=intent_id, owner="second-worker").ok, "outbox acknowledgement failed")
+
+        legacy = plan_for(2, legacy_null_anchor_file=True)
+        expect(
+            repo.enqueue(legacy, configuration_fingerprint="cf1", schedule_fingerprint="sf1").kind
+            is OutboxResultKind.APPLIED,
+            "legacy null lifecycle intent could not be staged",
+        )
+        converged = repo.enqueue(plan_for(2), configuration_fingerprint="cf1", schedule_fingerprint="sf1")
+        expect(
+            converged.kind is OutboxResultKind.ALREADY_APPLIED,
+            "legacy null lifecycle intent was treated as an immutable conflict",
+        )
 
         stage_sequences = (
             (),

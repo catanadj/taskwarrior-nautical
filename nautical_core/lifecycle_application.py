@@ -51,6 +51,7 @@ from .lifecycle_models import (
     LifecycleIdentity,
     LifecyclePlan,
 )
+from .recurrence_spec import normalize_recurrence_text
 from .lifecycle_outbox import (
     LifecycleOutboxRecord,
     LifecycleOutboxRepository,
@@ -190,6 +191,16 @@ def _child_import_payload(plan: LifecyclePlan) -> ChildImportPayload | None:
     child = plan.child_dict()
     if not child:
         return None
+    for field in ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc"):
+        if field not in child:
+            continue
+        value = normalize_recurrence_text(child.get(field))
+        if value:
+            child[field] = value
+        else:
+            child.pop(field, None)
+    if "anchor_mode" in child:
+        child["anchor_mode"] = normalize_recurrence_text(child.get("anchor_mode")) or "skip"
     try:
         return ChildImportPayload.from_mapping(child, parent_uuid=plan.identity.parent_uuid)
     except IntegrationContractError:
@@ -581,7 +592,7 @@ class LifecycleApplicationService:
             config = str(configuration_fingerprint or "").strip()
             schedule = str(schedule_fingerprint or "").strip()
             if (
-                record.plan.semantic_key() != plan.semantic_key()
+                record.plan.compatibility_key() != plan.compatibility_key()
                 or record.configuration_fingerprint != config
                 or record.schedule_fingerprint != schedule
             ):

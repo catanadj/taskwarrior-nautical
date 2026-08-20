@@ -498,7 +498,7 @@ class ChainGenerationService:
                 child["anchor_file"] = anchor_file
             else:
                 child.pop("anchor_file", None)
-            parent_mode = parent.get("anchor_mode") or "skip"
+            parent_mode = normalize_recurrence_text(parent.get("anchor_mode")) or "skip"
             child["anchor_mode"] = (
                 "all" if str(parent_mode).strip().lower() == "flex" else parent_mode
             )

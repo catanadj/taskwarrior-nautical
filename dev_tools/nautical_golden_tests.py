@@ -2505,6 +2505,21 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         expect(len(outcomes) == 4 and all(result.ok for result in outcomes), f"concurrent outbox initialization failed: {outcomes}")
 
         repo = LifecycleOutboxRepository(root)
+        traced_sql: list[str] = []
+        original_connect = repo._connect
+
+        def traced_connect():
+            conn = original_connect()
+            conn.set_trace_callback(traced_sql.append)
+            return conn
+
+        repo._connect = traced_connect
+        reopened = repo.open()
+        expect(reopened.ok, f"reopening an adopted outbox failed: {reopened}")
+        expect(
+            not any("PRAGMA journal_mode=WAL" in statement for statement in traced_sql),
+            f"reopening an adopted outbox renegotiated WAL: {traced_sql!r}",
+        )
         with sqlite3.connect(str(repo.path)) as conn:
             journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
             expect(journal_mode == "wal", f"outbox did not retain WAL journal mode: {journal_mode}")

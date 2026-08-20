@@ -287,18 +287,24 @@ class LifecycleOutboxRepository:
     def _initialize(conn: sqlite3.Connection) -> None:
         for attempt in range(_INIT_RETRIES):
             try:
-                # WAL is negotiated once per durable database. Competing
-                # first-openers retry the complete sequence rather than using
-                # a process-local success flag.
+                version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+                if version > OUTBOX_SCHEMA_VERSION:
+                    raise LifecycleOutboxError(
+                        f"outbox schema v{version} is newer than supported v{OUTBOX_SCHEMA_VERSION}"
+                    )
+                if version == OUTBOX_SCHEMA_VERSION:
+                    # A validated schema is already adopted. Avoid reopening
+                    # WAL negotiation on every short-lived hook process.
+                    LifecycleOutboxRepository._validate_schema(conn)
+                    return
+                if version != 0:
+                    raise LifecycleOutboxError(f"unsupported outbox schema v{version}")
+
+                # WAL is negotiated only while creating or upgrading the
+                # durable database. Competing first-openers retry the complete
+                # sequence rather than using a process-local success flag.
                 conn.execute("PRAGMA journal_mode=WAL")
                 with _transaction(conn):
-                    version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
-                    if version > OUTBOX_SCHEMA_VERSION:
-                        raise LifecycleOutboxError(
-                            f"outbox schema v{version} is newer than supported v{OUTBOX_SCHEMA_VERSION}"
-                        )
-                    if version not in {0, OUTBOX_SCHEMA_VERSION}:
-                        raise LifecycleOutboxError(f"unsupported outbox schema v{version}")
                     conn.execute(
                         """
                         CREATE TABLE IF NOT EXISTS lifecycle_outbox (

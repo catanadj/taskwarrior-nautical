@@ -257,15 +257,13 @@ def _plan_difference_summary(
     """Describe immutable intent differences without dumping full task JSON."""
     differences: list[str] = []
     sections = (
-        ("child", existing.child_dict(), requested.child_dict()),
-        ("parent", existing.parent_patch_dict(), requested.parent_patch_dict()),
-        ("guard", existing.parent_guard.to_dict(), requested.parent_guard.to_dict()),
+        ("child", existing.compatibility_payload().get("child_payload", {}), requested.compatibility_payload().get("child_payload", {})),
+        ("parent", existing.compatibility_payload().get("parent_patch", {}), requested.compatibility_payload().get("parent_patch", {})),
+        ("guard", existing.compatibility_payload().get("parent_guard", {}), requested.compatibility_payload().get("parent_guard", {})),
     )
     for section, old_values, new_values in sections:
         keys = sorted(set(old_values) | set(new_values))
         for key in keys:
-            if key == "entry":
-                continue
             old = old_values.get(key, "<absent>")
             new = new_values.get(key, "<absent>")
             if old != new:

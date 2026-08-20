@@ -114,6 +114,10 @@ _RECURRENCE_FINGERPRINT_FIELDS = (
 )
 _RECURRENCE_DATETIME_FIELDS = frozenset({"chainUntil", "due", "scheduled", "until", "wait"})
 _TASKWARRIOR_DATETIME_RE = re.compile(r"^(\d{8})T(\d{6})(Z|[+-]\d{4})$")
+_PLAN_DATETIME_FIELDS = frozenset({"due", "scheduled", "until", "wait", "chainUntil"})
+_PLAN_VOLATILE_CHILD_FIELDS = frozenset(
+    {"id", "entry", "modified", "urgency", "status", "end", "start", "nextLink", "mask", "imask", "parent", "recur", "rc"}
+)
 
 
 def _canonical_datetime_text(value: Any, parse_datetime: Callable[[Any], Any] | None) -> str:
@@ -165,6 +169,18 @@ def _canonical_recurrence_value(
     if isinstance(value, (list, tuple)):
         return [re.sub(r"\s+", " ", str(item).strip()) for item in value]
     return re.sub(r"\s+", " ", str(value).strip())
+
+
+def _canonical_plan_datetime(value: Any) -> Any:
+    """Canonicalize Taskwarrior and ISO timestamps for intent comparison."""
+    normalized = _canonical_datetime_text(value, None)
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return normalized
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def recurrence_fingerprint(
@@ -494,14 +510,21 @@ class LifecyclePlan:
 
     def compatibility_key(self) -> str:
         """Compare plans while tolerating legacy literal-null recurrence UDAs."""
+        payload = self.compatibility_payload()
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+
+    def compatibility_payload(self) -> dict[str, Any]:
+        """Return the immutable intent fields used for safe replay comparison."""
         payload = self.to_dict()
         payload.pop("stage", None)
         payload.pop("max_attempts", None)
         child = payload.get("child_payload")
         if isinstance(child, dict):
-            # Taskwarrior assigns a new entry timestamp whenever a retry
-            # rebuilds an otherwise identical child payload.
-            child.pop("entry", None)
+            for field in _PLAN_VOLATILE_CHILD_FIELDS:
+                child.pop(field, None)
+            for field in _PLAN_DATETIME_FIELDS:
+                if field in child:
+                    child[field] = _canonical_plan_datetime(child[field])
             optional_fields = ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc")
             for field in optional_fields:
                 value = child.get(field)
@@ -512,7 +535,10 @@ class LifecyclePlan:
                 and child["anchor_mode"].strip().casefold() == "null"
             ):
                 child["anchor_mode"] = "skip"
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+        guard = payload.get("parent_guard")
+        if isinstance(guard, dict):
+            guard.pop("modified", None)
+        return payload
 
     def with_stage(self, stage: ExecutionStage) -> "LifecyclePlan":
         """Return the same immutable plan at a new durable execution stage."""

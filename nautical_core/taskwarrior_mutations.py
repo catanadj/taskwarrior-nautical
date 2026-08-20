@@ -242,9 +242,9 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if actual_identity != guard.recurrence_identity:
             return "guard recurrence identity changed"
         for timestamp in guard.timestamps:
-            field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
-            if field is not None and _text(row.get(field)) != timestamp.value:
-                return f"guard {field} changed"
+            ts_field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
+            if ts_field is not None and _text(row.get(ts_field)) != timestamp.value:
+                return f"guard {ts_field} changed"
         return ""
 
     def _command_failure(self, request: MutationRequest, result: TaskCommandResult) -> MutationOutcome:
@@ -269,7 +269,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         self,
         request: MutationRequest,
         postcondition: MutationPostcondition,
-        predicate,
+        predicate: Any,
         *,
         target_uuid: str | None = None,
     ) -> MutationOutcome:
@@ -500,7 +500,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         extra: Sequence[str] = (),
         include_link: bool = True,
     ) -> tuple[str, ...]:
-        selectors = (
+        selectors: tuple[str, ...] = (
             f"uuid:{guard.task_uuid}",
             f"status:{guard.status}",
             f"chain:{guard.chain}",

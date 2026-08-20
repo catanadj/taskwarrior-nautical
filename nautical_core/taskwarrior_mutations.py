@@ -571,10 +571,24 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 for request in pending
             }
         snapshot = read.value
+        uuid_matches = getattr(snapshot, "uuid_matches", None)
+        if not callable(uuid_matches):
+            return {
+                request.payload.child_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed child postcondition snapshot"
+                )
+                for request in pending
+            }
         outcomes: dict[str, MutationOutcome] = {}
         for request in pending:
             assert isinstance(request.payload, ChildImportPayload)
-            matches = tuple(snapshot.uuid_matches(request.payload.child_uuid))
+            try:
+                matches = tuple(uuid_matches(request.payload.child_uuid))
+            except Exception as exc:
+                outcomes[request.payload.child_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed child postcondition snapshot: {exc}"
+                )
+                continue
             if len(matches) == 1 and _child_import_matches(matches[0], request.payload, request.guard.task_uuid):
                 outcomes[request.payload.child_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED
@@ -634,10 +648,24 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 for request in pending
             }
         snapshot = read.value
+        uuid_matches = getattr(snapshot, "uuid_matches", None)
+        if not callable(uuid_matches):
+            return {
+                request.guard.task_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed parent postcondition snapshot"
+                )
+                for request in pending
+            }
         outcomes: dict[str, MutationOutcome] = {}
         for request in pending:
             assert isinstance(request.payload, ParentLinkPayload)
-            matches = tuple(snapshot.uuid_matches(request.guard.task_uuid))
+            try:
+                matches = tuple(uuid_matches(request.guard.task_uuid))
+            except Exception as exc:
+                outcomes[request.guard.task_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed parent postcondition snapshot: {exc}"
+                )
+                continue
             if len(matches) == 1 and _text(matches[0].get("nextLink")).casefold() == request.payload.child_short_uuid.casefold():
                 outcomes[request.guard.task_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.PARENT_LINKED

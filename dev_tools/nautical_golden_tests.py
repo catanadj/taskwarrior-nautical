@@ -2374,18 +2374,44 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
     )
 
     class Repo:
+        def __init__(self, mode):
+            self.mode = mode
+
         def broad_snapshot(self, **kwargs):
             del kwargs
             command = TaskCommand(("task", "export"), "batch verification", 1.0)
-            evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active")
-            return Unavailable("broad:lifecycle-postverify", evidence)
+            if self.mode == "unavailable":
+                evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active")
+                return Unavailable("broad:lifecycle-postverify", evidence)
+            if self.mode == "malformed":
+                return Found(object(), "broad:malformed")
+            child_row = child.to_dict()
+            parent_row = dict(parent)
+            if self.mode == "stale":
+                child_row["link"] = 99
+                parent_row["nextLink"] = "stale00"
+            rows = {
+                "child": (child_row, child_row),
+                "parent": (parent_row, parent_row),
+            }
+
+            class Snapshot:
+                def uuid_matches(self, uuid_value):
+                    if str(uuid_value).lower() == child_uuid:
+                        return rows["child"] if self_mode == "conflict" else (rows["child"][0],)
+                    if str(uuid_value).lower() == parent_uuid:
+                        return rows["parent"] if self_mode == "conflict" else (rows["parent"][0],)
+                    return ()
+
+            self_mode = self.mode
+            return Found(Snapshot(), f"broad:{self.mode}")
 
     class Uow:
-        repository = Repo()
+        def __init__(self, mode):
+            self.repository = Repo(mode)
         mutation_epoch = 0
         client = None
 
-    service = TaskwarriorMutationService(Uow())
     guard = MutationGuard(
         parent_uuid,
         "completed",
@@ -2396,17 +2422,13 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
         0,
         "on",
     )
-    child_result = service.verify_lifecycle_children((MutationRequest(MutationOperation.CHILD_IMPORT, guard, child),))
-    expect(
-        child_result[child_uuid].kind is MutationOutcomeKind.RETRYABLE,
-        f"unavailable child batch snapshot was not retryable: {child_result}",
-    )
     link = ParentLinkPayload(parent_uuid, child_uuid[:8])
-    parent_result = service.verify_lifecycle_parents((MutationRequest(MutationOperation.PARENT_LINK, guard, link),))
-    expect(
-        parent_result[parent_uuid].kind is MutationOutcomeKind.RETRYABLE,
-        f"unavailable parent batch snapshot was not retryable: {parent_result}",
-    )
+    for mode, expected in (("unavailable", MutationOutcomeKind.RETRYABLE), ("malformed", MutationOutcomeKind.MANUAL_REVIEW), ("stale", MutationOutcomeKind.MANUAL_REVIEW), ("conflict", MutationOutcomeKind.MANUAL_REVIEW)):
+        service = TaskwarriorMutationService(Uow(mode))
+        child_result = service.verify_lifecycle_children((MutationRequest(MutationOperation.CHILD_IMPORT, guard, child),))
+        expect(child_result[child_uuid].kind is expected, f"{mode} child snapshot was misclassified: {child_result}")
+        parent_result = service.verify_lifecycle_parents((MutationRequest(MutationOperation.PARENT_LINK, guard, link),))
+        expect(parent_result[parent_uuid].kind is expected, f"{mode} parent snapshot was misclassified: {parent_result}")
 
 
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():

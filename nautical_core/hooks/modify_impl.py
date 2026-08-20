@@ -1195,9 +1195,6 @@ def _format_next_cp_rows(
 # ------------------------------------------------------------------------------
 # Taskwarrior integration
 # ------------------------------------------------------------------------------
-_TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
-
 def _short(u):
     return (u or "")[:8]
 
@@ -1276,42 +1273,15 @@ def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env
 
 
 def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
-    removed = set()
-    for m in _UNREC_ATTR_RE.finditer(stderr or ""):
-        bad = m.group(1)
-        if bad in payload:
-            payload.pop(bad, None)
-            removed.add(bad)
-    return removed
+    return _module("modify_spawn_prep").sanitize_unknown_attrs(stderr, payload)
 
 
 def _normalise_datetime_fields(obj: dict) -> None:
-    def _to_tw_compact_isoz(s: str) -> str:
-        if isinstance(s, str) and _TW_JISO.fullmatch(s):
-            return s.replace("-", "").replace(":", "")
-        return s
-
-    for k in ("entry", "modified", "due", "end", "wait", "until", "scheduled"):
-        if k in obj and obj[k]:
-            obj[k] = _to_tw_compact_isoz(obj[k])
-    if "annotations" in obj and isinstance(obj["annotations"], list):
-        for ann in obj["annotations"]:
-            if isinstance(ann, dict) and ann.get("entry"):
-                ann["entry"] = _to_tw_compact_isoz(ann["entry"])
+    _module("modify_spawn_prep").normalise_datetime_fields(obj)
 
 
 def _strip_none_and_cast(obj: dict):
-    out = {}
-    for k, v in obj.items():
-        if v is None:
-            continue
-        if k in ("link", "chainMax"):
-            try:
-                v = int(v)
-            except Exception:
-                pass
-        out[k] = v
-    return out
+    return _module("modify_spawn_prep").strip_none_and_cast(obj)
 
 def _format_line_preview(
     link_no: int,
@@ -1350,33 +1320,7 @@ def _format_line_preview(
 
 # Helper to categorize subprocess failures
 def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
-    """
-    Categorize spawn errors and return (category, is_retryable).
-    category: "parse", "attribute", "validation", "taskwarrior", "unknown"
-    is_retryable: whether we should retry this attempt
-    """
-    stderr_lower = (stderr or "").lower()
-
-    if returncode == 0:
-        return ("success", False)
-
-    # Unrecognized attribute - NOT retryable, just strip and retry
-    if "unrecognized attribute" in stderr_lower:
-        return ("attribute", True)
-
-    # JSON parsing errors - likely malformed task, NOT retryable
-    if "json" in stderr_lower or "parse" in stderr_lower:
-        return ("parse", False)
-
-    # Validation errors (e.g., bad due date format) - NOT retryable
-    if "invalid" in stderr_lower or "bad date" in stderr_lower:
-        return ("validation", False)
-
-    # Taskwarrior internal errors - possibly retryable
-    if "error" in stderr_lower or "failed" in stderr_lower:
-        return ("taskwarrior", True)
-
-    return ("unknown", True)
+    return _module("modify_spawn_prep").categorize_spawn_error(returncode, stderr)
 
 
 def _enqueue_spawn_intent(plan) -> tuple[bool, str]:

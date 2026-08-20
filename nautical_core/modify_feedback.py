@@ -2,8 +2,49 @@ from __future__ import annotations
 
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
+
+
+def append_next_wait_sched_rows(
+    rows: list[tuple[str, str]],
+    next_task: dict[str, Any],
+    next_due_utc: datetime,
+    *,
+    anchor_field: str = "due",
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+    compare_datetimes: Callable[[datetime, datetime], int],
+    format_delta: Callable[[timedelta], str],
+) -> None:
+    """Append next-link timing rows and explain invalid wait/scheduled order."""
+    if not (isinstance(next_due_utc, datetime) and next_due_utc):
+        return
+
+    scheduled = parse_datetime(next_task.get("scheduled"))
+    wait = parse_datetime(next_task.get("wait"))
+    anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
+    for field, label, value in (
+        ("scheduled", "Scheduled", scheduled),
+        ("wait", "Wait", wait),
+    ):
+        if field == anchor_field or not isinstance(value, datetime):
+            continue
+        rows.append((label, f"{format_local(value)}  (Δ {format_delta(value - next_due_utc)})"))
+
+    issues: list[str] = []
+    if anchor_field != "scheduled" and isinstance(scheduled, datetime) and compare_datetimes(scheduled, next_due_utc) > 0:
+        issues.append(f"scheduled is after {anchor_label} by {format_delta(scheduled - next_due_utc)}")
+    if isinstance(wait, datetime) and compare_datetimes(wait, next_due_utc) > 0:
+        issues.append(f"wait is after {anchor_label} by {format_delta(wait - next_due_utc)}")
+    if anchor_field != "scheduled" and isinstance(scheduled, datetime) and isinstance(wait, datetime) and compare_datetimes(wait, scheduled) > 0:
+        issues.append(f"wait is after scheduled by {format_delta(wait - scheduled)}")
+    if not issues:
+        return
+
+    expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
+    rows.append(("⚠ Wait/Sched", f"Expected order: {expected}. " + "; ".join(issues)))
+    rows.append(("⚠ Wait/Sched", "This can happen when due is auto-assigned; adjust scheduled/wait if undesired."))
 
 
 def _format_td_short(td: timedelta) -> str:

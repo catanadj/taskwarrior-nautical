@@ -444,45 +444,17 @@ def _append_next_wait_sched_rows(
     *,
     anchor_field: str = "due",
 ) -> None:
-    """Append Scheduled/Wait lines for the next link showing local time and Δ to the recurrence anchor."""
-    if not (isinstance(nxt_due_utc, datetime) and nxt_due_utc):
-        return
-
-    dt_s = _dtparse(nxt.get("scheduled"))
-    dt_w = _dtparse(nxt.get("wait"))
-    anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
-
-    for fld, label, dt in (
-        ("scheduled", "Scheduled", dt_s),
-        ("wait", "Wait", dt_w),
-    ):
-        if fld == anchor_field:
-            continue
-        if not isinstance(dt, datetime):
-            continue
-        delta_s = _fmt_td_dd_hhmm(dt - nxt_due_utc)
-        fb.append((label, f"{core.fmt_dt_local(dt)}  (Δ {delta_s})"))
-
-    # Informative order validation: due > scheduled > wait
-    # This can be violated when due is auto-assigned but scheduled/wait are user-specified.
-    issues: list[str] = []
-    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and _compare_datetimes(dt_s, nxt_due_utc) > 0:
-        issues.append(f"scheduled is after {anchor_label} by {_fmt_td_dd_hhmm(dt_s - nxt_due_utc)}")
-    if isinstance(dt_w, datetime) and _compare_datetimes(dt_w, nxt_due_utc) > 0:
-        issues.append(f"wait is after {anchor_label} by {_fmt_td_dd_hhmm(dt_w - nxt_due_utc)}")
-    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and _compare_datetimes(dt_w, dt_s) > 0:
-        issues.append(f"wait is after scheduled by {_fmt_td_dd_hhmm(dt_w - dt_s)}")
-
-    if issues:
-        expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
-        fb.append((
-            "⚠ Wait/Sched",
-            f"Expected order: {expected}. " + "; ".join(issues),
-        ))
-        fb.append((
-            "⚠ Wait/Sched",
-            "This can happen when due is auto-assigned; adjust scheduled/wait if undesired.",
-        ))
+    """Compatibility adapter for wait/scheduled feedback presentation."""
+    _module("modify_feedback").append_next_wait_sched_rows(
+        fb,
+        nxt,
+        nxt_due_utc,
+        anchor_field=anchor_field,
+        parse_datetime=_dtparse,
+        format_local=core.fmt_dt_local,
+        compare_datetimes=_compare_datetimes,
+        format_delta=_fmt_td_dd_hhmm,
+    )
 
 core = None
 _DATETIME_COMPARATOR = None

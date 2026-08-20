@@ -31582,7 +31582,15 @@ def test_lifecycle_application_happy_path_real_stack():
         identity = LifecycleIdentity("chain-s12", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
         plan = LifecyclePlan.from_mappings(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={"uuid": child_uuid, "chainID": "chain-s12", "link": 2, "prevLink": parent_uuid[:8]},
+            child_payload={
+                "uuid": child_uuid,
+                "chainID": "chain-s12",
+                "link": 2,
+                "prevLink": parent_uuid[:8],
+                "status": "pending",
+                "chain": "on",
+                "cp": "1d",
+            },
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )

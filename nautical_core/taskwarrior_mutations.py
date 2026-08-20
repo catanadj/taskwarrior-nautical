@@ -106,6 +106,44 @@ def _link_text(value: object) -> str:
         return text
 
 
+def _child_import_matches(
+    row: Mapping[str, Any],
+    payload: ChildImportPayload,
+    parent_uuid: str,
+) -> bool:
+    """Return whether a Taskwarrior row is a complete imported child.
+
+    Identity alone is insufficient: a partially imported or repurposed UUID
+    must never be treated as an idempotent child.  Keep this predicate shared
+    by the existing-child fast path and the post-import verification path.
+    """
+    fields = payload.to_dict()
+    if _text(row.get("uuid")).lower() != payload.child_uuid.lower():
+        return False
+    if _text(row.get("chainID")) != payload.chain_id:
+        return False
+    if _link_text(row.get("link")) != str(payload.target_link):
+        return False
+    expected_prev = _text(fields.get("prevLink"))
+    if not expected_prev or _text(row.get("prevLink")).lower() != expected_prev.lower():
+        return False
+    if _text(row.get("prevLink")).lower() != _text(parent_uuid)[:8].lower():
+        return False
+    if _text(row.get("status")).lower() != "pending" or _text(row.get("chain")).lower() != "on":
+        return False
+
+    # A child must retain the recurrence mode that generated it.  Compare
+    # only mode-defining fields; Taskwarrior may add derived metadata during
+    # import (modified, urgency, and so on).
+    mode_fields = ("cp", "anchor", "anchor_file", "anchor_mode")
+    if not any(_text(fields.get(field)) for field in mode_fields[:3]):
+        return False
+    for field in mode_fields:
+        if field in fields and _text(row.get(field)) != _text(fields.get(field)):
+            return False
+    return True
+
+
 def _failure_from_command(result: TaskCommandResult, detail: str) -> FailureEvidence:
     kind = result.kind
     if kind in {CommandFailureKind.SUCCESS, CommandFailureKind.ABSENT}:
@@ -338,11 +376,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, kind, reason=existing.evidence.detail, failure=existing.evidence)
         if isinstance(existing, Found):
             row = existing.value
-            if (
-                _text(row.get("chainID")) == request.payload.chain_id
-                and _text(row.get("prevLink")).lower() == request.guard.task_uuid[:8].lower()
-                and _link_text(row.get("link")) == str(request.payload.target_link)
-            ):
+            if _child_import_matches(row, request.payload, request.guard.task_uuid):
                 return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="unrelated task already owns child UUID")
         if not isinstance(existing, Absent):
@@ -361,11 +395,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.CHILD_IMPORTED,
-            lambda row: (
-                _text(row.get("uuid")).lower() == request.payload.child_uuid.lower()
-                and _text(row.get("chainID")) == request.payload.chain_id
-                and _link_text(row.get("link")) == str(request.payload.target_link)
-            ),
+            lambda row: _child_import_matches(row, request.payload, request.guard.task_uuid),
             target_uuid=request.payload.child_uuid,
         )
 

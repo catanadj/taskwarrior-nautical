@@ -118,6 +118,17 @@ class DrainResult:
     outcomes: tuple[LifecycleApplicationOutcome, ...] = ()
 
 
+@dataclass(slots=True)
+class _BatchState:
+    record: LifecycleOutboxRecord
+    plan: LifecyclePlan
+    child_payload: ChildImportPayload
+    link_payload: ParentLinkPayload
+    stage: ExecutionStage
+    mutations: list[MutationOutcome]
+    terminal: LifecycleApplicationOutcome | None = None
+
+
 class _UnitOfWork(Protocol):
     mutation_epoch: int
 
@@ -334,17 +345,207 @@ class LifecycleApplicationService:
                 for payload in (_child_import_payload(record.plan),)
                 if payload is not None
             )
+            parent_expectations = tuple(
+                (record.plan.identity.parent_uuid, str(record.plan.parent_patch_dict().get("nextLink") or "").strip())
+                for record in records
+                if _SPAWN_STAGE_ORDER[record.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]
+                and str(record.plan.parent_patch_dict().get("nextLink") or "").strip()
+            )
             try:
-                prefetch(payloads)
+                prefetch(payloads, parent_expectations=parent_expectations)
             except Exception:
                 # Prefetch is an optimization only; normal authoritative
                 # UUID reads remain the correctness fallback.
                 pass
+        batch_apply = getattr(self._mutations, "apply_lifecycle_unverified", None)
+        batch_children = getattr(self._mutations, "verify_lifecycle_children", None)
+        batch_parents = getattr(self._mutations, "verify_lifecycle_parents", None)
+        if len(records) > 1 and all(callable(item) for item in (batch_apply, batch_children, batch_parents)):
+            return self._drain_batched(
+                claim,
+                records,
+                configuration_fingerprint=config,
+                schedule_fingerprint=schedule,
+                apply_unverified=batch_apply,
+                verify_children=batch_children,
+                verify_parents=batch_parents,
+            )
         outcomes = tuple(
             self._execute_claimed(record, configuration_fingerprint=config, schedule_fingerprint=schedule)
             for record in records
         )
         return DrainResult(claim=claim, outcomes=outcomes)
+
+    def _drain_batched(
+        self,
+        claim: OutboxResult,
+        records: tuple[LifecycleOutboxRecord, ...],
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+        apply_unverified: Any,
+        verify_children: Any,
+        verify_parents: Any,
+    ) -> DrainResult:
+        """Run multi-intent spawn work in two mutation/verification phases.
+
+        Child imports are followed by one authoritative child snapshot, then
+        parent links are followed by one authoritative parent snapshot. A
+        successful mutation is not staged until its batch verification passes;
+        interruption therefore leaves the durable record recoverable.
+        """
+        states: list[_BatchState] = []
+        outcomes: list[LifecycleApplicationOutcome] = []
+        for record in records:
+            plan = record.plan
+            child_payload = _child_import_payload(plan)
+            link_payload = _parent_link_payload(plan)
+            if (
+                record.configuration_fingerprint != configuration_fingerprint
+                or record.schedule_fingerprint != schedule_fingerprint
+                or plan.action is not LifecycleAction.SPAWN_CHILD
+                or child_payload is None
+                or link_payload is None
+            ):
+                outcomes.append(self._manual_review(record, "outbox record is invalid for batched lifecycle execution"))
+                continue
+            states.append(_BatchState(record, plan, child_payload, link_payload, record.stage, []))
+
+        pending_children: list[tuple[_BatchState, MutationRequest]] = []
+        for state in states:
+            if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
+                continue
+            lease_failure = self._renew_before_step(state.record, "child import", tuple(state.mutations))
+            if lease_failure is not None:
+                state.terminal = lease_failure
+                continue
+            request = self._request_for(MutationOperation.CHILD_IMPORT, state.plan, state.child_payload)
+            if request is None:
+                state.terminal = self._manual_review(state.record, "could not construct child-import mutation")
+                continue
+            outcome = apply_unverified(request)
+            state.mutations.append(outcome)
+            if outcome.kind is MutationOutcomeKind.APPLIED:
+                pending_children.append((state, request))
+            elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
+                settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+                state.terminal = settled
+                if settled is None:
+                    state.stage = ExecutionStage.CHILD_PRESENT
+            else:
+                state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+
+        verified_children: list[tuple[_BatchState, MutationRequest]] = []
+        for state, request in pending_children:
+            lease_failure = self._renew_before_step(state.record, "child verification", tuple(state.mutations))
+            if lease_failure is not None:
+                state.terminal = lease_failure
+                continue
+            verified_children.append((state, request))
+        child_results = verify_children(tuple(request for _, request in verified_children))
+        for state, request in verified_children:
+            outcome = child_results.get(request.payload.child_uuid.lower())
+            if outcome is None:
+                outcome = MutationOutcome(
+                    request.operation,
+                    MutationOutcomeKind.MANUAL_REVIEW,
+                    request.guard,
+                    (),
+                    "child batch verification returned no result",
+                )
+            state.mutations.append(outcome)
+            settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+            state.terminal = settled
+            if settled is None:
+                state.stage = ExecutionStage.CHILD_PRESENT
+
+        pending_parents: list[tuple[_BatchState, MutationRequest]] = []
+        for state in states:
+            if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
+                continue
+            lease_failure = self._renew_before_step(state.record, "parent link", tuple(state.mutations))
+            if lease_failure is not None:
+                state.terminal = lease_failure
+                continue
+            request = self._request_for(MutationOperation.PARENT_LINK, state.plan, state.link_payload)
+            if request is None:
+                state.terminal = self._manual_review(state.record, "could not construct parent-link mutation")
+                continue
+            outcome = apply_unverified(request)
+            state.mutations.append(outcome)
+            if outcome.kind is MutationOutcomeKind.APPLIED:
+                pending_parents.append((state, request))
+            elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
+                settled = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
+                state.terminal = settled
+                if settled is None:
+                    state.stage = ExecutionStage.PARENT_LINKED
+            else:
+                state.terminal = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
+
+        verified_parents: list[tuple[_BatchState, MutationRequest]] = []
+        for state, request in pending_parents:
+            lease_failure = self._renew_before_step(state.record, "parent verification", tuple(state.mutations))
+            if lease_failure is not None:
+                state.terminal = lease_failure
+                continue
+            verified_parents.append((state, request))
+        parent_results = verify_parents(tuple(request for _, request in verified_parents))
+        for state, request in verified_parents:
+            outcome = parent_results.get(request.guard.task_uuid.lower())
+            if outcome is None:
+                outcome = MutationOutcome(
+                    request.operation,
+                    MutationOutcomeKind.MANUAL_REVIEW,
+                    request.guard,
+                    (),
+                    "parent batch verification returned no result",
+                )
+            state.mutations.append(outcome)
+            settled = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
+            state.terminal = settled
+            if settled is None:
+                state.stage = ExecutionStage.PARENT_LINKED
+
+        for state in states:
+            if state.terminal is not None:
+                outcomes.append(
+                    LifecycleApplicationOutcome(
+                        state.terminal.kind,
+                        state.terminal.identity,
+                        reason=state.terminal.reason,
+                        intent_id=state.terminal.intent_id,
+                        mutations=tuple(state.mutations),
+                    )
+                )
+                continue
+            lease_failure = self._renew_before_step(state.record, "verification", tuple(state.mutations))
+            if lease_failure is not None:
+                outcomes.append(lease_failure)
+                continue
+            advance = self._outbox.advance_stage(
+                intent_id=state.record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED
+            )
+            if not advance.ok:
+                outcomes.append(self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations)))
+                continue
+            lease_failure = self._renew_before_step(state.record, "acknowledgement", tuple(state.mutations))
+            if lease_failure is not None:
+                outcomes.append(lease_failure)
+                continue
+            ack = self._outbox.acknowledge(intent_id=state.record.intent_id, owner=self._owner)
+            if not ack.ok:
+                outcomes.append(self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations)))
+                continue
+            outcomes.append(
+                LifecycleApplicationOutcome(
+                    LifecycleApplicationOutcomeKind.APPLIED,
+                    state.plan.identity,
+                    intent_id=state.record.intent_id,
+                    mutations=tuple(state.mutations),
+                )
+            )
+        return DrainResult(claim=claim, outcomes=tuple(outcomes))
 
     def execute_staged(
         self,
@@ -475,9 +676,9 @@ class LifecycleApplicationService:
             stage = ExecutionStage.PARENT_LINKED
 
         if _SPAWN_STAGE_ORDER[stage] < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]:
-            # Both mutations already verify their own postcondition before
-            # reporting success, so reaching here means the transition is
-            # verified; only the durable stage marker needs to catch up.
+            # The sequential path verifies each mutation inline. The batched
+            # path reaches this method only after its phase snapshot has
+            # already proven both postconditions.
             lease_failure = self._renew_before_step(record, "verification", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
@@ -649,15 +850,30 @@ class LifecycleApplicationService:
 
     # -- shared mutation application -----------------------------------
 
-    def _apply(self, operation: MutationOperation, plan: LifecyclePlan, payload: Any) -> MutationOutcome | None:
+    def _request_for(self, operation: MutationOperation, plan: LifecyclePlan, payload: Any = None) -> MutationRequest | None:
         self._require_execution_deps()
-        assert self._uow is not None and self._mutations is not None
+        assert self._uow is not None
         guard = _mutation_guard(plan, mutation_epoch=self._uow.mutation_epoch)
         if guard is None:
             return None
+        if payload is None and operation is MutationOperation.CHILD_IMPORT:
+            payload = _child_import_payload(plan)
+        elif payload is None and operation is MutationOperation.PARENT_LINK:
+            payload = _parent_link_payload(plan)
+        elif payload is None:
+            return None
+        if payload is None:
+            return None
         try:
-            request = MutationRequest(operation=operation, guard=guard, payload=payload)
+            return MutationRequest(operation=operation, guard=guard, payload=payload)
         except IntegrationContractError:
+            return None
+
+    def _apply(self, operation: MutationOperation, plan: LifecyclePlan, payload: Any) -> MutationOutcome | None:
+        self._require_execution_deps()
+        assert self._mutations is not None
+        request = self._request_for(operation, plan, payload)
+        if request is None:
             return None
         return self._mutations.apply(request)
 

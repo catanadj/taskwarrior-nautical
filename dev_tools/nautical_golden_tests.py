@@ -2285,8 +2285,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
 
     class Snapshot:
         def uuid_matches(self, uuid_value):
-            del uuid_value
-            return ()
+            return (parent,) if str(uuid_value).lower() == parent_uuid else ()
 
     class Repo:
         def __init__(self):
@@ -2317,7 +2316,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
 
     uow = Uow()
     service = TaskwarriorMutationService(uow)
-    service.prefetch_lifecycle_batch((payload,))
+    service.prefetch_lifecycle_batch((payload,), parent_expectations=((parent_uuid, child_uuid[:8]),))
     guard = MutationGuard(
         parent_uuid,
         "completed",
@@ -2332,8 +2331,82 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
         child_uuid.lower() in service._prefetched_children,
         "authoritative absent child was not retained for the import decision",
     )
+    expect(
+        service._prefetched_parents.get(parent_uuid) == parent,
+        "pre-mutation parent row was not retained for the guarded link decision",
+    )
     expect(uow.repository.broad_calls == 1, f"prefetch used {uow.repository.broad_calls} broad reads")
     expect(uow.repository.uuid_calls == [], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
+
+
+def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot():
+    """A failed phase snapshot cannot be mistaken for a verified mutation."""
+    from nautical_core.integration_models import (
+        ChildImportPayload, CommandFailureKind, FailureEvidence, Found, GuardTimestamp,
+        GuardTimestampField, MutationGuard, MutationOperation, MutationOutcomeKind,
+        MutationRequest, ParentLinkPayload, TaskCommand, Unavailable,
+    )
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+
+    parent_uuid = "00000000-0000-0000-0000-000000000930"
+    child_uuid = "00000000-0000-0000-0000-000000000931"
+    parent = {
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "batch-fail-closed",
+        "link": 1,
+        "modified": "20260813T120000Z",
+        "cp": "1d",
+    }
+    child = ChildImportPayload.from_mapping(
+        {
+            "uuid": child_uuid,
+            "chainID": "batch-fail-closed",
+            "link": 2,
+            "prevLink": parent_uuid[:8],
+            "status": "pending",
+            "chain": "on",
+            "cp": "1d",
+        },
+        parent_uuid=parent_uuid,
+    )
+
+    class Repo:
+        def broad_snapshot(self, **kwargs):
+            del kwargs
+            command = TaskCommand(("task", "export"), "batch verification", 1.0)
+            evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active")
+            return Unavailable("broad:lifecycle-postverify", evidence)
+
+    class Uow:
+        repository = Repo()
+        mutation_epoch = 0
+        client = None
+
+    service = TaskwarriorMutationService(Uow())
+    guard = MutationGuard(
+        parent_uuid,
+        "completed",
+        "batch-fail-closed",
+        1,
+        recurrence_fingerprint(parent),
+        (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+        0,
+        "on",
+    )
+    child_result = service.verify_lifecycle_children((MutationRequest(MutationOperation.CHILD_IMPORT, guard, child),))
+    expect(
+        child_result[child_uuid].kind is MutationOutcomeKind.RETRYABLE,
+        f"unavailable child batch snapshot was not retryable: {child_result}",
+    )
+    link = ParentLinkPayload(parent_uuid, child_uuid[:8])
+    parent_result = service.verify_lifecycle_parents((MutationRequest(MutationOperation.PARENT_LINK, guard, link),))
+    expect(
+        parent_result[parent_uuid].kind is MutationOutcomeKind.RETRYABLE,
+        f"unavailable parent batch snapshot was not retryable: {parent_result}",
+    )
 
 
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
@@ -31026,6 +31099,7 @@ TESTS = [
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
     test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
+    test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,

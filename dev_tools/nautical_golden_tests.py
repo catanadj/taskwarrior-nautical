@@ -28069,6 +28069,65 @@ def test_chain_repair_command_failure_is_structured():
         tool._export, tool._apply_repair = original
 
 
+def test_chain_repair_apply_uses_guarded_mutation_gateway():
+    """Operator chain repairs must submit typed guarded requests, not raw argv."""
+    from nautical_core import chain_repair
+    from nautical_core.integration_models import Found, MutationOutcomeKind
+
+    tool = _load_hook_module(
+        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
+        "_nautical_chain_repair_gateway_test",
+    )
+    repair = chain_repair.LinkRepair(
+        "11111111-0000-0000-0000-000000000001",
+        "11111111",
+        "chain-gateway",
+        2,
+        "nextLink",
+        "",
+        "22222222",
+    )
+    uow = _test_operator_uow()
+
+    class Repository:
+        def by_uuid(self, uuid_value, *, refresh=False):
+            del uuid_value, refresh
+            return Found(
+                {
+                    "uuid": repair.uuid,
+                    "status": "pending",
+                    "chain": "on",
+                    "chainID": repair.chain_id,
+                    "link": repair.link,
+                    "modified": "20260820T090000Z",
+                },
+                "chain repair guard",
+            )
+
+    captured = []
+
+    class Gateway:
+        def __init__(self, unit_of_work):
+            expect(unit_of_work is uow, "chain repair constructed a gateway for another invocation")
+
+        def apply(self, request):
+            captured.append(request)
+            return type("Outcome", (), {"kind": MutationOutcomeKind.APPLIED, "reason": ""})()
+
+    original_gateway = tool.TaskwarriorMutationService
+    try:
+        uow.repository = Repository()
+        tool.TaskwarriorMutationService = Gateway
+        tool._apply_repair(uow, repair)
+    finally:
+        tool.TaskwarriorMutationService = original_gateway
+    expect(len(captured) == 1, f"chain repair did not use the mutation gateway: {captured!r}")
+    request = captured[0]
+    expect(request.operation.value == "metadata_repair", f"unexpected repair operation: {request!r}")
+    expect(request.guard.task_uuid == repair.uuid, f"repair guard lost target identity: {request!r}")
+    expect(request.payload.to_dict().get("nextLink") == repair.new, f"repair payload was not typed: {request!r}")
+
+
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
     hook = _find_hook_file("on-modify.nautical")
@@ -30865,6 +30924,7 @@ TESTS = [
     test_task_command_classifies_boundary_failures,
     test_task_command_retries_only_opted_in_locks,
     test_chain_repair_command_failure_is_structured,
+    test_chain_repair_apply_uses_guarded_mutation_gateway,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_cp_completion_spawns_next_link,

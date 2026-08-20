@@ -5144,9 +5144,9 @@ def test_on_modify_limit_update_emits_effective_boundaries():
         "chainID": "abcd1234",
         "link": 2,
         "chainMax": 5,
-        "chainUntil": "20260810T070000Z",
+        "chainUntil": "20990810T070000Z",
     }
-    new = {**old, "chainMax": 8, "chainUntil": "20260820T070000Z"}
+    new = {**old, "chainMax": 8, "chainUntil": "20990820T070000Z"}
     cleared = dict(new)
     cleared.pop("chainMax")
     cleared.pop("chainUntil")
@@ -5172,7 +5172,7 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     )
     expect(
         any(
-            label == "Changed" and "Chain end point:" in value and "2026-08-10" in value and "2026-08-20" in value
+            label == "Changed" and "Chain end point:" in value and "2099-08-10" in value and "2099-08-20" in value
             for label, value in rows
         ),
         f"missing localized chainUntil update: {rows!r}",
@@ -14074,6 +14074,9 @@ def test_core_preset_recursion_chain_is_deterministic():
 
 def test_core_nested_preset_display_shows_resolved_leaf():
     """Preset display should show the effective resolved expression for simple nested aliases."""
+    # Resolve the lazy parser bundle before overriding facade config exports;
+    # the first resolution synchronizes those exports from Taskdata config.
+    core.anchor_preset_display("@__golden_missing__")
     prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
     prev_omit_presets = getattr(core, "OMIT_PRESETS", {})
     try:
@@ -17186,6 +17189,7 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
 def test_normalize_spec_for_acf_cache_guards():
     """normalize spec cache should bound inputs before caching."""
     import nautical_core as core
+    core._normalize_spec_for_acf_cached("w", "mon", "MD")
 
     res = core._normalize_spec_for_acf_cached("w", "mon", "MD")
     expect(res == "mon", f"unexpected normalize result: {res}")
@@ -17743,8 +17747,10 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         until_cap_no=None,
     )
     fake_flow = SimpleNamespace(
+        CompletionFlowServices=lambda **kwargs: kwargs,
         CompletionFinalizeServices=lambda **kwargs: kwargs,
         finalize_completion_modify=lambda **_kwargs: expected,
+        handle_completion_modify=lambda *_args, **_kwargs: expected,
     )
     original = {
         "validate": mod._completion_validate_cp_and_anchor,
@@ -25588,7 +25594,7 @@ def test_cache_load_quarantines_corrupt_entries_and_gc_removes_them():
 
     saved_enabled = core.ENABLE_ANCHOR_CACHE
     saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_cache_dir = core._CACHE_DIR
+    saved_cache_dir = getattr(core, "_CACHE_DIR", None)
     try:
         with tempfile.TemporaryDirectory() as td:
             core.ENABLE_ANCHOR_CACHE = True
@@ -25643,6 +25649,7 @@ def test_cache_schema_rejects_legacy_and_future_versions():
 def test_cache_load_retries_when_file_is_replaced_during_read():
     """A reader should retry if another process publishes a new generation."""
     import nautical_core as core
+    core.cache_load("__golden_cache_probe__")
     with tempfile.TemporaryDirectory() as td:
         saved_enabled = core.ENABLE_ANCHOR_CACHE
         saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
@@ -31056,6 +31063,11 @@ def main():
         total_tests += 1
         captured_stderr = io.StringIO()
         try:
+            # Some isolation tests intentionally import a disposable package;
+            # restore the canonical facade before the next test so shuffled
+            # runs do not inherit that temporary module.
+            if sys.modules.get("nautical_core") is not core:
+                sys.modules["nautical_core"] = core
             if args.strict_lifecycle_warnings:
                 with contextlib.redirect_stderr(captured_stderr):
                     fn()

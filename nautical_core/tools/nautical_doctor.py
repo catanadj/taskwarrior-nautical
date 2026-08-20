@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile  # noqa: E402
+from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
@@ -1418,7 +1418,7 @@ def main() -> int:
     _check_managed_runtime(findings, hooks_dir, hook_runtimes)
     _check_config(findings, taskdata)
     if args.clean_cache:
-        gc_result = run_cache_gc()
+        gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)
         _finding(
             findings,

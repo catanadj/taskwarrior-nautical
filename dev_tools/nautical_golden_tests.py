@@ -4460,9 +4460,18 @@ def test_core_cache_dir_and_lock_permissions():
     with tempfile.TemporaryDirectory() as td:
         cache_dir = os.path.join(td, "cache")
         mod = _load_hook_module(core_path, "_nautical_core_cache_perm_test")
+        mod._cache_api._resolve()
         mod._CACHE_DIR = None
         mod.ANCHOR_CACHE_DIR_OVERRIDE = cache_dir
-        path = mod._cache_dir()
+        previous_trust = os.environ.get("NAUTICAL_TRUST_CACHE_PATH")
+        os.environ["NAUTICAL_TRUST_CACHE_PATH"] = "1"
+        try:
+            path = mod._cache_dir()
+        finally:
+            if previous_trust is None:
+                os.environ.pop("NAUTICAL_TRUST_CACHE_PATH", None)
+            else:
+                os.environ["NAUTICAL_TRUST_CACHE_PATH"] = previous_trust
         expect(path == cache_dir, f"cache dir mismatch: {path}")
         mode = stat.S_IMODE(os.stat(path).st_mode)
         expect((mode & 0o077) == 0, f"cache dir has group/other perms: {oct(mode)}")
@@ -5326,14 +5335,14 @@ def test_on_modify_disables_chain_emits_disabled_panel():
         expect(any(k == "Chain" and v == "off" for k, v in rows), f"{case['label']} expected chain:off row, got {rows!r}")
         if case["label"] == "fields_cleared":
             expect(
-                any(title == "⛔ Chain finished – summary" and panel_kind == "summary" for title, _rows, panel_kind in captured["panels"]),
+                any(title == "⛔ Nautical chain stopped" and panel_kind == "summary" for title, _rows, panel_kind in captured["panels"]),
                 f"{case['label']} should also show the finished-chain summary: {captured!r}",
             )
-            summary_rows = next(rows for title, rows, _kind in captured["panels"] if title == "⛔ Chain finished – summary")
-            expect(any(label == "Pattern" and "w:mon" in str(value) for label, value in summary_rows), f"summary should retain removed recurrence metadata: {captured!r}")
+            summary_rows = next(rows for title, rows, _kind in captured["panels"] if title == "⛔ Nautical chain stopped")
+            expect(any(label == "Reason" and "removed" in str(value) for label, value in summary_rows), f"summary should explain removed recurrence: {captured!r}")
         elif case["label"] == "chain_off":
             expect(
-                any(title == "⛔ Chain finished – summary" and panel_kind == "summary" for title, _rows, panel_kind in captured["panels"]),
+                any(title == "⛔ Nautical chain stopped" and panel_kind == "summary" for title, _rows, panel_kind in captured["panels"]),
                 f"{case['label']} should also show the finished-chain summary: {captured!r}",
             )
         expect(new.get("chain") == "off", f"{case['label']} should set chain:off, got {new!r}")
@@ -8164,7 +8173,8 @@ def test_doctor_reports_actionable_broken_installation():
             "hook.on-exit.missing",
             "uda.cp.type",
             "config.invalid",
-            "queue.state",
+            "outbox.schema",
+            "outbox.state",
             "chains.missing_chainid",
             "chains.duplicate_slots",
             "chains.dangling_links",
@@ -28578,14 +28588,13 @@ def test_on_exit_drain_failure_panel_is_actionable_and_retry_quiet():
 
 
 def test_on_modify_state_files_use_dedicated_dir():
-    """on-modify queue/dead-letter state should live under .nautical-state."""
+    """on-modify lifecycle outbox state should live under .nautical-state."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_state_dir_test")
-
-    expect(mod._SPAWN_QUEUE_DB_PATH.parent.name == ".nautical-state", f"unexpected queue db dir: {mod._SPAWN_QUEUE_DB_PATH}")
-    expect(mod._DEAD_LETTER_PATH.parent.name == ".nautical-state", f"unexpected dead-letter dir: {mod._DEAD_LETTER_PATH}")
-    expect(mod._SPAWN_QUEUE_LOCK.parent.name == ".nautical-locks", f"unexpected queue lock dir: {mod._SPAWN_QUEUE_LOCK}")
-    expect(mod._DEAD_LETTER_LOCK.parent.name == ".nautical-locks", f"unexpected dead-letter lock dir: {mod._DEAD_LETTER_LOCK}")
+    mod._load_core()
+    outbox = mod._module("lifecycle_outbox")
+    path = outbox.lifecycle_outbox_path(Path(mod.TW_DATA_DIR))
+    expect(path.parent.name == ".nautical-state", f"unexpected outbox dir: {path}")
 
 
 def test_on_modify_recompleted_task_with_nextlink_skips_spawn():

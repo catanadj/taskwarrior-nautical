@@ -264,6 +264,7 @@ effective_config_fingerprint = _core_config.effective_config_fingerprint
 scheduler_config_fingerprint = _core_config.scheduler_config_fingerprint
 configuration_drift = _core_config.configuration_drift
 _CONF = _core_config._CONF
+_FACADE_CONFIG_SYNCED = False
 _conf_raw = _core_config.conf_raw
 _conf_str = _core_config.conf_str
 _conf_int = _core_config.conf_int
@@ -562,7 +563,7 @@ def validate_scheduling_configuration() -> None:
 
 def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     """Apply the validated configuration selected for a Taskwarrior data directory."""
-    global CONFIG_ERROR
+    global CONFIG_ERROR, _FACADE_CONFIG_SYNCED
     result = _core_config.reload_for_taskdata(taskdata)
     if not result.get("ok"):
         error = str(result.get("error") or "configuration unavailable")
@@ -609,6 +610,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
         "_CACHE_LOAD_MEM_TTL",
     ):
         globals()[name] = getattr(_core_config, name if not name.startswith("_") else name[1:])
+    _FACADE_CONFIG_SYNCED = True
     globals()["_CONF"] = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     _refresh_timezone()
@@ -622,8 +624,13 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
 
 def _refresh_facade_config_exports() -> None:
     """Resolve deferred config and synchronize facade compatibility exports."""
-    global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS
+    global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS, _FACADE_CONFIG_SYNCED
     _core_config.ensure_loaded()
+    configured_hemisphere = getattr(_core_config, "SEASON_HEMISPHERE", "north")
+    season_override = (
+        not _FACADE_CONFIG_SYNCED
+        and _season_support.active_hemisphere() != configured_hemisphere
+    )
     names = (
         "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "HOLIDAY_REGION",
         "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
@@ -638,17 +645,21 @@ def _refresh_facade_config_exports() -> None:
         "RECURRENCE_UPDATE_UDAS", "_CACHE_TTL_SECS", "_CACHE_LOAD_MEM_MAX",
         "_CACHE_LOAD_MEM_TTL",
     )
-    for name in names:
-        config_name = name if not name.startswith("_") else name[1:]
-        configured_value = getattr(_core_config, config_name)
-        globals()[name] = configured_value
+    initial_sync = not _FACADE_CONFIG_SYNCED
+    if initial_sync:
+        for name in names:
+            config_name = name if not name.startswith("_") else name[1:]
+            if name != "SEASON_HEMISPHERE" or not season_override:
+                globals()[name] = getattr(_core_config, config_name)
+        _FACADE_CONFIG_SYNCED = True
     _CONF = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     if globals().get("MAX_ANCHOR_DNF_TERMS") == globals().get("_CONFIG_DEFAULT_MAX_ANCHOR_DNF_TERMS", 10_000):
         MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
     if "_refresh_timezone" in globals():
         _refresh_timezone()
-    _configure_season_support()
+    if initial_sync and not season_override:
+        _configure_season_support()
 
 
 # --- Date/time config ---

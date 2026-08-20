@@ -2138,7 +2138,7 @@ class TaskAnalyzer:
             context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(
                 task,
                 fallback_chain_id=task.get("uuid") or "analyzer",
-                timezone=getattr(core, "_LOCAL_TZ", None),
+                timezone=LOCAL_ZONE,
                 business_calendar=business_calendar,
                 astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),

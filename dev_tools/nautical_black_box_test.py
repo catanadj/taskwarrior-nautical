@@ -258,6 +258,125 @@ def _scenario_modify(env: dict[str, str]) -> dict:
     return {"root": root_uuid, "due": updated.get("due")}
 
 
+def _install_hook_counter(hooks_dir: Path, hook_name: str, counter_dir: Path) -> None:
+    """Wrap one installed hook and count real process launches."""
+    hook = hooks_dir / hook_name
+    real_hook = hooks_dir / f"{hook_name}.real"
+    hook.rename(real_hook)
+    counter = counter_dir / f"{hook_name}.count"
+    wrapper = (
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"counter = Path({str(counter)!r})\n"
+        "counter.parent.mkdir(parents=True, exist_ok=True)\n"
+        "with counter.open('a', encoding='ascii') as stream:\n"
+        "    stream.write('1\\n')\n"
+        f"real_hook = {str(real_hook)!r}\n"
+        "os.execv(real_hook, [real_hook, *sys.argv[1:]])\n"
+    )
+    hook.write_text(wrapper, encoding="utf-8")
+    hook.chmod(0o755)
+
+
+def _install_task_command_shim(root: Path, env: dict[str, str]) -> Path:
+    """Log every Taskwarrior invocation while delegating to the real binary."""
+    real_task = shutil.which("task")
+    if not real_task:
+        raise AssertionError("Taskwarrior binary is required for the hook process harness")
+    shim_dir = root / "task-shim"
+    shim_dir.mkdir()
+    shim = shim_dir / "task"
+    log_path = root / "task-command-log.jsonl"
+    shim.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        f"log_path = {str(log_path)!r}\n"
+        "with open(log_path, 'a', encoding='utf-8') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:], ensure_ascii=False) + '\\n')\n"
+        f"real_task = {real_task!r}\n"
+        "os.execv(real_task, [real_task, *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    env["PATH"] = str(shim_dir) + os.pathsep + str(env.get("PATH") or "")
+    env["NAUTICAL_TASK_SHIM_LOG"] = str(log_path)
+    return log_path
+
+
+def _read_hook_count(counter_dir: Path, hook_name: str) -> int:
+    path = counter_dir / f"{hook_name}.count"
+    if not path.is_file():
+        return 0
+    return len(path.read_text(encoding="ascii").splitlines())
+
+
+def _read_task_command_log(path: Path) -> list[list[str]]:
+    if not path.is_file():
+        return []
+    commands: list[list[str]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = json.loads(line)
+        if isinstance(value, list):
+            commands.append([str(item) for item in value])
+    return commands
+
+
+def _scenario_no_nested_hooks(env: dict[str, str], data_dir: Path) -> dict:
+    """Real completion must not recursively launch lifecycle hooks."""
+    hooks_dir = data_dir / "hooks"
+    counter_dir = data_dir.parent / "hook-counters"
+    counter_dir.mkdir()
+    _install_hook_counter(hooks_dir, "on-modify", counter_dir)
+    _install_hook_counter(hooks_dir, "on-exit", counter_dir)
+    command_log = _install_task_command_shim(data_dir.parent, env)
+
+    description = "blackbox hook recursion"
+    _task(["add", description, "cp:1d", "due:today"], env)
+    root = _one(env, f"description:{description}", "status:pending")
+    root_uuid = str(root.get("uuid") or "").strip()
+    chain_id = str(root.get("chainID") or "").strip()
+    if not chain_id:
+        raise AssertionError("hook recursion fixture did not receive a chainID")
+
+    # The fixture setup itself is outside the measured lifecycle operation.
+    for hook_name in ("on-modify", "on-exit"):
+        count_path = counter_dir / f"{hook_name}.count"
+        if count_path.exists():
+            count_path.unlink()
+    if command_log.exists():
+        command_log.unlink()
+
+    _task([f"uuid:{root_uuid}", "done"], env)
+    rows = _export(env, f"chainID:{chain_id}")
+    by_link = {int(float(row.get("link"))): row for row in rows if row.get("link") is not None}
+    if set(by_link) != {1, 2}:
+        raise AssertionError(f"hook recursion fixture did not produce one child: {rows!r}")
+    child = by_link[2]
+    if by_link[1].get("nextLink") != str(child.get("uuid") or "")[:8]:
+        raise AssertionError("hook recursion fixture did not link the parent")
+
+    modify_count = _read_hook_count(counter_dir, "on-modify")
+    exit_count = _read_hook_count(counter_dir, "on-exit")
+    if modify_count != 1 or exit_count != 1:
+        raise AssertionError(
+            f"lifecycle completion recursively launched hooks: on-modify={modify_count}, on-exit={exit_count}"
+        )
+    modify_commands = [args for args in _read_task_command_log(command_log) if "modify" in args]
+    if not modify_commands:
+        raise AssertionError("hook recursion fixture recorded no internal modify command")
+    if any("rc.hooks=off" not in args for args in modify_commands):
+        raise AssertionError(f"internal lifecycle modify omitted rc.hooks=off: {modify_commands!r}")
+    return {
+        "on_modify": modify_count,
+        "on_exit": exit_count,
+        "internal_modify_commands": len(modify_commands),
+    }
+
+
 def _assert_clean_state(data_dir: Path) -> None:
     outbox_db = data_dir / ".nautical-state" / ".nautical_lifecycle_outbox.db"
     if not outbox_db.exists():
@@ -316,6 +435,7 @@ def main() -> int:
         scenarios["files"] = _scenario_files(env, anchor_dir, omit_dir)
         scenarios["modify"] = _scenario_modify(env)
         scenarios["duplicate_guard"] = _scenario_duplicate_guard(env, scenarios["cp"])
+        scenarios["no_nested_hooks"] = _scenario_no_nested_hooks(env, data_dir)
         _assert_clean_state(data_dir)
         result["ok"] = True
     except Exception as exc:

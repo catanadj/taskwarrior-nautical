@@ -5384,6 +5384,31 @@ def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():
     expect(got_old is old and got_new is new, f"expected UUID mismatch to be ignored for non-nautical delete: {(got_old, got_new)!r}")
 
 
+def _test_modify_engine_services(
+    result_cls,
+    *,
+    has_nautical_fields,
+    load_core,
+    diag,
+    fail_and_exit,
+    is_non_completion,
+    handle_non_completion,
+    handle_completion,
+    handle_deleted,
+):
+    return SimpleNamespace(
+        result=lambda task, *, sanitize: result_cls(task=task, sanitize=sanitize),
+        has_nautical_fields=has_nautical_fields,
+        load_core=load_core,
+        diag=diag,
+        fail_and_exit=fail_and_exit,
+        is_non_completion=is_non_completion,
+        handle_non_completion=handle_non_completion,
+        handle_completion=handle_completion,
+        handle_deleted=handle_deleted,
+    )
+
+
 def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     """Deleted pending Nautical tasks should trigger delete feedback and still pass through unchanged."""
     from nautical_core import hook_engine
@@ -5408,15 +5433,17 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     plain_new = {"uuid": "00000000-0000-0000-0000-000000000301", "status": "deleted"}
     result = hook_engine.handle_on_modify(
         Request({"uuid": plain_new["uuid"], "status": "pending"}, plain_new),
-        json_result_cls=HookJsonResult,
-        task_has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
-        load_core=load_core,
-        diag=lambda _msg: None,
-        fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("plain delete should not fail")),
-        is_non_completion_modify=lambda _old, _new: False,
-        handle_non_completion_modify=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
-        handle_completion_modify=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
-        handle_deleted_modify=handle_deleted,
+        _test_modify_engine_services(
+            HookJsonResult,
+            has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
+            load_core=load_core,
+            diag=lambda _msg: None,
+            fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("plain delete should not fail")),
+            is_non_completion=lambda _old, _new: False,
+            handle_non_completion=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
+            handle_completion=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
+            handle_deleted=handle_deleted,
+        ),
     )
     expect(isinstance(result, HookJsonResult) and result.task is plain_new, f"plain delete should pass through: {result!r}")
     expect(calls == {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}, f"plain delete should stay cheap: {calls!r}")
@@ -5430,15 +5457,17 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     nautical_new = dict(nautical_old, status="deleted")
     result = hook_engine.handle_on_modify(
         Request(nautical_old, nautical_new),
-        json_result_cls=HookJsonResult,
-        task_has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
-        load_core=load_core,
-        diag=lambda _msg: None,
-        fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("nautical delete should not fail")),
-        is_non_completion_modify=lambda _old, _new: False,
-        handle_non_completion_modify=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
-        handle_completion_modify=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
-        handle_deleted_modify=handle_deleted,
+        _test_modify_engine_services(
+            HookJsonResult,
+            has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
+            load_core=load_core,
+            diag=lambda _msg: None,
+            fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("nautical delete should not fail")),
+            is_non_completion=lambda _old, _new: False,
+            handle_non_completion=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
+            handle_completion=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
+            handle_deleted=handle_deleted,
+        ),
     )
     expect(isinstance(result, HookJsonResult) and result.task is nautical_new, f"nautical delete should pass through: {result!r}")
     expect(calls == {"load": 1, "deleted": 1, "completion": 0, "non_completion": 0}, f"unexpected nautical delete routing: {calls!r}")
@@ -5459,14 +5488,17 @@ def test_hook_engine_retains_completion_lifecycle_result_on_runtime_context():
     )
     result = hook_engine.handle_on_modify(
         request,
-        json_result_cls=HookJsonResult,
-        task_has_nautical_fields=lambda task: bool(task.get("chainID")),
-        load_core=lambda: None,
-        diag=lambda _msg: None,
-        fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("completion should not fail")),
-        is_non_completion_modify=lambda _old, _new: False,
-        handle_non_completion_modify=lambda *_args: (_ for _ in ()).throw(AssertionError("non-completion route selected")),
-        handle_completion_modify=lambda *_args: lifecycle,
+        _test_modify_engine_services(
+            HookJsonResult,
+            has_nautical_fields=lambda task: bool(task.get("chainID")),
+            load_core=lambda: None,
+            diag=lambda _msg: None,
+            fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("completion should not fail")),
+            is_non_completion=lambda _old, _new: False,
+            handle_non_completion=lambda *_args: (_ for _ in ()).throw(AssertionError("non-completion route selected")),
+            handle_completion=lambda *_args: lifecycle,
+            handle_deleted=lambda *_args: (_ for _ in ()).throw(AssertionError("delete route selected")),
+        ),
     )
     expect(result is None, f"completion routing should not emit an alternate JSON result: {result!r}")
     expect(runtime.lifecycle_result is lifecycle, f"hook engine dropped lifecycle result: {runtime.lifecycle_result!r}")

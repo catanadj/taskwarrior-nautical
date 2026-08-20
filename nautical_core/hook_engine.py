@@ -1,33 +1,63 @@
 from __future__ import annotations
 
+from datetime import datetime
 import importlib
+from typing import Any, NoReturn, Protocol
+
+
+class OnAddServices(Protocol):
+    """Typed services owned by the on-add implementation."""
+
+    def result(self, task: dict[str, Any], *, sanitize: bool, prof: Any) -> object: ...
+    def has_nautical_fields(self, task: dict[str, Any]) -> bool: ...
+    def load_core(self) -> None: ...
+    def core(self) -> Any: ...
+    def diag(self, message: str) -> None: ...
+    def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
+    def build_context(self, task: dict[str, Any], now_utc: datetime, now_local: datetime, *, prof: Any) -> Any: ...
+    def stamp_chain_id(self, task: dict[str, Any]) -> None: ...
+    def render_anchor_preview(self, context: Any, *, prof: Any) -> None: ...
+    def render_cp_preview(self, context: Any, *, prof: Any) -> None: ...
+
+
+class OnModifyServices(Protocol):
+    """Typed services owned by the on-modify implementation."""
+
+    def result(self, task: dict[str, Any], *, sanitize: bool) -> object: ...
+    def has_nautical_fields(self, task: dict[str, Any]) -> bool: ...
+    def load_core(self) -> None: ...
+    def diag(self, message: str) -> None: ...
+    def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
+    def is_non_completion(self, old: dict[str, Any], new: dict[str, Any]) -> bool: ...
+    def handle_non_completion(self, old: dict[str, Any], new: dict[str, Any], unit_of_work: Any) -> None: ...
+    def handle_completion(self, old: dict[str, Any], new: dict[str, Any], unit_of_work: Any) -> Any: ...
+    def handle_deleted(self, old: dict[str, Any], new: dict[str, Any], unit_of_work: Any) -> None: ...
+
+
+class OnExitServices(Protocol):
+    """Typed services owned by the on-exit implementation."""
+
+    def redirect_stdout(self) -> None: ...
+    def drain_outbox(self, unit_of_work: Any) -> dict[str, Any]: ...
+    def strict_feedback(self, stats: dict[str, Any]) -> str | None: ...
+    def result(self, *, exit_code: int, feedback_message: str | None, stats: dict[str, Any]) -> object: ...
 
 
 def handle_on_add(
     request,
-    *,
-    json_result_cls,
-    core_ref,
-    task_has_nautical_fields,
-    load_core,
-    diag,
-    fail_and_exit,
-    build_on_add_context,
-    stamp_chain_id_on_add,
-    handle_anchor_preview_on_add,
-    handle_cp_preview_on_add,
+    services: OnAddServices,
 ) -> None:
     task = request.task
     prof = request.prof
     runtime = request.runtime
-    if not task_has_nautical_fields(task):
-        return json_result_cls(task=task, sanitize=False, prof=prof)
+    if not services.has_nautical_fields(task):
+        return services.result(task, sanitize=False, prof=prof)
 
     try:
-        load_core()
+        services.load_core()
     except Exception as exc:
-        diag(f'core load failed: {exc}')
-        fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
+        services.diag(f'core load failed: {exc}')
+        services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
     try:
         if getattr(prof, 'enabled', False) and runtime.import_ms is not None:
             prof.import_ms = runtime.import_ms
@@ -35,54 +65,41 @@ def handle_on_add(
         pass
 
     with prof.section('clock:now'):
-        core = core_ref()
+        core = services.core()
         now_utc = core.now_utc()
         now_local = core.to_local(now_utc)
 
-    ctx = build_on_add_context(task, now_utc, now_local, prof=prof)
+    ctx = services.build_context(task, now_utc, now_local, prof=prof)
     if not ctx.kind:
-        return json_result_cls(task=task, sanitize=True, prof=prof)
+        return services.result(task, sanitize=True, prof=prof)
 
-    stamp_chain_id_on_add(task)
+    services.stamp_chain_id(task)
     if ctx.kind in {'anchor', 'anchor_file'}:
-        handle_anchor_preview_on_add(ctx, prof=prof)
+        services.render_anchor_preview(ctx, prof=prof)
         return None
 
-    handle_cp_preview_on_add(ctx, prof=prof)
+    services.render_cp_preview(ctx, prof=prof)
     return None
 
 
 
 def handle_on_exit(
     request,
-    *,
-    exit_result_cls,
-    redirect_stdout_to_devnull,
-    drain_outbox,
-    strict_exit_result,
+    services: OnExitServices,
 ):
     _ = request.runtime
-    redirect_stdout_to_devnull()
-    stats = drain_outbox(request.runtime.uow)
-    strict_msg = strict_exit_result(stats)
+    services.redirect_stdout()
+    stats = services.drain_outbox(request.runtime.uow)
+    strict_msg = services.strict_feedback(stats)
     if strict_msg:
-        return exit_result_cls(exit_code=1, feedback_message=strict_msg, stats=stats)
-    return exit_result_cls(exit_code=0, stats=stats)
+        return services.result(exit_code=1, feedback_message=strict_msg, stats=stats)
+    return services.result(exit_code=0, feedback_message=None, stats=stats)
 
 
 
 def handle_on_modify(
     request,
-    *,
-    json_result_cls,
-    task_has_nautical_fields,
-    load_core,
-    diag,
-    fail_and_exit,
-    is_non_completion_modify,
-    handle_non_completion_modify,
-    handle_completion_modify,
-    handle_deleted_modify=None,
+    services: OnModifyServices,
 ):
     old, new = request.old, request.new
     modify_lifecycle = importlib.import_module("nautical_core.modify_lifecycle")
@@ -90,35 +107,35 @@ def handle_on_modify(
     route = modify_lifecycle.classify_modify_route(
         old,
         new,
-        is_non_completion_modify=is_non_completion_modify,
+        is_non_completion_modify=services.is_non_completion,
     )
 
-    if route.is_deleted and route.has_nautical_fields and handle_deleted_modify is not None:
+    if route.is_deleted and route.has_nautical_fields:
         try:
-            load_core()
+            services.load_core()
         except Exception as exc:
-            diag(f'core load failed: {exc}')
-            fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-        handle_deleted_modify(old, new, request.runtime.uow)
-        return json_result_cls(task=new, sanitize=False)
+            services.diag(f'core load failed: {exc}')
+            services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
+        services.handle_deleted(old, new, request.runtime.uow)
+        return services.result(task=new, sanitize=False)
 
     if route.is_deleted:
-        return json_result_cls(task=new, sanitize=False)
+        return services.result(task=new, sanitize=False)
 
     if not route.has_nautical_fields:
-        return json_result_cls(task=new, sanitize=False)
+        return services.result(task=new, sanitize=False)
 
     try:
-        load_core()
+        services.load_core()
     except Exception as exc:
-        diag(f'core load failed: {exc}')
-        fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
+        services.diag(f'core load failed: {exc}')
+        services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
 
     if route.is_non_completion:
-        handle_non_completion_modify(old, new, request.runtime.uow)
+        services.handle_non_completion(old, new, request.runtime.uow)
         return None
 
-    lifecycle_result = handle_completion_modify(old, new, request.runtime.uow)
+    lifecycle_result = services.handle_completion(old, new, request.runtime.uow)
     try:
         request.runtime.lifecycle_result = lifecycle_result
     except Exception:

@@ -582,6 +582,29 @@ def _strict_exit_feedback_message(stats: dict) -> str | None:
     )
 
 
+class _OnExitServices:
+    """Concrete adapter passed to the shared hook router."""
+
+    def __init__(self, result_cls):
+        self._result_cls = result_cls
+
+    def redirect_stdout(self):
+        _redirect_stdout_to_devnull()
+
+    def drain_outbox(self, unit_of_work):
+        return _drain_outbox(unit_of_work)
+
+    def strict_feedback(self, stats):
+        return _strict_exit_feedback_message(stats)
+
+    def result(self, *, exit_code: int, feedback_message: str | None, stats):
+        return self._result_cls(
+            exit_code=exit_code,
+            feedback_message=feedback_message,
+            stats=stats,
+        )
+
+
 def _render_exit_drain_failure_panel(stats: dict) -> None:
     if not isinstance(stats, dict) or core is None:
         return
@@ -658,10 +681,7 @@ def main() -> int:
     }
     result = hook_engine.handle_on_exit(
         request,
-        exit_result_cls=hook_results.ExitHookResponse,
-        redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
-        drain_outbox=_drain_outbox,
-        strict_exit_result=_strict_exit_feedback_message,
+        services=_OnExitServices(hook_results.ExitHookResponse),
     )
     stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
     if stats_path:

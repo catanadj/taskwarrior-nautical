@@ -1815,6 +1815,43 @@ def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
     )
 
 
+class _OnAddServices:
+    """Concrete adapter passed to the shared hook router."""
+
+    def __init__(self, result_cls):
+        self._result_cls = result_cls
+
+    def result(self, task, *, sanitize: bool, prof):
+        return self._result_cls(task=task, sanitize=sanitize, prof=prof)
+
+    def has_nautical_fields(self, task):
+        return _task_has_nautical_fields(task)
+
+    def load_core(self):
+        _load_core()
+
+    def core(self):
+        return core
+
+    def diag(self, message: str):
+        _diag(message)
+
+    def fail_and_exit(self, title: str, message: str):
+        _fail_and_exit(title, message)
+
+    def build_context(self, task, now_utc, now_local, *, prof):
+        return _build_on_add_context(task, now_utc, now_local, prof=prof)
+
+    def stamp_chain_id(self, task):
+        _stamp_chain_id_on_add(task)
+
+    def render_anchor_preview(self, context, *, prof):
+        _handle_anchor_preview_on_add_context(context, prof=prof)
+
+    def render_cp_preview(self, context, *, prof):
+        _handle_cp_preview_on_add_context(context, prof=prof)
+
+
 def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
     has_cp = bool(cp_str)
     has_anchor = bool(anchor_str)
@@ -1954,16 +1991,7 @@ def main():
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,
-            json_result_cls=hook_results.TaskHookResponse,
-            core_ref=lambda: core,
-            task_has_nautical_fields=_task_has_nautical_fields,
-            load_core=_load_core,
-            diag=_diag,
-            fail_and_exit=_fail_and_exit,
-            build_on_add_context=_build_on_add_context,
-            stamp_chain_id_on_add=_stamp_chain_id_on_add,
-            handle_anchor_preview_on_add=_handle_anchor_preview_on_add_context,
-            handle_cp_preview_on_add=_handle_cp_preview_on_add_context,
+            services=_OnAddServices(hook_results.TaskHookResponse),
         )
     if result is not None:
         hook_results.emit_json_result(result, core=core)

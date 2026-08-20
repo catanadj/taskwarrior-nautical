@@ -4641,6 +4641,40 @@ def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
         )
 
 
+class _OnModifyServices:
+    """Concrete adapter passed to the shared hook router."""
+
+    def __init__(self, result_cls):
+        self._result_cls = result_cls
+
+    def result(self, task, *, sanitize: bool):
+        return self._result_cls(task=task, sanitize=sanitize)
+
+    def has_nautical_fields(self, task):
+        return _task_has_nautical_fields(task)
+
+    def load_core(self):
+        _load_core()
+
+    def diag(self, message: str):
+        _diag(message)
+
+    def fail_and_exit(self, title: str, message: str):
+        _fail_and_exit(title, message)
+
+    def is_non_completion(self, old, new):
+        return _is_non_completion_modify(old, new)
+
+    def handle_non_completion(self, old, new, unit_of_work):
+        _handle_non_completion_modify(old, new, unit_of_work)
+
+    def handle_completion(self, old, new, unit_of_work):
+        return _handle_completion_modify(old, new, unit_of_work)
+
+    def handle_deleted(self, old, new, unit_of_work):
+        _handle_deleted_modify(old, new, unit_of_work)
+
+
 def main():
     # Keep module import cheap while preserving the existing full-hook
     # contract: all mutation decisions run with the validated core loaded.
@@ -4687,15 +4721,7 @@ def main():
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_modify(
             request,
-            json_result_cls=hook_results.TaskHookResponse,
-            task_has_nautical_fields=_task_has_nautical_fields,
-            load_core=_load_core,
-            diag=_diag,
-            fail_and_exit=_fail_and_exit,
-            is_non_completion_modify=_is_non_completion_modify,
-            handle_non_completion_modify=_handle_non_completion_modify,
-            handle_completion_modify=_handle_completion_modify,
-            handle_deleted_modify=_handle_deleted_modify,
+            services=_OnModifyServices(hook_results.TaskHookResponse),
         )
     if result is not None:
         hook_results.emit_json_result(result, core=core)

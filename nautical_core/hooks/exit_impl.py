@@ -514,10 +514,15 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
 
     commands = getattr(unit_of_work, "commands", None)
     if commands is not None:
+        purpose_stats = {
+            _command_purpose_stat_key(purpose): max(0, int(count or 0))
+            for purpose, count in getattr(commands, "by_purpose", {}).items()
+        }
         state.diag_stats.update(
             run_task_calls=max(0, int(getattr(commands, "calls", 0) or 0)),
             run_task_failures=max(0, int(getattr(commands, "failures", 0) or 0)),
             run_task_seconds=max(0.0, float(getattr(commands, "duration", 0.0) or 0.0)),
+            **purpose_stats,
         )
 
     return {
@@ -562,11 +567,21 @@ def _emit_drain_stats_diag(stats: dict) -> None:
     _diag_block("on-exit drain", drain_items, columns=3)
     diag_stats = _exit_runtime_state().diag_stats
     task_stats = {
-        "run_task_calls": diag_stats.get("run_task_calls", 0),
-        "run_task_failures": diag_stats.get("run_task_failures", 0),
-        "run_task_seconds": round(float(diag_stats.get("run_task_seconds", 0.0)), 4),
+        str(key): value
+        for key, value in diag_stats.items()
+        if str(key).startswith("run_task_calls")
+        or str(key).startswith("run_task_failures")
+        or str(key).startswith("run_task_seconds")
     }
+    task_stats["run_task_seconds"] = round(float(task_stats.get("run_task_seconds", 0.0)), 4)
     _diag_block("on-exit task stats", task_stats.items(), columns=3)
+
+
+def _command_purpose_stat_key(purpose: object) -> str:
+    """Return a stable, JSON-safe key for an invocation command purpose."""
+    token = "".join(char if char.isalnum() else "_" for char in str(purpose).strip().lower())
+    token = "_".join(part for part in token.split("_") if part)
+    return f"run_task_calls_purpose_{token or 'unknown'}"
 
 
 def _strict_exit_feedback_message(stats: dict) -> str | None:

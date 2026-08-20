@@ -94,13 +94,19 @@
     },
     "task_call_budgets": {
       "workflow_queue_drain": {
-        "run_task_calls": 64
+        "run_task_calls": 64,
+        "run_task_calls_purpose_task_read_uuid": 48,
+        "run_task_calls_purpose_lifecycle_child_import": 8,
+        "run_task_calls_purpose_lifecycle_parent_link": 8
       },
       "workflow_queue_drain_idempotent": {
         "run_task_calls": 2
       },
       "workflow_queue_drain_partial_recovery": {
-        "run_task_calls": 64
+        "run_task_calls": 64,
+        "run_task_calls_purpose_task_read_uuid": 56,
+        "run_task_calls_purpose_lifecycle_child_import": 8,
+        "run_task_calls_purpose_lifecycle_parent_link": 8
       }
     }
   },

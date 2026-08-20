@@ -545,6 +545,8 @@ _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
 _MODIFY_PROTOCOL = None
 _MODIFY_PROTOCOL_LOAD_FAILED = False
+_MODIFY_CHAIN_SUMMARY = None
+_MODIFY_CHAIN_SUMMARY_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -731,6 +733,12 @@ _MODULE_SPECS = {
         "_MODIFY_PROTOCOL_LOAD_FAILED",
         "modify_protocol.py",
         "nautical_core.modify_protocol",
+    ),
+    "modify_chain_summary": (
+        "_MODIFY_CHAIN_SUMMARY",
+        "_MODIFY_CHAIN_SUMMARY_LOAD_FAILED",
+        "modify_chain_summary.py",
+        "nautical_core.modify_chain_summary",
     ),
 }
 core = None
@@ -2601,11 +2609,11 @@ def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
     return lines
 
 def _end_summary_current(current: dict, current_task: dict | None) -> dict:
-    return current_task if current_task else current
+    return _module("modify_chain_summary").summary_current(current, current_task)
 
 
 def _end_summary_chain_id_row(actual_current: dict) -> str:
-    return (actual_current.get("chainID") or "").strip()
+    return _module("modify_chain_summary").summary_chain_id(actual_current)
 
 
 def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
@@ -2629,92 +2637,47 @@ def _end_summary_span_fields(
     stop_at=None,
     stopped_by_delete: bool = False,
 ) -> tuple[datetime | None, datetime | None, str]:
-    first_task = chain[0] if chain else None
-    last_task = chain[-1] if chain else None
-    if not first_task and chain_id:
-        first_task = _export_chain_endpoint(chain_id, "first")
-    if not last_task and chain_id:
-        last_task = _export_chain_endpoint(chain_id, "last")
-    first = _dtparse((first_task or {}).get("due")) if first_task else None
-    last = _dtparse((last_task or {}).get("end")) if last_task else None
-    span = "–"
-    if first and last:
-        span = (
-            _human_delta(first, last, prefer_months=True)
-            .replace("in ", "")
-            .replace("overdue by ", "")
-        )
-    elif first and stop_at and stopped_by_delete:
-        active = (
-            _human_delta(first, stop_at, prefer_months=True)
-            .replace("in ", "")
-            .replace("overdue by ", "")
-        )
-        span = f"Active for {active} before deletion"
-    return first, last, span
+    return _module("modify_chain_summary").span_fields(
+        chain_id,
+        chain,
+        stop_at=stop_at,
+        stopped_by_delete=stopped_by_delete,
+        export_endpoint=_export_chain_endpoint,
+        parse_datetime=_dtparse,
+        human_delta=_human_delta,
+    )
 
 
 def _end_summary_kind_rows(rows: list[tuple[str, str]], kind: str, current: dict) -> None:
-    if kind == "anchor":
-        expr = (current.get("anchor") or "").strip()
-        mode = (current.get("anchor_mode") or "skip").lower()
-        tag = {
-            "skip": "[cyan]SKIP[/]",
-            "all": "[yellow]ALL[/]",
-            "flex": "[magenta]FLEX[/]",
-        }.get(mode, "[cyan]SKIP[/]")
-        try:
-            preset_display = core.anchor_preset_display(expr)
-        except Exception:
-            preset_display = None
-        if preset_display:
-            label, text = preset_display
-            rows.append((label, f"{text}  {tag}"))
-        else:
-            rows.append(("Pattern", f"{expr}  {tag}"))
-        try:
-            dnf = _validate_anchor_expr_cached(expr)
-            rows.append(("Natural", core.describe_anchor_dnf(dnf, current)))
-        except Exception:
-            pass
-        return
-    if kind == "anchor_file":
-        expr = (current.get("anchor_file") or "").strip()
-        mode = (current.get("anchor_mode") or "skip").lower()
-        tag = {
-            "skip": "[cyan]SKIP[/]",
-            "all": "[yellow]ALL[/]",
-            "flex": "[magenta]FLEX[/]",
-        }.get(mode, "[cyan]SKIP[/]")
-        rows.append(("Anchor file", f"{expr}  {tag}"))
-        rows.append(("Natural", f"Dates from {expr.split('@', 1)[0]}"))
-        return
-    rows.append(("Period", current.get("cp") or "–"))
+    summary = _module("modify_chain_summary")
+    summary.kind_rows(
+        rows,
+        kind,
+        current,
+        anchor_preset_display=core.anchor_preset_display,
+        validate_anchor=_validate_anchor_expr_cached,
+        describe_anchor=core.describe_anchor_dnf,
+    )
 
 
 def _end_summary_stats_rows(rows: list[tuple[str, str]], chain: list[dict], now_utc) -> None:
-    stats = _lateness_stats(chain)
-    rows.append(
-        (
-            "Performance",
-            f"early {stats['early']}, on-time {stats['on_time']}, late {stats['late']}",
-        )
+    _module("modify_chain_summary").stats_rows(
+        rows,
+        chain,
+        now_utc,
+        lateness_stats=_lateness_stats,
+        format_seconds_delta=_fmt_secs_delta,
     )
-    rows.append(("Avg lateness", _fmt_secs_delta(now_utc, stats["avg"])))
-    rows.append(("Median lateness", _fmt_secs_delta(now_utc, stats["median"])))
-    rows.append(("Best early", _fmt_secs_delta(now_utc, stats["best_early"])))
-    rows.append(("Worst late", _fmt_secs_delta(now_utc, stats["worst_late"])))
 
 
 def _end_summary_limits_row(rows: list[tuple[str, str]], current: dict) -> None:
-    cpmax = core.coerce_int(current.get("chainMax"), 0)
-    until = _dtparse(current.get("chainUntil"))
-    if cpmax:
-        rows.append(("Chain cap", f"#{cpmax}"))
-    if until:
-        rows.append(("Chain end point", core.fmt_dt_local(until)))
-    if not cpmax and not until:
-        rows.append(("Chain limits", "None"))
+    _module("modify_chain_summary").limits_row(
+        rows,
+        current,
+        coerce_int=core.coerce_int,
+        parse_datetime=_dtparse,
+        format_local=core.fmt_dt_local,
+    )
 
 
 def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:

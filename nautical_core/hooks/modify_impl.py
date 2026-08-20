@@ -3041,53 +3041,18 @@ def _reject_native_until_carry(
 
 
 def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> bool:
-    """Carry an untouched native until when an existing recurrence target moves."""
-    if _field_changed(old, new, "until") or not old.get("until"):
-        return False
-    old_target_field = _recurrence_anchor_field(old)
-    new_target_field = _recurrence_anchor_field(new)
-    target_changed = (
-        old_target_field != new_target_field
-        or _field_changed(old, new, old_target_field)
+    return _module("modify_carry").preserve_native_until_on_target_change(
+        old,
+        new,
+        kind,
+        field_changed=_field_changed,
+        recurrence_anchor_field=_recurrence_anchor_field,
+        parse_datetime=core.parse_dt_any,
+        native_until=core._import_sibling("native_until"),
+        generation_service=_chain_generation_service,
+        reject_carry=_reject_native_until_carry,
+        diagnostic=_diag,
     )
-    if not target_changed:
-        return False
-    native_until = core._import_sibling("native_until")
-    new_target: datetime | None = None
-    try:
-        new_target = core.parse_dt_any(new.get(new_target_field))
-        if not new_target:
-            raise native_until.NativeUntilCarryError(
-                native_until.CARRY_INVALID,
-                f"{new_target_field} timestamp is missing or invalid",
-            )
-        candidate = dict(new)
-        _chain_generation_service().carry_native_until(
-            old,
-            candidate,
-            new_target,
-            kind,
-            parent_anchor_field=old_target_field,
-            child_anchor_field=new_target_field,
-        )
-        carried = candidate.get("until")
-        if not carried:
-            raise native_until.NativeUntilCarryError(
-                native_until.CARRY_FAILED,
-                "native until carry produced no expiration value",
-            )
-        new["until"] = carried
-        return True
-    except native_until.NativeUntilCarryError as exc:
-        _reject_native_until_carry(old, new, new_target, old_target_field, exc)
-    except Exception as exc:
-        _diag(f"native until target carry failed: {exc}")
-        typed_error = native_until.NativeUntilCarryError(
-            native_until.CARRY_FAILED,
-            f"native until target carry failed: {type(exc).__name__}: {exc}",
-        )
-        _reject_native_until_carry(old, new, new_target, old_target_field, typed_error)
-    return False
 
 
 def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:

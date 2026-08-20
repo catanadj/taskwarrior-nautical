@@ -49,4 +49,66 @@ def preserve_cp_relative_offsets_on_due_change(
     return (old_due, new_due, adjustments) if adjustments else None
 
 
-__all__ = ("preserve_cp_relative_offsets_on_due_change",)
+def preserve_native_until_on_target_change(
+    old: dict[str, Any],
+    new: dict[str, Any],
+    kind: str,
+    *,
+    field_changed: Any,
+    recurrence_anchor_field: Any,
+    parse_datetime: Any,
+    native_until: Any,
+    generation_service: Any,
+    reject_carry: Any,
+    diagnostic: Any,
+) -> bool:
+    """Carry an untouched native until when an existing recurrence target moves."""
+    if field_changed(old, new, "until") or not old.get("until"):
+        return False
+    old_target_field = recurrence_anchor_field(old)
+    new_target_field = recurrence_anchor_field(new)
+    target_changed = old_target_field != new_target_field or field_changed(old, new, old_target_field)
+    if not target_changed:
+        return False
+
+    new_target = None
+    try:
+        new_target = parse_datetime(new.get(new_target_field))
+        if not new_target:
+            raise native_until.NativeUntilCarryError(
+                native_until.CARRY_INVALID,
+                f"{new_target_field} timestamp is missing or invalid",
+            )
+        candidate = dict(new)
+        generation_service().carry_native_until(
+            old,
+            candidate,
+            new_target,
+            kind,
+            parent_anchor_field=old_target_field,
+            child_anchor_field=new_target_field,
+        )
+        carried = candidate.get("until")
+        if not carried:
+            raise native_until.NativeUntilCarryError(
+                native_until.CARRY_FAILED,
+                "native until carry produced no expiration value",
+            )
+        new["until"] = carried
+        return True
+    except native_until.NativeUntilCarryError as exc:
+        reject_carry(old, new, new_target, old_target_field, exc)
+    except Exception as exc:
+        diagnostic(f"native until target carry failed: {exc}")
+        typed_error = native_until.NativeUntilCarryError(
+            native_until.CARRY_FAILED,
+            f"native until target carry failed: {type(exc).__name__}: {exc}",
+        )
+        reject_carry(old, new, new_target, old_target_field, typed_error)
+    return False
+
+
+__all__ = (
+    "preserve_cp_relative_offsets_on_due_change",
+    "preserve_native_until_on_target_change",
+)

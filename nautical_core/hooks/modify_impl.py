@@ -2866,79 +2866,23 @@ def _cap_from_until_cp(task, next_due_utc):
 
 
 def _cap_from_until_anchor(task, next_due_utc, dnf):
-    """
-    Return (final_no, final_dt) for anchors limited by chainUntil.
-    WITH iteration guard to prevent infinite loops.
-    """
-    until_utc = _dtparse(task.get("chainUntil"))
-    if not until_utc:
-        return (None, None)
-
-    cur_no = core.coerce_int(task.get("link"), 1)
-    seed_base = _recurrence_seed_base(task)
-
-    nxt_local = _to_local_cached(next_due_utc)
-    until_local = _to_local_cached(until_utc)
-    due0, _ = _safe_parse_datetime(task.get("due"))
-    default_seed = _to_local_cached(due0 or next_due_utc).date()
-    fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
-    scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
-    anchor_file = (task.get("anchor_file") or "").strip()
-    anchor_file_provider = None
-    if anchor_file:
-        anchor_file_provider = _anchor_file_provider_for(
-            anchor_file, fallback_hhmm=fallback_hhmm, seed_base=seed_base
-        )
-
-    count = 0
-    last_hit = None
-    cursor = nxt_local
-    iterations = 0
-
-    # Count occurrences starting with the already-computed next due.
-    while iterations < _MAX_ITERATIONS and _compare_datetimes(cursor, until_local) <= 0:
-        iterations += 1
-        count += 1
-        last_hit = cursor
-        if anchor_file:
-            future = _anchor_included_occurrences(
-                task,
-                after_local_dt=cursor,
-                inclusive=False,
-                limit=2,
-                fallback_hhmm=fallback_hhmm,
-                omit_dnf=omit_dnf,
-                seed_base=seed_base,
-                default_seed_date=default_seed,
-                dnf=dnf,
-                anchor_file_provider=anchor_file_provider,
-            )
-            cursor = future[0] if future else None
-        else:
-            cursor = scheduler(
-                dnf,
-                cursor,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=omit_dnf,
-                fallback_hhmm=fallback_hhmm,
-            )
-        if cursor is None:
-            break
-
-    if cursor is not None and _compare_datetimes(cursor, until_local) <= 0 and iterations >= _MAX_ITERATIONS:
-        raise ValueError(
-            f"Anchor chainUntil projection exceeded {_MAX_ITERATIONS} occurrences; "
-            "narrow chainUntil or use a larger recurrence interval."
-        )
-
-    if count == 0 or last_hit is None:
-        return (None, None)
-
-    final_no = cur_no + count
-    final_dt = last_hit.astimezone(timezone.utc)
-    return (final_no, final_dt)
+    return _module("modify_completion_compute").cap_from_until_anchor(
+        task,
+        next_due_utc,
+        dnf,
+        parse_datetime=_dtparse,
+        coerce_int=core.coerce_int,
+        recurrence_seed_base=_recurrence_seed_base,
+        to_local_cached=_to_local_cached,
+        safe_parse_datetime=_safe_parse_datetime,
+        anchor_file_fallback_hhmm=_anchor_file_fallback_hhmm,
+        omit_dnf_from_parent=_omit_dnf_from_parent,
+        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
+        anchor_file_provider_for=_anchor_file_provider_for,
+        anchor_included_occurrences=_anchor_included_occurrences,
+        compare_datetimes=_compare_datetimes,
+        max_iterations=_MAX_ITERATIONS,
+    )
 
 def _safe_dt(v):
     try:

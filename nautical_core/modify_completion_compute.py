@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from nautical_core.modify_models import (
@@ -264,6 +264,92 @@ def cap_from_until_cp(
         due = add_period(due, period)
         next_link += 1
     return last_link, last_due
+
+
+def cap_from_until_anchor(
+    task: dict[str, Any],
+    next_due_utc: Any,
+    dnf: Any,
+    *,
+    parse_datetime: Any,
+    coerce_int: Any,
+    recurrence_seed_base: Any,
+    to_local_cached: Any,
+    safe_parse_datetime: Any,
+    anchor_file_fallback_hhmm: Any,
+    omit_dnf_from_parent: Any,
+    recurrence_evaluator_for_task: Any,
+    anchor_file_provider_for: Any,
+    anchor_included_occurrences: Any,
+    compare_datetimes: Any,
+    max_iterations: int,
+) -> tuple[int | None, Any]:
+    """Return the final anchor link and due date permitted by ``chainUntil``."""
+    until_utc = parse_datetime(task.get("chainUntil"))
+    if not until_utc:
+        return None, None
+
+    current_link = coerce_int(task.get("link"), 1)
+    seed_base = recurrence_seed_base(task)
+    next_local = to_local_cached(next_due_utc)
+    until_local = to_local_cached(until_utc)
+    due0, _ = safe_parse_datetime(task.get("due"))
+    default_seed = to_local_cached(due0 or next_due_utc).date()
+    fallback_hhmm = anchor_file_fallback_hhmm(task, next_local)
+    _omit_expr, omit_dnf = omit_dnf_from_parent(task)
+    scheduler = recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
+    anchor_file = (task.get("anchor_file") or "").strip()
+    anchor_file_provider = None
+    if anchor_file:
+        anchor_file_provider = anchor_file_provider_for(
+            anchor_file,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+        )
+
+    count = 0
+    last_hit = None
+    cursor = next_local
+    iterations = 0
+
+    while iterations < max_iterations and compare_datetimes(cursor, until_local) <= 0:
+        iterations += 1
+        count += 1
+        last_hit = cursor
+        if anchor_file:
+            future = anchor_included_occurrences(
+                task,
+                after_local_dt=cursor,
+                inclusive=False,
+                limit=2,
+                fallback_hhmm=fallback_hhmm,
+                omit_dnf=omit_dnf,
+                seed_base=seed_base,
+                default_seed_date=default_seed,
+                dnf=dnf,
+                anchor_file_provider=anchor_file_provider,
+            )
+            cursor = future[0] if future else None
+        else:
+            cursor = scheduler(
+                dnf,
+                cursor,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                fallback_hhmm=fallback_hhmm,
+            )
+        if cursor is None:
+            break
+
+    if cursor is not None and compare_datetimes(cursor, until_local) <= 0 and iterations >= max_iterations:
+        raise ValueError(
+            f"Anchor chainUntil projection exceeded {max_iterations} occurrences; "
+            "narrow chainUntil or use a larger recurrence interval."
+        )
+    if count == 0 or last_hit is None:
+        return None, None
+    return current_link + count, last_hit.astimezone(timezone.utc)
 
 
 def completion_cap_guard_or_stop(

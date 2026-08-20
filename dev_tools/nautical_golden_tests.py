@@ -19264,14 +19264,29 @@ def test_public_datetime_comparator_preserves_dst_fold_and_provider_alias():
 
 
 def test_modify_until_past_guard_orders_dst_fold_by_instant():
-    """The modify hook must not treat the first repeated-hour instant as future."""
+    """Completion validation must reject an earlier instant in a repeated hour."""
     from zoneinfo import ZoneInfo
+    from nautical_core import add_validation, modify_completion_compute
 
     zone = ZoneInfo("Europe/Bucharest")
     now = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
     earlier = datetime(2026, 10, 25, 3, 18, tzinfo=zone, fold=0)
-    valid, message = _hook._validate_until_not_past(earlier, now)
-    expect(not valid and message and "in the past" in message, f"modify past guard accepted an earlier fold: {message!r}")
+    panels = []
+    result = modify_completion_compute.completion_until_or_fail(
+        {"chainUntil": earlier},
+        now,
+        safe_parse_datetime=lambda _value: (earlier, None),
+        validate_until_not_past=lambda until_dt, now_utc: add_validation.validate_until_not_past(
+            until_dt,
+            now_utc,
+            core=core,
+        ),
+        panel=lambda _title, rows, **_kwargs: panels.extend(rows),
+        print_task=lambda _task: None,
+    )
+    expect(result is False, "completion boundary accepted an earlier repeated-hour instant")
+    reason = " ".join(str(value) for label, value in panels if label == "Reason")
+    expect("in the past" in reason, f"completion past guard omitted actionable reason: {reason!r}")
 
 
 def test_merged_anchor_file_provider_carries_context_and_reuses_specs():

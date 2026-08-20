@@ -352,6 +352,33 @@ class LifecycleApplicationService:
             raise LifecycleApplicationError("execute_staged requires a validated LifecyclePlan")
         intent_id = plan.identity.idempotency_key
         claim = self._outbox.claim_intent(owner=self._owner, lease_seconds=self._lease_seconds, intent_id=intent_id)
+        if claim.kind is OutboxResultKind.ALREADY_APPLIED:
+            record = claim.record
+            if record is None:
+                return LifecycleApplicationOutcome(
+                    LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
+                    plan.identity,
+                    reason="acknowledged lifecycle intent has no durable record",
+                    intent_id=intent_id,
+                )
+            config = str(configuration_fingerprint or "").strip()
+            schedule = str(schedule_fingerprint or "").strip()
+            if (
+                record.plan.semantic_key() != plan.semantic_key()
+                or record.configuration_fingerprint != config
+                or record.schedule_fingerprint != schedule
+            ):
+                return LifecycleApplicationOutcome(
+                    LifecycleApplicationOutcomeKind.CONFLICT,
+                    plan.identity,
+                    reason="acknowledged lifecycle intent does not match requested immutable inputs",
+                    intent_id=intent_id,
+                )
+            return LifecycleApplicationOutcome(
+                LifecycleApplicationOutcomeKind.ALREADY_APPLIED,
+                plan.identity,
+                intent_id=intent_id,
+            )
         if not claim.ok or claim.record is None:
             kind = (
                 LifecycleApplicationOutcomeKind.RETRYABLE

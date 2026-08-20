@@ -552,6 +552,13 @@ class LifecycleOutboxRepository:
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is None:
                     return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
+                if str(row["processing_state"]) == OutboxProcessingState.ACKNOWLEDGED.value:
+                    try:
+                        record = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
+                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
                 if str(row["lease_owner"]) != owner or str(row["processing_state"]) != OutboxProcessingState.CLAIMED.value:
                     return OutboxResult(
                         OutboxResultKind.CONFLICT,

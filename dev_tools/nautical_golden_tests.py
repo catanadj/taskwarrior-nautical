@@ -2177,6 +2177,82 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     expect(len(uow.client.calls) == 7, f"unexpected Taskwarrior mutation count: {uow.client.calls}")
 
 
+def test_child_import_rejects_incomplete_existing_rows():
+    """A matching UUID is not enough to acknowledge a malformed child row."""
+    from nautical_core.integration_models import (
+        Absent, ChildImportPayload, Found, GuardTimestamp, GuardTimestampField,
+        MutationGuard, MutationOperation, MutationOutcomeKind, MutationRequest,
+    )
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+
+    parent_uuid = "00000000-0000-0000-0000-000000000926"
+    child_uuid = "00000000-0000-0000-0000-000000000927"
+    parent = {
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "chain-child-check",
+        "link": 4,
+        "modified": "20260813T110000Z",
+    }
+    payload_map = {
+        "uuid": child_uuid,
+        "chainID": "chain-child-check",
+        "link": 5,
+        "prevLink": parent_uuid[:8],
+        "status": "pending",
+        "chain": "on",
+        "cp": "1d",
+    }
+
+    class Repo:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def by_uuid(self, uuid_value, *, refresh=False):
+            del refresh
+            row = self.rows.get(str(uuid_value).lower())
+            return Found(row, f"uuid:{uuid_value}") if row is not None else Absent(f"uuid:{uuid_value}", "not present")
+
+    class Uow:
+        def __init__(self, rows):
+            self.repository = Repo(rows)
+            self.mutation_epoch = 0
+
+        def record_mutation(self, *, uncertain=False):
+            del uncertain
+            self.mutation_epoch += 1
+            return self.mutation_epoch
+
+    for label, mutate in (
+        ("missing prevLink", lambda row: row.pop("prevLink")),
+        ("wrong status", lambda row: row.update(status="completed")),
+        ("disabled chain", lambda row: row.update(chain="off")),
+        ("changed recurrence metadata", lambda row: row.update(cp="2d")),
+    ):
+        child = dict(payload_map)
+        mutate(child)
+        uow = Uow({parent_uuid: dict(parent), child_uuid: child})
+        service = TaskwarriorMutationService(uow)
+        payload = ChildImportPayload.from_mapping(payload_map, parent_uuid=parent_uuid)
+        guard = MutationGuard(
+            parent_uuid,
+            "completed",
+            "chain-child-check",
+            4,
+            recurrence_fingerprint(parent),
+            (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+            0,
+            "on",
+        )
+        outcome = service.apply(MutationRequest(MutationOperation.CHILD_IMPORT, guard, payload))
+        expect(
+            outcome.kind is MutationOutcomeKind.CONFLICT and not outcome.postconditions,
+            f"{label} was incorrectly accepted as imported: {outcome}",
+        )
+
+
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
     """Outbox work is deterministic and cannot finalize without verified mutations."""
     from nautical_core.integration_models import (
@@ -30759,6 +30835,7 @@ TESTS = [
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_mutation_requests_use_named_typed_payloads,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
+    test_child_import_rejects_incomplete_existing_rows,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,

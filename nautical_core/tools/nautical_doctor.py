@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
@@ -116,16 +116,16 @@ def _finding(
     findings.append(item)
 
 
-def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
-    proc = task_command.run_task_command(
-        task_bin,
+def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]:
+    """Read a Taskwarrior setting through the invocation's shared client."""
+    proc = unit_of_work.client.execute(
         ["_get", key],
-        env=env,
-        timeout=30.0,
-        retry_locks=True,
         purpose="doctor Taskwarrior query",
+        timeout=30.0,
+        attempts=2,
+        retry_delay=0.1,
     )
-    return proc.returncode == 0, (proc.stdout or "").strip()
+    return proc.ok, proc.stdout.strip()
 
 
 def _task_export(repository: TaskReadRepository) -> tuple[bool, list[dict[str, Any]], str]:
@@ -166,8 +166,8 @@ def _diagnostic_read_uow(
     return TaskwarriorUnitOfWork.create(context, env=env)
 
 
-def _resolve_hooks_dir(task_bin: str, taskdata: Path, env: dict[str, str]) -> Path:
-    ok, raw = _task_get(task_bin, "rc.hooks.location", env)
+def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> Path:
+    ok, raw = _task_get(unit_of_work, "rc.hooks.location")
     if ok and raw:
         return Path(raw).expanduser().resolve()
     return (taskdata / "hooks").resolve()
@@ -242,26 +242,27 @@ def _check_hook_installation(
 def _check_runtime(
     findings: list[dict[str, Any]],
     *,
-    task_bin: str,
+    unit_of_work: TaskwarriorUnitOfWork,
     taskdata: Path,
-    env: dict[str, str],
 ) -> Path:
-    proc = task_command.run_task_command(
-        task_bin,
+    proc = unit_of_work.client.execute(
         ["--version"],
-        env=env,
-        timeout=30.0,
-        retry_locks=True,
         purpose="doctor Taskwarrior query",
+        timeout=30.0,
+        attempts=2,
+        retry_delay=0.1,
     )
-    if proc.returncode != 0:
+    if not proc.ok:
         _finding(
             findings,
             "taskwarrior.unavailable",
             "error",
             "Taskwarrior could not be executed.",
             fix="Install Taskwarrior or pass --task-bin.",
-            details={"error": task_command.failure_message(proc, "Taskwarrior version lookup")},
+            details={
+                "error": str(proc.stderr or proc.stdout or "").strip()
+                or f"{proc.kind.value} (exit code {proc.returncode})"
+            },
         )
     else:
         _finding(
@@ -290,19 +291,19 @@ def _check_runtime(
             f"Taskwarrior data directory is {'accessible' if writable else 'not fully accessible'}: {taskdata}",
             fix="" if writable else "Correct ownership and directory permissions.",
         )
-    return _resolve_hooks_dir(task_bin, taskdata, env)
+    return _resolve_hooks_dir(unit_of_work, taskdata)
 
 
 def _check_hooks_and_udas(
     findings: list[dict[str, Any]],
     *,
-    task_bin: str,
+    unit_of_work: TaskwarriorUnitOfWork,
     hooks_dir: Path,
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
     validated = _check_hook_installation(findings, hooks_dir=hooks_dir, env=env)
     for name, expected in REQUIRED_UDAS.items():
-        ok, actual = _task_get(task_bin, f"rc.uda.{name}.type", env)
+        ok, actual = _task_get(unit_of_work, f"rc.uda.{name}.type")
         if not ok or not actual:
             _finding(
                 findings,
@@ -1405,13 +1406,12 @@ def main() -> int:
 
     hooks_dir = _check_runtime(
         findings,
-        task_bin=args.task_bin,
+        unit_of_work=unit_of_work,
         taskdata=taskdata,
-        env=env,
     )
     hook_runtimes = _check_hooks_and_udas(
         findings,
-        task_bin=args.task_bin,
+        unit_of_work=unit_of_work,
         hooks_dir=hooks_dir,
         env=env,
     )

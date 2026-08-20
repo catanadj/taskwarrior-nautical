@@ -6069,7 +6069,7 @@ import os
 import sys
 
 args = sys.argv[1:]
-if args == ["--version"]:
+if args and args[-1] == "--version":
     print("3.4.2")
     raise SystemExit(0)
 if len(args) >= 2 and args[-2] == "_get":

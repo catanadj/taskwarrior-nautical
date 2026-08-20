@@ -277,13 +277,15 @@ def _load_on_modify(hook_path: str | None = None):
 _DEFAULT_LOAD_ON_MODIFY = _load_on_modify
 
 
-def _load_reconcile_runtime(task_bin: str, hook_path: str | None = None):
-    """Load validated core context; an explicit hook path is read-only."""
-    if hook_path is not None or _load_on_modify is not _DEFAULT_LOAD_ON_MODIFY:
-        return _load_on_modify(hook_path), True
+def _load_reconcile_runtime(task_bin: str | None = None):
+    """Load the public core runtime; private hook loading is test-only."""
+    del task_bin
+    # Keep dependency injection for focused protocol tests without allowing a
+    # production CLI argument or environment variable to load hook internals.
+    if _load_on_modify is not _DEFAULT_LOAD_ON_MODIFY:
+        return _load_on_modify(), True
     import nautical_core as core
 
-    del task_bin
     return core, False
 
 
@@ -1675,7 +1677,6 @@ def main(
     parser = argparse.ArgumentParser(description="Repair Nautical chains after hookless completion, expiration, or deletion.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
-    parser.add_argument("--hook-path", default=None, help="Explicit on-modify hook path for non-standard installs.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")
     parser.add_argument(
@@ -1712,7 +1713,7 @@ def main(
             )
 
     try:
-        hook, legacy_hook = _load_reconcile_runtime(args.task_bin, args.hook_path)
+        hook, legacy_hook = _load_reconcile_runtime(args.task_bin)
     except Exception as exc:
         return _startup_failure(args, "hook_load", exc)
     try:

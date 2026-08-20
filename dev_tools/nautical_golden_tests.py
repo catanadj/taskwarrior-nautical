@@ -2737,6 +2737,32 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             schedule_fingerprint="sf1",
         )
         expect(new_entry.kind is OutboxResultKind.ALREADY_APPLIED, "entry timestamp caused a lifecycle conflict")
+        manual_plan = plan_for(20)
+        manual_staged = repo.enqueue(manual_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
+        expect(manual_staged.ok and manual_staged.record is not None, "manual intent enqueue failed")
+        manual_claim = repo.claim_intent(
+            owner="manual-owner", lease_seconds=5, intent_id=manual_staged.record.intent_id
+        )
+        expect(manual_claim.ok and manual_claim.record is not None, "manual intent claim failed")
+        expect(
+            repo.manual_review(
+                intent_id=manual_staged.record.intent_id,
+                owner="manual-owner",
+                failure=OutboxFailure("mutation_conflict", "postcondition does not match"),
+            ).ok,
+            "manual intent setup failed",
+        )
+        reopened = repo.enqueue(manual_plan, configuration_fingerprint="new-config", schedule_fingerprint="new-schedule")
+        expect(reopened.kind is OutboxResultKind.APPLIED, "known stale postcondition review was not reopened")
+        expect(reopened.record is not None and reopened.record.state is OutboxProcessingState.RETRY, "reopened intent was not retryable")
+        cleanup_claim = repo.claim_intent(owner="cleanup-owner", lease_seconds=5, intent_id=manual_staged.record.intent_id)
+        expect(cleanup_claim.ok, "reopened intent cleanup claim failed")
+        for stage in ("child_present", "parent_linked", "verified"):
+            expect(
+                repo.advance_stage(intent_id=manual_staged.record.intent_id, owner="cleanup-owner", stage=stage).ok,
+                f"reopened intent cleanup could not reach {stage}",
+            )
+        expect(repo.acknowledge(intent_id=manual_staged.record.intent_id, owner="cleanup-owner").ok, "reopened intent cleanup failed")
 
         stage_sequences = (
             (),

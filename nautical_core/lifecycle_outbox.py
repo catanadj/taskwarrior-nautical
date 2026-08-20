@@ -491,6 +491,31 @@ class LifecycleOutboxRepository:
                     same_plan = current.plan.compatibility_key() == plan.compatibility_key()
                     if current.state is OutboxProcessingState.ACKNOWLEDGED and same_plan:
                         return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
+                    if (
+                        current.state is OutboxProcessingState.MANUAL_REVIEW
+                        and same_plan
+                        and current.failure is not None
+                        and current.failure.code == "mutation_conflict"
+                        and current.failure.message == "postcondition does not match"
+                    ):
+                        conn.execute(
+                            "UPDATE lifecycle_outbox SET configuration_fingerprint=?, schedule_fingerprint=?, "
+                            "lifecycle_stage=?, processing_state=?, failure_json='', updated_at=? WHERE intent_id=?",
+                            (
+                                config,
+                                schedule,
+                                ExecutionStage.PLANNED.value,
+                                OutboxProcessingState.RETRY.value,
+                                now,
+                                intent_id,
+                            ),
+                        )
+                        refreshed = conn.execute(
+                            "SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)
+                        ).fetchone()
+                        if refreshed is None:
+                            return OutboxResult(OutboxResultKind.RETRYABLE, reason="reopened lifecycle intent disappeared")
+                        return OutboxResult(OutboxResultKind.APPLIED, record=self._from_row(refreshed))
                     compatible = (
                         same_plan
                         and current.configuration_fingerprint == config

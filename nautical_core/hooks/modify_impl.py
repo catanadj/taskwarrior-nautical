@@ -2776,123 +2776,31 @@ def _timeline_lines(
         modify_timeline = _module("modify_timeline")
         _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
         anchor_omit = _module("anchor_omit") if omit_dnf else None
-        child_local = _to_local_cached(child_due_utc)
-        fallback_hhmm = _anchor_file_fallback_hhmm(task, child_local)
-        default_seed = child_local.date()
         evaluator = _recurrence_evaluator_for_task(task)
-        projection_warning = None
-        try:
-            from nautical_core.scheduler_cursor import OccurrenceCursor
-
-            result = _scheduler_service_for_task(task).collect(
-                OccurrenceCursor(
-                    child_local,
-                    inclusive=True,
-                    timezone=evaluator.context.timezone,
-                ),
-                limit=max(8, next_count + 6),
-                count_omitted=False,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed,
-                max_iterations=_MAX_ITERATIONS,
-                max_file_skips=_MAX_ITERATIONS,
-            )
-            events = [occurrence for occurrence in result.occurrences if occurrence.local_datetime is not None]
-        except Exception as exc:
-            events = []
-            projection_warning = modify_timeline._timeline_warning(
-                f"Projection unavailable: {type(exc).__name__}: {exc}"
-            )
-        cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
-        nxt_no = cur_no + 1
-        allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
-        prev_style, cur_style, next_style, future_style = modify_timeline._timeline_styles(
+        return modify_timeline.anchor_file_timeline_lines(
             task,
-            "anchor",
-            future_style_for_chain=_future_style_for_chain,
-        )
-        items = modify_timeline._timeline_initial_items(
-            task,
-            cur_no,
-            nxt_no,
             child_due_utc,
             child_short,
+            next_count=next_count,
+            cap_no=cap_no,
+            cur_no=cur_no,
+            show_gaps=show_gaps,
+            round_anchor_gaps=round_anchor_gaps,
             core=core,
+            max_iterations=_MAX_ITERATIONS,
+            future_style_for_chain=_future_style_for_chain,
             collect_prev_two=_collect_prev_two,
             dtparse=_dtparse,
+            fmt_on_time_delta=_fmt_on_time_delta,
+            fmtlocal=_fmtlocal,
+            short=_short,
+            to_local_cached=_to_local_cached,
+            safe_parse_datetime=_safe_parse_datetime,
+            scheduler_service=_scheduler_service_for_task(task),
+            evaluator=evaluator,
+            omit_dnf=omit_dnf,
+            anchor_omit=anchor_omit,
         )
-        if projection_warning is not None:
-            items.append(projection_warning)
-        fut_no = nxt_no
-        actual_future = 0
-        for occurrence in events:
-            item_local = occurrence.local_datetime
-            is_omitted = occurrence.omitted
-            if item_local is None:
-                continue
-            item_utc = item_local.astimezone(timezone.utc)
-            if _compare_datetimes(item_utc, child_due_utc) <= 0:
-                continue
-            if is_omitted:
-                items.append(
-                    (
-                        "··",
-                        item_utc,
-                        {
-                            "is_omit": True,
-                            "omit_label": (
-                                modify_timeline._timeline_omit_label(
-                                    omit_dnf,
-                                    item_local.date(),
-                                    omit_description_for_date=(
-                                        anchor_omit.omit_description_for_date if anchor_omit is not None else None
-                                    ),
-                                )
-                                if omit_dnf else None
-                            ),
-                        },
-                        "omitted",
-                    )
-                )
-                continue
-            fut_no += 1
-            if cap_no is not None and fut_no > cap_no:
-                break
-            items.append((fut_no, item_utc, {"is_future": True}, "future"))
-            actual_future += 1
-            if actual_future >= allowed_future:
-                break
-        lines: list[str] = []
-        for i, (no, dt, obj, item_type) in enumerate(items):
-            base_line = modify_timeline._timeline_base_line(
-                no,
-                dt,
-                obj,
-                item_type,
-                task=task,
-                cap_no=cap_no,
-                prev_style=prev_style,
-                cur_style=cur_style,
-                next_style=next_style,
-                future_style=future_style,
-                core=core,
-                dtparse=_dtparse,
-                fmt_on_time_delta=_fmt_on_time_delta,
-                fmtlocal=_fmtlocal,
-                short=_short,
-            )
-            lines.append(
-                modify_timeline._timeline_with_gap(
-                    base_line,
-                    idx=i,
-                    items=items,
-                    show_gaps=show_gaps,
-                    kind="anchor",
-                    round_anchor_gaps=round_anchor_gaps,
-                    format_gap=_module("modify_timeline").format_gap,
-                )
-            )
-        return lines
     modify_timeline = _module("modify_timeline")
     _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
     anchor_omit = _module("anchor_omit") if kind == "anchor" else None

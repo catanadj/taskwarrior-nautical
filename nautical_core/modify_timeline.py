@@ -550,6 +550,154 @@ def _timeline_with_gap(
     return f"{base_line}{gap_text}"
 
 
+def anchor_file_timeline_lines(
+    task: dict[str, Any],
+    child_due_utc: datetime,
+    child_short: str,
+    *,
+    next_count: int,
+    cap_no: int | None,
+    cur_no: int | None,
+    show_gaps: bool,
+    round_anchor_gaps: bool,
+    core: Any,
+    max_iterations: int,
+    future_style_for_chain: Callable[[dict[str, Any], str], str],
+    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    dtparse: Callable[[Any], Any],
+    fmt_on_time_delta: Callable[[Any, Any], str],
+    fmtlocal: Callable[[Any], str],
+    short: Callable[[Any], str],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
+    scheduler_service: Any,
+    evaluator: Any,
+    omit_dnf: Any,
+    anchor_omit: Any | None,
+) -> list[str]:
+    """Project anchor-file events and render their timeline rows."""
+    child_local = to_local_cached(child_due_utc)
+    fallback_hhmm = (child_local.hour, child_local.minute)
+    default_seed = child_local.date()
+    projection_warning = None
+    try:
+        from nautical_core.scheduler_cursor import OccurrenceCursor
+
+        result = scheduler_service.collect(
+            OccurrenceCursor(
+                child_local,
+                inclusive=True,
+                timezone=evaluator.context.timezone,
+            ),
+            limit=max(8, next_count + 6),
+            count_omitted=False,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed,
+            max_iterations=max_iterations,
+            max_file_skips=max_iterations,
+        )
+        events = [occurrence for occurrence in result.occurrences if occurrence.local_datetime is not None]
+    except Exception as exc:
+        events = []
+        projection_warning = _timeline_warning(
+            f"Projection unavailable: {type(exc).__name__}: {exc}"
+        )
+
+    cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
+    nxt_no = cur_no + 1
+    allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
+    prev_style, cur_style, next_style, future_style = _timeline_styles(
+        task,
+        "anchor",
+        future_style_for_chain=future_style_for_chain,
+    )
+    items = _timeline_initial_items(
+        task,
+        cur_no,
+        nxt_no,
+        child_due_utc,
+        child_short,
+        core=core,
+        collect_prev_two=collect_prev_two,
+        dtparse=dtparse,
+    )
+    if projection_warning is not None:
+        items.append(projection_warning)
+    fut_no = nxt_no
+    actual_future = 0
+    for occurrence in events:
+        item_local = occurrence.local_datetime
+        if item_local is None:
+            continue
+        item_utc = item_local.astimezone(timezone.utc)
+        if compare_datetimes(item_utc, child_due_utc) <= 0:
+            continue
+        if occurrence.omitted:
+            items.append(
+                (
+                    "··",
+                    item_utc,
+                    {
+                        "is_omit": True,
+                        "omit_label": (
+                            _timeline_omit_label(
+                                omit_dnf,
+                                item_local.date(),
+                                omit_description_for_date=(
+                                    anchor_omit.omit_description_for_date
+                                    if anchor_omit is not None
+                                    else None
+                                ),
+                            )
+                            if omit_dnf
+                            else None
+                        ),
+                    },
+                    "omitted",
+                )
+            )
+            continue
+        fut_no += 1
+        if cap_no is not None and fut_no > cap_no:
+            break
+        items.append((fut_no, item_utc, {"is_future": True}, "future"))
+        actual_future += 1
+        if actual_future >= allowed_future:
+            break
+
+    lines: list[str] = []
+    for index, (number, dt, obj, item_type) in enumerate(items):
+        base_line = _timeline_base_line(
+            number,
+            dt,
+            obj,
+            item_type,
+            task=task,
+            cap_no=cap_no,
+            prev_style=prev_style,
+            cur_style=cur_style,
+            next_style=next_style,
+            future_style=future_style,
+            core=core,
+            dtparse=dtparse,
+            fmt_on_time_delta=fmt_on_time_delta,
+            fmtlocal=fmtlocal,
+            short=short,
+        )
+        lines.append(
+            _timeline_with_gap(
+                base_line,
+                idx=index,
+                items=items,
+                show_gaps=show_gaps,
+                kind="anchor",
+                round_anchor_gaps=round_anchor_gaps,
+                format_gap=format_gap,
+            )
+        )
+    return lines
+
+
 def timeline_lines(
     kind: str,
     task: dict[str, Any],

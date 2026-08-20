@@ -57,7 +57,7 @@ def _load_runtime_manifest(root: Path):
         if spec is None or spec.loader is None:
             raise RuntimeError("spec_from_file_location failed")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        spec.loader.exec_module(module)
         return module, ""
     except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -419,7 +419,7 @@ def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
                 os.environ.clear()
                 os.environ.update(env)
                 mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)  # type: ignore[union-attr]
+                spec.loader.exec_module(mod)
             finally:
                 os.environ.clear()
                 os.environ.update(old_env)

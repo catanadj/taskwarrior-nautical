@@ -111,6 +111,9 @@ def _check_required_files(root: Path, require_exec: bool) -> list[dict]:
                         str(Path("nautical_core") / str(path))
                         for path in files
                     )
+        operator_files = getattr(manifest, "OPERATOR_RUNTIME_FILES", ())
+        if isinstance(operator_files, (tuple, list)):
+            required_files.extend(str(path) for path in operator_files)
     else:
         out.append({
             "kind": "manifest",

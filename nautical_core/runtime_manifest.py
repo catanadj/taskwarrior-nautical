@@ -100,10 +100,23 @@ HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     for impl in (_HOOK_IMPL[event],)
 }
 
+# Commands dispatched by the installed ``nautical`` launcher.  Hook smoke
+# tests alone cannot prove these operator surfaces survived staging.
+OPERATOR_RUNTIME_FILES = (
+    "nautical",
+    "nautical_navigator.py",
+    "nautical_core/tools/nautical_install.py",
+    "nautical_core/tools/nautical_runtime_cleanup.py",
+    "nautical_core/tools/nautical_doctor.py",
+    "nautical_core/tools/nautical_queue_status.py",
+    "nautical_core/tools/nautical_chain_repair.py",
+    "nautical_core/tools/nautical_reconcile.py",
+)
+
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
 for _event in HOOK_RUNTIME_FILES:
     HOOK_RUNTIME_FILES[_event] += ("panel_colours.py",)
 
 
-__all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES")
+__all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES", "OPERATOR_RUNTIME_FILES")

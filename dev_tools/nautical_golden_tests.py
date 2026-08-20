@@ -7869,6 +7869,37 @@ def test_deploy_sanity_rejects_missing_lazy_lifecycle_module():
         )
 
 
+def test_deploy_sanity_rejects_missing_operator_runtime_tool():
+    """Deployment sanity must cover every command dispatched by nautical."""
+    path = os.path.join(DEV_TOOLS, "nautical_deploy_sanity.py")
+    with tempfile.TemporaryDirectory() as td:
+        candidate = Path(td) / "candidate"
+        shutil.copytree(
+            ROOT,
+            candidate,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", ".nautical-cache", ".nautical_cache"),
+        )
+        missing = candidate / "nautical_core" / "tools" / "nautical_doctor.py"
+        missing.unlink()
+        proc = subprocess.run(
+            [sys.executable, path, "--root", str(candidate), "--no-require-exec", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=20.0,
+        )
+        expect(proc.returncode != 0, "deploy sanity accepted a release missing an operator tool")
+        payload = json.loads((proc.stdout or "{}").strip() or "{}")
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        expect(
+            any(
+                item.get("path") == "nautical_core/tools/nautical_doctor.py" and not item.get("ok")
+                for item in results
+                if isinstance(item, dict)
+            ),
+            f"missing operator tool was not reported: {results}",
+        )
+
+
 def test_deploy_sanity_rejects_unowned_taskwarrior_subprocess():
     """Deployment checks keep Taskwarrior process ownership in one client."""
     module = _load_hook_module(
@@ -30606,6 +30637,7 @@ TESTS = [
     test_hook_runtime_retains_module_import_failure_details,
     test_deploy_sanity_script_reports_ok,
     test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
+    test_deploy_sanity_rejects_missing_operator_runtime_tool,
     test_deploy_sanity_rejects_unowned_taskwarrior_subprocess,
     test_hook_replay_harness_reports_ok,
     test_mixed_recurrence_loop_harness_reports_ok,

@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import os
-from typing import Any, Protocol, cast
+from typing import Any, Mapping, Protocol, cast
 
 from .integration_models import (
     ChainDisablePayload,
@@ -245,10 +245,60 @@ def _validate_spawn_plan(plan: LifecyclePlan) -> str:
     return ""
 
 
-def _from_outbox_result(result: OutboxResult, identity: LifecycleIdentity) -> LifecycleApplicationOutcome:
+def _plan_difference_summary(
+    existing: LifecyclePlan,
+    requested: LifecyclePlan,
+    *,
+    existing_config: str = "",
+    requested_config: str = "",
+    existing_schedule: str = "",
+    requested_schedule: str = "",
+) -> str:
+    """Describe immutable intent differences without dumping full task JSON."""
+    differences: list[str] = []
+    sections = (
+        ("child", existing.child_dict(), requested.child_dict()),
+        ("parent", existing.parent_patch_dict(), requested.parent_patch_dict()),
+        ("guard", existing.parent_guard.to_dict(), requested.parent_guard.to_dict()),
+    )
+    for section, old_values, new_values in sections:
+        keys = sorted(set(old_values) | set(new_values))
+        for key in keys:
+            if key == "entry":
+                continue
+            old = old_values.get(key, "<absent>")
+            new = new_values.get(key, "<absent>")
+            if old != new:
+                differences.append(f"{section}.{key}={old!r} -> {new!r}")
+    if existing_config != requested_config:
+        differences.append(f"configuration_fingerprint={existing_config!r} -> {requested_config!r}")
+    if existing_schedule != requested_schedule:
+        differences.append(f"schedule_fingerprint={existing_schedule!r} -> {requested_schedule!r}")
+    return "; ".join(differences) or "no immutable field difference was found"
+
+
+def _from_outbox_result(
+    result: OutboxResult,
+    identity: LifecycleIdentity,
+    *,
+    requested: LifecyclePlan | None = None,
+    requested_config: str = "",
+    requested_schedule: str = "",
+) -> LifecycleApplicationOutcome:
     kind = _OUTBOX_TO_APPLICATION.get(result.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
     intent_id = result.record.intent_id if result.record is not None else ""
-    return LifecycleApplicationOutcome(kind, identity, reason=result.reason, intent_id=intent_id)
+    reason = result.reason
+    if result.record is not None and requested is not None and not result.ok:
+        changed = _plan_difference_summary(
+            result.record.plan,
+            requested,
+            existing_config=result.record.configuration_fingerprint,
+            requested_config=requested_config,
+            existing_schedule=result.record.schedule_fingerprint,
+            requested_schedule=requested_schedule,
+        )
+        reason = f"{reason}; changed fields: {changed}"
+    return LifecycleApplicationOutcome(kind, identity, reason=reason, intent_id=intent_id)
 
 
 class LifecycleApplicationService:
@@ -322,7 +372,13 @@ class LifecycleApplicationService:
             configuration_fingerprint=str(configuration_fingerprint or "").strip(),
             schedule_fingerprint=str(schedule_fingerprint or "").strip(),
         )
-        return _from_outbox_result(result, plan.identity)
+        return _from_outbox_result(
+            result,
+            plan.identity,
+            requested=plan,
+            requested_config=str(configuration_fingerprint or "").strip(),
+            requested_schedule=str(schedule_fingerprint or "").strip(),
+        )
 
     # -- execution: claimed SPAWN_CHILD intents ------------------------
 
@@ -613,10 +669,25 @@ class LifecycleApplicationService:
                 if claim.kind is OutboxResultKind.RETRYABLE
                 else LifecycleApplicationOutcomeKind.MANUAL_REVIEW
             )
+            reason = claim.reason or "could not claim the staged lifecycle intent"
+            if claim.record is not None:
+                changed = _plan_difference_summary(
+                    claim.record.plan,
+                    plan,
+                    existing_config=claim.record.configuration_fingerprint,
+                    requested_config=str(configuration_fingerprint or "").strip(),
+                    existing_schedule=claim.record.schedule_fingerprint,
+                    requested_schedule=str(schedule_fingerprint or "").strip(),
+                )
+                reason = (
+                    f"{reason}; changed fields: {changed}"
+                )
+                if claim.record.failure is not None:
+                    reason += f"; previous failure: {claim.record.failure.code}: {claim.record.failure.message}"
             return LifecycleApplicationOutcome(
                 kind,
                 plan.identity,
-                reason=claim.reason or "could not claim the staged lifecycle intent",
+                reason=reason,
                 intent_id=intent_id,
             )
         config = str(configuration_fingerprint or "").strip()

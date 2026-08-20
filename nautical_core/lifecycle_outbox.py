@@ -665,8 +665,14 @@ class LifecycleOutboxRepository:
                         return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
                     return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
                 if current_state not in _ACTIVE_STATES:
+                    try:
+                        record = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
                     return OutboxResult(
                         OutboxResultKind.CONFLICT,
+                        record=record,
                         reason=f"lifecycle intent is not claimable (state={current_state!r})",
                     )
                 try:

@@ -746,6 +746,12 @@ _MODULE_SPECS = {
         "modify_validation.py",
         "nautical_core.modify_validation",
     ),
+    "modify_carry": (
+        "_MODIFY_CARRY",
+        "_MODIFY_CARRY_LOAD_FAILED",
+        "modify_carry.py",
+        "nautical_core.modify_carry",
+    ),
 }
 core = None
 _CORE_IMPORT_TARGET = None
@@ -2991,40 +2997,17 @@ def _preserve_cp_relative_offsets_on_due_change(
     datetime,
     list[tuple[str, datetime, datetime, timedelta]],
 ] | None:
-    """Keep scheduled and wait relative to due when an existing cp task's due moves."""
-    if not new_cp or not str(old.get("cp") or "").strip():
-        return None
-    if not _field_changed(old, new, "due"):
-        return None
-    if not (old.get("due") and new.get("due")):
-        return None
-
-    try:
-        old_due = core.parse_dt_any(old.get("due"))
-        new_due = core.parse_dt_any(new.get("due"))
-        if not (old_due and new_due):
-            raise ValueError("due timestamp is missing or invalid")
-    except Exception as exc:
-        carry_error = _module("chain_generation").CarryFieldError
-        raise carry_error("due", str(exc) or "timestamp conversion failed") from exc
-
-    adjustments: list[tuple[str, datetime, datetime, timedelta]] = []
-    for field in ("scheduled", "wait"):
-        if _field_changed(old, new, field) or not old.get(field):
-            continue
-        try:
-            old_value = core.parse_dt_any(old.get(field))
-            if not old_value:
-                raise ValueError("timestamp is missing or invalid")
-            local_offset = _utc_to_local_naive(old_value) - _utc_to_local_naive(old_due)
-            new_value_local = _utc_to_local_naive(new_due) + local_offset
-            new_value = _local_naive_to_utc(new_value_local)
-            new[field] = core.fmt_isoz(new_value)
-            adjustments.append((field, old_value, new_value, local_offset))
-        except Exception as exc:
-            carry_error = _module("chain_generation").CarryFieldError
-            raise carry_error(field, str(exc) or "timezone conversion failed") from exc
-    return (old_due, new_due, adjustments) if adjustments else None
+    return _module("modify_carry").preserve_cp_relative_offsets_on_due_change(
+        old,
+        new,
+        new_cp,
+        field_changed=_field_changed,
+        parse_datetime=core.parse_dt_any,
+        utc_to_local_naive=_utc_to_local_naive,
+        local_naive_to_utc=_local_naive_to_utc,
+        format_datetime=core.fmt_isoz,
+        carry_error=_module("chain_generation").CarryFieldError,
+    )
 
 
 def _reject_native_until_carry(

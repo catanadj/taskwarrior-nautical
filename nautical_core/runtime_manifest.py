@@ -61,6 +61,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_protocol",
         "modify_chain_summary",
         "modify_validation",
+        "modify_carry",
         # These are imported directly in the completion path rather than via
         # HookModuleAccess, so keep them in the same deployment contract.
         "calendar_feedback",

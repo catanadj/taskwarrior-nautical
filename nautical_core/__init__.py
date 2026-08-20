@@ -254,7 +254,12 @@ _warn_once_per_day_any = _core_config.warn_once_per_day_any
 _warn_rate_limited_any = _core_config.warn_rate_limited_any
 _warn_toml_parse_error = _core_config._warn_toml_parse_error
 _get_config = _core_config._get_config
-effective_config_snapshot = _core_config.effective_config_snapshot
+def effective_config_snapshot() -> dict:
+    """Return the effective config after synchronizing facade exports."""
+    refresh = globals().get("_refresh_facade_config_exports")
+    if callable(refresh):
+        refresh()
+    return _core_config.effective_config_snapshot()
 effective_config_fingerprint = _core_config.effective_config_fingerprint
 scheduler_config_fingerprint = _core_config.scheduler_config_fingerprint
 configuration_drift = _core_config.configuration_drift
@@ -636,8 +641,7 @@ def _refresh_facade_config_exports() -> None:
     for name in names:
         config_name = name if not name.startswith("_") else name[1:]
         configured_value = getattr(_core_config, config_name)
-        if globals().get(name) == configured_value:
-            globals()[name] = configured_value
+        globals()[name] = configured_value
     _CONF = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     if globals().get("MAX_ANCHOR_DNF_TERMS") == globals().get("_CONFIG_DEFAULT_MAX_ANCHOR_DNF_TERMS", 10_000):

@@ -1620,12 +1620,14 @@ def _validate_native_until_after_target_or_fail(task: dict) -> None:
 def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
     add_validation = core._import_sibling("add_validation")
     astronomy = core._import_sibling("astronomy")
+    native_until = core._import_sibling("native_until")
     recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext
     _module("modify_validation").validate_native_until_anchor_slots_or_fail(
         task,
         safe_parse_datetime=_safe_parse_datetime,
         validate_anchor=_validate_anchor_expr_cached,
         collect_time_slots=add_validation.collect_anchor_time_slots,
+        validate_time_slots=native_until.validate_calendar_slots,
         normalize_time_slots=_norm_hhmm_list,
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         recurrence_context=recurrence_context.from_task,

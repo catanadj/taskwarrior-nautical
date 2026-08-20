@@ -233,6 +233,7 @@ def validate_native_until_anchor_slots_or_fail(
     safe_parse_datetime: Any,
     validate_anchor: Any,
     collect_time_slots: Any,
+    validate_time_slots: Any,
     normalize_time_slots: Any,
     anchor_file_dir: str,
     recurrence_context: Any,

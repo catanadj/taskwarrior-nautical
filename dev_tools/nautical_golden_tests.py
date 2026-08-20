@@ -20799,6 +20799,9 @@ def test_navigator_uses_nautical_configured_timezone():
 
 def test_navigator_fallback_export_uses_empty_filter():
     """Navigator's broad fallback must use Taskwarrior's valid empty filter."""
+    from dataclasses import replace
+    from nautical_core.integration_context import IntegrationAccess
+
     module_name = "_nautical_navigator_export_fallback_test"
     loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
     spec = importlib.util.spec_from_loader(module_name, loader)
@@ -20808,6 +20811,7 @@ def test_navigator_fallback_export_uses_empty_filter():
     try:
         loader.exec_module(navigator)
         uow = _test_operator_uow()
+        uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
 
         class Client:
             def execute(self, args, *, purpose, timeout, **_kwargs):
@@ -22899,6 +22903,9 @@ def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
 
 def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
     """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
+    from dataclasses import replace
+    from nautical_core.integration_context import IntegrationAccess
+
     module_name = "_nautical_navigator_direct_chain_test"
     loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
     spec = importlib.util.spec_from_loader(module_name, loader)
@@ -22907,6 +22914,46 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
     try:
         loader.exec_module(navigator)
     finally:
+        sys.modules.pop(module_name, None)
+
+
+def test_navigator_reads_through_read_only_invocation_repository():
+    """Navigator must use the typed read snapshot and reject mutation-capable UOWs."""
+    from dataclasses import replace
+    from nautical_core.integration_context import IntegrationAccess
+
+    module_name = "_nautical_navigator_read_boundary_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        uow = _test_operator_uow()
+        uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
+
+        class Client:
+            def execute(self, args, *, purpose, timeout, **kwargs):
+                del purpose, timeout, kwargs
+                rows = [{"uuid": "navigator-read", "chainID": "chain-read", "link": 1, "status": "pending"}]
+                return _typed_command_result(("task", *args), True, json.dumps(rows))
+
+        uow.client = Client()
+        navigator._UNIT_OF_WORK = uow
+        rows = navigator._run_task_export(("chainID:chain-read",))
+        expect(rows and rows[0]["uuid"] == "navigator-read", f"Navigator read failed: {rows!r}")
+        expect(uow.reads.size == 1, "Navigator did not retain the invocation read snapshot")
+        expect(uow.repository.metrics()["calls"] == 1, "Navigator did not use the shared read metrics")
+
+        uow.context = replace(uow.context, access=IntegrationAccess.MUTATION)
+        try:
+            navigator._run_task_export(("chainID:chain-read",))
+        except RuntimeError as exc:
+            expect("read-only" in str(exc), f"mutation boundary error was unclear: {exc}")
+        else:
+            raise AssertionError("Navigator accepted a mutation-capable integration context")
+    finally:
+        navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
 
     navigator._UNIT_OF_WORK = SimpleNamespace(context=SimpleNamespace(command_prefix=("task",)))
@@ -22944,6 +22991,7 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
 
     calls = []
     uow = _test_operator_uow()
+    uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
 
     class Client:
         def execute(self, args, *, purpose, timeout, **_kwargs):
@@ -22973,6 +23021,9 @@ def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_cha
 
 def test_navigator_empty_task_export_treats_no_matches_as_empty():
     """Taskwarrior's empty-filter exit must not abort Navigator startup."""
+    from dataclasses import replace
+    from nautical_core.integration_context import IntegrationAccess
+
     module_name = "_nautical_navigator_empty_export_test"
     loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
     spec = importlib.util.spec_from_loader(module_name, loader)
@@ -22981,6 +23032,7 @@ def test_navigator_empty_task_export_treats_no_matches_as_empty():
     try:
         loader.exec_module(navigator)
         uow = _test_operator_uow()
+        uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
 
         class Client:
             result = _typed_command_result(("task", "export"), True, "")
@@ -31025,6 +31077,7 @@ TESTS.extend([
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
+    test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_empty_task_export_treats_no_matches_as_empty,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,

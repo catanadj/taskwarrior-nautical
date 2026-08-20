@@ -169,7 +169,13 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
     """Run a read-only Taskwarrior export through Nautical's command boundary."""
     if _UNIT_OF_WORK is None:
         raise RuntimeError("Navigator integration context is unavailable")
-    repository = _UNIT_OF_WORK.repository
+    context = getattr(_UNIT_OF_WORK, "context", None)
+    access = getattr(context, "access", None)
+    if IntegrationAccess is not None and access is not None and access is not IntegrationAccess.READ_ONLY:
+        raise RuntimeError("Navigator requires a read-only integration context")
+    repository = getattr(_UNIT_OF_WORK, "repository", None)
+    if repository is None or not callable(getattr(repository, "broad_snapshot", None)):
+        raise RuntimeError("Navigator typed task-read repository is unavailable")
     repository.configure_commands(timeout=30.0, attempts=2, retry_delay=0.05)
     identity = "navigator:" + (" ".join(filters) if filters else "all")
     read = repository.broad_snapshot(

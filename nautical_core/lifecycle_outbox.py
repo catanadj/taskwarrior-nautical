@@ -515,6 +515,32 @@ class LifecycleOutboxRepository:
                         if refreshed is None:
                             return OutboxResult(OutboxResultKind.RETRYABLE, reason="refreshed lifecycle intent disappeared")
                         return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed))
+                    if (
+                        same_plan
+                        and current.state is OutboxProcessingState.CLAIMED
+                        and current.lease_expires_at <= now
+                    ):
+                        conn.execute(
+                            "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
+                            "configuration_fingerprint=?, schedule_fingerprint=?, processing_state=?, lease_owner='', "
+                            "lease_expires_at=0, failure_json='', updated_at=? WHERE intent_id=?",
+                            (
+                                encoded_plan,
+                                plan_fingerprint,
+                                guard_json,
+                                config,
+                                schedule,
+                                OutboxProcessingState.RETRY.value,
+                                now,
+                                intent_id,
+                            ),
+                        )
+                        refreshed = conn.execute(
+                            "SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)
+                        ).fetchone()
+                        if refreshed is None:
+                            return OutboxResult(OutboxResultKind.RETRYABLE, reason="expired lifecycle intent disappeared")
+                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed))
                     if same_plan and current.state is OutboxProcessingState.MANUAL_REVIEW and current.failure is not None and current.failure.code == "mutation_conflict":
                         conn.execute(
                             "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
@@ -550,7 +576,10 @@ class LifecycleOutboxRepository:
                             reason=(
                                 "deterministic lifecycle intent conflicts with an existing queued transition; "
                                 "run `nautical reconcile --apply` to drain it, then inspect the chain's "
-                                "nextLink and child before retrying"
+                                "nextLink and child before retrying; "
+                                f"state={current.state.value}, plan_equal={same_plan}, "
+                                f"configuration={current.configuration_fingerprint!r}->{config!r}, "
+                                f"schedule={current.schedule_fingerprint!r}->{schedule!r}"
                             ),
                         )
                     return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)

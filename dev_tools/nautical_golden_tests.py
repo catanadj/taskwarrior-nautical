@@ -31108,7 +31108,7 @@ TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result
 # Section 12: Failure, Concurrency, and Recovery Verification
 # Tests for lifecycle_application.LifecycleApplicationService
 # Written against the new architecture. Replaces white-box tests that targeted
-# deleted legacy internals (lifecycle_executor, exit_models, etc.).
+# deleted legacy lifecycle internals.
 # =============================================================================
 
 def test_lifecycle_application_happy_path_real_stack():

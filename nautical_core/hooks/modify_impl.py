@@ -4206,82 +4206,31 @@ def _completion_compute_next_and_limits(
     if not str(new.get("uuid") or "").strip() or not str(new.get("chainID") or "").strip():
         return computed
 
-    # The existing preflight still owns user-facing validation and terminal
-    # panels.  The planner now owns the pure successor payload so the spawn
-    # executor does not rebuild it through a second lifecycle path.
-    try:
-        lifecycle_planner = _module("lifecycle_planner")
-        lifecycle_models = _module("lifecycle_models")
-        generation = _chain_generation_service()
-        candidate = lifecycle_planner.RecurrenceCandidate(
-            child_due=computed.child_due,
-            metadata=tuple(sorted(dict(computed.meta or {}).items())),
-            dnf=computed.dnf,
-            until=computed.until_dt,
-        )
-        fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
-        fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
-        plan = lifecycle_planner.plan_candidate_successor(
-            lifecycle_models.TaskSnapshot.from_mapping(new),
-            lifecycle_models.LifecycleEvent.COMPLETE,
-            candidate,
-            generation=generation,
-            validated_configuration={"scheduler_fingerprint": fingerprint},
-            compare_datetimes=_compare_datetimes,
-            preflight=(
-                lifecycle_planner.LifecyclePreflight.from_context(
-                    base_link=preflight.base_no,
-                    next_link=preflight.next_no,
-                    kind=preflight.kind,
-                    chain_id=preflight.chain_id,
-                )
-                if preflight is not None
-                else None
-            ),
-            carry_validator=lambda snapshot, candidate_child, _candidate: _module("reconcile").invalid_relative_carry_reason(
-                snapshot.to_dict(),
-                dict(candidate_child),
-                child_field=str(computed.meta.get("target_field") or "due"),
-                generation=generation,
-            ),
-        )
-        if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
-            _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
-            _ensure_terminal_chain_off(new, "complete")
-            _print_task(new)
-            models = _module("modify_models")
-            return models.CompletionLifecycleResult(
-                state="terminal",
-                reason="successor limit reached",
-                diagnostic=models.CompletionLifecycleDiagnostic(
-                    transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
-                    chain_id=str(new.get("chainID") or "").strip(),
-                    parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
-                    child_link=next_no,
-                    stage="plan",
-                    failure_kind="successor_limit",
-                ),
-            )
-        computed.lifecycle_plan = plan
-        computed.planned_child = plan.child_dict()
-    except Exception as exc:
-        _diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
-        _panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
-        _print_task(new)
-        models = _module("modify_models")
-        return models.CompletionLifecycleResult(
-            state="retryable",
-            reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
-            diagnostic=models.CompletionLifecycleDiagnostic(
-                transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
-                chain_id=str(new.get("chainID") or "").strip(),
-                parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
-                child_link=next_no,
-                stage="plan",
-                failure_kind="planner_error",
-            ),
-        )
-    return computed
+    modify_completion_compute = _module("modify_completion_compute")
+    lifecycle_planner = _module("lifecycle_planner")
+    lifecycle_models = _module("lifecycle_models")
+    models = _module("modify_models")
+    fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
+    fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
+    return modify_completion_compute.attach_lifecycle_plan(
+        new,
+        computed,
+        next_no,
+        now_utc,
+        preflight=preflight,
+        generation=_chain_generation_service(),
+        scheduler_fingerprint=fingerprint,
+        compare_datetimes=_compare_datetimes,
+        invalid_relative_carry_reason=_module("reconcile").invalid_relative_carry_reason,
+        lifecycle_planner=lifecycle_planner,
+        lifecycle_models=lifecycle_models,
+        modify_models=models,
+        end_chain_summary=_end_chain_summary,
+        ensure_terminal_chain_off=_ensure_terminal_chain_off,
+        panel=_panel,
+        print_task=_print_task,
+        diag=_diag,
+    )
 
 
 def _completion_build_and_spawn_child(

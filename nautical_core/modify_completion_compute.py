@@ -244,6 +244,95 @@ def completion_cap_guard_or_stop(
     return True
 
 
+def attach_lifecycle_plan(
+    new: dict[str, Any],
+    computed: CompletionComputeResult,
+    next_no: int,
+    now_utc: Any,
+    *,
+    preflight: Any | None,
+    generation: Any,
+    scheduler_fingerprint: str,
+    compare_datetimes: Any,
+    invalid_relative_carry_reason: Any,
+    lifecycle_planner: Any,
+    lifecycle_models: Any,
+    modify_models: Any,
+    end_chain_summary: EndChainSummaryCallback,
+    ensure_terminal_chain_off: Any,
+    panel: PanelCallback,
+    print_task: PrintTaskCallback,
+    diag: DiagnosticCallback,
+) -> CompletionComputeResult | CompletionLifecycleResult:
+    """Attach the shared lifecycle successor plan to a computed result."""
+    try:
+        candidate = lifecycle_planner.RecurrenceCandidate(
+            child_due=computed.child_due,
+            metadata=tuple(sorted(dict(computed.meta or {}).items())),
+            dnf=computed.dnf,
+            until=computed.until_dt,
+        )
+        plan = lifecycle_planner.plan_candidate_successor(
+            lifecycle_models.TaskSnapshot.from_mapping(new),
+            lifecycle_models.LifecycleEvent.COMPLETE,
+            candidate,
+            generation=generation,
+            validated_configuration={"scheduler_fingerprint": scheduler_fingerprint},
+            compare_datetimes=compare_datetimes,
+            preflight=(
+                lifecycle_planner.LifecyclePreflight.from_context(
+                    base_link=preflight.base_no,
+                    next_link=preflight.next_no,
+                    kind=preflight.kind,
+                    chain_id=preflight.chain_id,
+                )
+                if preflight is not None
+                else None
+            ),
+            carry_validator=lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
+                snapshot.to_dict(),
+                dict(candidate_child),
+                child_field=str(computed.meta.get("target_field") or "due"),
+                generation=generation,
+            ),
+        )
+        if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
+            end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
+            ensure_terminal_chain_off(new, "complete")
+            print_task(new)
+            return modify_models.CompletionLifecycleResult(
+                state="terminal",
+                reason="successor limit reached",
+                diagnostic=modify_models.CompletionLifecycleDiagnostic(
+                    transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
+                    chain_id=str(new.get("chainID") or "").strip(),
+                    parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                    child_link=next_no,
+                    stage="plan",
+                    failure_kind="successor_limit",
+                ),
+            )
+        computed.lifecycle_plan = plan
+        computed.planned_child = plan.child_dict()
+    except Exception as exc:
+        diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
+        panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
+        print_task(new)
+        return modify_models.CompletionLifecycleResult(
+            state="retryable",
+            reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
+            diagnostic=modify_models.CompletionLifecycleDiagnostic(
+                transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
+                chain_id=str(new.get("chainID") or "").strip(),
+                parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                child_link=next_no,
+                stage="plan",
+                failure_kind="planner_error",
+            ),
+        )
+    return computed
+
+
 def completion_compute_next_and_limits(
     new: dict[str, Any],
     kind: str,

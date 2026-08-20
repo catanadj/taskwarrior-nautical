@@ -269,12 +269,12 @@ def _plan_difference_summary(
         for key in keys:
             old = old_values.get(key, "<absent>")
             new = new_values.get(key, "<absent>")
-            if old != new:
+            if type(old) is not type(new) or old != new:
                 differences.append(f"{section}.{key}={old!r} -> {new!r}")
     for field in ("action", "expected_postconditions"):
         old = existing_payload.get(field, "<absent>")
         new = requested_payload.get(field, "<absent>")
-        if old != new:
+        if type(old) is not type(new) or old != new:
             differences.append(f"{field}={old!r} -> {new!r}")
     if existing_config != requested_config:
         differences.append(f"configuration_fingerprint={existing_config!r} -> {requested_config!r}")

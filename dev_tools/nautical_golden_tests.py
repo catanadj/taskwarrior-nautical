@@ -2660,6 +2660,7 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         legacy_null_anchor_file: bool = False,
         child_entry: str = "",
         child_description: str = "",
+        numeric_variant: bool = False,
     ) -> LifecyclePlan:
         parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
         child_uuid = f"10000000-0000-0000-0000-{link:012d}"
@@ -2668,9 +2669,13 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             "chainID": "outbox-chain",
             "link": link + 1,
             "prevLink": parent_uuid[:8],
+            "numeric_metadata": {"slot": link + 1},
         }
         if legacy_null_anchor_file:
             child_payload["anchor_file"] = None
+        if numeric_variant:
+            child_payload["link"] = float(link + 1)
+            child_payload["numeric_metadata"] = {"slot": float(link + 1)}
         if child_entry:
             child_payload["entry"] = child_entry
         if child_description:
@@ -2746,6 +2751,36 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             schedule_fingerprint="sf1",
         )
         expect(new_entry.kind is OutboxResultKind.ALREADY_APPLIED, "entry timestamp caused a lifecycle conflict")
+        numeric = repo.enqueue(
+            plan_for(11),
+            configuration_fingerprint="cf1",
+            schedule_fingerprint="sf1",
+        )
+        expect(numeric.kind is OutboxResultKind.APPLIED, "numeric lifecycle intent could not be staged")
+        numeric_variant = repo.enqueue(
+            plan_for(11, numeric_variant=True),
+            configuration_fingerprint="cf1",
+            schedule_fingerprint="sf1",
+        )
+        expect(
+            numeric_variant.kind is OutboxResultKind.ALREADY_APPLIED,
+            "numeric JSON representation caused a lifecycle conflict",
+        )
+        expect(numeric.record is not None, "numeric lifecycle intent lost its durable record")
+        numeric_claim = repo.claim_intent(
+            owner="numeric-cleanup",
+            lease_seconds=5,
+            intent_id=numeric.record.intent_id,
+        )
+        expect(numeric_claim.ok, "numeric lifecycle intent cleanup claim failed")
+        expect(
+            repo.manual_review(
+                intent_id=numeric.record.intent_id,
+                owner="numeric-cleanup",
+                failure=OutboxFailure("test_cleanup", "numeric representation test complete"),
+            ).ok,
+            "numeric lifecycle intent cleanup failed",
+        )
         manual_plan = plan_for(20)
         manual_staged = repo.enqueue(manual_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
         expect(manual_staged.ok and manual_staged.record is not None, "manual intent enqueue failed")

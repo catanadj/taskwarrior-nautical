@@ -183,6 +183,19 @@ def _canonical_plan_datetime(value: Any) -> Any:
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _canonical_plan_value(value: Any) -> Any:
+    """Normalize JSON-compatible values before comparing immutable plans."""
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_plan_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_plan_value(item) for item in value]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # Taskwarrior commonly serializes numeric UDAs as floats while plans
+        # built in Python naturally contain integers.
+        return float(value)
+    return value
+
+
 def recurrence_fingerprint(
     task: Mapping[str, Any],
     *,
@@ -515,7 +528,7 @@ class LifecyclePlan:
 
     def compatibility_payload(self) -> dict[str, Any]:
         """Return the immutable intent fields used for safe replay comparison."""
-        payload = self.to_dict()
+        payload = _canonical_plan_value(self.to_dict())
         payload.pop("stage", None)
         payload.pop("max_attempts", None)
         child = payload.get("child_payload")
@@ -528,7 +541,7 @@ class LifecyclePlan:
             optional_fields = ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc")
             for field in optional_fields:
                 value = child.get(field)
-                if value is None or (isinstance(value, str) and value.strip().casefold() == "null"):
+                if value is None or (isinstance(value, str) and value.strip().casefold() in {"", "null"}):
                     child.pop(field, None)
             if child.get("anchor_mode") is None or (
                 isinstance(child.get("anchor_mode"), str)

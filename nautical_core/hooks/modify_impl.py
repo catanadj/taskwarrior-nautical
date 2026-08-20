@@ -2853,33 +2853,16 @@ def _got_anchor_invalid(msg: str) -> None:
 
 # chainUntil -> numeric cap and final permitted occurrence
 def _cap_from_until_cp(task, next_due_utc):
-    until = _dtparse(task.get("chainUntil"))
-    if not until:
-        return (None, None)
-    cp_str = task.get("cp") or ""
-    tokens = core.parse_cp_sequence_tokens(cp_str)
-    if not tokens:
-        return (None, None)
-    cur = core.coerce_int(task.get("link"), 1)
-    nno = cur + 1
-    ndt = next_due_utc
-    last_no = None
-    last_dt = None
-    iterations = 0
-
-    while ndt and _compare_datetimes(ndt, until) <= 0 and iterations < _MAX_ITERATIONS:
-        iterations += 1
-        last_no, last_dt = nno, ndt
-        td = _cp_sequence_period_for_link(
-            tokens,
-            cp_str,
-            nno,
-            str(task.get("chainID") or "").strip(),
-        )
-        ndt = _cp_add_td(ndt, td)
-        nno += 1
-
-    return (last_no, last_dt)
+    return _module("modify_completion_compute").cap_from_until_cp(
+        task,
+        next_due_utc,
+        parse_datetime=_dtparse,
+        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+        coerce_int=core.coerce_int,
+        sequence_period_for_link=_cp_sequence_period_for_link,
+        add_period=_cp_add_td,
+        max_iterations=_MAX_ITERATIONS,
+    )
 
 
 def _cap_from_until_anchor(task, next_due_utc, dnf):

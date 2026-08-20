@@ -227,6 +227,45 @@ def completion_caps(
     return cpmax, until_dt, cap_no, finals, until_cap_no
 
 
+def cap_from_until_cp(
+    task: dict[str, Any],
+    next_due_utc: Any,
+    *,
+    parse_datetime: DatetimeParserCallback,
+    parse_cp_sequence_tokens: Callable[[str], Any],
+    coerce_int: CoerceIntCallback,
+    sequence_period_for_link: Callable[[Any, str, int, str], Any],
+    add_period: Callable[[Any, Any], Any],
+    max_iterations: int,
+) -> tuple[int | None, Any]:
+    """Return the final CP link and due date permitted by chainUntil."""
+    until = parse_datetime(task.get("chainUntil"))
+    if not until:
+        return None, None
+    cp_str = task.get("cp") or ""
+    tokens = parse_cp_sequence_tokens(cp_str)
+    if not tokens:
+        return None, None
+    current_link = coerce_int(task.get("link"), 1)
+    next_link = current_link + 1
+    due = next_due_utc
+    last_link = None
+    last_due = None
+    iterations = 0
+    while due and compare_datetimes(due, until) <= 0 and iterations < max_iterations:
+        iterations += 1
+        last_link, last_due = next_link, due
+        period = sequence_period_for_link(
+            tokens,
+            cp_str,
+            next_link,
+            str(task.get("chainID") or "").strip(),
+        )
+        due = add_period(due, period)
+        next_link += 1
+    return last_link, last_due
+
+
 def completion_cap_guard_or_stop(
     new: dict[str, Any],
     next_no: int,

@@ -764,6 +764,7 @@ def test_hooks_survive_malformed_numeric_environment():
     malformed_names = (
         "NAUTICAL_PROFILE",
         "NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS",
+        "NAUTICAL_OUTBOX_DIAG_MAX_ITEMS",
         "NAUTICAL_OUTBOX_RETRY_MAX",
         "NAUTICAL_TASK_TIMEOUT_EXPORT",
         "NAUTICAL_TASK_TIMEOUT_IMPORT",

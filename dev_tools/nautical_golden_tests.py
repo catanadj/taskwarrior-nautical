@@ -2808,6 +2808,45 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             )
         expect(repo.acknowledge(intent_id=manual_staged.record.intent_id, owner="cleanup-owner").ok, "reopened intent cleanup failed")
 
+        rejected_plan = plan_for(22)
+        rejected_staged = repo.enqueue(rejected_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
+        expect(rejected_staged.ok and rejected_staged.record is not None, "rejected intent enqueue failed")
+        rejected_claim = repo.claim_intent(
+            owner="rejected-owner",
+            lease_seconds=5,
+            intent_id=rejected_staged.record.intent_id,
+        )
+        expect(rejected_claim.ok, "rejected intent claim failed")
+        expect(
+            repo.manual_review(
+                intent_id=rejected_staged.record.intent_id,
+                owner="rejected-owner",
+                failure=OutboxFailure("mutation_rejected", "parent link command failed"),
+            ).ok,
+            "rejected intent review setup failed",
+        )
+        reopened_rejected = repo.enqueue(
+            rejected_plan,
+            configuration_fingerprint="cf1",
+            schedule_fingerprint="sf1",
+        )
+        expect(reopened_rejected.kind is OutboxResultKind.APPLIED, "rejected mutation intent was not reopened")
+        expect(reopened_rejected.record is not None, "reopened rejected intent lost its durable record")
+        rejected_cleanup = repo.claim_intent(
+            owner="rejected-cleanup",
+            lease_seconds=5,
+            intent_id=rejected_staged.record.intent_id,
+        )
+        expect(rejected_cleanup.ok, "reopened rejected intent cleanup claim failed")
+        expect(
+            repo.manual_review(
+                intent_id=rejected_staged.record.intent_id,
+                owner="rejected-cleanup",
+                failure=OutboxFailure("test_cleanup", "rejected mutation test complete"),
+            ).ok,
+            "reopened rejected intent cleanup failed",
+        )
+
         stage_sequences = (
             (),
             ("child_present",),

@@ -541,7 +541,12 @@ class LifecycleOutboxRepository:
                         if refreshed is None:
                             return OutboxResult(OutboxResultKind.RETRYABLE, reason="expired lifecycle intent disappeared")
                         return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed))
-                    if same_plan and current.state is OutboxProcessingState.MANUAL_REVIEW and current.failure is not None and current.failure.code == "mutation_conflict":
+                    if (
+                        same_plan
+                        and current.state is OutboxProcessingState.MANUAL_REVIEW
+                        and current.failure is not None
+                        and current.failure.code in {"mutation_conflict", "mutation_rejected"}
+                    ):
                         conn.execute(
                             "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
                             "configuration_fingerprint=?, schedule_fingerprint=?, lifecycle_stage=?, processing_state=?, "

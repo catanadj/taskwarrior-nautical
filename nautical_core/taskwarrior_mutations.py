@@ -160,6 +160,11 @@ def _failure_from_command(result: TaskCommandResult, detail: str) -> FailureEvid
     kind = result.kind
     if kind in {CommandFailureKind.SUCCESS, CommandFailureKind.ABSENT}:
         kind = CommandFailureKind.REJECTED
+    command_detail = str(result.stderr or result.stdout or "").strip()
+    if command_detail and detail:
+        detail = f"{detail}: {command_detail}"
+    elif command_detail:
+        detail = command_detail
     return FailureEvidence(
         result.command,
         kind,

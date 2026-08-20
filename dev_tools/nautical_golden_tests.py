@@ -148,47 +148,6 @@ def _unavailable_task(reason: str = "database is locked"):
     evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.0, True, reason)
     return Unavailable("isolated test read", evidence)
 
-def _bind_exit_test_repository(mod, taskdata: str | Path, runner):
-    """Bind an on-exit module to the same typed read boundary as production."""
-    from nautical_core.integration_models import TaskCommandResult
-
-    uow = _test_operator_uow(taskdata)
-
-    def _typed_runner(cmd, **kwargs):
-        try:
-            result = runner(cmd, **kwargs)
-        except TypeError:
-            result = runner(cmd)
-        if isinstance(result, TaskCommandResult):
-            return result
-        ok, stdout, stderr = result
-        return _typed_command_result(cmd, bool(ok), stdout, stderr)
-
-    class _Client:
-        def execute(self, args, *, purpose, timeout, **kwargs):
-            del purpose, kwargs
-            cmd = [*mod._task_cmd_prefix(), *args]
-            return _typed_runner(cmd, timeout=timeout)
-
-    uow.client = _Client()
-    state = mod._exit_runtime_state()
-    state.unit_of_work = uow
-    state.repository = uow.repository
-    uow.repository.configure_commands(
-        timeout=getattr(mod, "_TASK_TIMEOUT_EXPORT", 30.0),
-        attempts=getattr(mod, "_TASK_RETRIES_EXPORT", 1),
-        retry_delay=getattr(mod, "_TASK_RETRY_DELAY", 0.0),
-    )
-    mod._run_task_result = _typed_runner
-    return uow
-
-
-def _drain_exit_for_test(mod):
-    """Enter the strict on-exit API with an isolated test unit of work."""
-    runner = getattr(mod, "_run_task", lambda *_args, **_kwargs: (True, "", ""))
-    uow = _bind_exit_test_repository(mod, getattr(mod, "TW_DATA_DIR", "/tmp"), runner)
-    return mod._drain_outbox(uow)
-
 def build_preview(expr, mode="ALL", due=None):
     """
     Always use core.build_and_cache_hints if present (it computes upcoming),

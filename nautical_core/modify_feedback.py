@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -19,6 +20,78 @@ def _format_td_short(td: timedelta) -> str:
             n, rem = divmod(rem, unit_secs)
             parts.append(f"{n}{label}")
     return "".join(parts) if parts else "0s"
+
+
+def render_cp_schedule_adjusted_panel(
+    adjustment: tuple[Any, Any, list[tuple[str, Any, Any, timedelta]]],
+    *,
+    format_local: Callable[[Any], str],
+    semantic_diff_value: Callable[[str, str], str],
+    format_offset: Callable[[timedelta], str],
+    panel: Callable[..., Any],
+) -> None:
+    """Render the relative schedule changes applied after a CP due edit."""
+    old_due, new_due, field_adjustments = adjustment
+    rows = [("Due", semantic_diff_value(format_local(old_due), format_local(new_due)))]
+    rows.extend(
+        (field.capitalize(), semantic_diff_value(format_local(old_value), format_local(new_value)))
+        for field, old_value, new_value, _offset in field_adjustments
+    )
+    offset_text = "; ".join(
+        f"{field.capitalize()} {format_offset(offset)}"
+        for field, _old_value, _new_value, offset in field_adjustments
+    )
+    rows.append(("Offset" if len(field_adjustments) == 1 else "Offsets", offset_text))
+    panel("⚓ Nautical schedule adjusted", rows, kind="note")
+
+
+def render_explicit_timing_order_warning(
+    new: dict[str, Any],
+    changed_fields: tuple[str, ...],
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_offset: Callable[[timedelta], str],
+    panel: Callable[..., Any],
+) -> None:
+    """Warn when an explicit timing edit leaves an invalid field ordering."""
+    if not changed_fields:
+        return
+
+    def parsed(field: str) -> Any:
+        value = new.get(field)
+        if not value:
+            return None
+        try:
+            return parse_datetime(value)
+        except Exception:
+            return None
+
+    due = parsed("due")
+    scheduled = parsed("scheduled")
+    wait = parsed("wait")
+    issues: list[str] = []
+    if due and scheduled and scheduled > due:
+        issues.append(f"Scheduled is after Due by {format_offset(scheduled - due)}")
+    if due and wait and wait > due:
+        issues.append(f"Wait is after Due by {format_offset(wait - due)}")
+    if scheduled and wait and wait > scheduled:
+        issues.append(f"Wait is after Scheduled by {format_offset(wait - scheduled)}")
+    if not issues:
+        return
+
+    if due:
+        expected = "Due >= Scheduled >= Wait"
+        action = "Keep Scheduled at/before Due and Wait at/before Scheduled."
+    else:
+        expected = "Scheduled >= Wait"
+        action = "Keep Wait at or before Scheduled."
+    rows: list[tuple[str, str]] = [
+        ("Changed", ", ".join(field.capitalize() for field in changed_fields)),
+        ("Expected", expected),
+    ]
+    rows.extend(("Problem", issue) for issue in issues)
+    rows.append(("Action", action))
+    panel("⚠ Nautical timing order", rows, kind="warning")
 
 
 def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:

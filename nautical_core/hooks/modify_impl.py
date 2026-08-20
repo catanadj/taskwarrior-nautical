@@ -3267,63 +3267,23 @@ def _render_cp_schedule_adjusted_panel(
         list[tuple[str, datetime, datetime, timedelta]],
     ],
 ) -> None:
-    old_due, new_due, field_adjustments = adjustment
-    rows = [("Due", _semantic_diff_value(_fmtlocal(old_due), _fmtlocal(new_due)))]
-    rows.extend(
-        (field.capitalize(), _semantic_diff_value(_fmtlocal(old_value), _fmtlocal(new_value)))
-        for field, old_value, new_value, _offset in field_adjustments
-    )
-    offset_text = "; ".join(
-        f"{field.capitalize()} {_fmt_td_dd_hhmm(offset)}"
-        for field, _old_value, _new_value, offset in field_adjustments
-    )
-    rows.append(("Offset" if len(field_adjustments) == 1 else "Offsets", offset_text))
-    _panel(
-        "⚓ Nautical schedule adjusted",
-        rows,
-        kind="note",
+    _module("modify_feedback").render_cp_schedule_adjusted_panel(
+        adjustment,
+        format_local=_fmtlocal,
+        semantic_diff_value=_semantic_diff_value,
+        format_offset=_fmt_td_dd_hhmm,
+        panel=_panel,
     )
 
 
 def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, ...]) -> None:
-    if not changed_fields:
-        return
-
-    def parsed(field: str) -> datetime | None:
-        value = new.get(field)
-        if not value:
-            return None
-        try:
-            return core.parse_dt_any(value)
-        except Exception:
-            return None
-
-    due = parsed("due")
-    scheduled = parsed("scheduled")
-    wait = parsed("wait")
-    issues: list[str] = []
-    if due and scheduled and scheduled > due:
-        issues.append(f"Scheduled is after Due by {_fmt_td_dd_hhmm(scheduled - due)}")
-    if due and wait and wait > due:
-        issues.append(f"Wait is after Due by {_fmt_td_dd_hhmm(wait - due)}")
-    if scheduled and wait and wait > scheduled:
-        issues.append(f"Wait is after Scheduled by {_fmt_td_dd_hhmm(wait - scheduled)}")
-    if not issues:
-        return
-
-    if due:
-        expected = "Due >= Scheduled >= Wait"
-        action = "Keep Scheduled at/before Due and Wait at/before Scheduled."
-    else:
-        expected = "Scheduled >= Wait"
-        action = "Keep Wait at or before Scheduled."
-    rows = [
-        ("Changed", ", ".join(field.capitalize() for field in changed_fields)),
-        ("Expected", expected),
-    ]
-    rows.extend(("Problem", issue) for issue in issues)
-    rows.append(("Action", action))
-    _panel("⚠ Nautical timing order", rows, kind="warning")
+    _module("modify_feedback").render_explicit_timing_order_warning(
+        new,
+        changed_fields,
+        parse_datetime=core.parse_dt_any,
+        format_offset=_fmt_td_dd_hhmm,
+        panel=_panel,
+    )
 
 
 def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:

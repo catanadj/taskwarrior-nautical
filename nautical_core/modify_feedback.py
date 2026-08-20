@@ -960,3 +960,143 @@ def render_cp_completion_feedback(
         )
     else:
         panel(title, fb, kind="preview_cp")
+
+
+def orchestrate_anchor_completion_feedback(
+    *,
+    new: dict,
+    child: dict,
+    child_due,
+    child_short: str,
+    next_no: int,
+    parent_short: str,
+    cap_no: int | None,
+    finals: list[tuple[str, object]],
+    now_utc,
+    until_dt,
+    until_cap_no: int | None,
+    dnf,
+    meta: dict,
+    stripped_attrs: list[str],
+    deferred_spawn: bool,
+    spawn_intent_id: str | None,
+    lifecycle_result=None,
+    chain_by_short: dict | None,
+    analytics_advice: str | None,
+    integrity_warnings: list[str] | None,
+    base_no: int,
+    core: Any,
+    panel,
+    calendar_feedback,
+    panel_diagnostics,
+    modify_models,
+    modify_runtime,
+    build_runtime_services,
+) -> None:
+    """Assemble anchor feedback state and hand it to the feedback renderer."""
+    if lifecycle_result is None:
+        lifecycle_result = modify_models.CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
+    calendar_feedback.render_business_calendar_displacement(
+        new,
+        child_due,
+        core=core,
+        panel=panel,
+    )
+    panel_warnings = panel_diagnostics.panel_warnings(core, new)
+    if panel_warnings:
+        integrity_warnings = list(integrity_warnings or [])
+        integrity_warnings.extend(panel_warnings)
+    feedback = modify_models.AnchorCompletionFeedbackModel(
+        new=new,
+        child=child,
+        child_due=child_due,
+        child_short=child_short,
+        next_no=next_no,
+        parent_short=parent_short,
+        cap_no=cap_no,
+        finals=finals,
+        now_utc=now_utc,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
+        dnf=dnf,
+        meta=meta,
+        stripped_attrs=stripped_attrs,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
+        chain_by_short=chain_by_short,
+        analytics_advice=analytics_advice,
+        integrity_warnings=integrity_warnings,
+        base_no=base_no,
+    )
+    services = modify_runtime.build_anchor_feedback_services(build_runtime_services())
+    render_anchor_completion_feedback(feedback=feedback, services=services)
+
+
+def orchestrate_cp_completion_feedback(
+    *,
+    new: dict,
+    child: dict,
+    child_due,
+    child_short: str,
+    next_no: int,
+    parent_short: str,
+    cap_no: int | None,
+    finals: list[tuple[str, object]],
+    now_utc,
+    until_dt,
+    until_cap_no: int | None,
+    meta: dict,
+    deferred_spawn: bool,
+    spawn_intent_id: str | None,
+    lifecycle_result=None,
+    chain_by_short: dict | None,
+    analytics_advice: str | None,
+    integrity_warnings: list[str] | None,
+    base_no: int,
+    core: Any,
+    panel_diagnostics,
+    modify_models,
+    modify_runtime,
+    build_runtime_services,
+) -> None:
+    """Assemble CP feedback state and hand it to the feedback renderer."""
+    if lifecycle_result is None:
+        lifecycle_result = modify_models.CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
+    panel_warnings = panel_diagnostics.panel_warnings(core, new, include_files=False)
+    if panel_warnings:
+        integrity_warnings = list(integrity_warnings or [])
+        integrity_warnings.extend(panel_warnings)
+    feedback = modify_models.CpCompletionFeedbackModel(
+        new=new,
+        child=child,
+        child_due=child_due,
+        child_short=child_short,
+        next_no=next_no,
+        parent_short=parent_short,
+        cap_no=cap_no,
+        finals=finals,
+        now_utc=now_utc,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
+        meta=meta,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
+        chain_by_short=chain_by_short,
+        analytics_advice=analytics_advice,
+        integrity_warnings=integrity_warnings,
+        base_no=base_no,
+    )
+    services = modify_runtime.build_cp_feedback_services(build_runtime_services())
+    render_cp_completion_feedback(feedback=feedback, services=services)

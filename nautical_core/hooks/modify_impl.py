@@ -3202,29 +3202,9 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    if lifecycle_result is None:
-        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
-            state="queued" if deferred_spawn else "applied",
-            child_short=child_short,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-        )
     calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
-    calendar_feedback.render_business_calendar_displacement(
-        new,
-        child_due,
-        core=core,
-        panel=_panel,
-    )
-    diagnostics = _module("panel_diagnostics")
-    panel_warnings = diagnostics.panel_warnings(core, new)
-    if panel_warnings:
-        integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.extend(panel_warnings)
     modify_feedback = _module("modify_feedback")
-    modify_models = _module("modify_models")
-    modify_runtime = _module("modify_runtime")
-    feedback = modify_models.AnchorCompletionFeedbackModel(
+    modify_feedback.orchestrate_anchor_completion_feedback(
         new=new,
         child=child,
         child_due=child_due,
@@ -3246,12 +3226,13 @@ def _render_anchor_completion_feedback(
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
         base_no=base_no,
-    )
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_anchor_feedback_services(runtime)
-    modify_feedback.render_anchor_completion_feedback(
-        feedback=feedback,
-        services=services,
+        core=core,
+        panel=_panel,
+        calendar_feedback=calendar_feedback,
+        panel_diagnostics=_module("panel_diagnostics"),
+        modify_models=_module("modify_models"),
+        modify_runtime=_module("modify_runtime"),
+        build_runtime_services=_modify_runtime_services,
     )
 
 
@@ -3277,22 +3258,8 @@ def _render_cp_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    if lifecycle_result is None:
-        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
-            state="queued" if deferred_spawn else "applied",
-            child_short=child_short,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-        )
-    diagnostics = _module("panel_diagnostics")
-    panel_warnings = diagnostics.panel_warnings(core, new, include_files=False)
-    if panel_warnings:
-        integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.extend(panel_warnings)
     modify_feedback = _module("modify_feedback")
-    modify_models = _module("modify_models")
-    modify_runtime = _module("modify_runtime")
-    feedback = modify_models.CpCompletionFeedbackModel(
+    modify_feedback.orchestrate_cp_completion_feedback(
         new=new,
         child=child,
         child_due=child_due,
@@ -3312,12 +3279,11 @@ def _render_cp_completion_feedback(
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
         base_no=base_no,
-    )
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_cp_feedback_services(runtime)
-    modify_feedback.render_cp_completion_feedback(
-        feedback=feedback,
-        services=services,
+        core=core,
+        panel_diagnostics=_module("panel_diagnostics"),
+        modify_models=_module("modify_models"),
+        modify_runtime=_module("modify_runtime"),
+        build_runtime_services=_modify_runtime_services,
     )
 
 

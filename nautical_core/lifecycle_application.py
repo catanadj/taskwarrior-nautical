@@ -491,13 +491,10 @@ class LifecycleApplicationService:
             return LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.RETRYABLE, plan.identity, reason=outcome.reason, intent_id=record.intent_id
             )
-        self._outbox.manual_review(
-            intent_id=record.intent_id,
-            owner=self._owner,
+        return self._manual_review(
+            record,
+            outcome.reason or outcome.kind.value,
             failure=OutboxFailure(f"mutation_{outcome.kind.value}", outcome.reason or outcome.kind.value),
-        )
-        return LifecycleApplicationOutcome(
-            LifecycleApplicationOutcomeKind.MANUAL_REVIEW, plan.identity, reason=outcome.reason, intent_id=record.intent_id
         )
 
     def _retry_or_review(
@@ -517,10 +514,26 @@ class LifecycleApplicationService:
             LifecycleApplicationOutcomeKind.MANUAL_REVIEW, plan.identity, reason=reason, intent_id=record.intent_id, mutations=mutations
         )
 
-    def _manual_review(self, record: LifecycleOutboxRecord, reason: str) -> LifecycleApplicationOutcome:
-        self._outbox.manual_review(
-            intent_id=record.intent_id, owner=self._owner, failure=OutboxFailure("invalid_intent", reason)
+    def _manual_review(
+        self,
+        record: LifecycleOutboxRecord,
+        reason: str,
+        *,
+        failure: OutboxFailure | None = None,
+    ) -> LifecycleApplicationOutcome:
+        persisted = self._outbox.manual_review(
+            intent_id=record.intent_id,
+            owner=self._owner,
+            failure=failure or OutboxFailure("invalid_intent", reason),
         )
+        if not persisted.ok:
+            persistence_reason = persisted.reason or persisted.kind.value
+            return LifecycleApplicationOutcome(
+                LifecycleApplicationOutcomeKind.RETRYABLE,
+                record.plan.identity,
+                reason=f"manual-review persistence failed: {persistence_reason}; {reason}",
+                intent_id=record.intent_id,
+            )
         return LifecycleApplicationOutcome(
             LifecycleApplicationOutcomeKind.MANUAL_REVIEW, record.plan.identity, reason=reason, intent_id=record.intent_id
         )

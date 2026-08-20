@@ -3015,23 +3015,13 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
 
 
 def _first_recurrence_target(new: dict, source: str):
-    target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
-    if not target_field:
-        return None
-    target = core.parse_dt_any(new.get(target_field))
-    if not target:
-        return None
-    parent = dict(new)
-    parent["end"] = core.fmt_isoz(target)
-    try:
-        generation = _chain_generation_service()
-        if source in {"anchor", "anchor_file"}:
-            result = generation.compute_anchor_child_due(parent)
-            return result[0] if result else None
-        result = generation.compute_cp_child_due(parent)
-        return result[0] if result else None
-    except Exception:
-        return None
+    return _module("modify_completion_compute").first_recurrence_target(
+        new,
+        source,
+        parse_datetime=core.parse_dt_any,
+        format_datetime=core.fmt_isoz,
+        generation_service=_chain_generation_service,
+    )
 
 
 def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:

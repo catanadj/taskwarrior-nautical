@@ -481,6 +481,34 @@ def estimate_anchor_final_by_max(
     return future_local.astimezone(timezone.utc)
 
 
+def first_recurrence_target(
+    task: dict[str, Any],
+    source: str,
+    *,
+    parse_datetime: Any,
+    format_datetime: Any,
+    generation_service: Any,
+) -> Any:
+    """Compute the first projected target used by recurrence-update panels."""
+    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
+    if not target_field:
+        return None
+    target = parse_datetime(task.get(target_field))
+    if not target:
+        return None
+    parent = dict(task)
+    parent["end"] = format_datetime(target)
+    try:
+        generation = generation_service()
+        if source in {"anchor", "anchor_file"}:
+            result = generation.compute_anchor_child_due(parent)
+        else:
+            result = generation.compute_cp_child_due(parent)
+        return result[0] if result else None
+    except Exception:
+        return None
+
+
 def completion_cap_guard_or_stop(
     new: dict[str, Any],
     next_no: int,

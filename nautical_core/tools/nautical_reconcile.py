@@ -114,6 +114,34 @@ class _ConfigurationReason(str):
         value.status = status
         return value
 
+
+class _NativeUntilAudit:
+    """Typed native-until integrity result used to gate reconcile mutation."""
+
+    __slots__ = ("status", "repairs", "errors", "reason")
+
+    def __init__(
+        self,
+        status: str,
+        repairs: list[dict[str, Any]] | None = None,
+        errors: list[str] | None = None,
+        reason: str = "",
+    ) -> None:
+        if status not in {"valid", "invalid", "unavailable"}:
+            raise ValueError(f"invalid native-until audit status: {status}")
+        self.status = status
+        self.repairs = list(repairs or [])
+        self.errors = list(errors or [])
+        self.reason = str(reason or "").strip()
+
+
+def _native_until_audit_result(
+    repairs: list[dict[str, Any]],
+    errors: list[str],
+) -> _NativeUntilAudit:
+    status = "invalid" if repairs or errors else "valid"
+    return _NativeUntilAudit(status, repairs, errors)
+
 _ANSI = {
     "dim": "\033[2m",
     "cyan": "\033[36m",
@@ -1686,6 +1714,7 @@ def main(
         return _startup_failure(args, "chain_generation", exc)
     configuration_status, configuration_drift_reason = _configuration_state(hook)
     native_until_audit_warning = ""
+    native_until_audit_status = "unavailable" if configuration_status != "valid" else "valid"
     if configuration_status != "valid":
         native_until_repairs: list[dict[str, Any]] = []
         native_until_errors: list[str] = []
@@ -1698,11 +1727,20 @@ def main(
                 taskdata=taskdata,
                 lease_held=_apply_lease_held,
             )
+            native_until_audit_status = _native_until_audit_result(
+                native_until_repairs, native_until_errors
+            ).status
         except Exception as exc:
-            # The integrity pass is supplementary; preserve normal recovery when its
-            # independent export cannot run (for example while Taskwarrior is locked).
+            # Dry-run can still report planned work, but apply must not mutate
+            # after the authoritative integrity read became unavailable.
             native_until_repairs, native_until_errors = [], []
             native_until_audit_warning = str(exc).strip() or type(exc).__name__
+            native_until_audit_status = "unavailable"
+            if args.apply:
+                configuration_status = "unavailable"
+                configuration_drift_reason = (
+                    f"native-until audit unavailable: {native_until_audit_warning}; restart and rerun"
+                )
             if not args.json:
                 print(
                     _style(
@@ -1883,6 +1921,7 @@ def main(
         "native_until_error_count": native_until_error_count,
         "native_until_manual_review": native_until_manual_review,
         "native_until_audit_skipped": native_until_audit_skipped,
+        "native_until_audit_status": native_until_audit_status,
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),

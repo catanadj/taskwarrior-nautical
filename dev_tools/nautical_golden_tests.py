@@ -28023,6 +28023,16 @@ def test_reconcile_degraded_audit_status_is_structured():
         expect(skipped_result == 2, f"skipped audit should be degraded: {skipped_result}")
         expect(skipped_summary.get("status") == "degraded", f"wrong skipped status: {skipped_summary!r}")
         expect(skipped_summary.get("native_until_audit_skipped") == 1, f"skipped audit was not counted: {skipped_summary!r}")
+        expect(skipped_summary.get("native_until_audit_status") == "unavailable", f"missing unavailable audit status: {skipped_summary!r}")
+
+        apply_output = io.StringIO()
+        with contextlib.redirect_stdout(apply_output):
+            apply_result = mod.main(["--json", "--apply"], _unit_of_work=_test_operator_uow())
+        apply_summary = json.loads(apply_output.getvalue())
+        expect(apply_result == 2, f"unavailable apply audit should be degraded: {apply_result}")
+        expect(apply_summary.get("native_until_audit_status") == "unavailable", f"apply audit status was lost: {apply_summary!r}")
+        expect(apply_summary.get("configuration_status") == "unavailable", f"apply did not fail closed: {apply_summary!r}")
+        expect(not apply_summary.get("applied"), f"apply mutated after unavailable audit: {apply_summary!r}")
 
         mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: ([], [])
         mod._configuration_drift_reason = lambda _hook: "configuration changed during reconcile (source: test)"

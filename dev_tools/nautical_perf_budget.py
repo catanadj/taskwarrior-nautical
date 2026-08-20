@@ -533,7 +533,10 @@ def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
             rows = [
                 {
                     "uuid": parent_uuid,
-                    "status": "pending",
+                    # Native-until predecessor reads intentionally inspect
+                    # completed/deleted history, so model the prior link as
+                    # completed rather than leaving it active.
+                    "status": "completed",
                     "description": "Native-until benchmark predecessor",
                     "cp": "P1D",
                     "chain": "on",

@@ -2004,6 +2004,8 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
                 target = self.repo.rows[target_uuid]
                 for token in args[update_at:]:
                     key, value = token.split(":", 1)
+                    if key == "until" and "-" in value:
+                        value = datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%Y%m%dT%H%M%SZ")
                     target[key] = value
             return TaskCommandResult(command, 0, "", "", CommandFailureKind.SUCCESS, 1, 0.01)
 

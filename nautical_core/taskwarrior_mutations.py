@@ -9,6 +9,7 @@ the requested postcondition before reporting success.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence
 
 from .integration_models import (
@@ -71,6 +72,30 @@ _TIMESTAMP_FIELDS = {
 
 def _text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _timestamp_equal(left: object, right: object) -> bool:
+    """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
+    left_text = _text(left)
+    right_text = _text(right)
+    if left_text == right_text:
+        return True
+
+    def parse(value: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    left_dt = parse(left_text)
+    right_dt = parse(right_text)
+    return left_dt is not None and right_dt is not None and left_dt == right_dt
 
 
 def _link_text(value: object) -> str:
@@ -432,7 +457,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.NATIVE_UNTIL_REPAIRED,
-            lambda row: _text(row.get("until")) == request.payload.replacement_until,
+            lambda row: _timestamp_equal(row.get("until"), request.payload.replacement_until),
         )
 
     def repair_metadata(self, request: MutationRequest) -> MutationOutcome:

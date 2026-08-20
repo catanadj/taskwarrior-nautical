@@ -256,10 +256,13 @@ def _plan_difference_summary(
 ) -> str:
     """Describe immutable intent differences without dumping full task JSON."""
     differences: list[str] = []
+    existing_payload = existing.compatibility_payload()
+    requested_payload = requested.compatibility_payload()
     sections = (
-        ("child", existing.compatibility_payload().get("child_payload", {}), requested.compatibility_payload().get("child_payload", {})),
-        ("parent", existing.compatibility_payload().get("parent_patch", {}), requested.compatibility_payload().get("parent_patch", {})),
-        ("guard", existing.compatibility_payload().get("parent_guard", {}), requested.compatibility_payload().get("parent_guard", {})),
+        ("identity", existing_payload.get("identity", {}), requested_payload.get("identity", {})),
+        ("child", existing_payload.get("child_payload", {}), requested_payload.get("child_payload", {})),
+        ("parent", existing_payload.get("parent_patch", {}), requested_payload.get("parent_patch", {})),
+        ("guard", existing_payload.get("parent_guard", {}), requested_payload.get("parent_guard", {})),
     )
     for section, old_values, new_values in sections:
         keys = sorted(set(old_values) | set(new_values))
@@ -268,6 +271,11 @@ def _plan_difference_summary(
             new = new_values.get(key, "<absent>")
             if old != new:
                 differences.append(f"{section}.{key}={old!r} -> {new!r}")
+    for field in ("action", "expected_postconditions"):
+        old = existing_payload.get(field, "<absent>")
+        new = requested_payload.get(field, "<absent>")
+        if old != new:
+            differences.append(f"{field}={old!r} -> {new!r}")
     if existing_config != requested_config:
         differences.append(f"configuration_fingerprint={existing_config!r} -> {requested_config!r}")
     if existing_schedule != requested_schedule:

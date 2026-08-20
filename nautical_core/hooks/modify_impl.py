@@ -2120,30 +2120,12 @@ def _anchor_included_occurrences(
     dnf,
     anchor_file_provider: Any | None = None,
 ) -> list[datetime]:
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-
     service = _scheduler_service_for_task(parent)
-    timezone = service.session.evaluator.context.timezone
-    result = service.collect_request(
-        OccurrenceRangeRequest(
-            OccurrenceCursor(
-                after_local_dt,
-                inclusive=inclusive,
-                timezone=timezone,
-            ),
-            limit=limit,
-            omission_policy="exclude",
-        )
+    return service.included_occurrences_after(
+        after_local_dt,
+        inclusive=inclusive,
+        limit=limit,
     )
-    if result.failure is not None:
-        raise ValueError(f"Anchor occurrence collection {result.status}: {result.failure.reason}")
-    if result.terminal is not None and not result.occurrences:
-        raise result.terminal
-    return [
-        occurrence.local_datetime
-        for occurrence in result.occurrences
-        if occurrence.local_datetime is not None
-    ]
 
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):

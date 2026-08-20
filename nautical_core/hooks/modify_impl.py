@@ -470,6 +470,8 @@ _CHAIN_GENERATION_LOAD_FAILED = False
 _MODIFY_ORDINARY = None
 _MODIFY_ORDINARY_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
+_MODIFY_SPAWN = None
+_MODIFY_SPAWN_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
 _MODIFY_COMPLETION_PREFLIGHT = None
 _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = False
@@ -545,6 +547,12 @@ _MODULE_SPECS = {
         "_MODIFY_SPAWN_PREP_LOAD_FAILED",
         "modify_spawn_prep.py",
         "nautical_core.modify_spawn_prep",
+    ),
+    "modify_spawn": (
+        "_MODIFY_SPAWN",
+        "_MODIFY_SPAWN_LOAD_FAILED",
+        "modify_spawn.py",
+        "nautical_core.modify_spawn",
     ),
     "chain_generation": (
         "_CHAIN_GENERATION",
@@ -1362,74 +1370,23 @@ def _spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
-    """
-    Queue a child spawn intent for the on-exit hook.
-
-    Important: The parent update is applied by Taskwarrior using this hook's stdout.
-    We intentionally avoid importing the parent from inside the hook to reduce the
-    risk of re-entering Taskwarrior while it is holding the datastore lock.
-
-    We enqueue the child for the on-exit hook to import, then update the parent link.
-    """
-    env = os.environ.copy()
-    modify_spawn_prep = _module("modify_spawn_prep")
-    child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
+    modify_spawn = _module("modify_spawn")
+    return modify_spawn.spawn_child_atomic(
         child_task,
         parent_task_with_nextlink,
-        env,
-        child_uuid_for_spawn=_child_uuid_for_spawn,
-        fmt_isoz=core.fmt_isoz,
-        now_utc=core.now_utc,
-        strip_none_and_cast=_strip_none_and_cast,
-        normalise_datetime_fields=_normalise_datetime_fields,
-    )
-
-    stripped_attrs: set[str] = set()
-    last_stderr = ""
-    last_category = "unknown"
-
-    # Decision-only mode: enqueue for on-exit spawn and return unverified.
-    lifecycle_models = _module("lifecycle_models")
-    lifecycle_identity = _lifecycle_spawn_identity(parent_task_with_nextlink, child_obj)
-    spawn_intent_id = lifecycle_identity.idempotency_key
-    recurrence_guard = lifecycle_models.recurrence_fingerprint(
-        parent_task_with_nextlink,
-        parse_datetime=getattr(core, "parse_dt_any", None),
-    )
-    parent_guard = {
-        "status": parent_task_with_nextlink.get("status") or "",
-        "chain": parent_task_with_nextlink.get("chain") or "",
-        "chainID": parent_task_with_nextlink.get("chainID") or "",
-        "link": parent_task_with_nextlink.get("link") or "",
-        "modified": parent_task_with_nextlink.get("modified") or "",
-        "recurrence_fingerprint": recurrence_guard,
-    }
-    lifecycle_plan = lifecycle_models.LifecyclePlan.from_mappings(
-        identity=lifecycle_identity,
-        action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
-        parent_guard=lifecycle_models.ParentGuard.from_mapping(parent_guard),
-        child_payload=child_obj,
-        parent_patch={"nextLink": child_short},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    )
-    queued, queue_reason = _enqueue_spawn_intent(lifecycle_plan)
-    if not queued:
-        return (
-            child_short,
-            stripped_attrs,
-            False,
-            False,
-            f"Spawn intent queue failed: {queue_reason}",
-            spawn_intent_id,
-        )
-    _diag_count("spawn_deferred")
-    return (
-        child_short,
-        stripped_attrs,
-        False,
-        True,
-        "Spawn intent queued for on-exit processing",
-        spawn_intent_id,
+        services=modify_spawn.SpawnServices(
+            prepare_spawn_child_payload=_module("modify_spawn_prep").prepare_spawn_child_payload,
+            child_uuid_for_spawn=_child_uuid_for_spawn,
+            fmt_isoz=core.fmt_isoz,
+            now_utc=core.now_utc,
+            strip_none_and_cast=_strip_none_and_cast,
+            normalise_datetime_fields=_normalise_datetime_fields,
+            lifecycle_models=_module("lifecycle_models"),
+            lifecycle_spawn_identity=_lifecycle_spawn_identity,
+            enqueue_spawn_intent=_enqueue_spawn_intent,
+            parse_datetime=getattr(core, "parse_dt_any", None),
+            diag_count=_diag_count,
+        ),
     )
 
 

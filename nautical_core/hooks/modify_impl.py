@@ -4270,50 +4270,8 @@ def _completion_build_and_spawn_child(
 
 
 def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
-    _modify_runtime_state().task_repository = unit_of_work.repository
-    # Prepare carry-forward fields on an isolated snapshot.  A malformed
-    # carry must never leave the Taskwarrior response partially rewritten.
-    prepared = dict(new)
-    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, prepared)
-    _preserve_cp_relative_offsets_on_due_change(old, prepared, new_cp)
-    if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
-        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
-        _preserve_native_until_on_target_change(old, prepared, recurrence_kind)
-    _validate_native_until_after_target_or_fail(prepared)
-    _validate_native_until_anchor_slots_or_fail(prepared)
-    new.clear()
-    new.update(prepared)
-    now_utc = core.now_utc()
-    ctx = _completion_preflight_context(new, now_utc, unit_of_work.repository)
-    if ctx is None:
-        return
-    parent_short = ctx.parent_short
-    base_no = ctx.base_no
-    next_no = ctx.next_no
-    kind = ctx.kind
-    chain_id = ctx.chain_id
-
-    computed = _completion_compute_next_and_limits(
-        new,
-        kind,
-        next_no,
-        now_utc,
-        preflight=ctx,
-    )
-    if computed is None:
-        return
-    if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
-        _diag_lifecycle_result(computed)
-        return computed
-    snapshot = ctx.chain_snapshot
-    preloaded_chain = list(snapshot.rows)
-    indexes = _lifecycle_read_service().build_indexes(preloaded_chain)
-    preloaded_chain_by_link, preloaded_chain_by_short = indexes.by_link, indexes.by_short
-    if snapshot.mode == "full" and snapshot.loaded:
-        _lifecycle_read_service().replace_chain_cache(chain_id, preloaded_chain)
-        _diag_count("chain_cache_seeded")
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
-    services = modify_completion_flow.CompletionFinalizeServices(
+    finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,
         seed_runtime_lookup_tasks=_seed_runtime_lookup_tasks,
         modify_chain_state=_modify_chain_state,
@@ -4329,21 +4287,28 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "Completion
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
     )
-    result = modify_completion_flow.finalize_completion_modify(
-        new=new,
-        ctx=ctx,
-        computed=computed,
-        now_utc=now_utc,
-        need_chain=snapshot.mode == "full",
-        chain_snapshot_loaded=snapshot.loaded,
-        preloaded_chain=preloaded_chain,
-        preloaded_chain_by_link=preloaded_chain_by_link,
-        preloaded_chain_by_short=preloaded_chain_by_short,
-        chain_id=chain_id,
-        services=services,
+    flow_services = modify_completion_flow.CompletionFlowServices(
+        runtime_state=_modify_runtime_state,
+        prepare_recurrence=_completion_validate_cp_and_anchor,
+        preserve_cp_relative_offsets=_preserve_cp_relative_offsets_on_due_change,
+        preserve_native_until=_preserve_native_until_on_target_change,
+        validate_native_until=_validate_native_until_after_target_or_fail,
+        validate_native_until_slots=_validate_native_until_anchor_slots_or_fail,
+        now_utc=core.now_utc,
+        preflight_context=_completion_preflight_context,
+        compute_next_and_limits=_completion_compute_next_and_limits,
+        lifecycle_read_service=_lifecycle_read_service(),
+        diag_count=_diag_count,
+        diag_lifecycle_result=_diag_lifecycle_result,
+        finalize_completion=modify_completion_flow.finalize_completion_modify,
+        finalize_services=finalize_services,
     )
-    _diag_lifecycle_result(result)
-    return result
+    return modify_completion_flow.handle_completion_modify(
+        old,
+        new,
+        unit_of_work,
+        services=flow_services,
+    )
 
 
 def _expiration_services():

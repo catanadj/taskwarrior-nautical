@@ -68,7 +68,6 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "integration_models",
         "taskwarrior_mutations",
         "hook_support",
-        "lifecycle_models",
         "lifecycle_application",
         "lifecycle_outbox",
         "exit_runtime",

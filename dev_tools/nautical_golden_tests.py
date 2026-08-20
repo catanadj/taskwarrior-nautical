@@ -31758,6 +31758,89 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
         expect(status2["states"].get("quarantined") == 1, f"record was not quarantined: {status2}")
 
 
+def test_lifecycle_application_renews_batch_leases_before_mutation():
+    """A slow sequential batch must not mutate a record after its lease expires."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
+
+    now = [100.0]
+
+    class _Scripted:
+        def __init__(self):
+            self.calls = []
+
+        def apply(self, request):
+            self.calls.append(request.operation)
+            postcondition = {
+                MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+                MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+            }.get(request.operation)
+            return MutationOutcome(
+                request.operation,
+                MutationOutcomeKind.APPLIED,
+                request.guard,
+                (postcondition,) if postcondition else (),
+            )
+
+    class _Uow:
+        mutation_epoch = 0
+
+    def make_plan(parent_uuid, child_uuid, chain_id):
+        guard = ParentGuard("completed", "on", chain_id, 1, f"rf-{chain_id}", "20260101T000000Z")
+        identity = LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
+        return LifecyclePlan.from_mappings(
+            identity=identity,
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=guard,
+            child_payload={"uuid": child_uuid, "chainID": chain_id, "link": 2, "prevLink": parent_uuid[:8]},
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        mutations = _Scripted()
+        original_acknowledge = outbox.acknowledge
+        acknowledged = [0]
+
+        def acknowledge(**kwargs):
+            result = original_acknowledge(**kwargs)
+            acknowledged[0] += 1
+            if acknowledged[0] == 1:
+                now[0] += 2.0
+            return result
+
+        outbox.acknowledge = acknowledge
+        service = LifecycleApplicationService(
+            unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="slow-batch", lease_seconds=1.0
+        )
+        first = make_plan(
+            "00000000-0000-0000-0000-000000000601",
+            "00000000-0000-0000-0000-000000000602",
+            "chain-s3a",
+        )
+        second = make_plan(
+            "00000000-0000-0000-0000-000000000603",
+            "00000000-0000-0000-0000-000000000604",
+            "chain-s3b",
+        )
+        service.stage(first, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        service.stage(second, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+
+        result = service.drain(limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        expect(len(result.outcomes) == 2, f"expected both claimed records: {result.outcomes}")
+        expect(result.outcomes[0].kind is LifecycleApplicationOutcomeKind.APPLIED, f"first record failed: {result.outcomes[0]}")
+        expect(result.outcomes[1].kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW, f"expired lease was not rejected: {result.outcomes[1]}")
+        expect(
+            mutations.calls == [MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK],
+            f"expired second record was mutated: {mutations.calls}",
+        )
+
+
 def test_lifecycle_application_idempotency_and_duplicate_staging():
     """Staging the same plan twice is idempotent; draining an already-applied
     intent produces already_applied and draining an empty outbox is a no-op."""
@@ -32011,6 +32094,7 @@ TESTS.extend([
     test_lifecycle_application_happy_path_real_stack,
     test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
+    test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,
     test_lifecycle_application_execute_staged_targets_exact_intent,
     test_lifecycle_application_staging_only_service_rejects_execution,

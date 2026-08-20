@@ -419,11 +419,21 @@ class LifecycleApplicationService:
         mutations: list[MutationOutcome] = []
         stage = record.stage
 
+        lease_failure = self._renew_before_step(record, "starting lifecycle execution", tuple(mutations))
+        if lease_failure is not None:
+            return lease_failure
+
         if _SPAWN_STAGE_ORDER[stage] < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
+            lease_failure = self._renew_before_step(record, "child import", tuple(mutations))
+            if lease_failure is not None:
+                return lease_failure
             outcome = self._apply(MutationOperation.CHILD_IMPORT, plan, child_payload)
             if outcome is None:
                 return self._manual_review(record, "could not construct a guarded child-import mutation request")
             mutations.append(outcome)
+            lease_failure = self._renew_before_step(record, "child-import progress", tuple(mutations))
+            if lease_failure is not None:
+                return lease_failure
             settled = self._settle_step(record, outcome, ExecutionStage.CHILD_PRESENT)
             if settled is not None:
                 return LifecycleApplicationOutcome(
@@ -432,10 +442,16 @@ class LifecycleApplicationService:
             stage = ExecutionStage.CHILD_PRESENT
 
         if _SPAWN_STAGE_ORDER[stage] < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
+            lease_failure = self._renew_before_step(record, "parent link", tuple(mutations))
+            if lease_failure is not None:
+                return lease_failure
             outcome = self._apply(MutationOperation.PARENT_LINK, plan, link_payload)
             if outcome is None:
                 return self._manual_review(record, "could not construct a guarded parent-link mutation request")
             mutations.append(outcome)
+            lease_failure = self._renew_before_step(record, "parent-link progress", tuple(mutations))
+            if lease_failure is not None:
+                return lease_failure
             settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
             if settled is not None:
                 return LifecycleApplicationOutcome(
@@ -447,16 +463,44 @@ class LifecycleApplicationService:
             # Both mutations already verify their own postcondition before
             # reporting success, so reaching here means the transition is
             # verified; only the durable stage marker needs to catch up.
+            lease_failure = self._renew_before_step(record, "verification", tuple(mutations))
+            if lease_failure is not None:
+                return lease_failure
             advance = self._outbox.advance_stage(intent_id=record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED)
             if not advance.ok:
                 return self._retry_or_review(record, advance, "could not persist verified lifecycle stage", tuple(mutations))
 
+        lease_failure = self._renew_before_step(record, "acknowledgement", tuple(mutations))
+        if lease_failure is not None:
+            return lease_failure
         ack = self._outbox.acknowledge(intent_id=record.intent_id, owner=self._owner)
         if not ack.ok:
             return self._retry_or_review(record, ack, "could not acknowledge finalized lifecycle intent", tuple(mutations))
         return LifecycleApplicationOutcome(
             LifecycleApplicationOutcomeKind.APPLIED, plan.identity, intent_id=record.intent_id, mutations=tuple(mutations)
         )
+
+    def _renew_before_step(
+        self,
+        record: LifecycleOutboxRecord,
+        step: str,
+        mutations: tuple[MutationOutcome, ...],
+    ) -> LifecycleApplicationOutcome | None:
+        """Refresh ownership immediately before each claimed operation.
+
+        A batch is claimed at one instant, but execution is sequential.  A
+        later record must not be mutated using an expired lease.  The atomic
+        repository check also turns lease loss into a typed outcome before
+        the next external mutation can begin.
+        """
+        renewed = self._outbox.renew_lease(
+            intent_id=record.intent_id,
+            owner=self._owner,
+            lease_seconds=self._lease_seconds,
+        )
+        if renewed.kind is OutboxResultKind.APPLIED:
+            return None
+        return self._retry_or_review(record, renewed, f"could not renew lifecycle lease before {step}", mutations)
 
     def _settle_step(
         self,

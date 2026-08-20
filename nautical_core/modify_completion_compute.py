@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from nautical_core.modify_models import (
     CapFromUntilAnchorCallback,
@@ -588,7 +588,7 @@ def attach_lifecycle_plan(
                 diagnostic=modify_models.CompletionLifecycleDiagnostic(
                     transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
                     chain_id=str(new.get("chainID") or "").strip(),
-                    parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                    parent_link=int(str(new.get("link"))) if str(new.get("link") or "").isdigit() else None,
                     child_link=next_no,
                     stage="plan",
                     failure_kind="successor_limit",
@@ -606,7 +606,7 @@ def attach_lifecycle_plan(
             diagnostic=modify_models.CompletionLifecycleDiagnostic(
                 transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
                 chain_id=str(new.get("chainID") or "").strip(),
-                parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
+                parent_link=int(str(new.get("link"))) if str(new.get("link") or "").isdigit() else None,
                 child_link=next_no,
                 stage="plan",
                 failure_kind="planner_error",

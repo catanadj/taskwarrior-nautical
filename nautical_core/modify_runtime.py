@@ -124,6 +124,7 @@ def scheduler_service_for_task(
 ) -> Any:
     """Return one cached scheduler service for the task's scheduling state."""
     identity = str(task.get("uuid") or task.get("chainID") or "").strip()
+    cache_key: tuple[Any, ...]
     if identity:
         cache_key = (
             "task",

@@ -114,7 +114,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NoReturn, Optional
 
 if TYPE_CHECKING:
     from nautical_core.modify_models import CompletionLifecycleResult
@@ -924,7 +924,7 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
 # ------------------------------------------------------------------------------
 # Basic IO and panel
 # ------------------------------------------------------------------------------
-def _fail_and_exit(title: str, msg: str) -> None:
+def _fail_and_exit(title: str, msg: str) -> NoReturn:
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
     sys.exit(1)
 
@@ -932,7 +932,7 @@ _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
 
 
-def _fail_protocol_error(msg: str) -> None:
+def _fail_protocol_error(msg: str) -> NoReturn:
     _fail_and_exit("Protocol error", msg)
 
 
@@ -3395,7 +3395,7 @@ class _OnModifyServices:
         return self._result_cls(task=task, sanitize=sanitize)
 
     def has_nautical_fields(self, task):
-        return _task_has_nautical_fields(task)
+        return _task_has_nautical_fields(task, task)
 
     def load_core(self):
         _load_core()

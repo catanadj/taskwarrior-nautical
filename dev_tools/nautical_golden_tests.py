@@ -8160,6 +8160,32 @@ def test_on_exit_diag_blocks_pretty_print():
     expect("[nautical]   c=3  d=4\n" in out, f"missing second wrapped exit diag line: {out!r}")
 
 
+def test_on_exit_outcome_diagnostics_are_bounded():
+    """Large drains summarize excess intent diagnostics instead of flooding stderr."""
+    hook = _find_hook_file("on-exit.nautical")
+    mod = _load_hook_module(hook, "_nautical_on_exit_diag_bound_test")
+    from types import SimpleNamespace
+
+    messages = []
+    previous_limit = mod._OUTBOX_DIAG_MAX_ITEMS
+    previous_diag = mod._diag
+    mod._OUTBOX_DIAG_MAX_ITEMS = 2
+    mod._diag = messages.append
+    outcomes = [
+        SimpleNamespace(intent_id=f"intent-{index}", kind=SimpleNamespace(value="retryable"), reason="busy")
+        for index in range(5)
+    ]
+    try:
+        suppressed = mod._emit_outcome_diagnostics(outcomes)
+    finally:
+        mod._OUTBOX_DIAG_MAX_ITEMS = previous_limit
+        mod._diag = previous_diag
+    expect(suppressed == 3, f"unexpected suppressed diagnostic count: {suppressed}")
+    expect(len(messages) == 3, f"bounded diagnostics emitted unexpected lines: {messages!r}")
+    expect("intent-0" in messages[0] and "intent-1" in messages[1], f"first diagnostics were lost: {messages!r}")
+    expect("suppressed 3 additional" in messages[2], f"suppression summary was not actionable: {messages!r}")
+
+
 def test_on_modify_chain_cache_thread_safety_smoke():
     """Concurrent chain cache set/read paths should not crash or return invalid shapes."""
     import threading
@@ -30728,6 +30754,7 @@ TESTS = [
     test_on_modify_lifecycle_diagnostics_are_gated_to_stderr,
     test_on_modify_run_task_diag_bucket_stats,
     test_on_exit_diag_blocks_pretty_print,
+    test_on_exit_outcome_diagnostics_are_bounded,
     test_on_modify_chain_cache_thread_safety_smoke,
     test_on_modify_get_chain_export_filters_cached_chain_in_memory,
     test_on_modify_chain_cache_reads_through_typed_repository,

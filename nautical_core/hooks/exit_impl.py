@@ -335,6 +335,12 @@ _OUTBOX_BATCH_MAX_ITEMS = _env_int(
     min_value=1,
     max_value=100000,
 )
+_OUTBOX_DIAG_MAX_ITEMS = _env_int(
+    "NAUTICAL_OUTBOX_DIAG_MAX_ITEMS",
+    32,
+    min_value=0,
+    max_value=1000,
+)
 _OUTBOX_RETRY_MAX = _env_int("NAUTICAL_OUTBOX_RETRY_MAX", 6, min_value=0, max_value=100)
 _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0, min_value=0.1, max_value=300.0)
 _TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0, min_value=0.1, max_value=300.0)
@@ -505,12 +511,9 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
         outbox_lock_failures = 1
         _diag(f"lifecycle outbox claim failed: {result.claim.reason or 'unknown error'}")
 
-    for outcome in outcomes:
-        if outcome.reason:
-            _diag(
-                f"lifecycle intent {outcome.intent_id or '(unstaged)'}: "
-                f"{outcome.kind.value}: {outcome.reason}"
-            )
+    suppressed_diagnostics = _emit_outcome_diagnostics(outcomes)
+    if suppressed_diagnostics:
+        state.diag_stats["outbox_diagnostics_suppressed"] = suppressed_diagnostics
 
     commands = getattr(unit_of_work, "commands", None)
     if commands is not None:
@@ -534,12 +537,37 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
         "quarantined": quarantined,
         "conflicted": conflicted,
         "outbox_lock_failures": outbox_lock_failures,
+        "diagnostics_suppressed": suppressed_diagnostics,
         "drain_ms": drain_ms,
     }
 
 
 def _drain_outbox(unit_of_work) -> dict:
     return _drain_outbox_result(unit_of_work)
+
+
+def _emit_outcome_diagnostics(outcomes) -> int:
+    """Emit bounded per-intent diagnostics and return suppressed count."""
+    emitted = 0
+    suppressed = 0
+    for outcome in outcomes:
+        reason = getattr(outcome, "reason", "")
+        if not reason:
+            continue
+        if emitted < _OUTBOX_DIAG_MAX_ITEMS:
+            _diag(
+                f"lifecycle intent {getattr(outcome, 'intent_id', '') or '(unstaged)'}: "
+                f"{getattr(getattr(outcome, 'kind', None), 'value', 'unknown')}: {reason}"
+            )
+            emitted += 1
+        else:
+            suppressed += 1
+    if suppressed:
+        _diag(
+            f"lifecycle diagnostics: suppressed {suppressed} additional intent results "
+            f"(limit {_OUTBOX_DIAG_MAX_ITEMS})"
+        )
+    return suppressed
 
 
 def _redirect_stdout_to_devnull() -> None:
@@ -562,6 +590,7 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         ("quarantined", stats.get("quarantined", 0)),
         ("conflicted", stats.get("conflicted", 0)),
         ("outbox_lock_failures", stats.get("outbox_lock_failures", 0)),
+        ("diagnostics_suppressed", stats.get("diagnostics_suppressed", 0)),
         ("drain_ms", stats.get("drain_ms", 0)),
     ]
     _diag_block("on-exit drain", drain_items, columns=3)

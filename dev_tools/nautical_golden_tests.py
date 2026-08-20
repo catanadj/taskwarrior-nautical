@@ -2165,6 +2165,12 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         replay_compensation.kind is MutationOutcomeKind.ALREADY_APPLIED,
         f"child compensation replay was not idempotent: {replay_compensation}",
     )
+    modify_calls = [args for args, purpose in uow.client.calls if "modify" in args]
+    expect(modify_calls, "lifecycle mutation test did not exercise a modify command")
+    expect(
+        all(args and args[0] == "rc.hooks=off" for args in modify_calls),
+        f"lifecycle modify commands must disable hooks: {modify_calls}",
+    )
     uow.repository.unavailable = True
     unavailable = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 7))
     expect(unavailable.kind is MutationOutcomeKind.RETRYABLE, f"unavailable guard was not retryable: {unavailable}")

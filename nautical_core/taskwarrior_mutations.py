@@ -254,7 +254,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
 
     def _run_modify(self, request: MutationRequest, selectors: Sequence[str], updates: Sequence[str]) -> MutationOutcome | None:
         result = self._uow.client.execute(
-            [*selectors, "modify", *updates],
+            ["rc.hooks=off", *selectors, "modify", *updates],
             purpose=f"lifecycle {request.operation.value}",
             timeout=self._timeout,
             attempts=1,

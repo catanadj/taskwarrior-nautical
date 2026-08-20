@@ -3511,60 +3511,22 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
 
 def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
     _modify_runtime_state().task_repository = unit_of_work.repository
-    if str(old.get("status") or "").strip().lower() != "pending":
-        return
-    if not ((old.get("chainID") or new.get("chainID") or "").strip()):
-        return
     modify_expiration = _module("modify_expiration", required=False)
     if modify_expiration is None:
         _expiration_recovery_warning(new, "Expiration recovery module is unavailable; deletion was not classified.")
         return
-    try:
-        deletion_evidence = modify_expiration.classify_deleted_task(
-            new,
-            services=_expiration_services(),
-        )
-        disposition = deletion_evidence.disposition.value
-        disposition_reason = deletion_evidence.reason
-    except Exception as exc:
-        _diag(f"deleted-task disposition failed: {exc}")
-        _expiration_recovery_warning(new, "Deletion evidence could not be classified safely.")
-        return
-    if disposition == "ambiguous":
-        _expiration_recovery_warning(
-            new,
-            disposition_reason or "Deletion evidence is unavailable or malformed.",
-        )
-        return
-    if disposition == "expiration":
-        try:
-            if _handle_expired_deleted_modify(new):
-                return
-        except Exception as exc:
-            _diag(f"expiration recovery failed: {exc}")
-        _expiration_recovery_warning(
-            new,
-            "Expiration recovery could not be initialized; the chain remains active.",
-        )
-        return
-    if disposition == "manual":
-        _diag("deleted Nautical task classified as manual stop")
-
-    _ensure_terminal_chain_off(new, "manual_delete")
-    now_utc = core.now_utc()
-    try:
-        _end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)
-    except Exception as exc:
-        _diag(f"delete chain summary failed: {exc}")
-        _panel(
-            "⛔ Nautical chain stopped",
-            [
-                ("Reason", "Pending Nautical task was deleted."),
-                ("Root", _format_root_and_age(old, now_utc)),
-                ("Task", _short(old.get("uuid")) or "–"),
-            ],
-            kind="summary",
-        )
+    services = modify_expiration.DeletedModifyServices(
+        expiration=_expiration_services(),
+        terminal_chain_off=_ensure_terminal_chain_off,
+        now_utc=core.now_utc,
+        end_chain_summary=_end_chain_summary,
+        format_root_and_age=_format_root_and_age,
+        short=_short,
+        panel=_panel,
+        diag=_diag,
+        recovery_warning=_expiration_recovery_warning,
+    )
+    modify_expiration.handle_deleted_modify(old, new, services=services)
 
 
 class _OnModifyServices:

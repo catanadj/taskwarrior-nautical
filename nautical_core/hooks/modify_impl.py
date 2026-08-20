@@ -2970,64 +2970,30 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
 
 
 def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:
-    # If we reach here, the task is being completed
-    # Now we should validate CP (in addition to anchor which was already validated on modify)
-    cp_raw = (new.get("cp") or "").strip()
-    new_cp = _strip_quotes(cp_raw)
-    anchor_raw = (new.get("anchor") or "").strip()
-    new_anchor = _strip_quotes(anchor_raw)
-    anchor_file_raw = (new.get("anchor_file") or "").strip()
-    new_anchor_file = _strip_quotes(anchor_file_raw)
-    if new_anchor_file:
-        new["anchor_file"] = new_anchor_file
-    omit_raw = (new.get("omit") or "").strip()
-    new_omit = _strip_quotes(omit_raw)
-    if new_omit:
-        new["omit"] = new_omit
-    omit_file_raw = (new.get("omit_file") or "").strip()
-    new_omit_file = _strip_quotes(omit_file_raw)
-    if new_omit_file:
-        new["omit_file"] = new_omit_file
-    _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
-    _validate_omit_for_anchor_or_fail(new_anchor, new_anchor_file, new_omit, new_omit_file)
-    if new_cp or new_anchor or new_anchor_file:
-        _validate_chain_limits_on_modify(new)
-
-    if new_cp:
-        # Validate CP on completion
-        try:
-            seq = core.parse_cp_sequence(new_cp)
-            if not seq:
-                reason = core.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
-                raise ValueError(reason)
-        except ValueError as e:
-            _fail_and_exit("Invalid CP", str(e))
-        except Exception as e:
-            _diag(f"cp parse unexpected error: {e}")
-            _fail_and_exit("CP parsing error", "Unexpected error while parsing cp")
-
-        # Deep checks only if fields changed
-        if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode") or _field_changed(old, new, "anchor_file"):
-            if new_anchor:
-                _validate_anchor_on_modify(new_anchor)
-
-        if (
-            _field_changed(old, new, "cp")
-            or _field_changed(old, new, "chainMax")
-            or _field_changed(old, new, "chainUntil")
-        ) and new_cp:
-            _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
-
-        modify_lifecycle = _module("modify_lifecycle")
-        try:
-            modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
-        except Exception as exc:
-            _fail_and_exit(
-                "Nautical recurrence activation failed",
-                f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}",
-            )
-
-    return new_cp, new_anchor, new_anchor_file
+    modify_validation = _module("modify_validation")
+    modify_lifecycle = _module("modify_lifecycle")
+    return modify_validation.validate_completion_cp_and_anchor(
+        old,
+        new,
+        services=modify_validation.CompletionValidationServices(
+            strip_quotes=_strip_quotes,
+            reject_conflicting_types=_non_completion_reject_conflicting_types,
+            validate_omit=_validate_omit_for_anchor_or_fail,
+            validate_chain_limits=_validate_chain_limits_on_modify,
+            parse_cp_sequence=core.parse_cp_sequence,
+            cp_sequence_parse_error=core.cp_sequence_parse_error,
+            field_changed=_field_changed,
+            validate_anchor=_validate_anchor_on_modify,
+            validate_cp=_validate_cp_on_modify,
+            apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
+                old_task,
+                new_task,
+                short_uuid=core.short_uuid,
+            ),
+            fail=_fail_and_exit,
+            diagnostic=_diag,
+        ),
+    )
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:

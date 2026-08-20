@@ -2,7 +2,86 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
+
+
+@dataclass(slots=True)
+class CompletionValidationServices:
+    strip_quotes: Callable[[str], str]
+    reject_conflicting_types: Callable[[str, str, str], None]
+    validate_omit: Callable[[str, str, str, str], None]
+    validate_chain_limits: Callable[[dict[str, Any]], None]
+    parse_cp_sequence: Callable[[str], Any]
+    cp_sequence_parse_error: Callable[[str], str | None]
+    field_changed: Callable[[dict[str, Any], dict[str, Any], str], bool]
+    validate_anchor: Callable[[str], None]
+    validate_cp: Callable[[str, Any, Any], None]
+    apply_transition: Callable[[dict[str, Any], dict[str, Any]], None]
+    fail: Callable[[str, str], Any]
+    diagnostic: Callable[[str], None]
+
+
+def validate_completion_cp_and_anchor(
+    old: dict[str, Any],
+    new: dict[str, Any],
+    *,
+    services: CompletionValidationServices,
+) -> tuple[str, str, str]:
+    """Validate recurrence fields while a task is completing."""
+    new_cp = services.strip_quotes(str(new.get("cp") or "").strip())
+    new_anchor = services.strip_quotes(str(new.get("anchor") or "").strip())
+    new_anchor_file = services.strip_quotes(str(new.get("anchor_file") or "").strip())
+    if new_anchor_file:
+        new["anchor_file"] = new_anchor_file
+    new_omit = services.strip_quotes(str(new.get("omit") or "").strip())
+    if new_omit:
+        new["omit"] = new_omit
+    new_omit_file = services.strip_quotes(str(new.get("omit_file") or "").strip())
+    if new_omit_file:
+        new["omit_file"] = new_omit_file
+
+    services.reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
+    services.validate_omit(new_anchor, new_anchor_file, new_omit, new_omit_file)
+    if new_cp or new_anchor or new_anchor_file:
+        services.validate_chain_limits(new)
+
+    if new_cp:
+        try:
+            sequence = services.parse_cp_sequence(new_cp)
+            if not sequence:
+                reason = services.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
+                raise ValueError(reason)
+        except ValueError as exc:
+            services.fail("Invalid CP", str(exc))
+        except Exception as exc:
+            services.diagnostic(f"cp parse unexpected error: {exc}")
+            services.fail("CP parsing error", "Unexpected error while parsing cp")
+
+        if (
+            services.field_changed(old, new, "anchor")
+            or services.field_changed(old, new, "anchor_mode")
+            or services.field_changed(old, new, "anchor_file")
+        ) and new_anchor:
+            services.validate_anchor(new_anchor)
+
+        if (
+            services.field_changed(old, new, "cp")
+            or services.field_changed(old, new, "chainMax")
+            or services.field_changed(old, new, "chainUntil")
+        ):
+            services.validate_cp(new_cp, new.get("chainMax"), new.get("chainUntil"))
+
+        try:
+            services.apply_transition(old, new)
+        except Exception as exc:
+            services.fail(
+                "Nautical recurrence activation failed",
+                f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}",
+            )
+
+    return new_cp, new_anchor, new_anchor_file
 
 
 def validate_anchor_on_modify(

@@ -187,23 +187,13 @@ def _anchor_file_provider_for(
     fallback_hhmm: tuple[int, int],
     seed_base: str,
 ):
-    """Return one anchor-file provider for this hook's projection session."""
-    if not anchor_file:
-        return None
-    state = _modify_runtime_state()
-    anchor_file_dir = getattr(core, "ANCHOR_FILE_DIR", "")
-    key = (anchor_file, anchor_file_dir, fallback_hhmm, seed_base)
-    provider = state.anchor_file_providers.get(key)
-    if provider is None:
-        provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
-            anchor_file,
-            anchor_file_dir=anchor_file_dir,
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
-        )
-        state.anchor_file_providers[key] = provider
-    return provider
+    return _module("modify_runtime").anchor_file_provider_for(
+        anchor_file,
+        fallback_hhmm=fallback_hhmm,
+        seed_base=seed_base,
+        state=_modify_runtime_state(),
+        core=core,
+    )
 
 
 def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int, int]:

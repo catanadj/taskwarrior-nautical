@@ -164,6 +164,32 @@ def scheduler_service_for_task(
     return service
 
 
+def anchor_file_provider_for(
+    anchor_file: str,
+    *,
+    fallback_hhmm: tuple[int, int],
+    seed_base: str,
+    state: ModifyRuntimeState,
+    core: Any,
+) -> Any:
+    """Return one cached anchor-file provider for a projection session."""
+    if not anchor_file:
+        return None
+    anchor_file_dir = getattr(core, "ANCHOR_FILE_DIR", "")
+    key = (anchor_file, anchor_file_dir, fallback_hhmm, seed_base)
+    provider = state.anchor_file_providers.get(key)
+    if provider is None:
+        provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
+            anchor_file,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
+        state.anchor_file_providers[key] = provider
+    return provider
+
+
 @dataclass(slots=True)
 class ModifyRuntimeServices:
     state: ModifyRuntimeState
@@ -330,6 +356,7 @@ __all__ = (
     'ModifyRuntimeServices',
     'new_runtime_state',
     'scheduler_service_for_task',
+    'anchor_file_provider_for',
     'build_anchor_feedback_services',
     'build_cp_feedback_services',
     'build_preflight_services',

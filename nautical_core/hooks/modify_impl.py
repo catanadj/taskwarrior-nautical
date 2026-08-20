@@ -2252,116 +2252,35 @@ def _anchor_included_occurrences(
 
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):
-    """
-    Estimate the final due date when chainMax cap is reached.
-    Returns the due datetime of link #chainMax.
-    """
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if not cpmax:
-        return None
-
-    cur_no = core.coerce_int(task.get("link"), 1)
-    if cur_no >= cpmax:
-        return None
-
-    cp_str = task.get("cp") or ""
-    tokens = core.parse_cp_sequence_tokens(cp_str)
-    if not tokens:
-        return None
-
-    fut_dt = next_due_utc
-    fut_no = cur_no + 1
-    iterations = 0
-
-    # Step forward from next due until we reach cap_no
-    while fut_no < cpmax:
-        iterations += 1
-        if iterations > _MAX_ITERATIONS:
-            _diag(
-                f"chainMax forecast stopped after {_MAX_ITERATIONS} occurrences; "
-                "final date is unavailable"
-            )
-            return None
-        td = _cp_sequence_period_for_link(
-            tokens,
-            cp_str,
-            fut_no,
-            str(task.get("chainID") or "").strip(),
-        )
-        fut_no += 1
-        fut_dt = _cp_add_td(fut_dt, td)
-
-    return fut_dt
+    return _module("modify_completion_compute").estimate_cp_final_by_max(
+        task,
+        next_due_utc,
+        coerce_int=core.coerce_int,
+        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+        sequence_period_for_link=_cp_sequence_period_for_link,
+        add_period=_cp_add_td,
+        max_iterations=_MAX_ITERATIONS,
+        diagnostic=_diag,
+    )
 
 
 def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
-    """
-    Estimate the final due date when chainMax cap is reached for anchors.
-    Returns the due datetime of link #chainMax.
-    """
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if not cpmax:
-        return None
-
-    cur_no = core.coerce_int(task.get("link"), 1)
-    if cur_no >= cpmax:
-        return None
-
-    seed_base = _recurrence_seed_base(task)
-    nxt_local = _to_local_cached(next_due_utc)
-
-    # Use a stable default seed (prefer the original due date).
-    due0, _ = _safe_parse_datetime(task.get("due"))
-    default_seed = _to_local_cached(due0 or next_due_utc).date()
-
-    fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
-    scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
-    anchor_file = (task.get("anchor_file") or "").strip()
-    anchor_file_provider = None
-    if anchor_file:
-        anchor_file_provider = _anchor_file_provider_for(
-            anchor_file, fallback_hhmm=fallback_hhmm, seed_base=seed_base
-        )
-    fut_no = cur_no + 1
-    fut_local = nxt_local
-    iterations = 0
-    while fut_no < cpmax:
-        iterations += 1
-        if iterations > _MAX_ITERATIONS:
-            _diag(
-                f"chainMax forecast stopped after {_MAX_ITERATIONS} occurrences; "
-                "final date is unavailable"
-            )
-            return None
-        if anchor_file:
-            future = _anchor_included_occurrences(
-                task,
-                after_local_dt=fut_local,
-                inclusive=False,
-                limit=2,
-                fallback_hhmm=fallback_hhmm,
-                omit_dnf=omit_dnf,
-                seed_base=seed_base,
-                default_seed_date=default_seed,
-                dnf=dnf,
-                anchor_file_provider=anchor_file_provider,
-            )
-            fut_local = future[0] if future else None
-        else:
-            fut_local = scheduler(
-                dnf,
-                fut_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=omit_dnf,
-                fallback_hhmm=fallback_hhmm,
-            )
-        if fut_local is None:
-            return None
-        fut_no += 1
-
-    return fut_local.astimezone(timezone.utc)
+    return _module("modify_completion_compute").estimate_anchor_final_by_max(
+        task,
+        next_due_utc,
+        dnf,
+        coerce_int=core.coerce_int,
+        recurrence_seed_base=_recurrence_seed_base,
+        to_local_cached=_to_local_cached,
+        safe_parse_datetime=_safe_parse_datetime,
+        anchor_file_fallback_hhmm=_anchor_file_fallback_hhmm,
+        omit_dnf_from_parent=_omit_dnf_from_parent,
+        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
+        anchor_file_provider_for=_anchor_file_provider_for,
+        anchor_included_occurrences=_anchor_included_occurrences,
+        diagnostic=_diag,
+        max_iterations=_MAX_ITERATIONS,
+    )
 
 
 # Helper to validate chainUntil is in the future

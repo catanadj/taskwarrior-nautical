@@ -352,6 +352,135 @@ def cap_from_until_anchor(
     return current_link + count, last_hit.astimezone(timezone.utc)
 
 
+def estimate_cp_final_by_max(
+    task: dict[str, Any],
+    next_due_utc: Any,
+    *,
+    coerce_int: Any,
+    parse_cp_sequence_tokens: Any,
+    sequence_period_for_link: Any,
+    add_period: Any,
+    max_iterations: int,
+    diagnostic: Any | None = None,
+) -> Any:
+    """Estimate the final CP due date permitted by ``chainMax``."""
+    chain_max = coerce_int(task.get("chainMax"), 0)
+    if not chain_max:
+        return None
+    current_link = coerce_int(task.get("link"), 1)
+    if current_link >= chain_max:
+        return None
+
+    cp_str = task.get("cp") or ""
+    tokens = parse_cp_sequence_tokens(cp_str)
+    if not tokens:
+        return None
+
+    future_due = next_due_utc
+    future_link = current_link + 1
+    iterations = 0
+    while future_link < chain_max:
+        iterations += 1
+        if iterations > max_iterations:
+            if callable(diagnostic):
+                diagnostic(
+                    f"chainMax forecast stopped after {max_iterations} occurrences; "
+                    "final date is unavailable"
+                )
+            return None
+        period = sequence_period_for_link(
+            tokens,
+            cp_str,
+            future_link,
+            str(task.get("chainID") or "").strip(),
+        )
+        future_link += 1
+        future_due = add_period(future_due, period)
+    return future_due
+
+
+def estimate_anchor_final_by_max(
+    task: dict[str, Any],
+    next_due_utc: Any,
+    dnf: Any,
+    *,
+    coerce_int: Any,
+    recurrence_seed_base: Any,
+    to_local_cached: Any,
+    safe_parse_datetime: Any,
+    anchor_file_fallback_hhmm: Any,
+    omit_dnf_from_parent: Any,
+    recurrence_evaluator_for_task: Any,
+    anchor_file_provider_for: Any,
+    anchor_included_occurrences: Any,
+    diagnostic: Any | None = None,
+    max_iterations: int,
+) -> Any:
+    """Estimate the final anchor due date permitted by ``chainMax``."""
+    chain_max = coerce_int(task.get("chainMax"), 0)
+    if not chain_max:
+        return None
+    current_link = coerce_int(task.get("link"), 1)
+    if current_link >= chain_max:
+        return None
+
+    seed_base = recurrence_seed_base(task)
+    next_local = to_local_cached(next_due_utc)
+    due0, _ = safe_parse_datetime(task.get("due"))
+    default_seed = to_local_cached(due0 or next_due_utc).date()
+    fallback_hhmm = anchor_file_fallback_hhmm(task, next_local)
+    _omit_expr, omit_dnf = omit_dnf_from_parent(task)
+    scheduler = recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
+    anchor_file = (task.get("anchor_file") or "").strip()
+    anchor_file_provider = None
+    if anchor_file:
+        anchor_file_provider = anchor_file_provider_for(
+            anchor_file,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+        )
+
+    future_link = current_link + 1
+    future_local = next_local
+    iterations = 0
+    while future_link < chain_max:
+        iterations += 1
+        if iterations > max_iterations:
+            if callable(diagnostic):
+                diagnostic(
+                    f"chainMax forecast stopped after {max_iterations} occurrences; "
+                    "final date is unavailable"
+                )
+            return None
+        if anchor_file:
+            future = anchor_included_occurrences(
+                task,
+                after_local_dt=future_local,
+                inclusive=False,
+                limit=2,
+                fallback_hhmm=fallback_hhmm,
+                omit_dnf=omit_dnf,
+                seed_base=seed_base,
+                default_seed_date=default_seed,
+                dnf=dnf,
+                anchor_file_provider=anchor_file_provider,
+            )
+            future_local = future[0] if future else None
+        else:
+            future_local = scheduler(
+                dnf,
+                future_local,
+                default_seed_date=default_seed,
+                seed_base=seed_base,
+                omit_dnf=omit_dnf,
+                fallback_hhmm=fallback_hhmm,
+            )
+        if future_local is None:
+            return None
+        future_link += 1
+    return future_local.astimezone(timezone.utc)
+
+
 def completion_cap_guard_or_stop(
     new: dict[str, Any],
     next_no: int,

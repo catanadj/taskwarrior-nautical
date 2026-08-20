@@ -2254,7 +2254,7 @@ def test_child_import_rejects_incomplete_existing_rows():
 
 
 def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
-    """Batch child existence checks avoid duplicate UUID exports safely."""
+    """Batch child-absence checks avoid duplicate pre-import UUID exports safely."""
     from nautical_core.integration_models import (
         Absent, ChildImportPayload, Found, GuardTimestamp, GuardTimestampField,
         MutationGuard, MutationOperation, MutationOutcomeKind, MutationRequest,
@@ -2285,7 +2285,8 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
 
     class Snapshot:
         def uuid_matches(self, uuid_value):
-            return (child,) if str(uuid_value).lower() == child_uuid else ()
+            del uuid_value
+            return ()
 
     class Repo:
         def __init__(self):
@@ -2316,7 +2317,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
 
     uow = Uow()
     service = TaskwarriorMutationService(uow)
-    service.prefetch_child_imports((payload,))
+    service.prefetch_lifecycle_batch((payload,))
     guard = MutationGuard(
         parent_uuid,
         "completed",
@@ -2327,10 +2328,12 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
         0,
         "on",
     )
-    outcome = service.apply(MutationRequest(MutationOperation.CHILD_IMPORT, guard, payload))
-    expect(outcome.kind is MutationOutcomeKind.ALREADY_APPLIED, f"prefetched child was not recognized: {outcome}")
+    expect(
+        child_uuid.lower() in service._prefetched_children,
+        "authoritative absent child was not retained for the import decision",
+    )
     expect(uow.repository.broad_calls == 1, f"prefetch used {uow.repository.broad_calls} broad reads")
-    expect(uow.repository.uuid_calls == [parent_uuid], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
+    expect(uow.repository.uuid_calls == [], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
 
 
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():

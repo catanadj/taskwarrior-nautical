@@ -165,15 +165,16 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
         self._uow = unit_of_work
         self._timeout = max(0.05, float(timeout))
-        self._prefetched_children: dict[str, Found | Absent] = {}
+        self._prefetched_children: dict[str, Absent] = {}
 
-    def prefetch_child_imports(self, payloads: Sequence[ChildImportPayload]) -> None:
-        """Preload child existence for one drain without caching mutations.
+    def prefetch_lifecycle_batch(self, payloads: Sequence[ChildImportPayload]) -> None:
+        """Preload safe child-absence decisions for one drain.
 
-        This snapshot is used only for the decision immediately before an
-        import.  Every actual import still performs a fresh postcondition read,
-        and any unavailable/ambiguous snapshot falls back to the normal
-        authoritative UUID query.
+        A cached absence can only skip a redundant pre-import UUID read: the
+        import command remains authoritative if another process creates the
+        child.  Present rows are deliberately *not* cached because linking a
+        stale or deleted child would weaken idempotency; those paths retain a
+        fresh UUID read and postcondition verification.
         """
         self._prefetched_children.clear()
         wanted = tuple(payloads)
@@ -207,11 +208,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 matches = tuple(uuid_matches(payload.child_uuid))
             except Exception:
                 continue
-            if len(matches) == 1:
-                self._prefetched_children[payload.child_uuid.lower()] = Found(
-                    matches[0], f"prefetch:uuid:{payload.child_uuid.lower()}"
-                )
-            elif not matches:
+            if not matches:
                 self._prefetched_children[payload.child_uuid.lower()] = Absent(
                     f"prefetch:uuid:{payload.child_uuid.lower()}", "prefetch snapshot contains no matching UUID"
                 )

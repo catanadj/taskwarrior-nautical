@@ -325,7 +325,7 @@ class LifecycleApplicationService:
             return DrainResult(claim=claim, outcomes=())
         config = str(configuration_fingerprint or "").strip()
         schedule = str(schedule_fingerprint or "").strip()
-        prefetch = getattr(self._mutations, "prefetch_child_imports", None)
+        prefetch = getattr(self._mutations, "prefetch_lifecycle_batch", None)
         if callable(prefetch):
             payloads = tuple(
                 payload

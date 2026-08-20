@@ -145,6 +145,22 @@ def load_core_helper_module(
     if helper_path is None:
         return None, helper_path, None
     try:
+        # Helpers are loaded by file path, so Python does not automatically
+        # add the installed package parent to sys.path.  Heavy hook modules
+        # then fail on imports such as ``from nautical_core...`` when
+        # Taskwarrior launches them from its hooks directory.  Establish the
+        # package parent without importing the package itself, preserving the
+        # plain-task fast path and lazy module loading.
+        package_dir = target.parent if target is not None else None
+        if package_dir is None:
+            for parent in (helper_path.parent, helper_path.parent.parent):
+                if parent.name == "nautical_core":
+                    package_dir = parent
+                    break
+        if package_dir is not None:
+            package_parent = str(package_dir.parent)
+            if package_parent not in sys.path:
+                sys.path.insert(0, package_parent)
         spec = importlib.util.spec_from_file_location(module_name, helper_path)
         if spec is None or spec.loader is None:
             raise ImportError(f"could not load {helper_path}")

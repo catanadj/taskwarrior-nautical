@@ -990,13 +990,19 @@ def _workflow_outbox_pending(taskdata: Path) -> list[dict]:
     ]
 
 
-def _stage_workflow_plans(taskdata: Path, plans: list) -> None:
+def _stage_workflow_plans(
+    taskdata: Path,
+    plans: list,
+    *,
+    configuration_fingerprint: str,
+    schedule_fingerprint: str,
+) -> None:
     repository = lifecycle_outbox.LifecycleOutboxRepository(taskdata)
     for plan in plans:
         result = repository.enqueue(
             plan,
-            configuration_fingerprint="perf-config-v1",
-            schedule_fingerprint="perf-schedule-v1",
+            configuration_fingerprint=configuration_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
         )
         if not result.ok:
             raise RuntimeError(f"workflow outbox enqueue failed: {result.reason or result.kind.value}")
@@ -1071,7 +1077,7 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "chainID": chain_id,
             "link": child_link,
             "prevLink": parent_uuid[:8],
-            "due": "20260101T090000Z",
+            "due": "20260102T090000Z",
         }
         guard = {"status": "completed", "chain": "on", "chainID": chain_id, "link": str(parent_link)}
         plan = LifecyclePlan.from_mappings(
@@ -1115,6 +1121,7 @@ def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: s
             "link": 1,
             "chainMax": limit,
             "due": "20260101T090000Z",
+            "modified": "20260101T090000Z",
         }
     return {
         "uuid": parent_uuid,
@@ -1127,6 +1134,7 @@ def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: s
         "link": 1,
         "chainMax": limit,
         "due": "20260105T090000Z",
+        "modified": "20260105T090000Z",
     }
 
 
@@ -1192,7 +1200,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             "        sys.stderr.write(done.stderr or '')\n"
             "        if done.returncode:\n"
             "            raise SystemExit(done.returncode)\n"
-            "    sys.stderr.write('simulated partial import failure\\n')\n"
+            "    sys.stderr.write('database is locked after partial import\\n')\n"
             "    raise SystemExit(1)\n"
             "raise SystemExit(subprocess.run([real, *args], text=True).returncode)\n",
             encoding="utf-8",
@@ -1224,6 +1232,35 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 "TZ": "UTC",
             }
         )
+        fingerprint_taskdata = root / "fingerprint-probe"
+        fingerprint_taskdata.mkdir()
+        fingerprint_probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import json, os, nautical_core as core; "
+                    "core.reload_taskdata_config(os.environ['TASKDATA']); "
+                    "print(json.dumps({'configuration': core.effective_config_fingerprint(), "
+                    "'schedule': core.scheduler_config_fingerprint()}))"
+                ),
+            ],
+            text=True,
+            capture_output=True,
+            env=dict(base_env, TASKDATA=str(fingerprint_taskdata)),
+            timeout=30.0,
+        )
+        if fingerprint_probe.returncode != 0:
+            raise RuntimeError(
+                "workflow fingerprint probe failed: "
+                f"{(fingerprint_probe.stderr or fingerprint_probe.stdout or '').strip()}"
+            )
+        try:
+            workflow_fingerprints = json.loads(fingerprint_probe.stdout or "{}")
+            config_fingerprint = str(workflow_fingerprints["configuration"])
+            schedule_fingerprint = str(workflow_fingerprints["schedule"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError("workflow fingerprint probe returned invalid JSON") from exc
         for key in ("NAUTICAL_DIAG", "NAUTICAL_DIAG_LOG", "NAUTICAL_PROFILE"):
             base_env.pop(key, None)
 
@@ -1271,6 +1308,10 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 "link": 1,
                 "due": "20260101T090000Z",
                 "until": "20260101T200000Z",
+                # Lifecycle plans require the Taskwarrior modified guard;
+                # preserve it in the synthetic hook snapshot just as an
+                # exported task would.
+                "modified": "20260101T090000Z",
             }
             new = dict(old, status="deleted", end="20260102T090000Z")
             taskdata = root / f"expiration-recovery-{sample_index}"
@@ -1403,7 +1444,12 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                     f"{(preload_probe.stderr or preload_probe.stdout or '').strip()}"
                 )
             queue_plans = _bind_workflow_plans_to_parents(queue_plans, preload_rows)
-            _stage_workflow_plans(queue_data, queue_plans)
+            _stage_workflow_plans(
+                queue_data,
+                queue_plans,
+                configuration_fingerprint=config_fingerprint,
+                schedule_fingerprint=schedule_fingerprint,
+            )
 
             queue_elapsed, _queue_result, _queue_stderr = _run_workflow_hook_result(
                 ROOT / "on-exit.nautical",
@@ -1516,7 +1562,12 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 partial_plans,
                 json.loads(partial_parent_probe.stdout or "[]"),
             )
-            _stage_workflow_plans(partial_data, partial_plans)
+            _stage_workflow_plans(
+                partial_data,
+                partial_plans,
+                configuration_fingerprint=config_fingerprint,
+                schedule_fingerprint=schedule_fingerprint,
+            )
             partial_env["NAUTICAL_BENCH_FAIL_MODE"] = "partial-import"
             try:
                 partial_stats_path.unlink()

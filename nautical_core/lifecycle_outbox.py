@@ -704,19 +704,70 @@ class LifecycleOutboxRepository:
 
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
-    def status(self, *, limit: int = 20) -> tuple[OutboxResult, dict[str, Any]]:
-        empty = {"schema_version": OUTBOX_SCHEMA_VERSION, "states": {}, "records": []}
+    def status(
+        self,
+        *,
+        limit: int = 20,
+        stale_after: float = 300.0,
+    ) -> tuple[OutboxResult, dict[str, Any]]:
+        """Return a typed, read-only operational view of the outbox.
+
+        Operator tools use this method instead of decoding the SQLite schema
+        themselves.  The repository remains the owner of row validation,
+        state names, failure evidence, and lease semantics.
+        """
+        empty = {
+            "schema_version": OUTBOX_SCHEMA_VERSION,
+            "integrity": "not_checked",
+            "states": {},
+            "stale_claims": 0,
+            "max_attempts": 0,
+            "records": [],
+        }
         conn: sqlite3.Connection | None = None
+        now = self._clock()
         try:
-            conn = self._connect()
-            self._initialize(conn)
-            self._secure_state_files()
+            # Status is an operator read, not an initialization path.  Do not
+            # create the state directory, negotiate WAL, or repair a schema
+            # merely because a diagnostic command was run.
+            if not self.path.exists():
+                return OutboxResult(OutboxResultKind.APPLIED), empty
+            conn = sqlite3.connect(
+                f"file:{self.path.resolve()}?mode=ro",
+                uri=True,
+                timeout=self.connect_timeout,
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            version_row = conn.execute("PRAGMA user_version").fetchone()
+            version = int(version_row[0] if version_row else 0)
+            empty["schema_version"] = version
+            if version != OUTBOX_SCHEMA_VERSION:
+                raise LifecycleOutboxError(
+                    f"outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
+                )
+            self._validate_schema(conn)
+            integrity_row = conn.execute("PRAGMA quick_check").fetchone()
+            integrity = str(integrity_row[0] if integrity_row else "unknown")
+            empty["integrity"] = integrity
             states = {
                 str(row[0]): int(row[1])
                 for row in conn.execute(
                     "SELECT processing_state, COUNT(*) FROM lifecycle_outbox GROUP BY processing_state"
                 )
             }
+            stale_after = max(0.0, float(stale_after))
+            empty["stale_claims"] = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM lifecycle_outbox "
+                    "WHERE processing_state=? AND lease_expires_at <= ?",
+                    (OutboxProcessingState.CLAIMED.value, now - stale_after),
+                ).fetchone()[0]
+                or 0
+            )
+            empty["max_attempts"] = int(
+                conn.execute("SELECT COALESCE(MAX(attempts), 0) FROM lifecycle_outbox").fetchone()[0] or 0
+            )
             records = []
             for row in conn.execute(
                 "SELECT * FROM lifecycle_outbox ORDER BY updated_at ASC, intent_id ASC LIMIT ?",
@@ -731,6 +782,11 @@ class LifecycleOutboxRepository:
                             "stage": record.stage.value,
                             "attempts": record.attempts,
                             "lease_expires_at": record.lease_expires_at,
+                            "lease_age_s": (
+                                max(0, int(now - record.lease_expires_at))
+                                if record.lease_expires_at
+                                else 0
+                            ),
                             "failure": None if record.failure is None else {
                                 "code": record.failure.code,
                                 "message": record.failure.message,
@@ -738,12 +794,14 @@ class LifecycleOutboxRepository:
                         }
                     )
                 except LifecycleOutboxError as exc:
-                    records.append({"intent_id": str(row["intent_id"]), "state": "poison", "reason": str(exc)})
-            return OutboxResult(OutboxResultKind.APPLIED), {
-                "schema_version": OUTBOX_SCHEMA_VERSION,
-                "states": states,
-                "records": records,
-            }
+                    records.append(
+                        {"intent_id": str(row["intent_id"]), "state": "poison", "reason": str(exc)}
+                    )
+            empty["states"] = states
+            empty["records"] = records
+            return OutboxResult(OutboxResultKind.APPLIED), empty
+        except LifecycleOutboxError as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), empty
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), empty
         except Exception as exc:

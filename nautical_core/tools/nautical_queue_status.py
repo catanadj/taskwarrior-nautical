@@ -7,9 +7,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
-import time
 from typing import Any
 
 
@@ -18,7 +16,11 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core.lifecycle_outbox import OUTBOX_SCHEMA_VERSION, lifecycle_outbox_path  # noqa: E402
+from nautical_core.lifecycle_outbox import (  # noqa: E402
+    OUTBOX_SCHEMA_VERSION,
+    LifecycleOutboxRepository,
+    lifecycle_outbox_path,
+)
 
 
 _JSON_SCHEMA = "nautical.lifecycle_outbox_status"
@@ -49,85 +51,51 @@ def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict
     if not path.exists():
         return summary, issues
     summary["exists"] = True
-    conn: sqlite3.Connection | None = None
-    now = time.time()
-    try:
-        conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=0.5)
-        integrity_row = conn.execute("PRAGMA quick_check").fetchone()
-        integrity = str(integrity_row[0] if integrity_row else "unknown")
-        summary["integrity"] = integrity
-        if integrity.lower() != "ok":
-            issues.append(f"lifecycle outbox integrity check failed: {integrity}")
-        version_row = conn.execute("PRAGMA user_version").fetchone()
-        version = int(version_row[0] if version_row else 0)
-        schema = summary["schema"]
-        schema["version"] = version
-        if version != OUTBOX_SCHEMA_VERSION:
-            schema["status"] = "error"
-            issues.append(
-                f"lifecycle outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
-            )
-            return summary, issues
-        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
-        required = {"intent_id", "processing_state", "lifecycle_stage", "attempts", "lease_expires_at", "failure_json"}
-        missing = sorted(required - columns)
-        if missing:
-            schema["status"] = "error"
-            issues.append(f"lifecycle outbox schema missing {', '.join(missing)}")
-            return summary, issues
+    # ``path`` is the derived .../.nautical-state/database path; the
+    # repository accepts the Taskdata root and owns that derivation.
+    repository = LifecycleOutboxRepository(path.parent.parent)
+    result, data = repository.status(limit=limit, stale_after=stale_after)
+    summary["integrity"] = str(data.get("integrity") or "not_checked")
+    summary["states"] = dict(data.get("states") or {})
+    summary["stale_claims"] = int(data.get("stale_claims") or 0)
+    summary["max_attempts"] = int(data.get("max_attempts") or 0)
+    version = int(data.get("schema_version") or 0)
+    schema = summary["schema"]
+    schema["version"] = version
+    if result.ok and version == OUTBOX_SCHEMA_VERSION:
         schema["status"] = "ok"
-        states = {
-            str(row[0]): int(row[1])
-            for row in conn.execute("SELECT processing_state, COUNT(*) FROM lifecycle_outbox GROUP BY processing_state")
+    else:
+        schema["status"] = "error"
+        reason = result.reason or f"lifecycle outbox schema v{version} is incompatible"
+        summary["error"] = reason
+        issues.append(f"lifecycle outbox error: {reason}")
+        return summary, issues
+    if summary["integrity"].lower() != "ok":
+        issues.append(f"lifecycle outbox integrity check failed: {summary['integrity']}")
+    stale = summary["stale_claims"]
+    if stale:
+        issues.append(f"{stale} stale lifecycle outbox claim{'s' if stale != 1 else ''}")
+    states = summary["states"]
+    for state in ("retry", "manual_review", "quarantined"):
+        count = int(states.get(state, 0))
+        if count:
+            issues.append(f"{count} lifecycle intent{'s' if count != 1 else ''} in {state}")
+    for record in data.get("records") or []:
+        item: dict[str, Any] = {
+            "intent_id": str(record.get("intent_id") or ""),
+            "state": str(record.get("state") or ""),
+            "stage": str(record.get("stage") or ""),
+            "attempts": int(record.get("attempts") or 0),
+            "lease_age_s": int(record.get("lease_age_s") or 0),
         }
-        summary["states"] = states
-        stale = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM lifecycle_outbox WHERE processing_state='claimed' AND lease_expires_at <= ?",
-                (now - max(0.0, stale_after),),
-            ).fetchone()[0]
-            or 0
-        )
-        summary["stale_claims"] = stale
-        summary["max_attempts"] = int(
-            conn.execute("SELECT COALESCE(MAX(attempts), 0) FROM lifecycle_outbox").fetchone()[0] or 0
-        )
-        if stale:
-            issues.append(f"{stale} stale lifecycle outbox claim{'s' if stale != 1 else ''}")
-        for state in ("retry", "manual_review", "quarantined"):
-            count = int(states.get(state, 0))
-            if count:
-                issues.append(f"{count} lifecycle intent{'s' if count != 1 else ''} in {state}")
-        for row in conn.execute(
-            "SELECT intent_id, processing_state, lifecycle_stage, attempts, lease_expires_at, failure_json "
-            "FROM lifecycle_outbox ORDER BY updated_at ASC, intent_id ASC LIMIT ?",
-            (max(0, int(limit)),),
-        ):
-            item: dict[str, Any] = {
-                "intent_id": str(row[0]),
-                "state": str(row[1]),
-                "stage": str(row[2]),
-                "attempts": int(row[3] or 0),
-                "lease_age_s": max(0, int(now - float(row[4] or 0))) if row[4] else 0,
-            }
-            if row[5]:
-                try:
-                    failure = json.loads(str(row[5]))
-                    if isinstance(failure, dict):
-                        item["reason"] = str(failure.get("message") or "")
-                        item["failure_code"] = str(failure.get("code") or "")
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    item["reason"] = "invalid failure evidence"
-            summary["sample"].append(item)
-        return summary, issues
-    except (OSError, sqlite3.Error) as exc:
-        summary["error"] = str(exc)
-        summary["schema"]["status"] = "error"
-        issues.append(f"lifecycle outbox error: {exc}")
-        return summary, issues
-    finally:
-        if conn is not None:
-            conn.close()
+        failure = record.get("failure")
+        if isinstance(failure, dict):
+            item["reason"] = str(failure.get("message") or "")
+            item["failure_code"] = str(failure.get("code") or "")
+        elif record.get("reason"):
+            item["reason"] = str(record["reason"])
+        summary["sample"].append(item)
+    return summary, issues
 
 
 def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[str, Any]:

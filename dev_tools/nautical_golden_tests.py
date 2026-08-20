@@ -5933,6 +5933,24 @@ def test_queue_status_json_ok_empty_taskdata():
         expect((outbox.get("schema") or {}).get("status") == "absent", f"unexpected outbox schema: {obj}")
 
 
+def test_queue_status_does_not_initialize_missing_outbox():
+    """A read-only queue inspection must not create lifecycle state."""
+    from nautical_core.lifecycle_outbox import lifecycle_outbox_path
+
+    path = os.path.join(CORE_TOOLS, "nautical_queue_status.py")
+    with tempfile.TemporaryDirectory() as td:
+        state_dir = Path(td) / ".nautical-state"
+        proc = subprocess.run(
+            [sys.executable, path, "--taskdata", td, "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        expect(proc.returncode == 0, f"queue status returned {proc.returncode}: {proc.stderr!r}")
+        expect(not state_dir.exists(), f"queue status initialized state directory: {state_dir}")
+        expect(not lifecycle_outbox_path(Path(td)).exists(), "queue status created an outbox database")
+
+
 def test_doctor_json_has_stable_schema_marker():
     """Doctor JSON should expose a stable schema marker for automation."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -30436,6 +30454,7 @@ TESTS = [
     test_queue_status_and_doctor_report_schema_health,
     test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them,
     test_queue_status_json_ok_empty_taskdata,
+    test_queue_status_does_not_initialize_missing_outbox,
     test_doctor_json_has_stable_schema_marker,
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,

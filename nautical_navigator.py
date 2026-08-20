@@ -2167,7 +2167,11 @@ class TaskAnalyzer:
                     cur_after = due_local_dt
                 else:
                     next_day = start_from_date + datetime.timedelta(days=1)
-                    cur_after = core.to_local(core.build_local_datetime(next_day, (0, 0))) - datetime.timedelta(microseconds=1)
+                    cur_after = datetime.datetime.combine(
+                        next_day,
+                        datetime.time.min,
+                        tzinfo=LOCAL_ZONE,
+                    ) - datetime.timedelta(microseconds=1)
                 from nautical_core.occurrence_outcomes import ExhaustedOccurrence
                 from nautical_core.scheduler_cursor import OccurrenceCursor
 

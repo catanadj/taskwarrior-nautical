@@ -7734,7 +7734,10 @@ def test_effective_config_snapshot_isolated_and_provenanced():
     expect(str(snapshot.get("source") or ""), f"effective config source missing: {snapshot!r}")
     original_tz = values.get("tz")
     values["tz"] = "mutated-in-test"
-    expect(core.LOCAL_TZ_NAME == original_tz, "effective config snapshot leaked mutable state")
+    expect(
+        core._core_config.LOCAL_TZ_NAME == original_tz,
+        "effective config snapshot leaked mutable state",
+    )
 
 
 def test_config_fingerprint_invalidates_persistent_cache_keys():

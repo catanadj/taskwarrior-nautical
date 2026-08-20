@@ -2446,86 +2446,15 @@ def _fmt_secs_delta(now_ref, secs: float | None) -> str:
 
 
 def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
-    if not chain:
-        return []
-
-    # Get link number for sorting - handle tasks without link numbers
-    def get_link(obj):
-        link = obj.get("link")
-        if link is None or link == "":
-            return -1  # Put tasks without links at the beginning
-        return core.coerce_int(link, 999999)
-
-    # Sort by link number descending (most recent first)
-    # But tasks without links (link=-1) should go at the end (oldest)
-    chain_sorted = sorted(chain, key=get_link, reverse=True)
-
-    # Filter out tasks without link numbers for display (they're usually root tasks)
-    chain_with_links = [t for t in chain_sorted if get_link(t) > 0]
-
-    # Determine max link number for formatting (only from tasks with links)
-    if chain_with_links:
-        max_link = max(get_link(obj) for obj in chain_with_links)
-        label_width = len(str(max_link)) + 1  # +1 for the # symbol
-    else:
-        label_width = 4  # default width
-
-    def history_line(obj: dict, no: int) -> str:
-        end = _dtparse(obj.get("end"))
-        due = _dtparse(obj.get("due"))
-        is_deleted = str(obj.get("status") or "").strip().lower() == "deleted"
-        if is_deleted and not end:
-            end_s = "deleted"
-            delta = ""
-            marker = "×"
-        else:
-            end_s = _fmtlocal(end) if end else "(no end)"
-            delta = _fmt_on_time_delta(due, end)
-            marker = "✓"
-        short = _short(obj.get("uuid"))
-        lab = f"[bold]#{no:<{label_width}}[/]"
-        return f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
-
-    # If chain has more than 10 tasks, show top 3 (most recent) and bottom 3 (oldest)
-    if len(chain_with_links) > 10:
-        # Top 3: most recent tasks (highest link numbers)
-        top_tasks = chain_with_links[:3]
-
-        # Bottom 3: oldest tasks (lowest link numbers)
-        bottom_tasks = chain_with_links[-3:]  # Already in descending order (e.g., [3, 2, 1])
-
-        # Create lines for top tasks (most recent)
-        top_lines = []
-        for obj in top_tasks:
-            no = get_link(obj)
-            line = history_line(obj, no)
-            # Highlight the most recent task
-            if no == get_link(chain_with_links[0]):
-                line = f"[green]{line}[/]"
-            top_lines.append(line)
-
-        # Add ellipsis
-        ellipsis_line = f"[dim]{' ' * (label_width + 4)}... ({len(chain_with_links) - 6} more tasks) ...[/dim]"
-
-        # Create lines for bottom tasks (oldest) - also in descending order
-        bottom_lines = []
-        for obj in bottom_tasks:  # Already in descending order (e.g., 3, 2, 1)
-            no = get_link(obj)
-            bottom_lines.append(history_line(obj, no))
-
-        return top_lines + [ellipsis_line] + bottom_lines
-
-    # For chains with <= 10 tasks, show all in reverse order (most recent at top)
-    lines = []
-    for obj in chain_with_links[:n]:
-        no = get_link(obj)
-        line = history_line(obj, no)
-        # Highlight the most recent task
-        if no == get_link(chain_with_links[0]):
-            line = f"[green]{line}[/]"
-        lines.append(line)
-
-    return lines
+    return _module("modify_chain_summary").last_n_timeline(
+        chain,
+        n,
+        coerce_int=core.coerce_int,
+        parse_datetime=_dtparse,
+        format_local=_fmtlocal,
+        format_on_time_delta=_fmt_on_time_delta,
+        short_uuid=_short,
+    )
 
 def _end_summary_current(current: dict, current_task: dict | None) -> dict:
     return _module("modify_chain_summary").summary_current(current, current_task)

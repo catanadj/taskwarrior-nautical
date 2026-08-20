@@ -114,4 +114,79 @@ def limits_row(
         rows.append(("Chain limits", "None"))
 
 
-__all__ = ("kind_rows", "limits_row", "span_fields", "stats_rows", "summary_chain_id", "summary_current")
+def last_n_timeline(
+    chain: list[dict[str, Any]],
+    n: int = 6,
+    *,
+    coerce_int: Callable[[Any, Any], int | None],
+    parse_datetime: Callable[[Any], datetime | None],
+    format_local: Callable[[Any], str],
+    format_on_time_delta: Callable[[Any, Any], str],
+    short_uuid: Callable[[Any], str],
+) -> list[str]:
+    """Render the compact recent-history rows used by chain summaries."""
+    if not chain:
+        return []
+
+    def get_link(task: dict[str, Any]) -> int:
+        link = task.get("link")
+        if link is None or link == "":
+            return -1
+        return coerce_int(link, 999999) or 999999
+
+    chain_sorted = sorted(chain, key=get_link, reverse=True)
+    chain_with_links = [task for task in chain_sorted if get_link(task) > 0]
+    if chain_with_links:
+        max_link = max(get_link(task) for task in chain_with_links)
+        label_width = len(str(max_link)) + 1
+    else:
+        label_width = 4
+
+    def history_line(task: dict[str, Any], link_no: int) -> str:
+        end = parse_datetime(task.get("end"))
+        due = parse_datetime(task.get("due"))
+        is_deleted = str(task.get("status") or "").strip().lower() == "deleted"
+        if is_deleted and not end:
+            end_s = "deleted"
+            delta = ""
+            marker = "×"
+        else:
+            end_s = format_local(end) if end else "(no end)"
+            delta = format_on_time_delta(due, end)
+            marker = "✓"
+        label = f"[bold]#{link_no:<{label_width}}[/]"
+        return f"{label} {marker:<2} {end_s} {delta} [dim]{short_uuid(task.get('uuid'))}[/]"
+
+    if len(chain_with_links) > 10:
+        top_tasks = chain_with_links[:3]
+        bottom_tasks = chain_with_links[-3:]
+        top_lines = []
+        for task in top_tasks:
+            link_no = get_link(task)
+            line = history_line(task, link_no)
+            if link_no == get_link(chain_with_links[0]):
+                line = f"[green]{line}[/]"
+            top_lines.append(line)
+        ellipsis = f"[dim]{' ' * (label_width + 4)}... ({len(chain_with_links) - 6} more tasks) ...[/dim]"
+        bottom_lines = [history_line(task, get_link(task)) for task in bottom_tasks]
+        return top_lines + [ellipsis] + bottom_lines
+
+    lines = []
+    for task in chain_with_links[:n]:
+        link_no = get_link(task)
+        line = history_line(task, link_no)
+        if link_no == get_link(chain_with_links[0]):
+            line = f"[green]{line}[/]"
+        lines.append(line)
+    return lines
+
+
+__all__ = (
+    "kind_rows",
+    "last_n_timeline",
+    "limits_row",
+    "span_fields",
+    "stats_rows",
+    "summary_chain_id",
+    "summary_current",
+)

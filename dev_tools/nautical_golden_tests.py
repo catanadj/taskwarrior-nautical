@@ -2253,6 +2253,86 @@ def test_child_import_rejects_incomplete_existing_rows():
         )
 
 
+def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
+    """Batch child existence checks avoid duplicate UUID exports safely."""
+    from nautical_core.integration_models import (
+        Absent, ChildImportPayload, Found, GuardTimestamp, GuardTimestampField,
+        MutationGuard, MutationOperation, MutationOutcomeKind, MutationRequest,
+    )
+    from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+
+    parent_uuid = "00000000-0000-0000-0000-000000000928"
+    child_uuid = "00000000-0000-0000-0000-000000000929"
+    parent = {
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "prefetch-chain",
+        "link": 1,
+        "modified": "20260813T120000Z",
+    }
+    child = {
+        "uuid": child_uuid,
+        "chainID": "prefetch-chain",
+        "link": 2,
+        "prevLink": parent_uuid[:8],
+        "status": "pending",
+        "chain": "on",
+        "cp": "1d",
+    }
+    payload = ChildImportPayload.from_mapping(child, parent_uuid=parent_uuid)
+
+    class Snapshot:
+        def uuid_matches(self, uuid_value):
+            return (child,) if str(uuid_value).lower() == child_uuid else ()
+
+    class Repo:
+        def __init__(self):
+            self.uuid_calls = []
+            self.broad_calls = 0
+
+        def by_uuid(self, uuid_value, *, refresh=False):
+            del refresh
+            self.uuid_calls.append(str(uuid_value))
+            row = parent if str(uuid_value).lower() == parent_uuid else None
+            return Found(row, f"uuid:{uuid_value}") if row is not None else Absent(f"uuid:{uuid_value}", "not present")
+
+        def broad_snapshot(self, **kwargs):
+            self.broad_calls += 1
+            del kwargs
+            return Found(Snapshot(), "broad:lifecycle-child-prefetch")
+
+    class Uow:
+        def __init__(self):
+            self.repository = Repo()
+            self.mutation_epoch = 0
+            self.client = None
+
+        def record_mutation(self, *, uncertain=False):
+            del uncertain
+            self.mutation_epoch += 1
+            return self.mutation_epoch
+
+    uow = Uow()
+    service = TaskwarriorMutationService(uow)
+    service.prefetch_child_imports((payload,))
+    guard = MutationGuard(
+        parent_uuid,
+        "completed",
+        "prefetch-chain",
+        1,
+        recurrence_fingerprint(parent),
+        (GuardTimestamp(GuardTimestampField.MODIFIED, parent["modified"]),),
+        0,
+        "on",
+    )
+    outcome = service.apply(MutationRequest(MutationOperation.CHILD_IMPORT, guard, payload))
+    expect(outcome.kind is MutationOutcomeKind.ALREADY_APPLIED, f"prefetched child was not recognized: {outcome}")
+    expect(uow.repository.broad_calls == 1, f"prefetch used {uow.repository.broad_calls} broad reads")
+    expect(uow.repository.uuid_calls == [parent_uuid], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
+
+
 def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
     """Outbox work is deterministic and cannot finalize without verified mutations."""
     from nautical_core.integration_models import (
@@ -30942,6 +31022,7 @@ TESTS = [
     test_integration_mutation_requests_use_named_typed_payloads,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
+    test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,

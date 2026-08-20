@@ -325,6 +325,21 @@ class LifecycleApplicationService:
             return DrainResult(claim=claim, outcomes=())
         config = str(configuration_fingerprint or "").strip()
         schedule = str(schedule_fingerprint or "").strip()
+        prefetch = getattr(self._mutations, "prefetch_child_imports", None)
+        if callable(prefetch):
+            payloads = tuple(
+                payload
+                for record in records
+                if _SPAWN_STAGE_ORDER[record.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]
+                for payload in (_child_import_payload(record.plan),)
+                if payload is not None
+            )
+            try:
+                prefetch(payloads)
+            except Exception:
+                # Prefetch is an optimization only; normal authoritative
+                # UUID reads remain the correctness fallback.
+                pass
         outcomes = tuple(
             self._execute_claimed(record, configuration_fingerprint=config, schedule_fingerprint=schedule)
             for record in records

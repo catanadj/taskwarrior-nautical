@@ -165,6 +165,56 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
         self._uow = unit_of_work
         self._timeout = max(0.05, float(timeout))
+        self._prefetched_children: dict[str, Found | Absent] = {}
+
+    def prefetch_child_imports(self, payloads: Sequence[ChildImportPayload]) -> None:
+        """Preload child existence for one drain without caching mutations.
+
+        This snapshot is used only for the decision immediately before an
+        import.  Every actual import still performs a fresh postcondition read,
+        and any unavailable/ambiguous snapshot falls back to the normal
+        authoritative UUID query.
+        """
+        self._prefetched_children.clear()
+        wanted = tuple(payloads)
+        if not wanted:
+            return
+        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
+        if not callable(broad_snapshot):
+            return
+        try:
+            read = broad_snapshot(
+                identity="lifecycle-child-prefetch",
+                filters=("chain:on",),
+                statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+                complete_chain_history=False,
+                refresh=True,
+            )
+        except Exception:
+            return
+        if isinstance(read, Absent):
+            for payload in wanted:
+                self._prefetched_children[payload.child_uuid.lower()] = read
+            return
+        if not isinstance(read, Found):
+            return
+        snapshot = read.value
+        uuid_matches = getattr(snapshot, "uuid_matches", None)
+        if not callable(uuid_matches):
+            return
+        for payload in wanted:
+            try:
+                matches = tuple(uuid_matches(payload.child_uuid))
+            except Exception:
+                continue
+            if len(matches) == 1:
+                self._prefetched_children[payload.child_uuid.lower()] = Found(
+                    matches[0], f"prefetch:uuid:{payload.child_uuid.lower()}"
+                )
+            elif not matches:
+                self._prefetched_children[payload.child_uuid.lower()] = Absent(
+                    f"prefetch:uuid:{payload.child_uuid.lower()}", "prefetch snapshot contains no matching UUID"
+                )
 
     def _outcome(
         self,
@@ -370,7 +420,9 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         assert parent is not None
         if _text(parent.get("chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
-        existing = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
+        existing = self._prefetched_children.pop(request.payload.child_uuid.lower(), None)
+        if existing is None:
+            existing = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
         if isinstance(existing, Unavailable):
             kind = MutationOutcomeKind.RETRYABLE if existing.retryable else MutationOutcomeKind.MANUAL_REVIEW
             return self._outcome(request, kind, reason=existing.evidence.detail, failure=existing.evidence)

@@ -449,32 +449,52 @@ def _load_hook_module(path: str, module_name: str):
     load_core = getattr(mod, "_load_core", None)
     if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
         load_core()
-    if os.path.basename(path) == "modify_impl.py":
-        # Tests that exercise historical private names now resolve directly
-        # through the public task-scoped generation service. Production hooks
-        # no longer carry these compatibility delegates.
-        mod._compute_cp_child_due = lambda parent: mod._chain_generation_service().compute_cp_child_due(parent)
-        mod._compute_anchor_child_due = lambda parent: mod._chain_generation_service().compute_anchor_child_due(parent)
-        mod._carry_relative_datetime = lambda parent, child, child_due, field, **kwargs: mod._chain_generation_service().carry_relative_datetime(
-            parent,
-            child,
-            child_due,
-            field,
-            parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
-            child_anchor_field=kwargs.pop("child_anchor_field", "due"),
-            **kwargs,
-        )
-        mod._carry_native_until = lambda parent, child, child_due, kind, **kwargs: mod._chain_generation_service().carry_native_until(
-            parent,
-            child,
-            child_due,
-            kind,
-            parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
-            child_anchor_field=kwargs.pop("child_anchor_field", "due"),
-            **kwargs,
-        )
-        mod._build_child_from_parent = lambda parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt: mod._chain_generation_service().build_child_from_parent(parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt)
     return mod
+
+
+def _generation_service(hook):
+    """Return the public chain-generation service used by hook tests."""
+    from nautical_core.chain_generation import ChainGenerationService
+
+    return ChainGenerationService.from_hook(hook)
+
+
+def _compute_anchor_child_due(hook, parent):
+    return _generation_service(hook).compute_anchor_child_due(parent)
+
+
+def _compute_cp_child_due(hook, parent):
+    return _generation_service(hook).compute_cp_child_due(parent)
+
+
+def _carry_relative_datetime(hook, parent, child, child_due, field, **kwargs):
+    return _generation_service(hook).carry_relative_datetime(
+        parent,
+        child,
+        child_due,
+        field,
+        parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
+        child_anchor_field=kwargs.pop("child_anchor_field", "due"),
+        **kwargs,
+    )
+
+
+def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
+    return _generation_service(hook).carry_native_until(
+        parent,
+        child,
+        child_due,
+        kind,
+        parent_anchor_field=kwargs.pop("parent_anchor_field", "due"),
+        child_anchor_field=kwargs.pop("child_anchor_field", "due"),
+        **kwargs,
+    )
+
+
+def _build_child_from_parent(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+    return _generation_service(hook).build_child_from_parent(
+        parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt
+    )
 
 def _load_core_module(path: str, module_name: str, config_path: str):
     prev_conf = os.environ.get("NAUTICAL_CONFIG")
@@ -9372,7 +9392,7 @@ def test_modify_completion_advances_past_second_dst_fold():
         mod.core._LOCAL_TZ = zone
         due = datetime(2026, 10, 25, 3, 0, tzinfo=zone, fold=0)
         completed = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-        child_due, _meta, _dnf = mod._compute_anchor_child_due({
+        child_due, _meta, _dnf = _compute_anchor_child_due(mod, {
             "anchor": "w:sun@t=03:20",
             "anchor_mode": "skip",
             "chainID": "dst-second-fold",
@@ -9433,9 +9453,6 @@ def test_reconcile_protocol_requires_public_datetime_converters():
     for name in (
         "_task_cmd_prefix",
         "_safe_parse_datetime",
-        "_compute_anchor_child_due",
-        "_compute_cp_child_due",
-        "_build_child_from_parent",
         "_spawn_child",
     ):
         setattr(hook, name, lambda *_args, **_kwargs: None)
@@ -9479,8 +9496,8 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
             "until": mod.core.fmt_isoz(parent_limit),
         }
         child = {"due": mod.core.fmt_isoz(child_due)}
-        mod._carry_relative_datetime(parent, child, child_due, "wait")
-        mod._carry_native_until(parent, child, child_due, "anchor")
+        _carry_relative_datetime(mod, parent, child, child_due, "wait")
+        _carry_native_until(mod, parent, child, child_due, "anchor")
         repaired, repair_error = reconcile.repair_native_until_from_previous(
             parent,
             {"due": mod.core.fmt_isoz(child_due)},
@@ -10101,17 +10118,17 @@ def test_year_ordinals_hooks_modes_calendar_and_timeline():
         "end": _stamp(date(2026, 5, 14), (10, 0)),
         "chainID": "abcd1234",
     }
-    all_due, all_meta, _all_dnf = mod._compute_anchor_child_due(
+    all_due, all_meta, _all_dnf = _compute_anchor_child_due(mod,
         dict(common, anchor_mode="all", scheduled=_stamp(date(2026, 5, 11), (9, 0)))
     )
-    skip_due, skip_meta, _skip_dnf = mod._compute_anchor_child_due(dict(common, anchor_mode="skip"))
+    skip_due, skip_meta, _skip_dnf = _compute_anchor_child_due(mod, dict(common, anchor_mode="skip"))
     expect(mod.core.to_local(all_due).date() == date(2026, 5, 12), f"all mode did not backfill ISO week: {all_due}")
     expect(all_meta.get("basis") == "missed", f"all mode metadata drifted: {all_meta}")
     expect(mod.core.to_local(skip_due).date() == date(2026, 5, 15), f"skip mode did not advance after completion: {skip_due}")
     expect(skip_meta.get("basis") == "after_end", f"skip mode metadata drifted: {skip_meta}")
 
     monday_expr = "y:w20 + w:mon@t=09:00"
-    child_due, _meta, child_dnf = mod._compute_anchor_child_due(
+    child_due, _meta, child_dnf = _compute_anchor_child_due(mod,
         {
             "anchor": monday_expr,
             "anchor_mode": "skip",
@@ -12156,7 +12173,7 @@ def test_on_modify_spawned_child_preserves_business_calendar():
         'chainID': 'calendar-chain',
         'link': 1,
     }
-    child = mod._build_child_from_parent(
+    child = _build_child_from_parent(mod,
         parent,
         child_due,
         'due',
@@ -12258,7 +12275,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
             "chainID": chain_id,
             "link": 1,
         }
-        child_due, _meta, completion_dnf = modify_mod._compute_anchor_child_due(parent)
+        child_due, _meta, completion_dnf = _compute_anchor_child_due(modify_mod, parent)
         completion_next = modify_mod.core.to_local(child_due)
         expect(completion_next == preview_next, f"{expr}: completion {completion_next} != preview {preview_next}")
 
@@ -13735,7 +13752,7 @@ def test_on_modify_time_window_completion_advances_within_same_day():
         "due": mod.core.fmt_isoz(local_due.astimezone(timezone.utc)),
         "end": mod.core.fmt_isoz(local_end.astimezone(timezone.utc)),
     }
-    child_due, meta, _dnf = mod._compute_anchor_child_due(parent)
+    child_due, meta, _dnf = _compute_anchor_child_due(mod, parent)
     child_local = mod.core.to_local(child_due)
     expect((child_local.date(), child_local.hour, child_local.minute) == (date(2025, 12, 17), 9, 0), f"window did not advance within day: {child_local}")
     expect(meta.get("basis") == "after_end", f"unexpected window completion basis: {meta!r}")
@@ -13759,11 +13776,11 @@ def test_on_modify_partitioned_window_completion_rolls_to_next_day():
         }
 
     first = mod.core.build_local_datetime(date(2025, 12, 17), (4, 30))
-    next_slot, _meta, _dnf = mod._compute_anchor_child_due(completed_parent(first, first + timedelta(minutes=10)))
+    next_slot, _meta, _dnf = _compute_anchor_child_due(mod, completed_parent(first, first + timedelta(minutes=10)))
     expect(mod.core.to_local(next_slot).strftime("%Y-%m-%d %H:%M") == "2025-12-17 12:00", "partitioned window skipped its middle slot")
 
     last = mod.core.build_local_datetime(date(2025, 12, 17), (19, 30))
-    next_day, _meta, _dnf = mod._compute_anchor_child_due(completed_parent(last, last + timedelta(minutes=10)))
+    next_day, _meta, _dnf = _compute_anchor_child_due(mod, completed_parent(last, last + timedelta(minutes=10)))
     expect(mod.core.to_local(next_day).strftime("%Y-%m-%d %H:%M") == "2025-12-18 04:30", "partitioned window did not roll to the next day")
 
 
@@ -13785,11 +13802,11 @@ def test_on_modify_overnight_window_completion_uses_next_day_slots():
         }
 
     due = mod.core.build_local_datetime(date(2025, 12, 15), (22, 30))
-    child_due, _meta, _dnf = mod._compute_anchor_child_due(parent(due, due + timedelta(minutes=10)))
+    child_due, _meta, _dnf = _compute_anchor_child_due(mod, parent(due, due + timedelta(minutes=10)))
     expect(mod.core.to_local(child_due).strftime("%Y-%m-%d %H:%M") == "2025-12-15 23:50", "overnight completion skipped the same-night slot")
 
     after_midnight = mod.core.build_local_datetime(date(2025, 12, 16), (6, 30))
-    child_due, _meta, _dnf = mod._compute_anchor_child_due(parent(due, after_midnight + timedelta(minutes=10)))
+    child_due, _meta, _dnf = _compute_anchor_child_due(mod, parent(due, after_midnight + timedelta(minutes=10)))
     expect(mod.core.to_local(child_due).strftime("%Y-%m-%d %H:%M") == "2025-12-22 22:30", "overnight completion did not advance to the next Monday window")
 
     capped = parent(due, due + timedelta(minutes=10))
@@ -13829,7 +13846,7 @@ def test_on_modify_random_time_window_completion_reuses_stable_slots():
         "due": mod.core.fmt_isoz(first.astimezone(timezone.utc)),
         "end": mod.core.fmt_isoz((first + timedelta(minutes=10)).astimezone(timezone.utc)),
     }
-    child_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+    child_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
     expect(mod.core.to_local(child_due) == expected, "random completion redrew or skipped the next stable slot")
 
 
@@ -16461,7 +16478,7 @@ def test_on_modify_carry_wall_clock_across_dst():
         }
         child = {"due": mod.core.fmt_isoz(child_due_utc)}
 
-        mod._carry_relative_datetime(parent, child, child_due_utc, "wait")
+        _carry_relative_datetime(mod, parent, child, child_due_utc, "wait")
         wait_child = mod.core.parse_dt_any(child.get("wait"))
         wait_local = mod.core.to_local(wait_child)
 
@@ -16501,7 +16518,7 @@ def test_on_modify_build_child_carries_until_across_dst():
             "chainID": "cid_until",
         }
 
-        child = mod._build_child_from_parent(
+        child = _build_child_from_parent(mod,
             parent,
             child_due,
             "due",
@@ -16563,7 +16580,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
             parent.update({"anchor": "d:*@t=09:00,13:00", "anchor_mode": "skip"})
         else:
             parent.update({"anchor_file": "calendar.csv", "anchor_mode": "skip"})
-        return mod._build_child_from_parent(
+        return _build_child_from_parent(mod,
             parent,
             child_due,
             "due",
@@ -16701,7 +16718,7 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
             "chainID": "cid_until_exact_dst",
         }
 
-        child = mod._build_child_from_parent(
+        child = _build_child_from_parent(mod,
             parent,
             child_due,
             "due",
@@ -16865,7 +16882,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
         "chainID": "cid_until_slots",
     }
     try:
-        mod._build_child_from_parent(
+        _build_child_from_parent(mod,
             invalid_parent,
             mod.core.build_local_datetime(anchor_day, (20, 0)),
             "due",
@@ -16898,7 +16915,7 @@ def test_on_modify_build_child_transitions_flex_to_all():
         "anchor_mode": "flex",
         "chainID": "flex140",
     }
-    child = mod._build_child_from_parent(
+    child = _build_child_from_parent(mod,
         parent,
         child_due,
         "due",
@@ -17161,7 +17178,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
             "cp": "1d",
             "chainID": "cid12345",
         }
-        child = mod._build_child_from_parent(
+        child = _build_child_from_parent(mod,
             parent,
             child_due_utc,
             "due",
@@ -17934,7 +17951,7 @@ def test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    child_due, meta = mod._compute_cp_child_due(
+    child_due, meta = _compute_cp_child_due(mod,
         {
             "cp": "P1D",
             "chainID": "scheduled-only-chain",
@@ -17954,7 +17971,7 @@ def test_on_modify_compute_cp_sequence_selects_interval_by_link():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    child_due, meta = mod._compute_cp_child_due(
+    child_due, meta = _compute_cp_child_due(mod,
         {
             "cp": "3d,20d,7d",
             "chainID": "sequence-chain",
@@ -17979,7 +17996,7 @@ def test_on_modify_compute_cp_random_selects_deterministic_interval():
 
     chain_id = "abcd1234"
     expected_td = mod.core.cp_sequence_interval_for_link("rand(3d..7d)", 2, chain_id)
-    child_due, meta = mod._compute_cp_child_due(
+    child_due, meta = _compute_cp_child_due(mod,
         {
             "cp": "rand(3d..7d)",
             "link": 2,
@@ -18080,7 +18097,7 @@ def test_on_modify_anchor_file_child_projection_reuses_provider():
     anchor_inclusion._build_anchor_file_provider = build_provider
     try:
         due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
-        child_due, _meta, _dnf = mod._compute_anchor_child_due(
+        child_due, _meta, _dnf = _compute_anchor_child_due(mod,
             {
                 "anchor": "w:mon@t=09:00",
                 "anchor_file": "calendar.csv@t=09:00",
@@ -18125,7 +18142,7 @@ def test_on_modify_pure_anchor_file_projection_reuses_provider():
     anchor_inclusion._build_anchor_file_provider = build_provider
     try:
         due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
-        child_due, _meta, _dnf = mod._compute_anchor_child_due(
+        child_due, _meta, _dnf = _compute_anchor_child_due(mod,
             {
                 "anchor_file": "calendar.csv@t=09:00",
                 "anchor_mode": "skip",
@@ -18215,7 +18232,7 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 8), (10, 0))),
             "chainID": "abcd1234",
         }
-    child_due, meta, _dnf = mod._compute_anchor_child_due(parent)
+    child_due, meta, _dnf = _compute_anchor_child_due(mod, parent)
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next scheduled anchor: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
@@ -18243,7 +18260,7 @@ def test_on_modify_compute_anchor_child_due_builds_timed_slots_in_configured_tim
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    child_due, _meta, _dnf = mod._compute_anchor_child_due(
+    child_due, _meta, _dnf = _compute_anchor_child_due(mod,
         {
             "anchor": "w:mon..sun@t=05:00,09:00,14:00,19:00",
             "anchor_mode": "skip",
@@ -18315,7 +18332,7 @@ def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
             }
             if omit_expr:
                 parent["omit"] = omit_expr
-            child_due, meta, _dnf = modify_mod._compute_anchor_child_due(parent)
+            child_due, meta, _dnf = _compute_anchor_child_due(modify_mod, parent)
             completion_next = modify_mod.core.to_local(child_due)
 
             expect(
@@ -22266,7 +22283,7 @@ def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
 
     class Hook:
         core = core
-        _compute_cp_child_due = staticmethod(
+        legacy_compute_cp_child_due = staticmethod(
             lambda _parent: (_ for _ in ()).throw(AssertionError("modify helper was captured"))
         )
 
@@ -22463,7 +22480,7 @@ def test_recurrence_evaluator_shadow_parity_time_matrix():
             "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
             "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
         }
-        hook_due, hook_meta, _dnf = mod._compute_anchor_child_due(parent)
+        hook_due, hook_meta, _dnf = _compute_anchor_child_due(mod, parent)
         evaluator = RecurrenceEvaluator.from_task(
             parent,
             timezone=mod.core._LOCAL_TZ,
@@ -22505,7 +22522,7 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
             "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
             "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
         }
-        hook_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+        hook_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
         evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
         result = evaluator.select_mode(
             "skip",
@@ -22550,7 +22567,7 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
         return mod.core.build_local_datetime(next_date, fallback_hhmm)
 
     with mod.core.use_business_calendar(policy):
-        hook_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+        hook_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
     evaluator = RecurrenceEvaluator.from_task(
         parent,
         timezone=mod.core._LOCAL_TZ,
@@ -23348,7 +23365,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
                 "due": "2026-04-27T12:00:00Z",
                 "end": "2026-04-28T12:00:00Z",
             }
-            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            child_due, meta, dnf = _compute_anchor_child_due(mod, parent)
             expected_due = mod.core.build_local_datetime(date(2026, 5, 11), (12, 0)).astimezone(timezone.utc)
             expect(not dnf, f"anchor_file recurrence should not produce a truthy DNF payload, got {dnf!r}")
             expect(child_due == expected_due, f"unexpected anchor_file child due: {child_due!r}")
@@ -23373,7 +23390,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
                 f"evaluator/file mode drifted from hook mode: {result!r} vs {child_due!r}",
             )
 
-            child = mod._build_child_from_parent(parent, child_due, "due", 2, "beeswax", "anchor_file", 0, None)
+            child = _build_child_from_parent(mod, parent, child_due, "due", 2, "beeswax", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
         finally:
@@ -23409,7 +23426,7 @@ def test_on_modify_compute_anchor_child_due_from_random_anchor_file():
                 "due": mod.core.fmt_isoz(first.astimezone(timezone.utc)),
                 "end": mod.core.fmt_isoz((first + timedelta(minutes=10)).astimezone(timezone.utc)),
             }
-            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            child_due, meta, dnf = _compute_anchor_child_due(mod, parent)
             expect(not dnf, f"random anchor_file should not produce an anchor DNF: {dnf!r}")
             expect(child_due == second.astimezone(timezone.utc), f"random anchor_file slot was not preserved: {child_due!r} != {second!r}")
             expect(meta.get("target_field") == "due", f"unexpected random anchor_file metadata: {meta!r}")
@@ -23440,7 +23457,7 @@ def test_on_modify_compute_anchor_child_due_from_multiple_file_times():
                 "due": mod.core.fmt_isoz(due_utc),
                 "end": mod.core.fmt_isoz(end_utc),
             }
-            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            child_due, meta, dnf = _compute_anchor_child_due(mod, parent)
             expected_due = mod.core.build_local_datetime(date(2026, 4, 25), (15, 0)).astimezone(timezone.utc)
             expect(not dnf, f"multiple anchor_file recurrence should not produce DNF: {dnf!r}")
             expect(child_due == expected_due, f"unexpected later same-day child due: {child_due!r}")
@@ -23470,7 +23487,7 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
                 "due": "2026-04-11T09:00:00Z",
                 "end": "2026-04-12T12:00:00Z",
             }
-            child_due, meta, dnf = mod._compute_anchor_child_due(parent)
+            child_due, meta, dnf = _compute_anchor_child_due(mod, parent)
             expected_due = mod.core.build_local_datetime(date(2026, 4, 14), (12, 0)).astimezone(timezone.utc)
             expect(dnf is not None, f"combined anchor should preserve expression dnf, got {dnf!r}")
             expect(child_due == expected_due, f"unexpected combined anchor child due: {child_due!r}")
@@ -23521,7 +23538,7 @@ def test_on_modify_compute_combined_overnight_sources_in_time_order():
                 "due": mod.core.fmt_isoz(due.astimezone(timezone.utc)),
                 "end": mod.core.fmt_isoz(end.astimezone(timezone.utc)),
             }
-            child_due, _meta, _dnf = mod._compute_anchor_child_due(parent)
+            child_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
             expected_due = mod.core.build_local_datetime(date(2026, 8, 4), (7, 0)).astimezone(timezone.utc)
             expect(child_due == expected_due, f"combined overnight sources were not time-ordered: {child_due!r}")
         finally:
@@ -23558,7 +23575,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
                     "due": "2026-04-23T12:00:00Z",
                     "end": "2026-04-23T13:00:00Z",
                 }
-                child_due, _meta, dnf = mod._compute_anchor_child_due(parent)
+                child_due, _meta, dnf = _compute_anchor_child_due(mod, parent)
                 expect(mod.core.fmt_isoz(child_due) == "2026-04-24T09:00:00Z", f"unexpected shifted child due: {mod.core.fmt_isoz(child_due)}")
                 lines = _call_with_supported_kwargs(
                     mod._timeline_lines,
@@ -23814,7 +23831,7 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
             "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 6), (10, 0))),
             "chainID": "omit1234",
         }
-    child_due, meta, _dnf = mod._compute_anchor_child_due(parent)
+    child_due, meta, _dnf = _compute_anchor_child_due(mod, parent)
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 10), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next due with omit: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
@@ -23841,7 +23858,7 @@ def test_on_modify_compute_anchor_child_due_accepts_scheduled_after_due():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    child_due, meta, _dnf = mod._compute_anchor_child_due(
+    child_due, meta, _dnf = _compute_anchor_child_due(mod,
         {
             "anchor": "w:mon..sun@t=09:00",
             "anchor_mode": "all",
@@ -23878,7 +23895,7 @@ def test_on_modify_compute_counted_random_advances_within_period():
         default_seed=seed,
         seed_base="abcd1234",
     )
-    child_due, meta, _dnf = mod._compute_anchor_child_due(
+    child_due, meta, _dnf = _compute_anchor_child_due(mod,
         {
             "anchor": "m:2rand",
             "anchor_mode": "skip",
@@ -23901,7 +23918,7 @@ def test_on_modify_compute_anchor_child_due_unsatisfiable_omit_fails():
         mod._load_core()
 
     try:
-        mod._compute_anchor_child_due(
+        _compute_anchor_child_due(mod,
             {
                 "anchor": "w:mon",
                 "omit": "w:mon",
@@ -24086,7 +24103,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         "chainID": "cid_sched",
     }
     child_due = mod.core.build_local_datetime(date(2025, 1, 2), (9, 0))
-    child = mod._build_child_from_parent(
+    child = _build_child_from_parent(mod,
         parent,
         child_due,
         "scheduled",
@@ -29032,7 +29049,7 @@ def test_position_selection_on_add_and_modify_completion():
     mod = _load_hook_module(modify_hook, "_nautical_position_selection_modify_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
-    child_due, meta, child_dnf = mod._compute_anchor_child_due(
+    child_due, meta, child_dnf = _compute_anchor_child_due(mod,
         {
             "anchor": expr,
             "anchor_mode": "skip",
@@ -29189,7 +29206,7 @@ def test_position_selection_post_modifiers_modify_completion():
     mod = _load_hook_module(modify_hook, "_nautical_position_selection_modifier_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
-    child_due, meta, child_dnf = mod._compute_anchor_child_due(
+    child_due, meta, child_dnf = _compute_anchor_child_due(mod,
         {
             "anchor": expr,
             "anchor_mode": "skip",
@@ -29698,7 +29715,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
 
     try:
-        same_day_due, _same_meta, _same_dnf = mod._compute_anchor_child_due(
+        same_day_due, _same_meta, _same_dnf = _compute_anchor_child_due(mod,
             {
                 "anchor": expression,
                 "anchor_mode": "skip",
@@ -29720,13 +29737,13 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
             "end": stamp(date(2026, 7, 1), (10, 0)),
             "chainID": "season123",
         }
-        all_due, all_meta, _all_dnf = mod._compute_anchor_child_due(
+        all_due, all_meta, _all_dnf = _compute_anchor_child_due(mod,
             dict(common, anchor_mode="all")
         )
-        skip_due, skip_meta, skip_dnf = mod._compute_anchor_child_due(
+        skip_due, skip_meta, skip_dnf = _compute_anchor_child_due(mod,
             dict(common, anchor_mode="skip")
         )
-        flex_due, flex_meta, _flex_dnf = mod._compute_anchor_child_due(
+        flex_due, flex_meta, _flex_dnf = _compute_anchor_child_due(mod,
             dict(common, anchor_mode="flex")
         )
         all_local = mod.core.to_local(all_due)
@@ -29787,7 +29804,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
             "anchor_mode": "flex",
             "link": 1,
         }
-        child = mod._build_child_from_parent(
+        child = _build_child_from_parent(mod,
             parent,
             flex_due,
             "due",
@@ -30172,7 +30189,7 @@ def test_position_selection_public_period_scopes_hooks():
     mod = _load_hook_module(modify_hook, "_nautical_period_selection_hook_test")
     if hasattr(mod, "_load_core"):
         mod._load_core()
-    child_due, meta, child_dnf = mod._compute_anchor_child_due(
+    child_due, meta, child_dnf = _compute_anchor_child_due(mod,
         {
             "anchor": expr,
             "anchor_mode": "skip",

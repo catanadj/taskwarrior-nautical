@@ -5090,13 +5090,24 @@ def test_on_modify_recurrence_update_groups_and_flattens_changes():
         ("Changed", "Anchor: [dim]w:mon[/] [cyan]→[/] [bold]w:tue[/]"),
         ("Changed", "Max links: [dim]5[/] [cyan]→[/] [bold]8[/]"),
     ]
-    grouped = mod._recurrence_update_panel_rows(changes, rich_rows)
+    feedback = mod.core._import_sibling("modify_feedback")
+    grouped = feedback._recurrence_update_panel_rows(
+        changes,
+        rich_rows,
+        panel_mode=mod.core.PANEL_MODE,
+        strip_markup=mod.core.strip_rich_markup,
+    )
     expect(grouped[1][0] is None, f"expected spacing between recurrence and limits: {grouped!r}")
 
     previous_mode = mod.core.PANEL_MODE
     try:
         mod.core.PANEL_MODE = "text"
-        flattened = mod._recurrence_update_panel_rows(changes, rich_rows)
+        flattened = feedback._recurrence_update_panel_rows(
+            changes,
+            rich_rows,
+            panel_mode=mod.core.PANEL_MODE,
+            strip_markup=mod.core.strip_rich_markup,
+        )
     finally:
         mod.core.PANEL_MODE = previous_mode
     expect(flattened[0][0] == "Changes", f"expected one-line change summary: {flattened!r}")

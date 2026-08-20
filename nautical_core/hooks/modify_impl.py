@@ -3037,138 +3037,28 @@ def _non_completion_reject_conflicting_types(new_anchor: str, new_anchor_file: s
         _fail_and_exit("Invalid chain config", "anchor_file and cp cannot both be set; clear one")
 
 
-def _recurrence_update_label(field: str) -> str:
-    return {
-        "anchor": "Anchor",
-        "anchor_file": "Anchor file",
-        "omit": "Omit",
-        "omit_file": "Omit file",
-        "anchor_mode": "Mode",
-        "bc": "Business calendar",
-        "cp": "Period",
-        "until": "Expiration",
-        "chainMax": "Max links",
-        "chainUntil": "Chain end point",
-    }.get(field, field)
-
-
 def _semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
 
-def _recurrence_display_value(field: str, value: str) -> str:
-    if not value:
-        return "-"
-    if field in {"until", "chainUntil"}:
-        parsed = core.parse_dt_any(value)
-        if parsed:
-            return _fmtlocal(parsed)
-    return value
-
-
-def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
-    old_text = _recurrence_display_value(field, old_value)
-    new_text = _recurrence_display_value(field, new_value)
-    return _semantic_diff_value(old_text, new_text)
-
-
-def _recurrence_change_row(field: str, old_value: str, new_value: str) -> tuple[str, str]:
-    label = _recurrence_update_label(field)
-    if old_value and new_value:
-        return "Changed", f"{label}: {_recurrence_update_value(field, old_value, new_value)}"
-    if new_value:
-        return "Added", f"{label}: [bold]{_recurrence_display_value(field, new_value)}[/]"
-    return "Removed", f"{label}: [dim]{_recurrence_display_value(field, old_value)}[/]"
-
-
-def _recurrence_update_panel_rows(changes: list[tuple[str, str, str]], rows: list[tuple[str | None, str]]) -> list[tuple[str | None, str]]:
-    """Keep multi-field updates scannable and preserve all changes in one-line modes."""
-    if len(changes) > 1:
-        recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
-        limit_fields = {"chainMax", "chainUntil"}
-        first_limit = next((idx for idx, (field, _old, _new) in enumerate(changes) if field in limit_fields), None)
-        if first_limit is not None and any(field in recurrence_fields for field, _old, _new in changes):
-            rows = list(rows)
-            rows.insert(first_limit, (None, ""))
-
-    mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
-    if mode == "quiet":
-        mode = "text"
-    if mode == "minimal":
-        mode = "line"
-    if mode in {"line", "text"}:
-        change_rows = [(label, value) for label, value in rows if label in {"Added", "Changed", "Removed"}]
-        if len(change_rows) > 1:
-            summary = " · ".join(
-                f"{label}: {core.strip_rich_markup(str(value))}" for label, value in change_rows
-            )
-            rows = [("Changes", summary)] + [
-                (label, value)
-                for label, value in rows
-                if label not in {"Added", "Changed", "Removed"}
-            ]
-    return rows
-
-
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
-    if not changes:
-        return
-    rows: list[tuple[str, str]] = [
-        _recurrence_change_row(field, old_value, new_value)
-        for field, old_value, new_value in changes
-    ]
-
-    if any(field == "until" for field, _old, _new in changes):
-        try:
-            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
-            until_dt = core.parse_dt_any(new.get("until"))
-            target_dt = core.parse_dt_any(new.get(target_field)) if target_field else None
-            add_validation = core._import_sibling("add_validation")
-            carry = add_validation.describe_native_until_carry(
-                until_dt,
-                target_dt,
-                to_local=core.to_local,
-            )
-            if carry:
-                rows.append(("Carry", carry))
-        except Exception:
-            pass
-
-    if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
-        max_link = core.coerce_int(new.get("chainMax"), 0)
-        deadline = core.parse_dt_any(new.get("chainUntil"))
-        if max_link:
-            rows.append(("Final link", f"#{max_link}"))
-        if deadline and not any(field == "chainUntil" for field, _old, _new in changes):
-            rows.append(("Chain end point", _fmtlocal(deadline)))
-        if max_link and deadline:
-            rows.append(("Effective", "Whichever boundary is reached first"))
-        elif not max_link and not deadline:
-            rows.append(("Chain limits", "None"))
-
-    anchor_expr = str(new.get("anchor") or "").strip()
-    if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
-        try:
-            rows.append(("Natural", core.describe_anchor_expr(anchor_expr)))
-        except Exception:
-            pass
-
-    omit_expr = str(new.get("omit") or "").strip()
-    if omit_expr and any(field == "omit" for field, _old, _new in changes):
-        try:
-            rows.append(("Except", core.describe_anchor_expr(core.resolve_omit_presets(omit_expr))))
-        except Exception:
-            pass
-
-    recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
-    if any(field in recurrence_fields for field, _old, _new in changes):
-        source = "anchor" if anchor_expr else "anchor_file" if str(new.get("anchor_file") or "").strip() else "cp"
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("First next", _fmtlocal(first)))
-
-    rows = _recurrence_update_panel_rows(changes, rows)
-    _panel("⚓ Nautical recurrence updated", rows, kind="note")
+    modify_feedback = _module("modify_feedback")
+    add_validation = core._import_sibling("add_validation")
+    modify_feedback.render_recurrence_updated_panel(
+        changes,
+        new,
+        parse_datetime=core.parse_dt_any,
+        format_local=_fmtlocal,
+        describe_native_until_carry=add_validation.describe_native_until_carry,
+        to_local=core.to_local,
+        coerce_int=core.coerce_int,
+        describe_anchor=core.describe_anchor_expr,
+        resolve_omit_presets=core.resolve_omit_presets,
+        first_recurrence_target=_first_recurrence_target,
+        panel_mode=getattr(core, "PANEL_MODE", "rich"),
+        strip_markup=core.strip_rich_markup,
+        panel=_panel,
+    )
 
 
 def _first_recurrence_target(new: dict, source: str):

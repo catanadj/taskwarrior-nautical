@@ -94,6 +94,167 @@ def render_explicit_timing_order_warning(
     panel("⚠ Nautical timing order", rows, kind="warning")
 
 
+def _recurrence_update_label(field: str) -> str:
+    return {
+        "anchor": "Anchor",
+        "anchor_file": "Anchor file",
+        "omit": "Omit",
+        "omit_file": "Omit file",
+        "anchor_mode": "Mode",
+        "bc": "Business calendar",
+        "cp": "Period",
+        "until": "Expiration",
+        "chainMax": "Max links",
+        "chainUntil": "Chain end point",
+    }.get(field, field)
+
+
+def _recurrence_display_value(
+    field: str,
+    value: str,
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+) -> str:
+    if not value:
+        return "-"
+    if field in {"until", "chainUntil"}:
+        parsed = parse_datetime(value)
+        if parsed:
+            return format_local(parsed)
+    return value
+
+
+def _recurrence_change_row(
+    field: str,
+    old_value: str,
+    new_value: str,
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+) -> tuple[str, str]:
+    label = _recurrence_update_label(field)
+    old_text = _recurrence_display_value(field, old_value, parse_datetime=parse_datetime, format_local=format_local)
+    new_text = _recurrence_display_value(field, new_value, parse_datetime=parse_datetime, format_local=format_local)
+    if old_value and new_value:
+        return "Changed", f"{label}: [dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
+    if new_value:
+        return "Added", f"{label}: [bold]{new_text}[/]"
+    return "Removed", f"{label}: [dim]{old_text}[/]"
+
+
+def _recurrence_update_panel_rows(
+    changes: list[tuple[str, str, str]],
+    rows: list[tuple[str | None, str]],
+    *,
+    panel_mode: str,
+    strip_markup: Callable[[str], str],
+) -> list[tuple[str | None, str]]:
+    if len(changes) > 1:
+        recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+        limit_fields = {"chainMax", "chainUntil"}
+        first_limit = next((idx for idx, (field, _old, _new) in enumerate(changes) if field in limit_fields), None)
+        if first_limit is not None and any(field in recurrence_fields for field, _old, _new in changes):
+            rows = list(rows)
+            rows.insert(first_limit, (None, ""))
+
+    mode = str(panel_mode or "rich").strip().lower()
+    if mode == "quiet":
+        mode = "text"
+    if mode == "minimal":
+        mode = "line"
+    if mode in {"line", "text"}:
+        change_rows = [(label, value) for label, value in rows if label in {"Added", "Changed", "Removed"}]
+        if len(change_rows) > 1:
+            summary = " · ".join(f"{label}: {strip_markup(str(value))}" for label, value in change_rows)
+            rows = [("Changes", summary)] + [
+                (label, value) for label, value in rows if label not in {"Added", "Changed", "Removed"}
+            ]
+    return rows
+
+
+def render_recurrence_updated_panel(
+    changes: list[tuple[str, str, str]],
+    new: dict[str, Any],
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+    describe_native_until_carry: Callable[..., Any],
+    to_local: Callable[[Any], Any],
+    coerce_int: Callable[[Any, Any], int | None],
+    describe_anchor: Callable[[str], str],
+    resolve_omit_presets: Callable[[str], str],
+    first_recurrence_target: Callable[[dict[str, Any], str], Any],
+    panel_mode: str,
+    strip_markup: Callable[[str], str],
+    panel: Callable[..., Any],
+) -> None:
+    if not changes:
+        return
+    rows: list[tuple[str | None, str]] = [
+        _recurrence_change_row(
+            field,
+            old_value,
+            new_value,
+            parse_datetime=parse_datetime,
+            format_local=format_local,
+        )
+        for field, old_value, new_value in changes
+    ]
+
+    if any(field == "until" for field, _old, _new in changes):
+        try:
+            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
+            until_dt = parse_datetime(new.get("until"))
+            target_dt = parse_datetime(new.get(target_field)) if target_field else None
+            carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
+            if carry:
+                rows.append(("Carry", carry))
+        except Exception:
+            pass
+
+    if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
+        max_link = coerce_int(new.get("chainMax"), 0)
+        deadline = parse_datetime(new.get("chainUntil"))
+        if max_link:
+            rows.append(("Final link", f"#{max_link}"))
+        if deadline and not any(field == "chainUntil" for field, _old, _new in changes):
+            rows.append(("Chain end point", format_local(deadline)))
+        if max_link and deadline:
+            rows.append(("Effective", "Whichever boundary is reached first"))
+        elif not max_link and not deadline:
+            rows.append(("Chain limits", "None"))
+
+    anchor_expr = str(new.get("anchor") or "").strip()
+    if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
+        try:
+            rows.append(("Natural", describe_anchor(anchor_expr)))
+        except Exception:
+            pass
+
+    omit_expr = str(new.get("omit") or "").strip()
+    if omit_expr and any(field == "omit" for field, _old, _new in changes):
+        try:
+            rows.append(("Except", describe_anchor(resolve_omit_presets(omit_expr))))
+        except Exception:
+            pass
+
+    recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+    if any(field in recurrence_fields for field, _old, _new in changes):
+        source = "anchor" if anchor_expr else "anchor_file" if str(new.get("anchor_file") or "").strip() else "cp"
+        first = first_recurrence_target(new, source)
+        if first:
+            rows.append(("First next", format_local(first)))
+
+    rows = _recurrence_update_panel_rows(
+        changes,
+        rows,
+        panel_mode=panel_mode,
+        strip_markup=strip_markup,
+    )
+    panel("⚓ Nautical recurrence updated", rows, kind="note")
+
+
 def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Arrange chain-finished rows into compact presentation sections."""
     groups = (

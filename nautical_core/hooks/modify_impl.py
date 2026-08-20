@@ -2333,51 +2333,10 @@ def _timeline_lines(
     show_gaps: bool = True,
     round_anchor_gaps: bool = True,
 ) -> list[str]:
-    """Compact timeline with inline gaps."""
+    """Compatibility adapter for task-scoped timeline presentation."""
     if not _require_core():
         return []
-    if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
-        modify_timeline = _module("modify_timeline")
-        _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
-        anchor_omit = _module("anchor_omit") if omit_dnf else None
-        evaluator = _recurrence_evaluator_for_task(task)
-        return modify_timeline.anchor_file_timeline_lines(
-            task,
-            child_due_utc,
-            child_short,
-            next_count=next_count,
-            cap_no=cap_no,
-            cur_no=cur_no,
-            show_gaps=show_gaps,
-            round_anchor_gaps=round_anchor_gaps,
-            core=core,
-            max_iterations=_MAX_ITERATIONS,
-            future_style_for_chain=_future_style_for_chain,
-            collect_prev_two=_collect_prev_two,
-            dtparse=_dtparse,
-            fmt_on_time_delta=_fmt_on_time_delta,
-            fmtlocal=_fmtlocal,
-            short=_short,
-            to_local_cached=_to_local_cached,
-            safe_parse_datetime=_safe_parse_datetime,
-            scheduler_service=_scheduler_service_for_task(task),
-            evaluator=evaluator,
-            omit_dnf=omit_dnf,
-            anchor_omit=anchor_omit,
-        )
-    modify_timeline = _module("modify_timeline")
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
-    anchor_omit = _module("anchor_omit") if kind == "anchor" else None
-    scheduler_service = _scheduler_service_for_task(task) if kind == "anchor" else None
-    evaluator = (
-        scheduler_service.session.evaluator
-        if scheduler_service is not None
-        else (_recurrence_evaluator_for_task(task) if kind == "cp" else None)
-    )
-    timeline_scheduler = _next_occurrence_after_local_dt
-    if evaluator is not None and kind == "anchor":
-        timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
-    return modify_timeline.timeline_lines(
+    return _module("modify_timeline").timeline_lines_for_task(
         kind,
         task,
         child_due_utc,
@@ -2397,18 +2356,14 @@ def _timeline_lines(
         fmtlocal=_fmtlocal,
         short=_short,
         tolocal=_tolocal,
-        next_occurrence_after_local_dt=timeline_scheduler,
-        scheduler_service=scheduler_service,
+        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
         format_gap=_module("modify_timeline").format_gap,
-        omit_dnf=omit_dnf,
-        omit_expr_fires_on_date=(
-            (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(dnf_, d, default_seed, seed_base, core=core))
-            if anchor_omit is not None else None
-        ),
-        omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
-        evaluator=evaluator,
+        module_loader=_module,
+        omit_dnf_from_parent=_omit_dnf_from_parent,
+        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
+        scheduler_service_for_task=_scheduler_service_for_task,
     )
 
 def _got_anchor_invalid(msg: str) -> None:

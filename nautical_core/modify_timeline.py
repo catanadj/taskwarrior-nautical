@@ -830,3 +830,112 @@ def timeline_lines(
             )
         )
     return lines
+
+
+def timeline_lines_for_task(
+    kind: str,
+    task: dict[str, Any],
+    child_due_utc: datetime,
+    child_short: str,
+    dnf: Any,
+    *,
+    next_count: int = 3,
+    cap_no: int | None = None,
+    cur_no: int | None = None,
+    show_gaps: bool = True,
+    round_anchor_gaps: bool = True,
+    core: Any,
+    max_iterations: int,
+    future_style_for_chain: Callable[[dict[str, Any], str], str],
+    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    dtparse: Callable[[Any], Any],
+    fmt_on_time_delta: Callable[[Any, Any], str],
+    fmtlocal: Callable[[Any], str],
+    short: Callable[[Any], str],
+    tolocal: Callable[[datetime], datetime],
+    next_occurrence_after_local_dt: Callable[..., Any],
+    to_local_cached: Callable[[datetime], datetime],
+    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
+    format_gap: Callable[[Any, Any, str, bool], str],
+    module_loader: Callable[[str], Any],
+    omit_dnf_from_parent: Callable[[dict[str, Any]], tuple[str, Any]],
+    recurrence_evaluator_for_task: Callable[[dict[str, Any]], Any],
+    scheduler_service_for_task: Callable[[dict[str, Any]], Any],
+) -> list[str]:
+    """Resolve task-scoped context and render the appropriate timeline."""
+    if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
+        _omit_expr, omit_dnf = omit_dnf_from_parent(task)
+        anchor_omit = module_loader("anchor_omit") if omit_dnf else None
+        evaluator = recurrence_evaluator_for_task(task)
+        return anchor_file_timeline_lines(
+            task,
+            child_due_utc,
+            child_short,
+            next_count=next_count,
+            cap_no=cap_no,
+            cur_no=cur_no,
+            show_gaps=show_gaps,
+            round_anchor_gaps=round_anchor_gaps,
+            core=core,
+            max_iterations=max_iterations,
+            future_style_for_chain=future_style_for_chain,
+            collect_prev_two=collect_prev_two,
+            dtparse=dtparse,
+            fmt_on_time_delta=fmt_on_time_delta,
+            fmtlocal=fmtlocal,
+            short=short,
+            to_local_cached=to_local_cached,
+            safe_parse_datetime=safe_parse_datetime,
+            scheduler_service=scheduler_service_for_task(task),
+            evaluator=evaluator,
+            omit_dnf=omit_dnf,
+            anchor_omit=anchor_omit,
+        )
+
+    _omit_expr, omit_dnf = omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
+    anchor_omit = module_loader("anchor_omit") if kind == "anchor" else None
+    scheduler_service = scheduler_service_for_task(task) if kind == "anchor" else None
+    evaluator = (
+        scheduler_service.session.evaluator
+        if scheduler_service is not None
+        else (recurrence_evaluator_for_task(task) if kind == "cp" else None)
+    )
+    timeline_scheduler = next_occurrence_after_local_dt
+    if evaluator is not None and kind == "anchor":
+        timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
+    return timeline_lines(
+        kind,
+        task,
+        child_due_utc,
+        child_short,
+        dnf,
+        next_count=next_count,
+        cap_no=cap_no,
+        cur_no=cur_no,
+        show_gaps=show_gaps,
+        round_anchor_gaps=round_anchor_gaps,
+        core=core,
+        max_iterations=max_iterations,
+        future_style_for_chain=future_style_for_chain,
+        collect_prev_two=collect_prev_two,
+        dtparse=dtparse,
+        fmt_on_time_delta=fmt_on_time_delta,
+        fmtlocal=fmtlocal,
+        short=short,
+        tolocal=tolocal,
+        next_occurrence_after_local_dt=timeline_scheduler,
+        scheduler_service=scheduler_service,
+        to_local_cached=to_local_cached,
+        safe_parse_datetime=safe_parse_datetime,
+        format_gap=format_gap,
+        omit_dnf=omit_dnf,
+        omit_expr_fires_on_date=(
+            (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(
+                dnf_, d, default_seed, seed_base, core=core
+            ))
+            if anchor_omit is not None
+            else None
+        ),
+        omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
+        evaluator=evaluator,
+    )

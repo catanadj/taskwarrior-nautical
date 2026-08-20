@@ -740,6 +740,12 @@ _MODULE_SPECS = {
         "modify_chain_summary.py",
         "nautical_core.modify_chain_summary",
     ),
+    "modify_validation": (
+        "_MODIFY_VALIDATION",
+        "_MODIFY_VALIDATION_LOAD_FAILED",
+        "modify_validation.py",
+        "nautical_core.modify_validation",
+    ),
 }
 core = None
 _CORE_IMPORT_TARGET = None
@@ -1711,117 +1717,38 @@ def _validate_chain_limits_on_modify(task: dict) -> None:
 
 
 def _validate_native_until_after_target_or_fail(task: dict) -> None:
-    until_raw = task.get("until")
-    if not until_raw:
-        return
     add_validation = core._import_sibling("add_validation")
-    mode_is_valid, mode_reason = add_validation.validate_native_until_anchor_mode(
-        until_raw,
-        task.get("anchor"),
-        task.get("anchor_file"),
-        task.get("anchor_mode"),
+    _module("modify_validation").validate_native_until_after_target_or_fail(
+        task,
+        validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
+        safe_parse_datetime=_safe_parse_datetime,
+        validate_after_target=add_validation.validate_native_until_after_target,
+        format_local=core.fmt_dt_local,
+        panel=_panel,
+        fail=_fail_and_exit,
+        abort=sys.exit,
     )
-    if not mode_is_valid:
-        mode = str(task.get("anchor_mode") or "skip").strip().lower()
-        _panel(
-            "❌ Invalid expiration mode",
-            [
-                ("Mode", mode),
-                ("Conflict", mode_reason or "Native until conflicts with strict anchor backfill."),
-                ("Action", "Remove until or use anchor_mode:skip."),
-            ],
-            kind="error",
-        )
-        sys.exit(1)
-    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
-    if not target_field:
-        return
-    target_dt, target_err = _safe_parse_datetime(task.get(target_field))
-    if target_err or target_dt is None:
-        _fail_and_exit(f"Invalid {target_field}", target_err or f"{target_field} must be a valid datetime")
-    until_dt, until_err = _safe_parse_datetime(until_raw)
-    if until_err or until_dt is None:
-        _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
-    is_valid, reason = add_validation.validate_native_until_after_target(
-        until_dt,
-        target_dt,
-        target_field,
-    )
-    if is_valid:
-        return
-    label = "Scheduled" if target_field == "scheduled" else "Due"
-    _panel(
-        "❌ Invalid expiration window",
-        [
-            (label, core.fmt_dt_local(target_dt)),
-            ("Expires", core.fmt_dt_local(until_dt)),
-            ("Required", reason or f"until must be later than {target_field}"),
-        ],
-        kind="error",
-    )
-    sys.exit(1)
 
 
 def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
-    until_raw = task.get("until")
-    anchor_value = str(task.get("anchor") or "").strip()
-    anchor_file_value = str(task.get("anchor_file") or "").strip()
-    if not until_raw or not (anchor_value or anchor_file_value):
-        return
-    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
-    if not target_field:
-        return
-    target_dt, target_err = _safe_parse_datetime(task.get(target_field))
-    until_dt, until_err = _safe_parse_datetime(until_raw)
-    if target_err or until_err or target_dt is None or until_dt is None:
-        return
-    dnf = None
-    if anchor_value:
-        try:
-            dnf = _validate_anchor_expr_cached(anchor_value)
-        except Exception:
-            return
     add_validation = core._import_sibling("add_validation")
-    target_local = _tolocal(target_dt)
-    try:
-        slots = add_validation.collect_anchor_time_slots(
-            dnf,
-            anchor_file_value,
-            (target_local.hour, target_local.minute),
-            normalize_time_slots=_norm_hhmm_list,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            target_date=target_local.date(),
-            resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
-            recurrence_context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(task),
-        )
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            _panel(
-                "❌ Invalid astronomy time",
-                [("Required", astronomy.scheduling_error_message(exc))],
-                kind="error",
-            )
-            sys.exit(1)
-        return
-    is_valid, reason = add_validation.validate_native_until_calendar_slots(
-        until_dt,
-        target_dt,
-        slots,
+    astronomy = core._import_sibling("astronomy")
+    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext
+    _module("modify_validation").validate_native_until_anchor_slots_or_fail(
+        task,
+        safe_parse_datetime=_safe_parse_datetime,
+        validate_anchor=_validate_anchor_expr_cached,
+        collect_time_slots=add_validation.collect_anchor_time_slots,
+        normalize_time_slots=_norm_hhmm_list,
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        recurrence_context=recurrence_context.from_task,
         to_local=_tolocal,
+        format_local=core.fmt_dt_local,
+        astronomy_is_error=astronomy.is_astronomy_error,
+        astronomy_error_message=astronomy.scheduling_error_message,
+        panel=_panel,
+        abort=sys.exit,
     )
-    if is_valid:
-        return
-    _panel(
-        "❌ Invalid expiration window",
-        [
-            ("Expires", core.fmt_dt_local(until_dt)),
-            ("Anchor slots", ", ".join(f"{hh:02d}:{mm:02d}" for hh, mm in slots) or "none"),
-            ("Required", reason or "calendar expiration must be later than every anchor slot"),
-        ],
-        kind="error",
-    )
-    sys.exit(1)
 
 
 # ------------------------------------------------------------------------------

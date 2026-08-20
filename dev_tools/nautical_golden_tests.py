@@ -27027,6 +27027,15 @@ def test_reconcile_candidate_and_plan_paths():
         recurrence_mismatch.action == "error" and "recurrence field cp" in recurrence_mismatch.reason,
         f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
     )
+    null_recurrence = reconcile.build_reconcile_plan(
+        parent,
+        existing_children=[dict(existing[0], anchor_file="null")],
+        hook=None,
+    )
+    expect(
+        null_recurrence.action == "backfill_nextlink" and null_recurrence.child_short == "22222222",
+        f"literal null recurrence UDA should be treated as unset: {null_recurrence}",
+    )
 
     class FakeCore:
         @staticmethod

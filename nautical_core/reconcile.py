@@ -31,6 +31,12 @@ from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
 
+def _recurrence_field_text(value: object) -> str:
+    """Normalize Taskwarrior's literal null UDA sentinel as an unset value."""
+    text = str(value or "").strip()
+    return "" if text.casefold() == "null" else text
+
+
 def _generation_service(hook: Any = None) -> ChainGenerationService:
     """Resolve the shared generator without requiring an on-modify module."""
     if isinstance(hook, ChainGenerationService):
@@ -294,11 +300,11 @@ def fallback_native_until_at_day_end(
 
 def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) -> str:
     """Return a mismatch when a candidate child carries a different recurrence."""
-    if not any(str(child.get(field) or "").strip() for field in RECURRENCE_FIELDS):
+    if not any(_recurrence_field_text(child.get(field)) for field in RECURRENCE_FIELDS):
         return ""
     for field in RECURRENCE_FIELDS:
-        parent_value = str(parent.get(field) or "").strip()
-        child_value = str(child.get(field) or "").strip()
+        parent_value = _recurrence_field_text(parent.get(field))
+        child_value = _recurrence_field_text(child.get(field))
         if child_value and child_value != parent_value:
             expected = parent_value or "<empty>"
             actual = child_value or "<empty>"

@@ -15,48 +15,87 @@ BASE_DIR = CORE_DIR.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from nautical_core import chain_repair, task_command  # noqa: E402
+import nautical_core as nautical_core_package  # noqa: E402
+from nautical_core import chain_repair  # noqa: E402
+from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
+from nautical_core.integration_models import (  # noqa: E402
+    GuardTimestamp,
+    GuardTimestampField,
+    MetadataRepairPayload,
+    MutationGuard,
+    MutationOperation,
+    MutationRequest,
+    MutationOutcomeKind,
+)
+from nautical_core.lifecycle_models import recurrence_fingerprint  # noqa: E402
+from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
+from nautical_core.integration_context import IntegrationAccess  # noqa: E402
+from nautical_core.taskwarrior_uow import (  # noqa: E402
+    TaskwarriorUnitOfWork,
+    build_operator_uow,
+)
+from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 
 
-def _run_task(task_bin: str, args: list[str], *, timeout: float = 60.0, read_only: bool = False):
-    return task_command.run_task_command(
-        task_bin,
-        args,
-        timeout=timeout,
-        retry_locks=read_only,
+def _export(repository: TaskReadRepository) -> list[dict[str, Any]]:
+    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    read = repository.broad_snapshot(
+        identity="chain-repair",
+        filters=("chainID.not:",),
+        statuses=ALL_TASK_STATUSES,
+        complete_chain_history=True,
     )
+    if isinstance(read, Found):
+        return [dict(row) for row in read.value.rows]
+    if isinstance(read, Absent):
+        return []
+    if isinstance(read, Unavailable):
+        raise RuntimeError(f"chain repair task read unavailable: {read.evidence.detail}")
+    raise RuntimeError("chain repair task repository returned an invalid result")
 
 
-def _export(task_bin: str) -> list[dict[str, Any]]:
-    proc = _run_task(
-        task_bin,
-        ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "chainID.not:", "export"],
-        timeout=120.0,
-        read_only=True,
+def _apply_repair(unit_of_work: TaskwarriorUnitOfWork, repair: chain_repair.LinkRepair) -> None:
+    read = unit_of_work.repository.by_uuid(repair.uuid, refresh=True)
+    if isinstance(read, Unavailable):
+        raise RuntimeError(read.evidence.detail or "chain repair guard read unavailable")
+    if isinstance(read, Absent):
+        raise RuntimeError("chain repair target is absent")
+    if not isinstance(read, Found):
+        raise RuntimeError("chain repair guard read was invalid")
+    row = read.value
+    raw_link = str(row.get("link") or "").strip()
+    if not raw_link and repair.field == "link":
+        # A missing link is the repair target, so the slot identity is the
+        # only trustworthy link value available for the guard.  Other repair
+        # fields still require an existing numeric link and fail closed.
+        link = repair.link
+    else:
+        try:
+            link = int(float(raw_link))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("chain repair target has no numeric link") from exc
+    modified = str(row.get("modified") or "").strip()
+    if not modified:
+        raise RuntimeError("chain repair target has no modified timestamp")
+    guard = MutationGuard(
+        task_uuid=repair.uuid,
+        status=str(row.get("status") or ""),
+        chain_id=str(row.get("chainID") or ""),
+        link=link,
+        recurrence_identity=recurrence_fingerprint(dict(row)),
+        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+        expected_mutation_epoch=unit_of_work.mutation_epoch,
+        chain=str(row.get("chain") or "on"),
     )
-    payload = task_command.load_json_result(proc, "task export", empty=[])
-    if isinstance(payload, dict):
-        payload = [payload]
-    if not isinstance(payload, list):
-        raise RuntimeError("task export returned a non-list payload")
-    return [row for row in payload if isinstance(row, dict)]
-
-
-def _apply_repair(task_bin: str, repair: chain_repair.LinkRepair) -> None:
-    proc = _run_task(
-        task_bin,
-        [
-            "rc.hooks=off",
-            "rc.confirmation=off",
-            "rc.verbose=nothing",
-            f"uuid:{repair.uuid}",
-            "modify",
-            f"{repair.field}:{repair.new}",
-        ],
-        timeout=30.0,
+    payload = MetadataRepairPayload.from_mapping(
+        repair.uuid,
+        {repair.field: repair.new},
+        expected={repair.field: repair.old},
     )
-    if proc.returncode != 0:
-        raise RuntimeError(task_command.failure_message(proc, f"failed to update {repair.short}"))
+    request = MutationRequest(MutationOperation.METADATA_REPAIR, guard, payload)
+    outcome = TaskwarriorMutationService(unit_of_work).apply(request)
+    if outcome.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
+        raise RuntimeError(outcome.reason or outcome.kind.value)
 
 
 def _print_repair(repair: chain_repair.LinkRepair, *, applied: bool) -> None:
@@ -102,15 +141,28 @@ def _failure(args: argparse.Namespace, stage: str, exc: Exception) -> int:
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    _unit_of_work: TaskwarriorUnitOfWork | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description="Repair deterministic Nautical chain link gaps.")
     parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     args = parser.parse_args(argv)
 
+    if _unit_of_work is None:
+        try:
+            _unit_of_work = build_operator_uow(
+                core=nautical_core_package,
+                task_binary=args.task_bin,
+                access=IntegrationAccess.MUTATION if args.apply else IntegrationAccess.READ_ONLY,
+            )
+        except Exception as exc:
+            return _failure(args, "integration_context", exc)
     try:
-        tasks = _export(args.task_bin)
+        tasks = _export(_unit_of_work.repository)
     except Exception as exc:
         return _failure(args, "task_export", exc)
     repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
@@ -124,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     for repair in repairs:
         if args.apply:
             try:
-                _apply_repair(args.task_bin, repair)
+                _apply_repair(_unit_of_work, repair)
             except Exception as exc:
                 apply_error = {
                     "repair": repair.__dict__,

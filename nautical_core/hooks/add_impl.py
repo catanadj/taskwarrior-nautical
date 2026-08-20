@@ -123,7 +123,6 @@ if __name__ == "__main__":
 import atexit
 import random
 import re
-import subprocess
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -152,6 +151,9 @@ _HOOK_ENGINE = None
 _HOOK_ENGINE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
+_INTEGRATION_CONTEXT_MODULE = None
+_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED = False
+_INTEGRATION_CONTEXT = None
 _HOOK_MODULE_ACCESS = None
 _MODULE_SPECS = {
     "hook_runtime": (
@@ -159,6 +161,12 @@ _MODULE_SPECS = {
         "_HOOK_RUNTIME_LOAD_FAILED",
         "hook_runtime.py",
         "nautical_core.hook_runtime",
+    ),
+    "integration_context": (
+        "_INTEGRATION_CONTEXT_MODULE",
+        "_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED",
+        "integration_context.py",
+        "nautical_core.integration_context",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -237,8 +245,9 @@ def _resolve_task_data_context() -> tuple[str, bool]:
         env=os.environ,
     )
 
-_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_TASKDATA_RAW = ""
+_USE_RC_DATA_LOCATION = False
+TW_DATA_DIR = Path(TW_DIR).expanduser()
 _IMPORT_MS = None
 
 
@@ -261,16 +270,30 @@ def _module(name: str, *, required: bool = True):
     return _hook_module_access().module(name, required=required)
 
 def _task_cmd_prefix() -> list[str]:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.build_task_cmd_prefix(
-            use_rc_data_location=_USE_RC_DATA_LOCATION,
-            tw_data_dir=TW_DATA_DIR,
-        )
-    cmd = ["task"]
-    if _USE_RC_DATA_LOCATION:
-        cmd.append(f"rc.data.location={TW_DATA_DIR}")
-    return cmd
+    from nautical_core.runtime_command import command_prefix
+
+    return command_prefix(_INTEGRATION_CONTEXT, hook_name="on-add")
+
+
+def _initialize_integration_context() -> None:
+    global core, _CORE_IMPORT_TARGET, _INTEGRATION_CONTEXT
+    global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    if _INTEGRATION_CONTEXT is not None:
+        return
+    hook_runtime = _hook_runtime_module()
+    core, target, context = hook_runtime.initialize_integration_context(
+        module_access=_hook_module_access(),
+        hook_bootstrap=hook_bootstrap,
+        core_base=_CORE_BASE,
+        argv=tuple(sys.argv[1:]),
+        tw_dir=str(TW_DIR),
+        access="read_only",
+    )
+    _CORE_IMPORT_TARGET = target
+    _INTEGRATION_CONTEXT = context
+    TW_DATA_DIR = context.taskdata
+    _TASKDATA_RAW = str(context.taskdata)
+    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
 
 
@@ -278,26 +301,7 @@ def _load_core() -> None:
     global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
     if core is not None and _CORE_READY:
         return
-    if core is None:
-        module, target, import_error = hook_bootstrap.import_core_package(_CORE_BASE)
-        if target is not None:
-            globals()["_CORE_IMPORT_TARGET"] = target
-        if import_error is not None:
-            globals()["_CORE_IMPORT_ERROR"] = import_error
-        if module is not None:
-            core = module
-    if core is None:
-        msg = (
-            "nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
-            f"(resolved base: {_CORE_BASE})"
-        )
-        raise ModuleNotFoundError(msg)
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    if callable(reload_config):
-        if _USE_RC_DATA_LOCATION:
-            reload_config(TW_DATA_DIR)
-    elif getattr(core, "__file__", None):
-        raise RuntimeError("nautical_core does not provide validated configuration reload")
+    _initialize_integration_context()
     try:
         core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
     except Exception:
@@ -507,86 +511,6 @@ def _diag(msg: str) -> None:
             pass
 
 
-def _run_task(
-    cmd: list[str],
-    *,
-    env: dict | None = None,
-    input_text: str | None = None,
-    timeout: float = 3.0,
-    retries: int = 2,
-    retry_delay: float = 0.15,
-) -> tuple[bool, str, str]:
-    load_err: Exception | None = None
-    if core is None:
-        try:
-            _load_core()
-        except Exception as e:
-            load_err = e
-    core_runner = getattr(core, "run_task", None) if core is not None else None
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        if load_err is not None and not callable(core_runner):
-            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-        return hook_support.run_task(
-            cmd,
-            core_run_task=core_runner,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
-    if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
-    if load_err is not None:
-        _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-    env = env or os.environ.copy()
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-            env=env,
-        )
-        out, err = proc.communicate(input=input_text, timeout=timeout)
-        return (proc.returncode == 0, out or "", err or "")
-    except subprocess.TimeoutExpired:
-        if proc is not None:
-            proc.kill()
-        try:
-            out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-        except Exception:
-            out, err = "", ""
-        return (False, out or "", "timeout")
-    except Exception as e:
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                proc.wait(timeout=1.0)
-            except Exception:
-                pass
-        return (False, "", str(e))
-
-
-_DEFAULT_RUN_TASK = _run_task
-
-
 def _run_task_result(
     cmd: list[str],
     *,
@@ -597,62 +521,18 @@ def _run_task_result(
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ):
-    """Return the typed subprocess result; retain ``_run_task`` for compatibility."""
-    try:
-        _load_core()
-    except Exception:
-        # A loaded core with invalid scheduling configuration must block the
-        # command; only an unavailable core may use the compatibility runner.
-        if core is not None:
-            raise
-    core_runner = (
-        getattr(core, "run_task_result", None)
-        if core is not None and _run_task is _DEFAULT_RUN_TASK
-        else None
-    )
-    if _run_task is not _DEFAULT_RUN_TASK:
-        from nautical_core.task_command import coerce_command_result
-        return coerce_command_result(
-            _run_task(cmd, env=env, input_text=input_text, timeout=timeout, retries=retries, retry_delay=retry_delay),
-            cmd,
-            timeout=timeout,
-            attempts=retries,
-        )
-    if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.run_task_result(
-            run_task=_run_task,
-            cmd=cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    from nautical_core.task_command import coerce_command_result
-    return coerce_command_result(
-        _run_task(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        ),
+    """Execute one on-add Taskwarrior command through the shared client."""
+    from nautical_core.runtime_command import run_task_result
+
+    return run_task_result(
         cmd,
+        env=env,
+        input_text=input_text,
         timeout=timeout,
-        attempts=retries,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+        purpose="on-add Taskwarrior command",
     )
 
 
@@ -1030,59 +910,6 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
             return None
         out.append(f"{key}:{value}")
     return out
-
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None) -> list[dict]:
-    if not chain_id:
-        return []
-    hook_support = _module("hook_support", required=False)
-    args = None
-    if hook_support is not None:
-        args = hook_support.build_chain_export_args(
-            task_cmd_prefix=_task_cmd_prefix(),
-            chain_id=chain_id,
-            since=since,
-            extra=extra,
-            limit=None,
-            parse_extra_tokens=_parse_extra_tokens,
-            diag=_diag,
-        )
-    if args is None and hook_support is None:
-        args = _task_cmd_prefix()
-        args += ["rc.hooks=off", "rc.json.array=on", "rc.verbose=nothing", f"chainID:{chain_id}"]
-        if since:
-            args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
-        if extra:
-            extra_tokens = _parse_extra_tokens(extra)
-            if extra_tokens is None:
-                _diag(f"tw_export_chain rejected extra: {extra!r}")
-                return []
-            args += extra_tokens
-        args.append("export")
-    if args is None:
-        return []
-    if hook_support is not None:
-        result = hook_support.run_task_result(
-            run_task=_run_task_result,
-            cmd=args,
-            timeout=3.0,
-            retries=2,
-        )
-        parsed_ok, rows, error = hook_support.parse_export_array_result(result, diag=_diag)
-        if not parsed_ok:
-            _diag(f"tw_export_chain failed (chainID={chain_id}): {error}")
-            return []
-        return rows
-    result = _run_task_result(args, timeout=3.0, retries=2)
-    if not result.ok:
-        _diag(f"tw_export_chain failed (chainID={chain_id}): {result.stderr.strip()}")
-        return []
-    try:
-        data = json.loads(result.stdout.strip() or "[]")
-        return data if isinstance(data, list) else [data]
-    except Exception as e:
-        _diag(f"tw_export_chain JSON parse failed: {e}")
-        return []
-
 
 def _stamp_chain_id_on_add(task: dict) -> None:
     # [CHAINID] Stamp short root id on new recurring roots (anchor/anchor_file/cp)
@@ -1899,9 +1726,7 @@ def _build_hook_runtime_context():
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
         hook_name="on-add",
-        taskdata_dir=str(TW_DATA_DIR),
-        use_rc_data_location=_USE_RC_DATA_LOCATION,
-        tw_dir=str(TW_DIR),
+        integration_context=_INTEGRATION_CONTEXT,
         hook_dir=str(HOOK_DIR),
         profile_level=_PROFILE_LEVEL,
         import_ms=_IMPORT_MS,
@@ -1988,6 +1813,43 @@ def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
         due_dt=ctx.due_dt,
         until_dt=ctx.until_dt,
     )
+
+
+class _OnAddServices:
+    """Concrete adapter passed to the shared hook router."""
+
+    def __init__(self, result_cls):
+        self._result_cls = result_cls
+
+    def result(self, task, *, sanitize: bool, prof):
+        return self._result_cls(task=task, sanitize=sanitize, prof=prof)
+
+    def has_nautical_fields(self, task):
+        return _task_has_nautical_fields(task)
+
+    def load_core(self):
+        _load_core()
+
+    def core(self):
+        return core
+
+    def diag(self, message: str):
+        _diag(message)
+
+    def fail_and_exit(self, title: str, message: str):
+        _fail_and_exit(title, message)
+
+    def build_context(self, task, now_utc, now_local, *, prof):
+        return _build_on_add_context(task, now_utc, now_local, prof=prof)
+
+    def stamp_chain_id(self, task):
+        _stamp_chain_id_on_add(task)
+
+    def render_anchor_preview(self, context, *, prof):
+        _handle_anchor_preview_on_add_context(context, prof=prof)
+
+    def render_cp_preview(self, context, *, prof):
+        _handle_cp_preview_on_add_context(context, prof=prof)
 
 
 def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
@@ -2105,29 +1967,31 @@ def main():
     except Exception as exc:
         _error_and_exit([("Invalid business calendar", str(exc))])
         return
-    hook_context = _module("hook_context")
     hook_results = _module("hook_results")
-    hook_engine = _module("hook_engine")
-    runtime = _build_hook_runtime_context()
-    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
     displacement_context = (
         core.capture_business_calendar_displacements()
         if str(task.get("bc") or "").strip()
         else nullcontext()
     )
+    if not _task_has_nautical_fields(task):
+        # Reached the full implementation only via an alias hint or forced
+        # full-path profiling, but this task doesn't actually need Nautical
+        # processing. Emit the passthrough response without constructing a
+        # unit of work -- that construction is reserved for genuine Nautical
+        # additions below.
+        with calendar_context, displacement_context:
+            hook_results.emit_json_result(
+                hook_results.TaskHookResponse(task=task, sanitize=False, prof=prof), core=core
+            )
+        return
+    hook_context = _module("hook_context")
+    hook_engine = _module("hook_engine")
+    runtime = _build_hook_runtime_context()
+    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,
-            json_result_cls=hook_results.TaskHookResponse,
-            core_ref=lambda: core,
-            task_has_nautical_fields=_task_has_nautical_fields,
-            load_core=_load_core,
-            diag=_diag,
-            fail_and_exit=_fail_and_exit,
-            build_on_add_context=_build_on_add_context,
-            stamp_chain_id_on_add=_stamp_chain_id_on_add,
-            handle_anchor_preview_on_add=_handle_anchor_preview_on_add_context,
-            handle_cp_preview_on_add=_handle_cp_preview_on_add_context,
+            services=_OnAddServices(hook_results.TaskHookResponse),
         )
     if result is not None:
         hook_results.emit_json_result(result, core=core)
@@ -2152,8 +2016,12 @@ def run_hook(
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
 
-    _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-    TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+    try:
+        _initialize_integration_context()
+    except _hook_runtime_module().HookIntegrationContextError as exc:
+        globals()["core"] = exc.core
+        title = "Invalid Nautical configuration" if exc.stage in {"configuration", "timezone"} else "Nautical integration unavailable"
+        _fail_and_exit(title, exc.detail)
     if protocol is None:
         protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(
             _CORE_BASE,

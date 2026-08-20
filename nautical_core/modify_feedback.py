@@ -1,8 +1,50 @@
 from __future__ import annotations
 
 
-from datetime import timedelta
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
+
+
+def append_next_wait_sched_rows(
+    rows: list[tuple[str, str]],
+    next_task: dict[str, Any],
+    next_due_utc: datetime,
+    *,
+    anchor_field: str = "due",
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+    compare_datetimes: Callable[[datetime, datetime], int],
+    format_delta: Callable[[timedelta], str],
+) -> None:
+    """Append next-link timing rows and explain invalid wait/scheduled order."""
+    if not (isinstance(next_due_utc, datetime) and next_due_utc):
+        return
+
+    scheduled = parse_datetime(next_task.get("scheduled"))
+    wait = parse_datetime(next_task.get("wait"))
+    anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
+    for field, label, value in (
+        ("scheduled", "Scheduled", scheduled),
+        ("wait", "Wait", wait),
+    ):
+        if field == anchor_field or not isinstance(value, datetime):
+            continue
+        rows.append((label, f"{format_local(value)}  (Δ {format_delta(value - next_due_utc)})"))
+
+    issues: list[str] = []
+    if anchor_field != "scheduled" and isinstance(scheduled, datetime) and compare_datetimes(scheduled, next_due_utc) > 0:
+        issues.append(f"scheduled is after {anchor_label} by {format_delta(scheduled - next_due_utc)}")
+    if isinstance(wait, datetime) and compare_datetimes(wait, next_due_utc) > 0:
+        issues.append(f"wait is after {anchor_label} by {format_delta(wait - next_due_utc)}")
+    if anchor_field != "scheduled" and isinstance(scheduled, datetime) and isinstance(wait, datetime) and compare_datetimes(wait, scheduled) > 0:
+        issues.append(f"wait is after scheduled by {format_delta(wait - scheduled)}")
+    if not issues:
+        return
+
+    expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
+    rows.append(("⚠ Wait/Sched", f"Expected order: {expected}. " + "; ".join(issues)))
+    rows.append(("⚠ Wait/Sched", "This can happen when due is auto-assigned; adjust scheduled/wait if undesired."))
 
 
 def _format_td_short(td: timedelta) -> str:
@@ -19,6 +61,316 @@ def _format_td_short(td: timedelta) -> str:
             n, rem = divmod(rem, unit_secs)
             parts.append(f"{n}{label}")
     return "".join(parts) if parts else "0s"
+
+
+def render_cp_schedule_adjusted_panel(
+    adjustment: tuple[Any, Any, list[tuple[str, Any, Any, timedelta]]],
+    *,
+    format_local: Callable[[Any], str],
+    semantic_diff_value: Callable[[str, str], str],
+    format_offset: Callable[[timedelta], str],
+    panel: Callable[..., Any],
+) -> None:
+    """Render the relative schedule changes applied after a CP due edit."""
+    old_due, new_due, field_adjustments = adjustment
+    rows = [("Due", semantic_diff_value(format_local(old_due), format_local(new_due)))]
+    rows.extend(
+        (field.capitalize(), semantic_diff_value(format_local(old_value), format_local(new_value)))
+        for field, old_value, new_value, _offset in field_adjustments
+    )
+    offset_text = "; ".join(
+        f"{field.capitalize()} {format_offset(offset)}"
+        for field, _old_value, _new_value, offset in field_adjustments
+    )
+    rows.append(("Offset" if len(field_adjustments) == 1 else "Offsets", offset_text))
+    panel("⚓ Nautical schedule adjusted", rows, kind="note")
+
+
+def render_explicit_timing_order_warning(
+    new: dict[str, Any],
+    changed_fields: tuple[str, ...],
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_offset: Callable[[timedelta], str],
+    panel: Callable[..., Any],
+) -> None:
+    """Warn when an explicit timing edit leaves an invalid field ordering."""
+    if not changed_fields:
+        return
+
+    def parsed(field: str) -> Any:
+        value = new.get(field)
+        if not value:
+            return None
+        try:
+            return parse_datetime(value)
+        except Exception:
+            return None
+
+    due = parsed("due")
+    scheduled = parsed("scheduled")
+    wait = parsed("wait")
+    issues: list[str] = []
+    if due and scheduled and scheduled > due:
+        issues.append(f"Scheduled is after Due by {format_offset(scheduled - due)}")
+    if due and wait and wait > due:
+        issues.append(f"Wait is after Due by {format_offset(wait - due)}")
+    if scheduled and wait and wait > scheduled:
+        issues.append(f"Wait is after Scheduled by {format_offset(wait - scheduled)}")
+    if not issues:
+        return
+
+    if due:
+        expected = "Due >= Scheduled >= Wait"
+        action = "Keep Scheduled at/before Due and Wait at/before Scheduled."
+    else:
+        expected = "Scheduled >= Wait"
+        action = "Keep Wait at or before Scheduled."
+    rows: list[tuple[str, str]] = [
+        ("Changed", ", ".join(field.capitalize() for field in changed_fields)),
+        ("Expected", expected),
+    ]
+    rows.extend(("Problem", issue) for issue in issues)
+    rows.append(("Action", action))
+    panel("⚠ Nautical timing order", rows, kind="warning")
+
+
+def _recurrence_update_label(field: str) -> str:
+    return {
+        "anchor": "Anchor",
+        "anchor_file": "Anchor file",
+        "omit": "Omit",
+        "omit_file": "Omit file",
+        "anchor_mode": "Mode",
+        "bc": "Business calendar",
+        "cp": "Period",
+        "until": "Expiration",
+        "chainMax": "Max links",
+        "chainUntil": "Chain end point",
+    }.get(field, field)
+
+
+def _recurrence_display_value(
+    field: str,
+    value: str,
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+) -> str:
+    if not value:
+        return "-"
+    if field in {"until", "chainUntil"}:
+        parsed = parse_datetime(value)
+        if parsed:
+            return format_local(parsed)
+    return value
+
+
+def _recurrence_change_row(
+    field: str,
+    old_value: str,
+    new_value: str,
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+) -> tuple[str, str]:
+    label = _recurrence_update_label(field)
+    old_text = _recurrence_display_value(field, old_value, parse_datetime=parse_datetime, format_local=format_local)
+    new_text = _recurrence_display_value(field, new_value, parse_datetime=parse_datetime, format_local=format_local)
+    if old_value and new_value:
+        return "Changed", f"{label}: [dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
+    if new_value:
+        return "Added", f"{label}: [bold]{new_text}[/]"
+    return "Removed", f"{label}: [dim]{old_text}[/]"
+
+
+def _recurrence_update_panel_rows(
+    changes: list[tuple[str, str, str]],
+    rows: list[tuple[str | None, str]],
+    *,
+    panel_mode: str,
+    strip_markup: Callable[[str], str],
+) -> list[tuple[str | None, str]]:
+    if len(changes) > 1:
+        recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+        limit_fields = {"chainMax", "chainUntil"}
+        first_limit = next((idx for idx, (field, _old, _new) in enumerate(changes) if field in limit_fields), None)
+        if first_limit is not None and any(field in recurrence_fields for field, _old, _new in changes):
+            rows = list(rows)
+            rows.insert(first_limit, (None, ""))
+
+    mode = str(panel_mode or "rich").strip().lower()
+    if mode == "quiet":
+        mode = "text"
+    if mode == "minimal":
+        mode = "line"
+    if mode in {"line", "text"}:
+        change_rows = [(label, value) for label, value in rows if label in {"Added", "Changed", "Removed"}]
+        if len(change_rows) > 1:
+            summary = " · ".join(f"{label}: {strip_markup(str(value))}" for label, value in change_rows)
+            rows = [("Changes", summary)] + [
+                (label, value) for label, value in rows if label not in {"Added", "Changed", "Removed"}
+            ]
+    return rows
+
+
+def render_recurrence_updated_panel(
+    changes: list[tuple[str, str, str]],
+    new: dict[str, Any],
+    *,
+    parse_datetime: Callable[[Any], Any],
+    format_local: Callable[[Any], str],
+    describe_native_until_carry: Callable[..., Any],
+    to_local: Callable[[Any], Any],
+    coerce_int: Callable[[Any, Any], int | None],
+    describe_anchor: Callable[[str], str],
+    resolve_omit_presets: Callable[[str], str],
+    first_recurrence_target: Callable[[dict[str, Any], str], Any],
+    panel_mode: str,
+    strip_markup: Callable[[str], str],
+    panel: Callable[..., Any],
+) -> None:
+    if not changes:
+        return
+    rows: list[tuple[str | None, str]] = [
+        _recurrence_change_row(
+            field,
+            old_value,
+            new_value,
+            parse_datetime=parse_datetime,
+            format_local=format_local,
+        )
+        for field, old_value, new_value in changes
+    ]
+
+    if any(field == "until" for field, _old, _new in changes):
+        try:
+            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
+            until_dt = parse_datetime(new.get("until"))
+            target_dt = parse_datetime(new.get(target_field)) if target_field else None
+            carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
+            if carry:
+                rows.append(("Carry", carry))
+        except Exception:
+            pass
+
+    if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
+        max_link = coerce_int(new.get("chainMax"), 0)
+        deadline = parse_datetime(new.get("chainUntil"))
+        if max_link:
+            rows.append(("Final link", f"#{max_link}"))
+        if deadline and not any(field == "chainUntil" for field, _old, _new in changes):
+            rows.append(("Chain end point", format_local(deadline)))
+        if max_link and deadline:
+            rows.append(("Effective", "Whichever boundary is reached first"))
+        elif not max_link and not deadline:
+            rows.append(("Chain limits", "None"))
+
+    anchor_expr = str(new.get("anchor") or "").strip()
+    if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
+        try:
+            rows.append(("Natural", describe_anchor(anchor_expr)))
+        except Exception:
+            pass
+
+    omit_expr = str(new.get("omit") or "").strip()
+    if omit_expr and any(field == "omit" for field, _old, _new in changes):
+        try:
+            rows.append(("Except", describe_anchor(resolve_omit_presets(omit_expr))))
+        except Exception:
+            pass
+
+    recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+    if any(field in recurrence_fields for field, _old, _new in changes):
+        source = "anchor" if anchor_expr else "anchor_file" if str(new.get("anchor_file") or "").strip() else "cp"
+        first = first_recurrence_target(new, source)
+        if first:
+            rows.append(("First next", format_local(first)))
+
+    rows = _recurrence_update_panel_rows(
+        changes,
+        rows,
+        panel_mode=panel_mode,
+        strip_markup=strip_markup,
+    )
+    panel("⚓ Nautical recurrence updated", rows, kind="note")
+
+
+def recurrence_enabled_rows(
+    task: dict[str, Any],
+    source: str,
+    *,
+    describe_anchor: Callable[[str], str],
+    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+    first_recurrence_target: Callable[[dict[str, Any], str], Any],
+    format_local: Callable[[Any], str],
+) -> list[tuple[str, str]]:
+    """Describe the recurrence added while promoting a plain task."""
+    if source == "anchor":
+        value = str(task.get("anchor") or "").strip()
+        rows = [("Anchor", value)]
+        try:
+            natural = describe_anchor(value)
+        except Exception:
+            natural = None
+        if natural:
+            rows.append(("Natural", natural))
+        mode = (task.get("anchor_mode") or "skip").strip().lower()
+        mode_explanations = {
+            "skip": "Skip missed anchors; use the next anchor after completion",
+            "all": "Backfill every missed anchor in order",
+            "flex": "Skip missed anchors and continue from the next available anchor",
+        }
+        rows.append(("Mode", f"{mode.upper()} — {mode_explanations.get(mode, mode)}"))
+        first = first_recurrence_target(task, source)
+        if first:
+            rows.append(("First next", format_local(first)))
+        return rows
+
+    if source == "anchor_file":
+        value = str(task.get("anchor_file") or "").strip()
+        rows = [("Anchor file", value), ("Natural", f"Dates from {value.split('@', 1)[0]}")]
+        mode = (task.get("anchor_mode") or "skip").strip().lower()
+        rows.append(("Mode", f"{mode.upper()}"))
+        first = first_recurrence_target(task, source)
+        if first:
+            rows.append(("First next", format_local(first)))
+        return rows
+
+    value = str(task.get("cp") or "").strip()
+    rows = [("Period", value)]
+    natural = None
+    try:
+        def duration_label(duration: Any) -> str:
+            seconds = int(duration.total_seconds())
+            if seconds % 86400 == 0:
+                return f"{seconds // 86400}d"
+            if seconds % 3600 == 0:
+                return f"{seconds // 3600}h"
+            if seconds % 60 == 0:
+                return f"{seconds // 60}m"
+            return f"{seconds}s"
+
+        tokens = parse_cp_sequence_tokens(value) or []
+        descriptions = []
+        for token in tokens:
+            if token.get("kind") == "rand":
+                descriptions.append(f"random interval {token.get('raw') or value}")
+            else:
+                duration = token.get("duration")
+                descriptions.append(duration_label(duration) if duration else str(token.get("raw") or value))
+        if len(descriptions) == 1:
+            natural = f"Every {descriptions[0]}"
+        elif descriptions:
+            natural = "Cycle through " + ", then ".join(descriptions)
+    except Exception:
+        natural = None
+    if natural:
+        rows.append(("Natural", natural))
+    first = first_recurrence_target(task, source)
+    if first:
+        rows.append(("First next", format_local(first)))
+    return rows
 
 
 def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
@@ -960,3 +1312,143 @@ def render_cp_completion_feedback(
         )
     else:
         panel(title, fb, kind="preview_cp")
+
+
+def orchestrate_anchor_completion_feedback(
+    *,
+    new: dict,
+    child: dict,
+    child_due,
+    child_short: str,
+    next_no: int,
+    parent_short: str,
+    cap_no: int | None,
+    finals: list[tuple[str, object]],
+    now_utc,
+    until_dt,
+    until_cap_no: int | None,
+    dnf,
+    meta: dict,
+    stripped_attrs: list[str],
+    deferred_spawn: bool,
+    spawn_intent_id: str | None,
+    lifecycle_result=None,
+    chain_by_short: dict | None,
+    analytics_advice: str | None,
+    integrity_warnings: list[str] | None,
+    base_no: int,
+    core: Any,
+    panel,
+    calendar_feedback,
+    panel_diagnostics,
+    modify_models,
+    modify_runtime,
+    build_runtime_services,
+) -> None:
+    """Assemble anchor feedback state and hand it to the feedback renderer."""
+    if lifecycle_result is None:
+        lifecycle_result = modify_models.CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
+    calendar_feedback.render_business_calendar_displacement(
+        new,
+        child_due,
+        core=core,
+        panel=panel,
+    )
+    panel_warnings = panel_diagnostics.panel_warnings(core, new)
+    if panel_warnings:
+        integrity_warnings = list(integrity_warnings or [])
+        integrity_warnings.extend(panel_warnings)
+    feedback = modify_models.AnchorCompletionFeedbackModel(
+        new=new,
+        child=child,
+        child_due=child_due,
+        child_short=child_short,
+        next_no=next_no,
+        parent_short=parent_short,
+        cap_no=cap_no,
+        finals=finals,
+        now_utc=now_utc,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
+        dnf=dnf,
+        meta=meta,
+        stripped_attrs=stripped_attrs,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
+        chain_by_short=chain_by_short,
+        analytics_advice=analytics_advice,
+        integrity_warnings=integrity_warnings,
+        base_no=base_no,
+    )
+    services = modify_runtime.build_anchor_feedback_services(build_runtime_services())
+    render_anchor_completion_feedback(feedback=feedback, services=services)
+
+
+def orchestrate_cp_completion_feedback(
+    *,
+    new: dict,
+    child: dict,
+    child_due,
+    child_short: str,
+    next_no: int,
+    parent_short: str,
+    cap_no: int | None,
+    finals: list[tuple[str, object]],
+    now_utc,
+    until_dt,
+    until_cap_no: int | None,
+    meta: dict,
+    deferred_spawn: bool,
+    spawn_intent_id: str | None,
+    lifecycle_result=None,
+    chain_by_short: dict | None,
+    analytics_advice: str | None,
+    integrity_warnings: list[str] | None,
+    base_no: int,
+    core: Any,
+    panel_diagnostics,
+    modify_models,
+    modify_runtime,
+    build_runtime_services,
+) -> None:
+    """Assemble CP feedback state and hand it to the feedback renderer."""
+    if lifecycle_result is None:
+        lifecycle_result = modify_models.CompletionLifecycleResult(
+            state="queued" if deferred_spawn else "applied",
+            child_short=child_short,
+            deferred_spawn=deferred_spawn,
+            spawn_intent_id=spawn_intent_id,
+        )
+    panel_warnings = panel_diagnostics.panel_warnings(core, new, include_files=False)
+    if panel_warnings:
+        integrity_warnings = list(integrity_warnings or [])
+        integrity_warnings.extend(panel_warnings)
+    feedback = modify_models.CpCompletionFeedbackModel(
+        new=new,
+        child=child,
+        child_due=child_due,
+        child_short=child_short,
+        next_no=next_no,
+        parent_short=parent_short,
+        cap_no=cap_no,
+        finals=finals,
+        now_utc=now_utc,
+        until_dt=until_dt,
+        until_cap_no=until_cap_no,
+        meta=meta,
+        deferred_spawn=deferred_spawn,
+        spawn_intent_id=spawn_intent_id,
+        lifecycle_result=lifecycle_result,
+        chain_by_short=chain_by_short,
+        analytics_advice=analytics_advice,
+        integrity_warnings=integrity_warnings,
+        base_no=base_no,
+    )
+    services = modify_runtime.build_cp_feedback_services(build_runtime_services())
+    render_cp_completion_feedback(feedback=feedback, services=services)

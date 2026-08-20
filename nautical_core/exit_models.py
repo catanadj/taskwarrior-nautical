@@ -5,29 +5,29 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from nautical_core.integration_models import TaskRead
     from nautical_core.lifecycle_models import LifecyclePlan
 
 
 class ExitDrainStateProtocol(Protocol):
-    requeue: list[dict[str, Any]]
+    retry_entries: list[dict[str, Any]]
     errors: int
-    sqlite_acked_claims: dict[int, str]
     lifecycle_defer_verification: bool
     lifecycle_batch_discovery: bool
     lifecycle_batch_plan: LifecycleBatchPlan | None
 
-    def dead_letter(self, entry: dict[str, Any], reason: str) -> None: ...
+    def manual_review(self, entry: dict[str, Any], reason: str) -> None: ...
     def record_lock_event(self, idx: int) -> bool: ...
     def to_stats_model(
         self,
         drain_t0: float,
-        requeue_ok: bool,
-        requeue_failed: int,
+        retry_release_ok: bool,
+        retry_release_failed: int,
     ) -> ExitDrainStats: ...
 
 
 class ExitExportCallback(Protocol):
-    def __call__(self, uuid_str: str, *, prefer_cache: bool = True) -> ExitExportResult: ...
+    def __call__(self, uuid_str: str, *, prefer_cache: bool = True) -> TaskRead[dict[str, Any]]: ...
 
 
 class ExitParentNextlinkStateCallback(Protocol):
@@ -44,7 +44,7 @@ class ExitParentNextlinkStateCallback(Protocol):
 
 
 class ExitImportCallback(Protocol):
-    def __call__(self, child: dict[str, Any]) -> ExitImportResult: ...
+    def __call__(self, ctx: "ExitEntryContext") -> ExitImportResult: ...
 
 
 class ExitParentUpdateCallback(Protocol):
@@ -63,15 +63,11 @@ class ExitClearParentCallback(Protocol):
 
 
 class ExitCleanupCallback(Protocol):
-    def __call__(self, child_uuid: str, spawn_intent_id: str = "") -> None: ...
+    def __call__(self, child_uuid: str, spawn_intent_id: str = "") -> "ExitImportResult": ...
 
 
 class ExitParentGuardCallback(Protocol):
     def __call__(self, ctx: "ExitEntryContext") -> str: ...
-
-
-class ExitLockErrorCallback(Protocol):
-    def __call__(self, error: str) -> bool: ...
 
 
 class ExitDiagnosticCallback(Protocol):
@@ -82,7 +78,7 @@ class ExitRecurrenceFingerprintCallback(Protocol):
     def __call__(self, task: dict[str, Any]) -> str: ...
 
 
-class ExitRequeueCallback(Protocol):
+class ExitRetryOrManualReviewCallback(Protocol):
     def __call__(self, entry: dict[str, Any], idx: int, state: ExitDrainStateProtocol) -> bool: ...
 
 
@@ -105,9 +101,8 @@ class ExitPrecheckServices:
     parent_nextlink_state: ExitParentNextlinkStateCallback
     export_uuid: ExitExportCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
-    is_lock_error: ExitLockErrorCallback
     diag: ExitDiagnosticCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
     recurrence_fingerprint: ExitRecurrenceFingerprintCallback | None = None
 
 
@@ -116,49 +111,24 @@ class ExitEnsureChildServices:
     export_uuid: ExitExportCallback
     import_child: ExitImportCallback
     clear_parent_nextlink_if_matches: ExitClearParentCallback
-    is_lock_error: ExitLockErrorCallback
     diag: ExitDiagnosticCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
 
 
 @dataclass(slots=True)
 class ExitApplyParentUpdateServices:
     update_parent_nextlink: ExitParentUpdateCallback
-    is_lock_error: ExitLockErrorCallback
     cleanup_orphan_child: ExitCleanupCallback
     diag: ExitDiagnosticCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
+    retry_or_manual_review_for_lock: ExitRetryOrManualReviewCallback
     recheck_parent_guard: ExitParentGuardCallback | None = None
-
-
-@dataclass(slots=True)
-class ExitExportResult:
-    exists: bool
-    retryable: bool
-    err: str
-    obj: dict[str, Any] | None
-
-    @property
-    def state(self) -> str:
-        return "found" if self.exists else ("unavailable" if self.retryable else "absent")
-
-
-@dataclass(slots=True)
-class ExitEquivalentChildResult:
-    exists: bool
-    retryable: bool
-    err: str
-    obj: dict[str, Any] | None
-
-    @property
-    def state(self) -> str:
-        return "found" if self.exists else ("unavailable" if self.retryable else "absent")
 
 
 @dataclass(slots=True)
 class ExitImportResult:
     ok: bool
     err: str
+    retryable: bool = False
 
 
 class LifecycleBatchDecisionKind(str, Enum):
@@ -196,7 +166,7 @@ class LifecycleBatchDecision:
 
 @dataclass(frozen=True, slots=True)
 class LifecycleBatchPlan:
-    """Validated, mutation-free classification of one claimed queue batch."""
+    """Validated, mutation-free classification of one claimed outbox batch."""
 
     decisions: tuple[LifecycleBatchDecision, ...] = ()
 
@@ -229,10 +199,11 @@ class ExitParentUpdateResult:
     ok: bool
     err: str
     state: str = ""
+    retryable: bool = False
 
 
 @dataclass(slots=True)
-class ExitQueueBatch:
+class ExitOutboxBatch:
     entries: list[dict[str, Any]]
 
     @property
@@ -241,7 +212,7 @@ class ExitQueueBatch:
 
 
 @dataclass(slots=True)
-class ExitRequeueResult:
+class ExitRetryReleaseResult:
     ok: bool
     failed: int
 
@@ -250,22 +221,15 @@ class ExitRequeueResult:
 class ExitDrainStats:
     processed: int
     errors: int
-    requeued: int
-    requeue_failed: int
-    dead_lettered: int
-    queue_lock_failures: int
+    retry_released: int
+    retry_release_failed: int
+    manual_reviewed: int
+    outbox_lock_failures: int
     entries_total: int
     entries_skipped_idempotent: int
     lock_events: int
     lock_streak_max: int
     circuit_breaks: int
-    intent_log_ready: int
-    intent_log_size: int
-    intent_log_load_ms: float
-    intent_mark_ok: int
-    intent_mark_fail: int
-    queue_db_opens: int
-    queue_db_reuses: int
     preload_export_uuids: int
     preload_export_hits: int
     preload_export_misses: int
@@ -276,22 +240,15 @@ class ExitDrainStats:
         return {
             "processed": self.processed,
             "errors": self.errors,
-            "requeued": self.requeued,
-            "requeue_failed": self.requeue_failed,
-            "dead_lettered": self.dead_lettered,
-            "queue_lock_failures": self.queue_lock_failures,
+            "retry_released": self.retry_released,
+            "retry_release_failed": self.retry_release_failed,
+            "manual_reviewed": self.manual_reviewed,
+            "outbox_lock_failures": self.outbox_lock_failures,
             "entries_total": self.entries_total,
             "entries_skipped_idempotent": self.entries_skipped_idempotent,
             "lock_events": self.lock_events,
             "lock_streak_max": self.lock_streak_max,
             "circuit_breaks": self.circuit_breaks,
-            "intent_log_ready": self.intent_log_ready,
-            "intent_log_size": self.intent_log_size,
-            "intent_log_load_ms": self.intent_log_load_ms,
-            "intent_mark_ok": self.intent_mark_ok,
-            "intent_mark_fail": self.intent_mark_fail,
-            "queue_db_opens": self.queue_db_opens,
-            "queue_db_reuses": self.queue_db_reuses,
             "preload_export_uuids": self.preload_export_uuids,
             "preload_export_hits": self.preload_export_hits,
             "preload_export_misses": self.preload_export_misses,
@@ -301,6 +258,8 @@ class ExitDrainStats:
 
 
 @dataclass(slots=True)
-class ExitQueueWriteResult:
+class ExitOutboxWriteResult:
     ok: bool
     count: int
+    err: str = ""
+    lock_busy: bool = False

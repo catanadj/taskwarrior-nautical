@@ -12,6 +12,7 @@ import re
 import argparse
 import multiprocessing as mp
 import json
+import sqlite3
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -160,117 +161,77 @@ def _run_chain_until_failure(env, max_iters: int, settle_s: float) -> tuple[int,
         time.sleep(settle_s)
     return (completed, "max iters reached")
 
-def _read_dead_letter_reason(td_path: Path) -> str | None:
-    dl = td_path / ".nautical_dead_letter.jsonl"
-    if not dl.exists() or dl.stat().st_size == 0:
-        return None
+def _outbox_rows(td_path: Path) -> list[tuple[str, str, str]]:
+    path = td_path / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+    if not path.exists():
+        return []
     try:
-        with dl.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    reason = obj.get("reason")
-                    if reason:
-                        return str(reason)
-                except Exception:
-                    continue
-    except Exception:
-        return None
-    return "dead letter present"
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.0) as conn:
+            rows = conn.execute(
+                "SELECT processing_state, failure_json, plan_json FROM lifecycle_outbox "
+                "ORDER BY updated_at ASC, intent_id ASC"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return [("unavailable", str(exc), "")]
+    return [(str(state or ""), str(failure or ""), str(plan or "")) for state, failure, plan in rows]
+
 
 def _check_failure(td_path: Path) -> bool:
-    dl = td_path / ".nautical_dead_letter.jsonl"
-    if dl.exists() and dl.stat().st_size > 0:
-        return True
-    q = td_path / ".nautical_spawn_queue.jsonl"
-    for _ in range(10):
-        if q.exists():
-            try:
-                if q.stat().st_size > 0:
-                    time.sleep(0.1)
-                    continue
-            except Exception:
-                return True
-        return False
-    return True
+    return any(state in {"manual_review", "quarantined", "unavailable"} for state, _failure, _plan in _outbox_rows(td_path))
 
-def _read_queue_sample(td_path: Path, max_lines: int = 3) -> str | None:
-    q = td_path / ".nautical_spawn_queue.jsonl"
-    if not q.exists() or q.stat().st_size == 0:
+
+def _read_queue_sample(td_path: Path) -> str | None:
+    rows = _outbox_rows(td_path)
+    if not rows:
         return None
-    try:
-        lines = []
-        with q.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                lines.append(line)
-                if len(lines) >= max_lines:
-                    break
-        if lines:
-            return "queue head: " + " | ".join(lines)
-    except Exception:
-        return None
-    return None
+    states: dict[str, int] = {}
+    for state, _failure, _plan in rows:
+        states[state] = states.get(state, 0) + 1
+    return "outbox: " + ", ".join(f"{state}={count}" for state, count in sorted(states.items()))
+
 
 def _read_queue_child_uuid(td_path: Path) -> str | None:
-    q = td_path / ".nautical_spawn_queue.jsonl"
-    if not q.exists() or q.stat().st_size == 0:
-        return None
-    try:
-        with q.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    child = obj.get("child") if isinstance(obj, dict) else None
-                    if isinstance(child, dict):
-                        u = (child.get("uuid") or "").strip()
-                        if u:
-                            return u
-                except Exception:
-                    continue
-    except Exception:
-        return None
+    for state, _failure, plan_json in _outbox_rows(td_path):
+        if state not in {"ready", "claimed", "retry"}:
+            continue
+        try:
+            plan = json.loads(plan_json)
+            child = plan.get("child_payload") if isinstance(plan, dict) else None
+            child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
+            if child_uuid:
+                return child_uuid
+        except (TypeError, ValueError):
+            continue
     return None
 
+
 def _check_failure_detail(td_path: Path) -> tuple[bool, str | None]:
-    if _check_failure(td_path):
-        reason = _read_dead_letter_reason(td_path)
-        if reason:
-            return True, reason
-        q_hint = _read_queue_sample(td_path)
-        if q_hint:
-            return True, q_hint
-        return True, None
-    return False, None
+    rows = _outbox_rows(td_path)
+    failed = [(state, failure) for state, failure, _plan in rows if state in {"manual_review", "quarantined", "unavailable"}]
+    if not failed:
+        return False, None
+    state, failure = failed[0]
+    return True, failure or state
+
 
 def _reset_signal_files(td_path: Path) -> None:
-    for name in [
-        ".nautical_dead_letter.jsonl",
-        ".nautical_spawn_queue.jsonl",
-        ".nautical_spawn_queue.lock_failed",
-        ".nautical_spawn_queue.lock_failed.count",
-    ]:
+    state_dir = td_path / ".nautical-state"
+    for name in (
+        ".nautical_lifecycle_outbox.db",
+        ".nautical_lifecycle_outbox.db-shm",
+        ".nautical_lifecycle_outbox.db-wal",
+    ):
         try:
-            (td_path / name).unlink()
-        except Exception:
+            (state_dir / name).unlink()
+        except FileNotFoundError:
             pass
 
-def _load_worker(taskdata: str, count: int, durable: bool) -> tuple[bool, str]:
+def _load_worker(taskdata: str, count: int) -> tuple[bool, str]:
     env = os.environ.copy()
     env["TASKDATA"] = taskdata
     env["NAUTICAL_CORE_PATH"] = str(Path.home() / ".task")
     env["TASKRC"] = str(_write_taskrc(Path(taskdata)))
     env.setdefault("NAUTICAL_DIAG", "1")
-    if durable:
-        env["NAUTICAL_DURABLE_QUEUE"] = "1"
     try:
         _reset_signal_files(Path(taskdata))
         _run_load(env, count)
@@ -283,7 +244,6 @@ def _load_worker(taskdata: str, count: int, durable: bool) -> tuple[bool, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Nautical reliability smoke test")
     parser.add_argument("--load", type=int, default=0, help="number of tasks to add+complete under load")
-    parser.add_argument("--durable", action="store_true", help="enable NAUTICAL_DURABLE_QUEUE during load run")
     parser.add_argument("--find-limit", action="store_true", help="search for max safe load before failure")
     parser.add_argument("--min", dest="min_load", type=int, default=50, help="min load for limit finder")
     parser.add_argument("--max", dest="max_load", type=int, default=2000, help="max load for limit finder")
@@ -308,40 +268,14 @@ def main() -> int:
         # Test 1: happy path
         tid = _add_task(["nautical test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
         _task(["done", str(tid)], env=env)
-        q_path = td_path / ".nautical_spawn_queue.jsonl"
-        if q_path.exists():
-            # allow on-exit to drain
-            time.sleep(0.2)
+        time.sleep(0.2)
         # export all to show at least one task exists
         export = _task(["export"], env=env).stdout
         if not export.strip():
             raise RuntimeError("empty export after happy path")
         print("[smoke] happy path ok")
 
-        # Test 2: queue lock contention
-        lock_path = td_path / ".nautical_spawn_queue.lock"
-        lock_path.write_text("hold")
-        try:
-            tid = _add_task(["nautical lock test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
-            _task(["done", str(tid)], env=env)
-        finally:
-            try:
-                lock_path.unlink()
-            except Exception:
-                pass
-        # allow drain
-        time.sleep(0.2)
-        print("[smoke] lock contention ok")
-
-        # Test 3: corrupt queue line
-        q_path.parent.mkdir(parents=True, exist_ok=True)
-        with q_path.open("a", encoding="utf-8") as f:
-            f.write("{bad-json\n")
-        # trigger drain
-        _task(["export"], env=env)
-        print("[smoke] corrupt line quarantine ok")
-
-        # Test 4: CAS race (simulate by overwriting nextLink)
+        # Test 2: CAS race (simulate by overwriting nextLink)
         # create new task and grab parent uuid
         tid = _add_task(["nautical cas test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
         parent = _task([f"id:{tid}", "export"], env=env).stdout
@@ -353,19 +287,18 @@ def main() -> int:
         time.sleep(0.2)
         print("[smoke] cas race simulated")
 
-        # Test 5: durable queue mode
-        env_durable = env.copy()
-        env_durable["NAUTICAL_DURABLE_QUEUE"] = "1"
-        tid = _add_task(["nautical durable test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env_durable)
-        _task(["done", str(tid)], env=env_durable)
+        # Test 3: the lifecycle outbox remains durable across another completion.
+        tid = _add_task(["nautical outbox test", "anchor:m:17 + w:sun", "+", "w:sun", "anchor_mode:skip", "chain:on", "due:today"], env)
+        _task(["done", str(tid)], env=env)
         time.sleep(0.2)
-        print("[smoke] durable mode ok")
+        failed, reason = _check_failure_detail(td_path)
+        if failed:
+            raise RuntimeError(f"lifecycle outbox failure: {reason or 'unknown'}")
+        print("[smoke] lifecycle outbox ok")
 
         if args.load:
             env_load = env.copy()
-            if args.durable:
-                env_load["NAUTICAL_DURABLE_QUEUE"] = "1"
-            print(f"[smoke] load test: {args.load} tasks (durable={args.durable})")
+            print(f"[smoke] load test: {args.load} tasks")
             t0 = time.time()
             _run_load(env_load, args.load)
             dt = time.time() - t0
@@ -390,11 +323,11 @@ def main() -> int:
                     wdir.mkdir(parents=True, exist_ok=True)
                     work_dirs.append(str(wdir))
                 if args.workers <= 1:
-                    ok, err = _load_worker(work_dirs[0], load, args.durable)
+                    ok, err = _load_worker(work_dirs[0], load)
                     results = [(ok, err)]
                 else:
                     with mp.Pool(processes=args.workers) as pool:
-                        results = pool.starmap(_load_worker, [(work_dirs[i], load, args.durable) for i in range(args.workers)])
+                        results = pool.starmap(_load_worker, [(work_dirs[i], load) for i in range(args.workers)])
                 all_ok = all(r[0] for r in results)
                 dt = time.time() - t0
                 if all_ok:

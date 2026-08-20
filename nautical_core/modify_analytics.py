@@ -41,6 +41,46 @@ def sort_chain_for_analytics(
         return chain[:]
 
 
+def lateness_stats(
+    chain: list[dict],
+    *,
+    parse_datetime: Callable[[Any], datetime | None],
+    tol_secs: int = 60,
+) -> dict[str, Any]:
+    """Summarize completed-link timing without hook orchestration state."""
+    early = on = late = 0
+    deltas: list[float] = []
+    best = None
+    worst = None
+    for obj in chain:
+        due = parse_datetime(obj.get("due"))
+        end = parse_datetime(obj.get("end"))
+        if not (due and end):
+            continue
+        diff = (end - due).total_seconds()
+        deltas.append(diff)
+        if diff > tol_secs:
+            late += 1
+            worst = diff if worst is None or diff > worst else worst
+        elif diff < -tol_secs:
+            early += 1
+            best = diff if best is None or diff < best else best
+        else:
+            on += 1
+    avg = (sum(deltas) / len(deltas)) if deltas else None
+    med = _median(deltas) if deltas else None
+    return {
+        "early": early,
+        "on_time": on,
+        "late": late,
+        "avg": avg,
+        "median": med,
+        "best_early": best,
+        "worst_late": worst,
+        "count": len(deltas),
+    }
+
+
 def chain_health_advice(
     chain: list[dict],
     kind: str,
@@ -240,4 +280,9 @@ def chain_integrity_warnings(
     return list(dict.fromkeys(warnings))
 
 
-__all__ = ("chain_health_advice", "chain_integrity_warnings", "sort_chain_for_analytics")
+__all__ = (
+    "chain_health_advice",
+    "chain_integrity_warnings",
+    "lateness_stats",
+    "sort_chain_for_analytics",
+)

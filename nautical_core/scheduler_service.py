@@ -256,6 +256,36 @@ class SchedulerService:
             omitted_occurrences=omitted if request.omission_policy == "report" else (),
         )
 
+    def included_occurrences_after(
+        self,
+        after_local_dt: datetime,
+        *,
+        inclusive: bool,
+        limit: int,
+    ) -> list[datetime]:
+        """Return included local occurrences after one cursor with strict errors."""
+        timezone = self.session.evaluator.context.timezone
+        result = self.collect_request(
+            OccurrenceRangeRequest(
+                OccurrenceCursor(
+                    after_local_dt,
+                    inclusive=inclusive,
+                    timezone=timezone,
+                ),
+                limit=limit,
+                omission_policy="exclude",
+            )
+        )
+        if result.failure is not None:
+            raise ValueError(f"Anchor occurrence collection {result.status}: {result.failure.reason}")
+        if result.terminal is not None and not result.occurrences:
+            raise result.terminal
+        return [
+            occurrence.local_datetime
+            for occurrence in result.occurrences
+            if occurrence.local_datetime is not None
+        ]
+
     def preview(
         self,
         start: datetime,

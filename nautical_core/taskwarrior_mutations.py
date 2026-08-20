@@ -1,0 +1,520 @@
+"""Guarded, named Taskwarrior mutations for lifecycle transitions.
+
+This module owns the write side of the integration boundary.  Callers supply
+validated mutation requests; they never provide arbitrary Taskwarrior argv.
+Every operation re-reads its target, applies a narrow selector, and verifies
+the requested postcondition before reporting success.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from typing import Any, Mapping, Protocol, Sequence
+
+from .integration_models import (
+    Absent,
+    ChainDisablePayload,
+    ChildCompensationPayload,
+    ChildImportPayload,
+    CommandFailureKind,
+    FailureEvidence,
+    Found,
+    MetadataRepairPayload,
+    MutationGuard,
+    MutationOperation,
+    MutationOutcome,
+    MutationOutcomeKind,
+    MutationPostcondition,
+    MutationRequest,
+    NativeUntilRepairPayload,
+    ParentLinkPayload,
+    ParentLinkClearPayload,
+    TaskCommandResult,
+    TaskRead,
+    TaskwarriorMutationPort,
+    Unavailable,
+)
+from .lifecycle_models import recurrence_fingerprint
+
+
+class _TaskRepository(Protocol):
+    def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[Mapping[str, Any]]: ...
+
+
+class _TaskClient(Protocol):
+    def execute(
+        self,
+        args: Sequence[str],
+        *,
+        purpose: str,
+        timeout: float,
+        input_text: str | None = None,
+        attempts: int = 1,
+    ) -> TaskCommandResult: ...
+
+
+class _UnitOfWork(Protocol):
+    repository: _TaskRepository
+    client: _TaskClient
+    mutation_epoch: int
+
+    def record_mutation(self, *, uncertain: bool = False) -> int: ...
+
+
+_TIMESTAMP_FIELDS = {
+    "modified": "modified",
+    "due": "due",
+    "until": "until",
+    "end": "end",
+}
+
+
+def _text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _timestamp_equal(left: object, right: object) -> bool:
+    """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
+    left_text = _text(left)
+    right_text = _text(right)
+    if left_text == right_text:
+        return True
+
+    def parse(value: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    left_dt = parse(left_text)
+    right_dt = parse(right_text)
+    return left_dt is not None and right_dt is not None and left_dt == right_dt
+
+
+def _link_text(value: object) -> str:
+    text = _text(value)
+    try:
+        return str(int(float(text)))
+    except (TypeError, ValueError, OverflowError):
+        return text
+
+
+def _failure_from_command(result: TaskCommandResult, detail: str) -> FailureEvidence:
+    kind = result.kind
+    if kind in {CommandFailureKind.SUCCESS, CommandFailureKind.ABSENT}:
+        kind = CommandFailureKind.REJECTED
+    return FailureEvidence(
+        result.command,
+        kind,
+        result.returncode,
+        result.attempt,
+        result.duration,
+        kind in {CommandFailureKind.TIMEOUT, CommandFailureKind.BUSY, CommandFailureKind.EXECUTION_FAILURE},
+        detail or result.stderr or result.kind.value,
+    )
+
+
+class TaskwarriorMutationService(TaskwarriorMutationPort):
+    """Apply one typed request through one invocation-scoped unit of work."""
+
+    def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
+        self._uow = unit_of_work
+        self._timeout = max(0.05, float(timeout))
+
+    def _outcome(
+        self,
+        request: MutationRequest,
+        kind: MutationOutcomeKind,
+        *,
+        postcondition: MutationPostcondition | None = None,
+        reason: str = "",
+        failure: FailureEvidence | None = None,
+    ) -> MutationOutcome:
+        return MutationOutcome(
+            request.operation,
+            kind,
+            request.guard,
+            () if postcondition is None else (postcondition,),
+            reason,
+            failure,
+        )
+
+    def _read_target(self, request: MutationRequest) -> tuple[Mapping[str, Any] | None, MutationOutcome | None]:
+        if self._uow.mutation_epoch != request.guard.expected_mutation_epoch:
+            return None, self._outcome(
+                request,
+                MutationOutcomeKind.CONFLICT,
+                reason="mutation epoch changed before guard read",
+            )
+        result = self._uow.repository.by_uuid(request.guard.task_uuid, refresh=True)
+        if isinstance(result, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if result.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return None, self._outcome(request, kind, reason=result.evidence.detail, failure=result.evidence)
+        if isinstance(result, Absent):
+            if request.operation is MutationOperation.CHILD_COMPENSATION:
+                return None, self._outcome(
+                    request,
+                    MutationOutcomeKind.ALREADY_APPLIED,
+                    postcondition=MutationPostcondition.CHILD_COMPENSATED,
+                )
+            return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason="guard task is absent")
+        if not isinstance(result, Found):
+            return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard read result")
+        row = result.value
+        mismatch = self._guard_mismatch(request.guard, row)
+        if mismatch:
+            # A successful parent link changes Taskwarrior's ``modified``
+            # timestamp.  If the process crashed after that external
+            # mutation but before the outbox stage was persisted, the next
+            # recovery read must recognize the requested link as converged.
+            # Keep all other guard fields strict: only the timestamp may have
+            # changed, and only for the parent-link operation.
+            if (
+                request.operation is MutationOperation.PARENT_LINK
+                and isinstance(request.payload, ParentLinkPayload)
+                and _text(row.get("nextLink")).casefold()
+                == request.payload.child_short_uuid.casefold()
+                and mismatch.startswith("guard modified changed")
+            ):
+                expected_modified = next(
+                    (
+                        timestamp.value
+                        for timestamp in request.guard.timestamps
+                        if timestamp.field.value == "modified"
+                    ),
+                    None,
+                )
+                if expected_modified is not None:
+                    normalized = dict(row)
+                    normalized["modified"] = expected_modified
+                    if not self._guard_mismatch(request.guard, normalized):
+                        return row, None
+            if (
+                request.operation is MutationOperation.METADATA_REPAIR
+                and isinstance(request.payload, MetadataRepairPayload)
+                and request.payload.expected_dict().get("link") == ""
+                and not _text(row.get("link"))
+                and mismatch.startswith("guard link changed")
+            ):
+                return row, None
+            if (
+                request.operation is MutationOperation.CHAIN_DISABLE
+                and request.guard.chain == "on"
+                and _text(row.get("chain")).lower() == "off"
+            ):
+                return row, None
+            if (
+                request.operation is MutationOperation.CHILD_COMPENSATION
+                and _text(row.get("status")).lower() == "deleted"
+            ):
+                return row, None
+            return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
+        return row, None
+
+    @staticmethod
+    def _guard_mismatch(guard: MutationGuard, row: Mapping[str, Any]) -> str:
+        values = {
+            "status": guard.status,
+            "chain": guard.chain,
+            "chainID": guard.chain_id,
+            "link": str(guard.link),
+        }
+        for field, expected in values.items():
+            actual = _text(row.get(field))
+            if field == "link":
+                try:
+                    actual = str(int(float(actual)))
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            if actual.casefold() != expected.casefold():
+                return f"guard {field} changed (expected {expected}, found {actual or '-'})"
+        try:
+            actual_identity = recurrence_fingerprint(row)
+        except Exception as exc:
+            return f"guard recurrence identity unavailable: {exc}"
+        if actual_identity != guard.recurrence_identity:
+            return "guard recurrence identity changed"
+        for timestamp in guard.timestamps:
+            field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
+            if field is not None and _text(row.get(field)) != timestamp.value:
+                return f"guard {field} changed"
+        return ""
+
+    def _command_failure(self, request: MutationRequest, result: TaskCommandResult) -> MutationOutcome:
+        evidence = _failure_from_command(result, f"{request.operation.value} command failed")
+        kind = MutationOutcomeKind.RETRYABLE if evidence.retryable else MutationOutcomeKind.REJECTED
+        return self._outcome(request, kind, reason=evidence.detail, failure=evidence)
+
+    def _run_modify(self, request: MutationRequest, selectors: Sequence[str], updates: Sequence[str]) -> MutationOutcome | None:
+        result = self._uow.client.execute(
+            [*selectors, "modify", *updates],
+            purpose=f"lifecycle {request.operation.value}",
+            timeout=self._timeout,
+            attempts=1,
+        )
+        if not result.ok:
+            self._uow.record_mutation(uncertain=True)
+            return self._command_failure(request, result)
+        self._uow.record_mutation(uncertain=False)
+        return None
+
+    def _verify(
+        self,
+        request: MutationRequest,
+        postcondition: MutationPostcondition,
+        predicate,
+        *,
+        target_uuid: str | None = None,
+    ) -> MutationOutcome:
+        result = self._uow.repository.by_uuid(target_uuid or request.guard.task_uuid, refresh=True)
+        if isinstance(result, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if result.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return self._outcome(request, kind, reason=result.evidence.detail, failure=result.evidence)
+        if isinstance(result, Absent):
+            return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="postcondition target is absent")
+        if not isinstance(result, Found):
+            return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid postcondition read result")
+        if not predicate(result.value):
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="postcondition does not match")
+        return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
+
+    def apply(self, request: MutationRequest) -> MutationOutcome:
+        if not isinstance(request, MutationRequest):
+            raise TypeError("mutation service requires a MutationRequest")
+        handlers = {
+            MutationOperation.CHILD_IMPORT: self.import_child,
+            MutationOperation.CHILD_COMPENSATION: self.compensate_child,
+            MutationOperation.PARENT_LINK: self.link_parent,
+            MutationOperation.PARENT_LINK_CLEAR: self.clear_parent_link,
+            MutationOperation.CHAIN_DISABLE: self.disable_chain,
+            MutationOperation.NATIVE_UNTIL_REPAIR: self.repair_native_until,
+            MutationOperation.METADATA_REPAIR: self.repair_metadata,
+        }
+        return handlers[request.operation](request)
+
+    def compensate_child(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.CHILD_COMPENSATION or not isinstance(request.payload, ChildCompensationPayload):
+            raise TypeError("child compensation requires a child-compensation request")
+        child, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert child is not None
+        if _text(child.get("status")).lower() == "deleted":
+            return self._outcome(
+                request,
+                MutationOutcomeKind.ALREADY_APPLIED,
+                postcondition=MutationPostcondition.CHILD_COMPENSATED,
+            )
+        if _text(child.get("status")).lower() != request.payload.expected_status:
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="child status changed before compensation")
+        failure = self._run_modify(request, self._selectors(request.guard), ("status:deleted",))
+        if failure is not None:
+            return failure
+        return self._verify(
+            request,
+            MutationPostcondition.CHILD_COMPENSATED,
+            lambda row: _text(row.get("status")).lower() == "deleted",
+        )
+
+    def import_child(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.CHILD_IMPORT or not isinstance(request.payload, ChildImportPayload):
+            raise TypeError("child import requires a child-import request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        if _text(parent.get("chain")).lower() != "on":
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
+        existing = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
+        if isinstance(existing, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if existing.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return self._outcome(request, kind, reason=existing.evidence.detail, failure=existing.evidence)
+        if isinstance(existing, Found):
+            row = existing.value
+            if (
+                _text(row.get("chainID")) == request.payload.chain_id
+                and _text(row.get("prevLink")).lower() == request.guard.task_uuid[:8].lower()
+                and _link_text(row.get("link")) == str(request.payload.target_link)
+            ):
+                return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="unrelated task already owns child UUID")
+        if not isinstance(existing, Absent):
+            return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child lookup result")
+        result = self._uow.client.execute(
+            ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+            purpose="lifecycle child import",
+            timeout=self._timeout,
+            input_text=json.dumps(request.payload.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n",
+            attempts=1,
+        )
+        if not result.ok:
+            self._uow.record_mutation(uncertain=True)
+            return self._command_failure(request, result)
+        self._uow.record_mutation(uncertain=True)
+        return self._verify(
+            request,
+            MutationPostcondition.CHILD_IMPORTED,
+            lambda row: (
+                _text(row.get("uuid")).lower() == request.payload.child_uuid.lower()
+                and _text(row.get("chainID")) == request.payload.chain_id
+                and _link_text(row.get("link")) == str(request.payload.target_link)
+            ),
+            target_uuid=request.payload.child_uuid,
+        )
+
+    def link_parent(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.PARENT_LINK or not isinstance(request.payload, ParentLinkPayload):
+            raise TypeError("parent linking requires a parent-link request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        if _text(parent.get("chain")).lower() != "on":
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
+        current = _text(parent.get("nextLink"))
+        if current.casefold() == request.payload.child_short_uuid.casefold():
+            return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINKED)
+        if current != request.payload.expected_next_link:
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent nextLink changed")
+        failure = self._run_modify(
+            request,
+            self._selectors(request.guard, extra=(f"nextLink:{current}",)),
+            (f"nextLink:{request.payload.child_short_uuid}",),
+        )
+        if failure is not None:
+            return failure
+        return self._verify(
+            request,
+            MutationPostcondition.PARENT_LINKED,
+            lambda row: _text(row.get("nextLink")).casefold() == request.payload.child_short_uuid.casefold(),
+        )
+
+    def disable_chain(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.CHAIN_DISABLE or not isinstance(request.payload, ChainDisablePayload):
+            raise TypeError("chain disablement requires a chain-disable request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        if _text(parent.get("chain")).lower() == "off":
+            return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHAIN_DISABLED)
+        failure = self._run_modify(request, self._selectors(request.guard), ("chain:off",))
+        if failure is not None:
+            return failure
+        return self._verify(request, MutationPostcondition.CHAIN_DISABLED, lambda row: _text(row.get("chain")).lower() == "off")
+
+    def clear_parent_link(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.PARENT_LINK_CLEAR or not isinstance(request.payload, ParentLinkClearPayload):
+            raise TypeError("parent-link clearing requires a parent-link-clear request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        current = _text(parent.get("nextLink"))
+        if not current:
+            return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINK_CLEARED)
+        if current.casefold() != request.payload.expected_next_link.casefold():
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent nextLink changed")
+        failure = self._run_modify(
+            request,
+            self._selectors(request.guard, extra=(f"nextLink:{current}",)),
+            ("nextLink:",),
+        )
+        if failure is not None:
+            return failure
+        return self._verify(
+            request,
+            MutationPostcondition.PARENT_LINK_CLEARED,
+            lambda row: not _text(row.get("nextLink")),
+        )
+
+    def repair_native_until(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.NATIVE_UNTIL_REPAIR or not isinstance(request.payload, NativeUntilRepairPayload):
+            raise TypeError("native-until repair requires a native-until request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        current = _text(parent.get("until"))
+        if current == request.payload.replacement_until:
+            return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.NATIVE_UNTIL_REPAIRED)
+        if current != request.payload.expected_until:
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="native until changed")
+        failure = self._run_modify(
+            request,
+            self._selectors(request.guard, extra=(f"until:{current}",)),
+            (f"until:{request.payload.replacement_until}",),
+        )
+        if failure is not None:
+            return failure
+        return self._verify(
+            request,
+            MutationPostcondition.NATIVE_UNTIL_REPAIRED,
+            lambda row: _timestamp_equal(row.get("until"), request.payload.replacement_until),
+        )
+
+    def repair_metadata(self, request: MutationRequest) -> MutationOutcome:
+        if request.operation is not MutationOperation.METADATA_REPAIR or not isinstance(request.payload, MetadataRepairPayload):
+            raise TypeError("metadata repair requires a metadata request")
+        parent, failure = self._read_target(request)
+        if failure is not None:
+            return failure
+        assert parent is not None
+        updates = request.payload.to_dict()
+        if all(_text(parent.get(key)) == _text(value) for key, value in updates.items()):
+            return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.METADATA_REPAIRED)
+        expected = request.payload.expected_dict()
+        for key, value in expected.items():
+            if _text(parent.get(key)) != _text(value):
+                return self._outcome(request, MutationOutcomeKind.CONFLICT, reason=f"metadata field {key} changed")
+        failure = self._run_modify(
+            request,
+            self._selectors(
+                request.guard,
+                include_link=not (
+                    "link" in request.payload.expected_dict()
+                    and request.payload.expected_dict().get("link") == ""
+                ),
+            ),
+            tuple(f"{key}:{value}" for key, value in updates.items()),
+        )
+        if failure is not None:
+            return failure
+        return self._verify(
+            request,
+            MutationPostcondition.METADATA_REPAIRED,
+            lambda row: all(_text(row.get(key)) == _text(value) for key, value in updates.items()),
+        )
+
+    @staticmethod
+    def _selectors(
+        guard: MutationGuard,
+        *,
+        extra: Sequence[str] = (),
+        include_link: bool = True,
+    ) -> tuple[str, ...]:
+        selectors = (
+            f"uuid:{guard.task_uuid}",
+            f"status:{guard.status}",
+            f"chain:{guard.chain}",
+            f"chainID:{guard.chain_id}",
+        )
+        if include_link:
+            selectors = (*selectors, f"link:{guard.link}")
+        modified = next(
+            (timestamp.value for timestamp in guard.timestamps if timestamp.field.value == "modified"),
+            "",
+        )
+        if modified:
+            selectors = (*selectors, f"modified:{modified}")
+        return (*selectors, *tuple(extra))
+
+
+__all__ = ("TaskwarriorMutationService",)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from nautical_core.integration_models import Absent, Found, Unavailable
 from nautical_core.modify_models import CompletionPreflightContext
 
 
@@ -91,21 +92,21 @@ def completion_existing_next_or_fail(
     print_task,
 ) -> bool:
     existing_next = existing_next_lookup(new, next_no)
-    if getattr(existing_next, "is_unavailable", False):
+    if isinstance(existing_next, Unavailable):
         panel(
             "⚠ Chain lookup unavailable",
             [
-                ("Reason", getattr(existing_next, "reason", "Unable to verify the next link.")),
+                ("Reason", existing_next.evidence.detail or "Unable to verify the next link."),
                 ("Action", "Retry completion or run nautical reconcile before spawning."),
             ],
             kind="warning",
         )
         print_task(new)
         return False
-    if getattr(existing_next, "is_absent", False):
+    if isinstance(existing_next, Absent):
         return True
-    if getattr(existing_next, "is_found", False):
-        existing_next = existing_next.task
+    if isinstance(existing_next, Found):
+        existing_next = existing_next.value
     if not existing_next:
         return True
     ex_uuid = (existing_next.get("uuid") or "").strip()

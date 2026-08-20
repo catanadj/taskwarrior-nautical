@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """Heavy on-exit implementation loaded lazily by the executable wrapper.
 
-Drains Nautical spawn intents after Taskwarrior releases its lock.
-Reads JSONL queue entries, imports child tasks, and updates parent nextLink.
+Drains typed Nautical lifecycle outbox intents after Taskwarrior releases its lock.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import importlib
 import importlib.util
 from contextlib import contextmanager
 from pathlib import Path
+from collections.abc import Mapping
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
 HOOK_DIR = _IMPL_CORE_DIR.parent
@@ -105,38 +105,16 @@ if (
 
 import json
 import random
-import sqlite3
-import subprocess
 from contextlib import contextmanager
 from typing import Any
-
-try:
-    import fcntl  # POSIX advisory lock
-except Exception:
-    fcntl = None
-
 
 core = None
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
 _HOOK_SUPPORT = None
 _HOOK_SUPPORT_LOAD_FAILED = False
-_EXIT_QUERIES = None
-_EXIT_QUERIES_LOAD_FAILED = False
-_EXIT_SIDE_EFFECTS = None
-_EXIT_SIDE_EFFECTS_LOAD_FAILED = False
-_EXIT_ENTRY_FLOW = None
-_EXIT_ENTRY_FLOW_LOAD_FAILED = False
-_QUEUE_STORE = None
-_QUEUE_STORE_LOAD_FAILED = False
-_QUEUE_MODELS = None
-_QUEUE_MODELS_LOAD_FAILED = False
-_EXIT_MODELS = None
-_EXIT_MODELS_LOAD_FAILED = False
 _EXIT_RUNTIME = None
 _EXIT_RUNTIME_LOAD_FAILED = False
-_EXIT_DRAIN_FLOW = None
-_EXIT_DRAIN_FLOW_LOAD_FAILED = False
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
@@ -145,13 +123,19 @@ _HOOK_RESULTS = None
 _HOOK_RESULTS_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
+_INTEGRATION_CONTEXT_MODULE = None
+_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED = False
+_INTEGRATION_MODELS = None
+_INTEGRATION_MODELS_LOAD_FAILED = False
+_TASKWARRIOR_MUTATIONS = None
+_TASKWARRIOR_MUTATIONS_LOAD_FAILED = False
+_LIFECYCLE_APPLICATION = None
+_LIFECYCLE_APPLICATION_LOAD_FAILED = False
+_LIFECYCLE_OUTBOX = None
+_LIFECYCLE_OUTBOX_LOAD_FAILED = False
+_INTEGRATION_CONTEXT = None
+_CORE_READY = False
 _HOOK_MODULE_ACCESS = None
-_LIFECYCLE_MODELS = None
-_LIFECYCLE_MODELS_LOAD_FAILED = False
-_LIFECYCLE_PLANNER = None
-_LIFECYCLE_PLANNER_LOAD_FAILED = False
-_LIFECYCLE_EXECUTOR = None
-_LIFECYCLE_EXECUTOR_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -159,77 +143,47 @@ _MODULE_SPECS = {
         "hook_runtime.py",
         "nautical_core.hook_runtime",
     ),
+    "integration_context": (
+        "_INTEGRATION_CONTEXT_MODULE",
+        "_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED",
+        "integration_context.py",
+        "nautical_core.integration_context",
+    ),
+    "integration_models": (
+        "_INTEGRATION_MODELS",
+        "_INTEGRATION_MODELS_LOAD_FAILED",
+        "integration_models.py",
+        "nautical_core.integration_models",
+    ),
+    "taskwarrior_mutations": (
+        "_TASKWARRIOR_MUTATIONS",
+        "_TASKWARRIOR_MUTATIONS_LOAD_FAILED",
+        "taskwarrior_mutations.py",
+        "nautical_core.taskwarrior_mutations",
+    ),
+    "lifecycle_application": (
+        "_LIFECYCLE_APPLICATION",
+        "_LIFECYCLE_APPLICATION_LOAD_FAILED",
+        "lifecycle_application.py",
+        "nautical_core.lifecycle_application",
+    ),
+    "lifecycle_outbox": (
+        "_LIFECYCLE_OUTBOX",
+        "_LIFECYCLE_OUTBOX_LOAD_FAILED",
+        "lifecycle_outbox.py",
+        "nautical_core.lifecycle_outbox",
+    ),
     "hook_support": (
         "_HOOK_SUPPORT",
         "_HOOK_SUPPORT_LOAD_FAILED",
         "hook_support.py",
         "nautical_core.hook_support",
     ),
-    "exit_queries": (
-        "_EXIT_QUERIES",
-        "_EXIT_QUERIES_LOAD_FAILED",
-        "exit_queries.py",
-        "nautical_core.exit_queries",
-    ),
-    "exit_side_effects": (
-        "_EXIT_SIDE_EFFECTS",
-        "_EXIT_SIDE_EFFECTS_LOAD_FAILED",
-        "exit_side_effects.py",
-        "nautical_core.exit_side_effects",
-    ),
-    "exit_entry_flow": (
-        "_EXIT_ENTRY_FLOW",
-        "_EXIT_ENTRY_FLOW_LOAD_FAILED",
-        "exit_entry_flow.py",
-        "nautical_core.exit_entry_flow",
-    ),
-    "queue_store": (
-        "_QUEUE_STORE",
-        "_QUEUE_STORE_LOAD_FAILED",
-        "queue_store.py",
-        "nautical_core.queue_store",
-    ),
-    "queue_models": (
-        "_QUEUE_MODELS",
-        "_QUEUE_MODELS_LOAD_FAILED",
-        "queue_models.py",
-        "nautical_core.queue_models",
-    ),
-    "exit_models": (
-        "_EXIT_MODELS",
-        "_EXIT_MODELS_LOAD_FAILED",
-        "exit_models.py",
-        "nautical_core.exit_models",
-    ),
-    "lifecycle_models": (
-        "_LIFECYCLE_MODELS",
-        "_LIFECYCLE_MODELS_LOAD_FAILED",
-        "lifecycle_models.py",
-        "nautical_core.lifecycle_models",
-    ),
-    "lifecycle_planner": (
-        "_LIFECYCLE_PLANNER",
-        "_LIFECYCLE_PLANNER_LOAD_FAILED",
-        "lifecycle_planner.py",
-        "nautical_core.lifecycle_planner",
-    ),
-    "lifecycle_executor": (
-        "_LIFECYCLE_EXECUTOR",
-        "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
-        "lifecycle_executor.py",
-        "nautical_core.lifecycle_executor",
-    ),
     "exit_runtime": (
         "_EXIT_RUNTIME",
         "_EXIT_RUNTIME_LOAD_FAILED",
         "exit_runtime.py",
         "nautical_core.exit_runtime",
-    ),
-    "exit_drain_flow": (
-        "_EXIT_DRAIN_FLOW",
-        "_EXIT_DRAIN_FLOW_LOAD_FAILED",
-        "exit_drain_flow.py",
-        "nautical_core.exit_drain_flow",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -266,56 +220,26 @@ def _resolve_task_data_context() -> tuple[str, bool]:
         env=os.environ,
     )
 
-_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_TASKDATA_RAW = ""
+_USE_RC_DATA_LOCATION = False
+TW_DATA_DIR = Path(TW_DIR).expanduser()
 _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
 
 
 def _load_core() -> None:
     """Load the configured core only when the exit lifecycle is entered."""
-    global core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR, _IMPORT_MS
-    if core is not None:
+    global core, _CORE_IMPORT_TARGET, _CORE_IMPORT_ERROR, _IMPORT_MS, _CORE_READY
+    if core is not None and _CORE_READY:
         return
-    module, target, import_error = hook_bootstrap.import_core_package(_CORE_BASE)
-    if target is not None:
-        _CORE_IMPORT_TARGET = target
-    if import_error is not None:
-        _CORE_IMPORT_ERROR = import_error
-    if module is None:
-        target_text = str(target or (_CORE_BASE / "nautical_core" / "__init__.py"))
-        if import_error is not None:
-            raise RuntimeError(
-                f"Failed to import nautical_core from {target_text}: "
-                f"{type(import_error).__name__}: {import_error}"
-            ) from import_error
-        raise ModuleNotFoundError(
-            "nautical_core package not found. Expected nautical_core/__init__.py "
-            f"in ~/.task or NAUTICAL_CORE_PATH (resolved base: {_CORE_BASE})"
-        )
-    core = module
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    if callable(reload_config):
-        if _USE_RC_DATA_LOCATION:
-            reload_config(TW_DATA_DIR)
-    elif getattr(core, "__file__", None):
-        raise RuntimeError("nautical_core does not provide validated configuration reload")
+    _initialize_integration_context()
     _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
-    globals()["_QUEUE_MAX_LINES"] = _env_int(
-        "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
-        int(getattr(core, "SPAWN_QUEUE_DRAIN_MAX_ITEMS", 200)),
+    globals()["_OUTBOX_BATCH_MAX_ITEMS"] = _env_int(
+        "NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS",
+        int(getattr(core, "OUTBOX_DRAIN_MAX_ITEMS", 200)),
         min_value=1,
         max_value=100000,
     )
-
-
-def _tw_data_dir_path() -> Path:
-    td = TW_DATA_DIR
-    if isinstance(td, Path):
-        return td
-    try:
-        return Path(str(td)).expanduser()
-    except Exception:
-        return Path(".")
+    _CORE_READY = True
 
 
 def _hook_runtime_module():
@@ -336,17 +260,25 @@ def _hook_module_access():
 def _module(name: str, *, required: bool = True):
     return _hook_module_access().module(name, required=required)
 
-def _task_cmd_prefix() -> list[str]:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.build_task_cmd_prefix(
-            use_rc_data_location=_USE_RC_DATA_LOCATION,
-            tw_data_dir=TW_DATA_DIR,
-        )
-    cmd = ["task"]
-    if _USE_RC_DATA_LOCATION:
-        cmd.append(f"rc.data.location={TW_DATA_DIR}")
-    return cmd
+def _initialize_integration_context() -> None:
+    global core, _CORE_IMPORT_TARGET, _INTEGRATION_CONTEXT
+    global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    if _INTEGRATION_CONTEXT is not None:
+        return
+    hook_runtime = _hook_runtime_module()
+    core, target, context = hook_runtime.initialize_integration_context(
+        module_access=_hook_module_access(),
+        hook_bootstrap=hook_bootstrap,
+        core_base=_CORE_BASE,
+        argv=tuple(sys.argv[1:]),
+        tw_dir=str(TW_DIR),
+        access="mutation",
+    )
+    _CORE_IMPORT_TARGET = target
+    _INTEGRATION_CONTEXT = context
+    TW_DATA_DIR = context.taskdata
+    _TASKDATA_RAW = str(context.taskdata)
+    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
 
 
@@ -357,55 +289,15 @@ def _build_hook_runtime_context():
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
         hook_name="on-exit",
-        taskdata_dir=str(TW_DATA_DIR),
-        use_rc_data_location=_USE_RC_DATA_LOCATION,
-        tw_dir=str(TW_DIR),
+        integration_context=_INTEGRATION_CONTEXT,
         hook_dir=str(HOOK_DIR),
         import_ms=_IMPORT_MS,
     )
 
-def _nautical_state_dir_path() -> Path:
-    tw_data_dir = _tw_data_dir_path()
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_state_dir_path(tw_data_dir)
-    return tw_data_dir / ".nautical-state"
-
-def _nautical_lock_dir_path() -> Path:
-    tw_data_dir = _tw_data_dir_path()
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.nautical_lock_dir_path(tw_data_dir)
-    return tw_data_dir / ".nautical-locks"
-
-# Do not import queue_store merely to construct defaults.  run_hook refreshes
-# these paths after the lightweight TASKDATA resolver has run.
-_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
-_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
-_ORPHAN_CLEANUP_EVIDENCE_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_orphan_cleanup.jsonl"
-_ORPHAN_CLEANUP_EVIDENCE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_orphan_cleanup.lock"
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-_QUEUE_LOCK_FAIL_MARKER = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed"
-_QUEUE_LOCK_FAIL_COUNT = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock_failed.count"
-_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
-# When set, exit 1 if any spawns were dead-lettered or errored (for scripting/monitoring).
+# When set, exit 1 if any lifecycle plans require manual review or errored.
 _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
-
-def _migrate_legacy_nautical_state() -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        issues = queue_store.migrate_nautical_state(
-            tw_data_dir=TW_DATA_DIR,
-            extra_file_pairs=((_intent_log_path(), TW_DATA_DIR / ".nautical_spawn_intents.jsonl"),),
-        )
-        for issue in issues:
-            _diag(f"queue state migration failed: {issue.current} from {issue.legacy}: {issue.error}")
-        globals()["_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
-        return
 
 def _env_float(
     name: str,
@@ -437,47 +329,36 @@ def _env_int(
     )
 
 
-_DEAD_LETTER_RETENTION_DAYS = _env_int("NAUTICAL_DEAD_LETTER_RETENTION_DAYS", 30, min_value=0, max_value=3650)
-_QUEUE_MAX_LINES = _env_int(
-    "NAUTICAL_SPAWN_QUEUE_MAX_LINES",
+_OUTBOX_BATCH_MAX_ITEMS = _env_int(
+    "NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS",
     200,
     min_value=1,
     max_value=100000,
 )
-_DEAD_LETTER_MAX_BYTES = _env_int("NAUTICAL_DEAD_LETTER_MAX_BYTES", 524288, min_value=0, max_value=100 * 1024 * 1024)
-_QUEUE_RETRY_MAX = _env_int("NAUTICAL_QUEUE_RETRY_MAX", 6, min_value=0, max_value=100)
+_OUTBOX_DIAG_MAX_ITEMS = _env_int(
+    "NAUTICAL_OUTBOX_DIAG_MAX_ITEMS",
+    32,
+    min_value=0,
+    max_value=1000,
+)
+_OUTBOX_RETRY_MAX = _env_int("NAUTICAL_OUTBOX_RETRY_MAX", 6, min_value=0, max_value=100)
 _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0, min_value=0.1, max_value=300.0)
 _TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0, min_value=0.1, max_value=300.0)
 _TASK_TIMEOUT_MODIFY = _env_float("NAUTICAL_TASK_TIMEOUT_MODIFY", 4.0, min_value=0.1, max_value=300.0)
 _TASK_RETRIES_EXPORT = _env_int("NAUTICAL_TASK_RETRIES_EXPORT", 2, min_value=0, max_value=20)
 _TASK_RETRIES_MODIFY = _env_int("NAUTICAL_TASK_RETRIES_MODIFY", 2, min_value=0, max_value=20)
 _TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2, min_value=0.0, max_value=10.0)
-_QUEUE_LOCK_RETRIES = _env_int("NAUTICAL_QUEUE_LOCK_RETRIES", 6, min_value=0, max_value=100)
-_QUEUE_LOCK_SLEEP_BASE = _env_float("NAUTICAL_QUEUE_LOCK_SLEEP_BASE", 0.03, min_value=0.0, max_value=10.0)
-_QUEUE_LOCK_STALE_AFTER = _env_float("NAUTICAL_QUEUE_LOCK_STALE_AFTER", 30.0, min_value=0.0, max_value=86400.0)
-_INTENT_LOG_MAX_BYTES = _env_int("NAUTICAL_INTENT_LOG_MAX_BYTES", 524288, min_value=0, max_value=100 * 1024 * 1024)
-_INTENT_LOG_MAX_ENTRIES = _env_int("NAUTICAL_INTENT_LOG_MAX_ENTRIES", 20000, min_value=0, max_value=1000000)
+_PARENT_LOCK_RETRIES = _env_int("NAUTICAL_PARENT_LOCK_RETRIES", 6, min_value=0, max_value=100)
+_PARENT_LOCK_SLEEP_BASE = _env_float("NAUTICAL_PARENT_LOCK_SLEEP_BASE", 0.03, min_value=0.0, max_value=10.0)
+_PARENT_LOCK_STALE_AFTER = _env_float("NAUTICAL_PARENT_LOCK_STALE_AFTER", 30.0, min_value=0.0, max_value=86400.0)
 _LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8, min_value=0, max_value=1000)
 _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05, min_value=0.0, max_value=60.0)
 _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0, min_value=0.0, max_value=300.0)
-_QUEUE_PROCESSING_STALE_AFTER = _env_float(
-    "NAUTICAL_QUEUE_PROCESSING_STALE_AFTER",
+_OUTBOX_LEASE_SECONDS = _env_float(
+    "NAUTICAL_OUTBOX_LEASE_SECONDS",
     300.0,
     min_value=0.0,
     max_value=7 * 86400.0,
-)
-_QUEUE_DB_CONNECT_RETRIES = _env_int("NAUTICAL_QUEUE_DB_CONNECT_RETRIES", 3, min_value=1, max_value=20)
-_QUEUE_DB_CONNECT_TIMEOUT_MAX = _env_float(
-    "NAUTICAL_QUEUE_DB_CONNECT_TIMEOUT_MAX",
-    60.0,
-    min_value=1.0,
-    max_value=300.0,
-)
-_QUEUE_DB_CONNECT_BACKOFF_BASE = _env_float(
-    "NAUTICAL_QUEUE_DB_CONNECT_BACKOFF_BASE",
-    0.05,
-    min_value=0.0,
-    max_value=10.0,
 )
 
 _EXIT_RUNTIME_STATE = None
@@ -506,587 +387,6 @@ def _reset_exit_diag_stats() -> None:
     global _EXIT_DIAG_STATS
     _EXIT_DIAG_STATS = {}
     _exit_runtime_state().diag_stats = _EXIT_DIAG_STATS
-
-
-def _reset_exit_export_cache() -> None:
-    _exit_runtime_state().export_cache = {}
-
-
-def _reset_exit_equiv_child_cache() -> None:
-    _exit_runtime_state().equiv_child_cache = {}
-
-
-def _diag_count_exit(key: str, inc: float | int = 1) -> None:
-    try:
-        state = _exit_runtime_state()
-        stats = state.diag_stats
-        stats[key] = stats.get(key, 0) + inc
-    except Exception:
-        pass
-
-
-@contextmanager
-def _task_phase(name: str):
-    state = _exit_runtime_state()
-    previous = state.task_phase
-    state.task_phase = str(name or "unclassified")
-    try:
-        yield
-    finally:
-        state.task_phase = previous
-
-
-def _run_task_diag_bucket(cmd: list[str]) -> str:
-    try:
-        parts = []
-        for p in (cmd or ()):
-            parts.extend(str(p).split())
-        parts = tuple(parts)
-    except Exception:
-        return "other"
-    if not parts:
-        return "other"
-    if "import" in parts:
-        return "import"
-    if "modify" in parts:
-        if any(p.startswith("nextLink:") for p in parts):
-            return "modify_parent_nextlink"
-        if "status:deleted" in parts:
-            return "modify_cleanup"
-        return "modify_other"
-    if "export" in parts:
-        if any(p.startswith("uuid:") for p in parts):
-            return "export_uuid"
-        if any(p.startswith("chainID:") for p in parts):
-            return "export_equivalent_child"
-        return "export_other"
-    return "other"
-
-
-def _diag_record_run_task(cmd: list[str], *, ok: bool, elapsed: float) -> None:
-    bucket = _run_task_diag_bucket(cmd)
-    _diag_count_exit(f"run_task_calls_phase_{_exit_runtime_state().task_phase or 'unclassified'}")
-    _diag_count_exit(f"run_task_calls_{bucket}")
-    _diag_count_exit(f"run_task_seconds_{bucket}", float(elapsed or 0.0))
-    if not ok:
-        _diag_count_exit(f"run_task_failures_{bucket}")
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = str(os.environ.get(name, "")).strip().lower()
-    if not raw:
-        return bool(default)
-    if raw in {"1", "yes", "true", "on"}:
-        return True
-    if raw in {"0", "no", "false", "off"}:
-        return False
-    return bool(default)
-
-
-def _exit_progress_enabled(entries_total: int) -> bool:
-    if int(entries_total or 0) < 2:
-        return False
-    if not sys.stderr.isatty():
-        return False
-    if str(os.environ.get("TERM") or "").strip().lower() == "dumb":
-        return False
-    return _env_bool("NAUTICAL_EXIT_PROGRESS", bool(getattr(core, "EXIT_PROGRESS", True)))
-
-
-def _exit_progress_counts(state: object | None) -> str:
-    if state is None:
-        return "ok:0 skip:0 rq:0 dead:0"
-    try:
-        ok = int(getattr(state, "processed", 0) or 0)
-        skip = int(getattr(state, "skipped_idempotent", 0) or 0)
-        rq = len(getattr(state, "requeue", []) or [])
-        dead = int(getattr(state, "dead_lettered", 0) or 0)
-        return f"ok:{ok} skip:{skip} rq:{rq} dead:{dead}"
-    except Exception:
-        return "ok:0 skip:0 rq:0 dead:0"
-
-
-@contextmanager
-def _exit_progress_scope(entries_total: int):
-    if not _exit_progress_enabled(entries_total):
-        yield None
-        return
-    try:
-        from rich.console import Console
-        from rich.progress import (
-            BarColumn,
-            Progress,
-            TaskProgressColumn,
-            TextColumn,
-            TimeElapsedColumn,
-            TimeRemainingColumn,
-        )
-    except Exception:
-        yield None
-        return
-    try:
-        console = Console(file=sys.stderr, force_terminal=True)
-        with Progress(
-            TextColumn("[bold cyan]Nautical[/]"),
-            TextColumn("[dim]{task.fields[phase]}[/]"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            TextColumn("[dim]{task.fields[counts]}[/]"),
-            console=console,
-            transient=True,
-            refresh_per_second=10,
-        ) as progress:
-            task_id = progress.add_task(
-                "drain",
-                total=max(1, int(entries_total or 0)),
-                phase="preload",
-                counts=_exit_progress_counts(None),
-            )
-
-            def _advance(*, advance: int = 0, phase: str | None = None, state: object | None = None) -> None:
-                try:
-                    kwargs = {
-                        "advance": max(0, int(advance or 0)),
-                        "counts": _exit_progress_counts(state),
-                    }
-                    if phase is not None:
-                        kwargs["phase"] = str(phase)
-                    progress.update(task_id, **kwargs)
-                except Exception:
-                    pass
-
-            yield _advance
-    except Exception:
-        yield None
-
-
-def _export_cache_get(uuid_str: str):
-    key = str(uuid_str or "").strip()
-    if not key:
-        return None
-    cached = _exit_runtime_state().export_cache.get(key)
-    if cached is not None:
-        _diag_count_exit("preload_export_hits")
-        return cached
-    _diag_count_exit("preload_export_misses")
-    return None
-
-
-def _export_cache_set(uuid_str: str, result) -> None:
-    key = str(uuid_str or "").strip()
-    if not key or result is None:
-        return
-    _exit_runtime_state().export_cache[key] = result
-
-
-def _chunked(items: list[Any], size: int):
-    size = max(1, int(size or 1))
-    for idx in range(0, len(items), size):
-        yield items[idx:idx + size]
-
-
-def _preload_export_uuids(entries: list[dict]) -> None:
-    exit_models = _module("exit_models")
-    hook_support = _module("hook_support", required=False)
-    uuids: list[str] = []
-    seen: set[str] = set()
-    for entry in entries or []:
-        if not isinstance(entry, dict):
-            continue
-        parent_uuid = str(entry.get("parent_uuid") or "").strip()
-        child = entry.get("child") or {}
-        child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
-        for uuid_str in (parent_uuid, child_uuid):
-            if uuid_str and uuid_str not in seen:
-                seen.add(uuid_str)
-                uuids.append(uuid_str)
-    slot_specs = _equivalent_child_slot_specs(entries)
-    lifecycle_entries = [
-        entry
-        for entry in entries or []
-        if isinstance(entry, dict) and isinstance(entry.get("lifecycle_plan"), dict)
-    ]
-    lifecycle_uuids: set[str] = set()
-    for entry in lifecycle_entries:
-        parent_uuid = str(entry.get("parent_uuid") or "").strip()
-        child = entry.get("child") or {}
-        child_uuid = str(child.get("uuid") or "").strip() if isinstance(child, dict) else ""
-        lifecycle_uuids.update(value for value in (parent_uuid, child_uuid) if value)
-    lifecycle_slots = set(_equivalent_child_slot_specs(lifecycle_entries))
-    specs: list[tuple[str, Any, list[str]]] = [
-        ("uuid", uuid_str, [f"uuid:{uuid_str}"])
-        for uuid_str in uuids
-    ]
-    specs.extend(("slot", key, clause) for key, clause in slot_specs.items())
-    if not specs:
-        return
-    prefix = _task_cmd_prefix()
-    if slot_specs:
-        _diag_count_exit("equivalent_child_preload_slots", len(slot_specs))
-    for chunk in _chunked(specs, _EXIT_PRELOAD_CHUNK_SIZE):
-        _diag_count_exit("preload_export_chunks")
-        chunk_uuids = [value for kind, value, _clause in chunk if kind == "uuid"]
-        chunk_slots = [value for kind, value, _clause in chunk if kind == "slot"]
-        if chunk_slots:
-            _diag_count_exit("equivalent_child_preload_chunks")
-        cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
-        for idx, (_kind, _value, clause) in enumerate(chunk):
-            if idx:
-                cmd.append("or")
-            cmd.extend(clause)
-        cmd.append("export")
-        rows: list[dict[str, Any]] = []
-        parsed_ok = False
-        allow_negative_cache = False
-        if hook_support is not None:
-            with _task_phase("preload_uuid"):
-                result = hook_support.run_task_result(
-                    run_task=_run_task_result,
-                    cmd=cmd,
-                    timeout=_TASK_TIMEOUT_EXPORT,
-                    retries=_TASK_RETRIES_EXPORT,
-                    retry_delay=_TASK_RETRY_DELAY,
-                )
-            parsed_ok, rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
-            allow_negative_cache = parsed_ok
-            if not parsed_ok and result.ok:
-                # Keep compatibility with Taskwarrior builds that ignore
-                # rc.json.array=1 for a single-object export. This is valid
-                # JSON, but never enables negative caching.
-                try:
-                    single = json.loads((result.stdout or "").strip())
-                    if isinstance(single, dict) and single.get("uuid"):
-                        rows = [single]
-                        parsed_ok = True
-                except Exception:
-                    pass
-        else:
-            result = _run_task_result(
-                cmd,
-                timeout=_TASK_TIMEOUT_EXPORT,
-                retries=_TASK_RETRIES_EXPORT,
-                retry_delay=_TASK_RETRY_DELAY,
-            )
-            if not result.ok:
-                continue
-            out = result.stdout
-            allow_negative_cache = (out or "").lstrip().startswith("[")
-            try:
-                parsed = json.loads((out or "").strip() or "[]")
-                if isinstance(parsed, list):
-                    rows = [row for row in parsed if isinstance(row, dict)]
-                    parsed_ok = True
-                elif isinstance(parsed, dict) and len(chunk) == 1:
-                    rows = [parsed]
-                    parsed_ok = True
-            except Exception:
-                rows = []
-        if not parsed_ok:
-            # A combined preload is authoritative for a lifecycle batch. Do
-            # not silently fall back to one export per UUID after a malformed
-            # or unavailable chunk; affected batch entries must defer.
-            reason = "lifecycle preload unavailable"
-            if hook_support is not None and result is not None:
-                reason = getattr(result, "stderr", "") or reason
-            if len(lifecycle_entries) > 1:
-                for uuid_str in chunk_uuids:
-                    if uuid_str in lifecycle_uuids:
-                        _export_cache_set(uuid_str, exit_models.ExitExportResult(False, True, reason, None))
-                for key in chunk_slots:
-                    if key in lifecycle_slots:
-                        _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(
-                            False, True, reason, None
-                        )
-            continue
-        found: set[str] = set()
-        for row in rows:
-            row_uuid = str(row.get("uuid") or "").strip()
-            if not row_uuid:
-                continue
-            found.add(row_uuid)
-            _export_cache_set(row_uuid, exit_models.ExitExportResult(True, False, "", row))
-        if parsed_ok and allow_negative_cache:
-            for uuid_str in chunk_uuids:
-                _diag_count_exit("preload_export_uuids")
-                if uuid_str not in found:
-                    _export_cache_set(uuid_str, exit_models.ExitExportResult(False, False, "not found", None))
-            grouped: dict[tuple[str, str, str], list[dict]] = {}
-            for row in rows:
-                row_key = _equivalent_child_cache_key(row)
-                if row_key is not None:
-                    grouped.setdefault(row_key, []).append(row)
-            for key in chunk_slots:
-                selected = _pick_equivalent_child_row(grouped.get(key, []))
-                if selected is not None:
-                    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
-                    _diag_count_exit("equivalent_child_preload_hits")
-                else:
-                    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
-                    _diag_count_exit("equivalent_child_preload_misses")
-
-
-def _queue_db_begin_run() -> None:
-    state = _exit_runtime_state()
-    state.run_queue_db_active = True
-    state.run_queue_db_conn = None
-    state.queue_db_open_count = 0
-    state.queue_db_reuse_count = 0
-    state.queue_lock_failures_this_run = 0
-    state.last_queue_lock_diag_ts = 0.0
-    state.task_phase = ""
-    _reset_exit_diag_stats()
-    _reset_exit_export_cache()
-    _reset_exit_equiv_child_cache()
-    state.lifecycle_parent_preflight.clear()
-    state.lifecycle_batch_imported.clear()
-    state.lifecycle_batch_import_failed.clear()
-
-
-def _queue_db_end_run() -> None:
-    state = _exit_runtime_state()
-    state.run_queue_db_active = False
-    conn = state.run_queue_db_conn
-    state.run_queue_db_conn = None
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def _local_lock_sleep_once(sleep_base: float) -> None:
-    try:
-        delay = float(sleep_base or 0.0)
-    except Exception:
-        delay = 0.0
-    if delay > 0:
-        time.sleep(delay)
-
-
-def _local_lock_age(path_str: str) -> float | None:
-    try:
-        with open(path_str, "r", encoding="utf-8") as f:
-            head = f.read(64)
-        parts = head.strip().split()
-        if len(parts) >= 2:
-            return time.time() - float(parts[1])
-    except Exception:
-        pass
-    try:
-        st = os.stat(path_str)
-        return time.time() - float(st.st_mtime)
-    except Exception:
-        return None
-
-
-def _local_lock_stale_pid(path_str: str, stale_after: float | None) -> bool:
-    try:
-        with open(path_str, "r", encoding="utf-8") as f:
-            head = f.read(64)
-        parts = head.strip().split()
-        pid_str = parts[0] if parts else ""
-        pid = int(pid_str)
-        if pid <= 0:
-            return True
-        if stale_after is not None and len(parts) >= 2:
-            try:
-                age = time.time() - float(parts[1])
-                if age < float(stale_after):
-                    return False
-            except Exception:
-                pass
-        try:
-            os.kill(pid, 0)
-            return False
-        except PermissionError:
-            return False
-        except ProcessLookupError:
-            return True
-        except Exception:
-            return False
-    except Exception:
-        return False
-
-
-def _local_lock_ensure_parent(path: Path) -> None:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-
-
-def _mount_path_unescape(path: str) -> str:
-    return (
-        str(path or "")
-        .replace("\\040", " ")
-        .replace("\\011", "\t")
-        .replace("\\012", "\n")
-        .replace("\\134", "\\")
-    )
-
-
-def _path_looks_network_mount(path: Path) -> bool:
-    network_fs = {
-        "nfs",
-        "nfs4",
-        "cifs",
-        "smbfs",
-        "fuse.sshfs",
-        "9p",
-        "afpfs",
-        "davfs",
-        "glusterfs",
-        "ceph",
-    }
-    try:
-        target = str(path.resolve())
-    except Exception:
-        target = str(path)
-    if not target:
-        return False
-    best_mount = ""
-    best_fs = ""
-    try:
-        with open("/proc/mounts", "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                mount_point = _mount_path_unescape(parts[1]).rstrip("/") or "/"
-                fs_type = str(parts[2] or "").strip().lower()
-                if not fs_type:
-                    continue
-                if target == mount_point or target.startswith(mount_point + "/"):
-                    if len(mount_point) > len(best_mount):
-                        best_mount = mount_point
-                        best_fs = fs_type
-    except Exception:
-        return False
-    if not best_fs:
-        return False
-    return best_fs in network_fs or best_fs.startswith("nfs")
-
-
-@contextmanager
-def _local_lock_fcntl_context(path: Path, path_str: str, *, tries: int, sleep_base: float):
-    lf = None
-    acquired = False
-    _local_lock_ensure_parent(path)
-    try:
-        fd = os.open(path_str, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        lf = os.fdopen(fd, "a", encoding="utf-8")
-        for _ in range(tries):
-            try:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                acquired = True
-                break
-            except Exception:
-                _local_lock_sleep_once(sleep_base)
-    except Exception:
-        lf = None
-    try:
-        yield acquired
-    finally:
-        try:
-            if acquired and lf is not None:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            if lf is not None:
-                lf.close()
-        except Exception:
-            pass
-
-
-@contextmanager
-def _local_lock_excl_context(
-    path: Path,
-    path_str: str,
-    *,
-    tries: int,
-    sleep_base: float,
-    stale_after: float | None,
-):
-    fd = None
-    acquired = False
-    for _ in range(tries):
-        _local_lock_ensure_parent(path)
-        try:
-            fd = os.open(path_str, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            try:
-                payload = f"{os.getpid()} {int(time.time())}\n"
-                os.write(fd, payload.encode("ascii", "replace"))
-            except Exception:
-                pass
-            acquired = True
-            break
-        except FileExistsError:
-            pid_stale = _local_lock_stale_pid(path_str, stale_after)
-            age_stale = False
-            if stale_after is not None:
-                age = _local_lock_age(path_str)
-                if age is not None and age >= float(stale_after):
-                    age_stale = True
-            if pid_stale and age_stale:
-                try:
-                    os.unlink(path_str)
-                except Exception:
-                    pass
-            else:
-                _local_lock_sleep_once(sleep_base)
-        except Exception:
-            break
-    try:
-        yield acquired
-    finally:
-        try:
-            if acquired and fd is not None:
-                os.close(fd)
-        except Exception:
-            pass
-        try:
-            if acquired and fd is not None:
-                os.unlink(path_str)
-        except Exception:
-            pass
-
-
-@contextmanager
-def _local_safe_lock(path: Path, *, retries: int = 6, sleep_base: float = 0.05, stale_after: float | None = 60.0):
-    path_str = str(path) if path else ""
-    if not path_str:
-        yield False
-        return
-
-    tries = max(1, int(retries or 0))
-    if fcntl is None and _path_looks_network_mount(path):
-        _diag(f"queue lock fallback disabled on network mount: {path}")
-        yield False
-        return
-    if fcntl is not None:
-        with _local_lock_fcntl_context(path, path_str, tries=tries, sleep_base=sleep_base) as acquired:
-            yield acquired
-        return
-
-    with _local_lock_excl_context(
-        path,
-        path_str,
-        tries=tries,
-        sleep_base=sleep_base,
-        stale_after=stale_after,
-    ) as acquired:
-        yield acquired
 
 
 _DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
@@ -1154,2257 +454,120 @@ def _emit_exit_feedback(msg: str) -> None:
             stream.flush()
         except Exception:
             pass
+def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
+    """Claim and execute one bounded batch of lifecycle intents.
 
-
-def _run_task_retry_or_stop(attempt: int, attempts: int, delay: float) -> bool:
-    if attempt >= attempts or delay <= 0:
-        return False
-    jitter = random.uniform(0.0, delay)
-    _sleep(delay * (2 ** (attempt - 1)) + jitter)
-    return True
-
-
-def _run_task_terminate(proc: subprocess.Popen | None) -> None:
-    if proc is None:
-        return
-    try:
-        proc.kill()
-    except Exception:
-        pass
-    try:
-        proc.wait(timeout=1.0)
-    except Exception:
-        pass
-
-
-def _run_task_attempt(
-    cmd: list[str],
-    *,
-    env: dict[str, str],
-    input_text: str | None,
-    timeout: float,
-) -> tuple[bool, str, str]:
-    proc = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-            env=env,
-        )
-        try:
-            out, err = proc.communicate(input=input_text, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            if proc is not None:
-                proc.kill()
-            try:
-                out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-            except Exception:
-                out, err = "", ""
-            return False, out or "", "timeout"
-        out = out or ""
-        err = err or ""
-        if proc.returncode == 0:
-            return True, out, err
-        return False, out, err
-    except subprocess.TimeoutExpired:
-        _run_task_terminate(proc)
-        return False, "", "timeout"
-    except Exception as e:
-        _run_task_terminate(proc)
-        return False, "", str(e)
-
-
-def _run_task(
-    cmd: list[str],
-    *,
-    env: dict[str, str] | None = None,
-    input_text: str | None = None,
-    timeout: float = 6.0,
-    retries: int = 1,
-    retry_delay: float = 0.0,
-) -> tuple[bool, str, str]:
-    started = time.perf_counter()
-    ok = False
-    env_map = env or os.environ.copy()
-    run_fn = core.run_task if core is not None else None
-    hook_support = _module("hook_support", required=False)
-    try:
-        if hook_support is not None:
-            result = hook_support.run_task(
-                cmd,
-                core_run_task=run_fn,
-                env=env_map,
-                input_text=input_text,
-                timeout=timeout,
-                retries=max(1, int(retries)),
-                retry_delay=max(0.0, float(retry_delay)),
-            )
-            ok = bool(result[0]) if isinstance(result, tuple) and result else False
-            return result
-        if run_fn is not None:
-            result = run_fn(
-                cmd,
-                env=env_map,
-                input_text=input_text,
-                timeout=timeout,
-                retries=max(1, int(retries)),
-                retry_delay=max(0.0, float(retry_delay)),
-            )
-            ok = bool(result[0]) if isinstance(result, tuple) and result else False
-            return result
-        attempts = max(1, int(retries))
-        delay = max(0.0, float(retry_delay))
-        last_out = ""
-        last_err = ""
-        for attempt in range(1, attempts + 1):
-            ok, out, err = _run_task_attempt(
-                cmd,
-                env=env_map,
-                input_text=input_text,
-                timeout=timeout,
-            )
-            last_out = out or ""
-            last_err = err or ""
-            if ok:
-                return True, last_out, last_err
-            if _run_task_retry_or_stop(attempt, attempts, delay):
-                continue
-            return (False, last_out, last_err)
-        return (False, last_out, last_err)
-    finally:
-        elapsed = time.perf_counter() - started
-        _diag_count_exit("run_task_calls")
-        _diag_count_exit("run_task_seconds", elapsed)
-        _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
-        if not ok:
-            _diag_count_exit("run_task_failures")
-
-
-_DEFAULT_RUN_TASK = _run_task
-
-
-def _run_task_result(
-    cmd: list[str],
-    *,
-    env: dict[str, str] | None = None,
-    input_text: str | None = None,
-    timeout: float = 6.0,
-    retries: int = 1,
-    retry_delay: float = 0.0,
-):
-    """Return typed command state while retaining the legacy tuple wrapper."""
-    core_runner = (
-        getattr(core, "run_task_result", None)
-        if core is not None and _run_task is _DEFAULT_RUN_TASK
-        else None
-    )
-    if _run_task is not _DEFAULT_RUN_TASK:
-        from nautical_core.task_command import coerce_command_result
-        return coerce_command_result(
-            _run_task(
-                cmd,
-                env=env,
-                input_text=input_text,
-                timeout=timeout,
-                retries=retries,
-                retry_delay=retry_delay,
-            ),
-            cmd,
-            timeout=timeout,
-            attempts=retries,
-        )
-    if callable(core_runner):
-        started = time.perf_counter()
-        ok = False
-        try:
-            result = core_runner(
-                cmd,
-                env=env,
-                input_text=input_text,
-                timeout=timeout,
-                retries=retries,
-                retry_delay=retry_delay,
-            )
-            ok = bool(getattr(result, "ok", False))
-            return result
-        finally:
-            elapsed = time.perf_counter() - started
-            _diag_count_exit("run_task_calls")
-            _diag_count_exit("run_task_seconds", elapsed)
-            _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
-            if not ok:
-                _diag_count_exit("run_task_failures")
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.run_task_result(
-            run_task=_run_task,
-            cmd=cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        )
-    from nautical_core.task_command import coerce_command_result
-    return coerce_command_result(
-        _run_task(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        ),
-        cmd,
-        timeout=timeout,
-        attempts=retries,
-    )
-
-
-def _is_lock_error(err: str) -> bool:
-    if core is not None:
-        return core.is_lock_error(err)
-    e = (err or "").lower()
-    return (
-        "database is locked" in e or "unable to lock" in e
-        or "resource temporarily unavailable" in e or "another task is running" in e
-        or "lock file" in e or "lockfile" in e or "locked by" in e or "timeout" in e
-    )
-
-def _tw_lock_path() -> Path:
-    return _tw_data_dir_path() / "lock"
-
-def _tw_lock_recent(max_age_s: float = 5.0) -> bool:
-    try:
-        p = _tw_lock_path()
-        if not p.exists():
-            return False
-        age = time.time() - p.stat().st_mtime
-        return age >= 0 and age <= max_age_s
-    except Exception:
-        return False
-
-def _sleep(secs: float) -> None:
-    time.sleep(secs)
-
-def _record_queue_lock_failure() -> None:
+    All staging, mutation, verification, and recovery logic lives in
+    ``lifecycle_application.LifecycleApplicationService``; this hook only
+    constructs the service from the invocation's unit of work, drains one
+    bounded batch, and turns the typed outcomes into a diagnostics dict.
+    """
+    _reset_exit_runtime_state()
     state = _exit_runtime_state()
-    state.queue_lock_failures_this_run += 1
-    now = time.time()
-    if now - state.last_queue_lock_diag_ts >= 60.0:
-        _diag("queue lock not acquired; drain deferred")
-        state.last_queue_lock_diag_ts = now
-    try:
-        payload: dict[str, Any] = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "reason": "queue lock busy",
-        }
-        _QUEUE_LOCK_FAIL_MARKER.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(_QUEUE_LOCK_FAIL_MARKER), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-    try:
-        count = 0
-        if _QUEUE_LOCK_FAIL_COUNT.exists():
-            try:
-                data = json.loads(_QUEUE_LOCK_FAIL_COUNT.read_text(encoding="utf-8") or "{}")
-                count = int(data.get("count") or 0)
-            except Exception:
-                count = 0
-        count += 1
-        payload = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "count": count,
-        }
-        _QUEUE_LOCK_FAIL_COUNT.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(_QUEUE_LOCK_FAIL_COUNT), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except Exception:
-        pass
-
-
-@contextmanager
-def _lock_dead_letter():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _DEAD_LETTER_LOCK,
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-@contextmanager
-def _lock_orphan_cleanup_evidence():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _ORPHAN_CLEANUP_EVIDENCE_LOCK,
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-def _record_orphan_cleanup_evidence(child_uuid: str, spawn_intent_id: str, reason: str) -> None:
-    """Persist cleanup failures separately from the original lifecycle conflict."""
-    queue_store = _module("queue_store", required=False)
-    if queue_store is None:
-        _diag(f"orphan cleanup evidence unavailable: {reason}")
-        return
-    payload = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "hook": "on-exit",
-        "hook_version": NAUTICAL_HOOK_VERSION,
-        "kind": "orphan_cleanup",
-        "child_uuid": str(child_uuid or "").strip(),
-        "spawn_intent_id": str(spawn_intent_id or "").strip(),
-        "reason": str(reason or "cleanup unavailable").strip(),
-    }
-    ok = queue_store.append_dead_letter_jsonl(
-        path=_ORPHAN_CLEANUP_EVIDENCE_PATH,
-        payload=payload,
-        durable=True,
-        acquire_lock=_lock_orphan_cleanup_evidence,
-        diag=_diag,
-    )
-    if not ok:
-        _diag(f"orphan cleanup evidence write failed (child={child_uuid[:8]}): {reason}")
-
-
-def _intent_log_path() -> Path:
-    return _nautical_state_dir_path() / ".nautical_spawn_intents.jsonl"
-
-
-def _intent_log_lock_path() -> Path:
-    return _nautical_lock_dir_path() / ".nautical_spawn_intents.lock"
-
-
-@contextmanager
-def _lock_intent_log():
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _intent_log_lock_path(),
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-def _parent_nextlink_lock_path(parent_uuid: str) -> Path:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        return queue_store.parent_nextlink_lock_path(_tw_data_dir_path(), parent_uuid)
-    raw = (parent_uuid or "").strip().lower()
-    safe = "".join(ch for ch in raw if ch.isalnum())
-    if not safe:
-        safe = "unknown"
-    if len(safe) > 64:
-        safe = safe[:64]
-    return _nautical_lock_dir_path() / f".nautical_parent_nextlink.{safe}.lock"
-
-
-@contextmanager
-def _lock_parent_nextlink(parent_uuid: str):
-    lock_fn = core.safe_lock if core is not None and hasattr(core, "safe_lock") else _local_safe_lock
-    with lock_fn(
-        _parent_nextlink_lock_path(parent_uuid),
-        retries=_QUEUE_LOCK_RETRIES,
-        sleep_base=_QUEUE_LOCK_SLEEP_BASE,
-        stale_after=_QUEUE_LOCK_STALE_AFTER,
-    ) as acquired:
-        yield acquired
-
-
-def _intent_log_collect_final_states(path: Path) -> dict[str, str] | None:
-    final_states: dict[str, str] = {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                ln = line.strip()
-                if not ln:
-                    continue
-                try:
-                    obj = json.loads(ln)
-                except Exception:
-                    continue
-                sid = (obj.get("spawn_intent_id") or "").strip()
-                status = (obj.get("status") or "").strip().lower()
-                if not sid or status not in {"done", "dead"}:
-                    continue
-                if sid in final_states:
-                    final_states.pop(sid, None)
-                final_states[sid] = status
-        return final_states
-    except Exception as e:
-        _diag(f"intent log read failed: {e}")
-        return None
-
-
-def _intent_log_needs_compact(path: Path, final_states: dict[str, str]) -> bool:
-    try:
-        st_size = path.stat().st_size
-    except Exception:
-        st_size = 0
-    return bool(
-        (_INTENT_LOG_MAX_BYTES > 0 and st_size > _INTENT_LOG_MAX_BYTES)
-        or (_INTENT_LOG_MAX_ENTRIES > 0 and len(final_states) > _INTENT_LOG_MAX_ENTRIES)
-    )
-
-
-def _intent_log_trim_states(final_states: dict[str, str]) -> None:
-    if _INTENT_LOG_MAX_ENTRIES <= 0:
-        return
-    if len(final_states) <= _INTENT_LOG_MAX_ENTRIES:
-        return
-    drop_n = len(final_states) - _INTENT_LOG_MAX_ENTRIES
-    for sid in list(final_states.keys())[:drop_n]:
-        final_states.pop(sid, None)
-
-
-def _intent_log_compact(path: Path, final_states: dict[str, str]) -> None:
-    tmp_path = path.with_suffix(".staging")
-    try:
-        fd = os.open(str(tmp_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except Exception:
-            pass
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for sid, status in final_states.items():
-                payload = {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "hook": "on-exit",
-                    "hook_version": NAUTICAL_HOOK_VERSION,
-                    "status": status,
-                    "spawn_intent_id": sid,
-                    "reason": "compacted",
-                }
-                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-            if _DURABLE_QUEUE:
-                try:
-                    f.flush()
-                    os.fsync(f.fileno())
-                except Exception:
-                    pass
-        os.replace(tmp_path, path)
-        if _DURABLE_QUEUE:
-            _fsync_dir(path.parent)
-    except Exception as e:
-        _diag(f"intent log compaction failed: {e}")
-        try:
-            if tmp_path.exists():
-                tmp_path.unlink()
-        except Exception:
-            pass
-
-
-def _load_finalized_intents() -> tuple[set[str], bool]:
-    """Return finalized spawn_intent_id set, with best-effort compaction."""
-    p = _intent_log_path()
-    with _lock_intent_log() as locked:
-        if not locked:
-            _diag("intent log lock busy; idempotency disabled for this drain")
-            return set(), False
-        try:
-            if not p.exists():
-                return set(), True
-        except Exception:
-            return set(), True
-        final_states = _intent_log_collect_final_states(p)
-        if final_states is None:
-            return set(), False
-
-        needs_compact = _intent_log_needs_compact(p, final_states)
-        _intent_log_trim_states(final_states)
-        if needs_compact:
-            _intent_log_compact(p, final_states)
-    return set(final_states.keys()), True
-
-
-def _mark_intent_status(spawn_intent_id: str, status: str, reason: str = "") -> bool:
-    sid = (spawn_intent_id or "").strip()
-    st = (status or "").strip().lower()
-    if not sid or st not in {"done", "dead"}:
-        return False
-    payload = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "hook": "on-exit",
-        "hook_version": NAUTICAL_HOOK_VERSION,
-        "status": st,
-        "spawn_intent_id": sid,
-        "reason": reason,
-    }
-    p = _intent_log_path()
-    with _lock_intent_log() as locked:
-        if not locked:
-            _diag(f"intent log lock busy; could not mark {sid} as {st}")
-            return False
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        try:
-            fd = os.open(str(p), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-            try:
-                os.fchmod(fd, 0o600)
-            except Exception:
-                pass
-            with os.fdopen(fd, "a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-                if _DURABLE_QUEUE:
-                    try:
-                        f.flush()
-                        os.fsync(f.fileno())
-                        _fsync_dir(p.parent)
-                    except Exception:
-                        pass
-            return True
-        except Exception as e:
-            _diag(f"intent log write failed ({sid}={st}): {e}")
-            return False
-
-
-def _lock_backoff_delay(streak: int) -> float:
-    if streak <= 0:
-        return 0.0
-    base = max(0.0, float(_LOCK_BACKOFF_BASE or 0.0))
-    cap = max(0.0, float(_LOCK_BACKOFF_MAX or 0.0))
-    if base <= 0.0:
-        return 0.0
-    exp = min(int(streak), 8)
-    delay = base * (2 ** (exp - 1))
-    delay = min(delay, cap if cap > 0 else delay)
-    jitter = random.uniform(0.0, base) if base > 0 else 0.0
-    return delay + jitter
-
-
-def _write_dead_letter(entry: dict, reason: str) -> bool:
-    queue_store = _module("queue_store")
-    payload = queue_store.build_dead_letter_payload(
-        hook="on-exit",
-        hook_version=NAUTICAL_HOOK_VERSION,
-        entry=entry,
-        reason=reason,
-    )
-    return bool(queue_store.append_dead_letter_jsonl(
-        path=_DEAD_LETTER_PATH,
-        payload=payload,
-        durable=_DURABLE_QUEUE,
-        acquire_lock=_lock_dead_letter,
-        diag=_diag,
-        max_bytes=_DEAD_LETTER_MAX_BYTES,
-        retention_days=_DEAD_LETTER_RETENTION_DAYS,
-    ))
-
-def _fsync_dir(path: Path) -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        queue_store.fsync_dir(path)
-        return
-    try:
-        fd = os.open(str(path), os.O_DIRECTORY)
-    except Exception:
-        return
-    try:
-        os.fsync(fd)
-    except Exception:
-        pass
-    finally:
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-
-def _queue_db_connect_result():
-    state = _exit_runtime_state()
-    queue_store = _module("queue_store")
-    db_path = _QUEUE_DB_PATH
-    timeout_base = max(1.0, _QUEUE_LOCK_SLEEP_BASE * max(1, _QUEUE_LOCK_RETRIES) * 4.0)
-    timeout_max = max(timeout_base, float(_QUEUE_DB_CONNECT_TIMEOUT_MAX or timeout_base))
-    result = queue_store.connect_queue_db_result(
-        db_path,
-        attempts=max(1, int(_QUEUE_DB_CONNECT_RETRIES or 1)),
-        timeout_base=timeout_base,
-        timeout_max=timeout_max,
-        backoff_base=float(_QUEUE_DB_CONNECT_BACKOFF_BASE or 0.0),
-        durable=_DURABLE_QUEUE,
-        row_factory=sqlite3.Row,
-        diag=_diag,
-        sleep_fn=_sleep,
-    )
-    if result.conn is not None:
-        state.queue_db_open_count += 1
-    return result
-
-
-def _queue_db_init(conn: sqlite3.Connection) -> None:
-    queue_store = _module("queue_store")
-    queue_store.init_queue_db(conn)
-
-
-def _queue_db_open_ready() -> sqlite3.Connection | None:
-    state = _exit_runtime_state()
-    if state.run_queue_db_active and state.run_queue_db_conn is not None:
-        try:
-            state.run_queue_db_conn.execute("SELECT 1")
-            state.queue_db_reuse_count += 1
-            return state.run_queue_db_conn
-        except Exception:
-            _queue_close_silent(state.run_queue_db_conn)
-            state.run_queue_db_conn = None
-    queue_store = _module("queue_store")
-    db_path = _QUEUE_DB_PATH
-    result = queue_store.open_ready_queue_db_result(
-        db_path,
-        connect_fn=_queue_db_connect_result,
-        init_fn=_queue_db_init,
-        close_fn=_queue_close_silent,
-        diag=_diag,
-    )
-    conn = result.conn
-    if state.run_queue_db_active and conn is not None:
-        state.run_queue_db_conn = conn
-    return conn
-
-
-def _queue_db_open_fresh_ready() -> sqlite3.Connection | None:
-    queue_store = _module("queue_store")
-    db_path = _QUEUE_DB_PATH
-    result = queue_store.open_ready_queue_db_result(
-        db_path,
-        connect_fn=_queue_db_connect_result,
-        init_fn=_queue_db_init,
-        close_fn=_queue_close_silent,
-        diag=_diag,
-    )
-    return result.conn
-
-
-def _queue_close_silent(conn: sqlite3.Connection) -> None:
-    if conn is None:
-        return
-    state = _exit_runtime_state()
-    if state.run_queue_db_active and conn is state.run_queue_db_conn:
-        return
-    queue_store = _module("queue_store")
-    queue_store.close_silent(conn)
-
-
-def _take_queue_entries_sqlite_batch():
-    conn = _queue_db_open_ready()
-    exit_models = _module("exit_models")
-    if conn is None:
-        return exit_models.ExitQueueBatch(entries=[])
-    token = f"drain-{os.getpid()}-{os.urandom(8).hex()}"
-    now = time.time()
-    queue_store = _module("queue_store")
-    claim = queue_store.claim_rows_sqlite_result(
-        conn,
-        token=token,
-        now=now,
-        processing_stale_after=_QUEUE_PROCESSING_STALE_AFTER,
-        max_lines=_QUEUE_MAX_LINES,
-        diag=_diag,
-        on_lock_busy=_record_queue_lock_failure,
-    )
-    entries = queue_store.rows_to_entries_result(claim.rows).entries
-    _queue_close_silent(conn)
-    return exit_models.ExitQueueBatch(entries=entries)
-
-
-def _ack_queue_entries_sqlite_result(entry_claims: list[tuple[int, str]]):
-    conn = _queue_db_open_fresh_ready()
-    exit_models = _module("exit_models")
-    claims = [
-        (int(raw_id), str(raw_token or "").strip())
-        for raw_id, raw_token in (entry_claims or [])
-        if str(raw_id).isdigit() and int(raw_id) > 0 and str(raw_token or "").strip()
-    ]
-    if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(claims))
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.ack_entry_claims_sqlite_result(
-            conn,
-            claims,
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-    finally:
-        _queue_close_silent(conn)
-
-
-def _requeue_entries_sqlite_result(entries: list[dict]):
-    conn = _queue_db_open_fresh_ready()
-    exit_models = _module("exit_models")
-    items = [
-        entry
-        for entry in (entries or [])
-        if isinstance(entry, dict) and entry.get("__queue_backend") == "sqlite" and entry.get("__queue_id")
-    ]
-    if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.requeue_entries_sqlite_result(
-            conn,
-            items,
-            now=time.time(),
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-    finally:
-        _queue_close_silent(conn)
-
-
-def _advance_lifecycle_stage(entry: dict, stage):
-    """Advance a durable plan while retaining the claimed queue row."""
-    queue_store = _module("queue_store")
-    if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
-        # Legacy rows remain owned by the compatibility executor.
-        return queue_store.QueueWriteResult(ok=True, count=0)
-    conn = _queue_db_open_fresh_ready()
-    if conn is None:
-        return queue_store.QueueWriteResult(
-            ok=False,
-            count=1,
-            lock_busy=True,
-            err="queue database unavailable while advancing lifecycle stage",
-        )
-    try:
-        return queue_store.advance_lifecycle_stage_sqlite_result(
-            conn,
-            row_id=entry.get("__queue_id"),
-            claim_token=entry.get("__queue_claim_token"),
-            stage=stage,
-            now=time.time(),
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-    finally:
-        _queue_close_silent(conn)
-
-
-def _enqueue_entries_sqlite_result(entries: list[dict]):
-    conn = _queue_db_open_ready()
-    exit_models = _module("exit_models")
-    items = [entry for entry in (entries or []) if isinstance(entry, dict)]
-    if conn is None:
-        return exit_models.ExitQueueWriteResult(ok=False, count=len(items))
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.enqueue_entries_sqlite_result(
-            conn,
-            items,
-            now=time.time(),
-            diag=_diag,
-            on_lock_busy=_record_queue_lock_failure,
-        )
-        return exit_models.ExitQueueWriteResult(ok=result.ok, count=result.count)
-    finally:
-        _queue_close_silent(conn)
-
-
-def _normalize_queue_entry(entry: dict) -> dict:
-    queue_models = _module("queue_models")
-    return queue_models.normalize_spawn_queue_entry(entry)
-
-
-def _validate_queue_entry(entry: dict) -> tuple[bool, str]:
-    try:
-        _normalize_queue_entry(entry)
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-def _bump_attempts(entry: dict) -> int:
-    try:
-        attempts = int(entry.get("attempts") or 0)
-    except Exception:
-        attempts = 0
-    attempts += 1
-    entry["attempts"] = attempts
-    return attempts
-
-def _short_uuid(value: str) -> str:
-    exit_queries = _module("exit_queries")
-    return exit_queries.short_uuid(value, core=core)
-
-
-def _equivalent_child_cache_key(child: dict, parent_uuid: str = "") -> tuple[str, str, str] | None:
-    if not isinstance(child, dict):
-        return None
-    chain_id = str(child.get("chainID") or "").strip()
-    link_no = child.get("link")
-    if not chain_id or link_no in (None, ""):
-        return None
-    try:
-        link_token = str(int(link_no))
-    except Exception:
-        return None
-    prev_link = str(child.get("prevLink") or "").strip()
-    if not prev_link and parent_uuid:
-        prev_link = _short_uuid(parent_uuid)
-    return (chain_id, link_token, prev_link)
-
-
-def _pick_equivalent_child_row(rows: list[dict]) -> dict | None:
-    for wanted in ("pending", "waiting", "completed"):
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            if (row.get("status") or "").strip().lower() != wanted:
-                continue
-            if (row.get("uuid") or "").strip():
-                return row
-    for row in rows:
-        if isinstance(row, dict) and (row.get("uuid") or "").strip():
-            return row
-    return None
-
-
-def _equivalent_child_slot_specs(entries: list[dict]) -> dict[tuple[str, str, str], list[str]]:
-    slot_specs: dict[tuple[str, str, str], list[str]] = {}
-    for entry in entries or []:
-        if not isinstance(entry, dict):
-            continue
-        child = entry.get("child") or {}
-        parent_uuid = str(entry.get("parent_uuid") or "").strip()
-        key = _equivalent_child_cache_key(child, parent_uuid)
-        if key is None or key in slot_specs:
-            continue
-        chain_id, link_token, prev_link = key
-        clause = [f"chainID:{chain_id}", f"link:{link_token}"]
-        if prev_link:
-            clause.append(f"prevLink:{prev_link}")
-        clause.append("status.not:deleted")
-        slot_specs[key] = clause
-    return slot_specs
-
-
-def _preload_equivalent_child_slots(entries: list[dict]) -> None:
-    exit_models = _module("exit_models")
-    cached = _exit_runtime_state().equiv_child_cache
-    slot_specs = {
-        key: clause
-        for key, clause in _equivalent_child_slot_specs(entries).items()
-        if key not in cached
-    }
-    if not slot_specs:
-        return
-    prefix = _task_cmd_prefix()
-    keys = list(slot_specs.keys())
-    _diag_count_exit("equivalent_child_preload_slots", len(keys))
-    for chunk_keys in _chunked(keys, _EXIT_EQUIV_PRELOAD_CHUNK_SIZE):
-        _diag_count_exit("equivalent_child_preload_chunks")
-        cmd = list(prefix) + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
-        first = True
-        for key in chunk_keys:
-            if not first:
-                cmd.append("or")
-            first = False
-            cmd.extend(slot_specs[key])
-        cmd.append("export")
-        with _task_phase("preload_slot"):
-            result = _run_task_result(
-                cmd,
-                timeout=_TASK_TIMEOUT_EXPORT,
-                retries=_TASK_RETRIES_EXPORT,
-                retry_delay=_TASK_RETRY_DELAY,
-            )
-        if not result.ok:
-            continue
-        try:
-            rows = json.loads((result.stdout or "").strip() or "[]")
-        except Exception:
-            continue
-        if isinstance(rows, dict):
-            rows = [rows]
-        if not isinstance(rows, list):
-            continue
-        grouped: dict[tuple[str, str, str], list[dict]] = {}
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            row_key = _equivalent_child_cache_key(row)
-            if row_key is None:
-                continue
-            grouped.setdefault(row_key, []).append(row)
-        for key in chunk_keys:
-            selected = _pick_equivalent_child_row(grouped.get(key, []))
-            if selected is not None:
-                _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", selected)
-                _diag_count_exit("equivalent_child_preload_hits")
-            else:
-                _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(False, False, "not found", None)
-                _diag_count_exit("equivalent_child_preload_misses")
-
-
-def _equivalent_child_cache_get(child: dict, parent_uuid: str = ""):
-    key = _equivalent_child_cache_key(child, parent_uuid)
-    if key is None:
-        return None
-    cached = _exit_runtime_state().equiv_child_cache.get(key)
-    if cached is not None:
-        _diag_count_exit("equivalent_child_cache_hits")
-        return cached
-    _diag_count_exit("equivalent_child_cache_misses")
-    return None
-
-
-def _equivalent_child_cache_set(child: dict, parent_uuid: str, result) -> None:
-    key = _equivalent_child_cache_key(child, parent_uuid)
-    if key is None or result is None:
-        return
-    _exit_runtime_state().equiv_child_cache[key] = result
-
-
-def _seed_equivalent_child_cache(child: dict, parent_uuid: str, child_uuid: str) -> None:
-    key = _equivalent_child_cache_key(child, parent_uuid)
-    if key is None or not child_uuid:
-        return
-    exit_models = _module("exit_models")
-    row = dict(child or {}) if isinstance(child, dict) else {}
-    row["uuid"] = child_uuid
-    if not row.get("prevLink") and parent_uuid:
-        row["prevLink"] = _short_uuid(parent_uuid)
-    _exit_runtime_state().equiv_child_cache[key] = exit_models.ExitEquivalentChildResult(True, False, "", row)
-    _diag_count_exit("equivalent_child_cache_seeded")
-
-
-def _export_uuid(uuid_str: str, *, prefer_cache: bool = True):
-    if prefer_cache:
-        cached = _export_cache_get(uuid_str)
-        if cached is not None:
-            return cached
-    exit_queries = _module("exit_queries")
-    hook_support = _module("hook_support", required=False)
-    result = exit_queries.export_uuid(
-        uuid_str,
-        hook_support=hook_support,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
+    state.unit_of_work = unit_of_work
+    state.repository = unit_of_work.repository
+    _reset_exit_diag_stats()
+    unit_of_work.repository.configure_commands(
         timeout=_TASK_TIMEOUT_EXPORT,
-        retries=_TASK_RETRIES_EXPORT,
+        attempts=_TASK_RETRIES_EXPORT,
         retry_delay=_TASK_RETRY_DELAY,
-        is_lock_error=_is_lock_error,
-    )
-    if not result.retryable:
-        _export_cache_set(uuid_str, result)
-    return result
-
-
-def _existing_equivalent_child(child: dict, parent_uuid: str = ""):
-    cached = _equivalent_child_cache_get(child, parent_uuid)
-    if cached is not None:
-        return cached
-    exit_queries = _module("exit_queries")
-    result = exit_queries.existing_equivalent_child(
-        child,
-        parent_uuid=parent_uuid,
-        task_cmd_prefix=_task_cmd_prefix(),
-        run_task=_run_task_result,
-        timeout=_TASK_TIMEOUT_EXPORT,
-        retries=_TASK_RETRIES_EXPORT,
-        retry_delay=_TASK_RETRY_DELAY,
-        is_lock_error=_is_lock_error,
-        short_uuid_fn=_short_uuid,
-    )
-    if not result.retryable:
-        _equivalent_child_cache_set(child, parent_uuid, result)
-    return result
-
-
-def _import_child(obj: dict):
-    exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.import_child(
-        obj,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_import=_TASK_TIMEOUT_IMPORT,
-        is_lock_error=_is_lock_error,
-        sleep=_sleep,
-        random_uniform=random.uniform,
     )
 
+    lifecycle_application = _module("lifecycle_application")
+    taskwarrior_mutations = _module("taskwarrior_mutations")
+    lifecycle_outbox = _module("lifecycle_outbox")
 
-def _import_children(children: list[dict]):
-    exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.import_children(
-        children,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_import=_TASK_TIMEOUT_IMPORT,
+    mutations = taskwarrior_mutations.TaskwarriorMutationService(unit_of_work)
+    outbox = lifecycle_outbox.LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
+    owner = f"exit-{os.getpid()}-{os.urandom(8).hex()}"
+    service = lifecycle_application.LifecycleApplicationService(
+        unit_of_work=unit_of_work,
+        mutations=mutations,
+        outbox=outbox,
+        owner=owner,
+        lease_seconds=_OUTBOX_LEASE_SECONDS,
     )
 
+    configuration = _INTEGRATION_CONTEXT.configuration
+    drain_t0 = time.perf_counter()
+    result = service.drain(
+        limit=_OUTBOX_BATCH_MAX_ITEMS,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
+    drain_ms = round((time.perf_counter() - drain_t0) * 1000.0, 3)
 
-def _lifecycle_batch_link_token(value: Any) -> str:
-    token = str(value or "").strip()
-    try:
-        return str(int(float(token)))
-    except (TypeError, ValueError, OverflowError):
-        return token
+    outcome_kind = lifecycle_application.LifecycleApplicationOutcomeKind
+    outcomes = result.outcomes
+    processed = sum(1 for o in outcomes if o.ok)
+    retry_released = sum(1 for o in outcomes if o.kind is outcome_kind.RETRYABLE)
+    manual_reviewed = sum(1 for o in outcomes if o.kind is outcome_kind.MANUAL_REVIEW)
+    quarantined = sum(1 for o in outcomes if o.kind is outcome_kind.QUARANTINED)
+    conflicted = sum(1 for o in outcomes if o.kind is outcome_kind.CONFLICT)
+    errors = len(outcomes) - processed
 
+    outbox_lock_failures = 0
+    if not result.claim.ok:
+        outbox_lock_failures = 1
+        _diag(f"lifecycle outbox claim failed: {result.claim.reason or 'unknown error'}")
 
-def _lifecycle_batch_child_matches(expected: dict[str, Any], actual: dict[str, Any]) -> str:
-    for field in ("chainID", "link", "prevLink"):
-        expected_value = str(expected.get(field) or "").strip()
-        actual_value = str(actual.get(field) or "").strip()
-        if field == "link":
-            expected_value = _lifecycle_batch_link_token(expected_value)
-            actual_value = _lifecycle_batch_link_token(actual_value)
-        if expected_value and actual_value != expected_value:
-            return f"child {field} changed"
-    return ""
+    suppressed_diagnostics = _emit_outcome_diagnostics(outcomes)
+    if suppressed_diagnostics:
+        state.diag_stats["outbox_diagnostics_suppressed"] = suppressed_diagnostics
 
-
-def _prepare_lifecycle_batch(entries: list[dict]):
-    """Classify claimed lifecycle entries without mutating Taskwarrior."""
-    state = _exit_runtime_state()
-    decisions = []
-    exit_models = _module("exit_models")
-    lifecycle_models = _module("lifecycle_models")
-    flow = _module("exit_entry_flow")
-    use_preload = sum(
-        isinstance(item, dict) and isinstance(item.get("lifecycle_plan"), dict)
-        for item in entries or []
-    ) > 1
-    for entry in entries or []:
-        if not isinstance(entry, dict) or not isinstance(entry.get("lifecycle_plan"), dict):
-            continue
-        sid = str(entry.get("spawn_intent_id") or "").strip()
-        if not sid:
-            continue
-        try:
-            plan = lifecycle_models.LifecyclePlan.from_dict(entry["lifecycle_plan"])
-        except Exception as exc:
-            _diag(f"lifecycle batch plan rejected: {exc}")
-            continue
-        with _task_phase("batch_preflight"):
-            parent_res = _export_uuid(plan.identity.parent_uuid, prefer_cache=use_preload)
-        if parent_res.retryable:
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
-                reason=parent_res.err or "parent preflight unavailable",
-            ))
-            continue
-        if not isinstance(parent_res.obj, dict):
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
-                reason="parent task is missing",
-            ))
-            continue
-        expected_short = str(plan.parent_patch_dict().get("nextLink") or "").strip()
-        parent_linked = (
-            expected_short
-            and _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
-            == _lifecycle_batch_link_token(expected_short)
-        )
-        mismatch = flow._parent_guard_mismatch(
-            parent_res.obj,
-            plan.parent_guard.to_dict(),
-            recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
-                task,
-                parse_datetime=getattr(core, "parse_dt_any", None),
-            ),
-            check_modified=not parent_linked,
-        )
-        if mismatch:
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
-                parent=parent_res.obj, reason=mismatch,
-            ))
-            continue
-        state.lifecycle_parent_preflight[sid] = parent_res.obj
-        child = plan.child_dict()
-        child_uuid = str(child.get("uuid") or "").strip()
-        if not child_uuid:
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
-                parent=parent_res.obj, reason="lifecycle child has no UUID",
-            ))
-            continue
-        with _task_phase("batch_preflight"):
-            exact = _export_uuid(child_uuid, prefer_cache=use_preload)
-        child_obj = exact.obj if exact.exists and isinstance(exact.obj, dict) else None
-        if exact.retryable:
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
-                parent=parent_res.obj, reason=exact.err or "child preflight unavailable",
-            ))
-            continue
-        if child_obj is not None:
-            child_reason = _lifecycle_batch_child_matches(child, child_obj)
-            if child_reason:
-                decisions.append(exit_models.LifecycleBatchDecision(
-                    sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
-                    parent=parent_res.obj, child=child_obj, reason=child_reason,
-                ))
-                continue
-        else:
-            equivalent = _equivalent_child_cache_get(child, plan.identity.parent_uuid)
-            if equivalent is not None and equivalent.retryable:
-                decisions.append(exit_models.LifecycleBatchDecision(
-                    sid, entry, plan, exit_models.LifecycleBatchDecisionKind.UNAVAILABLE,
-                    parent=parent_res.obj, reason=equivalent.err or "equivalent child preflight unavailable",
-                ))
-                continue
-            if equivalent is not None and equivalent.exists and isinstance(equivalent.obj, dict):
-                child_obj = equivalent.obj
-                child_reason = _lifecycle_batch_child_matches(child, child_obj)
-                if child_reason:
-                    decisions.append(exit_models.LifecycleBatchDecision(
-                        sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
-                        parent=parent_res.obj, child=child_obj, reason=child_reason,
-                    ))
-                    continue
-        actual_next = _lifecycle_batch_link_token(parent_res.obj.get("nextLink"))
-        expected_next = _lifecycle_batch_link_token(expected_short)
-        if child_obj is not None:
-            kind = (
-                exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED
-                if expected_next and actual_next == expected_next
-                else exit_models.LifecycleBatchDecisionKind.READY_TO_APPLY
-            )
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, kind, parent=parent_res.obj, child=child_obj,
-            ))
-        elif expected_next and actual_next == expected_next:
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING,
-                parent=parent_res.obj, reason="parent points to a missing child",
-            ))
-        else:
-            decisions.append(exit_models.LifecycleBatchDecision(
-                sid, entry, plan, exit_models.LifecycleBatchDecisionKind.MISSING_CHILD,
-                parent=parent_res.obj, child=child,
-            ))
-    return exit_models.LifecycleBatchPlan(tuple(decisions))
-
-
-def _apply_lifecycle_batch(plan) -> None:
-    """Apply only the missing-child subset of a read-only batch plan."""
-    exit_models = _module("exit_models")
-    state = _exit_runtime_state()
-    missing = plan.for_kind(exit_models.LifecycleBatchDecisionKind.MISSING_CHILD)
-    if not missing:
-        return
-    result = _import_children([decision.plan.child_dict() for decision in missing])
-    if not result.ok:
-        _diag(f"lifecycle child batch import failed: {result.err or 'unknown error'}")
-        state.lifecycle_batch_import_failed.update(decision.spawn_intent_id for decision in missing)
-        return
-    for decision in missing:
-        child = decision.plan.child_dict()
-        child_uuid = str(child.get("uuid") or "").strip()
-        if not child_uuid:
-            state.lifecycle_batch_import_failed.add(decision.spawn_intent_id)
-            continue
-        _export_cache_set(child_uuid, exit_models.ExitExportResult(True, False, "", dict(child)))
-        state.lifecycle_batch_imported.add(decision.spawn_intent_id)
-
-
-def _cleanup_lifecycle_batch(state) -> None:
-    """Safely batch-compensate imported children after multi-entry conflicts."""
-    requests = getattr(state, "lifecycle_orphan_cleanup", {})
-    if not requests:
-        return
-    entries = [
-        {"parent_uuid": parent_uuid, "child": {"uuid": child_uuid}}
-        for child_uuid, (parent_uuid, _child_short, _sid) in requests.items()
-    ]
-    for child_uuid, (parent_uuid, _child_short, _sid) in requests.items():
-        _exit_runtime_state().export_cache.pop(child_uuid, None)
-        _exit_runtime_state().export_cache.pop(parent_uuid, None)
-    _preload_export_uuids(entries)
-    safe: list[tuple[str, str, str]] = []
-    for child_uuid, (parent_uuid, child_short, sid) in requests.items():
-        parent_res = _export_cache_get(parent_uuid)
-        child_res = _export_cache_get(child_uuid)
-        if parent_res is None or parent_res.retryable:
-            reason = "parent unavailable while compensating orphan child"
-            state.lifecycle_cleanup_failures[child_uuid] = reason
-            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
-            continue
-        parent = parent_res.obj if parent_res.exists else None
-        if isinstance(parent, dict) and str(parent.get("nextLink") or "").strip() == str(child_short or "").strip():
-            reason = "cleanup skipped because parent link is now present"
-            state.lifecycle_cleanup_failures[child_uuid] = reason
-            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
-            continue
-        if child_res is None or child_res.retryable:
-            reason = "child unavailable while compensating orphan"
-            state.lifecycle_cleanup_failures[child_uuid] = reason
-            _record_orphan_cleanup_evidence(child_uuid, sid, reason)
-            continue
-        if not child_res.exists:
-            continue
-        safe.append((child_uuid, parent_uuid, sid))
-    if safe:
-        result = _cleanup_orphan_children([child_uuid for child_uuid, _parent, _sid in safe])
-        if not result.ok:
-            for child_uuid, _parent, sid in safe:
-                reason = result.err or "batched orphan cleanup failed"
-                state.lifecycle_cleanup_failures[child_uuid] = reason
-                _record_orphan_cleanup_evidence(child_uuid, sid, reason)
-        else:
-            verify_entries = [{"child": {"uuid": child_uuid}} for child_uuid, _parent, _sid in safe]
-            for child_uuid, _parent, _sid in safe:
-                _exit_runtime_state().export_cache.pop(child_uuid, None)
-            _preload_export_uuids(verify_entries)
-            for child_uuid, _parent, sid in safe:
-                verified = _export_cache_get(child_uuid)
-                status = str((verified.obj or {}).get("status") or "").strip().lower() if verified else ""
-                if verified is None or verified.retryable or not verified.exists or status != "deleted":
-                    reason = "batched orphan cleanup postcondition unavailable"
-                    state.lifecycle_cleanup_failures[child_uuid] = reason
-                    _record_orphan_cleanup_evidence(child_uuid, sid, reason)
-
-
-def _finalize_lifecycle_batch(state) -> None:
-    """Verify all deferred lifecycle postconditions with bounded exports."""
-    _cleanup_lifecycle_batch(state)
-    pending = getattr(state, "lifecycle_pending_verification", {})
-    if not pending:
-        return
-    specs: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for ctx, plan, _child in pending.values():
-        for uuid_str in (ctx.parent_uuid, ctx.child_uuid):
-            uuid_str = str(uuid_str or "").strip()
-            if uuid_str and uuid_str not in seen:
-                seen.add(uuid_str)
-                specs.append((uuid_str, f"uuid:{uuid_str}"))
-    rows: list[dict[str, Any]] = []
-    parsed_ok = False
-    hook_support = _module("hook_support", required=False)
-    for chunk in _chunked(specs, _EXIT_PRELOAD_CHUNK_SIZE):
-        cmd = _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off"]
-        for index, (_uuid, clause) in enumerate(chunk):
-            if index:
-                cmd.append("or")
-            cmd.append(clause)
-        cmd.append("export")
-        with _task_phase("batch_verify"):
-            result = _run_task_result(cmd, timeout=_TASK_TIMEOUT_EXPORT, retries=_TASK_RETRIES_EXPORT, retry_delay=_TASK_RETRY_DELAY)
-        if not result.ok:
-            for ctx, _plan, _child in pending.values():
-                _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, result.stderr or "batch verification unavailable")
-            return
-        if hook_support is not None:
-            parsed_ok, chunk_rows, _error = hook_support.parse_export_array_result(result, diag=_diag)
-            if not parsed_ok:
-                for ctx, _plan, _child in pending.values():
-                    _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, "batch verification returned malformed JSON")
-                return
-            rows.extend(chunk_rows)
-        else:
-            try:
-                parsed = json.loads((result.stdout or "").strip() or "[]")
-            except Exception:
-                parsed = None
-            if not isinstance(parsed, list):
-                for ctx, _plan, _child in pending.values():
-                    _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, "batch verification returned malformed JSON")
-                return
-            rows.extend(row for row in parsed if isinstance(row, dict))
-    by_uuid = {str(row.get("uuid") or "").strip(): row for row in rows if isinstance(row, dict)}
-    flow = _module("exit_entry_flow")
-    lifecycle_models = _module("lifecycle_models")
-    for sid, (ctx, plan, expected_child) in pending.items():
-        child = by_uuid.get(ctx.child_uuid)
-        parent = by_uuid.get(ctx.parent_uuid)
-        reason = ""
-        if not isinstance(child, dict):
-            reason = "child postcondition missing after lifecycle batch"
-        elif not isinstance(parent, dict):
-            reason = "parent postcondition missing after lifecycle batch"
-        else:
-            for field in ("chainID", "link", "prevLink"):
-                expected = str(expected_child.get(field) or "").strip()
-                actual = str(child.get(field) or "").strip()
-                if field == "link":
-                    try:
-                        expected = str(int(float(expected)))
-                        actual = str(int(float(actual)))
-                    except (TypeError, ValueError, OverflowError):
-                        pass
-                if expected and actual != expected:
-                    reason = f"child {field} changed"
-                    break
-            if not reason and str(parent.get("nextLink") or "").strip() != ctx.child_short:
-                reason = "parent linkage postcondition not satisfied"
-            if not reason:
-                mismatch = flow._parent_guard_mismatch(
-                    parent,
-                    plan.parent_guard.to_dict(),
-                    recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
-                        task,
-                        parse_datetime=getattr(core, "parse_dt_any", None),
-                    ),
-                    check_modified=False,
-                )
-                if mismatch:
-                    reason = mismatch
-        if reason:
-            _handle_lifecycle_postcondition_failure(ctx.entry, ctx.idx, state, reason)
-            continue
-        verified = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.VERIFIED)
-        if not verified.ok:
-            _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, verified)
-            continue
-        finalized = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
-        if not finalized.ok:
-            _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, finalized)
-            continue
-        if not state.mark_final(ctx.entry, "done", "processed"):
-            state.errors += 1
-            state.requeue.append(ctx.entry)
-            continue
-        state.processed += 1
-        state.ack_sqlite(ctx.entry)
-        state.reset_lock_streak()
-
-
-def _update_parent_nextlink(
-    parent_uuid: str,
-    child_short: str,
-    expected_prev: str | None = None,
-    *,
-    parent_guard: dict[str, Any] | None = None,
-    parent_snapshot: dict[str, Any] | None = None,
-):
-    exit_side_effects = _module("exit_side_effects")
-    with _task_phase("parent_update"):
-        return exit_side_effects.update_parent_nextlink(
-        parent_uuid,
-        child_short,
-        expected_prev=expected_prev,
-        lock_parent_nextlink=_lock_parent_nextlink,
-        parent_nextlink_state_fn=lambda parent_uuid, child_short, expected_prev, **kwargs: _parent_nextlink_state(
-            parent_uuid, child_short, expected_prev, prefer_cache=False, **kwargs
-        ),
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-        parent_guard=parent_guard,
-        parent_snapshot=parent_snapshot,
-        guard_mismatch_fn=lambda parent, guard: _module("exit_entry_flow")._parent_guard_mismatch(
-            parent,
-            guard,
-            recurrence_fingerprint=lambda task: _module("lifecycle_models").recurrence_fingerprint(
-                task,
-                parse_datetime=getattr(core, "parse_dt_any", None),
-            ),
-        ),
+    commands = getattr(unit_of_work, "commands", None)
+    if commands is not None:
+        purpose_stats = {
+            _command_purpose_stat_key(purpose): max(0, int(count or 0))
+            for purpose, count in getattr(commands, "by_purpose", {}).items()
+        }
+        state.diag_stats.update(
+            run_task_calls=max(0, int(getattr(commands, "calls", 0) or 0)),
+            run_task_failures=max(0, int(getattr(commands, "failures", 0) or 0)),
+            run_task_seconds=max(0.0, float(getattr(commands, "duration", 0.0) or 0.0)),
+            **purpose_stats,
         )
 
-
-def _clear_parent_nextlink_if_matches(parent_uuid: str, child_short: str):
-    exit_side_effects = _module("exit_side_effects")
-    try:
-        return exit_side_effects.clear_parent_nextlink_if_matches(
-            parent_uuid,
-            child_short,
-            lock_parent_nextlink=_lock_parent_nextlink,
-            export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=False),
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            timeout_modify=_TASK_TIMEOUT_MODIFY,
-            retries_modify=_TASK_RETRIES_MODIFY,
-            retry_delay=_TASK_RETRY_DELAY,
-        )
-    finally:
-        _exit_runtime_state().export_cache.pop(str(parent_uuid or "").strip(), None)
+    return {
+        "entries_total": len(outcomes),
+        "processed": processed,
+        "errors": errors,
+        "retry_released": retry_released,
+        "manual_reviewed": manual_reviewed,
+        "quarantined": quarantined,
+        "conflicted": conflicted,
+        "outbox_lock_failures": outbox_lock_failures,
+        "diagnostics_suppressed": suppressed_diagnostics,
+        "drain_ms": drain_ms,
+    }
 
 
-def _parent_nextlink_state(
-    parent_uuid: str,
-    child_short: str,
-    expected_prev: str | None = None,
-    *,
-    prefer_cache: bool = True,
-    parent_guard: dict[str, Any] | None = None,
-    guard_mismatch_fn=None,
-):
-    exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.parent_nextlink_state(
-        parent_uuid,
-        child_short,
-        expected_prev=expected_prev,
-        export_uuid=lambda uuid_str: _export_uuid(uuid_str, prefer_cache=prefer_cache),
-        parent_guard=parent_guard,
-        guard_mismatch_fn=guard_mismatch_fn,
-    )
+def _drain_outbox(unit_of_work) -> dict:
+    return _drain_outbox_result(unit_of_work)
 
 
-def _cleanup_orphan_child(child_uuid: str, spawn_intent_id: str = "") -> None:
-    exit_side_effects = _module("exit_side_effects")
-    exit_side_effects.cleanup_orphan_child(
-        child_uuid,
-        spawn_intent_id=spawn_intent_id,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-        diag=_diag,
-    )
-
-
-def _cleanup_orphan_children(child_uuids: list[str]):
-    exit_side_effects = _module("exit_side_effects")
-    return exit_side_effects.cleanup_orphan_children(
-        child_uuids,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        timeout_modify=_TASK_TIMEOUT_MODIFY,
-        retries_modify=_TASK_RETRIES_MODIFY,
-        retry_delay=_TASK_RETRY_DELAY,
-    )
-
-
-def _take_queue_batch():
-    return _take_queue_entries_sqlite_batch()
-
-
-def _take_queue_entries():
-    return _take_queue_batch().entries
-
-
-def _requeue_entries_result(entries: list[dict]):
-    exit_models = _module("exit_models")
-    items = [e for e in (entries or []) if isinstance(e, dict)]
-    if not items:
-        return exit_models.ExitRequeueResult(ok=True, failed=0)
-    claimed: list[dict] = []
-    fresh: list[dict] = []
-    for e in items:
-        if (e.get("__queue_backend") == "sqlite") and e.get("__queue_id"):
-            claimed.append(e)
-        else:
-            fresh.append(e)
-    claimed_result = _requeue_entries_sqlite_result(claimed) if claimed else exit_models.ExitQueueWriteResult(ok=True, count=0)
-    fresh_result = _enqueue_entries_sqlite_result(fresh) if fresh else exit_models.ExitQueueWriteResult(ok=True, count=0)
-    ok = claimed_result.ok and fresh_result.ok
-    failed = (claimed_result.count if not claimed_result.ok else 0) + (fresh_result.count if not fresh_result.ok else 0)
-    return exit_models.ExitRequeueResult(ok=ok, failed=failed)
-
-
-class _DrainState:
-    def __init__(
-        self,
-        entries: list[dict],
-        entries_total: int,
-        finalized_intents: set[str],
-        intent_log_ready: bool,
-        intent_log_load_ms: float,
-    ) -> None:
-        self.entries = entries
-        self.entries_total = entries_total
-        self.finalized_intents = finalized_intents
-        self.intent_log_ready = intent_log_ready
-        self.intent_log_load_ms = intent_log_load_ms
-        self.processed = 0
-        self.errors = 0
-        self.requeue: list[dict] = []
-        self.dead_lettered = 0
-        self.skipped_idempotent = 0
-        self.lock_events = 0
-        self.lock_streak = 0
-        self.lock_streak_max = 0
-        self.circuit_breaks = 0
-        self.intent_mark_ok = 0
-        self.intent_mark_fail = 0
-        self.sqlite_acked_claims: dict[int, str] = {}
-        self.lifecycle_defer_verification = False
-        self.lifecycle_batch_discovery = False
-        self.lifecycle_pending_verification: dict[str, tuple[Any, Any, dict[str, Any]]] = {}
-        self.lifecycle_batch_plan = None
-        self.lifecycle_orphan_cleanup: dict[str, tuple[str, str, str]] = {}
-        self.lifecycle_cleanup_failures: dict[str, str] = {}
-
-    def mark_final(self, entry: dict, status: str, reason: str) -> bool:
-        sid = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
-        if not sid:
-            return True
-        if _mark_intent_status(sid, status, reason):
-            self.finalized_intents.add(sid)
-            self.intent_mark_ok += 1
-            return True
-        else:
-            self.intent_mark_fail += 1
-            return False
-
-    def queue_backend(self, entry: dict) -> str:
-        if not isinstance(entry, dict):
-            return "sqlite"
-        b = (entry.get("__queue_backend") or "").strip().lower()
-        return b if b else "sqlite"
-
-    def queue_id(self, entry: dict) -> int:
-        if not isinstance(entry, dict):
-            return 0
-        try:
-            return int(entry.get("__queue_id") or 0)
-        except Exception:
-            return 0
-
-    def entry_clean(self, entry: dict) -> dict:
-        if not isinstance(entry, dict):
-            return {}
-        out = dict(entry)
-        out.pop("__queue_backend", None)
-        out.pop("__queue_id", None)
-        out.pop("__queue_claim_token", None)
-        return out
-
-    def ack_sqlite(self, entry: dict) -> None:
-        if self.queue_backend(entry) != "sqlite":
-            return
-        rid = self.queue_id(entry)
-        token = str(entry.get("__queue_claim_token") or "").strip()
-        if rid > 0 and token:
-            self.sqlite_acked_claims[rid] = token
-
-    def dead_letter(self, entry: dict, reason: str) -> None:
-        if not _write_dead_letter(self.entry_clean(entry), reason):
-            # Keep the claimed row recoverable when the DLQ itself is
-            # unavailable. It will be requeued below and retried later.
-            self.requeue.append(entry)
-            self.errors += 1
-            _diag("dead-letter write failed; entry retained for retry")
-            return
-        if not self.mark_final(entry, "dead", reason):
-            # The dead-letter evidence is durable, but without the finalized
-            # intent record the queue row must remain recoverable and cannot
-            # be acknowledged as complete.
-            self.requeue.append(entry)
-            self.errors += 1
-            _diag("dead-letter intent write failed; entry retained for retry")
-            return
-        self.dead_lettered += 1
-        self.errors += 1
-        self.ack_sqlite(entry)
-
-    def record_lock_event(self, idx: int) -> bool:
-        self.lock_events += 1
-        self.lock_streak += 1
-        if self.lock_streak > self.lock_streak_max:
-            self.lock_streak_max = self.lock_streak
-        delay = _lock_backoff_delay(self.lock_streak)
-        if delay > 0:
-            _sleep(delay)
-        if _LOCK_STORM_THRESHOLD > 0 and self.lock_streak >= _LOCK_STORM_THRESHOLD and (idx + 1) < self.entries_total:
-            self.circuit_breaks += 1
-            self.requeue.extend(self.entries[idx + 1:])
+def _emit_outcome_diagnostics(outcomes) -> int:
+    """Emit bounded per-intent diagnostics and return suppressed count."""
+    emitted = 0
+    suppressed = 0
+    for outcome in outcomes:
+        reason = getattr(outcome, "reason", "")
+        if not reason:
+            continue
+        if emitted < _OUTBOX_DIAG_MAX_ITEMS:
             _diag(
-                f"lock storm detected (streak={self.lock_streak}); "
-                f"requeued remaining {self.entries_total - (idx + 1)} entries"
+                f"lifecycle intent {getattr(outcome, 'intent_id', '') or '(unstaged)'}: "
+                f"{getattr(getattr(outcome, 'kind', None), 'value', 'unknown')}: {reason}"
             )
-            return True
-        return False
-
-    def reset_lock_streak(self) -> None:
-        self.lock_streak = 0
-
-    def to_stats_model(self, drain_t0: float, requeue_ok: bool, requeue_failed: int):
-        exit_models = _module("exit_models")
-        return exit_models.ExitDrainStats(
-            processed=self.processed,
-            errors=self.errors,
-            requeued=len(self.requeue) if requeue_ok else 0,
-            requeue_failed=requeue_failed,
-            dead_lettered=self.dead_lettered,
-            queue_lock_failures=_exit_runtime_state().queue_lock_failures_this_run,
-            entries_total=self.entries_total,
-            entries_skipped_idempotent=self.skipped_idempotent,
-            lock_events=self.lock_events,
-            lock_streak_max=self.lock_streak_max,
-            circuit_breaks=self.circuit_breaks,
-            intent_log_ready=1 if self.intent_log_ready else 0,
-            intent_log_size=len(self.finalized_intents),
-            intent_log_load_ms=round(self.intent_log_load_ms, 3),
-            intent_mark_ok=self.intent_mark_ok,
-            intent_mark_fail=self.intent_mark_fail,
-            queue_db_opens=_exit_runtime_state().queue_db_open_count,
-            queue_db_reuses=_exit_runtime_state().queue_db_reuse_count,
-            preload_export_uuids=int(_exit_runtime_state().diag_stats.get("preload_export_uuids", 0)),
-            preload_export_hits=int(_exit_runtime_state().diag_stats.get("preload_export_hits", 0)),
-            preload_export_misses=int(_exit_runtime_state().diag_stats.get("preload_export_misses", 0)),
-            preload_export_chunks=int(_exit_runtime_state().diag_stats.get("preload_export_chunks", 0)),
-            drain_ms=round((time.perf_counter() - drain_t0) * 1000.0, 3),
-        )
-
-
-def _requeue_or_dead_letter_for_lock(entry: dict, idx: int, state: _DrainState) -> bool:
-    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-        state.dead_letter(entry, "exceeded retry budget")
-    else:
-        state.requeue.append(entry)
-    return state.record_lock_event(idx)
-
-
-def _handle_lifecycle_stage_failure(entry: dict, idx: int, state: _DrainState, result) -> bool:
-    """Keep a claimed plan retryable, or quarantine a structurally invalid one."""
-    error = str(getattr(result, "err", "") or "lifecycle stage update failed")
-    _diag(f"lifecycle stage update failed for queue entry {entry.get('__queue_id')}: {error}")
-    if bool(getattr(result, "lock_busy", False)):
-        return _requeue_or_dead_letter_for_lock(entry, idx, state)
-    if "claim ownership lost" in error.lower():
-        # Another worker owns recovery now; requeueing would itself fail the
-        # ownership check and could obscure the original race.
-        state.errors += 1
-        _diag(f"lifecycle stage update abandoned after claim loss: {error}")
-        return True
-    state.dead_letter(entry, f"lifecycle stage update failed: {error}")
-    return False
-
-
-def _verify_lifecycle_postconditions(ctx) -> tuple[str, str]:
-    """Freshly verify the child and reciprocal parent link before finalizing."""
-    if not isinstance(ctx.entry.get("lifecycle_plan"), dict):
-        return "ok", ""
-    child_res = _export_uuid(ctx.child_uuid, prefer_cache=False)
-    if child_res.retryable:
-        return "retry", child_res.err or "child verification unavailable"
-    if not child_res.exists:
-        return "retry", "child postcondition missing after lifecycle apply"
-    link_res = _parent_nextlink_state(
-        ctx.parent_uuid,
-        ctx.child_short,
-        ctx.expected_parent_nextlink,
-        prefer_cache=False,
-    )
-    if link_res.state == "already":
-        return "ok", ""
-    if link_res.state == "locked":
-        return "retry", link_res.err or "parent linkage verification unavailable"
-    return "retry", link_res.err or "parent linkage postcondition not satisfied"
-
-
-def _handle_lifecycle_postcondition_failure(entry: dict, idx: int, state: _DrainState, reason: str) -> bool:
-    """Retry a failed final read, bounded by the normal queue retry budget."""
-    message = str(reason or "lifecycle postcondition verification failed")
-    _diag(f"lifecycle postcondition verification deferred: {message}")
-    if _bump_attempts(entry) > _QUEUE_RETRY_MAX:
-        state.dead_letter(entry, message)
-    else:
-        state.requeue.append(entry)
-    return False
-
-
-def _handle_entry_gate(entry: dict, state: _DrainState) -> bool:
-    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip() if isinstance(entry, dict) else ""
-    if spawn_intent_id and spawn_intent_id in state.finalized_intents:
-        state.skipped_idempotent += 1
-        state.processed += 1
-        state.ack_sqlite(entry)
-        state.reset_lock_streak()
-        return True
-
-    valid, reason = _validate_queue_entry(entry)
-    if not valid:
-        _diag(f"queue entry rejected before lifecycle execution: {reason}")
-        state.dead_letter(entry, reason)
-        state.reset_lock_streak()
-        return True
-    return False
-
-
-def _build_exit_entry_context(
-    entry: dict,
-    idx: int,
-    state: _DrainState,
-    *,
-    parent_uuid: str,
-    child_short: str,
-    expected_parent_nextlink: str | None,
-    parent_guard: dict[str, str] | None,
-    child: dict,
-    child_uuid: str,
-    spawn_intent_id: str,
-):
-    exit_models = _module("exit_models")
-    return exit_models.ExitEntryContext(
-        entry=entry,
-        idx=idx,
-        state=state,
-        parent_uuid=parent_uuid,
-        child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink,
-        parent_guard=parent_guard,
-        child=child,
-        child_uuid=child_uuid,
-        spawn_intent_id=spawn_intent_id,
-    )
-
-
-def _exit_runtime_services():
-    exit_runtime = _module("exit_runtime")
-    return exit_runtime.ExitRuntimeServices(
-        state=_exit_runtime_state(),
-        parent_nextlink_state=_parent_nextlink_state,
-        requeue_or_dead_letter_for_lock=_requeue_or_dead_letter_for_lock,
-        export_uuid=_export_uuid,
-        import_child=_import_child,
-        is_lock_error=_is_lock_error,
-        diag=_diag,
-        update_parent_nextlink=_update_parent_nextlink,
-        clear_parent_nextlink_if_matches=_clear_parent_nextlink_if_matches,
-        cleanup_orphan_child=_cleanup_orphan_child,
-    )
-
-
-def _precheck_parent_link_state(ctx) -> tuple[str, bool]:
-    exit_entry_flow = _module("exit_entry_flow")
-    exit_runtime = _module("exit_runtime")
-    services = exit_runtime.build_precheck_services(_exit_runtime_services())
-    return exit_entry_flow.precheck_parent_link_state(ctx, services=services)
-
-
-def _precheck_parent_guard(ctx) -> str:
-    exit_entry_flow = _module("exit_entry_flow")
-    exit_runtime = _module("exit_runtime")
-    services = exit_runtime.build_precheck_services(_exit_runtime_services())
-    lifecycle_models = _module("lifecycle_models")
-    parse_datetime = getattr(core, "parse_dt_any", None)
-    services.recurrence_fingerprint = lambda task: lifecycle_models.recurrence_fingerprint(
-        task,
-        parse_datetime=parse_datetime,
-    )
-    return exit_entry_flow.precheck_parent_guard(ctx, services=services)
-
-
-def _ensure_child_exists_for_entry(ctx, *, initial_export_res=None) -> tuple[str, bool]:
-    exit_entry_flow = _module("exit_entry_flow")
-    exit_runtime = _module("exit_runtime")
-    services = exit_runtime.build_ensure_child_services(_exit_runtime_services())
-    return exit_entry_flow.ensure_child_exists_for_entry(
-        ctx,
-        services=services,
-        initial_export_res=initial_export_res,
-    )
-
-
-def _apply_parent_update_for_entry(
-    ctx,
-    *,
-    parent_linked_already: bool,
-    imported: bool,
-) -> str:
-    exit_entry_flow = _module("exit_entry_flow")
-    exit_runtime = _module("exit_runtime")
-    services = exit_runtime.build_apply_parent_update_services(_exit_runtime_services())
-    services.recheck_parent_guard = _precheck_parent_guard
-    return exit_entry_flow.apply_parent_update_for_entry(
-        ctx,
-        parent_linked_already=parent_linked_already,
-        imported=imported,
-        services=services,
-    )
-
-
-def _lifecycle_operation_result(state, *, value=None, reason=""):
-    lifecycle_executor = _module("lifecycle_executor")
-    return lifecycle_executor.OperationResult(state, value=value, reason=reason)
-
-
-def _execute_lifecycle_queue_entry(ctx, state):
-    """Execute a validated queue plan through the shared typed executor."""
-    lifecycle_models = _module("lifecycle_models")
-    lifecycle_executor = _module("lifecycle_executor")
-    exit_models = _module("exit_models")
-    try:
-        plan = lifecycle_models.LifecyclePlan.from_dict(ctx.entry["lifecycle_plan"])
-    except Exception as exc:
-        _diag(f"lifecycle executor rejected plan: {exc}")
-        state.dead_letter(ctx.entry, f"invalid lifecycle plan: {exc}")
-        state.reset_lock_streak()
-        return False
-
-    batch_plan = getattr(state, "lifecycle_batch_plan", None)
-    batch_decision = None
-    if batch_plan is not None:
-        batch_decision = batch_plan.by_intent().get(ctx.spawn_intent_id)
-    if batch_decision is not None:
-        if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.STALE_CONFLICTING:
-            state.dead_letter(
-                ctx.entry,
-                f"lifecycle batch preflight conflict: {batch_decision.reason or 'state changed'}",
-            )
-            state.reset_lock_streak()
-            return False
-        if batch_decision.kind is exit_models.LifecycleBatchDecisionKind.UNAVAILABLE:
-            reason = batch_decision.reason or "lifecycle batch preflight unavailable"
-            _diag(f"lifecycle batch preflight deferred: {reason}")
-            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
-                state.dead_letter(ctx.entry, reason)
-            else:
-                state.requeue.append(ctx.entry)
-            return False
-        # A partial batch import may have created a child before Taskwarrior
-        # returned failure. On retry, promote that durable plan before the
-        # executor advances it to linkage/verification.
-        if (
-            isinstance(batch_decision.child, dict)
-            and plan.stage is lifecycle_models.ExecutionStage.PERSISTED
-            and not (
-                batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
-                and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
-            )
-        ):
-            child_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
-            if not child_stage.ok:
-                return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
-        if (
-            batch_decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
-            and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_import_failed
-        ):
-            reason = "lifecycle child batch import unavailable"
-            _diag(f"lifecycle batch import deferred (intent={ctx.spawn_intent_id})")
-            if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
-                state.dead_letter(ctx.entry, reason)
-            else:
-                state.requeue.append(ctx.entry)
-            return False
-
-    def planned_decision():
-        if batch_plan is None:
-            return None
-        return batch_plan.by_intent().get(ctx.spawn_intent_id)
-
-    def stage(stage):
-        result = _advance_lifecycle_stage(ctx.entry, stage)
-        if result.ok:
-            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
-        operation_state = (
-            lifecycle_executor.OperationState.UNAVAILABLE
-            if bool(getattr(result, "lock_busy", False))
-            else lifecycle_executor.OperationState.FAILED
-        )
-        return _lifecycle_operation_result(operation_state, reason=getattr(result, "err", "") or "queue stage update failed")
-
-    class Services:
-        def validate_parent(self, current_plan):
-            decision = planned_decision()
-            if decision is not None and isinstance(decision.parent, dict):
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.APPLIED,
-                    value=decision.parent,
-                )
-            if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_parent_preflight:
-                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
-            result = _export_uuid(current_plan.identity.parent_uuid, prefer_cache=False)
-            if result.retryable:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=result.err or "parent export unavailable",
-                )
-            parent = result.obj
-            if not isinstance(parent, dict):
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason="parent task is unavailable",
-                )
-            flow = _module("exit_entry_flow")
-            mismatch = flow._parent_guard_mismatch(
-                parent,
-                current_plan.parent_guard.to_dict(),
-                recurrence_fingerprint=lambda task: lifecycle_models.recurrence_fingerprint(
-                    task,
-                    parse_datetime=getattr(core, "parse_dt_any", None),
-                ),
-            )
-            if mismatch:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason=mismatch,
-                )
-            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
-
-        def find_equivalent_child(self, current_plan):
-            decision = planned_decision()
-            if decision is not None and isinstance(decision.child, dict):
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.FOUND,
-                    value=decision.child,
-                )
-            if (
-                decision is not None
-                and decision.kind is exit_models.LifecycleBatchDecisionKind.MISSING_CHILD
-                and ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported
-            ):
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.FOUND,
-                    value=current_plan.child_dict(),
-                )
-            child = current_plan.child_dict()
-            child_uuid = str(child.get("uuid") or "").strip()
-            if child_uuid:
-                # Discovery may use the authoritative drain preload. Fresh
-                # reads remain mandatory for parent guards and every
-                # post-mutation verification below.
-                exact = _export_uuid(child_uuid)
-                if exact.retryable:
-                    return _lifecycle_operation_result(
-                        lifecycle_executor.OperationState.UNAVAILABLE,
-                        reason=exact.err or "child export unavailable",
-                    )
-                if isinstance(exact.obj, dict):
-                    return _lifecycle_operation_result(
-                        lifecycle_executor.OperationState.FOUND,
-                        value=exact.obj,
-                    )
-            equivalent = _existing_equivalent_child(child, current_plan.identity.parent_uuid)
-            if equivalent.retryable:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=equivalent.err or "equivalent child lookup unavailable",
-                )
-            if isinstance(equivalent.obj, dict):
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.FOUND,
-                    value=equivalent.obj,
-                )
-            return _lifecycle_operation_result(lifecycle_executor.OperationState.ABSENT)
-
-        def import_child(self, current_plan):
-            child = current_plan.child_dict()
-            imported = _import_child(child)
-            if imported.ok:
-                stage_result = stage(lifecycle_models.ExecutionStage.CHILD_PRESENT)
-                return stage_result
-            operation_state = (
-                lifecycle_executor.OperationState.UNAVAILABLE
-                if _is_lock_error(imported.err)
-                else lifecycle_executor.OperationState.FAILED
-            )
-            return _lifecycle_operation_result(operation_state, reason=imported.err or "child import failed")
-
-        def verify_child(self, current_plan, child):
-            if getattr(state, "lifecycle_defer_verification", False):
-                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED, value=child)
-            child_uuid = str(child.get("uuid") or "").strip()
-            if not child_uuid:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason="child verification has no UUID",
-                )
-            result = _export_uuid(child_uuid, prefer_cache=False)
-            if result.retryable:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=result.err or "child verification unavailable",
-                )
-            if not isinstance(result.obj, dict):
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason="child postcondition is missing",
-                )
-            child.clear()
-            child.update(result.obj)
-            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
-
-        def apply_parent_patch(self, current_plan, child):
-            decision = planned_decision()
-            if (
-                decision is not None
-                and decision.kind is exit_models.LifecycleBatchDecisionKind.ALREADY_SATISFIED
-            ):
-                return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
-            child_short = str(
-                current_plan.parent_patch_dict().get("nextLink")
-                or ctx.child_short
-                or _short_uuid(str(child.get("uuid") or ""))
-            ).strip()
-            if not child_short:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason="parent patch has no child identity",
-                )
-            expected_prev = str(ctx.entry.get("parent_nextlink") or "").strip() or None
-            updated = _update_parent_nextlink(
-                current_plan.identity.parent_uuid,
-                child_short,
-                expected_prev,
-                parent_guard=current_plan.parent_guard.to_dict(),
-                parent_snapshot=(
-                    planned_decision().parent
-                    if planned_decision() is not None and isinstance(planned_decision().parent, dict)
-                    else None
-                ),
-            )
-            if updated.ok:
-                if updated.state == "already":
-                    return _lifecycle_operation_result(lifecycle_executor.OperationState.ALREADY)
-                stage_result = stage(lifecycle_models.ExecutionStage.PARENT_LINKED)
-                return stage_result
-            if updated.state == "locked":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=updated.err or "parent linkage unavailable",
-                )
-            if updated.state in {"conflict", "missing", "invalid"}:
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason=updated.err or "parent nextLink changed",
-                )
-            operation_state = (
-                lifecycle_executor.OperationState.UNAVAILABLE
-                if _is_lock_error(updated.err)
-                else lifecycle_executor.OperationState.FAILED
-            )
-            return _lifecycle_operation_result(operation_state, reason=updated.err or "parent update failed")
-
-        def verify_linkage(self, current_plan, child):
-            if getattr(state, "lifecycle_defer_verification", False):
-                return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED, value=child)
-            child_short = str(
-                current_plan.parent_patch_dict().get("nextLink")
-                or ctx.child_short
-                or _short_uuid(str(child.get("uuid") or ""))
-            ).strip()
-            state_result = _parent_nextlink_state(
-                current_plan.identity.parent_uuid,
-                child_short,
-                str(ctx.entry.get("parent_nextlink") or "").strip() or None,
-                prefer_cache=False,
-            )
-            if state_result.state == "locked":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.UNAVAILABLE,
-                    reason=state_result.err or "parent linkage verification unavailable",
-                )
-            if state_result.state != "already":
-                return _lifecycle_operation_result(
-                    lifecycle_executor.OperationState.CONFLICT,
-                    reason=state_result.err or "parent linkage postcondition not satisfied",
-                )
-            return stage(lifecycle_models.ExecutionStage.VERIFIED)
-
-        def compensate_child(self, _current_plan, child):
-            child_uuid = str(child.get("uuid") or "").strip()
-            if child_uuid:
-                if getattr(state, "lifecycle_defer_verification", False):
-                    state.lifecycle_orphan_cleanup.setdefault(
-                        child_uuid,
-                        (ctx.parent_uuid, ctx.child_short, ctx.spawn_intent_id),
-                    )
-                else:
-                    _cleanup_orphan_child(child_uuid, ctx.spawn_intent_id)
-            return _lifecycle_operation_result(lifecycle_executor.OperationState.APPLIED)
-
-    if ctx.spawn_intent_id in _exit_runtime_state().lifecycle_batch_imported:
-        child_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
-        if not child_stage.ok:
-            return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, child_stage)
-    outcome = lifecycle_executor.LifecycleTransitionExecutor(Services()).execute(plan)
-    _diag(
-        f"lifecycle transition intent={ctx.spawn_intent_id} stage={plan.stage.value} "
-        f"outcome={outcome.kind.value} reason={outcome.reason or 'none'}"
-    )
-    if outcome.kind in {
-        lifecycle_models.LifecycleOutcomeKind.RETRYABLE,
-    }:
-        _diag(f"lifecycle transition retry: {outcome.reason or 'reason unavailable'}")
-        if _bump_attempts(ctx.entry) > _QUEUE_RETRY_MAX:
-            state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition retry limit reached")
+            emitted += 1
         else:
-            state.requeue.append(ctx.entry)
-        return False
-    if outcome.kind is lifecycle_models.LifecycleOutcomeKind.MANUAL_REVIEW:
-        state.dead_letter(ctx.entry, outcome.reason or "lifecycle transition requires manual review")
-        state.reset_lock_streak()
-        return False
-    if getattr(state, "lifecycle_defer_verification", False):
-        state.lifecycle_pending_verification[ctx.spawn_intent_id] = (ctx, plan, plan.child_dict())
-        return False
-    final_stage = _advance_lifecycle_stage(ctx.entry, lifecycle_models.ExecutionStage.FINALIZED)
-    if not final_stage.ok:
-        return _handle_lifecycle_stage_failure(ctx.entry, ctx.idx, state, final_stage)
-    _seed_equivalent_child_cache(ctx.child, ctx.parent_uuid, ctx.child_uuid)
-    if not state.mark_final(ctx.entry, "done", "processed"):
-        state.errors += 1
-        state.requeue.append(ctx.entry)
-        _diag("finalized intent write failed; retaining queue entry for retry")
-        return False
-    state.processed += 1
-    state.ack_sqlite(ctx.entry)
-    state.reset_lock_streak()
-    return False
-
-
-def _process_queue_entry(idx: int, entry: dict, state: _DrainState) -> bool:
-    if _handle_entry_gate(entry, state):
-        return False
-    queue_entry = entry
-    entry = _normalize_queue_entry(entry)
-
-    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
-    parent_uuid = (entry.get("parent_uuid") or "").strip()
-    expected_parent_nextlink = (entry.get("parent_nextlink") or "").strip()
-    parent_guard = entry.get("parent_guard")
-    child = entry.get("child") or {}
-    child_short = (entry.get("child_short") or "").strip()
-    child_uuid = (child.get("uuid") or "").strip()
-    ctx = _build_exit_entry_context(
-        queue_entry,
-        idx,
-        state,
-        parent_uuid=parent_uuid,
-        child_short=child_short,
-        expected_parent_nextlink=expected_parent_nextlink or None,
-        parent_guard=parent_guard if isinstance(parent_guard, dict) else None,
-        child=child,
-        child_uuid=child_uuid,
-        spawn_intent_id=spawn_intent_id,
-    )
-
-    if isinstance(queue_entry.get("lifecycle_plan"), dict):
-        return _execute_lifecycle_queue_entry(ctx, state)
-
-    guard_action = _precheck_parent_guard(ctx)
-    if guard_action == "break":
-        return True
-    if guard_action == "continue":
-        return False
-
-    exact_child = _export_uuid(child_uuid)
-    if exact_child.retryable:
-        return _requeue_or_dead_letter_for_lock(entry, idx, state)
-    child_already_exists = bool(exact_child.exists)
-    if not exact_child.exists:
-        equivalent = _existing_equivalent_child(child, parent_uuid)
-        if equivalent.retryable:
-            return _requeue_or_dead_letter_for_lock(entry, idx, state)
-        existing_obj = equivalent.obj
-        if isinstance(existing_obj, dict):
-            child_uuid = (existing_obj.get("uuid") or "").strip()
-            child_short = _short_uuid(child_uuid)
-            child_already_exists = bool(child_uuid)
-            if child_short:
-                if spawn_intent_id:
-                    _diag(
-                        f"equivalent child already exists; binding intent {spawn_intent_id} "
-                        f"to child {child_short}"
-                    )
-                else:
-                    _diag(f"equivalent child already exists; binding to child {child_short}")
-
-    ctx.child_short = child_short
-    ctx.child_uuid = child_uuid
-
-    link_action, parent_linked_already = _precheck_parent_link_state(ctx)
-    if link_action == "break":
-        return True
-    if link_action == "continue":
-        return False
-
-    if child_already_exists:
-        child_action, imported = ("ok", False)
-    else:
-        guard_action = _precheck_parent_guard(ctx)
-        if guard_action == "break":
-            return True
-        if guard_action == "continue":
-            return False
-        child_action, imported = _ensure_child_exists_for_entry(ctx, initial_export_res=exact_child)
-    if child_action == "break":
-        return True
-    if child_action == "continue":
-        return False
-
-    lifecycle_models = _module("lifecycle_models")
-    child_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.CHILD_PRESENT)
-    if not child_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, child_stage)
-
-    parent_action = _apply_parent_update_for_entry(
-        ctx,
-        parent_linked_already=parent_linked_already,
-        imported=imported,
-    )
-    if parent_action == "break":
-        return True
-    if parent_action == "continue":
-        return False
-
-    parent_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.PARENT_LINKED)
-    if not parent_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, parent_stage)
-
-    verification_action, verification_reason = _verify_lifecycle_postconditions(ctx)
-    if verification_action != "ok":
-        return _handle_lifecycle_postcondition_failure(queue_entry, idx, state, verification_reason)
-    verified_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.VERIFIED)
-    if not verified_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, verified_stage)
-    finalized_stage = _advance_lifecycle_stage(queue_entry, lifecycle_models.ExecutionStage.FINALIZED)
-    if not finalized_stage.ok:
-        return _handle_lifecycle_stage_failure(queue_entry, idx, state, finalized_stage)
-
-    _seed_equivalent_child_cache(child, parent_uuid, child_uuid)
-    if not state.mark_final(queue_entry, "done", "processed"):
-        state.errors += 1
-        state.requeue.append(queue_entry)
-        _diag("finalized intent write failed; retaining queue entry for retry")
-        return False
-    state.processed += 1
-    state.ack_sqlite(queue_entry)
-    state.reset_lock_streak()
-    return False
-
-
-def _drain_queue_result():
-    exit_drain_flow = _module("exit_drain_flow")
-    return exit_drain_flow.drain_queue_result(
-        services=exit_drain_flow.ExitDrainServices(
-            queue_db_begin_run=_queue_db_begin_run,
-            queue_db_end_run=_queue_db_end_run,
-            take_queue_batch=_take_queue_batch,
-            load_finalized_intents=_load_finalized_intents,
-            exit_progress_scope=_exit_progress_scope,
-            preload_export_uuids=_preload_export_uuids,
-            preload_equivalent_child_slots=_preload_equivalent_child_slots,
-            prepare_lifecycle_batch=_prepare_lifecycle_batch,
-            apply_lifecycle_batch=_apply_lifecycle_batch,
-            finalize_lifecycle_batch=_finalize_lifecycle_batch,
-            process_queue_entry=_process_queue_entry,
-            requeue_entries_result=_requeue_entries_result,
-            ack_queue_entries_sqlite_result=_ack_queue_entries_sqlite_result,
-            drain_state_factory=_DrainState,
-            diag=_diag,
+            suppressed += 1
+    if suppressed:
+        _diag(
+            f"lifecycle diagnostics: suppressed {suppressed} additional intent results "
+            f"(limit {_OUTBOX_DIAG_MAX_ITEMS})"
         )
-    )
-
-
-def _drain_queue() -> dict:
-    return _drain_queue_result().to_dict()
+    return suppressed
 
 
 def _redirect_stdout_to_devnull() -> None:
@@ -3420,80 +583,70 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         _diag_block("on-exit startup", startup_stats.items(), columns=2)
     drain_items = [
         ("entries_total", stats.get("entries_total", 0)),
-        ("idempotent_skipped", stats.get("entries_skipped_idempotent", 0)),
         ("processed", stats.get("processed", 0)),
         ("errors", stats.get("errors", 0)),
-        ("requeued", stats.get("requeued", 0)),
-        ("requeue_failed", stats.get("requeue_failed", 0)),
-        ("dead_lettered", stats.get("dead_lettered", 0)),
-        ("queue_lock_failures", stats.get("queue_lock_failures", 0)),
-        ("lock_events", stats.get("lock_events", 0)),
-        ("lock_streak_max", stats.get("lock_streak_max", 0)),
-        ("circuit_breaks", stats.get("circuit_breaks", 0)),
-        ("intent_log_ready", stats.get("intent_log_ready", 0)),
-        ("intent_log_size", stats.get("intent_log_size", 0)),
-        ("intent_mark_ok", stats.get("intent_mark_ok", 0)),
-        ("intent_mark_fail", stats.get("intent_mark_fail", 0)),
-        ("intent_log_load_ms", stats.get("intent_log_load_ms", 0)),
-        ("queue_db_opens", stats.get("queue_db_opens", 0)),
-        ("queue_db_reuses", stats.get("queue_db_reuses", 0)),
-        ("preload_export_uuids", stats.get("preload_export_uuids", 0)),
-        ("preload_export_hits", stats.get("preload_export_hits", 0)),
-        ("preload_export_misses", stats.get("preload_export_misses", 0)),
-        ("preload_export_chunks", stats.get("preload_export_chunks", 0)),
+        ("retry_released", stats.get("retry_released", 0)),
+        ("manual_reviewed", stats.get("manual_reviewed", 0)),
+        ("quarantined", stats.get("quarantined", 0)),
+        ("conflicted", stats.get("conflicted", 0)),
+        ("outbox_lock_failures", stats.get("outbox_lock_failures", 0)),
+        ("diagnostics_suppressed", stats.get("diagnostics_suppressed", 0)),
         ("drain_ms", stats.get("drain_ms", 0)),
     ]
     _diag_block("on-exit drain", drain_items, columns=3)
     diag_stats = _exit_runtime_state().diag_stats
     task_stats = {
-        "run_task_calls": diag_stats.get("run_task_calls", 0),
-        "run_task_failures": diag_stats.get("run_task_failures", 0),
-        "run_task_calls_export_uuid": diag_stats.get("run_task_calls_export_uuid", 0),
-        "run_task_calls_export_equivalent_child": diag_stats.get("run_task_calls_export_equivalent_child", 0),
-        "run_task_calls_import": diag_stats.get("run_task_calls_import", 0),
-        "run_task_calls_modify_parent_nextlink": diag_stats.get("run_task_calls_modify_parent_nextlink", 0),
-        "run_task_calls_modify_cleanup": diag_stats.get("run_task_calls_modify_cleanup", 0),
-        "run_task_calls_modify_other": diag_stats.get("run_task_calls_modify_other", 0),
-        "run_task_calls_export_other": diag_stats.get("run_task_calls_export_other", 0),
-        "run_task_calls_other": diag_stats.get("run_task_calls_other", 0),
-        "run_task_failures_export_uuid": diag_stats.get("run_task_failures_export_uuid", 0),
-        "run_task_failures_export_equivalent_child": diag_stats.get("run_task_failures_export_equivalent_child", 0),
-        "run_task_failures_import": diag_stats.get("run_task_failures_import", 0),
-        "run_task_failures_modify_parent_nextlink": diag_stats.get("run_task_failures_modify_parent_nextlink", 0),
-        "run_task_failures_modify_cleanup": diag_stats.get("run_task_failures_modify_cleanup", 0),
-        "run_task_failures_modify_other": diag_stats.get("run_task_failures_modify_other", 0),
-        "run_task_failures_export_other": diag_stats.get("run_task_failures_export_other", 0),
-        "run_task_failures_other": diag_stats.get("run_task_failures_other", 0),
-        "run_task_seconds_export_uuid": round(float(diag_stats.get("run_task_seconds_export_uuid", 0.0)), 4),
-        "run_task_seconds_export_equivalent_child": round(float(diag_stats.get("run_task_seconds_export_equivalent_child", 0.0)), 4),
-        "run_task_seconds_import": round(float(diag_stats.get("run_task_seconds_import", 0.0)), 4),
-        "equivalent_child_cache_hits": diag_stats.get("equivalent_child_cache_hits", 0),
-        "equivalent_child_cache_misses": diag_stats.get("equivalent_child_cache_misses", 0),
-        "equivalent_child_cache_seeded": diag_stats.get("equivalent_child_cache_seeded", 0),
-        "equivalent_child_preload_slots": diag_stats.get("equivalent_child_preload_slots", 0),
-        "equivalent_child_preload_hits": diag_stats.get("equivalent_child_preload_hits", 0),
-        "equivalent_child_preload_misses": diag_stats.get("equivalent_child_preload_misses", 0),
-        "equivalent_child_preload_chunks": diag_stats.get("equivalent_child_preload_chunks", 0),
-        "run_task_seconds_modify_parent_nextlink": round(float(diag_stats.get("run_task_seconds_modify_parent_nextlink", 0.0)), 4),
-        "run_task_seconds_modify_cleanup": round(float(diag_stats.get("run_task_seconds_modify_cleanup", 0.0)), 4),
-        "run_task_seconds_modify_other": round(float(diag_stats.get("run_task_seconds_modify_other", 0.0)), 4),
-        "run_task_seconds_export_other": round(float(diag_stats.get("run_task_seconds_export_other", 0.0)), 4),
-        "run_task_seconds_other": round(float(diag_stats.get("run_task_seconds_other", 0.0)), 4),
-        "run_task_seconds": round(float(diag_stats.get("run_task_seconds", 0.0)), 4),
+        str(key): value
+        for key, value in diag_stats.items()
+        if str(key).startswith("run_task_calls")
+        or str(key).startswith("run_task_failures")
+        or str(key).startswith("run_task_seconds")
     }
+    task_stats["run_task_seconds"] = round(float(task_stats.get("run_task_seconds", 0.0)), 4)
     _diag_block("on-exit task stats", task_stats.items(), columns=3)
+
+
+def _command_purpose_stat_key(purpose: object) -> str:
+    """Return a stable, JSON-safe key for an invocation command purpose."""
+    token = "".join(char if char.isalnum() else "_" for char in str(purpose).strip().lower())
+    token = "_".join(part for part in token.split("_") if part)
+    return f"run_task_calls_purpose_{token or 'unknown'}"
 
 
 def _strict_exit_feedback_message(stats: dict) -> str | None:
     errors = stats.get("errors", 0)
-    dead_lettered = stats.get("dead_lettered", 0)
-    queue_lock_failures = stats.get("queue_lock_failures", 0)
-    if not (_EXIT_STRICT and (errors > 0 or dead_lettered > 0 or queue_lock_failures > 0)):
+    manual_reviewed = stats.get("manual_reviewed", 0)
+    outbox_lock_failures = stats.get("outbox_lock_failures", 0)
+    if not (_EXIT_STRICT and (errors > 0 or manual_reviewed > 0 or outbox_lock_failures > 0)):
         return None
     return (
-        f"[nautical] on-exit: {dead_lettered} dead-lettered, {errors} errors, {queue_lock_failures} queue lock failures. "
-        "Check .nautical-state/.nautical_dead_letter.jsonl (set NAUTICAL_EXIT_STRICT=0 to disable)"
+        f"[nautical] on-exit: {manual_reviewed} manual-review intents, {errors} errors, "
+        f"{outbox_lock_failures} outbox lock failures. Check nautical queue-status "
+        "(set NAUTICAL_EXIT_STRICT=0 to disable)"
     )
+
+
+class _OnExitServices:
+    """Concrete adapter passed to the shared hook router."""
+
+    def __init__(self, result_cls):
+        self._result_cls = result_cls
+
+    def redirect_stdout(self):
+        _redirect_stdout_to_devnull()
+
+    def drain_outbox(self, unit_of_work):
+        return _drain_outbox(unit_of_work)
+
+    def strict_feedback(self, stats):
+        return _strict_exit_feedback_message(stats)
+
+    def result(self, *, exit_code: int, feedback_message: str | None, stats):
+        return self._result_cls(
+            exit_code=exit_code,
+            feedback_message=feedback_message,
+            stats=stats,
+        )
 
 
 def _render_exit_drain_failure_panel(stats: dict) -> None:
@@ -3507,18 +660,18 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
             return 0
 
     errors = count("errors")
-    dead_lettered = count("dead_lettered")
-    requeue_failed = count("requeue_failed")
-    if not (errors or dead_lettered or requeue_failed):
+    manual_reviewed = count("manual_reviewed")
+    quarantined = count("quarantined")
+    if not (errors or manual_reviewed or quarantined):
         return
 
     problems = []
-    if dead_lettered:
-        problems.append(f"{dead_lettered} dead-lettered")
-    if requeue_failed:
-        suffix = "" if requeue_failed == 1 else "s"
-        problems.append(f"{requeue_failed} requeue write{suffix} failed")
-    other_errors = max(0, errors - dead_lettered - requeue_failed)
+    if manual_reviewed:
+        problems.append(f"{manual_reviewed} manual-review intents")
+    if quarantined:
+        suffix = "" if quarantined == 1 else "s"
+        problems.append(f"{quarantined} quarantined intent{suffix}")
+    other_errors = max(0, errors - manual_reviewed - quarantined)
     if other_errors:
         suffix = "" if other_errors == 1 else "s"
         problems.append(f"{other_errors} other drain error{suffix}")
@@ -3527,14 +680,14 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
         ("Action", "Run nautical queue-status"),
         ("Problems", "; ".join(problems) or f"{errors} drain errors"),
     ]
-    if dead_lettered:
-        rows.append(("State", ".nautical-state/.nautical_dead_letter.jsonl"))
-    requeued = count("requeued")
-    if requeued:
-        rows.append(("Retrying", str(requeued)))
-    queue_lock_failures = count("queue_lock_failures")
-    if queue_lock_failures:
-        rows.append(("Lock events", str(queue_lock_failures)))
+    if manual_reviewed or quarantined:
+        rows.append(("Review", "Run nautical queue-status"))
+    retry_released = count("retry_released")
+    if retry_released:
+        rows.append(("Retrying", str(retry_released)))
+    outbox_lock_failures = count("outbox_lock_failures")
+    if outbox_lock_failures:
+        rows.append(("Lock events", str(outbox_lock_failures)))
 
     core.render_panel(
         "⚠ Nautical spawn drain failed",
@@ -3550,12 +703,10 @@ def _render_exit_drain_failure_panel(stats: dict) -> None:
         label_width_max=14,
     )
 
-
 def main() -> int:
     # Queue draining and diagnostics use the configured core/UI services;
     # defer that package import until the lifecycle is actually entered.
     _load_core()
-    _migrate_legacy_nautical_state()
     _reset_exit_runtime_state()
     startup_t0 = time.perf_counter()
     module_t0 = time.perf_counter()
@@ -3574,10 +725,7 @@ def main() -> int:
     }
     result = hook_engine.handle_on_exit(
         request,
-        exit_result_cls=hook_results.ExitHookResponse,
-        redirect_stdout_to_devnull=_redirect_stdout_to_devnull,
-        drain_queue=_drain_queue,
-        strict_exit_result=_strict_exit_feedback_message,
+        services=_OnExitServices(hook_results.ExitHookResponse),
     )
     stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
     if stats_path:
@@ -3610,26 +758,18 @@ def run_hook(
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
-    global _QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
-    global _ORPHAN_CLEANUP_EVIDENCE_PATH, _ORPHAN_CLEANUP_EVIDENCE_LOCK
-    global _QUEUE_LOCK_FAIL_MARKER, _QUEUE_LOCK_FAIL_COUNT
 
     HOOK_DIR = Path(hook_dir)
     TW_DIR = HOOK_DIR.parent
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
-    _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-    TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+    try:
+        _initialize_integration_context()
+    except _hook_runtime_module().HookIntegrationContextError as exc:
+        globals()["core"] = exc.core
+        _emit_exit_feedback(f"[nautical] on-exit: {exc.stage}: {exc.detail}")
+        return 1
 
-    state_dir = TW_DATA_DIR / ".nautical-state"
-    lock_dir = TW_DATA_DIR / ".nautical-locks"
-    _QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
-    _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
-    _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
-    _ORPHAN_CLEANUP_EVIDENCE_PATH = state_dir / ".nautical_orphan_cleanup.jsonl"
-    _ORPHAN_CLEANUP_EVIDENCE_LOCK = lock_dir / ".nautical_orphan_cleanup.lock"
-    _QUEUE_LOCK_FAIL_MARKER = lock_dir / ".nautical_spawn_queue.lock_failed"
-    _QUEUE_LOCK_FAIL_COUNT = lock_dir / ".nautical_spawn_queue.lock_failed.count"
     return main()
 
 
@@ -3642,8 +782,4 @@ if __name__ == "__main__":
         _diag(f"on-exit unexpected error: {e}")
         err_text = _diag_redact_msg(f"{type(e).__name__}: {e}")
         _emit_exit_feedback(f"[nautical] on-exit: unexpected error: {err_text}")
-        try:
-            _write_dead_letter({"error": "unexpected_error"}, "on-exit exception")
-        except Exception:
-            pass
         raise SystemExit(1)

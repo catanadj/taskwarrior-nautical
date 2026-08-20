@@ -130,7 +130,8 @@ def validate_and_terms_satisfiable(
         ]
         if any(interval > 40 for interval in stepped_intervals):
             continue
-        if not term_has_any_match_within(term, ref_d, seed, years=40):
+        probe_years = max(40, min(400, max(stepped_intervals or [1]) * 6))
+        if not term_has_any_match_within(term, ref_d, seed, years=probe_years):
             pieces = []
             for atom in term:
                 typ = (atom.get("typ") or "").lower()

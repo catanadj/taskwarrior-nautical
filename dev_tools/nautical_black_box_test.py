@@ -259,22 +259,16 @@ def _scenario_modify(env: dict[str, str]) -> dict:
 
 
 def _assert_clean_state(data_dir: Path) -> None:
-    for dead_letter in (
-        data_dir / ".nautical-state" / ".nautical_dead_letter.jsonl",
-        data_dir / ".nautical_dead_letter.jsonl",
-    ):
-        if dead_letter.exists() and dead_letter.stat().st_size:
-            raise AssertionError(f"dead-letter queue is not empty: {dead_letter}")
-
-    queue_db = data_dir / ".nautical-state" / ".nautical_queue.db"
-    if not queue_db.exists():
-        raise AssertionError("durable spawn queue database was not created")
-    with sqlite3.connect(str(queue_db)) as conn:
+    outbox_db = data_dir / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+    if not outbox_db.exists():
+        raise AssertionError("lifecycle outbox database was not created")
+    with sqlite3.connect(str(outbox_db)) as conn:
         active = conn.execute(
-            "SELECT COUNT(*) FROM queue_entries WHERE state IN ('queued', 'processing')"
+            "SELECT COUNT(*) FROM lifecycle_outbox "
+            "WHERE processing_state IN ('ready', 'claimed', 'retry', 'manual_review', 'quarantined')"
         ).fetchone()
     if active is None or int(active[0]) != 0:
-        raise AssertionError(f"spawn queue did not drain: {active}")
+        raise AssertionError(f"lifecycle outbox did not drain: {active}")
 
 
 def main() -> int:

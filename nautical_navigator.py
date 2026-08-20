@@ -144,9 +144,15 @@ def _find_nautical_core() -> Optional[Any]:
 
 core = _find_nautical_core()
 try:
-    from nautical_core import task_command as _task_command
+    from nautical_core.integration_models import Absent, Found, Unavailable
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.taskwarrior_uow import build_operator_uow
 except Exception:
-    _task_command = None
+    Absent = Found = Unavailable = None
+    IntegrationAccess = None
+    build_operator_uow = None
+
+_UNIT_OF_WORK = None
 
 # Resolve the display timezone only after Nautical core has loaded.  The core
 # profile is authoritative; the host timezone remains a safe fallback when
@@ -161,71 +167,50 @@ except Exception:
 
 def _run_task_export(filters: tuple[str, ...]) -> Any:
     """Run a read-only Taskwarrior export through Nautical's command boundary."""
-    if _task_command is None:
-        raise RuntimeError("Nautical Taskwarrior command support is unavailable")
-    task_bin = shutil.which("task") or "task"
-    result = _task_command.run_task_command(
-        task_bin,
-        [
-            "rc.hooks=off",
-            "rc.json.array=1",
-            "rc.verbose=nothing",
-            "rc.color=off",
-            *filters,
-            "export",
-        ],
-        timeout=30.0,
-        retry_locks=True,
+    if _UNIT_OF_WORK is None:
+        raise RuntimeError("Navigator integration context is unavailable")
+    context = getattr(_UNIT_OF_WORK, "context", None)
+    access = getattr(context, "access", None)
+    if IntegrationAccess is not None and access is not None and access is not IntegrationAccess.READ_ONLY:
+        raise RuntimeError("Navigator requires a read-only integration context")
+    repository = getattr(_UNIT_OF_WORK, "repository", None)
+    if repository is None or not callable(getattr(repository, "broad_snapshot", None)):
+        raise RuntimeError("Navigator typed task-read repository is unavailable")
+    repository.configure_commands(timeout=30.0, attempts=2, retry_delay=0.05)
+    identity = "navigator:" + (" ".join(filters) if filters else "all")
+    read = repository.broad_snapshot(
+        identity=identity,
+        filters=filters,
+        statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+        complete_chain_history=True,
     )
-    # Taskwarrior reports an empty filter result as a non-zero "No matches"
-    # command result.  For Navigator this is a valid empty collection, not a
-    # retrieval failure; preserve all other command failures as errors.
-    if result.returncode != 0:
-        detail = "\n".join((str(result.stderr or ""), str(result.stdout or ""))).lower()
-        if "no matches" in detail:
-            return []
-    return _task_command.load_json_result(result, "Navigator Taskwarrior export", empty=[])
-
-
-def _navigator_taskdata() -> Path:
-    """Resolve Taskdata without bypassing Taskwarrior's configured location."""
-    configured = str(os.environ.get("TASKDATA") or "").strip()
-    if configured:
-        return Path(os.path.expandvars(configured)).expanduser().resolve()
-    if _task_command is not None:
-        task_bin = shutil.which("task") or "task"
-        result = _task_command.run_task_command(
-            task_bin,
-            ["rc.hooks=off", "rc.verbose=nothing", "_get", "rc.data.location"],
-            timeout=10.0,
-            retry_locks=True,
-        )
-        if result.ok and str(result.stdout or "").strip():
-            return Path(os.path.expandvars(result.stdout.strip())).expanduser().resolve()
-    # Explain/validate can still use the installed config when Taskwarrior is
-    # unavailable; normal task analysis will fail clearly at its export step.
-    return (Path.home() / ".task").resolve()
+    if Found is not None and isinstance(read, Found):
+        return [dict(row) for row in read.value.rows]
+    if Absent is not None and isinstance(read, Absent):
+        return []
+    if Unavailable is not None and isinstance(read, Unavailable):
+        raise RuntimeError(f"Navigator task read unavailable: {read.evidence.detail}")
+    raise RuntimeError("Navigator task repository returned an invalid result")
 
 
 def _reload_navigator_configuration() -> None:
     """Apply and validate the same Taskdata configuration used by hooks."""
     if core is None:
         raise RuntimeError("Nautical core package is unavailable")
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    if not callable(reload_config):
-        raise RuntimeError("Nautical core does not provide validated configuration reload")
-    taskdata = _navigator_taskdata()
+    if build_operator_uow is None or IntegrationAccess is None:
+        raise RuntimeError("Nautical integration context support is unavailable")
     try:
-        reload_config(taskdata)
+        unit_of_work = build_operator_uow(
+            core=core,
+            task_binary=shutil.which("task") or "task",
+            env=os.environ,
+            access=IntegrationAccess.READ_ONLY,
+        )
     except Exception as exc:
         raise RuntimeError(f"Navigator configuration validation failed: {exc}") from exc
-    global LOCAL_ZONE
-    try:
-        from zoneinfo import ZoneInfo
-
-        LOCAL_ZONE = ZoneInfo(str(getattr(core, "LOCAL_TZ_NAME", "UTC")))
-    except Exception as exc:
-        raise RuntimeError(f"Navigator timezone configuration is invalid: {exc}") from exc
+    global LOCAL_ZONE, _UNIT_OF_WORK
+    _UNIT_OF_WORK = unit_of_work
+    LOCAL_ZONE = unit_of_work.context.local_timezone
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Navigator helpers (explain/validate/self-check)
@@ -615,119 +600,6 @@ def _anchor_explain(expr: str, *, trace_enabled: bool = False) -> int:
     if trace is not None:
         table.add_row("Trace", _trace_summary(trace))
     console.print(Panel(table, title="Anchor explain", border_style=COLORS["secondary"], expand=False))
-    return 0
-
-def _taskdata_dir() -> Path:
-    td = os.environ.get("TASKDATA")
-    if td:
-        return Path(td).expanduser()
-    return Path.home() / ".task"
-
-def _is_valid_spawn_entry(entry: dict) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    spawn_intent_id = (entry.get("spawn_intent_id") or "").strip()
-    if not spawn_intent_id:
-        return False
-    child = entry.get("child")
-    if not isinstance(child, dict):
-        return False
-    child_uuid = (child.get("uuid") or "").strip()
-    if not child_uuid:
-        return False
-    return True
-
-def _recover_dead_letter(*, dry_run: bool, prune: bool, limit: int | None) -> int:
-    td = _taskdata_dir()
-    dead_path = td / ".nautical_dead_letter.jsonl"
-    queue_path = td / ".nautical_spawn_queue.jsonl"
-    lock_dead = td / ".nautical_dead_letter.lock"
-    lock_queue = td / ".nautical_spawn_queue.lock"
-
-    if not dead_path.exists():
-        console.print(f"[{COLORS['warning']}]No dead-letter file found at {dead_path}[/]")
-        return 0
-
-    lock_fn = getattr(core, "safe_lock", None) if core else None
-    if lock_fn is None:
-        def _noop_lock(_path, **_kwargs):
-            from contextlib import contextmanager
-            @contextmanager
-            def _cm():
-                yield True
-            return _cm()
-        lock_fn = _noop_lock
-
-    lines: list[str] = []
-    recovered_entries: list[dict] = []
-    recovered_line_indexes: list[int] = []
-    skipped = 0
-    invalid = 0
-
-    with lock_fn(lock_dead, retries=3, sleep_base=0.05, jitter=0.05, mkdir=True, stale_after=30.0) as ok:
-        if not ok:
-            console.print(f"[{COLORS['warning']}]Dead-letter lock busy; try again later.[/]")
-            return 1
-        try:
-            lines = [ln.rstrip("\n") for ln in dead_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        except Exception as e:
-            console.print(f"[{COLORS['error']}]Failed to read dead-letter file: {e}[/]")
-            return 1
-
-    for idx, line in enumerate(lines):
-        if limit is not None and len(recovered_entries) >= limit:
-            break
-        try:
-            obj = json.loads(line)
-        except Exception:
-            skipped += 1
-            continue
-        entry = obj.get("entry") if isinstance(obj, dict) else None
-        if isinstance(entry, dict) and _is_valid_spawn_entry(entry):
-            recovered_entries.append(entry)
-            recovered_line_indexes.append(idx)
-        else:
-            invalid += 1
-
-    if dry_run:
-        console.print(
-            f"[{COLORS['secondary']}]Recoverable entries: {len(recovered_entries)} "
-            f"(invalid: {invalid}, skipped: {skipped})[/]"
-        )
-        return 0
-
-    if recovered_entries:
-        with lock_fn(lock_queue, retries=3, sleep_base=0.05, jitter=0.05, mkdir=True, stale_after=30.0) as ok:
-            if not ok:
-                console.print(f"[{COLORS['warning']}]Queue lock busy; try again later.[/]")
-                return 1
-            try:
-                queue_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(queue_path, "a", encoding="utf-8") as f:
-                    for entry in recovered_entries:
-                        f.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
-            except Exception as e:
-                console.print(f"[{COLORS['error']}]Failed to append to spawn queue: {e}[/]")
-                return 1
-
-    if prune and recovered_line_indexes:
-        recovered_set = set(recovered_line_indexes)
-        with lock_fn(lock_dead, retries=3, sleep_base=0.05, jitter=0.05, mkdir=True, stale_after=30.0) as ok:
-            if not ok:
-                console.print(f"[{COLORS['warning']}]Dead-letter lock busy; prune skipped.[/]")
-            else:
-                try:
-                    current = [ln for ln in dead_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-                    kept = [ln for i, ln in enumerate(current) if i not in recovered_set]
-                    dead_path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
-                except Exception as e:
-                    console.print(f"[{COLORS['warning']}]Failed to prune dead-letter file: {e}[/]")
-
-    console.print(
-        f"[{COLORS['success']}]Recovered {len(recovered_entries)} entries[/]"
-        + (f" (invalid: {invalid})" if invalid else "")
-        + (f" (skipped: {skipped})" if skipped else "")
-    )
     return 0
 
 def _validate_anchor(expr: str) -> int:
@@ -2272,7 +2144,7 @@ class TaskAnalyzer:
             context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(
                 task,
                 fallback_chain_id=task.get("uuid") or "analyzer",
-                timezone=getattr(core, "_LOCAL_TZ", None),
+                timezone=LOCAL_ZONE,
                 business_calendar=business_calendar,
                 astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
@@ -2301,7 +2173,11 @@ class TaskAnalyzer:
                     cur_after = due_local_dt
                 else:
                     next_day = start_from_date + datetime.timedelta(days=1)
-                    cur_after = core.to_local(core.build_local_datetime(next_day, (0, 0))) - datetime.timedelta(microseconds=1)
+                    cur_after = datetime.datetime.combine(
+                        next_day,
+                        datetime.time.min,
+                        tzinfo=LOCAL_ZONE,
+                    ) - datetime.timedelta(microseconds=1)
                 from nautical_core.occurrence_outcomes import ExhaustedOccurrence
                 from nautical_core.scheduler_cursor import OccurrenceCursor
 
@@ -3040,29 +2916,6 @@ def main():
                         help="Force vertical timing chart (good for Termux/narrow terminals)")
     parser.add_argument("--horizontal", action="store_true",
                         help="Force horizontal timing chart")
-    parser.add_argument(
-        "--recover-dead-letter",
-        action="store_true",
-        help="Requeue dead-lettered spawn intents into the spawn queue",
-    )
-    parser.add_argument(
-        "--recover-dry-run",
-        action="store_true",
-        help="Report recoverable dead-letter entries without writing files",
-    )
-    parser.add_argument(
-        "--recover-prune",
-        action="store_true",
-        help="Remove recovered lines from the dead-letter file",
-    )
-    parser.add_argument(
-        "--recover-limit",
-        type=int,
-        default=None,
-        help="Recover at most N entries from dead-letter",
-    )
-
-
     args = parser.parse_args()
     if not core:
         console.print(f"[{COLORS['error']}]Error: nautical_core package not found.[/]")
@@ -3076,7 +2929,7 @@ def main():
 
     config_drifted = _show_config_drift_warning()
 
-    if args.self_check or args.explain or args.validate or args.recover_dead_letter:
+    if args.self_check or args.explain or args.validate:
         code = 0
         if args.self_check:
             code = max(code, _self_check())
@@ -3084,15 +2937,6 @@ def main():
             code = max(code, _validate_anchor(args.validate))
         if args.explain:
             code = max(code, _anchor_explain(args.explain, trace_enabled=args.trace))
-        if args.recover_dead_letter:
-            code = max(
-                code,
-                _recover_dead_letter(
-                    dry_run=args.recover_dry_run,
-                    prune=args.recover_prune,
-                    limit=args.recover_limit,
-                ),
-            )
         sys.exit(code)
 
     if config_drifted:

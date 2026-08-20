@@ -12,57 +12,17 @@ from datetime import datetime
 from collections.abc import Callable, Sequence
 from functools import lru_cache
 import threading
-import time
 from typing import Any
-
-from .hook_support import LookupResult
-
 
 TaskRow = dict[str, Any]
 ReadQuery = Callable[[str, tuple[Any, ...]], Any]
 ChainExport = Callable[[str, datetime | None, str | None, int], Sequence[TaskRow]]
 ChainCache = Callable[[str], Sequence[TaskRow] | None]
-BuildExportArgs = Callable[..., list[str] | None]
-RunCheckedExport = Callable[[list[str], Any, float], "ChainReadResult"]
-ReadQuerySet = Callable[[str, tuple[Any, ...], Any], None]
-ReadQueryDelete = Callable[[str, tuple[Any, ...]], None]
 TokenParser = Callable[[str | None], list[str] | None]
 TokenMatcher = Callable[[TaskRow, str], bool]
 CoerceInt = Callable[[Any, int | None], int | None]
 Diagnostic = Callable[[str], None]
 Counter = Callable[[str], None]
-
-
-@dataclass(frozen=True, slots=True)
-class ChainReadResult:
-    """Typed result for a chain export at the Taskwarrior boundary."""
-
-    ok: bool
-    rows: list[TaskRow]
-    error: str = ""
-
-    @classmethod
-    def success(cls, rows: Sequence[TaskRow]) -> "ChainReadResult":
-        return cls(True, list(rows), "")
-
-    @classmethod
-    def failure(cls, error: str) -> "ChainReadResult":
-        return cls(False, [], str(error or "chain export unavailable"))
-
-
-@dataclass(frozen=True, slots=True)
-class ChainSnapshotResult:
-    """Typed completion snapshot result, including its lookup coverage."""
-
-    mode: str
-    rows: list[TaskRow]
-    loaded: bool
-    chain_id: str = ""
-    error: str = ""
-
-    @property
-    def is_unavailable(self) -> bool:
-        return not self.loaded and bool(self.error)
 
 
 def chain_read_key(
@@ -145,10 +105,7 @@ class LifecycleReadService:
         max_chain_walk: int,
         diag: Diagnostic | None = None,
         record_stat: Counter | None = None,
-        read_query_set: ReadQuerySet | None = None,
-        read_query_delete: ReadQueryDelete | None = None,
         cache_store: ChainCacheStore | None = None,
-        task_cmd_prefix: Callable[[], list[str]] | None = None,
         read_query_missing: object | None = None,
     ) -> None:
         self._coerce_int = coerce_int
@@ -160,73 +117,8 @@ class LifecycleReadService:
         self._max_chain_walk = max(1, int(max_chain_walk))
         self._diag = diag or (lambda _message: None)
         self._record_stat = record_stat or (lambda _name: None)
-        self._read_query_set = read_query_set or (lambda _kind, _key, _value: None)
-        self._read_query_delete = read_query_delete or (lambda _kind, _key: None)
         self._cache_store = cache_store
-        self._task_cmd_prefix = task_cmd_prefix or (lambda: ["task"])
         self._read_query_missing = read_query_missing
-
-    def build_export_args(
-        self,
-        chain_id: str,
-        *,
-        since: datetime | None,
-        extra: str | None,
-        limit: int | None,
-    ) -> list[str] | None:
-        """Build a strictly validated Taskwarrior chain export command."""
-        if not chain_id:
-            return None
-        args = self._task_cmd_prefix() + [
-            "rc.hooks=off",
-            "rc.json.array=on",
-            "rc.verbose=nothing",
-            f"chainID:{chain_id}",
-        ]
-        if since:
-            args.append(f"modified.after:{since.strftime('%Y-%m-%dT%H:%M:%S')}")
-        if isinstance(limit, int) and limit > 0:
-            args.append(f"limit:{limit}")
-        if extra:
-            tokens = self._parse_extra_tokens(extra)
-            if tokens is None:
-                self._diag(f"tw_export_chain rejected extra: {extra!r}")
-                return None
-            args.extend(tokens)
-        args.append("export")
-        return args
-
-    def run_checked_export(
-        self,
-        chain_id: str,
-        args: list[str],
-        *,
-        env: Any,
-        timeout: float,
-        run_task_result: Callable[..., Any],
-        parse_result: Callable[[Any], tuple[bool, list[TaskRow], str]],
-        on_failure: Callable[[str, float], None] | None = None,
-        on_success: Callable[[float], None] | None = None,
-    ) -> ChainReadResult:
-        """Run and strictly validate one Taskwarrior chain export."""
-        started = time.perf_counter()
-        result = run_task_result(
-            args,
-            env=env,
-            timeout=timeout,
-            retries=1,
-            use_tempfiles=True,
-        )
-        ok, rows, error = parse_result(result)
-        elapsed = time.perf_counter() - started
-        if not ok:
-            message = str(error or "Taskwarrior export failed")
-            if callable(on_failure):
-                on_failure(message, timeout)
-            return ChainReadResult.failure(message)
-        if callable(on_success):
-            on_success(elapsed)
-        return ChainReadResult.success(rows)
 
     def cached_chain_rows(self, chain_id: str) -> list[TaskRow] | None:
         """Return the service-owned chain cache, if seeded for this chain."""
@@ -337,200 +229,6 @@ class LifecycleReadService:
             if task:
                 previous.append(task)
         return previous
-
-    def existing_next_lookup(
-        self,
-        parent_task: TaskRow,
-        next_no: int,
-        *,
-        export_uuid_short_cached: Callable[[str], Any],
-        get_chain_export: Callable[..., list[TaskRow] | None],
-        snapshot_rows: list[TaskRow] | None = None,
-        snapshot_loaded: bool = False,
-    ) -> LookupResult:
-        """Find an existing successor while preserving found/absent/unavailable."""
-        if not isinstance(parent_task, dict):
-            return LookupResult.unavailable("parent task is not an object")
-        rows = [
-            row
-            for row in (snapshot_rows or [])
-            if isinstance(row, dict)
-            and str(row.get("link") or "").strip() == str(int(next_no))
-            and str(row.get("status") or "").strip().lower() != "deleted"
-        ]
-        if rows:
-            picked = self._pick_existing_next(rows)
-            return LookupResult.found(picked) if picked else LookupResult.absent()
-
-        next_ref = str(parent_task.get("nextLink") or "").strip()
-        if next_ref:
-            obj = export_uuid_short_cached(next_ref)
-            if isinstance(obj, LookupResult):
-                if obj.is_found or obj.is_unavailable:
-                    return obj
-                obj = None
-            if isinstance(obj, dict) and str(obj.get("status") or "").strip().lower() != "deleted":
-                return LookupResult.found(obj)
-
-        chain_id = str(parent_task.get("chainID") or "").strip()
-        if not chain_id or snapshot_loaded:
-            return LookupResult.absent()
-        try:
-            rows = get_chain_export(
-                chain_id,
-                extra=f"link:{int(next_no)} status.not:deleted",
-            )
-        except Exception as exc:
-            return LookupResult.unavailable(f"chain export failed: {exc}")
-        if rows is None:
-            return LookupResult.unavailable("chain export was unavailable")
-        picked = self._pick_existing_next(rows)
-        return LookupResult.found(picked) if picked else LookupResult.absent()
-
-    @staticmethod
-    def _pick_existing_next(rows: list[TaskRow]) -> TaskRow | None:
-        for status in ("pending", "waiting", "completed"):
-            for row in rows:
-                if str(row.get("status") or "").strip().lower() == status:
-                    return row
-        return rows[0] if rows else None
-
-    def completion_snapshot(
-        self,
-        chain_id: str,
-        *,
-        mode: str,
-        links: Sequence[int] | None,
-        load_snapshot: Callable[[str, list[int] | None], ChainReadResult],
-        read_query_missing: object,
-    ) -> ChainSnapshotResult:
-        """Reuse or load one completion snapshot and promote full coverage."""
-        normalized_links = None if links is None else tuple(sorted({int(link) for link in links if int(link) > 0}))
-        snapshot_key = (str(chain_id), normalized_links)
-        cached_snapshot = self._read_query_get("chain_snapshot", snapshot_key)
-        if cached_snapshot is not read_query_missing:
-            self._record_stat("chain_snapshot_hits")
-            if not isinstance(cached_snapshot, list) or any(
-                not isinstance(row, dict) for row in cached_snapshot
-            ):
-                self._read_query_delete("chain_snapshot", snapshot_key)
-                return ChainSnapshotResult(
-                    mode=mode,
-                    rows=[],
-                    loaded=False,
-                    chain_id=str(chain_id),
-                    error="cached completion snapshot has invalid shape",
-                )
-            return ChainSnapshotResult(
-                mode=mode,
-                rows=list(cached_snapshot),
-                loaded=True,
-                chain_id=str(chain_id),
-            )
-
-        self._record_stat("chain_snapshot_misses")
-        result = load_snapshot(str(chain_id), None if normalized_links is None else list(normalized_links))
-        if not result.ok:
-            return ChainSnapshotResult(
-                mode=mode,
-                rows=[],
-                loaded=False,
-                chain_id=str(chain_id),
-                error=result.error,
-            )
-        self._read_query_set("chain_snapshot", snapshot_key, result.rows)
-        if normalized_links is None:
-            self._read_query_set(
-                "chain",
-                chain_read_key(str(chain_id), None, None, 0),
-                result.rows,
-            )
-        return ChainSnapshotResult(
-            mode=mode,
-            rows=list(result.rows),
-            loaded=True,
-            chain_id=str(chain_id),
-        )
-
-    def checked_export(
-        self,
-        chain_id: str,
-        *,
-        since: datetime | None,
-        extra: str | None,
-        env: Any,
-        limit: int | None,
-        build_args: BuildExportArgs,
-        run_export: RunCheckedExport,
-        timeout_for_chain: Callable[[str], float],
-        read_query_missing: object,
-    ) -> ChainReadResult:
-        """Load one chain with typed failures and request-scoped reuse."""
-        if not chain_id:
-            return ChainReadResult.success([])
-        args = build_args(chain_id, since=since, extra=extra, limit=limit)
-        if args is None:
-            return ChainReadResult.failure("invalid chain export filters")
-        read_key = chain_read_key(chain_id, since, extra, int(limit or 0))
-        if env is None:
-            cached_read = self._read_query_get("chain", read_key)
-            if cached_read is not read_query_missing:
-                if isinstance(cached_read, list) and all(isinstance(row, dict) for row in cached_read):
-                    return ChainReadResult.success(cached_read)
-                return ChainReadResult.failure("cached chain export has invalid shape")
-            if not since and not extra and int(limit or 0) > 0:
-                full_key = chain_read_key(chain_id, None, None, 0)
-                full_read = self._read_query_get("chain", full_key)
-                if full_read is not read_query_missing:
-                    if not isinstance(full_read, list) or not all(
-                        isinstance(row, dict) for row in full_read
-                    ):
-                        return ChainReadResult.failure("cached chain export has invalid shape")
-                    return ChainReadResult.success(full_read[: int(limit)])
-        result = run_export(args, env, timeout_for_chain(chain_id))
-        if result.ok and env is None:
-            self._read_query_set("chain", read_key, result.rows)
-        return result
-
-    def export_chain_checked(
-        self,
-        chain_id: str,
-        *,
-        since: datetime | None,
-        extra: str | None,
-        env: Any,
-        limit: int | None,
-        run_task_result: Callable[..., Any],
-        parse_result: Callable[[Any], tuple[bool, list[TaskRow], str]],
-        timeout_for_chain: Callable[[str], float],
-        read_query_missing: object,
-        on_failure: Callable[[str, float], None] | None = None,
-        on_success: Callable[[float], None] | None = None,
-    ) -> ChainReadResult:
-        """Run one checked export using the service-owned cache boundary."""
-        def run_export(args: list[str], run_env: Any, timeout: float) -> ChainReadResult:
-            return self.run_checked_export(
-                chain_id,
-                args,
-                env=run_env,
-                timeout=timeout,
-                run_task_result=run_task_result,
-                parse_result=parse_result,
-                on_failure=on_failure,
-                on_success=on_success,
-            )
-
-        return self.checked_export(
-            chain_id,
-            since=since,
-            extra=extra,
-            env=env,
-            limit=limit,
-            build_args=self.build_export_args,
-            run_export=run_export,
-            timeout_for_chain=timeout_for_chain,
-            read_query_missing=read_query_missing,
-        )
 
     def build_indexes(self, rows: Sequence[TaskRow]) -> ChainIndexes:
         """Build link, short UUID, and full UUID indexes in one pass."""
@@ -685,8 +383,6 @@ class LifecycleReadService:
 
 __all__ = [
     "ChainCacheStore",
-    "ChainReadResult",
-    "ChainSnapshotResult",
     "ChainIndexes",
     "LifecycleReadService",
     "cached_chain_export",

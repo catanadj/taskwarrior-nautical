@@ -36,8 +36,7 @@ jobs:
           --enable-error-code=arg-type
           --enable-error-code=return-value
           --enable-error-code=operator
-          nautical_core/queue_models.py
-          nautical_core/queue_store.py
+          nautical_core/lifecycle_outbox.py
           nautical_core/hook_protocol.py
           nautical_core/task_command.py
           nautical_core/runtime.py
@@ -48,9 +47,9 @@ jobs:
           nautical_core/modify_completion_flow.py
           nautical_core/modify_completion_compute.py
           nautical_core/modify_completion_spawn.py
-          nautical_core/exit_models.py
           nautical_core/exit_runtime.py
-          nautical_core/exit_drain_flow.py
+          nautical_core/lifecycle_application.py
+          nautical_core/taskwarrior_mutations.py
           nautical_core/occurrence_provider.py
           nautical_core/scheduler_trace.py
           nautical_core/scheduler_service.py

@@ -23,6 +23,19 @@ class ExpirationServices:
     diag: Any
 
 
+@dataclass(slots=True)
+class DeletedModifyServices:
+    expiration: ExpirationServices
+    terminal_chain_off: Any
+    now_utc: Any
+    end_chain_summary: Any
+    format_root_and_age: Any
+    short: Any
+    panel: Any
+    diag: Any
+    recovery_warning: Any
+
+
 def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
@@ -158,9 +171,68 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
     return True
 
 
+def handle_deleted_modify(
+    old: dict[str, Any],
+    new: dict[str, Any],
+    *,
+    services: DeletedModifyServices,
+) -> None:
+    """Classify one deleted pending task and converge its chain state."""
+    if str(old.get("status") or "").strip().lower() != "pending":
+        return
+    if not ((old.get("chainID") or new.get("chainID") or "").strip()):
+        return
+    expiration = services.expiration
+    try:
+        evidence = classify_deleted_task(new, services=expiration)
+        disposition = evidence.disposition.value
+        disposition_reason = evidence.reason
+    except Exception as exc:
+        services.diag(f"deleted-task disposition failed: {exc}")
+        services.recovery_warning(new, "Deletion evidence could not be classified safely.")
+        return
+    if disposition == "ambiguous":
+        services.recovery_warning(
+            new,
+            disposition_reason or "Deletion evidence is unavailable or malformed.",
+        )
+        return
+    if disposition == "expiration":
+        try:
+            if handle_expired_deleted_modify(new, services=expiration):
+                return
+        except Exception as exc:
+            services.diag(f"expiration recovery failed: {exc}")
+        services.recovery_warning(
+            new,
+            "Expiration recovery could not be initialized; the chain remains active.",
+        )
+        return
+    if disposition == "manual":
+        services.diag("deleted Nautical task classified as manual stop")
+
+    services.terminal_chain_off(new, "manual_delete")
+    now_utc = services.now_utc()
+    try:
+        services.end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)
+    except Exception as exc:
+        services.diag(f"delete chain summary failed: {exc}")
+        services.panel(
+            "⛔ Nautical chain stopped",
+            [
+                ("Reason", "Pending Nautical task was deleted."),
+                ("Root", services.format_root_and_age(old, now_utc)),
+                ("Task", services.short(old.get("uuid")) or "–"),
+            ],
+            kind="summary",
+        )
+
+
 __all__ = (
     "ExpirationServices",
+    "DeletedModifyServices",
     "classify_deleted_task",
+    "handle_deleted_modify",
     "handle_expired_deleted_modify",
     "has_expiration_evidence",
     "render_recovery_warning",

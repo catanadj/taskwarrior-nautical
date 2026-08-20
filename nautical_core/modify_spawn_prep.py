@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
+
+
+_TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+_UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
 class SpawnIdentityError(ValueError):
@@ -11,6 +16,63 @@ class SpawnIdentityError(ValueError):
         super().__init__(
             "chainID is required for child spawn; UUID-derived legacy identities are unsupported"
         )
+
+
+def sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
+    """Remove Taskwarrior attributes rejected by the current version."""
+    removed: set[str] = set()
+    for match in _UNREC_ATTR_RE.finditer(stderr or ""):
+        name = match.group(1)
+        if name in payload:
+            payload.pop(name, None)
+            removed.add(name)
+    return removed
+
+
+def normalise_datetime_fields(obj: dict) -> None:
+    """Use Taskwarrior's compact UTC format for imported datetime fields."""
+    def to_tw_compact_isoz(value: str) -> str:
+        if isinstance(value, str) and _TW_JISO.fullmatch(value):
+            return value.replace("-", "").replace(":", "")
+        return value
+
+    for key in ("entry", "modified", "due", "end", "wait", "until", "scheduled"):
+        if key in obj and obj[key]:
+            obj[key] = to_tw_compact_isoz(obj[key])
+    if isinstance(obj.get("annotations"), list):
+        for annotation in obj["annotations"]:
+            if isinstance(annotation, dict) and annotation.get("entry"):
+                annotation["entry"] = to_tw_compact_isoz(annotation["entry"])
+
+
+def strip_none_and_cast(obj: dict) -> dict:
+    out = {}
+    for key, value in obj.items():
+        if value is None:
+            continue
+        if key in ("link", "chainMax"):
+            try:
+                value = int(value)
+            except Exception:
+                pass
+        out[key] = value
+    return out
+
+
+def categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
+    """Classify an import failure and whether retrying can help."""
+    text = (stderr or "").lower()
+    if returncode == 0:
+        return "success", False
+    if "unrecognized attribute" in text:
+        return "attribute", True
+    if "json" in text or "parse" in text:
+        return "parse", False
+    if "invalid" in text or "bad date" in text:
+        return "validation", False
+    if "error" in text or "failed" in text:
+        return "taskwarrior", True
+    return "unknown", True
 
 
 def stable_child_uuid(

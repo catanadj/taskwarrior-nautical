@@ -231,7 +231,6 @@ PROFILES = {
             "tools/nautical_reliability_smoke.py",
             "--load",
             "120",
-            "--durable",
             "--find-limit",
             "--min",
             "60",

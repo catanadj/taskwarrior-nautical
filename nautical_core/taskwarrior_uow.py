@@ -1,0 +1,320 @@
+"""Invocation-scoped composition for Taskwarrior integration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+import os
+from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Mapping
+
+from .integration_context import (
+    DiagnosticEvent,
+    DiagnosticsSink,
+    IntegrationAccess,
+    IntegrationContext,
+    build_operator_context,
+)
+from .integration_models import CommandFailureKind
+from .taskwarrior_client import CommandObservation, TaskwarriorClient
+
+if TYPE_CHECKING:
+    from .task_read_repository import TaskReadRepository
+
+
+class QueryScopeKind(str, Enum):
+    BROAD = "broad"
+    UUID = "uuid"
+    CHAIN = "chain"
+    CHILD_SLOT = "child_slot"
+    PREDECESSOR = "predecessor"
+    HISTORY = "history"
+    VERIFICATION = "verification"
+
+
+@dataclass(frozen=True, slots=True)
+class QueryScope:
+    kind: QueryScopeKind
+    identity: str
+    statuses: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        try:
+            kind = QueryScopeKind(self.kind)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid Taskwarrior query scope") from exc
+        identity = str(self.identity or "").strip()
+        if not identity:
+            raise ValueError("Taskwarrior query scope requires an identity")
+        statuses = tuple(sorted({str(item).strip().lower() for item in self.statuses if str(item).strip()}))
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "identity", identity)
+        object.__setattr__(self, "statuses", statuses)
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotProvenance:
+    scope: QueryScope
+    covers: tuple[QueryScope, ...]
+    mutation_epoch: int
+    command_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CachedAuthoritativeRead:
+    value: Any
+    provenance: SnapshotProvenance
+
+
+@dataclass(slots=True)
+class InvocationReadCache:
+    """Authoritative reads valid only within one mutation epoch."""
+
+    _entries: dict[QueryScope, CachedAuthoritativeRead] = field(default_factory=dict)
+
+    def get(self, scope: QueryScope, *, mutation_epoch: int) -> CachedAuthoritativeRead | None:
+        entry = self._entries.get(scope)
+        if entry is None or entry.provenance.mutation_epoch != mutation_epoch:
+            return None
+        return entry
+
+    def put(
+        self,
+        scope: QueryScope,
+        value: Any,
+        *,
+        covers: tuple[QueryScope, ...] = (),
+        mutation_epoch: int,
+        command_count: int,
+    ) -> CachedAuthoritativeRead:
+        covered_scopes = tuple(dict.fromkeys((scope, *covers)))
+        entry = CachedAuthoritativeRead(
+            value,
+            SnapshotProvenance(scope, covered_scopes, mutation_epoch, command_count),
+        )
+        for covered_scope in covered_scopes:
+            self._entries[covered_scope] = entry
+        return entry
+
+    def invalidate(self, affected: tuple[QueryScope, ...] = ()) -> None:
+        if not affected:
+            self._entries.clear()
+            return
+        affected_set = set(affected)
+        for scope in tuple(self._entries):
+            if scope in affected_set:
+                self._entries.pop(scope, None)
+
+    @property
+    def size(self) -> int:
+        return len(self._entries)
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxBinding:
+    """Invocation-local handle to durable outbox ownership in Taskdata."""
+
+    taskdata: Path
+
+    def __post_init__(self) -> None:
+        taskdata = Path(self.taskdata)
+        if not taskdata.is_absolute():
+            raise ValueError("outbox Taskdata path must be absolute")
+        object.__setattr__(self, "taskdata", taskdata)
+
+
+@dataclass(slots=True)
+class InvocationDiagnostics:
+    """Keep diagnostic history local while forwarding configured output."""
+
+    sink: DiagnosticsSink
+    events: list[DiagnosticEvent] = field(default_factory=list)
+
+    def emit(self, event: DiagnosticEvent) -> None:
+        self.events.append(event)
+        self.sink.emit(event)
+
+
+@dataclass(frozen=True, slots=True)
+class MutationObservation:
+    epoch: int
+    uncertain: bool
+    affected: tuple[QueryScope, ...]
+
+
+@dataclass(slots=True)
+class MutationLedger:
+    observations: list[MutationObservation] = field(default_factory=list)
+
+    def record(
+        self,
+        *,
+        epoch: int,
+        uncertain: bool,
+        affected: tuple[QueryScope, ...],
+    ) -> MutationObservation:
+        observation = MutationObservation(epoch, uncertain, affected)
+        self.observations.append(observation)
+        return observation
+
+
+@dataclass(slots=True)
+class CommandLedger:
+    """Content-free per-invocation command metrics and budget observation."""
+
+    context: IntegrationContext
+    diagnostics: DiagnosticsSink
+    calls: int = 0
+    attempts: int = 0
+    duration: float = 0.0
+    failures: int = 0
+    by_purpose: dict[str, int] = field(default_factory=dict)
+    budget_exceeded: bool = False
+    _budget_reported: bool = False
+
+    def observe(self, observation: CommandObservation) -> None:
+        self.attempts += 1
+        self.duration += observation.duration
+        if observation.attempt == 1:
+            self.calls += 1
+            self.by_purpose[observation.purpose] = self.by_purpose.get(observation.purpose, 0) + 1
+        if observation.kind is not CommandFailureKind.SUCCESS:
+            self.failures += 1
+        if self.calls > self.context.command_budget:
+            self.budget_exceeded = True
+            if not self._budget_reported:
+                self.diagnostics.emit(DiagnosticEvent(
+                    "command_budget",
+                    f"invocation exceeded advisory command budget {self.context.command_budget}",
+                ))
+                self._budget_reported = True
+
+
+@dataclass(slots=True)
+class TaskwarriorUnitOfWork:
+    """All mutable Taskwarrior integration state for one invocation."""
+
+    context: IntegrationContext
+    client: TaskwarriorClient
+    reads: InvocationReadCache
+    mutations: MutationLedger
+    outbox: OutboxBinding
+    commands: CommandLedger
+    diagnostics: InvocationDiagnostics
+    repository: "TaskReadRepository" = field(init=False)
+    mutation_epoch: int = 0
+
+    def __post_init__(self) -> None:
+        from .task_read_repository import TaskReadRepository
+
+        self.repository = TaskReadRepository(self)
+
+    @classmethod
+    def create(
+        cls,
+        context: IntegrationContext,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> "TaskwarriorUnitOfWork":
+        if not isinstance(context, IntegrationContext):
+            raise TypeError("Taskwarrior unit of work requires an IntegrationContext")
+        diagnostics = InvocationDiagnostics(context.diagnostics)
+        ledger = CommandLedger(context, diagnostics)
+        client = TaskwarriorClient(
+            context.command_prefix,
+            env=dict(os.environ if env is None else env),
+            observer=ledger,
+        )
+        return cls(
+            context=context,
+            client=client,
+            reads=InvocationReadCache(),
+            mutations=MutationLedger(),
+            outbox=OutboxBinding(context.taskdata),
+            commands=ledger,
+            diagnostics=diagnostics,
+        )
+
+    def cached_read(self, scope: QueryScope) -> CachedAuthoritativeRead | None:
+        return self.reads.get(scope, mutation_epoch=self.mutation_epoch)
+
+    def cache_read(
+        self,
+        scope: QueryScope,
+        value: Any,
+        *,
+        covers: tuple[QueryScope, ...] = (),
+    ) -> CachedAuthoritativeRead:
+        return self.reads.put(
+            scope,
+            value,
+            covers=covers,
+            mutation_epoch=self.mutation_epoch,
+            command_count=self.commands.calls,
+        )
+
+    def record_mutation(
+        self,
+        *,
+        affected: tuple[QueryScope, ...] = (),
+        uncertain: bool = False,
+    ) -> int:
+        """Advance freshness after any applied or uncertain external mutation."""
+        self.mutation_epoch += 1
+        self.mutations.record(
+            epoch=self.mutation_epoch,
+            uncertain=bool(uncertain),
+            affected=affected,
+        )
+        # A mutation changes the authority epoch for the entire snapshot. A
+        # later repository may selectively reload, but no pre-mutation entry
+        # remains eligible for a decision.
+        self.reads.invalidate()
+        return self.mutation_epoch
+
+
+def build_taskwarrior_uow(
+    context: IntegrationContext,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> TaskwarriorUnitOfWork:
+    return TaskwarriorUnitOfWork.create(context, env=env)
+
+
+def build_operator_uow(
+    *,
+    core: ModuleType,
+    task_binary: str,
+    taskdata: str | None = None,
+    env: Mapping[str, str] | None = None,
+    access: IntegrationAccess = IntegrationAccess.READ_ONLY,
+    command_budget: int = 256,
+) -> TaskwarriorUnitOfWork:
+    """Build the sole unit of work for one operator invocation."""
+    context = build_operator_context(
+        core=core,
+        task_binary=task_binary,
+        taskdata=taskdata,
+        env=env,
+        access=access,
+        command_budget=command_budget,
+    )
+    return build_taskwarrior_uow(context, env=env)
+
+
+__all__ = (
+    "CachedAuthoritativeRead",
+    "CommandLedger",
+    "InvocationReadCache",
+    "InvocationDiagnostics",
+    "MutationLedger",
+    "MutationObservation",
+    "OutboxBinding",
+    "QueryScope",
+    "QueryScopeKind",
+    "SnapshotProvenance",
+    "TaskwarriorUnitOfWork",
+    "build_operator_uow",
+    "build_taskwarrior_uow",
+)

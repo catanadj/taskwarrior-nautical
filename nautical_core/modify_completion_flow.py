@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 from nautical_core.modify_models import (
@@ -9,6 +11,89 @@ from nautical_core.modify_models import (
     CompletionFinalizeServices,
     CompletionPreflightContext,
 )
+
+
+@dataclass(slots=True)
+class CompletionFlowServices:
+    """Typed collaborators for the complete-on-modify lifecycle boundary."""
+
+    runtime_state: Callable[[], Any]
+    prepare_recurrence: Callable[[dict[str, Any], dict[str, Any]], tuple[str, str, str]]
+    preserve_cp_relative_offsets: Callable[[dict[str, Any], dict[str, Any], str], None]
+    preserve_native_until: Callable[[dict[str, Any], dict[str, Any], str], None]
+    validate_native_until: Callable[[dict[str, Any]], None]
+    validate_native_until_slots: Callable[[dict[str, Any]], None]
+    now_utc: Callable[[], Any]
+    preflight_context: Callable[[dict[str, Any], Any, Any], CompletionPreflightContext | None]
+    compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
+    lifecycle_read_service: Any
+    diag_count: Callable[[str, int], None]
+    diag_lifecycle_result: Callable[[CompletionLifecycleResult], None]
+    finalize_completion: Callable[..., CompletionLifecycleResult]
+    finalize_services: CompletionFinalizeServices
+
+
+def handle_completion_modify(
+    old: dict[str, Any],
+    new: dict[str, Any],
+    unit_of_work: Any,
+    *,
+    services: CompletionFlowServices,
+) -> CompletionLifecycleResult | None:
+    """Prepare, compute, and finalize one completed recurring task."""
+    services.runtime_state().task_repository = unit_of_work.repository
+    prepared = dict(new)
+    new_cp, new_anchor, new_anchor_file = services.prepare_recurrence(old, prepared)
+    services.preserve_cp_relative_offsets(old, prepared, new_cp)
+    if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
+        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
+        services.preserve_native_until(old, prepared, recurrence_kind)
+    services.validate_native_until(prepared)
+    services.validate_native_until_slots(prepared)
+    new.clear()
+    new.update(prepared)
+
+    now_utc = services.now_utc()
+    ctx = services.preflight_context(new, now_utc, unit_of_work.repository)
+    if ctx is None:
+        return None
+
+    computed = services.compute_next_and_limits(
+        new,
+        ctx.kind,
+        ctx.next_no,
+        now_utc,
+        preflight=ctx,
+    )
+    if computed is None:
+        return None
+    if isinstance(computed, CompletionLifecycleResult):
+        services.diag_lifecycle_result(computed)
+        return computed
+
+    snapshot = ctx.chain_snapshot
+    preloaded_chain = list(snapshot.rows)
+    indexes = services.lifecycle_read_service.build_indexes(preloaded_chain)
+    preloaded_chain_by_link, preloaded_chain_by_short = indexes.by_link, indexes.by_short
+    if snapshot.mode == "full" and snapshot.loaded:
+        services.lifecycle_read_service.replace_chain_cache(ctx.chain_id, preloaded_chain)
+        services.diag_count("chain_cache_seeded", 1)
+
+    result = services.finalize_completion(
+        new=new,
+        ctx=ctx,
+        computed=computed,
+        now_utc=now_utc,
+        need_chain=snapshot.mode == "full",
+        chain_snapshot_loaded=snapshot.loaded,
+        preloaded_chain=preloaded_chain,
+        preloaded_chain_by_link=preloaded_chain_by_link,
+        preloaded_chain_by_short=preloaded_chain_by_short,
+        chain_id=ctx.chain_id,
+        services=services.finalize_services,
+    )
+    services.diag_lifecycle_result(result)
+    return result
 
 
 def _completion_diagnostic(
@@ -135,14 +220,12 @@ def finalize_completion_modify(
                 indexes = read_service.build_indexes(chain)
                 chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                 read_service.replace_chain_cache(chain_id, chain)
-                services.export_uuid_short_cached.cache_clear()
             elif need_chain and not chain_snapshot_loaded:
                 chain = read_service.get_chain_export(chain_id)
                 if chain:
                     indexes = read_service.build_indexes(chain)
                     chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                     read_service.replace_chain_cache(chain_id, chain)
-                    services.export_uuid_short_cached.cache_clear()
         except Exception:
             pass
 

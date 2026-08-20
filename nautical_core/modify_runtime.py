@@ -46,6 +46,7 @@ from nautical_core.modify_models import (
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
+    task_repository: Any = None
     scheduler_services: dict[Any, Any] = field(default_factory=dict)
     chain_generation_service: Any = None
     query_ctx: dict[str, dict[object, object]] = field(
@@ -63,29 +64,19 @@ class ModifyRuntimeState:
             "run_task_failures": 0,
             "run_task_calls_get": 0,
             "run_task_calls_export_chain": 0,
-            "run_task_calls_export_uuid_short": 0,
-            "run_task_calls_export_uuid_full": 0,
             "run_task_calls_import": 0,
             "run_task_calls_count": 0,
             "run_task_calls_other": 0,
             "run_task_failures_get": 0,
             "run_task_failures_export_chain": 0,
-            "run_task_failures_export_uuid_short": 0,
-            "run_task_failures_export_uuid_full": 0,
             "run_task_failures_import": 0,
             "run_task_failures_count": 0,
             "run_task_failures_other": 0,
             "run_task_seconds_get": 0.0,
             "run_task_seconds_export_chain": 0.0,
-            "run_task_seconds_export_uuid_short": 0.0,
-            "run_task_seconds_export_uuid_full": 0.0,
             "run_task_seconds_import": 0.0,
             "run_task_seconds_count": 0.0,
             "run_task_seconds_other": 0.0,
-            "export_uuid_cache_hits": 0,
-            "export_uuid_cache_misses": 0,
-            "export_full_cache_hits": 0,
-            "export_full_cache_misses": 0,
             "tw_get_cache_hits": 0,
             "tw_get_cache_misses": 0,
             "task_text_cache_hits": 0,
@@ -122,6 +113,82 @@ class ModifyRuntimeState:
 
 def new_runtime_state() -> ModifyRuntimeState:
     return ModifyRuntimeState()
+
+
+def scheduler_service_for_task(
+    task: dict[str, Any],
+    *,
+    state: ModifyRuntimeState,
+    core: Any,
+    recurrence_seed_base: Callable[[dict[str, Any]], str],
+) -> Any:
+    """Return one cached scheduler service for the task's scheduling state."""
+    identity = str(task.get("uuid") or task.get("chainID") or "").strip()
+    cache_key: tuple[Any, ...]
+    if identity:
+        cache_key = (
+            "task",
+            identity,
+            str(task.get("modified") or ""),
+            str(task.get("anchor") or ""),
+            str(task.get("anchor_file") or ""),
+            str(task.get("omit") or ""),
+            str(task.get("omit_file") or ""),
+            str(task.get("cp") or ""),
+            str(task.get("anchor_mode") or ""),
+            str(task.get("chainMax") or ""),
+            str(task.get("chainUntil") or ""),
+            str(task.get("bc") or ""),
+        )
+    else:
+        cache_key = ("object", id(task))
+    cached_service = state.scheduler_services.get(cache_key)
+    if cached_service is not None:
+        state.diag_stats["evaluator_session_hits"] = state.diag_stats.get("evaluator_session_hits", 0) + 1
+        return cached_service
+
+    from nautical_core.evaluation_session import EvaluationSession
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_service import SchedulerService
+
+    context = RecurrenceContext.from_task(
+        task,
+        fallback_chain_id=recurrence_seed_base(task),
+        timezone=core._LOCAL_TZ,
+        business_calendar=core.business_calendar_for_task(task),
+        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+    service = SchedulerService(EvaluationSession.from_task(task, context=context))
+    state.scheduler_services[cache_key] = service
+    state.diag_stats["evaluator_session_misses"] = state.diag_stats.get("evaluator_session_misses", 0) + 1
+    return service
+
+
+def anchor_file_provider_for(
+    anchor_file: str,
+    *,
+    fallback_hhmm: tuple[int, int],
+    seed_base: str,
+    state: ModifyRuntimeState,
+    core: Any,
+) -> Any:
+    """Return one cached anchor-file provider for a projection session."""
+    if not anchor_file:
+        return None
+    anchor_file_dir = getattr(core, "ANCHOR_FILE_DIR", "")
+    key = (anchor_file, anchor_file_dir, fallback_hhmm, seed_base)
+    provider = state.anchor_file_providers.get(key)
+    if provider is None:
+        provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
+            anchor_file,
+            anchor_file_dir=anchor_file_dir,
+            fallback_hhmm=fallback_hhmm,
+            seed_base=seed_base,
+            core=core,
+        )
+        state.anchor_file_providers[key] = provider
+    return provider
 
 
 @dataclass(slots=True)
@@ -289,6 +356,8 @@ __all__ = (
     'ModifyRuntimeState',
     'ModifyRuntimeServices',
     'new_runtime_state',
+    'scheduler_service_for_task',
+    'anchor_file_provider_for',
     'build_anchor_feedback_services',
     'build_cp_feedback_services',
     'build_preflight_services',

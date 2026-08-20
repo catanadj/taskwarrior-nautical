@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 
-_SHARED_HOOK_MODULES = ("hook_runtime",)
+_SHARED_HOOK_MODULES = ("hook_runtime", "integration_context")
+
+_INTEGRATION_FILES = (
+    "integration_models.py",
+    "task_read_repository.py",
+    "taskwarrior_client.py",
+    "taskwarrior_mutations.py",
+    "taskwarrior_uow.py",
+)
 
 
 HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
@@ -26,6 +34,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_queries",
         "lifecycle_read_service",
         "modify_spawn_prep",
+        "modify_spawn",
         "chain_generation",
         "modify_ordinary",
         "modify_completion_preflight",
@@ -34,7 +43,8 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_models",
         "lifecycle_models",
         "lifecycle_planner",
-        "lifecycle_executor",
+        "lifecycle_application",
+        "lifecycle_outbox",
         "modify_feedback",
         "modify_lifecycle",
         "modify_runtime",
@@ -44,13 +54,15 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "anchor_omit",
         "add_anchor_compute",
         "panel_diagnostics",
-        "queue_store",
-        "queue_models",
         "reconcile",
         "hook_context",
         "hook_engine",
         "hook_results",
         "recurrence_evaluator",
+        "modify_protocol",
+        "modify_chain_summary",
+        "modify_validation",
+        "modify_carry",
         # These are imported directly in the completion path rather than via
         # HookModuleAccess, so keep them in the same deployment contract.
         "calendar_feedback",
@@ -58,18 +70,12 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
     ),
     "on-exit": (
         *_SHARED_HOOK_MODULES,
+        "integration_models",
+        "taskwarrior_mutations",
         "hook_support",
-        "exit_queries",
-        "exit_side_effects",
-        "exit_entry_flow",
-        "queue_store",
-        "queue_models",
-        "exit_models",
-        "lifecycle_models",
-        "lifecycle_planner",
-        "lifecycle_executor",
+        "lifecycle_application",
+        "lifecycle_outbox",
         "exit_runtime",
-        "exit_drain_flow",
         "hook_context",
         "hook_engine",
         "hook_results",
@@ -84,9 +90,9 @@ _HOOK_IMPL = {
 }
 
 _HOOK_SUPPORT_FILES = {
-    "on-add": ("hook_bootstrap.py", "hook_protocol.py"),
-    "on-modify": ("hook_bootstrap.py", "hook_protocol.py"),
-    "on-exit": ("hook_bootstrap.py", "config_support.py", "exit_probe.py"),
+    "on-add": ("hook_bootstrap.py", "hook_protocol.py", *_INTEGRATION_FILES),
+    "on-modify": ("hook_bootstrap.py", "hook_protocol.py", *_INTEGRATION_FILES),
+    "on-exit": ("hook_bootstrap.py", "config_support.py", "exit_probe.py", *_INTEGRATION_FILES),
 }
 
 HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
@@ -99,10 +105,23 @@ HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     for impl in (_HOOK_IMPL[event],)
 }
 
+# Commands dispatched by the installed ``nautical`` launcher.  Hook smoke
+# tests alone cannot prove these operator surfaces survived staging.
+OPERATOR_RUNTIME_FILES = (
+    "nautical",
+    "nautical_navigator.py",
+    "nautical_core/tools/nautical_install.py",
+    "nautical_core/tools/nautical_runtime_cleanup.py",
+    "nautical_core/tools/nautical_doctor.py",
+    "nautical_core/tools/nautical_queue_status.py",
+    "nautical_core/tools/nautical_chain_repair.py",
+    "nautical_core/tools/nautical_reconcile.py",
+)
+
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
 for _event in HOOK_RUNTIME_FILES:
     HOOK_RUNTIME_FILES[_event] += ("panel_colours.py",)
 
 
-__all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES")
+__all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES", "OPERATOR_RUNTIME_FILES")

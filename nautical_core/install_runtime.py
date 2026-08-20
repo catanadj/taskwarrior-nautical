@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from nautical_core import hook_bootstrap
-from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
+from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES, OPERATOR_RUNTIME_FILES
 
 try:
     import fcntl
@@ -335,6 +335,11 @@ def _smoke_navigator(base: Path) -> None:
 
 
 def validate_release(root: Path, *, smoke: bool = True) -> dict[str, int]:
+    missing_operator = [name for name in OPERATOR_RUNTIME_FILES if not (root / name).is_file()]
+    if missing_operator:
+        raise InstallError(
+            "staged release is missing operator runtime files: " + ", ".join(missing_operator)
+        )
     for path in root.rglob("*.py"):
         try:
             compile(path.read_bytes(), str(path), "exec")
@@ -358,6 +363,11 @@ def validate_release(root: Path, *, smoke: bool = True) -> dict[str, int]:
 
 
 def validate_installed(base: Path, hooks_dir: Path, *, smoke: bool = True) -> dict[str, int]:
+    missing_operator = [name for name in OPERATOR_RUNTIME_FILES if not (base / name).is_file()]
+    if missing_operator:
+        raise InstallError(
+            "installed runtime is missing operator files: " + ", ".join(missing_operator)
+        )
     apis: dict[str, int] = {}
     for event, name in HOOK_FILES.items():
         hook = hooks_dir / name

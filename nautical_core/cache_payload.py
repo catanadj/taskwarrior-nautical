@@ -394,7 +394,7 @@ def cache_save(
                     written += n
                 # Anchor caches are disposable and rebuilt on a miss. Keep the
                 # atomic replace, but avoid a costly per-entry fsync on slow
-                # devices; durable queue state uses its own FULL-sync path.
+                # devices; durable lifecycle state uses its own FULL-sync path.
             finally:
                 try:
                     os_mod.close(fd)

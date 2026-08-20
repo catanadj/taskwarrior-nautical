@@ -195,35 +195,3 @@ def _runtime_command_module():
     from . import runtime_command
 
     return runtime_command
-
-
-def run_task(*args, **kwargs):
-    return _runtime_command_module().run_task(*args, **kwargs)
-
-
-def is_lock_error(*args, **kwargs):
-    return _runtime_command_module().is_lock_error(*args, **kwargs)
-
-
-def _run_task_should_retry(*args, **kwargs):
-    return _runtime_command_module()._run_task_should_retry(*args, **kwargs)
-
-
-def _run_task_retry_sleep(*args, **kwargs):
-    return _runtime_command_module()._run_task_retry_sleep(*args, **kwargs)
-
-
-def _run_task_prepare_tempfiles(*args, **kwargs):
-    return _runtime_command_module()._run_task_prepare_tempfiles(*args, **kwargs)
-
-
-def _run_task_normalize_input(*args, **kwargs):
-    return _runtime_command_module()._run_task_normalize_input(*args, **kwargs)
-
-
-def _run_task_collect_outputs(*args, **kwargs):
-    return _runtime_command_module()._run_task_collect_outputs(*args, **kwargs)
-
-
-def _run_task_cleanup_paths(*args, **kwargs):
-    return _runtime_command_module()._run_task_cleanup_paths(*args, **kwargs)

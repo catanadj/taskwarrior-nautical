@@ -12,7 +12,9 @@ import sys
 import tomllib
 import zoneinfo
 from collections import defaultdict
+from datetime import timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
@@ -24,11 +26,20 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import astronomy, cache_gc as run_cache_gc, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile, task_command  # noqa: E402
+import nautical_core as nautical_core_package  # noqa: E402
+from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile  # noqa: E402
+from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
+from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
-from nautical_core.reconcile_gateway import TaskwarriorMutationGateway  # noqa: E402
+from nautical_core.integration_context import (  # noqa: E402
+    IntegrationAccess,
+    IntegrationContext,
+    SilentDiagnostics,
+    SystemClock,
+    ValidatedNauticalConfiguration,
+)
+from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
-import nautical_core.runtime as runtime  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
@@ -105,46 +116,58 @@ def _finding(
     findings.append(item)
 
 
-def _run_task(task_bin: str, args: list[str], env: dict[str, str], timeout: float = 30.0):
-    return task_command.run_task_command(
-        task_bin,
-        args,
-        env=env,
-        timeout=timeout,
-        retry_locks=True,
+def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]:
+    """Read a Taskwarrior setting through the invocation's shared client."""
+    proc = unit_of_work.client.execute(
+        ["_get", key],
+        purpose="doctor Taskwarrior query",
+        timeout=30.0,
+        attempts=2,
+        retry_delay=0.1,
     )
+    return proc.ok, proc.stdout.strip()
 
 
-def _task_get(task_bin: str, key: str, env: dict[str, str]) -> tuple[bool, str]:
-    proc = _run_task(task_bin, ["_get", key], env)
-    return proc.returncode == 0, (proc.stdout or "").strip()
-
-
-def _discover_taskdata(task_bin: str, env: dict[str, str]) -> str:
-    ok, raw = _task_get(task_bin, "rc.data.location", env)
-    return raw if ok else ""
-
-
-def _task_export(task_bin: str, env: dict[str, str]) -> tuple[bool, list[dict[str, Any]], str]:
-    proc = _run_task(
-        task_bin,
-        ["rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "rc.color=off", "export"],
-        env,
-        timeout=120.0,
+def _task_export(repository: TaskReadRepository) -> tuple[bool, list[dict[str, Any]], str]:
+    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    read = repository.broad_snapshot(
+        identity="doctor-chain-inspection",
+        filters=(),
+        statuses=ALL_TASK_STATUSES,
+        complete_chain_history=True,
     )
-    try:
-        payload = task_command.load_json_result(proc, "task export", empty=[])
-    except Exception as exc:
-        return False, [], str(exc)
-    if isinstance(payload, dict):
-        payload = [payload]
-    if not isinstance(payload, list):
-        return False, [], "task export returned a non-list payload"
-    return True, [row for row in payload if isinstance(row, dict)], ""
+    if isinstance(read, Found):
+        return True, [dict(row) for row in read.value.rows], ""
+    if isinstance(read, Absent):
+        return True, [], ""
+    if isinstance(read, Unavailable):
+        return False, [], read.evidence.detail
+    return False, [], "task repository returned an invalid result"
 
 
-def _resolve_hooks_dir(task_bin: str, taskdata: Path, env: dict[str, str]) -> Path:
-    ok, raw = _task_get(task_bin, "rc.hooks.location", env)
+def _diagnostic_read_uow(
+    taskdata: Path,
+    task_bin: str,
+    env: dict[str, str],
+) -> TaskwarriorUnitOfWork:
+    """Read Taskwarrior state without claiming valid scheduling configuration."""
+    context = IntegrationContext(
+        taskdata.resolve(),
+        "doctor-recovery",
+        (str(task_bin), f"rc.data.location={taskdata.resolve()}"),
+        ValidatedNauticalConfiguration("doctor", "unavailable", "unavailable", "UTC", ()),
+        timezone.utc,
+        SilentDiagnostics(),
+        SystemClock(),
+        "doctor-diagnostic-read",
+        256,
+        IntegrationAccess.READ_ONLY,
+    )
+    return TaskwarriorUnitOfWork.create(context, env=env)
+
+
+def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> Path:
+    ok, raw = _task_get(unit_of_work, "rc.hooks.location")
     if ok and raw:
         return Path(raw).expanduser().resolve()
     return (taskdata / "hooks").resolve()
@@ -219,19 +242,27 @@ def _check_hook_installation(
 def _check_runtime(
     findings: list[dict[str, Any]],
     *,
-    task_bin: str,
+    unit_of_work: TaskwarriorUnitOfWork,
     taskdata: Path,
-    env: dict[str, str],
 ) -> Path:
-    proc = _run_task(task_bin, ["--version"], env)
-    if proc.returncode != 0:
+    proc = unit_of_work.client.execute(
+        ["--version"],
+        purpose="doctor Taskwarrior query",
+        timeout=30.0,
+        attempts=2,
+        retry_delay=0.1,
+    )
+    if not proc.ok:
         _finding(
             findings,
             "taskwarrior.unavailable",
             "error",
             "Taskwarrior could not be executed.",
             fix="Install Taskwarrior or pass --task-bin.",
-            details={"error": task_command.failure_message(proc, "Taskwarrior version lookup")},
+            details={
+                "error": str(proc.stderr or proc.stdout or "").strip()
+                or f"{proc.kind.value} (exit code {proc.returncode})"
+            },
         )
     else:
         _finding(
@@ -260,19 +291,19 @@ def _check_runtime(
             f"Taskwarrior data directory is {'accessible' if writable else 'not fully accessible'}: {taskdata}",
             fix="" if writable else "Correct ownership and directory permissions.",
         )
-    return _resolve_hooks_dir(task_bin, taskdata, env)
+    return _resolve_hooks_dir(unit_of_work, taskdata)
 
 
 def _check_hooks_and_udas(
     findings: list[dict[str, Any]],
     *,
-    task_bin: str,
+    unit_of_work: TaskwarriorUnitOfWork,
     hooks_dir: Path,
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
     validated = _check_hook_installation(findings, hooks_dir=hooks_dir, env=env)
     for name, expected in REQUIRED_UDAS.items():
-        ok, actual = _task_get(task_bin, f"rc.uda.{name}.type", env)
+        ok, actual = _task_get(unit_of_work, f"rc.uda.{name}.type")
         if not ok or not actual:
             _finding(
                 findings,
@@ -756,7 +787,7 @@ def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) ->
         )
 
 
-def _load_queue_status():
+def _load_queue_status() -> ModuleType:
     path = TOOLS_DIR / "nautical_queue_status.py"
     spec = importlib.util.spec_from_file_location("_nautical_doctor_queue_status", path)
     if spec is None or spec.loader is None:
@@ -766,74 +797,103 @@ def _load_queue_status():
     return module
 
 
-def _check_queue(findings: list[dict[str, Any]], taskdata: Path, stale_after: float) -> dict[str, Any]:
+def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stale_after: float) -> dict[str, Any]:
     try:
         module = _load_queue_status()
         payload = module._status_payload(taskdata, stale_after=stale_after, limit=5)
+        if not isinstance(payload, dict):
+            raise RuntimeError("lifecycle outbox status returned an invalid payload")
     except Exception as exc:
         _finding(
             findings,
-            "queue.unreadable",
+            "outbox.unreadable",
             "error",
-            "Nautical queue state could not be inspected.",
+            "Nautical lifecycle outbox could not be inspected.",
             details={"error": str(exc)},
         )
         return {}
-    queue = payload.get("queue") if isinstance(payload.get("queue"), dict) else {}
-    quarantined = int(queue.get("quarantined") or 0)
+    outbox = payload.get("outbox") if isinstance(payload.get("outbox"), dict) else {}
+    states = outbox.get("states") if isinstance(outbox.get("states"), dict) else {}
+    quarantined = int(states.get("quarantined") or 0)
     if quarantined:
         _finding(
             findings,
-            "queue.poison_rows",
+            "outbox.poison_rows",
             "error",
-            f"{quarantined} malformed SQLite queue row{'s' if quarantined != 1 else ''} quarantined.",
-            fix="Inspect nautical queue-status and repair or remove the quarantined queue entries.",
-            details={"count": quarantined, "sample": queue.get("sample") or []},
+            f"{quarantined} malformed lifecycle intent{'s' if quarantined != 1 else ''} quarantined.",
+            fix="Inspect nautical queue-status and resolve the quarantined lifecycle intents.",
+            details={"count": quarantined, "sample": outbox.get("sample") or []},
         )
-    schema = queue.get("schema") if isinstance(queue.get("schema"), dict) else {}
+    schema = outbox.get("schema") if isinstance(outbox.get("schema"), dict) else {}
     schema_status = str(schema.get("status") or "absent")
     if schema_status == "error":
         _finding(
             findings,
-            "queue.schema",
+            "outbox.schema",
             "error",
-            "Queue database schema is incompatible with this Nautical runtime.",
-            fix="Preserve the database, then upgrade Nautical or restore a compatible queue database.",
-            details=schema,
-        )
-    elif schema_status == "legacy":
-        _finding(
-            findings,
-            "queue.schema",
-            "warn",
-            "Queue database uses the compatible unversioned schema.",
-            fix="The next queue write or drain will migrate it transactionally.",
+            "Lifecycle outbox schema is incompatible with this Nautical runtime.",
+            fix="Preserve the database, then upgrade Nautical or restore a compatible lifecycle outbox.",
             details=schema,
         )
     else:
         _finding(
             findings,
-            "queue.schema",
+            "outbox.schema",
             "ok",
             (
-                f"Queue database schema v{schema.get('version')} is compatible."
+                f"Lifecycle outbox schema v{schema.get('version')} is compatible."
                 if schema_status == "ok"
-                else "Queue database has not been created yet."
+                else "Lifecycle outbox has not been created yet."
             ),
             details=schema,
         )
 
     issues = payload.get("issues") or []
-    queue_status = str(payload.get("status") or "ok")
+    outbox_status = str(payload.get("status") or "ok")
     _finding(
         findings,
-        "queue.state",
-        "error" if queue_status == "error" else ("warn" if issues else "ok"),
-        "Queue state has findings." if issues else "Queue and dead-letter state are clean.",
-        fix="Run nautical queue-status for queue details." if issues else "",
+        "outbox.state",
+        "error" if outbox_status == "error" else ("warn" if issues else "ok"),
+        "Lifecycle outbox has findings." if issues else "Lifecycle outbox is clean.",
+        fix="Run nautical queue-status for lifecycle outbox details." if issues else "",
         details={"issues": issues} if issues else None,
     )
-    return payload
+    return dict(payload)
+
+
+_OBSOLETE_QUEUE_STATE_NAMES = (
+    ".nautical_spawn_queue.jsonl",
+    ".nautical_spawn_queue.processing.jsonl",
+    ".nautical_spawn_queue.lock",
+    ".nautical_queue.db",
+    ".nautical_queue.db-wal",
+    ".nautical_queue.db-shm",
+    ".nautical_dead_letter.jsonl",
+)
+
+
+def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) -> list[str]:
+    """Report retired queue artifacts without reading or migrating them."""
+    paths: list[str] = []
+    roots = (taskdata, taskdata / ".nautical-state")
+    for root in roots:
+        for name in _OBSOLETE_QUEUE_STATE_NAMES:
+            path = root / name
+            if os.path.lexists(path):
+                paths.append(str(path))
+    if paths:
+        _finding(
+            findings,
+            "outbox.obsolete_state",
+            "warn",
+            "Retired Nautical queue state was found; it is not used by this runtime.",
+            fix=(
+                "Back up any required records, then quarantine or remove the listed files; "
+                "the lifecycle outbox is the only supported work store."
+            ),
+            details={"paths": sorted(set(paths))},
+        )
+    return sorted(set(paths))
 
 
 def _short_uuid(value: object) -> str:
@@ -877,9 +937,16 @@ def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, A
 
 def _safe_parse_datetime(runtime: Any, value: Any):
     parser = getattr(runtime, "safe_parse_datetime", None) or getattr(runtime, "_safe_parse_datetime", None)
+    if callable(parser):
+        return parser(value)
+    parser = getattr(runtime, "parse_dt_any", None)
     if not callable(parser):
         return None, "datetime parser unavailable"
-    return parser(value)
+    try:
+        parsed = parser(value)
+    except Exception as exc:
+        return None, str(exc).strip() or type(exc).__name__
+    return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
 
 
 def _check_reconcile_plans(
@@ -900,7 +967,7 @@ def _check_reconcile_plans(
     try:
         import nautical_core as core
 
-        hook = TaskwarriorMutationGateway(core)
+        hook = core
         generation = ChainGenerationService.from_core(
             core,
             recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
@@ -929,7 +996,7 @@ def _check_reconcile_plans(
             if plan.action == "spawn" and isinstance(plan.child, dict) and hook is not None:
                 try:
                     until_dt, until_err = _safe_parse_datetime(hook, plan.child.get("until"))
-                    now_utc = getattr(getattr(hook, "core", None), "now_utc", None)
+                    now_utc = getattr(hook, "now_utc", None)
                     planned_until_elapsed = (
                         not until_err
                         and until_dt is not None
@@ -994,10 +1061,14 @@ def _check_reconcile_plans(
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
-    task_bin: str,
-    env: dict[str, str],
+    repository: TaskReadRepository | None,
 ) -> dict[str, int]:
-    ok, rows, err = _task_export(task_bin, env)
+    if repository is None:
+        ok = False
+        rows: list[dict[str, Any]] = []
+        err = "validated integration context is unavailable"
+    else:
+        ok, rows, err = _task_export(repository)
     if not ok:
         _finding(
             findings,
@@ -1320,50 +1391,69 @@ def main() -> int:
     args = parser.parse_args()
 
     env = os.environ.copy()
-    if args.taskdata:
-        taskdata_raw, _, _ = runtime.resolve_task_data_context(
-            argv=[f"data:{args.taskdata}"],
-            env=env,
-            tw_dir=args.taskdata,
-        )
-    else:
-        taskdata_raw, _, _ = runtime.resolve_task_data_context(
-            env=env,
-            tw_dir=_discover_taskdata(args.task_bin, env) or None,
-        )
-    taskdata = Path(taskdata_raw).expanduser().resolve()
-    env["TASKDATA"] = str(taskdata)
     findings: list[dict[str, Any]] = []
+    unit_of_work = None
+    try:
+        unit_of_work = build_operator_uow(
+            core=nautical_core_package,
+            task_binary=args.task_bin,
+            taskdata=args.taskdata,
+            env=env,
+            access=IntegrationAccess.READ_ONLY,
+        )
+    except Exception as exc:
+        stage = str(getattr(exc, "stage", "context") or "context")
+        failed_taskdata = getattr(exc, "taskdata", None)
+        if stage not in {"configuration", "timezone"} or not isinstance(failed_taskdata, Path):
+            message = f"Integration context unavailable: {exc}"
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "schema": _JSON_SCHEMA,
+                            "schema_version": _JSON_SCHEMA_VERSION,
+                            "status": "error",
+                            "findings": [
+                                {"id": "integration.context", "severity": "error", "message": message}
+                            ],
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+            else:
+                print(f"Nautical doctor: ERROR\nContext: {message}")
+            return 1
+        taskdata = failed_taskdata
+        _finding(
+            findings,
+            "integration.context",
+            "error",
+            "The validated integration context could not be constructed.",
+            fix="Correct the reported scheduling configuration before using Nautical hooks or mutations.",
+            details={"error": str(exc)},
+        )
+        unit_of_work = _diagnostic_read_uow(taskdata, args.task_bin, env)
+    else:
+        taskdata = unit_of_work.context.taskdata
+        args.task_bin = unit_of_work.context.command_prefix[0]
+    env["TASKDATA"] = str(taskdata)
 
     hooks_dir = _check_runtime(
         findings,
-        task_bin=args.task_bin,
+        unit_of_work=unit_of_work,
         taskdata=taskdata,
-        env=env,
     )
     hook_runtimes = _check_hooks_and_udas(
         findings,
-        task_bin=args.task_bin,
+        unit_of_work=unit_of_work,
         hooks_dir=hooks_dir,
         env=env,
     )
     _check_managed_runtime(findings, hooks_dir, hook_runtimes)
-    try:
-        import nautical_core as core
-
-        core.reload_taskdata_config(taskdata)
-    except Exception as exc:
-        _finding(
-            findings,
-            "config.reload",
-            "error",
-            "The runtime could not apply the Taskdata Nautical configuration.",
-            fix="Correct the reported TOML or timezone error before running reconcile or scheduling recurrence.",
-            details={"error": str(exc)},
-        )
     _check_config(findings, taskdata)
     if args.clean_cache:
-        gc_result = run_cache_gc()
+        gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)
         _finding(
             findings,
@@ -1372,11 +1462,11 @@ def main() -> int:
             "Anchor cache cleanup completed." if not gc_errors else "Anchor cache cleanup completed with errors.",
             details=gc_result,
         )
-    queue = _check_queue(findings, taskdata, max(0.0, args.stale_after_seconds))
+    outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
+    obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
     counts = _check_chains(
         findings,
-        task_bin=args.task_bin,
-        env=env,
+        repository=unit_of_work.repository if unit_of_work is not None else None,
     )
 
     status = _overall_status(findings)
@@ -1387,7 +1477,8 @@ def main() -> int:
         "taskdata": str(taskdata),
         "hooks_dir": str(hooks_dir),
         "counts": counts,
-        "queue": queue,
+        "outbox": outbox,
+        "obsolete_queue_state": obsolete_queue_state,
         "findings": findings,
     }
     if args.json:

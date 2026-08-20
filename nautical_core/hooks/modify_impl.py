@@ -107,16 +107,14 @@ import atexit
 import hashlib
 import random
 import re
-import sqlite3
 import stat
-import subprocess
 import tempfile
 import time as _time
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NoReturn, Optional
 
 if TYPE_CHECKING:
     from nautical_core.modify_models import CompletionLifecycleResult
@@ -129,7 +127,6 @@ if TYPE_CHECKING:
 # ------------------------------------------------------------------------------
 
 _MAX_CHAIN_WALK = 500  # cap for chain summaries/analytics
-_MAX_UUID_LOOKUPS = 50  # max individual UUID exports before giving up
 _MAX_ITERATIONS = 2000  # prevent infinite loops in stepping functions
 _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 
@@ -137,27 +134,6 @@ _MIN_FUTURE_WARN = 365 * 2  # warn if chain extends >2 years
 _MAX_SPAWN_ATTEMPTS = 3
 _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
-# Spawn intent queue guards (override via env for heavy workloads).
-# spawn_queue_max_bytes: warn when queue exceeds this size (on-exit drains).
-_DEFAULT_SPAWN_QUEUE_MAX_BYTES = 524288
-_DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE = 1.5
-_DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100 = 1.0
-_DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX = 12.0
-
-def _env_float(
-    name: str,
-    default: float,
-    *,
-    min_value: float | None = None,
-    max_value: float | None = None,
-) -> float:
-    return hook_bootstrap.env_float(
-        name,
-        default,
-        min_value=min_value,
-        max_value=max_value,
-    )
-
 # Panel chain index and chain caches live in the per-run modify runtime state.
 _MODIFY_RUNTIME_STATE = None
 _HOOK_CONTEXT = None
@@ -173,9 +149,6 @@ _HOOK_RESULTS_LOAD_FAILED = False
 _DEFAULT_DEBUG_WAIT_SCHED = False
 _LAST_WAIT_SCHED_DEBUG: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
-_WARNED_SPAWN_QUEUE_GROWTH = False
-_WARNED_CHAIN_EXPORT: set[str] = set()
-_LAST_CHAIN_EXPORT_STATUS: tuple[bool, str] = (True, "")
 
 
 def _diag(msg: str) -> None:
@@ -192,21 +165,6 @@ def _diag(msg: str) -> None:
             sys.stderr.write(f"[nautical] {msg}\n")
         except Exception:
             pass
-
-
-def _is_lock_error(stderr: str) -> bool:
-    try:
-        _load_core()
-    except Exception:
-        pass
-    if core is not None:
-        return core.is_lock_error(stderr)
-    s = (stderr or "").lower()
-    return (
-        "database is locked" in s or "unable to lock" in s
-        or "resource temporarily unavailable" in s or "another task is running" in s
-        or "lock file" in s or "lockfile" in s or "locked by" in s or "timeout" in s
-    )
 
 
 def _modify_runtime_state():
@@ -229,23 +187,13 @@ def _anchor_file_provider_for(
     fallback_hhmm: tuple[int, int],
     seed_base: str,
 ):
-    """Return one anchor-file provider for this hook's projection session."""
-    if not anchor_file:
-        return None
-    state = _modify_runtime_state()
-    anchor_file_dir = getattr(core, "ANCHOR_FILE_DIR", "")
-    key = (anchor_file, anchor_file_dir, fallback_hhmm, seed_base)
-    provider = state.anchor_file_providers.get(key)
-    if provider is None:
-        provider = core._import_sibling("anchor_inclusion")._build_anchor_file_provider(
-            anchor_file,
-            anchor_file_dir=anchor_file_dir,
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
-        )
-        state.anchor_file_providers[key] = provider
-    return provider
+    return _module("modify_runtime").anchor_file_provider_for(
+        anchor_file,
+        fallback_hhmm=fallback_hhmm,
+        seed_base=seed_base,
+        state=_modify_runtime_state(),
+        core=core,
+    )
 
 
 def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int, int]:
@@ -290,11 +238,6 @@ def _run_task_diag_bucket(cmd: list[str]) -> str:
     if "export" in parts:
         if any(p.startswith("chainID:") for p in parts):
             return "export_chain"
-        if any(p.startswith("uuid:") for p in parts):
-            if "rc.json.array=off" in parts:
-                return "export_uuid_short"
-            if "rc.json.array=1" in parts:
-                return "export_uuid_full"
         return "other"
     return "other"
 
@@ -414,15 +357,6 @@ def _invalidate_read_query_cache() -> None:
         )
     except Exception:
         pass
-    for name in (
-        "_export_uuid_short_cached",
-    ):
-        try:
-            clear = getattr(globals().get(name), "cache_clear", None)
-            if callable(clear):
-                clear()
-        except Exception:
-            pass
     try:
         _module("lifecycle_read_service").clear_cached_chain_exports()
     except Exception:
@@ -510,45 +444,17 @@ def _append_next_wait_sched_rows(
     *,
     anchor_field: str = "due",
 ) -> None:
-    """Append Scheduled/Wait lines for the next link showing local time and Δ to the recurrence anchor."""
-    if not (isinstance(nxt_due_utc, datetime) and nxt_due_utc):
-        return
-
-    dt_s = _dtparse(nxt.get("scheduled"))
-    dt_w = _dtparse(nxt.get("wait"))
-    anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
-
-    for fld, label, dt in (
-        ("scheduled", "Scheduled", dt_s),
-        ("wait", "Wait", dt_w),
-    ):
-        if fld == anchor_field:
-            continue
-        if not isinstance(dt, datetime):
-            continue
-        delta_s = _fmt_td_dd_hhmm(dt - nxt_due_utc)
-        fb.append((label, f"{core.fmt_dt_local(dt)}  (Δ {delta_s})"))
-
-    # Informative order validation: due > scheduled > wait
-    # This can be violated when due is auto-assigned but scheduled/wait are user-specified.
-    issues: list[str] = []
-    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and _compare_datetimes(dt_s, nxt_due_utc) > 0:
-        issues.append(f"scheduled is after {anchor_label} by {_fmt_td_dd_hhmm(dt_s - nxt_due_utc)}")
-    if isinstance(dt_w, datetime) and _compare_datetimes(dt_w, nxt_due_utc) > 0:
-        issues.append(f"wait is after {anchor_label} by {_fmt_td_dd_hhmm(dt_w - nxt_due_utc)}")
-    if anchor_field != "scheduled" and isinstance(dt_s, datetime) and isinstance(dt_w, datetime) and _compare_datetimes(dt_w, dt_s) > 0:
-        issues.append(f"wait is after scheduled by {_fmt_td_dd_hhmm(dt_w - dt_s)}")
-
-    if issues:
-        expected = "scheduled > wait" if anchor_field == "scheduled" else "due > scheduled > wait"
-        fb.append((
-            "⚠ Wait/Sched",
-            f"Expected order: {expected}. " + "; ".join(issues),
-        ))
-        fb.append((
-            "⚠ Wait/Sched",
-            "This can happen when due is auto-assigned; adjust scheduled/wait if undesired.",
-        ))
+    """Compatibility adapter for wait/scheduled feedback presentation."""
+    _module("modify_feedback").append_next_wait_sched_rows(
+        fb,
+        nxt,
+        nxt_due_utc,
+        anchor_field=anchor_field,
+        parse_datetime=_dtparse,
+        format_local=core.fmt_dt_local,
+        compare_datetimes=_compare_datetimes,
+        format_delta=_fmt_td_dd_hhmm,
+    )
 
 core = None
 _DATETIME_COMPARATOR = None
@@ -564,6 +470,8 @@ _CHAIN_GENERATION_LOAD_FAILED = False
 _MODIFY_ORDINARY = None
 _MODIFY_ORDINARY_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP = None
+_MODIFY_SPAWN = None
+_MODIFY_SPAWN_LOAD_FAILED = False
 _MODIFY_SPAWN_PREP_LOAD_FAILED = False
 _MODIFY_COMPLETION_PREFLIGHT = None
 _MODIFY_COMPLETION_PREFLIGHT_LOAD_FAILED = False
@@ -577,33 +485,44 @@ _LIFECYCLE_MODELS = None
 _LIFECYCLE_MODELS_LOAD_FAILED = False
 _LIFECYCLE_PLANNER = None
 _LIFECYCLE_PLANNER_LOAD_FAILED = False
-_LIFECYCLE_EXECUTOR = None
-_LIFECYCLE_EXECUTOR_LOAD_FAILED = False
+_LIFECYCLE_APPLICATION = None
+_LIFECYCLE_APPLICATION_LOAD_FAILED = False
+_LIFECYCLE_OUTBOX = None
+_LIFECYCLE_OUTBOX_LOAD_FAILED = False
 _MODIFY_FEEDBACK = None
 _MODIFY_FEEDBACK_LOAD_FAILED = False
 _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
 _MODIFY_EXPIRATION = None
 _MODIFY_EXPIRATION_LOAD_FAILED = False
-_QUEUE_STORE = None
-_QUEUE_STORE_LOAD_FAILED = False
-_QUEUE_MODELS = None
-_QUEUE_MODELS_LOAD_FAILED = False
 _RECONCILE = None
 _RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
+_INTEGRATION_CONTEXT_MODULE = None
+_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED = False
+_INTEGRATION_CONTEXT = None
 _HOOK_MODULE_ACCESS = None
 _RECURRENCE_EVALUATOR = None
 _RECURRENCE_EVALUATOR_LOAD_FAILED = False
 _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
+_MODIFY_PROTOCOL = None
+_MODIFY_PROTOCOL_LOAD_FAILED = False
+_MODIFY_CHAIN_SUMMARY = None
+_MODIFY_CHAIN_SUMMARY_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
         "_HOOK_RUNTIME_LOAD_FAILED",
         "hook_runtime.py",
         "nautical_core.hook_runtime",
+    ),
+    "integration_context": (
+        "_INTEGRATION_CONTEXT_MODULE",
+        "_INTEGRATION_CONTEXT_MODULE_LOAD_FAILED",
+        "integration_context.py",
+        "nautical_core.integration_context",
     ),
     "hook_support": (
         "_HOOK_SUPPORT",
@@ -628,6 +547,12 @@ _MODULE_SPECS = {
         "_MODIFY_SPAWN_PREP_LOAD_FAILED",
         "modify_spawn_prep.py",
         "nautical_core.modify_spawn_prep",
+    ),
+    "modify_spawn": (
+        "_MODIFY_SPAWN",
+        "_MODIFY_SPAWN_LOAD_FAILED",
+        "modify_spawn.py",
+        "nautical_core.modify_spawn",
     ),
     "chain_generation": (
         "_CHAIN_GENERATION",
@@ -677,11 +602,17 @@ _MODULE_SPECS = {
         "lifecycle_planner.py",
         "nautical_core.lifecycle_planner",
     ),
-    "lifecycle_executor": (
-        "_LIFECYCLE_EXECUTOR",
-        "_LIFECYCLE_EXECUTOR_LOAD_FAILED",
-        "lifecycle_executor.py",
-        "nautical_core.lifecycle_executor",
+    "lifecycle_application": (
+        "_LIFECYCLE_APPLICATION",
+        "_LIFECYCLE_APPLICATION_LOAD_FAILED",
+        "lifecycle_application.py",
+        "nautical_core.lifecycle_application",
+    ),
+    "lifecycle_outbox": (
+        "_LIFECYCLE_OUTBOX",
+        "_LIFECYCLE_OUTBOX_LOAD_FAILED",
+        "lifecycle_outbox.py",
+        "nautical_core.lifecycle_outbox",
     ),
     "modify_feedback": (
         "_MODIFY_FEEDBACK",
@@ -737,18 +668,6 @@ _MODULE_SPECS = {
         "panel_diagnostics.py",
         "nautical_core.panel_diagnostics",
     ),
-    "queue_store": (
-        "_QUEUE_STORE",
-        "_QUEUE_STORE_LOAD_FAILED",
-        "queue_store.py",
-        "nautical_core.queue_store",
-    ),
-    "queue_models": (
-        "_QUEUE_MODELS",
-        "_QUEUE_MODELS_LOAD_FAILED",
-        "queue_models.py",
-        "nautical_core.queue_models",
-    ),
     "reconcile": (
         "_RECONCILE",
         "_RECONCILE_LOAD_FAILED",
@@ -779,6 +698,30 @@ _MODULE_SPECS = {
         "recurrence_evaluator.py",
         "nautical_core.recurrence_evaluator",
     ),
+    "modify_protocol": (
+        "_MODIFY_PROTOCOL",
+        "_MODIFY_PROTOCOL_LOAD_FAILED",
+        "modify_protocol.py",
+        "nautical_core.modify_protocol",
+    ),
+    "modify_chain_summary": (
+        "_MODIFY_CHAIN_SUMMARY",
+        "_MODIFY_CHAIN_SUMMARY_LOAD_FAILED",
+        "modify_chain_summary.py",
+        "nautical_core.modify_chain_summary",
+    ),
+    "modify_validation": (
+        "_MODIFY_VALIDATION",
+        "_MODIFY_VALIDATION_LOAD_FAILED",
+        "modify_validation.py",
+        "nautical_core.modify_validation",
+    ),
+    "modify_carry": (
+        "_MODIFY_CARRY",
+        "_MODIFY_CARRY_LOAD_FAILED",
+        "modify_carry.py",
+        "nautical_core.modify_carry",
+    ),
 }
 core = None
 _CORE_IMPORT_TARGET = None
@@ -796,8 +739,9 @@ def _resolve_task_data_context() -> tuple[str, bool]:
         env=os.environ,
     )
 
-_TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
+_TASKDATA_RAW = ""
+_USE_RC_DATA_LOCATION = False
+TW_DATA_DIR = Path(TW_DIR).expanduser()
 
 
 def _hook_runtime_module():
@@ -824,79 +768,43 @@ def _build_hook_runtime_context():
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
         hook_name="on-modify",
-        taskdata_dir=str(TW_DATA_DIR),
-        use_rc_data_location=_USE_RC_DATA_LOCATION,
-        tw_dir=str(TW_DIR),
+        integration_context=_INTEGRATION_CONTEXT,
         hook_dir=str(HOOK_DIR),
         import_ms=_IMPORT_MS,
     )
 
 
 def _task_cmd_prefix() -> list[str]:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.build_task_cmd_prefix(
-            use_rc_data_location=_USE_RC_DATA_LOCATION,
-            tw_data_dir=TW_DATA_DIR,
-        )
-    cmd = ["task"]
-    if _USE_RC_DATA_LOCATION:
-        cmd.append(f"rc.data.location={TW_DATA_DIR}")
-    return cmd
+    from nautical_core.runtime_command import command_prefix
 
-# ------------------------------------------------------------------------------
-# Deferred next-link spawn queue (used when nested `task import` times out due to TW lock)
-# ------------------------------------------------------------------------------
-# Keep import-time state path setup dependency-free.  The queue adapter is
-# loaded by the lifecycle that actually needs it and run_hook refreshes these
-# paths after resolving TASKDATA/rc.data.location.
-_SPAWN_QUEUE_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_spawn_queue.lock"
-_SPAWN_QUEUE_DB_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_queue.db"
-_DEAD_LETTER_PATH = TW_DATA_DIR / ".nautical-state" / ".nautical_dead_letter.jsonl"
-_DEAD_LETTER_LOCK = TW_DATA_DIR / ".nautical-locks" / ".nautical_dead_letter.lock"
-_SPAWN_LOCK_RETRIES = 6
-_SPAWN_LOCK_SLEEP_BASE = 0.03
-_SPAWN_LOCK_STALE_AFTER = 30.0
-_DEAD_LETTER_LOCK_RETRIES = _SPAWN_LOCK_RETRIES
-_DEAD_LETTER_LOCK_SLEEP_BASE = _SPAWN_LOCK_SLEEP_BASE
-_WARNED_SPAWN_QUEUE_LOCK = False
-_DURABLE_QUEUE = os.environ.get("NAUTICAL_DURABLE_QUEUE") == "1"
+    return command_prefix(_INTEGRATION_CONTEXT, hook_name="on-modify")
 
-def _migrate_legacy_nautical_state() -> None:
-    queue_store = _module("queue_store", required=False)
-    if queue_store is not None:
-        issues = queue_store.migrate_nautical_state(tw_data_dir=TW_DATA_DIR)
-        for issue in issues:
-            _diag(f"queue state migration failed: {issue.current} from {issue.legacy}: {issue.error}")
-        globals()["_SPAWN_QUEUE_DB_PATH"] = queue_store.queue_db_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_PATH"] = queue_store.dead_letter_path(TW_DATA_DIR)
-        globals()["_DEAD_LETTER_LOCK"] = queue_store.dead_letter_lock_path(TW_DATA_DIR)
+
+def _initialize_integration_context() -> None:
+    global core, _CORE_IMPORT_TARGET, _INTEGRATION_CONTEXT
+    global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    if _INTEGRATION_CONTEXT is not None:
         return
+    hook_runtime = _hook_runtime_module()
+    core, target, context = hook_runtime.initialize_integration_context(
+        module_access=_hook_module_access(),
+        hook_bootstrap=hook_bootstrap,
+        core_base=_CORE_BASE,
+        argv=tuple(sys.argv[1:]),
+        tw_dir=str(TW_DIR),
+        access="read_only",
+    )
+    _CORE_IMPORT_TARGET = target
+    _INTEGRATION_CONTEXT = context
+    TW_DATA_DIR = context.taskdata
+    _TASKDATA_RAW = str(context.taskdata)
+    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
 def _load_core() -> None:
     global core, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
     if core is not None and _CORE_READY:
         return
-    if core is None:
-        module, target, import_error = hook_bootstrap.import_core_package(_CORE_BASE)
-        if target is not None:
-            globals()["_CORE_IMPORT_TARGET"] = target
-        if import_error is not None:
-            globals()["_CORE_IMPORT_ERROR"] = import_error
-        if module is not None:
-            core = module
-    if core is None:
-        msg = (
-            "nautical_core package not found. Expected nautical_core/__init__.py in ~/.task or NAUTICAL_CORE_PATH. "
-            f"(resolved base: {_CORE_BASE})"
-        )
-        raise ModuleNotFoundError(msg)
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    if callable(reload_config):
-        if _USE_RC_DATA_LOCATION:
-            reload_config(TW_DATA_DIR)
-    elif getattr(core, "__file__", None):
-        raise RuntimeError("nautical_core does not provide validated configuration reload")
+    _initialize_integration_context()
     try:
         core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
     except Exception:
@@ -928,13 +836,12 @@ _ANALYTICS_ONTIME_TOL_SECS = 3600
 _CHECK_CHAIN_INTEGRITY = False
 _DEBUG_WAIT_SCHED = _DEFAULT_DEBUG_WAIT_SCHED
 _RECURRENCE_UPDATE_UDAS: tuple[str, ...] = ()
-_SPAWN_QUEUE_MAX_BYTES = _DEFAULT_SPAWN_QUEUE_MAX_BYTES
 _MAX_CHAIN_WALK = _MAX_CHAIN_WALK
 
 def _apply_core_config() -> None:
     global _CHAIN_COLOR_PER_CHAIN, _SHOW_TIMELINE_GAPS, _SHOW_ANALYTICS, _ANALYTICS_STYLE
     global _ANALYTICS_ONTIME_TOL_SECS, _CHECK_CHAIN_INTEGRITY
-    global _DEBUG_WAIT_SCHED, _RECURRENCE_UPDATE_UDAS, _SPAWN_QUEUE_MAX_BYTES, _MAX_CHAIN_WALK
+    global _DEBUG_WAIT_SCHED, _RECURRENCE_UPDATE_UDAS, _MAX_CHAIN_WALK
     if core is None:
         return
     _CHAIN_COLOR_PER_CHAIN = core.CHAIN_COLOR_PER_CHAIN
@@ -945,32 +852,7 @@ def _apply_core_config() -> None:
     _CHECK_CHAIN_INTEGRITY = core.CHECK_CHAIN_INTEGRITY
     _DEBUG_WAIT_SCHED = core.DEBUG_WAIT_SCHED if hasattr(core, "DEBUG_WAIT_SCHED") else _DEFAULT_DEBUG_WAIT_SCHED
     _RECURRENCE_UPDATE_UDAS = tuple(core.RECURRENCE_UPDATE_UDAS) if hasattr(core, "RECURRENCE_UPDATE_UDAS") else ()
-    _SPAWN_QUEUE_MAX_BYTES = core.SPAWN_QUEUE_MAX_BYTES if hasattr(core, "SPAWN_QUEUE_MAX_BYTES") else _DEFAULT_SPAWN_QUEUE_MAX_BYTES
     _MAX_CHAIN_WALK = core.MAX_CHAIN_WALK
-_CHAIN_EXPORT_TIMEOUT_BASE = _env_float(
-    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_BASE",
-    _DEFAULT_CHAIN_EXPORT_TIMEOUT_BASE,
-    min_value=0.1,
-    max_value=120.0,
-)
-_CHAIN_EXPORT_TIMEOUT_PER_100 = _env_float(
-    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_PER_100",
-    _DEFAULT_CHAIN_EXPORT_TIMEOUT_PER_100,
-    min_value=0.0,
-    max_value=120.0,
-)
-_CHAIN_EXPORT_TIMEOUT_MAX = _env_float(
-    "NAUTICAL_CHAIN_EXPORT_TIMEOUT_MAX",
-    _DEFAULT_CHAIN_EXPORT_TIMEOUT_MAX,
-    min_value=0.1,
-    max_value=300.0,
-)
-_CHAIN_EXPORT_TIMEOUT_MAX = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_MAX)
-_CHAIN_EXPORT_TIMES: list[float] = []
-_CHAIN_EXPORT_TIMES_MAX = 20
-_CHAIN_EXPORT_TIMEOUT_FLOOR = _CHAIN_EXPORT_TIMEOUT_BASE
-
-
 # ------------------------------------------------------------------------------
 # Small cached helpers for speed + consistency
 # ------------------------------------------------------------------------------
@@ -1019,39 +901,6 @@ def _load_anchor_file_dates(name: str):
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
 
 
-@lru_cache(maxsize=512)
-def _export_uuid_short_cached(u_short: str):
-    obj = _export_uuid_short(u_short, env=None)
-    if isinstance(obj, dict) and obj.get("uuid"):
-        return obj
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.LookupResult.unavailable("short UUID lookup unavailable")
-    return None
-
-
-def _export_uuid_short_lookup(u_short: str):
-    """Return a tri-state UUID lookup without collapsing failures to None."""
-    cached = _export_uuid_short_cached(u_short)
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None and isinstance(cached, hook_support.LookupResult):
-        return cached
-    if isinstance(cached, dict) and cached.get("uuid"):
-        if hook_support is not None:
-            return hook_support.LookupResult.found(cached)
-    if hook_support is None:
-        return None
-    return hook_support.export_uuid_short_result(
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        uuid_short=u_short,
-        env=os.environ.copy(),
-        timeout=2.5,
-        retries=2,
-        diag=_diag,
-    )
-
-
 def _dtparse(s):
     return _parse_dt_any_cached(s)
 
@@ -1075,7 +924,7 @@ def _compare_datetimes(left: datetime, right: datetime) -> int:
 # ------------------------------------------------------------------------------
 # Basic IO and panel
 # ------------------------------------------------------------------------------
-def _fail_and_exit(title: str, msg: str) -> None:
+def _fail_and_exit(title: str, msg: str) -> NoReturn:
     _panel(f"❌ {title}", [("Message", msg)], kind="error")
     sys.exit(1)
 
@@ -1083,7 +932,7 @@ _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
 
 
-def _fail_protocol_error(msg: str) -> None:
+def _fail_protocol_error(msg: str) -> NoReturn:
     _fail_and_exit("Protocol error", msg)
 
 
@@ -1092,66 +941,38 @@ def _fail_invalid_input(msg: str) -> None:
 
 
 def _task_uuid_or_empty(task: dict) -> str:
-    if not isinstance(task, dict):
-        return ""
-    try:
-        return str(task.get("uuid") or "").strip()
-    except Exception:
-        return ""
+    return _module("modify_protocol").task_uuid_or_empty(task)
 
 
 def _validate_modify_pair(old: dict, new: dict) -> tuple[dict, dict]:
-    old_uuid = _task_uuid_or_empty(old)
-    new_uuid = _task_uuid_or_empty(new)
-    if not old_uuid or not new_uuid:
-        _fail_protocol_error("Missing task UUID in on-modify input")
-    if old_uuid != new_uuid:
-        if not _task_has_nautical_fields(old, new):
-            return old, new
-        _fail_protocol_error("Old and new task UUIDs differ")
-    return old, new
+    protocol = _module("modify_protocol")
+    try:
+        return protocol.validate_modify_pair(
+            old,
+            new,
+            has_nautical_fields=_task_has_nautical_fields,
+        )
+    except protocol.ModifyProtocolError as exc:
+        _fail_protocol_error(str(exc))
 
 
 def _validate_single_modify_task(task: dict) -> tuple[dict, dict]:
-    if not _task_uuid_or_empty(task):
-        if not _task_has_nautical_fields(task, task):
-            return task, task
-        _fail_protocol_error("Missing task UUID in on-modify input")
-    return task, task
+    protocol = _module("modify_protocol")
+    try:
+        return protocol.validate_single_modify_task(
+            task,
+            has_nautical_fields=_task_has_nautical_fields,
+        )
+    except protocol.ModifyProtocolError as exc:
+        _fail_protocol_error(str(exc))
 
 
 def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[object], int]:
-    decoder = json.JSONDecoder()
-    idx = 0
-    objs: list[object] = []
-    n = len(raw)
-    tries = 0
-    loop_guard = 0
-    max_loops = 10
-
-    while idx < n and len(objs) < max_objects:
-        loop_guard += 1
-        if loop_guard > max_loops:
-            _fail_protocol_error("Invalid JSON input: too many parse attempts")
-        while idx < n and raw[idx].isspace():
-            idx += 1
-        if idx >= n:
-            break
-        try:
-            obj, end = decoder.raw_decode(raw, idx)
-        except Exception as e:
-            _diag(f"json decode error: {e}")
-            _fail_protocol_error("Invalid JSON input")
-        objs.append(obj)
-        if end <= idx:
-            tries += 1
-            if tries >= 2:
-                _fail_protocol_error("Invalid JSON input: parser made no progress")
-            idx += 1
-            continue
-        idx = end
-
-    return objs, idx
+    protocol = _module("modify_protocol")
+    try:
+        return protocol.decode_leading_json_objects(raw, max_objects=max_objects)
+    except protocol.ModifyProtocolError as exc:
+        _fail_protocol_error(str(exc))
 
 
 def _read_two():
@@ -1364,300 +1185,8 @@ def _format_next_cp_rows(
 # ------------------------------------------------------------------------------
 # Taskwarrior integration
 # ------------------------------------------------------------------------------
-_TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
-
-
-
-def _spawn_queue_db_size_bytes() -> int:
-    total = 0
-    paths = (
-        _SPAWN_QUEUE_DB_PATH,
-        Path(str(_SPAWN_QUEUE_DB_PATH) + "-wal"),
-        Path(str(_SPAWN_QUEUE_DB_PATH) + "-shm"),
-    )
-    for p in paths:
-        try:
-            if p.exists():
-                total += p.stat().st_size
-        except Exception:
-            continue
-    return total
-
-
-def _spawn_queue_total_bytes() -> int:
-    return _spawn_queue_db_size_bytes()
-
-
-def _spawn_queue_warn_growth(queue_path: Path, size: int) -> None:
-    global _WARNED_SPAWN_QUEUE_GROWTH
-    try:
-        if _WARNED_SPAWN_QUEUE_GROWTH:
-            return
-        if _SPAWN_QUEUE_MAX_BYTES <= 0:
-            return
-        if size > _SPAWN_QUEUE_MAX_BYTES:
-            _WARNED_SPAWN_QUEUE_GROWTH = True
-            _panel(
-                "⚠ Spawn queue growing",
-                [
-                    ("Queue", str(queue_path)),
-                    ("Size", f"{size} bytes"),
-                    ("Limit", f"{_SPAWN_QUEUE_MAX_BYTES} bytes"),
-                    ("Hint", "Run the on-exit hook or reduce load."),
-                ],
-                kind="warning",
-            )
-    except Exception:
-        pass
-
-
-def _handle_enqueue_lock_busy(task_obj: dict) -> tuple[bool, str]:
-    _write_dead_letter(task_obj, "queue lock busy")
-    _diag("queue lock busy; intent dead-lettered")
-    _diag_count("queue_lock_failures")
-    global _WARNED_SPAWN_QUEUE_LOCK
-    if not _WARNED_SPAWN_QUEUE_LOCK:
-        _WARNED_SPAWN_QUEUE_LOCK = True
-        _panel(
-            "⚠ Spawn queue busy",
-            [
-                ("Queue", str(_SPAWN_QUEUE_DB_PATH)),
-                ("Hint", "Queue lock busy; spawn intent not queued."),
-            ],
-            kind="warning",
-        )
-    return False, "queue lock busy"
-
-
-def _spawn_queue_db_connect_result():
-    queue_store = _module("queue_store")
-    timeout_base = max(1.0, _SPAWN_LOCK_SLEEP_BASE * max(1, _SPAWN_LOCK_RETRIES) * 4.0)
-    return queue_store.connect_queue_db_result(
-        _SPAWN_QUEUE_DB_PATH,
-        attempts=2,
-        timeout_base=timeout_base,
-        timeout_max=timeout_base,
-        backoff_base=0.0,
-        durable=_DURABLE_QUEUE,
-        diag=_diag,
-    )
-
-
-
-
-def _spawn_queue_db_init(conn: sqlite3.Connection) -> None:
-    queue_store = _module("queue_store")
-    queue_store.init_queue_db(conn)
-
-
-def _queue_close_silent(conn: sqlite3.Connection) -> None:
-    queue_store = _module("queue_store")
-    queue_store.close_silent(conn)
-
-
-def _spawn_queue_db_open_ready() -> sqlite3.Connection | None:
-    queue_store = _module("queue_store")
-    return queue_store.open_ready_queue_db_result(
-        _SPAWN_QUEUE_DB_PATH,
-        connect_fn=_spawn_queue_db_connect_result,
-        init_fn=_spawn_queue_db_init,
-        close_fn=_queue_close_silent,
-        diag=_diag,
-    ).conn
-
-
-def _spawn_queue_capacity_guard(task_obj: dict) -> tuple[bool, str] | None:
-    if _SPAWN_QUEUE_MAX_BYTES <= 0:
-        return None
-    try:
-        if _spawn_queue_total_bytes() > _SPAWN_QUEUE_MAX_BYTES:
-            _write_dead_letter(task_obj, "spawn queue full")
-            _diag("spawn queue full; intent dropped")
-            return False, "spawn queue full"
-    except Exception as exc:
-        reason = f"spawn queue capacity check unavailable: {exc}"
-        _write_dead_letter(task_obj, reason)
-        _diag(reason)
-        return False, reason
-    return None
-
-def _spawn_queue_write_failure(task_obj: dict, err: Exception) -> tuple[bool, str]:
-    fail_reason = f"spawn queue write failed: {err}"
-    _write_dead_letter(task_obj, fail_reason)
-    _diag(fail_reason)
-    return False, fail_reason
-
-
-def _enqueue_deferred_spawn_sqlite(
-    task_obj: dict,
-    *,
-    require_lifecycle_plan: bool = False,
-) -> tuple[bool, str]:
-    guard = _spawn_queue_capacity_guard(task_obj)
-    if guard is not None:
-        return guard
-
-    conn = _spawn_queue_db_open_ready()
-    if conn is None:
-        return False, "spawn queue db unavailable"
-    lock_busy = {"value": False}
-    errors: list[str] = []
-    try:
-        queue_store = _module("queue_store")
-        result = queue_store.enqueue_entries_sqlite_result(
-            conn,
-            [task_obj],
-            now=_time.time(),
-            diag=lambda msg: errors.append(str(msg)),
-            on_lock_busy=lambda: lock_busy.__setitem__("value", True),
-            require_lifecycle_plan=require_lifecycle_plan,
-            max_payload_bytes=_SPAWN_QUEUE_MAX_BYTES,
-        )
-        if result.ok:
-            queue_store.repair_sqlite_permissions(_SPAWN_QUEUE_DB_PATH)
-            _spawn_queue_warn_growth(_SPAWN_QUEUE_DB_PATH, _spawn_queue_db_size_bytes())
-            return True, ""
-        if lock_busy["value"]:
-            return _handle_enqueue_lock_busy(task_obj)
-        err = result.err or (errors[-1] if errors else "spawn queue write failed")
-        return _spawn_queue_write_failure(task_obj, RuntimeError(err))
-    finally:
-        _queue_close_silent(conn)
-
-
-def _enqueue_deferred_spawn(
-    task_obj: dict,
-    *,
-    require_lifecycle_plan: bool = False,
-) -> tuple[bool, str]:
-    return _enqueue_deferred_spawn_sqlite(task_obj, require_lifecycle_plan=require_lifecycle_plan)
-
-
-def _write_dead_letter(entry: dict, reason: str) -> None:
-    if not _require_core():
-        return
-    queue_store = _module("queue_store")
-    payload = queue_store.build_dead_letter_payload(
-        hook="on-modify",
-        hook_version=NAUTICAL_HOOK_VERSION,
-        entry=entry,
-        reason=reason,
-        now_fn=lambda: _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
-    )
-    try:
-        queue_store.append_dead_letter_jsonl(
-            path=_DEAD_LETTER_PATH,
-            payload=payload,
-            durable=_DURABLE_QUEUE,
-            acquire_lock=lambda: core.safe_lock(
-                _DEAD_LETTER_LOCK,
-                retries=_DEAD_LETTER_LOCK_RETRIES,
-                sleep_base=_DEAD_LETTER_LOCK_SLEEP_BASE,
-                jitter=_DEAD_LETTER_LOCK_SLEEP_BASE,
-                mkdir=True,
-                stale_after=_SPAWN_LOCK_STALE_AFTER,
-            ),
-            diag=_diag,
-        )
-    except Exception:
-        pass
-
-
-
 def _short(u):
     return (u or "")[:8]
-
-
-def _run_task(
-    cmd: list[str],
-    *,
-    env: dict | None = None,
-    input_text: str | None = None,
-    timeout: float = 3.0,
-    retries: int = 2,
-    retry_delay: float = 0.15,
-    use_tempfiles: bool = False,
-) -> tuple[bool, str, str]:
-    load_err = None
-    try:
-        _load_core()
-    except Exception as e:
-        load_err = e
-    _diag_count("run_task_calls")
-    t0 = _ptime.perf_counter()
-    core_runner = getattr(core, "run_task", None) if core is not None else None
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        if load_err is not None and not callable(core_runner):
-            _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-        ok, out, err = hook_support.run_task(
-            cmd,
-            core_run_task=core_runner,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    else:
-        if callable(core_runner):
-            ok, out, err = core.run_task(
-                cmd,
-                env=env,
-                input_text=input_text,
-                timeout=timeout,
-                retries=retries,
-                use_tempfiles=use_tempfiles,
-            )
-        else:
-            if load_err is not None:
-                _diag(f"core.run_task unavailable; falling back to subprocess: {load_err}")
-            env = env or os.environ.copy()
-            proc = None
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    close_fds=True,
-                    env=env,
-                )
-                out, err = proc.communicate(input=input_text, timeout=timeout)
-                ok, out, err = (proc.returncode == 0, out or "", err or "")
-            except subprocess.TimeoutExpired:
-                if proc is not None:
-                    proc.kill()
-                try:
-                    out, err = proc.communicate(timeout=1.0) if proc is not None else ("", "")
-                except Exception:
-                    out, err = "", ""
-                ok, out, err = (False, out or "", "timeout")
-            except Exception as e:
-                if proc is not None:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    try:
-                        proc.wait(timeout=1.0)
-                    except Exception:
-                        pass
-                ok, out, err = (False, "", str(e))
-    elapsed = _ptime.perf_counter() - t0
-    _diag_count("run_task_seconds", elapsed)
-    _diag_record_run_task(cmd, ok=ok, elapsed=elapsed)
-    if not ok:
-        _diag_count("run_task_failures")
-    return ok, out, err
-
-
-_DEFAULT_RUN_TASK = _run_task
 
 
 def _run_task_result(
@@ -1670,143 +1199,27 @@ def _run_task_result(
     retry_delay: float = 0.15,
     use_tempfiles: bool = False,
 ):
-    """Return typed command state while retaining the legacy tuple wrapper."""
-    core_runner = (
-        getattr(core, "run_task_result", None)
-        if core is not None and _run_task is _DEFAULT_RUN_TASK
-        else None
-    )
-    if _run_task is not _DEFAULT_RUN_TASK:
-        from nautical_core.task_command import coerce_command_result
-        return coerce_command_result(
-            _run_task(
-                cmd,
-                env=env,
-                input_text=input_text,
-                timeout=timeout,
-                retries=retries,
-                use_tempfiles=use_tempfiles,
-            ),
-            cmd,
-            timeout=timeout,
-            attempts=retries,
-        )
-    if callable(core_runner):
-        return core_runner(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.run_task_result(
-            run_task=_run_task,
-            cmd=cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-            use_tempfiles=use_tempfiles,
-        )
-    from nautical_core.task_command import coerce_command_result
-    return coerce_command_result(
-        _run_task(
-            cmd,
-            env=env,
-            input_text=input_text,
-            timeout=timeout,
-            retries=retries,
-            retry_delay=retry_delay,
-        ),
+    """Execute one on-modify Taskwarrior command through the shared client."""
+    from nautical_core.runtime_command import run_task_result
+
+    started = _ptime.perf_counter()
+    result = run_task_result(
         cmd,
+        env=env,
+        input_text=input_text,
         timeout=timeout,
-        attempts=retries,
+        retries=retries,
+        retry_delay=retry_delay,
+        use_tempfiles=use_tempfiles,
+        purpose=f"on-modify {_run_task_diag_bucket(cmd)}",
     )
-
-
-def _export_uuid_short(u_short: str, env=None):
-    if env is None:
-        cached_read = _read_query_get("uuid", str(u_short or "").lower())
-        if cached_read is not _READ_QUERY_MISSING:
-            return cached_read
-    cache_chain_id = ""
-    if env is None and u_short:
-        cached, cache_chain_id = _lifecycle_read_service().lookup_short(u_short)
-        if isinstance(cached, dict):
-            _diag_count("export_uuid_cache_hits")
-            return dict(cached)
-    if env is None:
-        if cache_chain_id:
-            _diag_count("unexpected_cache_misses")
-            _diag(f"cache miss: short uuid {u_short} (chainID={cache_chain_id})")
-        else:
-            _diag_count("export_uuid_cache_misses")
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        obj = hook_support.export_uuid_short(
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            uuid_short=u_short,
-            env=(env or os.environ.copy()),
-            timeout=2.5,
-            retries=2,
-            diag=_diag,
-        )
-        if env is None and isinstance(obj, dict):
-            _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
-        return obj
-    env = env or os.environ.copy()
-    result = _run_task_result(
-        _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{u_short}", "export"],
-        env=env,
-        timeout=2.5,
-        retries=2,
-    )
+    elapsed = _ptime.perf_counter() - started
+    _diag_count("run_task_calls")
+    _diag_count("run_task_seconds", elapsed)
+    _diag_record_run_task(cmd, ok=result.ok, elapsed=elapsed)
     if not result.ok:
-        _diag(f"export uuid:{u_short} failed: {result.stderr.strip()}")
-        return None
-    try:
-        obj = json.loads(result.stdout.strip() or "{}")
-        if not obj.get("uuid"):
-            return None
-        if not str(obj.get("uuid") or "").lower().startswith((u_short or "").lower()):
-            _diag(f"uuid prefix mismatch for {u_short}")
-            return None
-        if env is None:
-            _read_query_set("uuid", str(u_short or "").lower(), obj)
-            return _seed_runtime_lookup_task(obj, lookup_short=u_short)
-        return obj
-    except Exception:
-        return None
-
-
-def _task_lookup_by_uuid(u: str, env: dict | None):
-    """Return a tri-state child verification result for mutation decisions."""
-    hook_support = _module("hook_support", required=False)
-    if hook_support is None:
-        return None
-    if env is None:
-        cached_read = _read_query_get("uuid", str(u or "").lower())
-        if cached_read is not _READ_QUERY_MISSING:
-            # Empty legacy cache entries can represent an earlier parse or
-            # command failure; only a task-bearing entry is authoritative.
-            if isinstance(cached_read, dict) and cached_read.get("uuid"):
-                return hook_support.LookupResult.found(cached_read)
-    return hook_support.task_lookup_by_uuid_uncached(
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        uuid_str=u,
-        env=env,
-        timeout=2.5,
-        retries=2,
-        diag=_diag,
-    )
+        _diag_count("run_task_failures")
+    return result
 
 
 def _reserve_child_uuid(env: dict) -> str:
@@ -1850,42 +1263,15 @@ def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env
 
 
 def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
-    removed = set()
-    for m in _UNREC_ATTR_RE.finditer(stderr or ""):
-        bad = m.group(1)
-        if bad in payload:
-            payload.pop(bad, None)
-            removed.add(bad)
-    return removed
+    return _module("modify_spawn_prep").sanitize_unknown_attrs(stderr, payload)
 
 
 def _normalise_datetime_fields(obj: dict) -> None:
-    def _to_tw_compact_isoz(s: str) -> str:
-        if isinstance(s, str) and _TW_JISO.fullmatch(s):
-            return s.replace("-", "").replace(":", "")
-        return s
-
-    for k in ("entry", "modified", "due", "end", "wait", "until", "scheduled"):
-        if k in obj and obj[k]:
-            obj[k] = _to_tw_compact_isoz(obj[k])
-    if "annotations" in obj and isinstance(obj["annotations"], list):
-        for ann in obj["annotations"]:
-            if isinstance(ann, dict) and ann.get("entry"):
-                ann["entry"] = _to_tw_compact_isoz(ann["entry"])
+    _module("modify_spawn_prep").normalise_datetime_fields(obj)
 
 
 def _strip_none_and_cast(obj: dict):
-    out = {}
-    for k, v in obj.items():
-        if v is None:
-            continue
-        if k in ("link", "chainMax"):
-            try:
-                v = int(v)
-            except Exception:
-                pass
-        out[k] = v
-    return out
+    return _module("modify_spawn_prep").strip_none_and_cast(obj)
 
 def _format_line_preview(
     link_no: int,
@@ -1924,70 +1310,31 @@ def _format_line_preview(
 
 # Helper to categorize subprocess failures
 def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
-    """
-    Categorize spawn errors and return (category, is_retryable).
-    category: "parse", "attribute", "validation", "taskwarrior", "unknown"
-    is_retryable: whether we should retry this attempt
-    """
-    stderr_lower = (stderr or "").lower()
-
-    if returncode == 0:
-        return ("success", False)
-
-    # Unrecognized attribute - NOT retryable, just strip and retry
-    if "unrecognized attribute" in stderr_lower:
-        return ("attribute", True)
-
-    # JSON parsing errors - likely malformed task, NOT retryable
-    if "json" in stderr_lower or "parse" in stderr_lower:
-        return ("parse", False)
-
-    # Validation errors (e.g., bad due date format) - NOT retryable
-    if "invalid" in stderr_lower or "bad date" in stderr_lower:
-        return ("validation", False)
-
-    # Taskwarrior internal errors - possibly retryable
-    if "error" in stderr_lower or "failed" in stderr_lower:
-        return ("taskwarrior", True)
-
-    return ("unknown", True)
+    return _module("modify_spawn_prep").categorize_spawn_error(returncode, stderr)
 
 
-def _spawn_intent_entry(
-    parent_uuid: str,
-    child_obj: dict,
-    child_short: str,
-    parent_nextlink: str | None = None,
-    spawn_intent_id: str | None = None,
-    parent_guard: dict | None = None,
-    lifecycle_plan: dict | None = None,
-) -> dict:
-    intent_id = (spawn_intent_id or "").strip()
-    if not intent_id:
-        intent_id = f"si_{uuid.uuid4().hex[:12]}"
-    queue_models = _module("queue_models")
-    return queue_models.normalize_spawn_queue_entry(
-        {
-            "parent_uuid": parent_uuid,
-            "parent_nextlink": (parent_nextlink or "").strip(),
-            "child_short": child_short,
-            "child": child_obj,
-            "spawn_intent_id": intent_id,
-            "parent_guard": parent_guard,
-            "lifecycle_plan": lifecycle_plan,
-        }
+def _enqueue_spawn_intent(plan) -> tuple[bool, str]:
+    """Stage one immutable lifecycle plan through the shared application service."""
+    if _INTEGRATION_CONTEXT is None:
+        return False, "validated integration context is unavailable"
+    lifecycle_models = _module("lifecycle_models")
+    if not isinstance(plan, lifecycle_models.LifecyclePlan):
+        return False, "invalid lifecycle plan"
+    configuration = _INTEGRATION_CONTEXT.configuration
+    lifecycle_application = _module("lifecycle_application")
+    outbox = _module("lifecycle_outbox").LifecycleOutboxRepository(TW_DATA_DIR)
+    # Staging-only: no unit_of_work/mutations here by design. On-modify must
+    # not construct a command-capable unit of work, to avoid re-entering
+    # Taskwarrior while it still holds the datastore lock for this task.
+    service = lifecycle_application.LifecycleApplicationService(outbox=outbox, owner="on-modify")
+    result = service.stage(
+        plan,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
     )
-
-
-def _enqueue_spawn_intent(entry: dict) -> tuple[bool, str]:
-    if not isinstance(entry, dict):
-        return False, "invalid spawn intent"
-    queue_models = _module("queue_models")
-    try:
-        normalized = queue_models.normalize_spawn_queue_entry(entry)
-    except Exception as e:
-        return False, str(e)
-    return _enqueue_deferred_spawn(normalized, require_lifecycle_plan=True)
+    if result.ok:
+        return True, ""
+    return False, result.reason or "lifecycle outbox staging failed"
 
 
 def _lifecycle_spawn_identity(parent: dict, child: dict):
@@ -2023,83 +1370,23 @@ def _spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
-    """
-    Queue a child spawn intent for the on-exit hook.
-
-    Important: The parent update is applied by Taskwarrior using this hook's stdout.
-    We intentionally avoid importing the parent from inside the hook to reduce the
-    risk of re-entering Taskwarrior while it is holding the datastore lock.
-
-    We enqueue the child for the on-exit hook to import, then update the parent link.
-    """
-    env = os.environ.copy()
-    modify_spawn_prep = _module("modify_spawn_prep")
-    child_obj, child_uuid, child_short = modify_spawn_prep.prepare_spawn_child_payload(
+    modify_spawn = _module("modify_spawn")
+    return modify_spawn.spawn_child_atomic(
         child_task,
         parent_task_with_nextlink,
-        env,
-        child_uuid_for_spawn=_child_uuid_for_spawn,
-        fmt_isoz=core.fmt_isoz,
-        now_utc=core.now_utc,
-        strip_none_and_cast=_strip_none_and_cast,
-        normalise_datetime_fields=_normalise_datetime_fields,
-    )
-
-    stripped_attrs: set[str] = set()
-    last_stderr = ""
-    last_category = "unknown"
-
-    # Decision-only mode: enqueue for on-exit spawn and return unverified.
-    lifecycle_models = _module("lifecycle_models")
-    lifecycle_identity = _lifecycle_spawn_identity(parent_task_with_nextlink, child_obj)
-    spawn_intent_id = lifecycle_identity.idempotency_key
-    recurrence_guard = lifecycle_models.recurrence_fingerprint(
-        parent_task_with_nextlink,
-        parse_datetime=getattr(core, "parse_dt_any", None),
-    )
-    parent_guard = {
-        "status": parent_task_with_nextlink.get("status") or "",
-        "chain": parent_task_with_nextlink.get("chain") or "",
-        "chainID": parent_task_with_nextlink.get("chainID") or "",
-        "link": parent_task_with_nextlink.get("link") or "",
-        "modified": parent_task_with_nextlink.get("modified") or "",
-        "recurrence_fingerprint": recurrence_guard,
-    }
-    lifecycle_plan = lifecycle_models.LifecyclePlan.from_mappings(
-        identity=lifecycle_identity,
-        action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
-        parent_guard=lifecycle_models.ParentGuard.from_mapping(parent_guard),
-        child_payload=child_obj,
-        parent_patch={"nextLink": child_short},
-        expected_postconditions=("child_present", "parent_linked", "verified"),
-    ).to_dict()
-    entry = _spawn_intent_entry(
-        parent_task_with_nextlink.get("uuid") or "",
-        child_obj,
-        child_short,
-        parent_task_with_nextlink.get("nextLink") or "",
-        spawn_intent_id,
-        parent_guard=parent_guard,
-        lifecycle_plan=lifecycle_plan,
-    )
-    queued, queue_reason = _enqueue_spawn_intent(entry)
-    if not queued:
-        return (
-            child_short,
-            stripped_attrs,
-            False,
-            False,
-            f"Spawn intent queue failed: {queue_reason}",
-            spawn_intent_id,
-        )
-    _diag_count("spawn_deferred")
-    return (
-        child_short,
-        stripped_attrs,
-        False,
-        True,
-        "Spawn intent queued for on-exit processing",
-        spawn_intent_id,
+        services=modify_spawn.SpawnServices(
+            prepare_spawn_child_payload=_module("modify_spawn_prep").prepare_spawn_child_payload,
+            child_uuid_for_spawn=_child_uuid_for_spawn,
+            fmt_isoz=core.fmt_isoz,
+            now_utc=core.now_utc,
+            strip_none_and_cast=_strip_none_and_cast,
+            normalise_datetime_fields=_normalise_datetime_fields,
+            lifecycle_models=_module("lifecycle_models"),
+            lifecycle_spawn_identity=_lifecycle_spawn_identity,
+            enqueue_spawn_intent=_enqueue_spawn_intent,
+            parse_datetime=getattr(core, "parse_dt_any", None),
+            diag_count=_diag_count,
+        ),
     )
 
 
@@ -2154,14 +1441,11 @@ def tw_export_chain_required(seed_task, env=None):
             "ChainID is required (legacy chain traversal removed). "
             "Run dev_tools/nautical_backfill_chainid.py, then retry."
         )
-    if env is None:
-        rows = _lifecycle_read_service().get_chain_export(chain_id)
-        if rows is None:
-            raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
-        return rows
-    ok, rows, error = _tw_export_chain_checked(chain_id, env=env, limit=_MAX_CHAIN_WALK)
-    if not ok:
-        raise RuntimeError(error or f"Chain export unavailable for chainID {chain_id}")
+    if env is not None:
+        raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
+    rows = _lifecycle_read_service().get_chain_export(chain_id)
+    if rows is None:
+        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
     return rows
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
@@ -2280,195 +1564,80 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 def _validate_anchor_on_modify(expr: str):
-    """Mirror on-add strict checks for anchor; raise ValueError on problems."""
-    if not expr or not expr.strip():
-        raise ValueError("anchor is required if chaining by anchor")
-
-    # Syntax first (for friendlier messages)
-    try:
-        dnf_raw = core.parse_anchor_expr_to_dnf(expr)
-    except Exception as e:
-        raise ValueError(f"anchor syntax error: {str(e)}")
-
-
-    # NOTE: legacy weekday ':' syntax is accepted for backward compatibility.
-
-    # Strict validation
-    try:
-        _validate_anchor_expr_cached(expr)  # calls core.validate_anchor_expr_strict
-    except Exception as e:
-        raise ValueError(f"anchor validation failed: {str(e)}")
+    return _module("modify_validation").validate_anchor_on_modify(
+        expr,
+        parse_anchor_expr=core.parse_anchor_expr_to_dnf,
+        validate_anchor_expr=_validate_anchor_expr_cached,
+    )
 
 
 def _validate_omit_on_modify(expr: str):
-    if not expr or not expr.strip():
-        return
-    try:
-        _validate_omit_expr_cached(expr)
-    except Exception as e:
-        raise ValueError(f"omit validation failed: {str(e)}")
+    return _module("modify_validation").validate_omit_on_modify(
+        expr,
+        validate_omit_expr=_validate_omit_expr_cached,
+    )
 
 
 def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
-    """
-    Mirror on-add CP checks for a plain modify:
-      - cp must parse as a duration
-      - optional chainMax must be a positive integer
-      - optional chainUntil must parse as a datetime
-    """
-    if not cp_str or not cp_str.strip():
-        return  # nothing to validate
-
-    seq = core.parse_cp_sequence(cp_str)
-    if not seq:
-        reason = core.cp_sequence_parse_error(cp_str) or f"invalid duration format '{cp_str}'"
-        raise ValueError(f"{reason} (expected: 3d, 2w, 1h, etc.)")
-
-    # chainMax
     add_validation = core._import_sibling("add_validation")
-    _cpmax, chain_max_err = add_validation.parse_chain_max(chain_max_val)
-    if chain_max_err:
-        raise ValueError(chain_max_err)
-
-    # chainUntil
-    cu = (chain_until_val or "").strip()
-    if cu:
-        dt = core.parse_dt_any(cu)
-        if dt is None:
-            raise ValueError(f"Invalid chainUntil '{cu}'")
+    return _module("modify_validation").validate_cp_on_modify(
+        cp_str,
+        chain_max_val,
+        chain_until_val,
+        parse_cp_sequence=core.parse_cp_sequence,
+        cp_sequence_parse_error=core.cp_sequence_parse_error,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=core.parse_dt_any,
+    )
 
 
 def _validate_chain_limits_on_modify(task: dict) -> None:
     add_validation = core._import_sibling("add_validation")
-    cpmax, chain_max_err = add_validation.parse_chain_max(task.get("chainMax"))
-    if chain_max_err:
-        _fail_and_exit("Invalid chainMax", chain_max_err)
-    if cpmax is not None:
-        task["chainMax"] = cpmax
-
-    chain_until = str(task.get("chainUntil") or "").strip()
-    if not chain_until:
-        return
-    until_dt = core.parse_dt_any(chain_until)
-    if until_dt is None:
-        _fail_and_exit("Invalid chainUntil", f"Unrecognized datetime format '{chain_until}'")
-    is_valid, until_err = _validate_until_not_past(until_dt, core.now_utc())
-    if not is_valid:
-        _fail_and_exit("Invalid chainUntil", until_err or "chainUntil is in the past")
+    return _module("modify_validation").validate_chain_limits_on_modify(
+        task,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=core.parse_dt_any,
+        validate_until_not_past=_validate_until_not_past,
+        now_utc=core.now_utc,
+        fail=_fail_and_exit,
+    )
 
 
 def _validate_native_until_after_target_or_fail(task: dict) -> None:
-    until_raw = task.get("until")
-    if not until_raw:
-        return
     add_validation = core._import_sibling("add_validation")
-    mode_is_valid, mode_reason = add_validation.validate_native_until_anchor_mode(
-        until_raw,
-        task.get("anchor"),
-        task.get("anchor_file"),
-        task.get("anchor_mode"),
+    _module("modify_validation").validate_native_until_after_target_or_fail(
+        task,
+        validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
+        safe_parse_datetime=_safe_parse_datetime,
+        validate_after_target=add_validation.validate_native_until_after_target,
+        format_local=core.fmt_dt_local,
+        panel=_panel,
+        fail=_fail_and_exit,
+        abort=sys.exit,
     )
-    if not mode_is_valid:
-        mode = str(task.get("anchor_mode") or "skip").strip().lower()
-        _panel(
-            "❌ Invalid expiration mode",
-            [
-                ("Mode", mode),
-                ("Conflict", mode_reason or "Native until conflicts with strict anchor backfill."),
-                ("Action", "Remove until or use anchor_mode:skip."),
-            ],
-            kind="error",
-        )
-        sys.exit(1)
-    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
-    if not target_field:
-        return
-    target_dt, target_err = _safe_parse_datetime(task.get(target_field))
-    if target_err or target_dt is None:
-        _fail_and_exit(f"Invalid {target_field}", target_err or f"{target_field} must be a valid datetime")
-    until_dt, until_err = _safe_parse_datetime(until_raw)
-    if until_err or until_dt is None:
-        _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
-    is_valid, reason = add_validation.validate_native_until_after_target(
-        until_dt,
-        target_dt,
-        target_field,
-    )
-    if is_valid:
-        return
-    label = "Scheduled" if target_field == "scheduled" else "Due"
-    _panel(
-        "❌ Invalid expiration window",
-        [
-            (label, core.fmt_dt_local(target_dt)),
-            ("Expires", core.fmt_dt_local(until_dt)),
-            ("Required", reason or f"until must be later than {target_field}"),
-        ],
-        kind="error",
-    )
-    sys.exit(1)
 
 
 def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
-    until_raw = task.get("until")
-    anchor_value = str(task.get("anchor") or "").strip()
-    anchor_file_value = str(task.get("anchor_file") or "").strip()
-    if not until_raw or not (anchor_value or anchor_file_value):
-        return
-    target_field = "due" if task.get("due") else "scheduled" if task.get("scheduled") else ""
-    if not target_field:
-        return
-    target_dt, target_err = _safe_parse_datetime(task.get(target_field))
-    until_dt, until_err = _safe_parse_datetime(until_raw)
-    if target_err or until_err or target_dt is None or until_dt is None:
-        return
-    dnf = None
-    if anchor_value:
-        try:
-            dnf = _validate_anchor_expr_cached(anchor_value)
-        except Exception:
-            return
     add_validation = core._import_sibling("add_validation")
-    target_local = _tolocal(target_dt)
-    try:
-        slots = add_validation.collect_anchor_time_slots(
-            dnf,
-            anchor_file_value,
-            (target_local.hour, target_local.minute),
-            normalize_time_slots=_norm_hhmm_list,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            target_date=target_local.date(),
-            resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
-            recurrence_context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(task),
-        )
-    except Exception as exc:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            _panel(
-                "❌ Invalid astronomy time",
-                [("Required", astronomy.scheduling_error_message(exc))],
-                kind="error",
-            )
-            sys.exit(1)
-        return
-    is_valid, reason = add_validation.validate_native_until_calendar_slots(
-        until_dt,
-        target_dt,
-        slots,
+    astronomy = core._import_sibling("astronomy")
+    native_until = core._import_sibling("native_until")
+    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext
+    _module("modify_validation").validate_native_until_anchor_slots_or_fail(
+        task,
+        safe_parse_datetime=_safe_parse_datetime,
+        validate_anchor=_validate_anchor_expr_cached,
+        collect_time_slots=add_validation.collect_anchor_time_slots,
+        validate_time_slots=native_until.validate_calendar_slots,
+        normalize_time_slots=_norm_hhmm_list,
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        recurrence_context=recurrence_context.from_task,
         to_local=_tolocal,
+        format_local=core.fmt_dt_local,
+        astronomy_is_error=astronomy.is_astronomy_error,
+        astronomy_error_message=astronomy.scheduling_error_message,
+        panel=_panel,
+        abort=sys.exit,
     )
-    if is_valid:
-        return
-    _panel(
-        "❌ Invalid expiration window",
-        [
-            ("Expires", core.fmt_dt_local(until_dt)),
-            ("Anchor slots", ", ".join(f"{hh:02d}:{mm:02d}" for hh, mm in slots) or "none"),
-            ("Required", reason or "calendar expiration must be later than every anchor slot"),
-        ],
-        kind="error",
-    )
-    sys.exit(1)
 
 
 # ------------------------------------------------------------------------------
@@ -2526,14 +1695,31 @@ def _chain_export_for_cache(
     extra: str | None,
     limit: int,
 ) -> tuple[dict, ...]:
-    """Validated exporter injected into the lifecycle read service cache."""
-    global _LAST_CHAIN_EXPORT_STATUS
-    _LAST_CHAIN_EXPORT_STATUS = (True, "")
-    rows = tw_export_chain(chain_id, since=since, extra=extra, env=None, limit=limit)
-    ok, error = _LAST_CHAIN_EXPORT_STATUS
-    if not ok:
-        raise RuntimeError(error or "chain export unavailable")
-    return tuple(rows)
+    """Load one authoritative chain and apply presentation filters in memory."""
+    repository = getattr(_modify_runtime_state(), "task_repository", None)
+    if repository is None:
+        raise RuntimeError("modify task repository is unavailable")
+    integration_models = importlib.import_module("nautical_core.integration_models")
+    read = repository.chain_snapshot(chain_id)
+    if isinstance(read, integration_models.Unavailable):
+        raise RuntimeError(read.evidence.detail or "chain export unavailable")
+    if isinstance(read, integration_models.Absent):
+        return ()
+    if not isinstance(read, integration_models.Found):
+        raise RuntimeError("task repository returned an invalid chain result")
+    rows = [dict(row) for row in read.value]
+    if since is not None:
+        rows = [
+            row
+            for row in rows
+            if (parsed := _dtparse(row.get("modified"))) is not None and parsed > since
+        ]
+    if extra:
+        tokens = _parse_extra_tokens(extra)
+        if tokens is None:
+            raise RuntimeError("invalid chain export filters")
+        rows = [row for row in rows if all(_cached_chain_token_match(row, token) for token in tokens)]
+    return tuple(rows[: max(1, int(limit or _MAX_CHAIN_WALK))])
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:
     if not isinstance(task, dict) or not isinstance(token, str) or not token:
@@ -2575,37 +1761,16 @@ def _lifecycle_read_service():
         parse_extra_tokens=_parse_extra_tokens,
         token_matcher=_cached_chain_token_match,
         read_query_get=_read_query_get,
-        read_query_set=_read_query_set,
-        read_query_delete=_read_query_delete,
         chain_cache_get=lambda _chain_id: None,
         export_chain_cached=_chain_export_for_cache,
         max_chain_walk=_MAX_CHAIN_WALK,
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,
         cache_store=state.chain_cache_store,
-        task_cmd_prefix=_task_cmd_prefix,
         read_query_missing=_READ_QUERY_MISSING,
     )
     state.lifecycle_read_service = service
     return service
-
-
-def _existing_next_lookup(parent_task: dict, next_no: int, chain_snapshot=None):
-    hook_support = _module("hook_support", required=False)
-    if getattr(chain_snapshot, "is_unavailable", False) and hook_support is not None:
-        return hook_support.LookupResult.unavailable(
-            getattr(chain_snapshot, "error", "completion chain snapshot unavailable")
-        )
-    return _lifecycle_read_service().existing_next_lookup(
-        parent_task,
-        next_no,
-        export_uuid_short_cached=_export_uuid_short_lookup,
-        get_chain_export=lambda chain_id, **kwargs: _lifecycle_read_service().get_chain_export(
-            chain_id, **kwargs
-        ),
-        snapshot_rows=getattr(chain_snapshot, "rows", None),
-        snapshot_loaded=bool(getattr(chain_snapshot, "loaded", False)),
-    )
 
 
 def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = None) -> dict | None:
@@ -2637,6 +1802,10 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
 
 def _recurrence_seed_base(task: dict) -> str:
     """Resolve the task recurrence identity once for preview-like paths."""
+    # This helper is also used by isolated preview/test paths that do not pass
+    # through ``run_hook`` first.  Ensure the lazy core binding exists before
+    # resolving the shared recurrence context.
+    _load_core()
     context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
         task,
         fallback_chain_id="preview",
@@ -2822,45 +1991,12 @@ def _recurrence_evaluator_for_task(task: dict):
 
 
 def _scheduler_service_for_task(task: dict):
-    """Build the task-scoped scheduler service used by completion projections."""
-    state = _modify_runtime_state()
-    identity = str(task.get("uuid") or task.get("chainID") or "").strip()
-    if identity:
-        cache_key = (
-            "task",
-            identity,
-            str(task.get("modified") or ""),
-            str(task.get("anchor") or ""),
-            str(task.get("anchor_file") or ""),
-            str(task.get("omit") or ""),
-            str(task.get("omit_file") or ""),
-            str(task.get("cp") or ""),
-            str(task.get("anchor_mode") or ""),
-            str(task.get("chainMax") or ""),
-            str(task.get("chainUntil") or ""),
-            str(task.get("bc") or ""),
-        )
-    else:
-        cache_key = ("object", id(task))
-    cached_service = state.scheduler_services.get(cache_key)
-    if cached_service is not None:
-        return cached_service
-    from nautical_core.evaluation_session import EvaluationSession
-    from nautical_core.scheduler_service import SchedulerService
-
-    from nautical_core.recurrence_context import RecurrenceContext
-
-    context = RecurrenceContext.from_task(
+    return _module("modify_runtime").scheduler_service_for_task(
         task,
-        fallback_chain_id=_recurrence_seed_base(task),
-        timezone=core._LOCAL_TZ,
-        business_calendar=core.business_calendar_for_task(task),
-        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        state=_modify_runtime_state(),
+        core=core,
+        recurrence_seed_base=_recurrence_seed_base,
     )
-    service = SchedulerService(EvaluationSession.from_task(task, context=context))
-    state.scheduler_services[cache_key] = service
-    return service
 
 
 def _anchor_included_occurrences(
@@ -2876,143 +2012,44 @@ def _anchor_included_occurrences(
     dnf,
     anchor_file_provider: Any | None = None,
 ) -> list[datetime]:
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-
     service = _scheduler_service_for_task(parent)
-    timezone = service.session.evaluator.context.timezone
-    result = service.collect_request(
-        OccurrenceRangeRequest(
-            OccurrenceCursor(
-                after_local_dt,
-                inclusive=inclusive,
-                timezone=timezone,
-            ),
-            limit=limit,
-            omission_policy="exclude",
-        )
+    return service.included_occurrences_after(
+        after_local_dt,
+        inclusive=inclusive,
+        limit=limit,
     )
-    if result.failure is not None:
-        raise ValueError(f"Anchor occurrence collection {result.status}: {result.failure.reason}")
-    if result.terminal is not None and not result.occurrences:
-        raise result.terminal
-    return [
-        occurrence.local_datetime
-        for occurrence in result.occurrences
-        if occurrence.local_datetime is not None
-    ]
 
 
 def _estimate_cp_final_by_max(task: dict, next_due_utc):
-    """
-    Estimate the final due date when chainMax cap is reached.
-    Returns the due datetime of link #chainMax.
-    """
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if not cpmax:
-        return None
-
-    cur_no = core.coerce_int(task.get("link"), 1)
-    if cur_no >= cpmax:
-        return None
-
-    cp_str = task.get("cp") or ""
-    tokens = core.parse_cp_sequence_tokens(cp_str)
-    if not tokens:
-        return None
-
-    fut_dt = next_due_utc
-    fut_no = cur_no + 1
-    iterations = 0
-
-    # Step forward from next due until we reach cap_no
-    while fut_no < cpmax:
-        iterations += 1
-        if iterations > _MAX_ITERATIONS:
-            _diag(
-                f"chainMax forecast stopped after {_MAX_ITERATIONS} occurrences; "
-                "final date is unavailable"
-            )
-            return None
-        td = _cp_sequence_period_for_link(
-            tokens,
-            cp_str,
-            fut_no,
-            str(task.get("chainID") or "").strip(),
-        )
-        fut_no += 1
-        fut_dt = _cp_add_td(fut_dt, td)
-
-    return fut_dt
+    return _module("modify_completion_compute").estimate_cp_final_by_max(
+        task,
+        next_due_utc,
+        coerce_int=core.coerce_int,
+        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+        sequence_period_for_link=_cp_sequence_period_for_link,
+        add_period=_cp_add_td,
+        max_iterations=_MAX_ITERATIONS,
+        diagnostic=_diag,
+    )
 
 
 def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
-    """
-    Estimate the final due date when chainMax cap is reached for anchors.
-    Returns the due datetime of link #chainMax.
-    """
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
-    if not cpmax:
-        return None
-
-    cur_no = core.coerce_int(task.get("link"), 1)
-    if cur_no >= cpmax:
-        return None
-
-    seed_base = _recurrence_seed_base(task)
-    nxt_local = _to_local_cached(next_due_utc)
-
-    # Use a stable default seed (prefer the original due date).
-    due0, _ = _safe_parse_datetime(task.get("due"))
-    default_seed = _to_local_cached(due0 or next_due_utc).date()
-
-    fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
-    scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
-    anchor_file = (task.get("anchor_file") or "").strip()
-    anchor_file_provider = None
-    if anchor_file:
-        anchor_file_provider = _anchor_file_provider_for(
-            anchor_file, fallback_hhmm=fallback_hhmm, seed_base=seed_base
-        )
-    fut_no = cur_no + 1
-    fut_local = nxt_local
-    iterations = 0
-    while fut_no < cpmax:
-        iterations += 1
-        if iterations > _MAX_ITERATIONS:
-            _diag(
-                f"chainMax forecast stopped after {_MAX_ITERATIONS} occurrences; "
-                "final date is unavailable"
-            )
-            return None
-        if anchor_file:
-            future = _anchor_included_occurrences(
-                task,
-                after_local_dt=fut_local,
-                inclusive=False,
-                limit=2,
-                fallback_hhmm=fallback_hhmm,
-                omit_dnf=omit_dnf,
-                seed_base=seed_base,
-                default_seed_date=default_seed,
-                dnf=dnf,
-                anchor_file_provider=anchor_file_provider,
-            )
-            fut_local = future[0] if future else None
-        else:
-            fut_local = scheduler(
-                dnf,
-                fut_local,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=omit_dnf,
-                fallback_hhmm=fallback_hhmm,
-            )
-        if fut_local is None:
-            return None
-        fut_no += 1
-
-    return fut_local.astimezone(timezone.utc)
+    return _module("modify_completion_compute").estimate_anchor_final_by_max(
+        task,
+        next_due_utc,
+        dnf,
+        coerce_int=core.coerce_int,
+        recurrence_seed_base=_recurrence_seed_base,
+        to_local_cached=_to_local_cached,
+        safe_parse_datetime=_safe_parse_datetime,
+        anchor_file_fallback_hhmm=_anchor_file_fallback_hhmm,
+        omit_dnf_from_parent=_omit_dnf_from_parent,
+        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
+        anchor_file_provider_for=_anchor_file_provider_for,
+        anchor_included_occurrences=_anchor_included_occurrences,
+        diagnostic=_diag,
+        max_iterations=_MAX_ITERATIONS,
+    )
 
 
 # Helper to validate chainUntil is in the future
@@ -3112,47 +2149,12 @@ def _recurrence_anchor_field(task: dict | None) -> str:
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats
 # ------------------------------------------------------------------------------
-def _median(nums: list[float]) -> float | None:
-    if not nums:
-        return None
-    s = sorted(nums)
-    n = len(s)
-    mid = n // 2
-    return s[mid] if n % 2 else 0.5 * (s[mid - 1] + s[mid])
-
-
 def _lateness_stats(chain: list[dict], tol_secs: int = 60) -> dict:
-    early = on = late = 0
-    deltas = []
-    best = None
-    worst = None
-    for obj in chain:
-        due = _dtparse(obj.get("due"))
-        end = _dtparse(obj.get("end"))
-        if not (due and end):
-            continue
-        diff = (end - due).total_seconds()
-        deltas.append(diff)
-        if diff > tol_secs:
-            late += 1
-            worst = diff if (worst is None or diff > worst) else worst
-        elif diff < -tol_secs:
-            early += 1
-            best = diff if (best is None or diff < best) else best
-        else:
-            on += 1
-    avg = (sum(deltas) / len(deltas)) if deltas else None
-    med = _median(deltas) if deltas else None
-    return {
-        "early": early,
-        "on_time": on,
-        "late": late,
-        "avg": avg,
-        "median": med,
-        "best_early": best,
-        "worst_late": worst,
-        "count": len(deltas),
-    }
+    return _module("modify_analytics").lateness_stats(
+        chain,
+        parse_datetime=_dtparse,
+        tol_secs=tol_secs,
+    )
 
 
 def _sort_chain_for_analytics(chain: list[dict]) -> list[dict]:
@@ -3213,93 +2215,22 @@ def _fmt_secs_delta(now_ref, secs: float | None) -> str:
 
 
 def _last_n_timeline(chain: list[dict], n: int = 6) -> list[str]:
-    if not chain:
-        return []
-
-    # Get link number for sorting - handle tasks without link numbers
-    def get_link(obj):
-        link = obj.get("link")
-        if link is None or link == "":
-            return -1  # Put tasks without links at the beginning
-        return core.coerce_int(link, 999999)
-
-    # Sort by link number descending (most recent first)
-    # But tasks without links (link=-1) should go at the end (oldest)
-    chain_sorted = sorted(chain, key=get_link, reverse=True)
-
-    # Filter out tasks without link numbers for display (they're usually root tasks)
-    chain_with_links = [t for t in chain_sorted if get_link(t) > 0]
-
-    # Determine max link number for formatting (only from tasks with links)
-    if chain_with_links:
-        max_link = max(get_link(obj) for obj in chain_with_links)
-        label_width = len(str(max_link)) + 1  # +1 for the # symbol
-    else:
-        label_width = 4  # default width
-
-    def history_line(obj: dict, no: int) -> str:
-        end = _dtparse(obj.get("end"))
-        due = _dtparse(obj.get("due"))
-        is_deleted = str(obj.get("status") or "").strip().lower() == "deleted"
-        if is_deleted and not end:
-            end_s = "deleted"
-            delta = ""
-            marker = "×"
-        else:
-            end_s = _fmtlocal(end) if end else "(no end)"
-            delta = _fmt_on_time_delta(due, end)
-            marker = "✓"
-        short = _short(obj.get("uuid"))
-        lab = f"[bold]#{no:<{label_width}}[/]"
-        return f"{lab} {marker:<2} {end_s} {delta} [dim]{short}[/]"
-
-    # If chain has more than 10 tasks, show top 3 (most recent) and bottom 3 (oldest)
-    if len(chain_with_links) > 10:
-        # Top 3: most recent tasks (highest link numbers)
-        top_tasks = chain_with_links[:3]
-
-        # Bottom 3: oldest tasks (lowest link numbers)
-        bottom_tasks = chain_with_links[-3:]  # Already in descending order (e.g., [3, 2, 1])
-
-        # Create lines for top tasks (most recent)
-        top_lines = []
-        for obj in top_tasks:
-            no = get_link(obj)
-            line = history_line(obj, no)
-            # Highlight the most recent task
-            if no == get_link(chain_with_links[0]):
-                line = f"[green]{line}[/]"
-            top_lines.append(line)
-
-        # Add ellipsis
-        ellipsis_line = f"[dim]{' ' * (label_width + 4)}... ({len(chain_with_links) - 6} more tasks) ...[/dim]"
-
-        # Create lines for bottom tasks (oldest) - also in descending order
-        bottom_lines = []
-        for obj in bottom_tasks:  # Already in descending order (e.g., 3, 2, 1)
-            no = get_link(obj)
-            bottom_lines.append(history_line(obj, no))
-
-        return top_lines + [ellipsis_line] + bottom_lines
-
-    # For chains with <= 10 tasks, show all in reverse order (most recent at top)
-    lines = []
-    for obj in chain_with_links[:n]:
-        no = get_link(obj)
-        line = history_line(obj, no)
-        # Highlight the most recent task
-        if no == get_link(chain_with_links[0]):
-            line = f"[green]{line}[/]"
-        lines.append(line)
-
-    return lines
+    return _module("modify_chain_summary").last_n_timeline(
+        chain,
+        n,
+        coerce_int=core.coerce_int,
+        parse_datetime=_dtparse,
+        format_local=_fmtlocal,
+        format_on_time_delta=_fmt_on_time_delta,
+        short_uuid=_short,
+    )
 
 def _end_summary_current(current: dict, current_task: dict | None) -> dict:
-    return current_task if current_task else current
+    return _module("modify_chain_summary").summary_current(current, current_task)
 
 
 def _end_summary_chain_id_row(actual_current: dict) -> str:
-    return (actual_current.get("chainID") or "").strip()
+    return _module("modify_chain_summary").summary_chain_id(actual_current)
 
 
 def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
@@ -3323,164 +2254,72 @@ def _end_summary_span_fields(
     stop_at=None,
     stopped_by_delete: bool = False,
 ) -> tuple[datetime | None, datetime | None, str]:
-    first_task = chain[0] if chain else None
-    last_task = chain[-1] if chain else None
-    if not first_task and chain_id:
-        first_task = _export_chain_endpoint(chain_id, "first")
-    if not last_task and chain_id:
-        last_task = _export_chain_endpoint(chain_id, "last")
-    first = _dtparse((first_task or {}).get("due")) if first_task else None
-    last = _dtparse((last_task or {}).get("end")) if last_task else None
-    span = "–"
-    if first and last:
-        span = (
-            _human_delta(first, last, prefer_months=True)
-            .replace("in ", "")
-            .replace("overdue by ", "")
-        )
-    elif first and stop_at and stopped_by_delete:
-        active = (
-            _human_delta(first, stop_at, prefer_months=True)
-            .replace("in ", "")
-            .replace("overdue by ", "")
-        )
-        span = f"Active for {active} before deletion"
-    return first, last, span
+    return _module("modify_chain_summary").span_fields(
+        chain_id,
+        chain,
+        stop_at=stop_at,
+        stopped_by_delete=stopped_by_delete,
+        export_endpoint=_export_chain_endpoint,
+        parse_datetime=_dtparse,
+        human_delta=_human_delta,
+    )
 
 
 def _end_summary_kind_rows(rows: list[tuple[str, str]], kind: str, current: dict) -> None:
-    if kind == "anchor":
-        expr = (current.get("anchor") or "").strip()
-        mode = (current.get("anchor_mode") or "skip").lower()
-        tag = {
-            "skip": "[cyan]SKIP[/]",
-            "all": "[yellow]ALL[/]",
-            "flex": "[magenta]FLEX[/]",
-        }.get(mode, "[cyan]SKIP[/]")
-        try:
-            preset_display = core.anchor_preset_display(expr)
-        except Exception:
-            preset_display = None
-        if preset_display:
-            label, text = preset_display
-            rows.append((label, f"{text}  {tag}"))
-        else:
-            rows.append(("Pattern", f"{expr}  {tag}"))
-        try:
-            dnf = _validate_anchor_expr_cached(expr)
-            rows.append(("Natural", core.describe_anchor_dnf(dnf, current)))
-        except Exception:
-            pass
-        return
-    if kind == "anchor_file":
-        expr = (current.get("anchor_file") or "").strip()
-        mode = (current.get("anchor_mode") or "skip").lower()
-        tag = {
-            "skip": "[cyan]SKIP[/]",
-            "all": "[yellow]ALL[/]",
-            "flex": "[magenta]FLEX[/]",
-        }.get(mode, "[cyan]SKIP[/]")
-        rows.append(("Anchor file", f"{expr}  {tag}"))
-        rows.append(("Natural", f"Dates from {expr.split('@', 1)[0]}"))
-        return
-    rows.append(("Period", current.get("cp") or "–"))
+    summary = _module("modify_chain_summary")
+    summary.kind_rows(
+        rows,
+        kind,
+        current,
+        anchor_preset_display=core.anchor_preset_display,
+        validate_anchor=_validate_anchor_expr_cached,
+        describe_anchor=core.describe_anchor_dnf,
+    )
 
 
 def _end_summary_stats_rows(rows: list[tuple[str, str]], chain: list[dict], now_utc) -> None:
-    stats = _lateness_stats(chain)
-    rows.append(
-        (
-            "Performance",
-            f"early {stats['early']}, on-time {stats['on_time']}, late {stats['late']}",
-        )
+    _module("modify_chain_summary").stats_rows(
+        rows,
+        chain,
+        now_utc,
+        lateness_stats=_lateness_stats,
+        format_seconds_delta=_fmt_secs_delta,
     )
-    rows.append(("Avg lateness", _fmt_secs_delta(now_utc, stats["avg"])))
-    rows.append(("Median lateness", _fmt_secs_delta(now_utc, stats["median"])))
-    rows.append(("Best early", _fmt_secs_delta(now_utc, stats["best_early"])))
-    rows.append(("Worst late", _fmt_secs_delta(now_utc, stats["worst_late"])))
 
 
 def _end_summary_limits_row(rows: list[tuple[str, str]], current: dict) -> None:
-    cpmax = core.coerce_int(current.get("chainMax"), 0)
-    until = _dtparse(current.get("chainUntil"))
-    if cpmax:
-        rows.append(("Chain cap", f"#{cpmax}"))
-    if until:
-        rows.append(("Chain end point", core.fmt_dt_local(until)))
-    if not cpmax and not until:
-        rows.append(("Chain limits", "None"))
+    _module("modify_chain_summary").limits_row(
+        rows,
+        current,
+        coerce_int=core.coerce_int,
+        parse_datetime=_dtparse,
+        format_local=core.fmt_dt_local,
+    )
 
 
 def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
-    actual_current = _end_summary_current(current, current_task)
-    kind_anchor = bool((actual_current.get("anchor") or "").strip())
-    kind_anchor_file = bool((actual_current.get("anchor_file") or "").strip())
-    kind = "anchor" if kind_anchor else ("anchor_file" if kind_anchor_file else "cp")
-
-    chain_id = _end_summary_chain_id_row(actual_current)
-    if not chain_id:
-        _panel(
-            "⚠ Chain summary skipped",
-            [
-                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-                ("Fix", "Run dev_tools/nautical_backfill_chainid.py."),
-            ],
-            kind="warning",
-        )
-        return
-
-    chain_read_error = ""
-    try:
-        chain = _end_summary_sorted_chain(chain_id, actual_current)
-    except Exception as exc:
-        chain = []
-        chain_read_error = str(exc) or "chain export unavailable"
-        _diag(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
-
-    L = core.coerce_int(current.get("link"), len(chain))
-    root = _short(_root_uuid_from(current))
-    cur_s = _short(current.get("uuid"))
-    stopped_by_delete = str(reason or "").strip().lower().startswith("pending task deleted")
-    first, last, span = _end_summary_span_fields(
-        chain_id,
-        chain,
-        stop_at=now_utc,
-        stopped_by_delete=stopped_by_delete,
+    summary = _module("modify_chain_summary")
+    summary.render_chain_summary(
+        current,
+        reason,
+        now_utc,
+        current_task,
+        export_sorted_chain=_end_summary_sorted_chain,
+        root_uuid_from=_root_uuid_from,
+        short_uuid=_short,
+        format_root_and_age=_format_root_and_age,
+        kind_rows=_end_summary_kind_rows,
+        span_fields=_end_summary_span_fields,
+        stats_rows=_end_summary_stats_rows,
+        limits_row=_end_summary_limits_row,
+        last_n_timeline_rows=_last_n_timeline,
+        format_rows=_format_chain_summary_rows,
+        coerce_int=core.coerce_int,
+        format_local=core.fmt_dt_local,
+        max_chain_walk=_MAX_CHAIN_WALK,
+        panel=_panel,
+        diagnostic=_diag,
     )
-
-    rows = []
-    rows.append(("Reason", reason))
-    rows.append(("Root", _format_root_and_age(current, now_utc)))
-
-    chain_display = f"{root} … {cur_s}  [dim](#{L}, {len(chain)} tasks"
-    if len(chain) >= _MAX_CHAIN_WALK:
-        chain_display += f", truncated at {_MAX_CHAIN_WALK})"
-    else:
-        chain_display += ")"
-    rows.append(("Chain", chain_display))
-    if chain_read_error:
-        rows.append(("Chain read", f"Unavailable: {chain_read_error}"))
-
-    _end_summary_kind_rows(rows, kind, current)
-
-    if first:
-        rows.append(("First due", core.fmt_dt_local(first)))
-    if last:
-        rows.append(("Last end", core.fmt_dt_local(last)))
-    if stopped_by_delete:
-        rows.append(("Stopped at", core.fmt_dt_local(now_utc)))
-    rows.append(("Span", span))
-
-    _end_summary_stats_rows(rows, chain, now_utc)
-    _end_summary_limits_row(rows, current)
-
-    tail = _last_n_timeline(chain, n=6)
-    if tail:
-        rows.append(("History", "\n".join(tail)))
-
-    rows = _format_chain_summary_rows(rows)
-    title = "⛔ Chain stopped – summary" if stopped_by_delete else "⛔ Chain finished – summary"
-    _panel(title, rows, kind="summary")
 
 
 
@@ -3500,143 +2339,10 @@ def _timeline_lines(
     show_gaps: bool = True,
     round_anchor_gaps: bool = True,
 ) -> list[str]:
-    """Compact timeline with inline gaps."""
+    """Compatibility adapter for task-scoped timeline presentation."""
     if not _require_core():
         return []
-    if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
-        modify_timeline = _module("modify_timeline")
-        _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
-        anchor_omit = _module("anchor_omit") if omit_dnf else None
-        child_local = _to_local_cached(child_due_utc)
-        fallback_hhmm = _anchor_file_fallback_hhmm(task, child_local)
-        default_seed = child_local.date()
-        evaluator = _recurrence_evaluator_for_task(task)
-        projection_warning = None
-        try:
-            from nautical_core.scheduler_cursor import OccurrenceCursor
-
-            result = _scheduler_service_for_task(task).collect(
-                OccurrenceCursor(
-                    child_local,
-                    inclusive=True,
-                    timezone=evaluator.context.timezone,
-                ),
-                limit=max(8, next_count + 6),
-                count_omitted=False,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed,
-                max_iterations=_MAX_ITERATIONS,
-                max_file_skips=_MAX_ITERATIONS,
-            )
-            events = [occurrence for occurrence in result.occurrences if occurrence.local_datetime is not None]
-        except Exception as exc:
-            events = []
-            projection_warning = modify_timeline._timeline_warning(
-                f"Projection unavailable: {type(exc).__name__}: {exc}"
-            )
-        cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
-        nxt_no = cur_no + 1
-        allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
-        prev_style, cur_style, next_style, future_style = modify_timeline._timeline_styles(
-            task,
-            "anchor",
-            future_style_for_chain=_future_style_for_chain,
-        )
-        items = modify_timeline._timeline_initial_items(
-            task,
-            cur_no,
-            nxt_no,
-            child_due_utc,
-            child_short,
-            core=core,
-            collect_prev_two=_collect_prev_two,
-            dtparse=_dtparse,
-        )
-        if projection_warning is not None:
-            items.append(projection_warning)
-        fut_no = nxt_no
-        actual_future = 0
-        for occurrence in events:
-            item_local = occurrence.local_datetime
-            is_omitted = occurrence.omitted
-            if item_local is None:
-                continue
-            item_utc = item_local.astimezone(timezone.utc)
-            if _compare_datetimes(item_utc, child_due_utc) <= 0:
-                continue
-            if is_omitted:
-                items.append(
-                    (
-                        "··",
-                        item_utc,
-                        {
-                            "is_omit": True,
-                            "omit_label": (
-                                modify_timeline._timeline_omit_label(
-                                    omit_dnf,
-                                    item_local.date(),
-                                    omit_description_for_date=(
-                                        anchor_omit.omit_description_for_date if anchor_omit is not None else None
-                                    ),
-                                )
-                                if omit_dnf else None
-                            ),
-                        },
-                        "omitted",
-                    )
-                )
-                continue
-            fut_no += 1
-            if cap_no is not None and fut_no > cap_no:
-                break
-            items.append((fut_no, item_utc, {"is_future": True}, "future"))
-            actual_future += 1
-            if actual_future >= allowed_future:
-                break
-        lines: list[str] = []
-        for i, (no, dt, obj, item_type) in enumerate(items):
-            base_line = modify_timeline._timeline_base_line(
-                no,
-                dt,
-                obj,
-                item_type,
-                task=task,
-                cap_no=cap_no,
-                prev_style=prev_style,
-                cur_style=cur_style,
-                next_style=next_style,
-                future_style=future_style,
-                core=core,
-                dtparse=_dtparse,
-                fmt_on_time_delta=_fmt_on_time_delta,
-                fmtlocal=_fmtlocal,
-                short=_short,
-            )
-            lines.append(
-                modify_timeline._timeline_with_gap(
-                    base_line,
-                    idx=i,
-                    items=items,
-                    show_gaps=show_gaps,
-                    kind="anchor",
-                    round_anchor_gaps=round_anchor_gaps,
-                    format_gap=_module("modify_timeline").format_gap,
-                )
-            )
-        return lines
-    modify_timeline = _module("modify_timeline")
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
-    anchor_omit = _module("anchor_omit") if kind == "anchor" else None
-    scheduler_service = _scheduler_service_for_task(task) if kind == "anchor" else None
-    evaluator = (
-        scheduler_service.session.evaluator
-        if scheduler_service is not None
-        else (_recurrence_evaluator_for_task(task) if kind == "cp" else None)
-    )
-    timeline_scheduler = _next_occurrence_after_local_dt
-    if evaluator is not None and kind == "anchor":
-        timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
-    return modify_timeline.timeline_lines(
+    return _module("modify_timeline").timeline_lines_for_task(
         kind,
         task,
         child_due_utc,
@@ -3656,18 +2362,14 @@ def _timeline_lines(
         fmtlocal=_fmtlocal,
         short=_short,
         tolocal=_tolocal,
-        next_occurrence_after_local_dt=timeline_scheduler,
-        scheduler_service=scheduler_service,
+        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
         to_local_cached=_to_local_cached,
         safe_parse_datetime=_safe_parse_datetime,
         format_gap=_module("modify_timeline").format_gap,
-        omit_dnf=omit_dnf,
-        omit_expr_fires_on_date=(
-            (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(dnf_, d, default_seed, seed_base, core=core))
-            if anchor_omit is not None else None
-        ),
-        omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
-        evaluator=evaluator,
+        module_loader=_module,
+        omit_dnf_from_parent=_omit_dnf_from_parent,
+        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
+        scheduler_service_for_task=_scheduler_service_for_task,
     )
 
 def _got_anchor_invalid(msg: str) -> None:
@@ -3676,109 +2378,36 @@ def _got_anchor_invalid(msg: str) -> None:
 
 # chainUntil -> numeric cap and final permitted occurrence
 def _cap_from_until_cp(task, next_due_utc):
-    until = _dtparse(task.get("chainUntil"))
-    if not until:
-        return (None, None)
-    cp_str = task.get("cp") or ""
-    tokens = core.parse_cp_sequence_tokens(cp_str)
-    if not tokens:
-        return (None, None)
-    cur = core.coerce_int(task.get("link"), 1)
-    nno = cur + 1
-    ndt = next_due_utc
-    last_no = None
-    last_dt = None
-    iterations = 0
-
-    while ndt and _compare_datetimes(ndt, until) <= 0 and iterations < _MAX_ITERATIONS:
-        iterations += 1
-        last_no, last_dt = nno, ndt
-        td = _cp_sequence_period_for_link(
-            tokens,
-            cp_str,
-            nno,
-            str(task.get("chainID") or "").strip(),
-        )
-        ndt = _cp_add_td(ndt, td)
-        nno += 1
-
-    return (last_no, last_dt)
+    return _module("modify_completion_compute").cap_from_until_cp(
+        task,
+        next_due_utc,
+        parse_datetime=_dtparse,
+        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+        coerce_int=core.coerce_int,
+        sequence_period_for_link=_cp_sequence_period_for_link,
+        add_period=_cp_add_td,
+        max_iterations=_MAX_ITERATIONS,
+    )
 
 
 def _cap_from_until_anchor(task, next_due_utc, dnf):
-    """
-    Return (final_no, final_dt) for anchors limited by chainUntil.
-    WITH iteration guard to prevent infinite loops.
-    """
-    until_utc = _dtparse(task.get("chainUntil"))
-    if not until_utc:
-        return (None, None)
-
-    cur_no = core.coerce_int(task.get("link"), 1)
-    seed_base = _recurrence_seed_base(task)
-
-    nxt_local = _to_local_cached(next_due_utc)
-    until_local = _to_local_cached(until_utc)
-    due0, _ = _safe_parse_datetime(task.get("due"))
-    default_seed = _to_local_cached(due0 or next_due_utc).date()
-    fallback_hhmm = _anchor_file_fallback_hhmm(task, nxt_local)
-    _omit_expr, omit_dnf = _omit_dnf_from_parent(task)
-    scheduler = _recurrence_evaluator_for_task(task)._default_next_occurrence_after_local_dt
-    anchor_file = (task.get("anchor_file") or "").strip()
-    anchor_file_provider = None
-    if anchor_file:
-        anchor_file_provider = _anchor_file_provider_for(
-            anchor_file, fallback_hhmm=fallback_hhmm, seed_base=seed_base
-        )
-
-    count = 0
-    last_hit = None
-    cursor = nxt_local
-    iterations = 0
-
-    # Count occurrences starting with the already-computed next due.
-    while iterations < _MAX_ITERATIONS and _compare_datetimes(cursor, until_local) <= 0:
-        iterations += 1
-        count += 1
-        last_hit = cursor
-        if anchor_file:
-            future = _anchor_included_occurrences(
-                task,
-                after_local_dt=cursor,
-                inclusive=False,
-                limit=2,
-                fallback_hhmm=fallback_hhmm,
-                omit_dnf=omit_dnf,
-                seed_base=seed_base,
-                default_seed_date=default_seed,
-                dnf=dnf,
-                anchor_file_provider=anchor_file_provider,
-            )
-            cursor = future[0] if future else None
-        else:
-            cursor = scheduler(
-                dnf,
-                cursor,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=omit_dnf,
-                fallback_hhmm=fallback_hhmm,
-            )
-        if cursor is None:
-            break
-
-    if cursor is not None and _compare_datetimes(cursor, until_local) <= 0 and iterations >= _MAX_ITERATIONS:
-        raise ValueError(
-            f"Anchor chainUntil projection exceeded {_MAX_ITERATIONS} occurrences; "
-            "narrow chainUntil or use a larger recurrence interval."
-        )
-
-    if count == 0 or last_hit is None:
-        return (None, None)
-
-    final_no = cur_no + count
-    final_dt = last_hit.astimezone(timezone.utc)
-    return (final_no, final_dt)
+    return _module("modify_completion_compute").cap_from_until_anchor(
+        task,
+        next_due_utc,
+        dnf,
+        parse_datetime=_dtparse,
+        coerce_int=core.coerce_int,
+        recurrence_seed_base=_recurrence_seed_base,
+        to_local_cached=_to_local_cached,
+        safe_parse_datetime=_safe_parse_datetime,
+        anchor_file_fallback_hhmm=_anchor_file_fallback_hhmm,
+        omit_dnf_from_parent=_omit_dnf_from_parent,
+        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
+        anchor_file_provider_for=_anchor_file_provider_for,
+        anchor_included_occurrences=_anchor_included_occurrences,
+        compare_datetimes=_compare_datetimes,
+        max_iterations=_MAX_ITERATIONS,
+    )
 
 def _safe_dt(v):
     try:
@@ -3820,156 +2449,21 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
         out.append(f"{key}:{value}")
     return out
 
-def _chain_export_timeout(chain_id: str) -> float:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    base = float(_CHAIN_EXPORT_TIMEOUT_BASE)
-    per_100 = float(_CHAIN_EXPORT_TIMEOUT_PER_100)
-    max_t = float(_CHAIN_EXPORT_TIMEOUT_MAX)
-    est = base
-    cache_len = _lifecycle_read_service().cache_size(chain_id) if chain_id else 0
-    cache_match = bool(cache_len)
-    if cache_match:
-        extra = max(0, cache_len // 100)
-        est = base + (extra * per_100)
-    adaptive = 0.0
-    if _CHAIN_EXPORT_TIMES:
-        try:
-            times = sorted(t for t in _CHAIN_EXPORT_TIMES if t > 0)
-        except Exception:
-            times = []
-        if times:
-            idx = int(0.95 * (len(times) - 1))
-            p95 = times[max(0, min(idx, len(times) - 1))]
-            adaptive = p95 * 2.0
-    floor = _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if floor < base:
-        floor = base
-        _CHAIN_EXPORT_TIMEOUT_FLOOR = base
-    if est < base:
-        est = base
-    timeout = max(est, adaptive, floor)
-    if timeout > max_t:
-        timeout = max_t
-    return timeout
-
-def _tw_export_chain_success(elapsed: float) -> None:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if elapsed > 0:
-        _CHAIN_EXPORT_TIMES.append(elapsed)
-        if len(_CHAIN_EXPORT_TIMES) > _CHAIN_EXPORT_TIMES_MAX:
-            del _CHAIN_EXPORT_TIMES[:len(_CHAIN_EXPORT_TIMES) - _CHAIN_EXPORT_TIMES_MAX]
-    if _CHAIN_EXPORT_TIMEOUT_FLOOR > _CHAIN_EXPORT_TIMEOUT_BASE:
-        _CHAIN_EXPORT_TIMEOUT_FLOOR = max(_CHAIN_EXPORT_TIMEOUT_BASE, _CHAIN_EXPORT_TIMEOUT_FLOOR * 0.9)
-
-
-def _tw_export_chain_failure(chain_id: str, err: str, timeout: float) -> None:
-    global _CHAIN_EXPORT_TIMEOUT_FLOOR
-    if "timeout" in (err or "").lower():
-        _CHAIN_EXPORT_TIMEOUT_FLOOR = min(
-            _CHAIN_EXPORT_TIMEOUT_MAX,
-            max(_CHAIN_EXPORT_TIMEOUT_FLOOR, timeout * 1.5),
-        )
-    _diag(f"tw_export_chain failed (chainID={chain_id}): {err.strip()}")
-    if chain_id and chain_id in _WARNED_CHAIN_EXPORT:
-        return
-    if chain_id:
-        _WARNED_CHAIN_EXPORT.add(chain_id)
-    if _is_lock_error(err):
-        reason = "Taskwarrior lock active"
-    else:
-        reason = (err or "").strip() or "task export failed"
-    _panel("⚠ Chain export failed", [("ChainID", chain_id), ("Reason", reason)], kind="warning")
-
-
-def _tw_export_chain_parse(out: str) -> list[dict]:
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.parse_export_array(out, diag=_diag)
-    try:
-        data = json.loads(out.strip() or "[]")
-        return data if isinstance(data, list) else [data]
-    except Exception as e:
-        _diag(f"tw_export_chain JSON parse failed: {e}")
-        return []
-
-
-def _tw_export_chain_checked(
-    chain_id: str,
-    since: datetime | None = None,
-    extra: str | None = None,
-    env=None,
-    limit: int | None = None,
-) -> tuple[bool, list[dict], str]:
-    """Compatibility facade for the typed lifecycle chain-read service."""
-    service = _lifecycle_read_service()
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        def run_task_result(command, **kwargs):
-            return hook_support.run_task_result(run_task=_run_task_result, cmd=command, **kwargs)
-
-        def parse_result(result):
-            return hook_support.parse_export_array_result(result, diag=_diag)
-    else:
-        run_task_result = _run_task_result
-
-        def parse_result(result):
-            if not result.ok:
-                return False, [], result.stderr or "task export failed"
-            try:
-                parsed = json.loads((result.stdout or "").strip())
-                if not isinstance(parsed, list) or any(not isinstance(row, dict) for row in parsed):
-                    raise ValueError("expected an array of task objects")
-                return True, parsed, ""
-            except Exception as exc:
-                return False, [], f"Taskwarrior export returned invalid JSON: {exc}"
-
-    result = service.export_chain_checked(
-        chain_id,
-        since=since,
-        extra=extra,
-        env=env,
-        limit=limit,
-        run_task_result=run_task_result,
-        parse_result=parse_result,
-        timeout_for_chain=_chain_export_timeout,
-        read_query_missing=_READ_QUERY_MISSING,
-        on_failure=lambda error, export_timeout: _tw_export_chain_failure(
-            chain_id, error, export_timeout
-        ),
-        on_success=_tw_export_chain_success,
-    )
-    return result.ok, result.rows, result.error
-
-
-def tw_export_chain(chain_id: str, since: datetime | None = None, extra: str | None = None, env=None, limit: int | None = None) -> list[dict]:
-    """Return rows for compatibility; internal mutation reads use checked results."""
-    global _LAST_CHAIN_EXPORT_STATUS
-    _ok, rows, _error = _tw_export_chain_checked(
-        chain_id,
-        since=since,
-        extra=extra,
-        env=env,
-        limit=limit,
-    )
-    _LAST_CHAIN_EXPORT_STATUS = (_ok, _error)
-    return rows
-
-
 def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
-    """Return the first/last chain task using a minimal export."""
-    modify_queries = _module("modify_queries")
-    hook_support = _module("hook_support", required=False)
-    parser = (hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse)
-    return modify_queries.export_chain_endpoint(
-        chain_id,
-        direction,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        parse_export_array=parser,
-        diag=_diag,
-        timeout=3.0,
-        retries=1,
-    )
+    """Return a chain endpoint from the invocation's authoritative snapshot."""
+    rows = _lifecycle_read_service().get_chain_export(chain_id)
+    if rows is None:
+        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
+    with_links = [
+        (core.coerce_int(row.get("link"), None), row)
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    with_links = [(link, row) for link, row in with_links if link is not None]
+    if not with_links:
+        return None
+    with_links.sort(key=lambda item: item[0])
+    return dict(with_links[0 if direction == "first" else -1][1])
 
 # ------------------------------------------------------------------------------
 # Main
@@ -4031,29 +2525,9 @@ def _render_anchor_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    if lifecycle_result is None:
-        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
-            state="queued" if deferred_spawn else "applied",
-            child_short=child_short,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-        )
     calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
-    calendar_feedback.render_business_calendar_displacement(
-        new,
-        child_due,
-        core=core,
-        panel=_panel,
-    )
-    diagnostics = _module("panel_diagnostics")
-    panel_warnings = diagnostics.panel_warnings(core, new)
-    if panel_warnings:
-        integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.extend(panel_warnings)
     modify_feedback = _module("modify_feedback")
-    modify_models = _module("modify_models")
-    modify_runtime = _module("modify_runtime")
-    feedback = modify_models.AnchorCompletionFeedbackModel(
+    modify_feedback.orchestrate_anchor_completion_feedback(
         new=new,
         child=child,
         child_due=child_due,
@@ -4075,12 +2549,13 @@ def _render_anchor_completion_feedback(
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
         base_no=base_no,
-    )
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_anchor_feedback_services(runtime)
-    modify_feedback.render_anchor_completion_feedback(
-        feedback=feedback,
-        services=services,
+        core=core,
+        panel=_panel,
+        calendar_feedback=calendar_feedback,
+        panel_diagnostics=_module("panel_diagnostics"),
+        modify_models=_module("modify_models"),
+        modify_runtime=_module("modify_runtime"),
+        build_runtime_services=_modify_runtime_services,
     )
 
 
@@ -4106,22 +2581,8 @@ def _render_cp_completion_feedback(
     integrity_warnings: list[str] | None,
     base_no: int,
 ) -> None:
-    if lifecycle_result is None:
-        lifecycle_result = _module("modify_models").CompletionLifecycleResult(
-            state="queued" if deferred_spawn else "applied",
-            child_short=child_short,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-        )
-    diagnostics = _module("panel_diagnostics")
-    panel_warnings = diagnostics.panel_warnings(core, new, include_files=False)
-    if panel_warnings:
-        integrity_warnings = list(integrity_warnings or [])
-        integrity_warnings.extend(panel_warnings)
     modify_feedback = _module("modify_feedback")
-    modify_models = _module("modify_models")
-    modify_runtime = _module("modify_runtime")
-    feedback = modify_models.CpCompletionFeedbackModel(
+    modify_feedback.orchestrate_cp_completion_feedback(
         new=new,
         child=child,
         child_due=child_due,
@@ -4141,12 +2602,11 @@ def _render_cp_completion_feedback(
         analytics_advice=analytics_advice,
         integrity_warnings=integrity_warnings,
         base_no=base_no,
-    )
-    runtime = _modify_runtime_services()
-    services = modify_runtime.build_cp_feedback_services(runtime)
-    modify_feedback.render_cp_completion_feedback(
-        feedback=feedback,
-        services=services,
+        core=core,
+        panel_diagnostics=_module("panel_diagnostics"),
+        modify_models=_module("modify_models"),
+        modify_runtime=_module("modify_runtime"),
+        build_runtime_services=_modify_runtime_services,
     )
 
 
@@ -4254,227 +2714,49 @@ def _non_completion_reject_conflicting_types(new_anchor: str, new_anchor_file: s
         _fail_and_exit("Invalid chain config", "anchor_file and cp cannot both be set; clear one")
 
 
-def _recurrence_update_label(field: str) -> str:
-    return {
-        "anchor": "Anchor",
-        "anchor_file": "Anchor file",
-        "omit": "Omit",
-        "omit_file": "Omit file",
-        "anchor_mode": "Mode",
-        "bc": "Business calendar",
-        "cp": "Period",
-        "until": "Expiration",
-        "chainMax": "Max links",
-        "chainUntil": "Chain end point",
-    }.get(field, field)
-
-
 def _semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
 
-def _recurrence_display_value(field: str, value: str) -> str:
-    if not value:
-        return "-"
-    if field in {"until", "chainUntil"}:
-        parsed = core.parse_dt_any(value)
-        if parsed:
-            return _fmtlocal(parsed)
-    return value
-
-
-def _recurrence_update_value(field: str, old_value: str, new_value: str) -> str:
-    old_text = _recurrence_display_value(field, old_value)
-    new_text = _recurrence_display_value(field, new_value)
-    return _semantic_diff_value(old_text, new_text)
-
-
-def _recurrence_change_row(field: str, old_value: str, new_value: str) -> tuple[str, str]:
-    label = _recurrence_update_label(field)
-    if old_value and new_value:
-        return "Changed", f"{label}: {_recurrence_update_value(field, old_value, new_value)}"
-    if new_value:
-        return "Added", f"{label}: [bold]{_recurrence_display_value(field, new_value)}[/]"
-    return "Removed", f"{label}: [dim]{_recurrence_display_value(field, old_value)}[/]"
-
-
-def _recurrence_update_panel_rows(changes: list[tuple[str, str, str]], rows: list[tuple[str | None, str]]) -> list[tuple[str | None, str]]:
-    """Keep multi-field updates scannable and preserve all changes in one-line modes."""
-    if len(changes) > 1:
-        recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
-        limit_fields = {"chainMax", "chainUntil"}
-        first_limit = next((idx for idx, (field, _old, _new) in enumerate(changes) if field in limit_fields), None)
-        if first_limit is not None and any(field in recurrence_fields for field, _old, _new in changes):
-            rows = list(rows)
-            rows.insert(first_limit, (None, ""))
-
-    mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
-    if mode == "quiet":
-        mode = "text"
-    if mode == "minimal":
-        mode = "line"
-    if mode in {"line", "text"}:
-        change_rows = [(label, value) for label, value in rows if label in {"Added", "Changed", "Removed"}]
-        if len(change_rows) > 1:
-            summary = " · ".join(
-                f"{label}: {core.strip_rich_markup(str(value))}" for label, value in change_rows
-            )
-            rows = [("Changes", summary)] + [
-                (label, value)
-                for label, value in rows
-                if label not in {"Added", "Changed", "Removed"}
-            ]
-    return rows
-
-
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
-    if not changes:
-        return
-    rows: list[tuple[str, str]] = [
-        _recurrence_change_row(field, old_value, new_value)
-        for field, old_value, new_value in changes
-    ]
-
-    if any(field == "until" for field, _old, _new in changes):
-        try:
-            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
-            until_dt = core.parse_dt_any(new.get("until"))
-            target_dt = core.parse_dt_any(new.get(target_field)) if target_field else None
-            add_validation = core._import_sibling("add_validation")
-            carry = add_validation.describe_native_until_carry(
-                until_dt,
-                target_dt,
-                to_local=core.to_local,
-            )
-            if carry:
-                rows.append(("Carry", carry))
-        except Exception:
-            pass
-
-    if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
-        max_link = core.coerce_int(new.get("chainMax"), 0)
-        deadline = core.parse_dt_any(new.get("chainUntil"))
-        if max_link:
-            rows.append(("Final link", f"#{max_link}"))
-        if deadline and not any(field == "chainUntil" for field, _old, _new in changes):
-            rows.append(("Chain end point", _fmtlocal(deadline)))
-        if max_link and deadline:
-            rows.append(("Effective", "Whichever boundary is reached first"))
-        elif not max_link and not deadline:
-            rows.append(("Chain limits", "None"))
-
-    anchor_expr = str(new.get("anchor") or "").strip()
-    if anchor_expr and any(field == "anchor" for field, _old, _new in changes):
-        try:
-            rows.append(("Natural", core.describe_anchor_expr(anchor_expr)))
-        except Exception:
-            pass
-
-    omit_expr = str(new.get("omit") or "").strip()
-    if omit_expr and any(field == "omit" for field, _old, _new in changes):
-        try:
-            rows.append(("Except", core.describe_anchor_expr(core.resolve_omit_presets(omit_expr))))
-        except Exception:
-            pass
-
-    recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
-    if any(field in recurrence_fields for field, _old, _new in changes):
-        source = "anchor" if anchor_expr else "anchor_file" if str(new.get("anchor_file") or "").strip() else "cp"
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("First next", _fmtlocal(first)))
-
-    rows = _recurrence_update_panel_rows(changes, rows)
-    _panel("⚓ Nautical recurrence updated", rows, kind="note")
+    modify_feedback = _module("modify_feedback")
+    add_validation = core._import_sibling("add_validation")
+    modify_feedback.render_recurrence_updated_panel(
+        changes,
+        new,
+        parse_datetime=core.parse_dt_any,
+        format_local=_fmtlocal,
+        describe_native_until_carry=add_validation.describe_native_until_carry,
+        to_local=core.to_local,
+        coerce_int=core.coerce_int,
+        describe_anchor=core.describe_anchor_expr,
+        resolve_omit_presets=core.resolve_omit_presets,
+        first_recurrence_target=_first_recurrence_target,
+        panel_mode=getattr(core, "PANEL_MODE", "rich"),
+        strip_markup=core.strip_rich_markup,
+        panel=_panel,
+    )
 
 
 def _first_recurrence_target(new: dict, source: str):
-    target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
-    if not target_field:
-        return None
-    target = core.parse_dt_any(new.get(target_field))
-    if not target:
-        return None
-    parent = dict(new)
-    parent["end"] = core.fmt_isoz(target)
-    try:
-        generation = _chain_generation_service()
-        if source in {"anchor", "anchor_file"}:
-            result = generation.compute_anchor_child_due(parent)
-            return result[0] if result else None
-        result = generation.compute_cp_child_due(parent)
-        return result[0] if result else None
-    except Exception:
-        return None
+    return _module("modify_completion_compute").first_recurrence_target(
+        new,
+        source,
+        parse_datetime=core.parse_dt_any,
+        format_datetime=core.fmt_isoz,
+        generation_service=_chain_generation_service,
+    )
 
 
 def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
-    """Describe the recurrence that was added during a plain-task upgrade."""
-    if source == "anchor":
-        value = str(new.get("anchor") or "").strip()
-        rows = [("Anchor", value)]
-        try:
-            natural = core.describe_anchor_expr(value)
-        except Exception:
-            natural = None
-        if natural:
-            rows.append(("Natural", natural))
-        mode = (new.get("anchor_mode") or "skip").strip().lower()
-        mode_explanations = {
-            "skip": "Skip missed anchors; use the next anchor after completion",
-            "all": "Backfill every missed anchor in order",
-            "flex": "Skip missed anchors and continue from the next available anchor",
-        }
-        rows.append(("Mode", f"{mode.upper()} — {mode_explanations.get(mode, mode)}"))
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("First next", _fmtlocal(first)))
-        return rows
-
-    if source == "anchor_file":
-        value = str(new.get("anchor_file") or "").strip()
-        rows = [("Anchor file", value), ("Natural", f"Dates from {value.split('@', 1)[0]}")]
-        mode = (new.get("anchor_mode") or "skip").strip().lower()
-        rows.append(("Mode", f"{mode.upper()}"))
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("First next", _fmtlocal(first)))
-        return rows
-
-    value = str(new.get("cp") or "").strip()
-    rows = [("Period", value)]
-    natural = None
-    try:
-        def _duration_label(duration) -> str:
-            seconds = int(duration.total_seconds())
-            if seconds % 86400 == 0:
-                return f"{seconds // 86400}d"
-            if seconds % 3600 == 0:
-                return f"{seconds // 3600}h"
-            if seconds % 60 == 0:
-                return f"{seconds // 60}m"
-            return f"{seconds}s"
-
-        tokens = core.parse_cp_sequence_tokens(value) or []
-        descriptions = []
-        for token in tokens:
-            if token.get("kind") == "rand":
-                descriptions.append(f"random interval {token.get('raw') or value}")
-            else:
-                duration = token.get("duration")
-                descriptions.append(_duration_label(duration) if duration else str(token.get("raw") or value))
-        if len(descriptions) == 1:
-            natural = f"Every {descriptions[0]}"
-        elif descriptions:
-            natural = "Cycle through " + ", then ".join(descriptions)
-    except Exception:
-        natural = None
-    if natural:
-        rows.append(("Natural", natural))
-    first = _first_recurrence_target(new, source)
-    if first:
-        rows.append(("First next", _fmtlocal(first)))
-    return rows
+    return _module("modify_feedback").recurrence_enabled_rows(
+        new,
+        source,
+        describe_anchor=core.describe_anchor_expr,
+        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+        first_recurrence_target=_first_recurrence_target,
+        format_local=_fmtlocal,
+    )
 
 
 def _render_cp_schedule_adjusted_panel(
@@ -4484,63 +2766,23 @@ def _render_cp_schedule_adjusted_panel(
         list[tuple[str, datetime, datetime, timedelta]],
     ],
 ) -> None:
-    old_due, new_due, field_adjustments = adjustment
-    rows = [("Due", _semantic_diff_value(_fmtlocal(old_due), _fmtlocal(new_due)))]
-    rows.extend(
-        (field.capitalize(), _semantic_diff_value(_fmtlocal(old_value), _fmtlocal(new_value)))
-        for field, old_value, new_value, _offset in field_adjustments
-    )
-    offset_text = "; ".join(
-        f"{field.capitalize()} {_fmt_td_dd_hhmm(offset)}"
-        for field, _old_value, _new_value, offset in field_adjustments
-    )
-    rows.append(("Offset" if len(field_adjustments) == 1 else "Offsets", offset_text))
-    _panel(
-        "⚓ Nautical schedule adjusted",
-        rows,
-        kind="note",
+    _module("modify_feedback").render_cp_schedule_adjusted_panel(
+        adjustment,
+        format_local=_fmtlocal,
+        semantic_diff_value=_semantic_diff_value,
+        format_offset=_fmt_td_dd_hhmm,
+        panel=_panel,
     )
 
 
 def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, ...]) -> None:
-    if not changed_fields:
-        return
-
-    def parsed(field: str) -> datetime | None:
-        value = new.get(field)
-        if not value:
-            return None
-        try:
-            return core.parse_dt_any(value)
-        except Exception:
-            return None
-
-    due = parsed("due")
-    scheduled = parsed("scheduled")
-    wait = parsed("wait")
-    issues: list[str] = []
-    if due and scheduled and scheduled > due:
-        issues.append(f"Scheduled is after Due by {_fmt_td_dd_hhmm(scheduled - due)}")
-    if due and wait and wait > due:
-        issues.append(f"Wait is after Due by {_fmt_td_dd_hhmm(wait - due)}")
-    if scheduled and wait and wait > scheduled:
-        issues.append(f"Wait is after Scheduled by {_fmt_td_dd_hhmm(wait - scheduled)}")
-    if not issues:
-        return
-
-    if due:
-        expected = "Due >= Scheduled >= Wait"
-        action = "Keep Scheduled at/before Due and Wait at/before Scheduled."
-    else:
-        expected = "Scheduled >= Wait"
-        action = "Keep Wait at or before Scheduled."
-    rows = [
-        ("Changed", ", ".join(field.capitalize() for field in changed_fields)),
-        ("Expected", expected),
-    ]
-    rows.extend(("Problem", issue) for issue in issues)
-    rows.append(("Action", action))
-    _panel("⚠ Nautical timing order", rows, kind="warning")
+    _module("modify_feedback").render_explicit_timing_order_warning(
+        new,
+        changed_fields,
+        parse_datetime=core.parse_dt_any,
+        format_offset=_fmt_td_dd_hhmm,
+        panel=_panel,
+    )
 
 
 def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
@@ -4584,40 +2826,17 @@ def _preserve_cp_relative_offsets_on_due_change(
     datetime,
     list[tuple[str, datetime, datetime, timedelta]],
 ] | None:
-    """Keep scheduled and wait relative to due when an existing cp task's due moves."""
-    if not new_cp or not str(old.get("cp") or "").strip():
-        return None
-    if not _field_changed(old, new, "due"):
-        return None
-    if not (old.get("due") and new.get("due")):
-        return None
-
-    try:
-        old_due = core.parse_dt_any(old.get("due"))
-        new_due = core.parse_dt_any(new.get("due"))
-        if not (old_due and new_due):
-            raise ValueError("due timestamp is missing or invalid")
-    except Exception as exc:
-        carry_error = _module("chain_generation").CarryFieldError
-        raise carry_error("due", str(exc) or "timestamp conversion failed") from exc
-
-    adjustments: list[tuple[str, datetime, datetime, timedelta]] = []
-    for field in ("scheduled", "wait"):
-        if _field_changed(old, new, field) or not old.get(field):
-            continue
-        try:
-            old_value = core.parse_dt_any(old.get(field))
-            if not old_value:
-                raise ValueError("timestamp is missing or invalid")
-            local_offset = _utc_to_local_naive(old_value) - _utc_to_local_naive(old_due)
-            new_value_local = _utc_to_local_naive(new_due) + local_offset
-            new_value = _local_naive_to_utc(new_value_local)
-            new[field] = core.fmt_isoz(new_value)
-            adjustments.append((field, old_value, new_value, local_offset))
-        except Exception as exc:
-            carry_error = _module("chain_generation").CarryFieldError
-            raise carry_error(field, str(exc) or "timezone conversion failed") from exc
-    return (old_due, new_due, adjustments) if adjustments else None
+    return _module("modify_carry").preserve_cp_relative_offsets_on_due_change(
+        old,
+        new,
+        new_cp,
+        field_changed=_field_changed,
+        parse_datetime=core.parse_dt_any,
+        utc_to_local_naive=_utc_to_local_naive,
+        local_naive_to_utc=_local_naive_to_utc,
+        format_datetime=core.fmt_isoz,
+        carry_error=_module("chain_generation").CarryFieldError,
+    )
 
 
 def _reject_native_until_carry(
@@ -4651,56 +2870,22 @@ def _reject_native_until_carry(
 
 
 def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> bool:
-    """Carry an untouched native until when an existing recurrence target moves."""
-    if _field_changed(old, new, "until") or not old.get("until"):
-        return False
-    old_target_field = _recurrence_anchor_field(old)
-    new_target_field = _recurrence_anchor_field(new)
-    target_changed = (
-        old_target_field != new_target_field
-        or _field_changed(old, new, old_target_field)
+    return _module("modify_carry").preserve_native_until_on_target_change(
+        old,
+        new,
+        kind,
+        field_changed=_field_changed,
+        recurrence_anchor_field=_recurrence_anchor_field,
+        parse_datetime=core.parse_dt_any,
+        native_until=core._import_sibling("native_until"),
+        generation_service=_chain_generation_service,
+        reject_carry=_reject_native_until_carry,
+        diagnostic=_diag,
     )
-    if not target_changed:
-        return False
-    native_until = core._import_sibling("native_until")
-    new_target: datetime | None = None
-    try:
-        new_target = core.parse_dt_any(new.get(new_target_field))
-        if not new_target:
-            raise native_until.NativeUntilCarryError(
-                native_until.CARRY_INVALID,
-                f"{new_target_field} timestamp is missing or invalid",
-            )
-        candidate = dict(new)
-        _chain_generation_service().carry_native_until(
-            old,
-            candidate,
-            new_target,
-            kind,
-            parent_anchor_field=old_target_field,
-            child_anchor_field=new_target_field,
-        )
-        carried = candidate.get("until")
-        if not carried:
-            raise native_until.NativeUntilCarryError(
-                native_until.CARRY_FAILED,
-                "native until carry produced no expiration value",
-            )
-        new["until"] = carried
-        return True
-    except native_until.NativeUntilCarryError as exc:
-        _reject_native_until_carry(old, new, new_target, old_target_field, exc)
-    except Exception as exc:
-        _diag(f"native until target carry failed: {exc}")
-        typed_error = native_until.NativeUntilCarryError(
-            native_until.CARRY_FAILED,
-            f"native until target carry failed: {type(exc).__name__}: {exc}",
-        )
-        _reject_native_until_carry(old, new, new_target, old_target_field, typed_error)
-    return False
 
 
-def _handle_non_completion_modify(old: dict, new: dict) -> None:
+def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
+    _modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
     services = modify_ordinary.OrdinaryModifyServices(
@@ -4746,64 +2931,30 @@ def _handle_non_completion_modify(old: dict, new: dict) -> None:
 
 
 def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:
-    # If we reach here, the task is being completed
-    # Now we should validate CP (in addition to anchor which was already validated on modify)
-    cp_raw = (new.get("cp") or "").strip()
-    new_cp = _strip_quotes(cp_raw)
-    anchor_raw = (new.get("anchor") or "").strip()
-    new_anchor = _strip_quotes(anchor_raw)
-    anchor_file_raw = (new.get("anchor_file") or "").strip()
-    new_anchor_file = _strip_quotes(anchor_file_raw)
-    if new_anchor_file:
-        new["anchor_file"] = new_anchor_file
-    omit_raw = (new.get("omit") or "").strip()
-    new_omit = _strip_quotes(omit_raw)
-    if new_omit:
-        new["omit"] = new_omit
-    omit_file_raw = (new.get("omit_file") or "").strip()
-    new_omit_file = _strip_quotes(omit_file_raw)
-    if new_omit_file:
-        new["omit_file"] = new_omit_file
-    _non_completion_reject_conflicting_types(new_anchor, new_anchor_file, new_cp)
-    _validate_omit_for_anchor_or_fail(new_anchor, new_anchor_file, new_omit, new_omit_file)
-    if new_cp or new_anchor or new_anchor_file:
-        _validate_chain_limits_on_modify(new)
-
-    if new_cp:
-        # Validate CP on completion
-        try:
-            seq = core.parse_cp_sequence(new_cp)
-            if not seq:
-                reason = core.cp_sequence_parse_error(new_cp) or f"invalid duration format '{new_cp}'"
-                raise ValueError(reason)
-        except ValueError as e:
-            _fail_and_exit("Invalid CP", str(e))
-        except Exception as e:
-            _diag(f"cp parse unexpected error: {e}")
-            _fail_and_exit("CP parsing error", "Unexpected error while parsing cp")
-
-        # Deep checks only if fields changed
-        if _field_changed(old, new, "anchor") or _field_changed(old, new, "anchor_mode") or _field_changed(old, new, "anchor_file"):
-            if new_anchor:
-                _validate_anchor_on_modify(new_anchor)
-
-        if (
-            _field_changed(old, new, "cp")
-            or _field_changed(old, new, "chainMax")
-            or _field_changed(old, new, "chainUntil")
-        ) and new_cp:
-            _validate_cp_on_modify(new_cp, new.get("chainMax"), new.get("chainUntil"))
-
-        modify_lifecycle = _module("modify_lifecycle")
-        try:
-            modify_lifecycle.apply_nautical_transition(old, new, short_uuid=core.short_uuid)
-        except Exception as exc:
-            _fail_and_exit(
-                "Nautical recurrence activation failed",
-                f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}",
-            )
-
-    return new_cp, new_anchor, new_anchor_file
+    modify_validation = _module("modify_validation")
+    modify_lifecycle = _module("modify_lifecycle")
+    return modify_validation.validate_completion_cp_and_anchor(
+        old,
+        new,
+        services=modify_validation.CompletionValidationServices(
+            strip_quotes=_strip_quotes,
+            reject_conflicting_types=_non_completion_reject_conflicting_types,
+            validate_omit=_validate_omit_for_anchor_or_fail,
+            validate_chain_limits=_validate_chain_limits_on_modify,
+            parse_cp_sequence=core.parse_cp_sequence,
+            cp_sequence_parse_error=core.cp_sequence_parse_error,
+            field_changed=_field_changed,
+            validate_anchor=_validate_anchor_on_modify,
+            validate_cp=_validate_cp_on_modify,
+            apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
+                old_task,
+                new_task,
+                short_uuid=core.short_uuid,
+            ),
+            fail=_fail_and_exit,
+            diagnostic=_diag,
+        ),
+    )
 
 
 def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
@@ -4837,12 +2988,15 @@ def _completion_chain_id_or_fail(new: dict) -> str | None:
     )
 
 
-def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot=None) -> bool:
+def _completion_existing_next_or_fail(new: dict, next_no: int, chain_snapshot, repository) -> bool:
     modify_completion_preflight = _module("modify_completion_preflight")
     return modify_completion_preflight.completion_existing_next_or_fail(
         new,
         next_no,
-        existing_next_lookup=lambda task, link: _existing_next_lookup(task, link, chain_snapshot),
+        existing_next_lookup=lambda task, link: repository.exact_child_slot(
+            str(task.get("chainID") or ""),
+            link,
+        ),
         short=_short,
         panel=_panel,
         print_task=_print_task,
@@ -4858,48 +3012,39 @@ def _completion_chain_snapshot_mode() -> str:
     return "recent"
 
 
-def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int):
+def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int, repository):
+    del base_no, next_no
     modify_models = _module("modify_models")
-    modify_queries = _module("modify_queries")
-    hook_support = _module("hook_support", required=False)
-    parser = hook_support.parse_export_array if hook_support is not None else _tw_export_chain_parse
+    from nautical_core.integration_models import Absent, Found, Unavailable
+
     mode = _completion_chain_snapshot_mode()
-    links = None if mode == "full" else ([next_no] if mode == "next" else [base_no - 2, base_no - 1, next_no])
-    if links is not None:
-        links = sorted({link for link in links if link > 0})
-
-    def _load_snapshot(snapshot_chain_id: str, snapshot_links: list[int] | None):
-        snapshot_result = modify_queries.export_completion_chain_snapshot(
-            snapshot_chain_id,
-            snapshot_links,
-            run_task=_run_task_result,
-            task_cmd_prefix=_task_cmd_prefix(),
-            parse_export_array=parser,
-            diag=_diag,
-            timeout=_chain_export_timeout(snapshot_chain_id),
-        )
-        lifecycle_read_service = _module("lifecycle_read_service")
-        if not snapshot_result.loaded:
-            return lifecycle_read_service.ChainReadResult.failure(snapshot_result.error)
-        return lifecycle_read_service.ChainReadResult.success(snapshot_result.rows)
-
-    snapshot = _lifecycle_read_service().completion_snapshot(
-        chain_id,
-        mode=mode,
-        links=links,
-        load_snapshot=_load_snapshot,
-        read_query_missing=_READ_QUERY_MISSING,
-    )
+    snapshot = repository.chain_snapshot(chain_id)
+    if isinstance(snapshot, Found):
+        rows = [dict(row) for row in snapshot.value]
+        loaded = True
+        error = ""
+    elif isinstance(snapshot, Absent):
+        rows = []
+        loaded = True
+        error = ""
+    elif isinstance(snapshot, Unavailable):
+        rows = []
+        loaded = False
+        error = snapshot.evidence.detail or snapshot.evidence.kind.value
+    else:
+        rows = []
+        loaded = False
+        error = "typed chain read returned an unsupported result"
     return modify_models.CompletionChainSnapshot(
-        mode=snapshot.mode,
-        rows=snapshot.rows,
-        loaded=snapshot.loaded,
-        chain_id=snapshot.chain_id,
-        error=snapshot.error,
+        mode=mode,
+        rows=rows,
+        loaded=loaded,
+        chain_id=chain_id,
+        error=error,
     )
 
 
-def _completion_preflight_context(new: dict, now_utc: datetime):
+def _completion_preflight_context(new: dict, now_utc: datetime, repository):
     modify_completion_preflight = _module("modify_completion_preflight")
     modify_runtime = _module("modify_runtime")
     services = modify_runtime.build_preflight_services(
@@ -4907,8 +3052,12 @@ def _completion_preflight_context(new: dict, now_utc: datetime):
         completion_link_numbers_or_fail=_completion_link_numbers_or_fail,
         completion_kind_or_stop=_completion_kind_or_stop,
         completion_chain_id_or_fail=_completion_chain_id_or_fail,
-        completion_chain_snapshot=_completion_chain_snapshot,
-        completion_existing_next_or_fail=_completion_existing_next_or_fail,
+        completion_chain_snapshot=lambda chain_id, base_no, next_no: _completion_chain_snapshot(
+            chain_id, base_no, next_no, repository
+        ),
+        completion_existing_next_or_fail=lambda task, next_no, snapshot: _completion_existing_next_or_fail(
+            task, next_no, snapshot, repository
+        ),
     )
     return modify_completion_preflight.completion_preflight_context(
         new,
@@ -5070,82 +3219,31 @@ def _completion_compute_next_and_limits(
     if not str(new.get("uuid") or "").strip() or not str(new.get("chainID") or "").strip():
         return computed
 
-    # The existing preflight still owns user-facing validation and terminal
-    # panels.  The planner now owns the pure successor payload so the spawn
-    # executor does not rebuild it through a second lifecycle path.
-    try:
-        lifecycle_planner = _module("lifecycle_planner")
-        lifecycle_models = _module("lifecycle_models")
-        generation = _chain_generation_service()
-        candidate = lifecycle_planner.RecurrenceCandidate(
-            child_due=computed.child_due,
-            metadata=tuple(sorted(dict(computed.meta or {}).items())),
-            dnf=computed.dnf,
-            until=computed.until_dt,
-        )
-        fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
-        fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
-        plan = lifecycle_planner.plan_candidate_successor(
-            lifecycle_models.TaskSnapshot.from_mapping(new),
-            lifecycle_models.LifecycleEvent.COMPLETE,
-            candidate,
-            generation=generation,
-            validated_configuration={"scheduler_fingerprint": fingerprint},
-            compare_datetimes=_compare_datetimes,
-            preflight=(
-                lifecycle_planner.LifecyclePreflight.from_context(
-                    base_link=preflight.base_no,
-                    next_link=preflight.next_no,
-                    kind=preflight.kind,
-                    chain_id=preflight.chain_id,
-                )
-                if preflight is not None
-                else None
-            ),
-            carry_validator=lambda snapshot, candidate_child, _candidate: _module("reconcile").invalid_relative_carry_reason(
-                snapshot.to_dict(),
-                dict(candidate_child),
-                child_field=str(computed.meta.get("target_field") or "due"),
-                generation=generation,
-            ),
-        )
-        if plan.action is lifecycle_models.LifecycleAction.FINALIZE_CHAIN:
-            _end_chain_summary(new, "Reached lifecycle successor limit", now_utc)
-            _ensure_terminal_chain_off(new, "complete")
-            _print_task(new)
-            models = _module("modify_models")
-            return models.CompletionLifecycleResult(
-                state="terminal",
-                reason="successor limit reached",
-                diagnostic=models.CompletionLifecycleDiagnostic(
-                    transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
-                    chain_id=str(new.get("chainID") or "").strip(),
-                    parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
-                    child_link=next_no,
-                    stage="plan",
-                    failure_kind="successor_limit",
-                ),
-            )
-        computed.lifecycle_plan = plan
-        computed.planned_child = plan.child_dict()
-    except Exception as exc:
-        _diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
-        _panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")
-        _print_task(new)
-        models = _module("modify_models")
-        return models.CompletionLifecycleResult(
-            state="retryable",
-            reason=str(exc).strip() or "Could not construct a lifecycle successor plan",
-            diagnostic=models.CompletionLifecycleDiagnostic(
-                transition_id=f"{str(new.get('chainID') or '').strip()}:{new.get('link')}->{next_no}",
-                chain_id=str(new.get("chainID") or "").strip(),
-                parent_link=int(new.get("link")) if str(new.get("link") or "").isdigit() else None,
-                child_link=next_no,
-                stage="plan",
-                failure_kind="planner_error",
-            ),
-        )
-    return computed
+    modify_completion_compute = _module("modify_completion_compute")
+    lifecycle_planner = _module("lifecycle_planner")
+    lifecycle_models = _module("lifecycle_models")
+    models = _module("modify_models")
+    fingerprint_fn = getattr(core, "scheduler_config_fingerprint", None)
+    fingerprint = fingerprint_fn() if callable(fingerprint_fn) else ""
+    return modify_completion_compute.attach_lifecycle_plan(
+        new,
+        computed,
+        next_no,
+        now_utc,
+        preflight=preflight,
+        generation=_chain_generation_service(),
+        scheduler_fingerprint=fingerprint,
+        compare_datetimes=_compare_datetimes,
+        invalid_relative_carry_reason=_module("reconcile").invalid_relative_carry_reason,
+        lifecycle_planner=lifecycle_planner,
+        lifecycle_models=lifecycle_models,
+        modify_models=models,
+        end_chain_summary=_end_chain_summary,
+        ensure_terminal_chain_off=_ensure_terminal_chain_off,
+        panel=_panel,
+        print_task=_print_task,
+        diag=_diag,
+    )
 
 
 def _completion_build_and_spawn_child(
@@ -5184,55 +3282,12 @@ def _completion_build_and_spawn_child(
     )
 
 
-def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResult | None":
-    # Prepare carry-forward fields on an isolated snapshot.  A malformed
-    # carry must never leave the Taskwarrior response partially rewritten.
-    prepared = dict(new)
-    new_cp, new_anchor, new_anchor_file = _completion_validate_cp_and_anchor(old, prepared)
-    _preserve_cp_relative_offsets_on_due_change(old, prepared, new_cp)
-    if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
-        recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
-        _preserve_native_until_on_target_change(old, prepared, recurrence_kind)
-    _validate_native_until_after_target_or_fail(prepared)
-    _validate_native_until_anchor_slots_or_fail(prepared)
-    new.clear()
-    new.update(prepared)
-    now_utc = core.now_utc()
-    ctx = _completion_preflight_context(new, now_utc)
-    if ctx is None:
-        return
-    parent_short = ctx.parent_short
-    base_no = ctx.base_no
-    next_no = ctx.next_no
-    kind = ctx.kind
-    chain_id = ctx.chain_id
-
-    computed = _completion_compute_next_and_limits(
-        new,
-        kind,
-        next_no,
-        now_utc,
-        preflight=ctx,
-    )
-    if computed is None:
-        return
-    if isinstance(computed, _module("modify_models").CompletionLifecycleResult):
-        _diag_lifecycle_result(computed)
-        return computed
-    snapshot = ctx.chain_snapshot
-    preloaded_chain = list(snapshot.rows)
-    indexes = _lifecycle_read_service().build_indexes(preloaded_chain)
-    preloaded_chain_by_link, preloaded_chain_by_short = indexes.by_link, indexes.by_short
-    if snapshot.mode == "full" and snapshot.loaded:
-        _lifecycle_read_service().replace_chain_cache(chain_id, preloaded_chain)
-        _diag_count("chain_cache_seeded")
-        _export_uuid_short_cached.cache_clear()
+def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
-    services = modify_completion_flow.CompletionFinalizeServices(
+    finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,
         seed_runtime_lookup_tasks=_seed_runtime_lookup_tasks,
         modify_chain_state=_modify_chain_state,
-        export_uuid_short_cached=_export_uuid_short_cached,
         lifecycle_read_service=_lifecycle_read_service(),
         chain_health_advice=_chain_health_advice,
         chain_integrity_warnings=_chain_integrity_warnings,
@@ -5245,21 +3300,28 @@ def _handle_completion_modify(old: dict, new: dict) -> "CompletionLifecycleResul
         check_integrity=_CHECK_CHAIN_INTEGRITY,
         analytics_style=_ANALYTICS_STYLE,
     )
-    result = modify_completion_flow.finalize_completion_modify(
-        new=new,
-        ctx=ctx,
-        computed=computed,
-        now_utc=now_utc,
-        need_chain=snapshot.mode == "full",
-        chain_snapshot_loaded=snapshot.loaded,
-        preloaded_chain=preloaded_chain,
-        preloaded_chain_by_link=preloaded_chain_by_link,
-        preloaded_chain_by_short=preloaded_chain_by_short,
-        chain_id=chain_id,
-        services=services,
+    flow_services = modify_completion_flow.CompletionFlowServices(
+        runtime_state=_modify_runtime_state,
+        prepare_recurrence=_completion_validate_cp_and_anchor,
+        preserve_cp_relative_offsets=_preserve_cp_relative_offsets_on_due_change,
+        preserve_native_until=_preserve_native_until_on_target_change,
+        validate_native_until=_validate_native_until_after_target_or_fail,
+        validate_native_until_slots=_validate_native_until_anchor_slots_or_fail,
+        now_utc=core.now_utc,
+        preflight_context=_completion_preflight_context,
+        compute_next_and_limits=_completion_compute_next_and_limits,
+        lifecycle_read_service=_lifecycle_read_service(),
+        diag_count=_diag_count,
+        diag_lifecycle_result=_diag_lifecycle_result,
+        finalize_completion=modify_completion_flow.finalize_completion_modify,
+        finalize_services=finalize_services,
     )
-    _diag_lifecycle_result(result)
-    return result
+    return modify_completion_flow.handle_completion_modify(
+        old,
+        new,
+        unit_of_work,
+        services=flow_services,
+    )
 
 
 def _expiration_services():
@@ -5303,68 +3365,64 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
     return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
 
 
-def _handle_deleted_modify(old: dict, new: dict) -> None:
-    if str(old.get("status") or "").strip().lower() != "pending":
-        return
-    if not ((old.get("chainID") or new.get("chainID") or "").strip()):
-        return
+def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
+    _modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = _module("modify_expiration", required=False)
     if modify_expiration is None:
         _expiration_recovery_warning(new, "Expiration recovery module is unavailable; deletion was not classified.")
         return
-    try:
-        deletion_evidence = modify_expiration.classify_deleted_task(
-            new,
-            services=_expiration_services(),
-        )
-        disposition = deletion_evidence.disposition.value
-        disposition_reason = deletion_evidence.reason
-    except Exception as exc:
-        _diag(f"deleted-task disposition failed: {exc}")
-        _expiration_recovery_warning(new, "Deletion evidence could not be classified safely.")
-        return
-    if disposition == "ambiguous":
-        _expiration_recovery_warning(
-            new,
-            disposition_reason or "Deletion evidence is unavailable or malformed.",
-        )
-        return
-    if disposition == "expiration":
-        try:
-            if _handle_expired_deleted_modify(new):
-                return
-        except Exception as exc:
-            _diag(f"expiration recovery failed: {exc}")
-        _expiration_recovery_warning(
-            new,
-            "Expiration recovery could not be initialized; the chain remains active.",
-        )
-        return
-    if disposition == "manual":
-        _diag("deleted Nautical task classified as manual stop")
+    services = modify_expiration.DeletedModifyServices(
+        expiration=_expiration_services(),
+        terminal_chain_off=_ensure_terminal_chain_off,
+        now_utc=core.now_utc,
+        end_chain_summary=_end_chain_summary,
+        format_root_and_age=_format_root_and_age,
+        short=_short,
+        panel=_panel,
+        diag=_diag,
+        recovery_warning=_expiration_recovery_warning,
+    )
+    modify_expiration.handle_deleted_modify(old, new, services=services)
 
-    _ensure_terminal_chain_off(new, "manual_delete")
-    now_utc = core.now_utc()
-    try:
-        _end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)
-    except Exception as exc:
-        _diag(f"delete chain summary failed: {exc}")
-        _panel(
-            "⛔ Nautical chain stopped",
-            [
-                ("Reason", "Pending Nautical task was deleted."),
-                ("Root", _format_root_and_age(old, now_utc)),
-                ("Task", _short(old.get("uuid")) or "–"),
-            ],
-            kind="summary",
-        )
+
+class _OnModifyServices:
+    """Concrete adapter passed to the shared hook router."""
+
+    def __init__(self, result_cls):
+        self._result_cls = result_cls
+
+    def result(self, task, *, sanitize: bool):
+        return self._result_cls(task=task, sanitize=sanitize)
+
+    def has_nautical_fields(self, task):
+        return _task_has_nautical_fields(task, task)
+
+    def load_core(self):
+        _load_core()
+
+    def diag(self, message: str):
+        _diag(message)
+
+    def fail_and_exit(self, title: str, message: str):
+        _fail_and_exit(title, message)
+
+    def is_non_completion(self, old, new):
+        return _is_non_completion_modify(old, new)
+
+    def handle_non_completion(self, old, new, unit_of_work):
+        _handle_non_completion_modify(old, new, unit_of_work)
+
+    def handle_completion(self, old, new, unit_of_work):
+        return _handle_completion_modify(old, new, unit_of_work)
+
+    def handle_deleted(self, old, new, unit_of_work):
+        _handle_deleted_modify(old, new, unit_of_work)
 
 
 def main():
     # Keep module import cheap while preserving the existing full-hook
     # contract: all mutation decisions run with the validated core loaded.
     _load_core()
-    _migrate_legacy_nautical_state()
     _reset_modify_runtime_state()
     state = _modify_runtime_state()
     startup_t0 = _ptime.perf_counter()
@@ -5407,15 +3465,7 @@ def main():
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_modify(
             request,
-            json_result_cls=hook_results.TaskHookResponse,
-            task_has_nautical_fields=_task_has_nautical_fields,
-            load_core=_load_core,
-            diag=_diag,
-            fail_and_exit=_fail_and_exit,
-            is_non_completion_modify=_is_non_completion_modify,
-            handle_non_completion_modify=_handle_non_completion_modify,
-            handle_completion_modify=_handle_completion_modify,
-            handle_deleted_modify=_handle_deleted_modify,
+            services=_OnModifyServices(hook_results.TaskHookResponse),
         )
     if result is not None:
         hook_results.emit_json_result(result, core=core)
@@ -5434,21 +3484,17 @@ def run_hook(
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
-    global _SPAWN_QUEUE_LOCK, _SPAWN_QUEUE_DB_PATH, _DEAD_LETTER_PATH, _DEAD_LETTER_LOCK
 
     HOOK_DIR = Path(hook_dir)
     TW_DIR = HOOK_DIR.parent
     _CORE_BASE = Path(core_base)
     sys.argv = [sys.argv[0], *argv]
-    _TASKDATA_RAW, _USE_RC_DATA_LOCATION = _resolve_task_data_context()
-    TW_DATA_DIR = Path(_TASKDATA_RAW).expanduser()
-
-    state_dir = TW_DATA_DIR / ".nautical-state"
-    lock_dir = TW_DATA_DIR / ".nautical-locks"
-    _SPAWN_QUEUE_LOCK = lock_dir / ".nautical_spawn_queue.lock"
-    _SPAWN_QUEUE_DB_PATH = state_dir / ".nautical_queue.db"
-    _DEAD_LETTER_PATH = state_dir / ".nautical_dead_letter.jsonl"
-    _DEAD_LETTER_LOCK = lock_dir / ".nautical_dead_letter.lock"
+    try:
+        _initialize_integration_context()
+    except _hook_runtime_module().HookIntegrationContextError as exc:
+        globals()["core"] = exc.core
+        title = "Invalid Nautical configuration" if exc.stage in {"configuration", "timezone"} else "Nautical integration unavailable"
+        _fail_and_exit(title, exc.detail)
 
     if protocol is None:
         protocol, _protocol_path, protocol_error = hook_bootstrap.load_core_helper_module(

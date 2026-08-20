@@ -254,11 +254,17 @@ _warn_once_per_day_any = _core_config.warn_once_per_day_any
 _warn_rate_limited_any = _core_config.warn_rate_limited_any
 _warn_toml_parse_error = _core_config._warn_toml_parse_error
 _get_config = _core_config._get_config
-effective_config_snapshot = _core_config.effective_config_snapshot
+def effective_config_snapshot() -> dict:
+    """Return the effective config after synchronizing facade exports."""
+    refresh = globals().get("_refresh_facade_config_exports")
+    if callable(refresh):
+        refresh()
+    return _core_config.effective_config_snapshot()
 effective_config_fingerprint = _core_config.effective_config_fingerprint
 scheduler_config_fingerprint = _core_config.scheduler_config_fingerprint
 configuration_drift = _core_config.configuration_drift
 _CONF = _core_config._CONF
+_FACADE_CONFIG_SYNCED = False
 _conf_raw = _core_config.conf_raw
 _conf_str = _core_config.conf_str
 _conf_int = _core_config.conf_int
@@ -401,8 +407,7 @@ LIVE_PANEL_DURATION_MS = _core_config.LIVE_PANEL_DURATION_MS
 LIVE_PANEL_FOOTER = _core_config.LIVE_PANEL_FOOTER
 FAST_COLOR = _core_config.FAST_COLOR
 EXIT_PROGRESS = _core_config.EXIT_PROGRESS
-SPAWN_QUEUE_MAX_BYTES = _core_config.SPAWN_QUEUE_MAX_BYTES
-SPAWN_QUEUE_DRAIN_MAX_ITEMS = _core_config.SPAWN_QUEUE_DRAIN_MAX_ITEMS
+OUTBOX_DRAIN_MAX_ITEMS = _core_config.OUTBOX_DRAIN_MAX_ITEMS
 MAX_CHAIN_WALK = _core_config.MAX_CHAIN_WALK
 MAX_ANCHOR_ITER = _core_config.MAX_ANCHOR_ITER
 MAX_LINK_NUMBER = _core_config.MAX_LINK_NUMBER
@@ -558,7 +563,7 @@ def validate_scheduling_configuration() -> None:
 
 def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     """Apply the validated configuration selected for a Taskwarrior data directory."""
-    global CONFIG_ERROR
+    global CONFIG_ERROR, _FACADE_CONFIG_SYNCED
     result = _core_config.reload_for_taskdata(taskdata)
     if not result.get("ok"):
         error = str(result.get("error") or "configuration unavailable")
@@ -592,8 +597,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
         "LIVE_PANEL_FOOTER",
         "FAST_COLOR",
         "EXIT_PROGRESS",
-        "SPAWN_QUEUE_MAX_BYTES",
-        "SPAWN_QUEUE_DRAIN_MAX_ITEMS",
+        "OUTBOX_DRAIN_MAX_ITEMS",
         "MAX_CHAIN_WALK",
         "MAX_ANCHOR_ITER",
         "MAX_LINK_NUMBER",
@@ -606,6 +610,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
         "_CACHE_LOAD_MEM_TTL",
     ):
         globals()[name] = getattr(_core_config, name if not name.startswith("_") else name[1:])
+    _FACADE_CONFIG_SYNCED = True
     globals()["_CONF"] = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     _refresh_timezone()
@@ -619,8 +624,13 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
 
 def _refresh_facade_config_exports() -> None:
     """Resolve deferred config and synchronize facade compatibility exports."""
-    global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS
+    global CONFIG_ERROR, _CONF, MAX_ANCHOR_DNF_TERMS, _FACADE_CONFIG_SYNCED
     _core_config.ensure_loaded()
+    configured_hemisphere = getattr(_core_config, "SEASON_HEMISPHERE", "north")
+    season_override = (
+        not _FACADE_CONFIG_SYNCED
+        and _season_support.active_hemisphere() != configured_hemisphere
+    )
     names = (
         "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "HOLIDAY_REGION",
         "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
@@ -629,24 +639,27 @@ def _refresh_facade_config_exports() -> None:
         "CHAIN_COLOR_PER_CHAIN", "SHOW_TIMELINE_GAPS", "SHOW_ANALYTICS",
         "ANALYTICS_STYLE", "ANALYTICS_ONTIME_TOL_SECS", "DEBUG_WAIT_SCHED",
         "CHECK_CHAIN_INTEGRITY", "PANEL_MODE", "LIVE_PANEL_DURATION_MS",
-        "LIVE_PANEL_FOOTER", "FAST_COLOR", "EXIT_PROGRESS", "SPAWN_QUEUE_MAX_BYTES",
-        "SPAWN_QUEUE_DRAIN_MAX_ITEMS", "MAX_CHAIN_WALK", "MAX_ANCHOR_ITER",
+        "LIVE_PANEL_FOOTER", "FAST_COLOR", "EXIT_PROGRESS", "OUTBOX_DRAIN_MAX_ITEMS",
+        "MAX_CHAIN_WALK", "MAX_ANCHOR_ITER",
         "MAX_LINK_NUMBER", "SANITIZE_UDA", "SANITIZE_UDA_MAX_LEN", "MAX_JSON_BYTES",
         "RECURRENCE_UPDATE_UDAS", "_CACHE_TTL_SECS", "_CACHE_LOAD_MEM_MAX",
         "_CACHE_LOAD_MEM_TTL",
     )
-    for name in names:
-        config_name = name if not name.startswith("_") else name[1:]
-        configured_value = getattr(_core_config, config_name)
-        if globals().get(name) == configured_value:
-            globals()[name] = configured_value
+    initial_sync = not _FACADE_CONFIG_SYNCED
+    if initial_sync:
+        for name in names:
+            config_name = name if not name.startswith("_") else name[1:]
+            if name != "SEASON_HEMISPHERE" or not season_override:
+                globals()[name] = getattr(_core_config, config_name)
+        _FACADE_CONFIG_SYNCED = True
     _CONF = _core_config._CONF
     CONFIG_ERROR = _core_config.configuration_error()
     if globals().get("MAX_ANCHOR_DNF_TERMS") == globals().get("_CONFIG_DEFAULT_MAX_ANCHOR_DNF_TERMS", 10_000):
         MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
     if "_refresh_timezone" in globals():
         _refresh_timezone()
-    _configure_season_support()
+    if initial_sync and not season_override:
+        _configure_season_support()
 
 
 # --- Date/time config ---
@@ -811,40 +824,8 @@ def _runtime_command_module():
     return _import_sibling("runtime_command")
 
 
-def _run_task_should_retry(*args, **kwargs):
-    return _runtime_command_module()._run_task_should_retry(*args, **kwargs)
-
-
-def _run_task_retry_sleep(*args, **kwargs):
-    return _runtime_command_module()._run_task_retry_sleep(*args, **kwargs)
-
-
-def _run_task_prepare_tempfiles(*args, **kwargs):
-    return _runtime_command_module()._run_task_prepare_tempfiles(*args, **kwargs)
-
-
-def _run_task_normalize_input(*args, **kwargs):
-    return _runtime_command_module()._run_task_normalize_input(*args, **kwargs)
-
-
-def _run_task_collect_outputs(*args, **kwargs):
-    return _runtime_command_module()._run_task_collect_outputs(*args, **kwargs)
-
-
-def _run_task_cleanup_paths(*args, **kwargs):
-    return _runtime_command_module()._run_task_cleanup_paths(*args, **kwargs)
-
-
-def run_task(*args, **kwargs):
-    return _runtime_command_module().run_task(*args, **kwargs)
-
-
 def run_task_result(*args, **kwargs):
     return _runtime_command_module().run_task_result(*args, **kwargs)
-
-
-def is_lock_error(*args, **kwargs):
-    return _runtime_command_module().is_lock_error(*args, **kwargs)
 
 
 # ---- Core iterator over DNF ---------------------------------------------------

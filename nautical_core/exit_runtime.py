@@ -1,126 +1,30 @@
-"""Runtime-owned state and service builders for hook orchestration."""
+"""Minimal runtime-owned state for on-exit diagnostics and startup timing.
+
+Mutation, verification, and queue-drain orchestration now live in
+``lifecycle_application.LifecycleApplicationService``; this module only
+keeps the small bit of invocation-scoped bookkeeping the thin hook adapter
+(``hooks/exit_impl.py``) uses for diagnostics (``NAUTICAL_DIAG=1``) and
+startup timing.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import sqlite3
 from typing import Any
-
-from nautical_core.exit_models import (
-    ExitApplyParentUpdateServices,
-    ExitClearParentCallback,
-    ExitCleanupCallback,
-    ExitDiagnosticCallback,
-    ExitEnsureChildServices,
-    ExitExportCallback,
-    ExitImportCallback,
-    ExitLockErrorCallback,
-    ExitParentNextlinkStateCallback,
-    ExitParentNextlinkStateResult,
-    ExitParentUpdateCallback,
-    ExitPrecheckServices,
-    ExitRequeueCallback,
-)
 
 
 @dataclass(slots=True)
 class ExitRuntimeState:
-    run_queue_db_conn: sqlite3.Connection | None = None
-    run_queue_db_active: bool = False
-    queue_db_open_count: int = 0
-    queue_db_reuse_count: int = 0
-    queue_lock_failures_this_run: int = 0
-    last_queue_lock_diag_ts: float = 0.0
+    unit_of_work: Any | None = None
+    repository: Any | None = None
     diag_stats: dict[str, Any] = field(default_factory=dict)
-    task_phase: str = ""
     startup_stats: dict[str, float | int] = field(default_factory=dict)
-    export_cache: dict[str, Any] = field(default_factory=dict)
-    equiv_child_cache: dict[tuple[str, str, str], Any] = field(default_factory=dict)
-    lifecycle_parent_preflight: dict[str, dict[str, Any]] = field(default_factory=dict)
-    lifecycle_batch_imported: set[str] = field(default_factory=set)
-    lifecycle_batch_import_failed: set[str] = field(default_factory=set)
 
 
 def new_runtime_state() -> ExitRuntimeState:
     return ExitRuntimeState()
 
 
-@dataclass(slots=True)
-class ExitRuntimeServices:
-    state: ExitRuntimeState
-    parent_nextlink_state: ExitParentNextlinkStateCallback
-    requeue_or_dead_letter_for_lock: ExitRequeueCallback
-    export_uuid: ExitExportCallback
-    import_child: ExitImportCallback
-    is_lock_error: ExitLockErrorCallback
-    diag: ExitDiagnosticCallback
-    update_parent_nextlink: ExitParentUpdateCallback
-    clear_parent_nextlink_if_matches: ExitClearParentCallback
-    cleanup_orphan_child: ExitCleanupCallback
-
-
-def build_precheck_services(runtime: ExitRuntimeServices) -> ExitPrecheckServices:
-    def parent_nextlink_state(
-        parent_uuid: str,
-        child_short: str,
-        expected_prev: str | None = None,
-        *,
-        prefer_cache: bool = True,
-        parent_guard: dict[str, Any] | None = None,
-        guard_mismatch_fn: Any = None,
-    ) -> ExitParentNextlinkStateResult:
-        try:
-            return runtime.parent_nextlink_state(
-                parent_uuid,
-                child_short,
-                expected_prev,
-                prefer_cache=prefer_cache,
-                parent_guard=parent_guard,
-                guard_mismatch_fn=guard_mismatch_fn,
-            )
-        except TypeError:
-            return runtime.parent_nextlink_state(
-                parent_uuid,
-                child_short,
-                expected_prev,
-                prefer_cache=prefer_cache,
-            )
-
-    return ExitPrecheckServices(
-        parent_nextlink_state=parent_nextlink_state,
-        export_uuid=lambda uuid_str, *, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
-        clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
-        is_lock_error=runtime.is_lock_error,
-        diag=runtime.diag,
-        requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
-    )
-
-
-def build_ensure_child_services(runtime: ExitRuntimeServices) -> ExitEnsureChildServices:
-    return ExitEnsureChildServices(
-        export_uuid=lambda uuid_str, prefer_cache=True: runtime.export_uuid(uuid_str, prefer_cache=prefer_cache),
-        import_child=runtime.import_child,
-        clear_parent_nextlink_if_matches=runtime.clear_parent_nextlink_if_matches,
-        is_lock_error=runtime.is_lock_error,
-        diag=runtime.diag,
-        requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
-    )
-
-
-def build_apply_parent_update_services(runtime: ExitRuntimeServices) -> ExitApplyParentUpdateServices:
-    return ExitApplyParentUpdateServices(
-        update_parent_nextlink=runtime.update_parent_nextlink,
-        is_lock_error=runtime.is_lock_error,
-        cleanup_orphan_child=runtime.cleanup_orphan_child,
-        diag=runtime.diag,
-        requeue_or_dead_letter_for_lock=runtime.requeue_or_dead_letter_for_lock,
-    )
-
-
 __all__ = (
-    'ExitRuntimeState',
-    'ExitRuntimeServices',
-    'new_runtime_state',
-    'build_precheck_services',
-    'build_ensure_child_services',
-    'build_apply_parent_update_services',
+    "ExitRuntimeState",
+    "new_runtime_state",
 )

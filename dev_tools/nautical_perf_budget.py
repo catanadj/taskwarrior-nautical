@@ -1070,6 +1070,7 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "chain": "on",
             "chainID": chain_id,
             "link": str(parent_link),
+            "cp": "P1D",
             "due": "20260101T090000Z",
         }
         child = {
@@ -1080,6 +1081,7 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "chainID": chain_id,
             "link": child_link,
             "prevLink": parent_uuid[:8],
+            "cp": "P1D",
             "due": "20260102T090000Z",
         }
         guard = {"status": "completed", "chain": "on", "chainID": chain_id, "link": str(parent_link)}

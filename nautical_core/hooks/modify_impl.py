@@ -1680,46 +1680,24 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
-    return _lifecycle_read_service().collect_prev_two(
+    from nautical_core.integration_models import Absent, Found, Unavailable
+
+    service = _lifecycle_read_service()
+    read = service.collect_prev_two(
         current_task,
-        get_chain_export=lambda chain_id: _lifecycle_read_service().get_chain_export(chain_id),
+        get_chain_read=lambda chain_id: service.get_chain_read(chain_id),
         panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
         panel_chain_snapshot_loaded=_modify_chain_state().panel_chain_snapshot_loaded,
         chain_by_link=chain_by_link,
     )
+    if isinstance(read, Unavailable):
+        raise RuntimeError(read.evidence.detail or "lifecycle predecessor read unavailable")
+    if isinstance(read, Absent):
+        return []
+    if not isinstance(read, Found):
+        raise RuntimeError("lifecycle predecessor read returned an invalid result")
+    return [dict(row) for row in read.value]
 
-
-def _chain_export_for_cache(
-    chain_id: str,
-    since: datetime | None,
-    extra: str | None,
-    limit: int,
-) -> tuple[dict, ...]:
-    """Load one authoritative chain and apply presentation filters in memory."""
-    repository = getattr(_modify_runtime_state(), "task_repository", None)
-    if repository is None:
-        raise RuntimeError("modify task repository is unavailable")
-    integration_models = importlib.import_module("nautical_core.integration_models")
-    read = repository.chain_snapshot(chain_id)
-    if isinstance(read, integration_models.Unavailable):
-        raise RuntimeError(read.evidence.detail or "chain export unavailable")
-    if isinstance(read, integration_models.Absent):
-        return ()
-    if not isinstance(read, integration_models.Found):
-        raise RuntimeError("task repository returned an invalid chain result")
-    rows = [dict(row) for row in read.value]
-    if since is not None:
-        rows = [
-            row
-            for row in rows
-            if (parsed := _dtparse(row.get("modified"))) is not None and parsed > since
-        ]
-    if extra:
-        tokens = _parse_extra_tokens(extra)
-        if tokens is None:
-            raise RuntimeError("invalid chain export filters")
-        rows = [row for row in rows if all(_cached_chain_token_match(row, token) for token in tokens)]
-    return tuple(rows[: max(1, int(limit or _MAX_CHAIN_WALK))])
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:
     if not isinstance(task, dict) or not isinstance(token, str) or not token:
@@ -1751,10 +1729,16 @@ def _lifecycle_read_service():
     state = _modify_chain_state()
     existing = getattr(state, "lifecycle_read_service", None)
     if existing is not None:
+        repository = getattr(_modify_runtime_state(), "task_repository", None)
+        if repository is not None:
+            bind_repository = getattr(existing, "bind_repository", None)
+            if callable(bind_repository):
+                bind_repository(repository)
         return existing
     lifecycle_read_service = _module("lifecycle_read_service")
     if getattr(state, "chain_cache_store", None) is None:
         state.chain_cache_store = lifecycle_read_service.ChainCacheStore()
+    repository = getattr(_modify_runtime_state(), "task_repository", None)
 
     service = lifecycle_read_service.LifecycleReadService(
         coerce_int=core.coerce_int,
@@ -1762,7 +1746,7 @@ def _lifecycle_read_service():
         token_matcher=_cached_chain_token_match,
         read_query_get=_read_query_get,
         chain_cache_get=lambda _chain_id: None,
-        export_chain_cached=_chain_export_for_cache,
+        repository=repository,
         max_chain_walk=_MAX_CHAIN_WALK,
         diag=_diag,
         record_stat=_record_chain_snapshot_stat,
@@ -3283,6 +3267,9 @@ def _completion_build_and_spawn_child(
 
 
 def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
+    # Completion preflight and feedback must share the invocation's
+    # authoritative repository, just like ordinary and deleted edits.
+    _modify_runtime_state().task_repository = unit_of_work.repository
     modify_completion_flow = importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=_completion_build_and_spawn_child,

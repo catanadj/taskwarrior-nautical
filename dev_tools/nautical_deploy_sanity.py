@@ -255,6 +255,53 @@ def _check_manifest_alignment(root: Path) -> list[dict]:
     return results
 
 
+def _check_removed_ownership(root: Path) -> list[dict]:
+    """Reject removed exit modules and reconcile compatibility symbols."""
+    manifest, manifest_error = _load_runtime_manifest(root)
+    if manifest is None:
+        return [{"kind": "ownership", "name": "removed-paths", "ok": False, "message": manifest_error}]
+    forbidden_files = tuple(str(path) for path in getattr(manifest, "REMOVED_RUNTIME_FILES", ()))
+    forbidden_symbols = frozenset(str(name) for name in getattr(manifest, "REMOVED_RECONCILE_SYMBOLS", ()))
+    results: list[dict] = []
+    for relative in forbidden_files:
+        exists = (root / relative).exists()
+        results.append({
+            "kind": "ownership",
+            "name": f"removed:{relative}",
+            "ok": not exists,
+            "message": "absent" if not exists else "removed runtime path reintroduced",
+        })
+
+    reconcile_path = root / "nautical_core" / "tools" / "nautical_reconcile.py"
+    if forbidden_symbols and reconcile_path.is_file():
+        try:
+            tree = ast.parse(reconcile_path.read_text(encoding="utf-8"), filename=str(reconcile_path))
+            used = {
+                node.id
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Name) and node.id in forbidden_symbols
+            }
+            used.update(
+                node.attr
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Attribute) and node.attr in forbidden_symbols
+            )
+            results.append({
+                "kind": "ownership",
+                "name": "reconcile-legacy-symbols",
+                "ok": not used,
+                "message": "absent" if not used else f"removed reconcile symbols reintroduced: {', '.join(sorted(used))}",
+            })
+        except Exception as exc:
+            results.append({
+                "kind": "ownership",
+                "name": "reconcile-legacy-symbols",
+                "ok": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+    return results
+
+
 def _check_scheduler_ownership(root: Path) -> list[dict]:
     """Reject operational calls to scheduler aliases removed from the facade."""
     legacy_names = {
@@ -514,6 +561,7 @@ def main() -> int:
         results.extend(_check_package_layout(root, layout_env))
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
+        results.extend(_check_removed_ownership(root))
         results.extend(_check_scheduler_ownership(root))
         results.extend(_check_taskwarrior_process_ownership(root))
         results.extend(_check_performance_workflow(root))

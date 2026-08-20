@@ -9,20 +9,44 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 import threading
-from typing import Any
+from typing import Any, Protocol
+
+from .integration_models import (
+    Absent,
+    CommandFailureKind,
+    FailureEvidence,
+    Found,
+    TaskCommand,
+    TaskRead,
+    Unavailable,
+)
+from .task_read_repository import AuthoritativeTaskSnapshot
 
 TaskRow = dict[str, Any]
+ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]
 ReadQuery = Callable[[str, tuple[Any, ...]], Any]
-ChainExport = Callable[[str, datetime | None, str | None, int], Sequence[TaskRow]]
 ChainCache = Callable[[str], Sequence[TaskRow] | None]
 TokenParser = Callable[[str | None], list[str] | None]
 TokenMatcher = Callable[[TaskRow, str], bool]
 CoerceInt = Callable[[Any, int | None], int | None]
 Diagnostic = Callable[[str], None]
 Counter = Callable[[str], None]
+
+
+class ChainSnapshotRepository(Protocol):
+    """Typed invocation repository used by lifecycle presentation reads."""
+
+    def chain_snapshot(
+        self,
+        chain_id: str,
+        *,
+        statuses: Sequence[str] = (),
+        complete_history: bool = True,
+        refresh: bool = False,
+    ) -> TaskRead[ChainSnapshotValue]: ...
 
 
 def chain_read_key(
@@ -89,6 +113,12 @@ class ChainCacheStore:
             self.rows = [dict(row) for row in rows if isinstance(row, dict)]
             self.indexes = indexes
 
+    def clear(self) -> None:
+        with self.lock:
+            self.chain_id = ""
+            self.rows = []
+            self.indexes = None
+
 
 class LifecycleReadService:
     """Own chain snapshot filtering, indexing, and read-cache orchestration."""
@@ -101,7 +131,7 @@ class LifecycleReadService:
         token_matcher: TokenMatcher,
         read_query_get: ReadQuery,
         chain_cache_get: ChainCache,
-        export_chain_cached: ChainExport,
+        repository: ChainSnapshotRepository | None = None,
         max_chain_walk: int,
         diag: Diagnostic | None = None,
         record_stat: Counter | None = None,
@@ -113,12 +143,26 @@ class LifecycleReadService:
         self._token_matcher = token_matcher
         self._read_query_get = read_query_get
         self._chain_cache_get = chain_cache_get
-        self._export_chain_cached = export_chain_cached
+        self._repository = repository
         self._max_chain_walk = max(1, int(max_chain_walk))
         self._diag = diag or (lambda _message: None)
         self._record_stat = record_stat or (lambda _name: None)
         self._cache_store = cache_store
         self._read_query_missing = read_query_missing
+
+    def bind_repository(self, repository: ChainSnapshotRepository) -> None:
+        """Attach the invocation repository after early lookup seeding.
+
+        Hook input seeding can construct this service before the runtime has
+        attached its authoritative Taskwarrior repository. Rebinding to a
+        different repository is safe only after clearing all invocation cache
+        state, so one service cannot mix rows from separate Taskdata sources.
+        """
+        if self._repository is not None and self._repository is not repository:
+            if self._cache_store is not None:
+                self._cache_store.clear()
+            clear_cached_chain_exports()
+        self._repository = repository
 
     def cached_chain_rows(self, chain_id: str) -> list[TaskRow] | None:
         """Return the service-owned chain cache, if seeded for this chain."""
@@ -191,18 +235,18 @@ class LifecycleReadService:
         self,
         current_task: TaskRow,
         *,
-        get_chain_export: Callable[[str], list[TaskRow] | None],
+        get_chain_read: Callable[[str], TaskRead[tuple[TaskRow, ...]]],
         panel_chain_by_link: dict[int, list[TaskRow]] | None = None,
         panel_chain_snapshot_loaded: bool = False,
         chain_by_link: dict[int, list[TaskRow]] | None = None,
-    ) -> list[TaskRow]:
-        """Return up to two previous links from one authoritative chain read."""
+    ) -> TaskRead[tuple[TaskRow, ...]]:
+        """Return up to two previous links with explicit read availability."""
         chain_id = str(current_task.get("chainID") or "").strip()
         if not chain_id:
-            return []
+            return Absent("chain:<missing>", "task has no chain identity")
         current_no = self._coerce_int(current_task.get("link"), None)
         if not current_no or current_no <= 1:
-            return []
+            return Absent(f"chain:{chain_id}", "task has no preceding links")
 
         def pick_best(candidates: list[TaskRow]) -> TaskRow | None:
             for status in ("pending", "completed", "deleted"):
@@ -213,13 +257,17 @@ class LifecycleReadService:
 
         chain_index = chain_by_link or panel_chain_by_link or {}
         if not chain_index and not panel_chain_snapshot_loaded:
-            try:
-                chain = get_chain_export(chain_id)
-            except Exception:
-                return []
-            if not isinstance(chain, list):
-                return []
-            chain_index = self.build_indexes(chain).by_link
+            read = get_chain_read(chain_id)
+            if isinstance(read, Unavailable):
+                return read
+            if isinstance(read, Absent):
+                return read
+            if not isinstance(read, Found):
+                return Unavailable(
+                    f"chain:{chain_id}",
+                    self._failure_evidence("typed predecessor read returned an invalid result"),
+                )
+            chain_index = self.build_indexes(read.value).by_link
 
         previous: list[TaskRow] = []
         for wanted in (current_no - 2, current_no - 1):
@@ -228,7 +276,22 @@ class LifecycleReadService:
             task = pick_best(chain_index.get(wanted, []))
             if task:
                 previous.append(task)
-        return previous
+        return Found(tuple(previous), f"chain:{chain_id}:predecessors") if previous else Absent(
+            f"chain:{chain_id}:predecessors", "no preceding links found"
+        )
+
+    @staticmethod
+    def _failure_evidence(detail: str) -> FailureEvidence:
+        command = TaskCommand(("task", "export"), "lifecycle predecessor read", 1.0)
+        return FailureEvidence(
+            command,
+            CommandFailureKind.INVALID_RESPONSE,
+            1,
+            1,
+            0.0,
+            False,
+            detail,
+        )
 
     def build_indexes(self, rows: Sequence[TaskRow]) -> ChainIndexes:
         """Build link, short UUID, and full UUID indexes in one pass."""
@@ -328,18 +391,96 @@ class LifecycleReadService:
             if filtered is not None:
                 self._record_stat("chain_cache_filter_hits")
                 return filtered
-        try:
-            rows = cached_chain_export(
-                self._export_chain_cached,
-                chain_id,
-                since.isoformat() if isinstance(since, datetime) else "",
-                str(extra or ""),
-                self._max_chain_walk,
-            )
-        except RuntimeError as exc:
-            self._diag(f"chain read unavailable (chainID={chain_id}): {exc}")
-            return None
+        rows = cached_chain_export(
+            self._repository_chain_export,
+            chain_id,
+            since.isoformat() if isinstance(since, datetime) else "",
+            str(extra or ""),
+            self._max_chain_walk,
+        )
         return list(rows)
+
+    def get_chain_read(
+        self,
+        chain_id: str,
+        *,
+        since: datetime | None = None,
+        extra: str | None = None,
+    ) -> TaskRead[tuple[TaskRow, ...]]:
+        """Return a typed chain read for callers making lifecycle decisions."""
+        query = f"chain:{str(chain_id or '').strip()}"
+        if not str(chain_id or "").strip():
+            return Absent(query, "chain identity is empty")
+        try:
+            rows = self.get_chain_export(chain_id, since=since, extra=extra)
+        except RuntimeError as exc:
+            return Unavailable(query, self._failure_evidence(str(exc)))
+        if rows is None:
+            return Unavailable(query, self._failure_evidence("chain read returned no authoritative result"))
+        if not rows:
+            return Absent(query, "authoritative chain contains no matching rows")
+        return Found(tuple(rows), query)
+
+    def _repository_chain_export(
+        self,
+        chain_id: str,
+        since: datetime | None,
+        extra: str | None,
+        limit: int,
+    ) -> tuple[TaskRow, ...]:
+        """Adapt one typed repository read to the cached presentation shape."""
+        repository = self._repository
+        if repository is None:
+            raise RuntimeError("typed lifecycle task repository is unavailable")
+        read = repository.chain_snapshot(
+            chain_id,
+            statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+            complete_history=True,
+            refresh=False,
+        )
+        if isinstance(read, Unavailable):
+            raise RuntimeError(read.evidence.detail or "chain snapshot unavailable")
+        if isinstance(read, Absent):
+            return ()
+        if not isinstance(read, Found):
+            raise RuntimeError("typed repository returned an invalid chain snapshot")
+        # TaskReadRepository returns an AuthoritativeTaskSnapshot, while small
+        # repository fakes may return the row tuple directly.  Normalize both
+        # at this typed boundary and reject malformed values instead of
+        # silently turning them into an empty chain.
+        raw_rows = getattr(read.value, "rows", read.value)
+        if not isinstance(raw_rows, Sequence) or isinstance(raw_rows, (str, bytes)):
+            raise RuntimeError("typed repository returned an invalid chain snapshot")
+        rows: list[TaskRow] = []
+        for row in raw_rows:
+            if not isinstance(row, Mapping):
+                raise RuntimeError("typed repository returned a non-object chain row")
+            rows.append(dict(row))
+        if since is not None:
+            rows = [
+                row for row in rows
+                if (parsed := self._parse_modified(row.get("modified"))) is not None and parsed > since
+            ]
+        tokens = self._parse_extra_tokens(extra)
+        if tokens is None:
+            raise RuntimeError("invalid chain export filters")
+        for token in tokens:
+            rows = [row for row in rows if self._token_matcher(row, token)]
+        return tuple(rows[: max(1, int(limit or self._max_chain_walk))])
+
+    @staticmethod
+    def _parse_modified(value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(text, "%Y%m%dT%H%M%SZ")
+            except ValueError:
+                return None
+        return parsed
 
     def merge_spawned_child(
         self,
@@ -383,6 +524,7 @@ class LifecycleReadService:
 
 __all__ = [
     "ChainCacheStore",
+    "ChainSnapshotRepository",
     "ChainIndexes",
     "LifecycleReadService",
     "cached_chain_export",

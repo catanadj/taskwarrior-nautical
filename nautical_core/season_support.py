@@ -35,6 +35,10 @@ def configure_hemisphere(value: object) -> str:
     """Set the process-wide fixed-season profile and return its canonical name."""
     global _ACTIVE_HEMISPHERE
     _ACTIVE_HEMISPHERE = normalize_hemisphere(value)
+    import sys
+    nc = sys.modules.get("nautical_core")
+    if nc is not None:
+        nc.SEASON_HEMISPHERE = _ACTIVE_HEMISPHERE
     return _ACTIVE_HEMISPHERE
 
 

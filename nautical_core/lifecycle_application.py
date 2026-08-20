@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import os
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from .integration_models import (
     ChainDisablePayload,
@@ -444,7 +444,8 @@ class LifecycleApplicationService:
             verified_children.append((state, request))
         child_results = verify_children(tuple(request for _, request in verified_children))
         for state, request in verified_children:
-            outcome = child_results.get(request.payload.child_uuid.lower())
+            payload = cast(ChildImportPayload, request.payload)
+            outcome = child_results.get(payload.child_uuid.lower())
             if outcome is None:
                 outcome = MutationOutcome(
                     request.operation,

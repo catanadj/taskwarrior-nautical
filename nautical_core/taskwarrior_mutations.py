@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, cast
 
 from .integration_models import (
     Absent,
@@ -76,26 +76,26 @@ def _text(value: object) -> str:
 
 def _timestamp_equal(left: object, right: object) -> bool:
     """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
-    left_text = _text(left)
-    right_text = _text(right)
-    if left_text == right_text:
-        return True
-
-    def parse(value: str) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-            except ValueError:
-                return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
-    left_dt = parse(left_text)
-    right_dt = parse(right_text)
+    left_dt = _parse_timestamp(left)
+    right_dt = _parse_timestamp(right)
     return left_dt is not None and right_dt is not None and left_dt == right_dt
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    """Parse the compact and ISO UTC forms emitted by Taskwarrior/Nautical."""
+    value_text = _text(value)
+    if not value_text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value_text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.strptime(value_text, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _link_text(value: object) -> str:
@@ -129,7 +129,15 @@ def _child_import_matches(
         return False
     if _text(row.get("prevLink")).lower() != _text(parent_uuid)[:8].lower():
         return False
-    if _text(row.get("status")).lower() != "pending" or _text(row.get("chain")).lower() != "on":
+    status = _text(row.get("status")).lower()
+    if status != "pending":
+        # Taskwarrior may immediately expire a child whose carried native
+        # until is already in the past. That is a valid imported occurrence;
+        # the reconciler can continue from its deleted slot on the next hop.
+        until = _parse_timestamp(fields.get("until"))
+        if status != "deleted" or until is None or until > datetime.now(timezone.utc):
+            return False
+    if _text(row.get("chain")).lower() != "on":
         return False
 
     # A child must retain the recurrence mode that generated it.  Compare
@@ -165,7 +173,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
         self._uow = unit_of_work
         self._timeout = max(0.05, float(timeout))
-        self._prefetched_children: dict[str, Absent] = {}
+        self._prefetched_children: dict[str, TaskRead[Mapping[str, Any]]] = {}
         self._prefetched_parents: dict[str, Mapping[str, Any]] = {}
 
     def prefetch_lifecycle_batch(
@@ -536,7 +544,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
         if not callable(broad_snapshot):
             return {
-                request.payload.child_uuid.lower(): self._outcome(
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason="child batch verification is unavailable"
                 )
                 for request in pending
@@ -551,21 +559,21 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if isinstance(read, Unavailable):
             kind = MutationOutcomeKind.RETRYABLE if read.retryable else MutationOutcomeKind.MANUAL_REVIEW
             return {
-                request.payload.child_uuid.lower(): self._outcome(
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
                     request, kind, reason=read.evidence.detail, failure=read.evidence
                 )
                 for request in pending
             }
         if isinstance(read, Absent):
             return {
-                request.payload.child_uuid.lower(): self._outcome(
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason="child postcondition snapshot is absent"
                 )
                 for request in pending
             }
         if not isinstance(read, Found):
             return {
-                request.payload.child_uuid.lower(): self._outcome(
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child postcondition snapshot"
                 )
                 for request in pending
@@ -574,7 +582,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         uuid_matches = getattr(snapshot, "uuid_matches", None)
         if not callable(uuid_matches):
             return {
-                request.payload.child_uuid.lower(): self._outcome(
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed child postcondition snapshot"
                 )
                 for request in pending

@@ -181,10 +181,97 @@ def last_n_timeline(
     return lines
 
 
+def render_chain_summary(
+    current: dict[str, Any],
+    reason: str,
+    now_utc: Any,
+    current_task: dict[str, Any] | None = None,
+    *,
+    export_sorted_chain: Callable[[str, dict[str, Any]], list[dict[str, Any]]],
+    root_uuid_from: Callable[[dict[str, Any]], Any],
+    short_uuid: Callable[[Any], str],
+    format_root_and_age: Callable[[dict[str, Any], Any], str],
+    kind_rows: Callable[[list[tuple[str, str]], str, dict[str, Any]], None],
+    span_fields: Callable[..., tuple[datetime | None, datetime | None, str]],
+    stats_rows: Callable[[list[tuple[str, str]], list[dict[str, Any]], Any], None],
+    limits_row: Callable[[list[tuple[str, str]], dict[str, Any]], None],
+    last_n_timeline_rows: Callable[[list[dict[str, Any]], int], list[str]],
+    format_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
+    coerce_int: Callable[[Any, Any], int | None],
+    format_local: Callable[[Any], str],
+    max_chain_walk: int,
+    panel: Callable[..., Any],
+    diagnostic: Callable[[str], None],
+) -> None:
+    """Render the finished/stopped chain summary from focused collaborators."""
+    actual_current = current_task if current_task else current
+    kind_anchor = bool((actual_current.get("anchor") or "").strip())
+    kind_anchor_file = bool((actual_current.get("anchor_file") or "").strip())
+    kind = "anchor" if kind_anchor else ("anchor_file" if kind_anchor_file else "cp")
+    chain_id = (actual_current.get("chainID") or "").strip()
+    if not chain_id:
+        panel(
+            "⚠ Chain summary skipped",
+            [
+                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
+                ("Fix", "Run dev_tools/nautical_backfill_chainid.py."),
+            ],
+            kind="warning",
+        )
+        return
+
+    chain_read_error = ""
+    try:
+        chain = export_sorted_chain(chain_id, actual_current)
+    except Exception as exc:
+        chain = []
+        chain_read_error = str(exc) or "chain export unavailable"
+        diagnostic(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
+
+    link_no = coerce_int(current.get("link"), len(chain))
+    root = short_uuid(root_uuid_from(current))
+    current_short = short_uuid(current.get("uuid"))
+    stopped_by_delete = str(reason or "").strip().lower().startswith("pending task deleted")
+    first, last, span = span_fields(
+        chain_id,
+        chain,
+        stop_at=now_utc,
+        stopped_by_delete=stopped_by_delete,
+    )
+
+    rows: list[tuple[str, str]] = [("Reason", reason), ("Root", format_root_and_age(current, now_utc))]
+    chain_display = f"{root} … {current_short}  [dim](#{link_no}, {len(chain)} tasks"
+    if len(chain) >= max_chain_walk:
+        chain_display += f", truncated at {max_chain_walk})"
+    else:
+        chain_display += ")"
+    rows.append(("Chain", chain_display))
+    if chain_read_error:
+        rows.append(("Chain read", f"Unavailable: {chain_read_error}"))
+
+    kind_rows(rows, kind, current)
+    if first:
+        rows.append(("First due", format_local(first)))
+    if last:
+        rows.append(("Last end", format_local(last)))
+    if stopped_by_delete:
+        rows.append(("Stopped at", format_local(now_utc)))
+    rows.append(("Span", span))
+    stats_rows(rows, chain, now_utc)
+    limits_row(rows, current)
+    tail = last_n_timeline_rows(chain, 6)
+    if tail:
+        rows.append(("History", "\n".join(tail)))
+
+    title = "⛔ Chain stopped – summary" if stopped_by_delete else "⛔ Chain finished – summary"
+    panel(title, format_rows(rows), kind="summary")
+
+
 __all__ = (
     "kind_rows",
     "last_n_timeline",
     "limits_row",
+    "render_chain_summary",
     "span_fields",
     "stats_rows",
     "summary_chain_id",

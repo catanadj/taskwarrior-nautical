@@ -2529,75 +2529,28 @@ def _end_summary_limits_row(rows: list[tuple[str, str]], current: dict) -> None:
 
 
 def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict = None) -> None:
-    actual_current = _end_summary_current(current, current_task)
-    kind_anchor = bool((actual_current.get("anchor") or "").strip())
-    kind_anchor_file = bool((actual_current.get("anchor_file") or "").strip())
-    kind = "anchor" if kind_anchor else ("anchor_file" if kind_anchor_file else "cp")
-
-    chain_id = _end_summary_chain_id_row(actual_current)
-    if not chain_id:
-        _panel(
-            "⚠ Chain summary skipped",
-            [
-                ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
-                ("Fix", "Run dev_tools/nautical_backfill_chainid.py."),
-            ],
-            kind="warning",
-        )
-        return
-
-    chain_read_error = ""
-    try:
-        chain = _end_summary_sorted_chain(chain_id, actual_current)
-    except Exception as exc:
-        chain = []
-        chain_read_error = str(exc) or "chain export unavailable"
-        _diag(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
-
-    L = core.coerce_int(current.get("link"), len(chain))
-    root = _short(_root_uuid_from(current))
-    cur_s = _short(current.get("uuid"))
-    stopped_by_delete = str(reason or "").strip().lower().startswith("pending task deleted")
-    first, last, span = _end_summary_span_fields(
-        chain_id,
-        chain,
-        stop_at=now_utc,
-        stopped_by_delete=stopped_by_delete,
+    summary = _module("modify_chain_summary")
+    summary.render_chain_summary(
+        current,
+        reason,
+        now_utc,
+        current_task,
+        export_sorted_chain=_end_summary_sorted_chain,
+        root_uuid_from=_root_uuid_from,
+        short_uuid=_short,
+        format_root_and_age=_format_root_and_age,
+        kind_rows=_end_summary_kind_rows,
+        span_fields=_end_summary_span_fields,
+        stats_rows=_end_summary_stats_rows,
+        limits_row=_end_summary_limits_row,
+        last_n_timeline_rows=_last_n_timeline,
+        format_rows=_format_chain_summary_rows,
+        coerce_int=core.coerce_int,
+        format_local=core.fmt_dt_local,
+        max_chain_walk=_MAX_CHAIN_WALK,
+        panel=_panel,
+        diagnostic=_diag,
     )
-
-    rows = []
-    rows.append(("Reason", reason))
-    rows.append(("Root", _format_root_and_age(current, now_utc)))
-
-    chain_display = f"{root} … {cur_s}  [dim](#{L}, {len(chain)} tasks"
-    if len(chain) >= _MAX_CHAIN_WALK:
-        chain_display += f", truncated at {_MAX_CHAIN_WALK})"
-    else:
-        chain_display += ")"
-    rows.append(("Chain", chain_display))
-    if chain_read_error:
-        rows.append(("Chain read", f"Unavailable: {chain_read_error}"))
-
-    _end_summary_kind_rows(rows, kind, current)
-
-    if first:
-        rows.append(("First due", core.fmt_dt_local(first)))
-    if last:
-        rows.append(("Last end", core.fmt_dt_local(last)))
-    if stopped_by_delete:
-        rows.append(("Stopped at", core.fmt_dt_local(now_utc)))
-    rows.append(("Span", span))
-
-    _end_summary_stats_rows(rows, chain, now_utc)
-    _end_summary_limits_row(rows, current)
-
-    tail = _last_n_timeline(chain, n=6)
-    if tail:
-        rows.append(("History", "\n".join(tail)))
-
-    rows = _format_chain_summary_rows(rows)
-    title = "⛔ Chain stopped – summary" if stopped_by_delete else "⛔ Chain finished – summary"
-    _panel(title, rows, kind="summary")
 
 
 

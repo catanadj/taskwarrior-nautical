@@ -2564,6 +2564,65 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         expect(any("parent guard differs" in reason for reason in reasons), f"integrity reason was not preserved: {status}")
 
 
+def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
+    """Explicit retention removes old acknowledgements and preserves live evidence."""
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure, OutboxProcessingState
+
+    now = [1000.0]
+
+    def plan_for(link: int) -> LifecyclePlan:
+        parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
+        child_uuid = f"10000000-0000-0000-0000-{link:012d}"
+        return LifecyclePlan.from_mappings(
+            identity=LifecycleIdentity("retention-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("completed", "on", "retention-chain", link, f"rf-{link}"),
+            child_payload={"uuid": child_uuid, "chainID": "retention-chain", "link": link + 1, "prevLink": parent_uuid[:8]},
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        acknowledged = plan_for(1)
+        expect(repo.enqueue(acknowledged, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "ack enqueue failed")
+        claimed, records = repo.claim_batch(owner="ack-worker", lease_seconds=30, limit=1)
+        expect(claimed.ok and records, "ack claim failed")
+        intent_id = records[0].intent_id
+        for stage in ("child_present", "parent_linked", "verified"):
+            expect(repo.advance_stage(intent_id=intent_id, owner="ack-worker", stage=stage).ok, f"stage {stage} failed")
+        expect(repo.acknowledge(intent_id=intent_id, owner="ack-worker").ok, "acknowledgement failed")
+
+        retry_plan = plan_for(2)
+        expect(repo.enqueue(retry_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "retry enqueue failed")
+        _, retry_records = repo.claim_batch(owner="retry-worker", lease_seconds=30, limit=1)
+        expect(retry_records, "retry claim failed")
+        expect(repo.release_retry(intent_id=retry_records[0].intent_id, owner="retry-worker", failure=OutboxFailure("busy", "lock")).ok, "retry release failed")
+
+        claimed_plan = plan_for(3)
+        expect(repo.enqueue(claimed_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "claimed enqueue failed")
+        _, claimed_records = repo.claim_batch(owner="live-worker", lease_seconds=300, limit=1)
+        expect(claimed_records, "live claim failed")
+
+        review_plan = plan_for(4)
+        expect(repo.enqueue(review_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "review enqueue failed")
+        _, review_records = repo.claim_batch(owner="review-worker", lease_seconds=30, limit=1)
+        expect(review_records, "review claim failed")
+        expect(repo.manual_review(intent_id=review_records[0].intent_id, owner="review-worker", failure=OutboxFailure("review", "inspect")).ok, "manual review failed")
+
+        now[0] += 100.0
+        cleaned = repo.prune_acknowledged(retention_seconds=50.0, limit=10)
+        expect(cleaned.ok and cleaned.removed == 1, f"unexpected retention result: {cleaned}")
+        status_result, status = repo.status(limit=20)
+        expect(status_result.ok, "status after retention failed")
+        states = status.get("states", {})
+        expect(states.get(OutboxProcessingState.READY.value) == 1, f"retry evidence was pruned: {states}")
+        expect(states.get(OutboxProcessingState.CLAIMED.value) == 1, f"claimed evidence was pruned: {states}")
+        expect(states.get(OutboxProcessingState.MANUAL_REVIEW.value) == 1, f"manual review evidence was pruned: {states}")
+        expect(states.get(OutboxProcessingState.ACKNOWLEDGED.value, 0) == 0, f"old acknowledgement remained: {states}")
+
+
 def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema():
     """First-open races are bounded, WAL-backed, and never silently downgrade schema."""
     import threading
@@ -30885,6 +30944,7 @@ TESTS = [
     test_child_import_rejects_incomplete_existing_rows,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
+    test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,

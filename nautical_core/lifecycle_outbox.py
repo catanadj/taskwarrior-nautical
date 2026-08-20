@@ -22,6 +22,7 @@ from nautical_core.lifecycle_models import ExecutionStage, LifecycleContractErro
 
 
 OUTBOX_SCHEMA_VERSION = 1
+OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
 _INIT_RETRIES = 8
 _INIT_BACKOFF_S = 0.025
 _MAX_INIT_BACKOFF_S = 0.25
@@ -191,6 +192,34 @@ class OutboxResult:
         return self.kind in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}
 
 
+@dataclass(frozen=True, slots=True)
+class OutboxMaintenanceResult:
+    """Structured result from an explicit, operator-triggered cleanup."""
+
+    kind: OutboxResultKind
+    removed: int = 0
+    cutoff: float = 0.0
+    retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS
+    checkpoint: str = "not_requested"
+    reason: str = ""
+    lock_busy: bool = False
+
+    def __post_init__(self) -> None:
+        try:
+            kind = OutboxResultKind(self.kind)
+        except (TypeError, ValueError) as exc:
+            raise LifecycleOutboxError("invalid outbox maintenance result") from exc
+        if isinstance(self.removed, bool) or int(self.removed) < 0:
+            raise LifecycleOutboxError("outbox maintenance removed count must be non-negative")
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "removed", int(self.removed))
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+
+    @property
+    def ok(self) -> bool:
+        return self.kind is OutboxResultKind.APPLIED
+
+
 def lifecycle_outbox_path(taskdata: Path) -> Path:
     return Path(taskdata) / ".nautical-state" / ".nautical_lifecycle_outbox.db"
 
@@ -351,6 +380,10 @@ class LifecycleOutboxRepository:
                     conn.execute(
                         "CREATE INDEX IF NOT EXISTS idx_lifecycle_outbox_stage "
                         "ON lifecycle_outbox (lifecycle_stage, processing_state)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_lifecycle_outbox_ack "
+                        "ON lifecycle_outbox (processing_state, acknowledged_at)"
                     )
                     conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
                 LifecycleOutboxRepository._validate_schema(conn)
@@ -888,13 +921,88 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def prune_acknowledged(
+        self,
+        *,
+        retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
+        limit: int = 1000,
+        checkpoint: bool = False,
+    ) -> OutboxMaintenanceResult:
+        """Remove only acknowledged records older than a conservative boundary.
+
+        Cleanup is explicit and bounded.  No retry, claimed, quarantined, or
+        manual-review row can match the delete predicate, so their evidence is
+        retained even when an operator runs maintenance repeatedly.
+        """
+        try:
+            retention = float(retention_seconds)
+        except (TypeError, ValueError):
+            return OutboxMaintenanceResult(OutboxResultKind.REJECTED, reason="retention_seconds must be finite")
+        if retention < 0 or not retention == retention or retention in {float("inf"), float("-inf")}:
+            return OutboxMaintenanceResult(OutboxResultKind.REJECTED, reason="retention_seconds must be finite and non-negative")
+        if isinstance(limit, bool) or int(limit) <= 0:
+            return OutboxMaintenanceResult(OutboxResultKind.REJECTED, reason="maintenance limit must be positive")
+        now = self._clock()
+        cutoff = now - retention
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            self._secure_state_files()
+            with _transaction(conn):
+                rows = conn.execute(
+                    "SELECT intent_id FROM lifecycle_outbox "
+                    "WHERE processing_state=? AND acknowledged_at > 0 AND acknowledged_at <= ? "
+                    "ORDER BY acknowledged_at ASC, intent_id ASC LIMIT ?",
+                    (OutboxProcessingState.ACKNOWLEDGED.value, cutoff, int(limit)),
+                ).fetchall()
+                removed = 0
+                for row in rows:
+                    result = conn.execute(
+                        "DELETE FROM lifecycle_outbox WHERE intent_id=? AND processing_state=? "
+                        "AND acknowledged_at > 0 AND acknowledged_at <= ?",
+                        (str(row[0]), OutboxProcessingState.ACKNOWLEDGED.value, cutoff),
+                    )
+                    removed += int(result.rowcount or 0)
+            checkpoint_state = "not_requested"
+            if checkpoint:
+                checkpoint_row = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                checkpoint_state = "completed" if checkpoint_row is not None else "unavailable"
+            return OutboxMaintenanceResult(
+                OutboxResultKind.APPLIED,
+                removed=removed,
+                cutoff=cutoff,
+                retention_seconds=retention,
+                checkpoint=checkpoint_state,
+            )
+        except sqlite3.OperationalError as exc:
+            return OutboxMaintenanceResult(
+                OutboxResultKind.RETRYABLE,
+                cutoff=cutoff,
+                retention_seconds=retention,
+                reason=str(exc),
+                lock_busy=_busy(exc),
+            )
+        except Exception as exc:
+            return OutboxMaintenanceResult(
+                OutboxResultKind.REJECTED,
+                cutoff=cutoff,
+                retention_seconds=retention,
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+
 
 __all__ = (
     "LifecycleOutboxError",
     "LifecycleOutboxRecord",
     "LifecycleOutboxRepository",
     "OUTBOX_SCHEMA_VERSION",
+    "OUTBOX_ACK_RETENTION_SECONDS",
     "OutboxFailure",
+    "OutboxMaintenanceResult",
     "OutboxProcessingState",
     "OutboxResult",
     "OutboxResultKind",

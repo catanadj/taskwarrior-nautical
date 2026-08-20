@@ -898,6 +898,7 @@ def test_hook_stdout_strict_json_with_diag_on_add():
     with tempfile.TemporaryDirectory() as td:
         env = {
             "NAUTICAL_DIAG": "1",
+            "NAUTICAL_BENCH_FORCE_FULL": "1",
             "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
         }
         task = {
@@ -909,6 +910,7 @@ def test_hook_stdout_strict_json_with_diag_on_add():
         p = _run_hook_script(hook, task, env_extra=env)
         expect(p.returncode == 0, f"on-add returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
+        expect(p.stderr.strip(), "diagnostics enabled for on-add but stderr was empty")
 
 def test_hook_stdout_strict_json_with_diag_on_modify():
     """on-modify must keep stdout JSON-only even when diagnostics are enabled."""
@@ -916,12 +918,14 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
     with tempfile.TemporaryDirectory() as td:
         env = {
             "NAUTICAL_DIAG": "1",
+            "NAUTICAL_BENCH_FORCE_FULL": "1",
             "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
         }
         raw = json.dumps({"uuid": "00000000-0000-0000-0000-000000000444", "status": "pending"})
         p = _run_hook_script_raw(hook, raw, env_extra=env)
         expect(p.returncode == 0, f"on-modify returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
+        expect(p.stderr.strip(), "diagnostics enabled for on-modify but stderr was empty")
 
 def test_hook_stdout_unicode_unescaped_on_add():
     """on-add passthrough stdout should preserve Unicode (ensure_ascii=False)."""

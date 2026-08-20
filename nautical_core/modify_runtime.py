@@ -115,6 +115,55 @@ def new_runtime_state() -> ModifyRuntimeState:
     return ModifyRuntimeState()
 
 
+def scheduler_service_for_task(
+    task: dict[str, Any],
+    *,
+    state: ModifyRuntimeState,
+    core: Any,
+    recurrence_seed_base: Callable[[dict[str, Any]], str],
+) -> Any:
+    """Return one cached scheduler service for the task's scheduling state."""
+    identity = str(task.get("uuid") or task.get("chainID") or "").strip()
+    if identity:
+        cache_key = (
+            "task",
+            identity,
+            str(task.get("modified") or ""),
+            str(task.get("anchor") or ""),
+            str(task.get("anchor_file") or ""),
+            str(task.get("omit") or ""),
+            str(task.get("omit_file") or ""),
+            str(task.get("cp") or ""),
+            str(task.get("anchor_mode") or ""),
+            str(task.get("chainMax") or ""),
+            str(task.get("chainUntil") or ""),
+            str(task.get("bc") or ""),
+        )
+    else:
+        cache_key = ("object", id(task))
+    cached_service = state.scheduler_services.get(cache_key)
+    if cached_service is not None:
+        state.diag_stats["evaluator_session_hits"] = state.diag_stats.get("evaluator_session_hits", 0) + 1
+        return cached_service
+
+    from nautical_core.evaluation_session import EvaluationSession
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_service import SchedulerService
+
+    context = RecurrenceContext.from_task(
+        task,
+        fallback_chain_id=recurrence_seed_base(task),
+        timezone=core._LOCAL_TZ,
+        business_calendar=core.business_calendar_for_task(task),
+        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+    service = SchedulerService(EvaluationSession.from_task(task, context=context))
+    state.scheduler_services[cache_key] = service
+    state.diag_stats["evaluator_session_misses"] = state.diag_stats.get("evaluator_session_misses", 0) + 1
+    return service
+
+
 @dataclass(slots=True)
 class ModifyRuntimeServices:
     state: ModifyRuntimeState
@@ -280,6 +329,7 @@ __all__ = (
     'ModifyRuntimeState',
     'ModifyRuntimeServices',
     'new_runtime_state',
+    'scheduler_service_for_task',
     'build_anchor_feedback_services',
     'build_cp_feedback_services',
     'build_preflight_services',

@@ -5,6 +5,87 @@ from __future__ import annotations
 from typing import Any
 
 
+def validate_anchor_on_modify(
+    expr: str,
+    *,
+    parse_anchor_expr: Any,
+    validate_anchor_expr: Any,
+) -> None:
+    """Mirror strict on-add anchor checks for ordinary modifications."""
+    if not expr or not expr.strip():
+        raise ValueError("anchor is required if chaining by anchor")
+    try:
+        parse_anchor_expr(expr)
+    except Exception as exc:
+        raise ValueError(f"anchor syntax error: {exc}") from exc
+    try:
+        validate_anchor_expr(expr)
+    except Exception as exc:
+        raise ValueError(f"anchor validation failed: {exc}") from exc
+
+
+def validate_omit_on_modify(expr: str, *, validate_omit_expr: Any) -> None:
+    if not expr or not expr.strip():
+        return
+    try:
+        validate_omit_expr(expr)
+    except Exception as exc:
+        raise ValueError(f"omit validation failed: {exc}") from exc
+
+
+def validate_cp_on_modify(
+    cp_value: str,
+    chain_max_value: Any,
+    chain_until_value: Any,
+    *,
+    parse_cp_sequence: Any,
+    cp_sequence_parse_error: Any,
+    parse_chain_max: Any,
+    parse_datetime: Any,
+) -> None:
+    """Validate a CP value and its optional chain limits."""
+    if not cp_value or not cp_value.strip():
+        return
+    sequence = parse_cp_sequence(cp_value)
+    if not sequence:
+        reason = cp_sequence_parse_error(cp_value) or f"invalid duration format '{cp_value}'"
+        raise ValueError(f"{reason} (expected: 3d, 2w, 1h, etc.)")
+    _cpmax, chain_max_error = parse_chain_max(chain_max_value)
+    if chain_max_error:
+        raise ValueError(chain_max_error)
+    chain_until = (chain_until_value or "").strip()
+    if chain_until and parse_datetime(chain_until) is None:
+        raise ValueError(f"Invalid chainUntil '{chain_until}'")
+
+
+def validate_chain_limits_on_modify(
+    task: dict[str, Any],
+    *,
+    parse_chain_max: Any,
+    parse_datetime: Any,
+    validate_until_not_past: Any,
+    now_utc: Any,
+    fail: Any,
+) -> None:
+    """Normalize and validate chainMax/chainUntil during modification."""
+    cpmax, chain_max_error = parse_chain_max(task.get("chainMax"))
+    if chain_max_error:
+        fail("Invalid chainMax", chain_max_error)
+        return
+    if cpmax is not None:
+        task["chainMax"] = cpmax
+    chain_until = str(task.get("chainUntil") or "").strip()
+    if not chain_until:
+        return
+    until_dt = parse_datetime(chain_until)
+    if until_dt is None:
+        fail("Invalid chainUntil", f"Unrecognized datetime format '{chain_until}'")
+        return
+    is_valid, until_error = validate_until_not_past(until_dt, now_utc())
+    if not is_valid:
+        fail("Invalid chainUntil", until_error or "chainUntil is in the past")
+
+
 def validate_native_until_after_target_or_fail(
     task: dict[str, Any],
     *,
@@ -144,6 +225,10 @@ def validate_native_until_anchor_slots_or_fail(
 
 
 __all__ = (
+    "validate_anchor_on_modify",
+    "validate_chain_limits_on_modify",
+    "validate_cp_on_modify",
     "validate_native_until_after_target_or_fail",
     "validate_native_until_anchor_slots_or_fail",
+    "validate_omit_on_modify",
 )

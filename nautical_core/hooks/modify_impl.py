@@ -1639,81 +1639,43 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 def _validate_anchor_on_modify(expr: str):
-    """Mirror on-add strict checks for anchor; raise ValueError on problems."""
-    if not expr or not expr.strip():
-        raise ValueError("anchor is required if chaining by anchor")
-
-    # Syntax first (for friendlier messages)
-    try:
-        dnf_raw = core.parse_anchor_expr_to_dnf(expr)
-    except Exception as e:
-        raise ValueError(f"anchor syntax error: {str(e)}")
-
-
-    # NOTE: legacy weekday ':' syntax is accepted for backward compatibility.
-
-    # Strict validation
-    try:
-        _validate_anchor_expr_cached(expr)  # calls core.validate_anchor_expr_strict
-    except Exception as e:
-        raise ValueError(f"anchor validation failed: {str(e)}")
+    return _module("modify_validation").validate_anchor_on_modify(
+        expr,
+        parse_anchor_expr=core.parse_anchor_expr_to_dnf,
+        validate_anchor_expr=_validate_anchor_expr_cached,
+    )
 
 
 def _validate_omit_on_modify(expr: str):
-    if not expr or not expr.strip():
-        return
-    try:
-        _validate_omit_expr_cached(expr)
-    except Exception as e:
-        raise ValueError(f"omit validation failed: {str(e)}")
+    return _module("modify_validation").validate_omit_on_modify(
+        expr,
+        validate_omit_expr=_validate_omit_expr_cached,
+    )
 
 
 def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
-    """
-    Mirror on-add CP checks for a plain modify:
-      - cp must parse as a duration
-      - optional chainMax must be a positive integer
-      - optional chainUntil must parse as a datetime
-    """
-    if not cp_str or not cp_str.strip():
-        return  # nothing to validate
-
-    seq = core.parse_cp_sequence(cp_str)
-    if not seq:
-        reason = core.cp_sequence_parse_error(cp_str) or f"invalid duration format '{cp_str}'"
-        raise ValueError(f"{reason} (expected: 3d, 2w, 1h, etc.)")
-
-    # chainMax
     add_validation = core._import_sibling("add_validation")
-    _cpmax, chain_max_err = add_validation.parse_chain_max(chain_max_val)
-    if chain_max_err:
-        raise ValueError(chain_max_err)
-
-    # chainUntil
-    cu = (chain_until_val or "").strip()
-    if cu:
-        dt = core.parse_dt_any(cu)
-        if dt is None:
-            raise ValueError(f"Invalid chainUntil '{cu}'")
+    return _module("modify_validation").validate_cp_on_modify(
+        cp_str,
+        chain_max_val,
+        chain_until_val,
+        parse_cp_sequence=core.parse_cp_sequence,
+        cp_sequence_parse_error=core.cp_sequence_parse_error,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=core.parse_dt_any,
+    )
 
 
 def _validate_chain_limits_on_modify(task: dict) -> None:
     add_validation = core._import_sibling("add_validation")
-    cpmax, chain_max_err = add_validation.parse_chain_max(task.get("chainMax"))
-    if chain_max_err:
-        _fail_and_exit("Invalid chainMax", chain_max_err)
-    if cpmax is not None:
-        task["chainMax"] = cpmax
-
-    chain_until = str(task.get("chainUntil") or "").strip()
-    if not chain_until:
-        return
-    until_dt = core.parse_dt_any(chain_until)
-    if until_dt is None:
-        _fail_and_exit("Invalid chainUntil", f"Unrecognized datetime format '{chain_until}'")
-    is_valid, until_err = _validate_until_not_past(until_dt, core.now_utc())
-    if not is_valid:
-        _fail_and_exit("Invalid chainUntil", until_err or "chainUntil is in the past")
+    return _module("modify_validation").validate_chain_limits_on_modify(
+        task,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=core.parse_dt_any,
+        validate_until_not_past=_validate_until_not_past,
+        now_utc=core.now_utc,
+        fail=_fail_and_exit,
+    )
 
 
 def _validate_native_until_after_target_or_fail(task: dict) -> None:

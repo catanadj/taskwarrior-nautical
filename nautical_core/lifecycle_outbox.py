@@ -273,12 +273,6 @@ class LifecycleOutboxRepository:
                 return OutboxResult(OutboxResultKind.APPLIED)
             except sqlite3.OperationalError as exc:
                 last = exc
-                # Reject when the database is read‑only or the disk is full.
-                msg = str(exc).lower()
-                if "readonly" in msg or "attempt to write a readonly database" in msg:
-                    return OutboxResult.reject(exc, reason="database is read‑only")
-                if "disk full" in msg or "disk i/o" in msg:
-                    return OutboxResult.reject(exc, reason="disk full or I/O error")
                 if not _busy(exc) or attempt + 1 >= _INIT_RETRIES:
                     return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
                 time.sleep(min(_MAX_INIT_BACKOFF_S, _INIT_BACKOFF_S * (2**attempt)))

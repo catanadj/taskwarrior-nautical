@@ -6738,6 +6738,26 @@ def test_nautical_dispatches_supported_subcommands():
         expect(run_name == "__main__", f"wrong run_name for {command}: {run_name!r}")
         expect(argv[0] == expected_target, f"argv not rewritten for {command}: {argv!r}")
 
+    previous_install_target = mod.COMMANDS["install"]
+    previous_source = os.environ.get("NAUTICAL_SOURCE")
+    try:
+        mod.COMMANDS["install"] = Path("/tmp/nautical-missing-install.py")
+        os.environ["NAUTICAL_SOURCE"] = str(ROOT)
+        mod.runpy.run_path = _fake_run_path
+        calls.clear()
+        sys.argv = ["nautical", "install"]
+        expect(mod.main() == 0, "missing install target did not recover through checkout")
+        expect(
+            calls and calls[0][0] == targets["install"],
+            f"checkout recovery selected the wrong install target: {calls!r}",
+        )
+    finally:
+        mod.COMMANDS["install"] = previous_install_target
+        if previous_source is None:
+            os.environ.pop("NAUTICAL_SOURCE", None)
+        else:
+            os.environ["NAUTICAL_SOURCE"] = previous_source
+
 
 def test_doctor_reports_missing_timezone_data():
     """doctor should warn when the configured timezone cannot be loaded."""

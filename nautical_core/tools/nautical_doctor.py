@@ -861,6 +861,41 @@ def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stal
     return dict(payload)
 
 
+_OBSOLETE_QUEUE_STATE_NAMES = (
+    ".nautical_spawn_queue.jsonl",
+    ".nautical_spawn_queue.processing.jsonl",
+    ".nautical_spawn_queue.lock",
+    ".nautical_queue.db",
+    ".nautical_queue.db-wal",
+    ".nautical_queue.db-shm",
+    ".nautical_dead_letter.jsonl",
+)
+
+
+def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) -> list[str]:
+    """Report retired queue artifacts without reading or migrating them."""
+    paths: list[str] = []
+    roots = (taskdata, taskdata / ".nautical-state")
+    for root in roots:
+        for name in _OBSOLETE_QUEUE_STATE_NAMES:
+            path = root / name
+            if os.path.lexists(path):
+                paths.append(str(path))
+    if paths:
+        _finding(
+            findings,
+            "outbox.obsolete_state",
+            "warn",
+            "Retired Nautical queue state was found; it is not used by this runtime.",
+            fix=(
+                "Back up any required records, then quarantine or remove the listed files; "
+                "the lifecycle outbox is the only supported work store."
+            ),
+            details={"paths": sorted(set(paths))},
+        )
+    return sorted(set(paths))
+
+
 def _short_uuid(value: object) -> str:
     raw = str(value or "").strip().lower()
     return raw.split("-")[0] if "-" in raw else raw[:8]
@@ -1428,6 +1463,7 @@ def main() -> int:
             details=gc_result,
         )
     outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
+    obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
     counts = _check_chains(
         findings,
         repository=unit_of_work.repository if unit_of_work is not None else None,
@@ -1442,6 +1478,7 @@ def main() -> int:
         "hooks_dir": str(hooks_dir),
         "counts": counts,
         "outbox": outbox,
+        "obsolete_queue_state": obsolete_queue_state,
         "findings": findings,
     }
     if args.json:

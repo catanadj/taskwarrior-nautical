@@ -6613,6 +6613,30 @@ def test_installer_cli_and_doctor_managed_runtime_diagnostics():
         expect(broken.get("severity") == "error", f"Doctor missed broken runtime pointer: {findings!r}")
 
 
+def test_doctor_reports_retired_queue_state_without_migrating_it():
+    """Doctor should identify retired queue artifacts and leave them untouched."""
+    from nautical_core.tools import nautical_doctor
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        state = taskdata / ".nautical-state"
+        state.mkdir(parents=True)
+        retired = [
+            taskdata / ".nautical_spawn_queue.jsonl",
+            state / ".nautical_queue.db",
+            state / ".nautical_queue.db-wal",
+        ]
+        for path in retired:
+            path.write_text("retired\n", encoding="utf-8")
+        findings: list[dict[str, object]] = []
+        found = nautical_doctor._check_obsolete_queue_state(findings, taskdata)
+        expect(set(found) == {str(path) for path in retired}, f"retired queue paths were not reported: {found!r}")
+        issue = next(item for item in findings if item.get("id") == "outbox.obsolete_state")
+        expect(issue.get("severity") == "warn", f"retired queue state had the wrong severity: {issue!r}")
+        expect("quarantine" in str(issue.get("fix") or "").lower(), f"missing quarantine guidance: {issue!r}")
+        expect(all(path.read_text(encoding="utf-8") == "retired\n" for path in retired), "doctor modified retired state")
+
+
 def test_runtime_cleanup_preserves_active_and_rollback_releases():
     """Runtime cleanup must retain the active release and newest rollback."""
     from nautical_core import install_runtime
@@ -30737,6 +30761,7 @@ TESTS = [
     test_installer_migrates_legacy_core_and_rolls_back_first_switch,
     test_installer_lock_and_duplicate_hook_guards,
     test_installer_cli_and_doctor_managed_runtime_diagnostics,
+    test_doctor_reports_retired_queue_state_without_migrating_it,
     test_runtime_cleanup_preserves_active_and_rollback_releases,
     test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,

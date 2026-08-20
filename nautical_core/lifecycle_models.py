@@ -499,6 +499,9 @@ class LifecyclePlan:
         payload.pop("max_attempts", None)
         child = payload.get("child_payload")
         if isinstance(child, dict):
+            # Taskwarrior assigns a new entry timestamp whenever a retry
+            # rebuilds an otherwise identical child payload.
+            child.pop("entry", None)
             optional_fields = ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc")
             for field in optional_fields:
                 value = child.get(field)

@@ -2654,7 +2654,12 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
     def clock():
         return now[0]
 
-    def plan_for(link: int, *, legacy_null_anchor_file: bool = False) -> LifecyclePlan:
+    def plan_for(
+        link: int,
+        *,
+        legacy_null_anchor_file: bool = False,
+        child_entry: str = "",
+    ) -> LifecyclePlan:
         parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
         child_uuid = f"10000000-0000-0000-0000-{link:012d}"
         child_payload = {
@@ -2665,6 +2670,8 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         }
         if legacy_null_anchor_file:
             child_payload["anchor_file"] = None
+        if child_entry:
+            child_payload["entry"] = child_entry
         return LifecyclePlan.from_mappings(
             identity=LifecycleIdentity("outbox-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
@@ -2718,6 +2725,18 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             converged.kind is OutboxResultKind.ALREADY_APPLIED,
             "legacy null lifecycle intent was treated as an immutable conflict",
         )
+        old_entry = repo.enqueue(
+            plan_for(3, child_entry="20260820T200000Z"),
+            configuration_fingerprint="cf1",
+            schedule_fingerprint="sf1",
+        )
+        expect(old_entry.kind is OutboxResultKind.APPLIED, "volatile-entry lifecycle intent could not be staged")
+        new_entry = repo.enqueue(
+            plan_for(3, child_entry="20260820T210000Z"),
+            configuration_fingerprint="cf1",
+            schedule_fingerprint="sf1",
+        )
+        expect(new_entry.kind is OutboxResultKind.ALREADY_APPLIED, "entry timestamp caused a lifecycle conflict")
 
         stage_sequences = (
             (),

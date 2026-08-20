@@ -2509,47 +2509,12 @@ def _recurrence_anchor_field(task: dict | None) -> str:
 # ------------------------------------------------------------------------------
 # End-of-chain summary + stats
 # ------------------------------------------------------------------------------
-def _median(nums: list[float]) -> float | None:
-    if not nums:
-        return None
-    s = sorted(nums)
-    n = len(s)
-    mid = n // 2
-    return s[mid] if n % 2 else 0.5 * (s[mid - 1] + s[mid])
-
-
 def _lateness_stats(chain: list[dict], tol_secs: int = 60) -> dict:
-    early = on = late = 0
-    deltas = []
-    best = None
-    worst = None
-    for obj in chain:
-        due = _dtparse(obj.get("due"))
-        end = _dtparse(obj.get("end"))
-        if not (due and end):
-            continue
-        diff = (end - due).total_seconds()
-        deltas.append(diff)
-        if diff > tol_secs:
-            late += 1
-            worst = diff if (worst is None or diff > worst) else worst
-        elif diff < -tol_secs:
-            early += 1
-            best = diff if (best is None or diff < best) else best
-        else:
-            on += 1
-    avg = (sum(deltas) / len(deltas)) if deltas else None
-    med = _median(deltas) if deltas else None
-    return {
-        "early": early,
-        "on_time": on,
-        "late": late,
-        "avg": avg,
-        "median": med,
-        "best_early": best,
-        "worst_late": worst,
-        "count": len(deltas),
-    }
+    return _module("modify_analytics").lateness_stats(
+        chain,
+        parse_datetime=_dtparse,
+        tol_secs=tol_secs,
+    )
 
 
 def _sort_chain_for_analytics(chain: list[dict]) -> list[dict]:

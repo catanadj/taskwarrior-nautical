@@ -61,6 +61,9 @@ class EvaluationSession:
 
     def project_time(self, value: Any, selected_date: Any, **kwargs: Any) -> ProjectionResult:
         """Project a time modifier without allowing it to change the date."""
+        if kwargs.get("config") is None and self._evaluator.context.astronomy_config is not None:
+            kwargs = dict(kwargs)
+            kwargs["config"] = dict(self._evaluator.context.astronomy_config)
         service = self.get_or_create("time_projection_service", TimeProjectionService)
         return service.project(value, selected_date, context=self._evaluator.context, **kwargs)
 

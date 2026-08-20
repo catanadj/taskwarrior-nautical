@@ -851,6 +851,12 @@ class RecurrenceEvaluator:
         """Project a time modifier against a selected date through one service."""
         from .time_projection import TimeProjectionService
 
+        # Anchor scheduling passes this callback without repeating the full
+        # context. Keep astronomical projections task-scoped instead of
+        # silently falling back to an empty global configuration.
+        if kwargs.get("config") is None and self.context.astronomy_config is not None:
+            kwargs = dict(kwargs)
+            kwargs["config"] = dict(self.context.astronomy_config)
         service = self._get_cached("time_projection_service", TimeProjectionService)
         return service.project(value, selected_date, context=self.context, **kwargs)
 

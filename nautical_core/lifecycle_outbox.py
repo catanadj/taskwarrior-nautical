@@ -49,6 +49,15 @@ class OutboxResultKind(str, Enum):
 
 
 _ACTIVE_STATES = (OutboxProcessingState.READY.value, OutboxProcessingState.RETRY.value)
+_EXECUTABLE_STAGES = frozenset(
+    {
+        ExecutionStage.PLANNED,
+        ExecutionStage.PERSISTED,
+        ExecutionStage.CHILD_PRESENT,
+        ExecutionStage.PARENT_LINKED,
+        ExecutionStage.VERIFIED,
+    }
+)
 _TERMINAL_STATES = frozenset(
     {
         OutboxProcessingState.MANUAL_REVIEW,
@@ -144,6 +153,14 @@ class LifecycleOutboxRecord:
             raise LifecycleOutboxError("claimed outbox record requires a lease")
         if state is not OutboxProcessingState.CLAIMED and lease_owner:
             raise LifecycleOutboxError("only claimed outbox records may retain a lease")
+        if state in {
+            OutboxProcessingState.READY,
+            OutboxProcessingState.RETRY,
+            OutboxProcessingState.CLAIMED,
+        } and stage not in _EXECUTABLE_STAGES:
+            raise LifecycleOutboxError(
+                f"active outbox state {state.value} cannot use lifecycle stage {stage.value}"
+            )
         if state in _TERMINAL_STATES and stage is not ExecutionStage.FINALIZED:
             if state is not OutboxProcessingState.QUARANTINED:
                 raise LifecycleOutboxError("terminal outbox state requires a finalized lifecycle stage")
@@ -497,6 +514,29 @@ class LifecycleOutboxRepository:
                 records: list[LifecycleOutboxRecord] = []
                 for raw in candidates:
                     intent_id = str(raw[0])
+                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                    if row is None:
+                        continue
+                    try:
+                        candidate = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        continue
+                    if candidate.attempts >= candidate.plan.max_attempts:
+                        self._quarantine_row(
+                            conn,
+                            intent_id,
+                            now,
+                            OutboxFailure(
+                                "retry_exhausted",
+                                "outbox retry budget exhausted before claim",
+                                {
+                                    "attempts": candidate.attempts,
+                                    "max_attempts": candidate.plan.max_attempts,
+                                },
+                            ),
+                        )
+                        continue
                     conn.execute(
                         "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
                         "attempts=attempts+1, failure_json='', updated_at=? "
@@ -543,6 +583,38 @@ class LifecycleOutboxRepository:
                     "WHERE processing_state=? AND lease_expires_at <= ?",
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
                 )
+                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                if row is None:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
+                current_state = str(row["processing_state"])
+                if current_state == OutboxProcessingState.ACKNOWLEDGED.value:
+                    try:
+                        record = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
+                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+                if current_state not in _ACTIVE_STATES:
+                    return OutboxResult(
+                        OutboxResultKind.CONFLICT,
+                        reason=f"lifecycle intent is not claimable (state={current_state!r})",
+                    )
+                try:
+                    candidate = self._from_row(row)
+                except LifecycleOutboxError as exc:
+                    self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
+                if candidate.attempts >= candidate.plan.max_attempts:
+                    failure = OutboxFailure(
+                        "retry_exhausted",
+                        "outbox retry budget exhausted before claim",
+                        {
+                            "attempts": candidate.attempts,
+                            "max_attempts": candidate.plan.max_attempts,
+                        },
+                    )
+                    self._quarantine_row(conn, intent_id, now, failure)
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=failure.message)
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
                     "attempts=attempts+1, failure_json='', updated_at=? "

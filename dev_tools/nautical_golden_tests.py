@@ -2546,6 +2546,81 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
 
 
+def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
+    """Claiming must not execute exhausted or stage/state-inconsistent rows."""
+    from nautical_core.lifecycle_models import (
+        LifecycleAction,
+        LifecycleEvent,
+        LifecycleIdentity,
+        LifecyclePlan,
+        ParentGuard,
+    )
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    now = [1000.0]
+
+    def plan_for(link: int, *, max_attempts: int = 3) -> LifecyclePlan:
+        parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
+        child_uuid = f"10000000-0000-0000-0000-{link:012d}"
+        return LifecyclePlan.from_mappings(
+            identity=LifecycleIdentity("claim-guards", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("completed", "on", "claim-guards", link, "rf1-claim"),
+            child_payload={
+                "uuid": child_uuid,
+                "chainID": "claim-guards",
+                "link": link + 1,
+                "prevLink": parent_uuid[:8],
+            },
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+            max_attempts=max_attempts,
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        exhausted = plan_for(1, max_attempts=1)
+        expect(repo.enqueue(exhausted, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "exhaustion enqueue failed")
+        first, records = repo.claim_batch(owner="crashed-worker", lease_seconds=5, limit=1)
+        expect(first.ok and len(records) == 1 and records[0].attempts == 1, f"initial claim failed: {first}, {records}")
+        now[0] += 6
+        recovered, records = repo.claim_batch(owner="recovery-worker", lease_seconds=5, limit=1)
+        expect(recovered.ok and not records, f"exhausted intent was reclaimed: {recovered}, {records}")
+        _, status = repo.status()
+        expect(status["states"].get("quarantined") == 1, f"exhausted intent was not quarantined: {status}")
+        failure = next(item for item in status["records"] if item["intent_id"] == exhausted.identity.idempotency_key)
+        expect(failure.get("failure", {}).get("code") == "retry_exhausted", f"wrong exhaustion evidence: {failure}")
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        inconsistent = plan_for(2)
+        expect(repo.enqueue(inconsistent, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "inconsistent enqueue failed")
+        with sqlite3.connect(str(repo.path)) as conn:
+            conn.execute(
+                "UPDATE lifecycle_outbox SET processing_state='retry', lifecycle_stage='manual_review' WHERE intent_id=?",
+                (inconsistent.identity.idempotency_key,),
+            )
+        claimed, records = repo.claim_batch(owner="poison-worker", lease_seconds=5, limit=1)
+        expect(claimed.ok and not records, f"inconsistent active row was claimed: {claimed}, {records}")
+        _, status = repo.status()
+        expect(status["states"].get("quarantined") == 1, f"inconsistent row was not quarantined: {status}")
+        failure = next(item for item in status["records"] if item["intent_id"] == inconsistent.identity.idempotency_key)
+        expect(
+            "active outbox state" in str(failure.get("failure", {}).get("message") or ""),
+            f"stage/state evidence was lost: {failure}",
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
+        exhausted = plan_for(3, max_attempts=1)
+        expect(repo.enqueue(exhausted, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "single-intent enqueue failed")
+        first = repo.claim_intent(owner="single-worker", lease_seconds=5, intent_id=exhausted.identity.idempotency_key)
+        expect(first.ok and first.record is not None and first.record.attempts == 1, f"single-intent claim failed: {first}")
+        now[0] += 6
+        recovered = repo.claim_intent(owner="single-recovery", lease_seconds=5, intent_id=exhausted.identity.idempotency_key)
+        expect(recovered.kind.value == "rejected" and "retry budget exhausted" in recovered.reason, f"single intent was reclaimed: {recovered}")
+
+
 def test_integration_contract_covers_all_mutation_and_outbox_states():
     """Every tagged integration outcome has one valid constructible shape."""
     from nautical_core.integration_models import (
@@ -30687,6 +30762,7 @@ TESTS = [
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
+    test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
     test_full_hooks_receive_one_explicit_integration_context,

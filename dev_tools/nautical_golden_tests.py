@@ -10145,7 +10145,7 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     """The reconciler's installed hook path should schedule ordinal anchor children."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_year_ordinal_test")
-    hook = mod._load_on_modify(str(Path(ROOT) / "on-modify.nautical"))
+    hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
     due = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (9, 0)))
     end = hook.core.fmt_isoz(hook.core.build_local_datetime(date(2024, 2, 29), (10, 0)))
     from nautical_core.chain_generation import ChainGenerationService
@@ -26830,12 +26830,12 @@ def test_reconcile_json_startup_failures_are_structured():
     """JSON mode should report hook loading and protocol failures without traceback output."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_startup_failure_test")
-    original = tool._load_on_modify
+    original = tool._load_reconcile_runtime
     try:
-        def fail_load(_path=None):
+        def fail_load(_task_bin=None):
             raise RuntimeError("could not load hook Ω")
 
-        tool._load_on_modify = fail_load
+        tool._load_reconcile_runtime = fail_load
         output = io.StringIO()
         errors = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
@@ -26851,14 +26851,14 @@ def test_reconcile_json_startup_failures_are_structured():
 
         incompatible = types.ModuleType("_nautical_incompatible_hook")
         incompatible.NAUTICAL_RECONCILE_PROTOCOL = 0
-        tool._load_on_modify = lambda _path=None: incompatible
+        tool._load_reconcile_runtime = lambda _task_bin=None: (incompatible, True)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             result = tool.main(["--json"], _unit_of_work=_test_operator_uow())
         summary = json.loads(output.getvalue())
         expect(result == 1 and summary.get("stage") == "hook_protocol", f"protocol failure was not structured: {summary}")
     finally:
-        tool._load_on_modify = original
+        tool._load_reconcile_runtime = original
 
 
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
@@ -27048,9 +27048,9 @@ def test_reconcile_apply_refuses_a_second_full_run():
     )
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
-        original_hook = tool._load_on_modify
+        original_runtime = tool._load_reconcile_runtime
         try:
-            tool._load_on_modify = lambda _path=None: (_ for _ in ()).throw(
+            tool._load_reconcile_runtime = lambda _task_bin=None: (_ for _ in ()).throw(
                 AssertionError("busy reconcile loaded its hook")
             )
             output = io.StringIO()
@@ -27062,7 +27062,7 @@ def test_reconcile_apply_refuses_a_second_full_run():
                         _unit_of_work=_test_operator_uow(taskdata),
                     )
         finally:
-            tool._load_on_modify = original_hook
+            tool._load_reconcile_runtime = original_runtime
     summary = json.loads(output.getvalue())
     expect(result == 1, f"busy reconcile returned {result}")
     expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
@@ -27209,12 +27209,12 @@ def test_reconcile_apply_isolates_candidate_failures():
             return ["task"]
 
     original = (
-        tool._load_on_modify,
+        tool._load_reconcile_runtime,
         tool._candidate_rows,
         tool._apply_parent_atomic,
     )
     try:
-        tool._load_on_modify = lambda _path=None: FakeHook()
+        tool._load_reconcile_runtime = lambda _task_bin=None: (FakeHook(), True)
         tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
 
         def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
@@ -27239,7 +27239,7 @@ def test_reconcile_apply_isolates_candidate_failures():
             )
     finally:
         (
-            tool._load_on_modify,
+            tool._load_reconcile_runtime,
             tool._candidate_rows,
             tool._apply_parent_atomic,
         ) = original
@@ -27537,31 +27537,12 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
 
 
 def test_reconcile_tool_loads_task_hooks_layout():
-    """Installed reconcile tool should find hooks under taskdata/hooks, including extensionless hook names."""
+    """Installed reconcile uses the public core package rather than hook files."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_tool_hook_layout_test")
-    prev_base = mod.BASE_DIR
-    prev_core = mod.CORE_DIR
-    prev_env = os.environ.get("NAUTICAL_ON_MODIFY_PATH")
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            hooks = base / "hooks"
-            hooks.mkdir()
-            hook = hooks / "on-modify"
-            hook.write_text("def _load_core():\n    pass\n", encoding="utf-8")
-            mod.BASE_DIR = base
-            mod.CORE_DIR = base / "nautical_core"
-            os.environ.pop("NAUTICAL_ON_MODIFY_PATH", None)
-            loaded = mod._load_on_modify()
-            expect(hasattr(loaded, "_load_core"), "extensionless hooks/on-modify should load")
-    finally:
-        mod.BASE_DIR = prev_base
-        mod.CORE_DIR = prev_core
-        if prev_env is None:
-            os.environ.pop("NAUTICAL_ON_MODIFY_PATH", None)
-        else:
-            os.environ["NAUTICAL_ON_MODIFY_PATH"] = prev_env
+    loaded, used_hook = mod._load_reconcile_runtime("task")
+    expect(not used_hook, "reconcile unexpectedly loaded a private hook")
+    expect(getattr(loaded, "__name__", "") == "nautical_core", f"unexpected runtime: {loaded!r}")
 
 
 def test_reconcile_default_runtime_uses_core_context():
@@ -27581,7 +27562,7 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     try:
         os.environ.pop("NAUTICAL_CORE_PATH", None)
         mod = _load_hook_module(str(path), "_nautical_reconcile_tool_timed_anchor_test")
-        hook = mod._load_on_modify(str(Path(ROOT) / "on-modify.nautical"))
+        hook = SimpleNamespace(core=importlib.import_module("nautical_core"))
         from nautical_core.chain_generation import ChainGenerationService
         generation = ChainGenerationService.from_core(hook.core)
         child_due, _meta, _dnf = generation.compute_anchor_child_due(
@@ -27715,9 +27696,9 @@ def test_reconcile_partial_recovery_exit_and_verbose_output():
         _task_cmd_prefix=lambda: ["task"],
         _safe_parse_datetime=lambda _value: (None, None),
     )
-    original = (mod._load_on_modify, mod._candidate_rows, mod._reconcile_candidate)
+    original = (mod._load_reconcile_runtime, mod._candidate_rows, mod._reconcile_candidate)
     try:
-        mod._load_on_modify = lambda _path=None: hook
+        mod._load_reconcile_runtime = lambda _task_bin=None: (hook, True)
         mod._candidate_rows = lambda _task_bin, _hook: [parent]
         mod._reconcile_candidate = lambda *_args, **_kwargs: outcomes
 
@@ -27728,7 +27709,7 @@ def test_reconcile_partial_recovery_exit_and_verbose_output():
         with contextlib.redirect_stdout(verbose):
             verbose_result = mod.main(["--verbose"], _unit_of_work=_test_operator_uow())
     finally:
-        mod._load_on_modify, mod._candidate_rows, mod._reconcile_candidate = original
+        mod._load_reconcile_runtime, mod._candidate_rows, mod._reconcile_candidate = original
 
     expect(compact_result == 2 and verbose_result == 2, f"partial recovery exit was not distinct: {compact_result}, {verbose_result}")
     expect("recover:" in compact.getvalue() and "spawn:" not in compact.getvalue(), f"default output was not compact: {compact.getvalue()!r}")
@@ -27847,9 +27828,9 @@ def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repair
         _safe_parse_datetime=lambda _value: (until_utc, None),
         _task_cmd_prefix=lambda: ["task"],
     )
-    original = (mod._load_on_modify, mod._candidate_rows, mod._native_until_repairs)
+    original = (mod._load_reconcile_runtime, mod._candidate_rows, mod._native_until_repairs)
     try:
-        mod._load_on_modify = lambda _path=None: hook
+        mod._load_reconcile_runtime = lambda _task_bin=None: (hook, True)
         mod._candidate_rows = lambda _task_bin, _hook: []
         mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
             [{"action": "repair_until", "task": "11111111", "chainID": "chain", "link": 2,
@@ -27860,7 +27841,7 @@ def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repair
         with contextlib.redirect_stdout(output):
             result = mod.main([], _unit_of_work=_test_operator_uow())
     finally:
-        mod._load_on_modify, mod._candidate_rows, mod._native_until_repairs = original
+        mod._load_reconcile_runtime, mod._candidate_rows, mod._native_until_repairs = original
 
     text = output.getvalue()
     summary_line = next(line for line in text.splitlines() if line.startswith("summary: "))

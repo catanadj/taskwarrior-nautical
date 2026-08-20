@@ -6,8 +6,6 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import importlib.machinery
-import importlib.util
 import json
 import os
 import sys
@@ -210,36 +208,6 @@ def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any])
     )
 
 
-def _candidate_on_modify_paths(explicit: str | None = None) -> list[Path]:
-    candidates: list[Path] = []
-    for raw in (explicit, os.environ.get("NAUTICAL_ON_MODIFY_PATH")):
-        if raw:
-            candidates.append(Path(raw).expanduser())
-    candidates.extend(
-        [
-            CORE_DIR / "hooks" / "modify_impl.py",
-            BASE_DIR / "on-modify.nautical",
-            BASE_DIR / "hooks" / "on-modify.nautical",
-            BASE_DIR / "on-modify-nautical.py",
-            BASE_DIR / "hooks" / "on-modify-nautical.py",
-            BASE_DIR / "hooks" / "on-modify",
-            CORE_DIR / "on-modify.nautical",
-            CORE_DIR / "on-modify-nautical.py",
-        ]
-    )
-    return candidates
-
-
-def _modify_implementation_path(path: Path) -> Path:
-    if path.name == "modify_impl.py":
-        return path
-    candidates = (
-        path.parent / "nautical_core" / "hooks" / "modify_impl.py",
-        path.parent.parent / "nautical_core" / "hooks" / "modify_impl.py",
-    )
-    return next((candidate for candidate in candidates if candidate.is_file()), path)
-
-
 def _repository() -> TaskReadRepository:
     if _READ_REPOSITORY is None:
         raise RuntimeError("reconcile task read repository is unavailable")
@@ -256,34 +224,9 @@ def _read_value(read: Any, subject: str) -> Any | None:
     raise _PlanReadUnavailable(f"{subject} returned an invalid typed result")
 
 
-def _load_on_modify(hook_path: str | None = None):
-    searched = _candidate_on_modify_paths(hook_path)
-    path = next((candidate for candidate in searched if candidate.is_file()), None)
-    if path is None:
-        tried = ", ".join(str(candidate) for candidate in searched)
-        raise RuntimeError(f"could not find on-modify hook; tried: {tried}")
-    path = _modify_implementation_path(path)
-    loader = importlib.machinery.SourceFileLoader("_nautical_reconcile_on_modify", str(path))
-    spec = importlib.util.spec_from_loader("_nautical_reconcile_on_modify", loader)
-    if spec is None:
-        raise RuntimeError(f"could not load {path}")
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    if hasattr(module, "_load_core"):
-        module._load_core()
-    return module
-
-
-_DEFAULT_LOAD_ON_MODIFY = _load_on_modify
-
-
 def _load_reconcile_runtime(task_bin: str | None = None):
-    """Load the public core runtime; private hook loading is test-only."""
+    """Load the public core runtime used by reconcile."""
     del task_bin
-    # Keep dependency injection for focused protocol tests without allowing a
-    # production CLI argument or environment variable to load hook internals.
-    if _load_on_modify is not _DEFAULT_LOAD_ON_MODIFY:
-        return _load_on_modify(), True
     import nautical_core as core
 
     return core, False

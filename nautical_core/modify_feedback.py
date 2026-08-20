@@ -255,6 +255,83 @@ def render_recurrence_updated_panel(
     panel("⚓ Nautical recurrence updated", rows, kind="note")
 
 
+def recurrence_enabled_rows(
+    task: dict[str, Any],
+    source: str,
+    *,
+    describe_anchor: Callable[[str], str],
+    parse_cp_sequence_tokens: Callable[[str], list[dict[str, Any]] | None],
+    first_recurrence_target: Callable[[dict[str, Any], str], Any],
+    format_local: Callable[[Any], str],
+) -> list[tuple[str, str]]:
+    """Describe the recurrence added while promoting a plain task."""
+    if source == "anchor":
+        value = str(task.get("anchor") or "").strip()
+        rows = [("Anchor", value)]
+        try:
+            natural = describe_anchor(value)
+        except Exception:
+            natural = None
+        if natural:
+            rows.append(("Natural", natural))
+        mode = (task.get("anchor_mode") or "skip").strip().lower()
+        mode_explanations = {
+            "skip": "Skip missed anchors; use the next anchor after completion",
+            "all": "Backfill every missed anchor in order",
+            "flex": "Skip missed anchors and continue from the next available anchor",
+        }
+        rows.append(("Mode", f"{mode.upper()} — {mode_explanations.get(mode, mode)}"))
+        first = first_recurrence_target(task, source)
+        if first:
+            rows.append(("First next", format_local(first)))
+        return rows
+
+    if source == "anchor_file":
+        value = str(task.get("anchor_file") or "").strip()
+        rows = [("Anchor file", value), ("Natural", f"Dates from {value.split('@', 1)[0]}")]
+        mode = (task.get("anchor_mode") or "skip").strip().lower()
+        rows.append(("Mode", f"{mode.upper()}"))
+        first = first_recurrence_target(task, source)
+        if first:
+            rows.append(("First next", format_local(first)))
+        return rows
+
+    value = str(task.get("cp") or "").strip()
+    rows = [("Period", value)]
+    natural = None
+    try:
+        def duration_label(duration: Any) -> str:
+            seconds = int(duration.total_seconds())
+            if seconds % 86400 == 0:
+                return f"{seconds // 86400}d"
+            if seconds % 3600 == 0:
+                return f"{seconds // 3600}h"
+            if seconds % 60 == 0:
+                return f"{seconds // 60}m"
+            return f"{seconds}s"
+
+        tokens = parse_cp_sequence_tokens(value) or []
+        descriptions = []
+        for token in tokens:
+            if token.get("kind") == "rand":
+                descriptions.append(f"random interval {token.get('raw') or value}")
+            else:
+                duration = token.get("duration")
+                descriptions.append(duration_label(duration) if duration else str(token.get("raw") or value))
+        if len(descriptions) == 1:
+            natural = f"Every {descriptions[0]}"
+        elif descriptions:
+            natural = "Cycle through " + ", then ".join(descriptions)
+    except Exception:
+        natural = None
+    if natural:
+        rows.append(("Natural", natural))
+    first = first_recurrence_target(task, source)
+    if first:
+        rows.append(("First next", format_local(first)))
+    return rows
+
+
 def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Arrange chain-finished rows into compact presentation sections."""
     groups = (

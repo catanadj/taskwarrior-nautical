@@ -3082,72 +3082,14 @@ def _first_recurrence_target(new: dict, source: str):
 
 
 def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
-    """Describe the recurrence that was added during a plain-task upgrade."""
-    if source == "anchor":
-        value = str(new.get("anchor") or "").strip()
-        rows = [("Anchor", value)]
-        try:
-            natural = core.describe_anchor_expr(value)
-        except Exception:
-            natural = None
-        if natural:
-            rows.append(("Natural", natural))
-        mode = (new.get("anchor_mode") or "skip").strip().lower()
-        mode_explanations = {
-            "skip": "Skip missed anchors; use the next anchor after completion",
-            "all": "Backfill every missed anchor in order",
-            "flex": "Skip missed anchors and continue from the next available anchor",
-        }
-        rows.append(("Mode", f"{mode.upper()} — {mode_explanations.get(mode, mode)}"))
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("First next", _fmtlocal(first)))
-        return rows
-
-    if source == "anchor_file":
-        value = str(new.get("anchor_file") or "").strip()
-        rows = [("Anchor file", value), ("Natural", f"Dates from {value.split('@', 1)[0]}")]
-        mode = (new.get("anchor_mode") or "skip").strip().lower()
-        rows.append(("Mode", f"{mode.upper()}"))
-        first = _first_recurrence_target(new, source)
-        if first:
-            rows.append(("First next", _fmtlocal(first)))
-        return rows
-
-    value = str(new.get("cp") or "").strip()
-    rows = [("Period", value)]
-    natural = None
-    try:
-        def _duration_label(duration) -> str:
-            seconds = int(duration.total_seconds())
-            if seconds % 86400 == 0:
-                return f"{seconds // 86400}d"
-            if seconds % 3600 == 0:
-                return f"{seconds // 3600}h"
-            if seconds % 60 == 0:
-                return f"{seconds // 60}m"
-            return f"{seconds}s"
-
-        tokens = core.parse_cp_sequence_tokens(value) or []
-        descriptions = []
-        for token in tokens:
-            if token.get("kind") == "rand":
-                descriptions.append(f"random interval {token.get('raw') or value}")
-            else:
-                duration = token.get("duration")
-                descriptions.append(_duration_label(duration) if duration else str(token.get("raw") or value))
-        if len(descriptions) == 1:
-            natural = f"Every {descriptions[0]}"
-        elif descriptions:
-            natural = "Cycle through " + ", then ".join(descriptions)
-    except Exception:
-        natural = None
-    if natural:
-        rows.append(("Natural", natural))
-    first = _first_recurrence_target(new, source)
-    if first:
-        rows.append(("First next", _fmtlocal(first)))
-    return rows
+    return _module("modify_feedback").recurrence_enabled_rows(
+        new,
+        source,
+        describe_anchor=core.describe_anchor_expr,
+        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
+        first_recurrence_target=_first_recurrence_target,
+        format_local=_fmtlocal,
+    )
 
 
 def _render_cp_schedule_adjusted_panel(

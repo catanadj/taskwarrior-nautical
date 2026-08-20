@@ -492,16 +492,39 @@ class LifecycleOutboxRepository:
                     if current.state is OutboxProcessingState.ACKNOWLEDGED and same_plan:
                         return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
                     if (
-                        current.state is OutboxProcessingState.MANUAL_REVIEW
-                        and same_plan
-                        and current.failure is not None
-                        and current.failure.code == "mutation_conflict"
-                        and current.failure.message == "postcondition does not match"
+                        same_plan
+                        and current.state in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}
+                        and current.plan.semantic_key() != plan.semantic_key()
                     ):
                         conn.execute(
-                            "UPDATE lifecycle_outbox SET configuration_fingerprint=?, schedule_fingerprint=?, "
-                            "lifecycle_stage=?, processing_state=?, failure_json='', updated_at=? WHERE intent_id=?",
+                            "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
+                            "configuration_fingerprint=?, schedule_fingerprint=?, failure_json='', updated_at=? "
+                            "WHERE intent_id=?",
                             (
+                                encoded_plan,
+                                plan_fingerprint,
+                                guard_json,
+                                config,
+                                schedule,
+                                now,
+                                intent_id,
+                            ),
+                        )
+                        refreshed = conn.execute(
+                            "SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)
+                        ).fetchone()
+                        if refreshed is None:
+                            return OutboxResult(OutboxResultKind.RETRYABLE, reason="refreshed lifecycle intent disappeared")
+                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed))
+                    if same_plan and current.state is OutboxProcessingState.MANUAL_REVIEW and current.failure is not None and current.failure.code == "mutation_conflict":
+                        conn.execute(
+                            "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
+                            "configuration_fingerprint=?, schedule_fingerprint=?, lifecycle_stage=?, processing_state=?, "
+                            "failure_json='', updated_at=? WHERE intent_id=?",
+                            (
+                                encoded_plan,
+                                plan_fingerprint,
+                                guard_json,
                                 config,
                                 schedule,
                                 ExecutionStage.PLANNED.value,

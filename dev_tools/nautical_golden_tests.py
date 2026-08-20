@@ -28064,6 +28064,43 @@ def test_reconcile_configuration_verification_fails_closed():
     expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
 
 
+def test_reconcile_native_until_audit_failure_matrix_fails_closed():
+    """Every authoritative native-until read failure blocks apply mutations."""
+    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    mod = _load_hook_module(str(path), "_nautical_reconcile_native_until_failure_matrix_test")
+    failures = (
+        ("locked", RuntimeError("Taskwarrior lock active")),
+        ("malformed", ValueError("invalid JSON from Taskwarrior export")),
+        ("missing-binary", FileNotFoundError("task executable not found")),
+        ("timeout", TimeoutError("Taskwarrior export timed out")),
+    )
+    original = (mod._candidate_rows, mod._native_until_repairs)
+    try:
+        mod._candidate_rows = lambda _task_bin, _hook: []
+        for label, failure in failures:
+            def unavailable_audit(_task_bin, _hook, _failure=failure, **_kwargs):
+                raise _failure
+
+            mod._native_until_repairs = unavailable_audit
+            dry_output = io.StringIO()
+            with contextlib.redirect_stdout(dry_output):
+                dry_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
+            dry_summary = json.loads(dry_output.getvalue())
+            expect(dry_result == 2, f"{label} dry-run was not degraded: {dry_summary!r}")
+            expect(dry_summary.get("native_until_audit_status") == "unavailable", f"{label} status was lost: {dry_summary!r}")
+            expect(str(dry_summary.get("native_until_audit_warning") or "") == str(failure), f"{label} cause was lost: {dry_summary!r}")
+
+            apply_output = io.StringIO()
+            with contextlib.redirect_stdout(apply_output):
+                apply_result = mod.main(["--json", "--apply"], _unit_of_work=_test_operator_uow())
+            apply_summary = json.loads(apply_output.getvalue())
+            expect(apply_result == 2, f"{label} apply did not degrade: {apply_summary!r}")
+            expect(apply_summary.get("configuration_status") == "unavailable", f"{label} apply was not fail-closed: {apply_summary!r}")
+            expect(not apply_summary.get("applied"), f"{label} apply mutated after unavailable audit: {apply_summary!r}")
+    finally:
+        mod._candidate_rows, mod._native_until_repairs = original
+
+
 def test_reconcile_startup_config_failure_is_structured():
     """Taskdata configuration startup failures expose unavailable status in JSON."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -31271,6 +31308,7 @@ TESTS = [
     test_reconcile_partial_recovery_exit_and_verbose_output,
     test_reconcile_degraded_audit_status_is_structured,
     test_reconcile_configuration_verification_fails_closed,
+    test_reconcile_native_until_audit_failure_matrix_fails_closed,
     test_reconcile_startup_config_failure_is_structured,
     test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
     test_chain_repair_plans_only_safe_adjacent_link_updates,

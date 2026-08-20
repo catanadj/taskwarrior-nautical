@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from nautical_core.lifecycle_outbox import (  # noqa: E402
     OUTBOX_SCHEMA_VERSION,
+    OUTBOX_ACK_RETENTION_SECONDS,
     LifecycleOutboxRepository,
     lifecycle_outbox_path,
 )
@@ -45,6 +46,12 @@ def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict
         "states": {},
         "stale_claims": 0,
         "max_attempts": 0,
+        "retention": {
+            "retention_seconds": OUTBOX_ACK_RETENTION_SECONDS,
+            "acknowledged": 0,
+            "eligible": 0,
+            "oldest_age_s": 0,
+        },
         "sample": [],
     }
     issues: list[str] = []
@@ -59,6 +66,7 @@ def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict
     summary["states"] = dict(data.get("states") or {})
     summary["stale_claims"] = int(data.get("stale_claims") or 0)
     summary["max_attempts"] = int(data.get("max_attempts") or 0)
+    summary["retention"] = dict(data.get("retention") or summary["retention"])
     version = int(data.get("schema_version") or 0)
     schema = summary["schema"]
     schema["version"] = version
@@ -80,6 +88,12 @@ def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict
         count = int(states.get(state, 0))
         if count:
             issues.append(f"{count} lifecycle intent{'s' if count != 1 else ''} in {state}")
+    eligible = int((summary.get("retention") or {}).get("eligible") or 0)
+    if eligible:
+        issues.append(
+            f"{eligible} acknowledged lifecycle intent{'s' if eligible != 1 else ''} exceed retention; "
+            "run nautical queue-status --prune-acknowledged"
+        )
     for record in data.get("records") or []:
         item: dict[str, Any] = {
             "intent_id": str(record.get("intent_id") or ""),
@@ -120,12 +134,41 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     parser.add_argument("--limit", type=int, default=5, help="number of sample intents")
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
+    parser.add_argument(
+        "--prune-acknowledged",
+        action="store_true",
+        help="explicitly remove acknowledged intents older than the retention policy",
+    )
+    parser.add_argument("--retention-seconds", type=float, default=OUTBOX_ACK_RETENTION_SECONDS)
+    parser.add_argument("--maintenance-limit", type=int, default=1000)
+    parser.add_argument("--checkpoint", action="store_true", help="request a passive WAL checkpoint during pruning")
     args = parser.parse_args()
+    maintenance: dict[str, Any] | None = None
+    if args.prune_acknowledged:
+        taskdata = Path(args.taskdata).expanduser().resolve()
+        result = LifecycleOutboxRepository(taskdata).prune_acknowledged(
+            retention_seconds=args.retention_seconds,
+            limit=args.maintenance_limit,
+            checkpoint=args.checkpoint,
+        )
+        maintenance = {
+            "kind": result.kind.value,
+            "ok": result.ok,
+            "removed": result.removed,
+            "retention_seconds": result.retention_seconds,
+            "checkpoint": result.checkpoint,
+            "reason": result.reason,
+        }
     payload = _status_payload(
         Path(args.taskdata),
         stale_after=max(0.0, float(args.stale_after_seconds)),
         limit=max(0, int(args.limit)),
     )
+    if maintenance is not None:
+        payload["maintenance"] = maintenance
+        if not maintenance["ok"]:
+            payload["issues"].append(f"outbox maintenance failed: {maintenance['reason'] or maintenance['kind']}")
+            payload["status"] = "error"
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     else:
@@ -137,6 +180,20 @@ def main() -> int:
             f" stale_claims={outbox.get('stale_claims', 0)}"
             f" max_attempts={outbox.get('max_attempts', 0)}"
         )
+        retention = outbox.get("retention") or {}
+        print(
+            "retention:"
+            f" acknowledged={retention.get('acknowledged', 0)}"
+            f" eligible={retention.get('eligible', 0)}"
+            f" oldest_age_s={retention.get('oldest_age_s', 0)}"
+            f" policy_s={retention.get('retention_seconds', OUTBOX_ACK_RETENTION_SECONDS)}"
+        )
+        if maintenance is not None:
+            print(
+                "maintenance:"
+                f" kind={maintenance['kind']} removed={maintenance['removed']}"
+                f" checkpoint={maintenance['checkpoint']}"
+            )
         schema = outbox["schema"]
         print(
             "schema:"

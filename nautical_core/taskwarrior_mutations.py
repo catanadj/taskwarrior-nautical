@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, cast
 
 from .integration_models import (
     Absent,
@@ -76,26 +76,26 @@ def _text(value: object) -> str:
 
 def _timestamp_equal(left: object, right: object) -> bool:
     """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
-    left_text = _text(left)
-    right_text = _text(right)
-    if left_text == right_text:
-        return True
-
-    def parse(value: str) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-            except ValueError:
-                return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
-    left_dt = parse(left_text)
-    right_dt = parse(right_text)
+    left_dt = _parse_timestamp(left)
+    right_dt = _parse_timestamp(right)
     return left_dt is not None and right_dt is not None and left_dt == right_dt
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    """Parse the compact and ISO UTC forms emitted by Taskwarrior/Nautical."""
+    value_text = _text(value)
+    if not value_text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value_text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.strptime(value_text, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _link_text(value: object) -> str:
@@ -104,6 +104,52 @@ def _link_text(value: object) -> str:
         return str(int(float(text)))
     except (TypeError, ValueError, OverflowError):
         return text
+
+
+def _child_import_matches(
+    row: Mapping[str, Any],
+    payload: ChildImportPayload,
+    parent_uuid: str,
+) -> bool:
+    """Return whether a Taskwarrior row is a complete imported child.
+
+    Identity alone is insufficient: a partially imported or repurposed UUID
+    must never be treated as an idempotent child.  Keep this predicate shared
+    by the existing-child fast path and the post-import verification path.
+    """
+    fields = payload.to_dict()
+    if _text(row.get("uuid")).lower() != payload.child_uuid.lower():
+        return False
+    if _text(row.get("chainID")) != payload.chain_id:
+        return False
+    if _link_text(row.get("link")) != str(payload.target_link):
+        return False
+    expected_prev = _text(fields.get("prevLink"))
+    if not expected_prev or _text(row.get("prevLink")).lower() != expected_prev.lower():
+        return False
+    if _text(row.get("prevLink")).lower() != _text(parent_uuid)[:8].lower():
+        return False
+    status = _text(row.get("status")).lower()
+    if status != "pending":
+        # Taskwarrior may immediately expire a child whose carried native
+        # until is already in the past. That is a valid imported occurrence;
+        # the reconciler can continue from its deleted slot on the next hop.
+        until = _parse_timestamp(fields.get("until"))
+        if status != "deleted" or until is None or until > datetime.now(timezone.utc):
+            return False
+    if _text(row.get("chain")).lower() != "on":
+        return False
+
+    # A child must retain the recurrence mode that generated it.  Compare
+    # only mode-defining fields; Taskwarrior may add derived metadata during
+    # import (modified, urgency, and so on).
+    mode_fields = ("cp", "anchor", "anchor_file", "anchor_mode")
+    if not any(_text(fields.get(field)) for field in mode_fields[:3]):
+        return False
+    for field in mode_fields:
+        if field in fields and _text(row.get(field)) != _text(fields.get(field)):
+            return False
+    return True
 
 
 def _failure_from_command(result: TaskCommandResult, detail: str) -> FailureEvidence:
@@ -127,6 +173,77 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
         self._uow = unit_of_work
         self._timeout = max(0.05, float(timeout))
+        self._prefetched_children: dict[str, TaskRead[Mapping[str, Any]]] = {}
+        self._prefetched_parents: dict[str, Mapping[str, Any]] = {}
+
+    def prefetch_lifecycle_batch(
+        self,
+        payloads: Sequence[ChildImportPayload],
+        *,
+        parent_expectations: Sequence[tuple[str, str]] = (),
+    ) -> None:
+        """Preload safe child-absence decisions for one drain.
+
+        A cached absence can only skip a redundant pre-import UUID read: the
+        import command remains authoritative if another process creates the
+        child.  Present rows are deliberately *not* cached because linking a
+        stale or deleted child would weaken idempotency; those paths retain a
+        fresh UUID read and postcondition verification.
+        """
+        self._prefetched_children.clear()
+        self._prefetched_parents.clear()
+        wanted = tuple(payloads)
+        parent_wanted = tuple(
+            (str(uuid_value or "").strip().lower(), str(expected or "").strip())
+            for uuid_value, expected in parent_expectations
+            if str(uuid_value or "").strip()
+        )
+        if not wanted and not parent_wanted:
+            return
+        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
+        if not callable(broad_snapshot):
+            return
+        try:
+            read = broad_snapshot(
+                identity="lifecycle-child-prefetch",
+                filters=("chain:on",),
+                statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+                complete_chain_history=False,
+                refresh=True,
+            )
+        except Exception:
+            return
+        if isinstance(read, Absent):
+            for payload in wanted:
+                self._prefetched_children[payload.child_uuid.lower()] = read
+            return
+        if not isinstance(read, Found):
+            return
+        snapshot = read.value
+        uuid_matches = getattr(snapshot, "uuid_matches", None)
+        if not callable(uuid_matches):
+            return
+        for payload in wanted:
+            try:
+                matches = tuple(uuid_matches(payload.child_uuid))
+            except Exception:
+                continue
+            if not matches:
+                self._prefetched_children[payload.child_uuid.lower()] = Absent(
+                    f"prefetch:uuid:{payload.child_uuid.lower()}", "prefetch snapshot contains no matching UUID"
+                )
+        for parent_uuid, expected_next_link in parent_wanted:
+            try:
+                matches = tuple(uuid_matches(parent_uuid))
+            except Exception:
+                continue
+            if len(matches) == 1:
+                row = matches[0]
+                # A cached row that already has the requested link is not
+                # safe to trust across the batch; retain a fresh read for
+                # idempotent classification.
+                if _text(row.get("nextLink")).casefold() != expected_next_link.casefold():
+                    self._prefetched_parents[parent_uuid] = row
 
     def _outcome(
         self,
@@ -242,9 +359,9 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if actual_identity != guard.recurrence_identity:
             return "guard recurrence identity changed"
         for timestamp in guard.timestamps:
-            field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
-            if field is not None and _text(row.get(field)) != timestamp.value:
-                return f"guard {field} changed"
+            ts_field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
+            if ts_field is not None and _text(row.get(ts_field)) != timestamp.value:
+                return f"guard {ts_field} changed"
         return ""
 
     def _command_failure(self, request: MutationRequest, result: TaskCommandResult) -> MutationOutcome:
@@ -254,7 +371,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
 
     def _run_modify(self, request: MutationRequest, selectors: Sequence[str], updates: Sequence[str]) -> MutationOutcome | None:
         result = self._uow.client.execute(
-            [*selectors, "modify", *updates],
+            ["rc.hooks=off", *selectors, "modify", *updates],
             purpose=f"lifecycle {request.operation.value}",
             timeout=self._timeout,
             attempts=1,
@@ -269,7 +386,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         self,
         request: MutationRequest,
         postcondition: MutationPostcondition,
-        predicate,
+        predicate: Any,
         *,
         target_uuid: str | None = None,
     ) -> MutationOutcome:
@@ -323,7 +440,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             lambda row: _text(row.get("status")).lower() == "deleted",
         )
 
-    def import_child(self, request: MutationRequest) -> MutationOutcome:
+    def import_child(self, request: MutationRequest, *, verify: bool = True) -> MutationOutcome:
         if request.operation is not MutationOperation.CHILD_IMPORT or not isinstance(request.payload, ChildImportPayload):
             raise TypeError("child import requires a child-import request")
         parent, failure = self._read_target(request)
@@ -332,17 +449,15 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         assert parent is not None
         if _text(parent.get("chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
-        existing = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
+        existing = self._prefetched_children.pop(request.payload.child_uuid.lower(), None)
+        if existing is None:
+            existing = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
         if isinstance(existing, Unavailable):
             kind = MutationOutcomeKind.RETRYABLE if existing.retryable else MutationOutcomeKind.MANUAL_REVIEW
             return self._outcome(request, kind, reason=existing.evidence.detail, failure=existing.evidence)
         if isinstance(existing, Found):
             row = existing.value
-            if (
-                _text(row.get("chainID")) == request.payload.chain_id
-                and _text(row.get("prevLink")).lower() == request.guard.task_uuid[:8].lower()
-                and _link_text(row.get("link")) == str(request.payload.target_link)
-            ):
+            if _child_import_matches(row, request.payload, request.guard.task_uuid):
                 return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="unrelated task already owns child UUID")
         if not isinstance(existing, Absent):
@@ -358,21 +473,25 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             self._uow.record_mutation(uncertain=True)
             return self._command_failure(request, result)
         self._uow.record_mutation(uncertain=True)
+        if not verify:
+            return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
         return self._verify(
             request,
             MutationPostcondition.CHILD_IMPORTED,
-            lambda row: (
-                _text(row.get("uuid")).lower() == request.payload.child_uuid.lower()
-                and _text(row.get("chainID")) == request.payload.chain_id
-                and _link_text(row.get("link")) == str(request.payload.target_link)
-            ),
+            lambda row: _child_import_matches(row, request.payload, request.guard.task_uuid),
             target_uuid=request.payload.child_uuid,
         )
 
-    def link_parent(self, request: MutationRequest) -> MutationOutcome:
+    def link_parent(self, request: MutationRequest, *, verify: bool = True) -> MutationOutcome:
         if request.operation is not MutationOperation.PARENT_LINK or not isinstance(request.payload, ParentLinkPayload):
             raise TypeError("parent linking requires a parent-link request")
-        parent, failure = self._read_target(request)
+        cached_parent = self._prefetched_parents.pop(request.guard.task_uuid.lower(), None)
+        parent: Mapping[str, Any] | None
+        failure: MutationOutcome | None
+        if cached_parent is not None and _text(cached_parent.get("nextLink")).casefold() != request.payload.child_short_uuid.casefold():
+            parent, failure = cached_parent, None
+        else:
+            parent, failure = self._read_target(request)
         if failure is not None:
             return failure
         assert parent is not None
@@ -390,11 +509,181 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         )
         if failure is not None:
             return failure
+        if not verify:
+            return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.PARENT_LINKED)
         return self._verify(
             request,
             MutationPostcondition.PARENT_LINKED,
             lambda row: _text(row.get("nextLink")).casefold() == request.payload.child_short_uuid.casefold(),
         )
+
+    def apply_lifecycle_unverified(self, request: MutationRequest) -> MutationOutcome:
+        """Apply a child-import or parent-link command for batch verification.
+
+        Guards and mutation commands remain per-intent.  Only the successful
+        postcondition read is deferred until the lifecycle batch has completed
+        its mutation phase; a crash leaves the durable stage unchanged and the
+        next drain re-checks the task idempotently.
+        """
+        if request.operation is MutationOperation.CHILD_IMPORT:
+            return self.import_child(request, verify=False)
+        if request.operation is MutationOperation.PARENT_LINK:
+            return self.link_parent(request, verify=False)
+        raise TypeError("batch lifecycle mutation supports child import and parent link only")
+
+    def verify_lifecycle_children(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]:
+        """Verify imported children with one authoritative broad snapshot."""
+        pending = tuple(
+            request
+            for request in requests
+            if request.operation is MutationOperation.CHILD_IMPORT
+            and isinstance(request.payload, ChildImportPayload)
+        )
+        if not pending:
+            return {}
+        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
+        if not callable(broad_snapshot):
+            return {
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="child batch verification is unavailable"
+                )
+                for request in pending
+            }
+        read = broad_snapshot(
+            identity="lifecycle-child-postverify",
+            filters=("chain:on",),
+            statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+            complete_chain_history=False,
+            refresh=True,
+        )
+        if isinstance(read, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if read.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return {
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
+                    request, kind, reason=read.evidence.detail, failure=read.evidence
+                )
+                for request in pending
+            }
+        if isinstance(read, Absent):
+            return {
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="child postcondition snapshot is absent"
+                )
+                for request in pending
+            }
+        if not isinstance(read, Found):
+            return {
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child postcondition snapshot"
+                )
+                for request in pending
+            }
+        snapshot = read.value
+        uuid_matches = getattr(snapshot, "uuid_matches", None)
+        if not callable(uuid_matches):
+            return {
+                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed child postcondition snapshot"
+                )
+                for request in pending
+            }
+        outcomes: dict[str, MutationOutcome] = {}
+        for request in pending:
+            assert isinstance(request.payload, ChildImportPayload)
+            try:
+                matches = tuple(uuid_matches(request.payload.child_uuid))
+            except Exception as exc:
+                outcomes[request.payload.child_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed child postcondition snapshot: {exc}"
+                )
+                continue
+            if len(matches) == 1 and _child_import_matches(matches[0], request.payload, request.guard.task_uuid):
+                outcomes[request.payload.child_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED
+                )
+            else:
+                reason = "child postcondition target is absent" if not matches else "child postcondition does not match"
+                outcomes[request.payload.child_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=reason
+                )
+        return outcomes
+
+    def verify_lifecycle_parents(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]:
+        """Verify parent links with one authoritative broad snapshot."""
+        pending = tuple(
+            request
+            for request in requests
+            if request.operation is MutationOperation.PARENT_LINK
+            and isinstance(request.payload, ParentLinkPayload)
+        )
+        if not pending:
+            return {}
+        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
+        if not callable(broad_snapshot):
+            return {
+                request.guard.task_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="parent batch verification is unavailable"
+                )
+                for request in pending
+            }
+        read = broad_snapshot(
+            identity="lifecycle-parent-postverify",
+            filters=("chain:on",),
+            statuses=("completed", "deleted", "pending", "recurring", "waiting"),
+            complete_chain_history=False,
+            refresh=True,
+        )
+        if isinstance(read, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if read.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return {
+                request.guard.task_uuid.lower(): self._outcome(
+                    request, kind, reason=read.evidence.detail, failure=read.evidence
+                )
+                for request in pending
+            }
+        if isinstance(read, Absent):
+            return {
+                request.guard.task_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="parent postcondition snapshot is absent"
+                )
+                for request in pending
+            }
+        if not isinstance(read, Found):
+            return {
+                request.guard.task_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid parent postcondition snapshot"
+                )
+                for request in pending
+            }
+        snapshot = read.value
+        uuid_matches = getattr(snapshot, "uuid_matches", None)
+        if not callable(uuid_matches):
+            return {
+                request.guard.task_uuid.lower(): self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed parent postcondition snapshot"
+                )
+                for request in pending
+            }
+        outcomes: dict[str, MutationOutcome] = {}
+        for request in pending:
+            assert isinstance(request.payload, ParentLinkPayload)
+            try:
+                matches = tuple(uuid_matches(request.guard.task_uuid))
+            except Exception as exc:
+                outcomes[request.guard.task_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed parent postcondition snapshot: {exc}"
+                )
+                continue
+            if len(matches) == 1 and _text(matches[0].get("nextLink")).casefold() == request.payload.child_short_uuid.casefold():
+                outcomes[request.guard.task_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.PARENT_LINKED
+                )
+            else:
+                reason = "parent postcondition target is absent" if not matches else "parent postcondition does not match"
+                outcomes[request.guard.task_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=reason
+                )
+        return outcomes
 
     def disable_chain(self, request: MutationRequest) -> MutationOutcome:
         if request.operation is not MutationOperation.CHAIN_DISABLE or not isinstance(request.payload, ChainDisablePayload):
@@ -500,7 +789,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         extra: Sequence[str] = (),
         include_link: bool = True,
     ) -> tuple[str, ...]:
-        selectors = (
+        selectors: tuple[str, ...] = (
             f"uuid:{guard.task_uuid}",
             f"status:{guard.status}",
             f"chain:{guard.chain}",

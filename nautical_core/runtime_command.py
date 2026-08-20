@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .integration_models import CommandFailureKind, TaskCommandResult
 from .taskwarrior_client import TaskwarriorClient

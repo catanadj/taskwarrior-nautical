@@ -858,6 +858,25 @@ def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stal
         fix="Run nautical queue-status for lifecycle outbox details." if issues else "",
         details={"issues": issues} if issues else None,
     )
+    retention = outbox.get("retention") if isinstance(outbox.get("retention"), dict) else {}
+    eligible = int(retention.get("eligible") or 0)
+    if eligible:
+        _finding(
+            findings,
+            "outbox.retention",
+            "warn",
+            f"{eligible} acknowledged lifecycle intent{'s' if eligible != 1 else ''} exceed the retention policy.",
+            fix="Run nautical queue-status --prune-acknowledged to remove only expired acknowledgements.",
+            details=retention,
+        )
+    elif outbox.get("exists"):
+        _finding(
+            findings,
+            "outbox.retention",
+            "ok",
+            "Lifecycle outbox retention is within policy.",
+            details=retention,
+        )
     return dict(payload)
 
 

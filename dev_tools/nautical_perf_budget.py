@@ -29,6 +29,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Sequence
 
 
 HERE = Path(__file__).resolve().parent
@@ -1070,6 +1071,7 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "chain": "on",
             "chainID": chain_id,
             "link": str(parent_link),
+            "cp": "P1D",
             "due": "20260101T090000Z",
         }
         child = {
@@ -1080,6 +1082,7 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "chainID": chain_id,
             "link": child_link,
             "prevLink": parent_uuid[:8],
+            "cp": "P1D",
             "due": "20260102T090000Z",
         }
         guard = {"status": "completed", "chain": "on", "chainID": chain_id, "link": str(parent_link)}
@@ -1171,6 +1174,25 @@ def _import_existing_completion_child(parent: dict, *, env: dict[str, str]) -> N
     )
     if proc.returncode != 0:
         raise RuntimeError(f"idempotent completion fixture import failed: {(proc.stderr or proc.stdout or '').strip()}")
+
+
+def _import_workflow_rows(rows: Sequence[dict], *, env: dict[str, str]) -> None:
+    """Seed synthetic lifecycle parents before exercising full hooks.
+
+    Full completion paths intentionally perform authoritative Taskwarrior
+    reads.  Keeping the fixture import explicit makes the benchmark measure
+    lifecycle work rather than the fail-closed response to an empty data dir.
+    """
+    proc = subprocess.run(
+        ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+        input="".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"workflow parent fixture import failed: {(proc.stderr or proc.stdout or '').strip()}")
 
 
 def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
@@ -1282,6 +1304,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             taskdata = root / f"ordinary-modify-{sample_index}"
             taskdata.mkdir()
             env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
+            _import_workflow_rows((old,), env=env)
             elapsed, result, _stderr = _run_workflow_hook_result(
                 ROOT / "on-modify.nautical",
                 input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
@@ -1320,6 +1343,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             taskdata = root / f"expiration-recovery-{sample_index}"
             taskdata.mkdir()
             env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
+            _import_workflow_rows((old,), env=env)
             elapsed, result, _stderr = _run_workflow_hook_result(
                 ROOT / "on-modify.nautical",
                 input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
@@ -1344,6 +1368,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 taskdata = root / f"{name}-fresh-{sample_index}"
                 taskdata.mkdir()
                 env = dict(base_env, TASKDATA=str(taskdata))
+                _import_workflow_rows((old,), env=env)
                 elapsed, result, _stderr = _run_workflow_hook_result(
                     ROOT / "on-modify.nautical",
                     input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
@@ -1372,6 +1397,7 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                     taskdata = root / f"{idem_name}-{sample_index}"
                     taskdata.mkdir()
                     env = dict(base_env, TASKDATA=str(taskdata))
+                    _import_workflow_rows((old,), env=env)
                     _import_existing_completion_child(old, env=env)
                     elapsed, result, stderr = _run_workflow_hook_result(
                         ROOT / "on-modify.nautical",

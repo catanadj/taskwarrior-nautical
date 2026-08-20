@@ -118,6 +118,22 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/tools/nautical_reconcile.py",
 )
 
+# Paths and symbols removed by the no-bridge lifecycle architecture. Deployment
+# checks reject their reintroduction so a stale release cannot silently restore
+# an alternate exit or reconcile owner.
+REMOVED_RUNTIME_FILES = (
+    "nautical_core/exit_drain_flow.py",
+    "nautical_core/exit_entry_flow.py",
+    "nautical_core/exit_models.py",
+    "nautical_core/exit_side_effects.py",
+)
+REMOVED_RECONCILE_SYMBOLS = (
+    "_is_legacy_root_without_link",
+    "_validate_hook_protocol",
+    "legacy_hook",
+    "_RECONCILE_PROTOCOL",
+)
+
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
 for _event in HOOK_RUNTIME_FILES:

@@ -64,7 +64,6 @@ _PARENT_LOCK_STALE_SECONDS = 300.0
 _RECONCILE_LOCK_STALE_SECONDS = 300.0
 _DEFAULT_EXPIRATION_HOPS = 32
 _MAX_EXPIRATION_HOPS = 1000
-_RECONCILE_PROTOCOL = 2
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
@@ -72,6 +71,21 @@ _EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, 
 _LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
 _READ_REPOSITORY: TaskReadRepository | None = None
 _UNIT_OF_WORK: TaskwarriorUnitOfWork | None = None
+
+
+def _opportunistic_housekeeping(taskdata: Path) -> dict[str, Any]:
+    """Run bounded outbox maintenance without involving Taskwarrior."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    result = LifecycleOutboxRepository(taskdata).opportunistic_housekeeping()
+    return {
+        "status": "skipped" if result.skipped else ("ok" if result.ok else "deferred"),
+        "kind": result.kind.value,
+        "removed": result.removed,
+        "retention_seconds": result.retention_seconds,
+        "checkpoint": result.checkpoint,
+        "reason": result.reason,
+    }
 
 
 class _ConfigurationDrift(RuntimeError):
@@ -113,6 +127,34 @@ class _ConfigurationReason(str):
         value = str.__new__(cls, reason)
         value.status = status
         return value
+
+
+class _NativeUntilAudit:
+    """Typed native-until integrity result used to gate reconcile mutation."""
+
+    __slots__ = ("status", "repairs", "errors", "reason")
+
+    def __init__(
+        self,
+        status: str,
+        repairs: list[dict[str, Any]] | None = None,
+        errors: list[str] | None = None,
+        reason: str = "",
+    ) -> None:
+        if status not in {"valid", "invalid", "unavailable"}:
+            raise ValueError(f"invalid native-until audit status: {status}")
+        self.status = status
+        self.repairs = list(repairs or [])
+        self.errors = list(errors or [])
+        self.reason = str(reason or "").strip()
+
+
+def _native_until_audit_result(
+    repairs: list[dict[str, Any]],
+    errors: list[str],
+) -> _NativeUntilAudit:
+    status = "invalid" if repairs or errors else "valid"
+    return _NativeUntilAudit(status, repairs, errors)
 
 _ANSI = {
     "dim": "\033[2m",
@@ -224,36 +266,12 @@ def _read_value(read: Any, subject: str) -> Any | None:
     raise _PlanReadUnavailable(f"{subject} returned an invalid typed result")
 
 
-def _load_reconcile_runtime(task_bin: str | None = None):
+def _load_reconcile_runtime(task_bin: str | None = None) -> Any:
     """Load the public core runtime used by reconcile."""
     del task_bin
     import nautical_core as core
 
-    return core, False
-
-
-def _validate_hook_protocol(hook: Any) -> None:
-    if not isinstance(hook, ModuleType):
-        return
-    protocol = getattr(hook, "NAUTICAL_RECONCILE_PROTOCOL", None)
-    if protocol != _RECONCILE_PROTOCOL:
-        raise RuntimeError(
-            f"incompatible on-modify reconcile protocol {protocol!r}; "
-            f"expected {_RECONCILE_PROTOCOL}"
-        )
-    required_core = (
-        "coerce_int",
-        "to_local",
-        "utc_to_local_naive",
-        "local_naive_to_utc",
-        "build_local_datetime",
-        "fmt_isoz",
-    )
-    missing: list[str] = []
-    core = getattr(hook, "core", None)
-    missing.extend(f"core.{name}" for name in required_core if not callable(getattr(core, name, None)))
-    if missing:
-        raise RuntimeError(f"on-modify reconcile protocol is missing: {', '.join(missing)}")
+    return core
 
 
 def _configuration_drift_reason(hook: Any) -> str:
@@ -726,29 +744,15 @@ def _fresh_parent(parent: dict[str, Any]) -> dict[str, Any] | None:
     return dict(value) if value is not None else None
 
 
-def _is_legacy_root_without_link(parent: dict[str, Any]) -> bool:
-    """Recognize only old root records whose link UDA was never stamped."""
-    raw_link = parent.get("link")
-    if raw_link is not None and str(raw_link).strip():
-        return False
-    parent_uuid = str(parent.get("uuid") or "").strip().lower()
-    chain_id = str(parent.get("chainID") or "").strip().lower()
-    if not parent_uuid or chain_id not in {parent_uuid, reconcile.short_uuid(parent_uuid).lower()}:
-        return False
-    return not str(parent.get("prevLink") or "").strip()
-
-
 def _parent_identity_error(parent: dict[str, Any]) -> str:
     """Explain why a parent cannot be used as an atomic reconcile target."""
     chain_id = str(parent.get("chainID") or "").strip()
     if not chain_id:
         return "parent chainID is missing"
-    if _is_legacy_root_without_link(parent):
-        return ""
 
     raw_link = parent.get("link")
     if raw_link is None or not str(raw_link).strip():
-        return "parent link is missing; run chain-repair --apply if the chain is deterministic"
+        return "parent link is missing; post-v2 reconcile requires a stamped link; run chain-repair --apply if deterministic"
     if isinstance(raw_link, bool):
         return f"parent link is invalid: {raw_link!r}"
     try:
@@ -774,7 +778,6 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
     identity_error = _parent_identity_error(parent)
     if identity_error:
         raise RuntimeError(identity_error)
-    legacy_root = _is_legacy_root_without_link(parent)
     if str(parent.get("nextLink") or "").strip():
         raise RuntimeError("parent nextLink is already set")
     return [
@@ -782,7 +785,7 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
         f"status:{status}",
         "chain:on",
         f"chainID:{chain_id}",
-        "link:" if legacy_root else f"link:{link}",
+        f"link:{link}",
         "nextLink:",
     ]
 
@@ -1623,6 +1626,11 @@ def main(
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")
     parser.add_argument(
+        "--no-housekeeping",
+        action="store_true",
+        help="Skip opportunistic lifecycle outbox housekeeping for this run.",
+    )
+    parser.add_argument(
         "--max-expiration-hops",
         type=_expiration_hop_limit,
         default=_DEFAULT_EXPIRATION_HOPS,
@@ -1656,18 +1664,16 @@ def main(
             )
 
     try:
-        hook, legacy_hook = _load_reconcile_runtime(args.task_bin)
+        hook = _load_reconcile_runtime(args.task_bin)
     except Exception as exc:
         return _startup_failure(args, "hook_load", exc)
     try:
-        if legacy_hook:
-            _validate_hook_protocol(hook)
         core = _runtime_core(hook)
         fmt_dt_local = getattr(core, "fmt_dt_local", None)
         now_utc = getattr(core, "now_utc", None)
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
-        return _startup_failure(args, "hook_protocol" if legacy_hook else "runtime", exc)
+        return _startup_failure(args, "runtime", exc)
     global _READ_REPOSITORY, _READ_SNAPSHOT, _UNIT_OF_WORK
     _UNIT_OF_WORK = _unit_of_work
     _READ_REPOSITORY = _unit_of_work.repository
@@ -1686,6 +1692,7 @@ def main(
         return _startup_failure(args, "chain_generation", exc)
     configuration_status, configuration_drift_reason = _configuration_state(hook)
     native_until_audit_warning = ""
+    native_until_audit_status = "unavailable" if configuration_status != "valid" else "valid"
     if configuration_status != "valid":
         native_until_repairs: list[dict[str, Any]] = []
         native_until_errors: list[str] = []
@@ -1698,11 +1705,20 @@ def main(
                 taskdata=taskdata,
                 lease_held=_apply_lease_held,
             )
+            native_until_audit_status = _native_until_audit_result(
+                native_until_repairs, native_until_errors
+            ).status
         except Exception as exc:
-            # The integrity pass is supplementary; preserve normal recovery when its
-            # independent export cannot run (for example while Taskwarrior is locked).
+            # Dry-run can still report planned work, but apply must not mutate
+            # after the authoritative integrity read became unavailable.
             native_until_repairs, native_until_errors = [], []
             native_until_audit_warning = str(exc).strip() or type(exc).__name__
+            native_until_audit_status = "unavailable"
+            if args.apply:
+                configuration_status = "unavailable"
+                configuration_drift_reason = (
+                    f"native-until audit unavailable: {native_until_audit_warning}; restart and rerun"
+                )
             if not args.json:
                 print(
                     _style(
@@ -1851,6 +1867,25 @@ def main(
     total_errors = plan_errors + native_until_error_count
     has_errors = total_errors > 0
 
+    if not args.apply:
+        housekeeping = {"status": "skipped", "reason": "dry_run"}
+    elif args.no_housekeeping:
+        housekeeping = {"status": "skipped", "reason": "disabled"}
+    elif has_errors:
+        housekeeping = {"status": "skipped", "reason": "reconcile_errors"}
+    else:
+        try:
+            housekeeping = _opportunistic_housekeeping(runtime_taskdata)
+        except Exception as exc:
+            housekeeping = {
+                "status": "deferred",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        if housekeeping.get("status") == "deferred":
+            degraded = True
+        if not args.json and housekeeping.get("status") == "deferred":
+            print(_style(f"warning: lifecycle housekeeping deferred: {housekeeping.get('reason')}", "yellow"))
+
     read_metrics = _repository().metrics()
     _EXPORT_STATS.update(
         calls=int(read_metrics["calls"]),
@@ -1883,6 +1918,7 @@ def main(
         "native_until_error_count": native_until_error_count,
         "native_until_manual_review": native_until_manual_review,
         "native_until_audit_skipped": native_until_audit_skipped,
+        "native_until_audit_status": native_until_audit_status,
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),
@@ -1900,6 +1936,7 @@ def main(
         "native_until_repairs": native_until_repairs,
         "native_until_errors": native_until_errors,
         "native_until_audit_warning": native_until_audit_warning,
+        "housekeeping": housekeeping,
     }
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -1918,6 +1955,7 @@ def main(
             f" manual_review={summary['native_until_manual_review']}"
             f" audit_skipped={summary['native_until_audit_skipped']}"
             f" config={summary['configuration_status']}"
+            f" housekeeping={summary['housekeeping'].get('status', 'unknown')}"
         )
         summary_color = "red" if has_errors else "yellow" if degraded else "green"
         print(_style(summary_line, summary_color))

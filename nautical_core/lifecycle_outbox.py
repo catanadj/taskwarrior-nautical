@@ -488,8 +488,11 @@ class LifecycleOutboxRepository:
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is not None:
                     current = self._from_row(row)
+                    same_plan = current.plan.compatibility_key() == plan.compatibility_key()
+                    if current.state is OutboxProcessingState.ACKNOWLEDGED and same_plan:
+                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
                     compatible = (
-                        current.plan.compatibility_key() == plan.compatibility_key()
+                        same_plan
                         and current.configuration_fingerprint == config
                         and current.schedule_fingerprint == schedule
                     )

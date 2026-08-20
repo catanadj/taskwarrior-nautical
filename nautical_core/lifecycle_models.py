@@ -502,9 +502,12 @@ class LifecyclePlan:
             optional_fields = ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc")
             for field in optional_fields:
                 value = child.get(field)
-                if isinstance(value, str) and value.strip().casefold() == "null":
+                if value is None or (isinstance(value, str) and value.strip().casefold() == "null"):
                     child.pop(field, None)
-            if isinstance(child.get("anchor_mode"), str) and child["anchor_mode"].strip().casefold() == "null":
+            if child.get("anchor_mode") is None or (
+                isinstance(child.get("anchor_mode"), str)
+                and child["anchor_mode"].strip().casefold() == "null"
+            ):
                 child["anchor_mode"] = "skip"
         return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
 

@@ -2664,7 +2664,7 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             "prevLink": parent_uuid[:8],
         }
         if legacy_null_anchor_file:
-            child_payload["anchor_file"] = "null"
+            child_payload["anchor_file"] = None
         return LifecyclePlan.from_mappings(
             identity=LifecycleIdentity("outbox-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
@@ -2704,6 +2704,8 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="parent_linked").ok, "outbox parent stage failed")
         expect(repo.advance_stage(intent_id=intent_id, owner="second-worker", stage="verified").ok, "outbox verification stage failed")
         expect(repo.acknowledge(intent_id=intent_id, owner="second-worker").ok, "outbox acknowledgement failed")
+        replay = repo.enqueue(plan, configuration_fingerprint="new-config", schedule_fingerprint="new-schedule")
+        expect(replay.kind is OutboxResultKind.ALREADY_APPLIED, "acknowledged intent was blocked by fingerprint drift")
 
         legacy = plan_for(2, legacy_null_anchor_file=True)
         expect(

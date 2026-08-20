@@ -8,6 +8,12 @@ from typing import Any, Mapping
 from .recurrence_context import RecurrenceContext
 
 
+def normalize_recurrence_text(value: Any) -> str:
+    """Normalize optional recurrence UDAs from Taskwarrior JSON/export forms."""
+    text = str(value or "").strip()
+    return "" if text.casefold() == "null" else text
+
+
 @dataclass(frozen=True, slots=True)
 class RecurrenceSpec:
     """Immutable recurrence fields paired with their evaluation context."""
@@ -45,14 +51,14 @@ class RecurrenceSpec:
                 raise ValueError("chainMax must be an integer in a recurrence specification.") from exc
         return cls(
             context=recurrence_context,
-            anchor=str(task.get("anchor") or "").strip(),
-            anchor_file=str(task.get("anchor_file") or "").strip(),
-            omit=str(task.get("omit") or "").strip(),
-            omit_file=str(task.get("omit_file") or "").strip(),
-            cp=str(task.get("cp") or "").strip(),
-            anchor_mode=str(task.get("anchor_mode") or "skip").strip().lower() or "skip",
+            anchor=normalize_recurrence_text(task.get("anchor")),
+            anchor_file=normalize_recurrence_text(task.get("anchor_file")),
+            omit=normalize_recurrence_text(task.get("omit")),
+            omit_file=normalize_recurrence_text(task.get("omit_file")),
+            cp=normalize_recurrence_text(task.get("cp")),
+            anchor_mode=normalize_recurrence_text(task.get("anchor_mode") or "skip").lower() or "skip",
             chain_max=normalized_max,
-            chain_until=str(task.get("chainUntil") or "").strip(),
+            chain_until=normalize_recurrence_text(task.get("chainUntil")),
         )
 
     @property
@@ -68,4 +74,4 @@ class RecurrenceSpec:
         return self.kind is not None
 
 
-__all__ = ("RecurrenceSpec",)
+__all__ = ("RecurrenceSpec", "normalize_recurrence_text")

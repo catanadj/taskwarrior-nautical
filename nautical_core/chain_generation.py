@@ -14,6 +14,7 @@ from typing import Any, Mapping, MutableMapping
 
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
+from .recurrence_spec import normalize_recurrence_text
 
 
 _RESERVED_DROP = frozenset(
@@ -272,8 +273,8 @@ class ChainGenerationService:
         return candidate, meta
 
     def compute_anchor_child_due(self, parent: dict[str, Any]) -> AnchorChildDueResult:
-        expression = str(parent.get("anchor") or "").strip()
-        anchor_file = str(parent.get("anchor_file") or "").strip()
+        expression = normalize_recurrence_text(parent.get("anchor"))
+        anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
         if not expression and not anchor_file:
             return None, None, None
         self._require_chain_id(parent)
@@ -487,8 +488,16 @@ class ChainGenerationService:
         else:
             child["due"] = self.core.fmt_isoz(child_due_utc)
         if kind in {"anchor", "anchor_file"}:
-            child["anchor"] = parent.get("anchor")
-            child["anchor_file"] = parent.get("anchor_file")
+            anchor = normalize_recurrence_text(parent.get("anchor"))
+            anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
+            if anchor:
+                child["anchor"] = anchor
+            else:
+                child.pop("anchor", None)
+            if anchor_file:
+                child["anchor_file"] = anchor_file
+            else:
+                child.pop("anchor_file", None)
             parent_mode = parent.get("anchor_mode") or "skip"
             child["anchor_mode"] = (
                 "all" if str(parent_mode).strip().lower() == "flex" else parent_mode

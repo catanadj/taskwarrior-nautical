@@ -2409,6 +2409,26 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
         },
         parent_uuid=parent_uuid,
     )
+    from nautical_core.taskwarrior_mutations import _child_import_matches
+    null_child = ChildImportPayload.from_mapping(
+        {
+            "uuid": child_uuid,
+            "chainID": "batch-fail-closed",
+            "link": 2,
+            "prevLink": parent_uuid[:8],
+            "status": "pending",
+            "chain": "on",
+            "cp": "1d",
+            "anchor_file": "null",
+        },
+        parent_uuid=parent_uuid,
+    )
+    null_row = null_child.to_dict()
+    null_row.pop("anchor_file", None)
+    expect(
+        _child_import_matches(null_row, null_child, parent_uuid),
+        "literal null recurrence UDA should not fail child postcondition verification",
+    )
 
     class Repo:
         def __init__(self, mode):
@@ -3798,6 +3818,7 @@ def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
     cases = (
         ({"cp": "1d", "due": "20260816T090000Z"}, "cp", {"target_field": "due"}),
         ({"anchor": "w:mon", "due": "20260816T090000Z"}, "anchor", {"target_field": "due"}),
+        ({"anchor": "w:mon", "anchor_file": "null", "due": "20260816T090000Z"}, "anchor", {"target_field": "due"}),
         ({"anchor_file": "dates.txt", "due": "20260816T090000Z"}, "anchor_file", {"target_field": "due"}),
         ({"cp": "1d", "scheduled": "20260816T090000Z"}, "cp", {"target_field": "scheduled"}),
         ({"cp": "1d", "due": "20260816T090000Z", "until": "20260818T090000Z"}, "cp", {"target_field": "due"}),
@@ -21900,6 +21921,13 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
     expect(spec.anchor == "w:mon" and spec.anchor_file == "events.csv", f"spec fields were not normalized: {spec!r}")
     expect(spec.omit == "y:12-25" and spec.chain_max == 4, f"spec limits were not normalized: {spec!r}")
     expect(spec.anchor_mode == "all" and spec.kind == "anchor" and spec.enabled, f"spec kind was incorrect: {spec!r}")
+    null_spec = RecurrenceSpec.from_task({
+        "chainID": "spec-null-chain",
+        "anchor": "w:mon",
+        "anchor_file": "null",
+        "anchor_mode": "skip",
+    })
+    expect(null_spec.anchor_file == "" and null_spec.kind == "anchor", f"literal null UDA was not unset: {null_spec!r}")
     supplied = RecurrenceContext(chain_id="supplied")
     expect(RecurrenceSpec.from_task({"anchor": "w:fri"}, context=supplied).context is supplied, "supplied context was replaced")
     try:
@@ -23995,6 +24023,12 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
             child = _build_child_from_parent(mod, parent, child_due, "due", 2, "beeswax", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
+
+            anchor_parent = dict(parent, anchor="w:mon@t=12:00", anchor_file="null")
+            anchor_child = _build_child_from_parent(
+                mod, anchor_parent, child_due, "due", 2, "beeswax", "anchor", 0, None
+            )
+            expect("anchor_file" not in anchor_child, f"literal null anchor_file leaked into anchor child: {anchor_child!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 
@@ -27035,6 +27069,10 @@ def test_reconcile_candidate_and_plan_paths():
     expect(
         null_recurrence.action == "backfill_nextlink" and null_recurrence.child_short == "22222222",
         f"literal null recurrence UDA should be treated as unset: {null_recurrence}",
+    )
+    expect(
+        reconcile.recurrence_kind(dict(parent, cp="", anchor="w:mon", anchor_file="null")) == "anchor",
+        "literal null anchor_file changed an anchor recurrence kind",
     )
 
     class FakeCore:

@@ -9,6 +9,7 @@ from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
+from nautical_core.recurrence_spec import normalize_recurrence_text
 from nautical_core.lifecycle_models import (
     LifecycleAction,
     LifecycleEvent,
@@ -33,8 +34,7 @@ RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
 def _recurrence_field_text(value: object) -> str:
     """Normalize Taskwarrior's literal null UDA sentinel as an unset value."""
-    text = str(value or "").strip()
-    return "" if text.casefold() == "null" else text
+    return normalize_recurrence_text(value)
 
 
 def _generation_service(hook: Any = None) -> ChainGenerationService:
@@ -368,9 +368,9 @@ def recurrence_kind(task: dict[str, Any]) -> str:
     except ValueError:
         # Preserve useful classification for incomplete legacy rows; the
         # reconciler reports their missing identity separately.
-        if str(task.get("anchor") or "").strip():
+        if normalize_recurrence_text(task.get("anchor")):
             return "anchor"
-        if str(task.get("anchor_file") or "").strip():
+        if normalize_recurrence_text(task.get("anchor_file")):
             return "anchor_file"
         return "cp"
     return evaluator.kind or "cp"

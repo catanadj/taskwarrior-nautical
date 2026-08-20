@@ -35,6 +35,7 @@ from .integration_models import (
     TaskwarriorMutationPort,
     Unavailable,
 )
+from .recurrence_spec import normalize_recurrence_text
 from .lifecycle_models import recurrence_fingerprint
 
 
@@ -147,7 +148,10 @@ def _child_import_matches(
     if not any(_text(fields.get(field)) for field in mode_fields[:3]):
         return False
     for field in mode_fields:
-        if field in fields and _text(row.get(field)) != _text(fields.get(field)):
+        if (
+            field in fields
+            and normalize_recurrence_text(row.get(field)) != normalize_recurrence_text(fields.get(field))
+        ):
             return False
     return True
 

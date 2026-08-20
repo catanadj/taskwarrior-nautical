@@ -23,10 +23,20 @@ from .lifecycle_models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
+from .recurrence_spec import normalize_recurrence_text
 
 
 class LifecyclePlanningError(RuntimeError):
     """Raised when a lifecycle plan cannot be constructed safely."""
+
+
+def _recurrence_kind(task: Mapping[str, Any]) -> str:
+    """Return the active recurrence kind, treating Taskwarrior null as unset."""
+    if normalize_recurrence_text(task.get("cp")):
+        return "cp"
+    if normalize_recurrence_text(task.get("anchor_file")):
+        return "anchor_file"
+    return "anchor"
 
 
 class ChildPlanBuilder(Protocol):
@@ -170,13 +180,7 @@ class ChainGenerationPlanningService:
         parent = snapshot.to_dict()
         metadata = dict(candidate.metadata)
         child_field = str(metadata.get("target_field") or "due")
-        kind = (
-            "cp"
-            if str(parent.get("cp") or "").strip()
-            else "anchor_file"
-            if str(parent.get("anchor_file") or "").strip()
-            else "anchor"
-        )
+        kind = _recurrence_kind(parent)
         cpmax = self.generation.core.coerce_int(parent.get("chainMax"), 0)
         parent_short = str(parent.get("uuid") or "").strip()[:8]
         return self.generation.build_child_from_parent(
@@ -256,13 +260,7 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
         raise LifecyclePlanningError("expired recurrence has no due or scheduled timestamp")
     calculation_parent = dict(parent)
     calculation_parent["end"] = target
-    kind = (
-        "cp"
-        if str(parent.get("cp") or "").strip()
-        else "anchor_file"
-        if str(parent.get("anchor_file") or "").strip()
-        else "anchor"
-    )
+    kind = _recurrence_kind(parent)
     if kind in {"anchor", "anchor_file"}:
         child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_parent)
     else:
@@ -453,13 +451,7 @@ class LifecyclePlanner:
                 raise LifecyclePlanningError("lifecycle preflight parent link differs from the task snapshot")
             if target_link is not None and preflight.next_link != target_link:
                 raise LifecyclePlanningError("lifecycle preflight next link differs from the task snapshot")
-            snapshot_kind = (
-                "cp"
-                if str(snapshot.get("cp") or "").strip()
-                else "anchor_file"
-                if str(snapshot.get("anchor_file") or "").strip()
-                else "anchor"
-            )
+            snapshot_kind = _recurrence_kind(snapshot)
             if preflight.kind != snapshot_kind:
                 raise LifecyclePlanningError("lifecycle preflight recurrence kind differs from the task snapshot")
         identity = LifecycleIdentity(
@@ -493,14 +485,8 @@ class LifecyclePlanner:
         child = None
         candidate: RecurrenceCandidate | None = None
         if self.recurrence_service is not None:
-            kind = (
-                "cp"
-                if str(snapshot.get("cp") or "").strip()
-                else "anchor_file"
-                if str(snapshot.get("anchor_file") or "").strip()
-                else "anchor"
-            )
-            if not any(str(snapshot.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
+            kind = _recurrence_kind(snapshot)
+            if not any(normalize_recurrence_text(snapshot.get(field)) for field in ("cp", "anchor", "anchor_file")):
                 return terminal_plan_for_snapshot(snapshot, event)
             try:
                 candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)

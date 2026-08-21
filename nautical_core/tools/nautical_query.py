@@ -100,7 +100,10 @@ def _capabilities_payload() -> dict[str, Any]:
 
 
 def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    try:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except BrokenPipeError:
+        return 0
     return exit_code
 
 

@@ -126,8 +126,8 @@ class QuerySelector:
     all_tasks: bool = False
 
     def __post_init__(self) -> None:
-        uuids = tuple(dict.fromkeys(_text(item, "task UUID") for item in self.uuids))
-        chain_id = _text(self.chain_id, "chainID", required=False)
+        uuids = tuple(dict.fromkeys(_text(item, "task UUID").lower() for item in self.uuids))
+        chain_id = _text(self.chain_id, "chainID", required=False).lower()
         if not isinstance(self.all_tasks, bool):
             raise QueryContractError("all_tasks must be boolean")
         modes = bool(uuids) + bool(chain_id) + self.all_tasks

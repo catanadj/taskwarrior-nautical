@@ -32171,13 +32171,13 @@ def test_query_contract_models_round_trip_and_reject_invalid():
     expect(request.max_occurrences == 20, "query limits were not normalized to integers")
     duplicate_selector = OccurrenceQueryRequest.from_mapping(
         {
-            "selector": {"uuids": ["same", "same"]},
+            "selector": {"uuids": ["SAME", "same"]},
             "from": "2026-08-21",
             "count": 1,
             "max_total_occurrences": 2,
         }
     )
-    expect(duplicate_selector.selector.uuids == ("same",), "duplicate UUID selectors were not deduplicated")
+    expect(duplicate_selector.selector.uuids == ("same",), "duplicate UUID selectors were not canonicalized")
     expect(duplicate_selector.max_total_occurrences == 2, "total occurrence limit was not normalized")
 
     local = datetime(2026, 8, 21, 4, 30, tzinfo=timezone(timedelta(hours=3)))

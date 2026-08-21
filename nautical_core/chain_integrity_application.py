@@ -41,6 +41,31 @@ class IntegrityOutboxSink(Protocol):
     def persist(self, plan: IntegrityRepairPlan) -> IntegrityOutboxPersistResult: ...
 
 
+class RepositoryIntegrityOutboxSink:
+    """Adapt the repository-owned shared outbox to the planner boundary."""
+
+    def __init__(self, repository: object, *, configuration_fingerprint: str, schedule_fingerprint: str) -> None:
+        self._repository = repository
+        self._configuration_fingerprint = str(configuration_fingerprint or "").strip()
+        self._schedule_fingerprint = str(schedule_fingerprint or "").strip()
+        if not self._configuration_fingerprint or not self._schedule_fingerprint:
+            raise ValueError("integrity outbox sink requires configuration and schedule fingerprints")
+
+    def persist(self, plan: IntegrityRepairPlan) -> IntegrityOutboxPersistResult:
+        from .integrity_outbox_envelope import IntegrityOutboxEnvelope
+
+        enqueue = getattr(self._repository, "enqueue_integrity", None)
+        if not callable(enqueue):
+            return IntegrityOutboxPersistResult(False, "repository does not support integrity outbox work")
+        try:
+            result = enqueue(IntegrityOutboxEnvelope(
+                plan, self._configuration_fingerprint, self._schedule_fingerprint,
+            ))
+        except Exception as exc:
+            return IntegrityOutboxPersistResult(False, f"integrity outbox persistence failed: {type(exc).__name__}: {exc}")
+        return IntegrityOutboxPersistResult(bool(getattr(result, "ok", False)), str(getattr(result, "reason", "")))
+
+
 @dataclass(frozen=True, slots=True)
 class IntegrityApplicationResult:
     plan_id: str
@@ -140,4 +165,5 @@ __all__ = [
     "IntegrityMutationRequestFactory",
     "IntegrityOutboxPersistResult",
     "IntegrityOutboxSink",
+    "RepositoryIntegrityOutboxSink",
 ]

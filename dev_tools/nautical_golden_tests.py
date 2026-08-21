@@ -3654,6 +3654,7 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
 def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
     """Integrity work uses the shared table but remains invisible to lifecycle claims."""
     from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
+    from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
     from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
 
@@ -3683,6 +3684,8 @@ def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
         expect(acknowledged.ok, f"integrity work was not acknowledged: {acknowledged}")
         repeated = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
         expect(repeated.kind is OutboxResultKind.ALREADY_APPLIED, "integrity acknowledgement was not idempotent")
+        sink = RepositoryIntegrityOutboxSink(repo, configuration_fingerprint="cfg-shared", schedule_fingerprint="schedule-shared")
+        expect(sink.persist(plan).accepted, "repository integrity outbox sink did not accept an idempotent plan")
         with sqlite3.connect(str(repo.path)) as conn:
             row = conn.execute("SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?", (envelope.intent_id,)).fetchone()
         expect(row is not None and row[0] == "integrity", "integrity work kind was not stored")

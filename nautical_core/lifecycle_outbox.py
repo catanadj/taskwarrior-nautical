@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import Enum
 import json
+import hashlib
 import os
 from pathlib import Path
 import sqlite3
@@ -630,6 +631,53 @@ class LifecycleOutboxRepository:
 
         return self._with_connection(operation)
 
+    def enqueue_integrity(self, envelope: Any) -> OutboxResult:
+        """Persist an integrity envelope in the shared outbox table.
+
+        Lifecycle methods deliberately do not decode or claim this work kind;
+        the integrity executor owns its later dispatch path.
+        """
+        try:
+            from .integrity_outbox_envelope import IntegrityOutboxEnvelope, OutboxWorkKind
+
+            if not isinstance(envelope, IntegrityOutboxEnvelope):
+                return OutboxResult(OutboxResultKind.REJECTED, reason="integrity enqueue requires an integrity envelope")
+            encoded = envelope.to_json()
+            intent_id = envelope.intent_id
+            fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            config = envelope.configuration_fingerprint
+            schedule = envelope.schedule_fingerprint
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"invalid integrity envelope: {exc}")
+        now = self._clock()
+
+        def operation(conn: sqlite3.Connection) -> OutboxResult:
+            with _transaction(conn):
+                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                if row is not None:
+                    if str(row["work_kind"] or "lifecycle") != OutboxWorkKind.INTEGRITY.value:
+                        return OutboxResult(OutboxResultKind.CONFLICT, reason="intent ID belongs to another outbox work kind")
+                    if str(row["plan_fingerprint"] or "") == fingerprint:
+                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED)
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="integrity intent payload differs")
+                conn.execute(
+                    """
+                    INSERT INTO lifecycle_outbox (
+                        intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json,
+                        configuration_fingerprint, schedule_fingerprint,
+                        lifecycle_stage, processing_state, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        intent_id, OutboxWorkKind.INTEGRITY.value, encoded, fingerprint, "{}",
+                        config, schedule, ExecutionStage.PLANNED.value,
+                        OutboxProcessingState.READY.value, now, now,
+                    ),
+                )
+            return OutboxResult(OutboxResultKind.APPLIED)
+
+        return self._with_connection(operation)
+
     def claim_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
@@ -649,8 +697,8 @@ class LifecycleOutboxRepository:
                 )
                 candidates = conn.execute(
                     "SELECT intent_id FROM lifecycle_outbox WHERE processing_state IN (?, ?) "
-                    "ORDER BY created_at, intent_id LIMIT ?",
-                    (*_ACTIVE_STATES, int(limit)),
+                    "AND work_kind=? ORDER BY created_at, intent_id LIMIT ?",
+                    (*_ACTIVE_STATES, "lifecycle", int(limit)),
                 ).fetchall()
                 records: list[LifecycleOutboxRecord] = []
                 for raw in candidates:
@@ -724,7 +772,10 @@ class LifecycleOutboxRepository:
                     "WHERE processing_state=? AND lease_expires_at <= ?",
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
                 )
-                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
+                    (intent_id, "lifecycle"),
+                ).fetchone()
                 if row is None:
                     return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
                 current_state = str(row["processing_state"])

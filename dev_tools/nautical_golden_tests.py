@@ -32475,6 +32475,49 @@ def test_query_service_preserves_absent_and_unavailable_task_reads():
     expect(unavailable_response.failure is not None and unavailable_response.failure.retryable, "unavailable read lost retryability")
 
 
+def test_query_service_all_selector_excludes_non_recurrence_rows():
+    """The active-task selector returns only complete recurrence identities."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    recurrence = {
+        "uuid": "00000000-0000-0000-0000-000000000004",
+        "chainID": "query-all",
+        "link": 1,
+        "description": "Recurring",
+        "anchor": "w:mon..sun@t=08:00",
+        "anchor_mode": "skip",
+        "status": "pending",
+    }
+    ordinary = {
+        "uuid": "00000000-0000-0000-0000-000000000005",
+        "description": "Ordinary task",
+        "status": "pending",
+    }
+
+    class _Repository:
+        def broad_snapshot(self, **kwargs):
+            del kwargs
+            return Found(SimpleNamespace(rows=(recurrence, ordinary)), "broad:query:all-active")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone.utc,
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1}
+    )
+    response = OccurrenceQueryService(uow, core=core).query(request)
+    expect(len(response.results) == 1, "all selector returned a non-recurrence task")
+    expect(response.results[0].task is not None and response.results[0].task.uuid == recurrence["uuid"], "all selector chose the wrong task")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
@@ -32483,6 +32526,7 @@ TESTS.extend([
     test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,
     test_query_service_preserves_absent_and_unavailable_task_reads,
+    test_query_service_all_selector_excludes_non_recurrence_rows,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

@@ -863,8 +863,8 @@ def _verify_applied_child(
     return matched
 
 
-def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
-    return reconcile.ReconcilePlan(
+def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
+    return reconcile.LifecycleRecoveryDecision(
         "stale",
         parent,
         reconcile.int_or_default(parent.get("link"), 1) + 1,
@@ -895,7 +895,7 @@ def _refresh_plan(
     original_parent: dict[str, Any],
     *,
     generation: ChainGenerationService | None = None,
-) -> reconcile.ReconcilePlan:
+) -> reconcile.LifecycleRecoveryDecision:
     parent = _fresh_parent(original_parent)
     if parent is None:
         return _stale_plan(original_parent, "parent no longer exists")
@@ -927,7 +927,7 @@ def _plan_for_parent(
     parent: dict[str, Any],
     *,
     generation: ChainGenerationService | None = None,
-) -> reconcile.ReconcilePlan:
+) -> reconcile.LifecycleRecoveryDecision:
     """Build the one reconcile plan used by both preview and apply paths."""
     configuration_status, configuration_reason = _configuration_state(hook)
     if configuration_status != "valid":
@@ -1089,7 +1089,7 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | No
     return None
 
 
-def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "reconcile.ReconcilePlan", hook: Any) -> LifecyclePlan:
+def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "reconcile.LifecycleRecoveryDecision", hook: Any) -> LifecyclePlan:
     """Ensure a SPAWN_CHILD plan's child payload targets a real, reproducible UUID.
 
     Reconcile may re-run against the same broken chain more than once, and
@@ -1142,7 +1142,7 @@ def _raise_for_lifecycle_outcome(outcome: Any, *, label: str) -> None:
 def _execute_reconcile_lifecycle_plan(
     task_bin: str,
     hook: Any,
-    plan: reconcile.ReconcilePlan,
+    plan: reconcile.LifecycleRecoveryDecision,
     *,
     verified_children: dict[str, dict[str, Any]] | None,
     label: str,
@@ -1187,7 +1187,7 @@ def _execute_reconcile_lifecycle_plan(
     return child_short
 
 
-def _terminal_lifecycle_plan(plan: reconcile.ReconcilePlan) -> LifecyclePlan:
+def _terminal_lifecycle_plan(plan: reconcile.LifecycleRecoveryDecision) -> LifecyclePlan:
     """Create the typed terminal plan for a reconcile final/manual decision."""
     parent = plan.parent
     if plan.action == "manual_stop":
@@ -1214,7 +1214,7 @@ def _terminal_lifecycle_plan(plan: reconcile.ReconcilePlan) -> LifecyclePlan:
 def _execute_reconcile_terminal_plan(
     task_bin: str,
     hook: Any,
-    plan: reconcile.ReconcilePlan,
+    plan: reconcile.LifecycleRecoveryDecision,
 ) -> str:
     """Apply a guarded terminal plan through the shared lifecycle application service."""
     lifecycle_plan = _terminal_lifecycle_plan(plan)
@@ -1234,7 +1234,7 @@ def _apply_parent_atomic(
     lease_held: bool = False,
     verified_children: dict[str, dict[str, Any]] | None = None,
     generation: ChainGenerationService | None = None,
-) -> tuple[reconcile.ReconcilePlan, str]:
+) -> tuple[reconcile.LifecycleRecoveryDecision, str]:
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
@@ -1285,8 +1285,8 @@ def _apply_parent_atomic(
             return plan, ""
 
 
-def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
-    return reconcile.ReconcilePlan(
+def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
+    return reconcile.LifecycleRecoveryDecision(
         "error",
         parent,
         reconcile.int_or_default(parent.get("link"), 1) + 1,
@@ -1294,7 +1294,7 @@ def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.ReconcileP
     )
 
 
-def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
+def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
     """Classify an expired-but-still-pending child as resumable, not corrupt."""
     if reason.endswith("native until has already elapsed"):
         return _recovery_partial(
@@ -1304,8 +1304,8 @@ def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.Reconci
     return _recovery_error(parent, reason)
 
 
-def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
-    return reconcile.ReconcilePlan(
+def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
+    return reconcile.LifecycleRecoveryDecision(
         "partial",
         parent,
         reconcile.int_or_default(parent.get("link"), 1) + 1,
@@ -1313,8 +1313,8 @@ def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.Reconcil
     )
 
 
-def _recovery_manual_review(parent: dict[str, Any], reason: str) -> reconcile.ReconcilePlan:
-    return reconcile.ReconcilePlan(
+def _recovery_manual_review(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
+    return reconcile.LifecycleRecoveryDecision(
         "manual_review",
         parent,
         reconcile.int_or_default(parent.get("link"), 1) + 1,
@@ -1390,7 +1390,7 @@ def _next_recovery_child(
 
 
 def _virtual_expired_child(
-    plan: reconcile.ReconcilePlan,
+    plan: reconcile.LifecycleRecoveryDecision,
     *,
     hook: Any,
     recovery_at: Any,
@@ -1433,8 +1433,8 @@ def _reconcile_candidate(
     recovery_at: Any,
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
-) -> list[tuple[reconcile.ReconcilePlan, str]]:
-    outcomes: list[tuple[reconcile.ReconcilePlan, str]] = []
+) -> list[tuple[reconcile.LifecycleRecoveryDecision, str]]:
+    outcomes: list[tuple[reconcile.LifecycleRecoveryDecision, str]] = []
     current = parent
     visited: set[tuple[str, int]] = set()
     expiration_hops = 0
@@ -1583,7 +1583,7 @@ def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
         print(f"  {key.replace('_', ' ')}: {value}")
 
 
-def _describe_plan(plan: reconcile.ReconcilePlan, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
+def _describe_plan(plan: reconcile.LifecycleRecoveryDecision, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
     evidence = reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local)
     child = plan.child if isinstance(plan.child, dict) else {}
     child_until = child.get("until")
@@ -1622,7 +1622,7 @@ def _describe_plan(plan: reconcile.ReconcilePlan, *, hook: Any, fmt_dt_local=Non
 
 
 def _print_plan(
-    plan: reconcile.ReconcilePlan,
+    plan: reconcile.LifecycleRecoveryDecision,
     evidence: dict[str, Any] | None = None,
     *,
     applied_short: str = "",
@@ -1657,7 +1657,7 @@ def _print_plan(
 
 
 def _print_recovery_group(
-    items: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]],
+    items: list[tuple[reconcile.LifecycleRecoveryDecision, dict[str, Any], str]],
 ) -> None:
     first = items[0][0]
     last, evidence, applied_short = items[-1]
@@ -1890,10 +1890,10 @@ def main(
             print(_style(line, _action_style(action)))
         for error in native_until_errors:
             print(_style(f"error: native-until: {error}", "red", stream=sys.stderr), file=sys.stderr)
-    plans: list[reconcile.ReconcilePlan] = []
+    plans: list[reconcile.LifecycleRecoveryDecision] = []
     plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
-    outcome_groups: list[list[tuple[reconcile.ReconcilePlan, str]]] = []
+    outcome_groups: list[list[tuple[reconcile.LifecycleRecoveryDecision, str]]] = []
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = _ambiguous_candidate_slots(candidates)
 
@@ -1945,7 +1945,7 @@ def main(
                     )
                     else "drifted"
                 )
-        rendered: list[tuple[reconcile.ReconcilePlan, dict[str, Any], str]] = []
+        rendered: list[tuple[reconcile.LifecycleRecoveryDecision, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             processed_slots.add(
                 (

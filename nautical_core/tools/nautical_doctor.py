@@ -628,6 +628,8 @@ def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
         from nautical_core.astronomical_seasons import seasonal_events_utc
 
         events = seasonal_events_utc(date.today().year)
+        if ZONEINFO_FACTORY is None:
+            raise RuntimeError("zoneinfo support is unavailable")
         local_events = {
             name: event.astimezone(ZONEINFO_FACTORY(timezone_name)).date().isoformat()
             for name, event in events.items()
@@ -1037,7 +1039,7 @@ def _check_reconcile_plans(
 
     hook = None
     generation = None
-    plans: list[reconcile.ReconcilePlan] = []
+    plans: list[reconcile.LifecycleRecoveryDecision] = []
     delayed_expiration_candidates: list[dict[str, Any]] = []
     unavailable = ""
     try:

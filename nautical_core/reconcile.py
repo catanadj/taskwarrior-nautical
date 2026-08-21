@@ -58,7 +58,7 @@ def scheduling_error_message(exc: BaseException) -> str:
 
 
 @dataclass(frozen=True)
-class ReconcilePlan:
+class LifecycleRecoveryDecision:
     action: str
     parent: dict[str, Any]
     next_link: int
@@ -70,7 +70,7 @@ class ReconcilePlan:
     lifecycle_plan: LifecyclePlan | None = None
 
 
-def is_terminal_plan(plan: ReconcilePlan) -> bool:
+def is_terminal_plan(plan: LifecycleRecoveryDecision) -> bool:
     """Return whether a final plan ended at the representable date boundary."""
     return plan.action == "legitimate_final" and plan.terminal_kind == "date_limit"
 
@@ -376,7 +376,7 @@ def recurrence_kind(task: dict[str, Any]) -> str:
     return evaluator.kind or "cp"
 
 
-def describe_plan(plan: ReconcilePlan, *, fmt_dt_local: Any = None) -> dict[str, Any]:
+def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     parent = plan.parent
     if plan.action == "manual_stop":
         trigger = "manual_deletion"
@@ -453,7 +453,7 @@ def _build_reconcile_plan_unscoped(
     existing_children: list[dict[str, Any]],
     hook: Any,
     generation: ChainGenerationService | None = None,
-) -> ReconcilePlan:
+) -> LifecycleRecoveryDecision:
     generation = generation or _generation_service(hook)
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
@@ -464,9 +464,9 @@ def _build_reconcile_plan_unscoped(
             safe_parse_datetime=generation.safe_parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
-            return ReconcilePlan("manual_stop", parent, next_link, evidence.reason)
+            return LifecycleRecoveryDecision("manual_stop", parent, next_link, evidence.reason)
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
-            return ReconcilePlan(
+            return LifecycleRecoveryDecision(
                 "error",
                 parent,
                 next_link,
@@ -479,7 +479,7 @@ def _build_reconcile_plan_unscoped(
         include_deleted=is_expiration,
     )
     if child_error:
-        return ReconcilePlan("error", parent, next_link, child_error)
+        return LifecycleRecoveryDecision("error", parent, next_link, child_error)
     if child_short:
         existing_child = next(
             (
@@ -490,7 +490,7 @@ def _build_reconcile_plan_unscoped(
             None,
         )
         if not isinstance(existing_child, dict):
-            return ReconcilePlan(
+            return LifecycleRecoveryDecision(
                 "error",
                 parent,
                 next_link,
@@ -522,14 +522,14 @@ def _build_reconcile_plan_unscoped(
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
         except Exception as exc:
-            return ReconcilePlan(
+            return LifecycleRecoveryDecision(
                 "error",
                 parent,
                 next_link,
                 f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
                 child_short=child_short,
             )
-        return ReconcilePlan(
+        return LifecycleRecoveryDecision(
             "backfill_nextlink",
             parent,
             next_link,
@@ -554,10 +554,10 @@ def _build_reconcile_plan_unscoped(
         until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
         cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
-        return ReconcilePlan("error", parent, next_link, f"invalid chainUntil: {until_err}")
+        return LifecycleRecoveryDecision("error", parent, next_link, f"invalid chainUntil: {until_err}")
 
     if cpmax and next_link > cpmax:
-        return ReconcilePlan("legitimate_final", parent, next_link, "reached chainMax")
+        return LifecycleRecoveryDecision("legitimate_final", parent, next_link, "reached chainMax")
 
     try:
         if is_expiration:
@@ -570,19 +570,19 @@ def _build_reconcile_plan_unscoped(
             child_due, meta = generation.compute_cp_child_due(parent)
     except Exception as exc:
         if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
-            return ReconcilePlan(
+            return LifecycleRecoveryDecision(
                 "legitimate_final",
                 parent,
                 next_link,
                 occurrence_exhaustion_message(exc),
                 terminal_kind=exc.kind,
             )
-        return ReconcilePlan("error", parent, next_link, scheduling_error_message(exc))
+        return LifecycleRecoveryDecision("error", parent, next_link, scheduling_error_message(exc))
 
     if not child_due:
-        return ReconcilePlan("error", parent, next_link, "could not compute next recurrence timestamp")
+        return LifecycleRecoveryDecision("error", parent, next_link, "could not compute next recurrence timestamp")
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
-        return ReconcilePlan("legitimate_final", parent, next_link, "reached chainUntil", child_due=child_due)
+        return LifecycleRecoveryDecision("legitimate_final", parent, next_link, "reached chainUntil", child_due=child_due)
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
@@ -622,7 +622,7 @@ def _build_reconcile_plan_unscoped(
             )
         )
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
-            return ReconcilePlan(
+            return LifecycleRecoveryDecision(
                 "legitimate_final",
                 parent,
                 next_link,
@@ -653,9 +653,9 @@ def _build_reconcile_plan_unscoped(
                     generation=generation,
                 )
             except Exception as fallback_exc:
-                return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
+                return LifecycleRecoveryDecision("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
-            return ReconcilePlan("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
+            return LifecycleRecoveryDecision("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
     if lifecycle_plan is None:
         try:
             guard = ParentGuard(
@@ -682,7 +682,7 @@ def _build_reconcile_plan_unscoped(
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
         except Exception as exc:
-            return ReconcilePlan(
+            return LifecycleRecoveryDecision(
                 "error",
                 parent,
                 next_link,
@@ -690,7 +690,7 @@ def _build_reconcile_plan_unscoped(
                 child_due=child_due,
             )
     reason = "expired link missing next link" if is_expiration else "missing next link"
-    return ReconcilePlan(
+    return LifecycleRecoveryDecision(
         "spawn",
         parent,
         next_link,
@@ -707,7 +707,7 @@ def build_reconcile_plan(
     existing_children: list[dict[str, Any]],
     hook: Any,
     generation: ChainGenerationService | None = None,
-) -> ReconcilePlan:
+) -> LifecycleRecoveryDecision:
     """Build one plan inside the parent task's business-calendar context."""
     generation = generation or _generation_service(hook)
     core = generation.core
@@ -724,7 +724,7 @@ def build_reconcile_plan(
     try:
         calendar_context = use_task_calendar(parent)
     except Exception as exc:
-        return ReconcilePlan(
+        return LifecycleRecoveryDecision(
             "error",
             parent,
             next_link,

@@ -28246,7 +28246,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
         def apply_parent(_task_bin, _hook, current, *, taskdata, lease_held=False, verified_children=None):
             expect(verified_children is not None, "recovery did not provide verified-child cache")
             verified_children["22222222"] = dict(child)
-            return tool.reconcile.ReconcilePlan(
+            return tool.reconcile.LifecycleRecoveryDecision(
                 "spawn",
                 current,
                 2,
@@ -28782,7 +28782,7 @@ def test_reconcile_apply_isolates_candidate_failures():
             expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
             if parent["uuid"] == failed["uuid"]:
                 raise RuntimeError("parent reconcile lock busy: 11111111")
-            plan = tool.reconcile.ReconcilePlan(
+            plan = tool.reconcile.LifecycleRecoveryDecision(
                 "backfill_nextlink",
                 parent,
                 3,
@@ -29086,7 +29086,7 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
         "chainID": "11111111",
         "link": 1,
     }
-    plan = reconcile.ReconcilePlan(
+    plan = reconcile.LifecycleRecoveryDecision(
         "spawn",
         parent,
         2,
@@ -29181,7 +29181,7 @@ def test_reconcile_tool_print_plan_includes_evidence():
         "chainID": "11111111",
         "link": 2,
     }
-    plan = reconcile.ReconcilePlan(
+    plan = reconcile.LifecycleRecoveryDecision(
         "backfill_nextlink",
         parent,
         3,
@@ -29197,7 +29197,7 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
 
     second_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 3}
-    second = reconcile.ReconcilePlan(
+    second = reconcile.LifecycleRecoveryDecision(
         "partial",
         second_parent,
         4,
@@ -29232,7 +29232,7 @@ def test_reconcile_partial_recovery_exit_and_verbose_output():
     next_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 2}
     outcomes = [
         (
-            mod.reconcile.ReconcilePlan(
+            mod.reconcile.LifecycleRecoveryDecision(
                 "spawn",
                 parent,
                 2,
@@ -29242,7 +29242,7 @@ def test_reconcile_partial_recovery_exit_and_verbose_output():
             "22222222",
         ),
         (
-            mod.reconcile.ReconcilePlan(
+            mod.reconcile.LifecycleRecoveryDecision(
                 "partial",
                 next_parent,
                 3,

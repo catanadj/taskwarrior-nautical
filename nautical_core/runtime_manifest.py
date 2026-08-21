@@ -116,6 +116,7 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/tools/nautical_queue_status.py",
     "nautical_core/tools/nautical_chain_repair.py",
     "nautical_core/tools/nautical_reconcile.py",
+    "nautical_core/tools/nautical_query.py",
 )
 
 # Paths and symbols removed by the no-bridge lifecycle architecture. Deployment

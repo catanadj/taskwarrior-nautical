@@ -748,6 +748,60 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def claim_integrity_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[Any, ...]]:
+        """Claim integrity work without exposing it to lifecycle executors."""
+        from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+
+        owner = str(owner or "").strip()
+        if not owner or lease_seconds <= 0 or limit <= 0:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and limit"), ()
+        now = self._clock()
+        expires = now + float(lease_seconds)
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            self._secure_state_files()
+            with _transaction(conn):
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
+                    "WHERE work_kind=? AND processing_state=? AND lease_expires_at <= ?",
+                    (OutboxProcessingState.RETRY.value, now, "integrity", OutboxProcessingState.CLAIMED.value, now),
+                )
+                rows = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE work_kind=? AND processing_state IN (?, ?) "
+                    "ORDER BY created_at, intent_id LIMIT ?",
+                    ("integrity", *_ACTIVE_STATES, int(limit)),
+                ).fetchall()
+                records: list[Any] = []
+                for row in rows:
+                    intent_id = str(row["intent_id"])
+                    try:
+                        envelope = IntegrityOutboxEnvelope.from_dict(json.loads(str(row["plan_json"] or "")))
+                        if hashlib.sha256(envelope.to_json().encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
+                            raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
+                    except Exception as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_integrity_row", str(exc)))
+                        continue
+                    conn.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
+                        "attempts=attempts+1, failure_json='', updated_at=? WHERE intent_id=? "
+                        "AND work_kind=? AND processing_state IN (?, ?)",
+                        (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, "integrity", *_ACTIVE_STATES),
+                    )
+                    records.append(IntegrityOutboxRecord(
+                        envelope, OutboxProcessingState.CLAIMED, ExecutionStage.PLANNED,
+                        owner, expires, int(row["attempts"] or 0) + 1,
+                    ))
+                return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
+        finally:
+            if conn is not None:
+                conn.close()
+
     def claim_intent(self, *, owner: str, lease_seconds: float, intent_id: str) -> OutboxResult:
         """Claim one specific intent by id, for a caller that must execute
         exactly the record it just staged (e.g. reconcile, which holds a

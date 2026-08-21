@@ -85,4 +85,32 @@ class IntegrityOutboxEnvelope:
         return envelope
 
 
-__all__ = ["IntegrityOutboxEnvelope", "OutboxWorkKind"]
+@dataclass(frozen=True, slots=True)
+class IntegrityOutboxRecord:
+    """Claimed integrity work plus durable lease evidence."""
+
+    envelope: IntegrityOutboxEnvelope
+    state: OutboxProcessingState
+    stage: ExecutionStage
+    lease_owner: str = ""
+    lease_expires_at: float = 0.0
+    attempts: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.envelope, IntegrityOutboxEnvelope):
+            raise TypeError("integrity record requires an envelope")
+        state = OutboxProcessingState(self.state)
+        stage = ExecutionStage(self.stage)
+        if state is OutboxProcessingState.CLAIMED and (not str(self.lease_owner or "").strip() or self.lease_expires_at <= 0):
+            raise ValueError("claimed integrity record requires a lease")
+        if state is not OutboxProcessingState.CLAIMED and str(self.lease_owner or "").strip():
+            raise ValueError("only claimed integrity records may retain a lease")
+        if isinstance(self.attempts, bool) or int(self.attempts) < 0:
+            raise ValueError("integrity attempts must be non-negative")
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "stage", stage)
+        object.__setattr__(self, "lease_owner", str(self.lease_owner or "").strip())
+        object.__setattr__(self, "attempts", int(self.attempts))
+
+
+__all__ = ["IntegrityOutboxEnvelope", "IntegrityOutboxRecord", "OutboxWorkKind"]

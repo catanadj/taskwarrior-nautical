@@ -3583,7 +3583,12 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
     """First-open races are bounded, WAL-backed, and never silently downgrade schema."""
     import threading
 
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OUTBOX_SCHEMA_VERSION, OutboxResultKind
+    from nautical_core.lifecycle_outbox import (
+        LifecycleOutboxRepository,
+        OUTBOX_LEGACY_SCHEMA_VERSION,
+        OUTBOX_SCHEMA_VERSION,
+        OutboxResultKind,
+    )
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -3623,6 +3628,15 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         with sqlite3.connect(str(repo.path)) as conn:
             journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
             expect(journal_mode == "wal", f"outbox did not retain WAL journal mode: {journal_mode}")
+            conn.execute("ALTER TABLE lifecycle_outbox DROP COLUMN work_kind")
+            conn.execute(f"PRAGMA user_version={OUTBOX_LEGACY_SCHEMA_VERSION}")
+        migrated = repo.open()
+        expect(migrated.ok, f"legacy outbox schema did not migrate: {migrated}")
+        with sqlite3.connect(str(repo.path)) as conn:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        expect("work_kind" in columns and version == OUTBOX_SCHEMA_VERSION, "outbox schema v2 migration incomplete")
+        with sqlite3.connect(str(repo.path)) as conn:
             conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION + 1}")
         rejected = repo.open()
         expect(rejected.kind is OutboxResultKind.REJECTED, f"future outbox schema was accepted: {rejected}")

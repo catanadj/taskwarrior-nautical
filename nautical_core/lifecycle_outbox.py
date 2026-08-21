@@ -21,7 +21,8 @@ import uuid
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleContractError, LifecyclePlan
 
 
-OUTBOX_SCHEMA_VERSION = 1
+OUTBOX_SCHEMA_VERSION = 2
+OUTBOX_LEGACY_SCHEMA_VERSION = 1
 OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS = 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
@@ -348,6 +349,16 @@ class LifecycleOutboxRepository:
                     # WAL negotiation on every short-lived hook process.
                     LifecycleOutboxRepository._validate_schema(conn)
                     return
+                if version == OUTBOX_LEGACY_SCHEMA_VERSION:
+                    with _transaction(conn):
+                        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
+                        if "work_kind" not in columns:
+                            conn.execute(
+                                "ALTER TABLE lifecycle_outbox ADD COLUMN work_kind TEXT NOT NULL DEFAULT 'lifecycle'"
+                            )
+                        conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
+                    LifecycleOutboxRepository._validate_schema(conn)
+                    return
                 if version != 0:
                     raise LifecycleOutboxError(f"unsupported outbox schema v{version}")
 
@@ -360,6 +371,7 @@ class LifecycleOutboxRepository:
                         """
                         CREATE TABLE IF NOT EXISTS lifecycle_outbox (
                             intent_id TEXT PRIMARY KEY,
+                            work_kind TEXT NOT NULL DEFAULT 'lifecycle',
                             plan_json TEXT NOT NULL,
                             plan_fingerprint TEXT NOT NULL,
                             parent_guard_json TEXT NOT NULL,
@@ -402,7 +414,7 @@ class LifecycleOutboxRepository:
     def _validate_schema(conn: sqlite3.Connection) -> None:
         columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
         required = {
-            "intent_id", "plan_json", "plan_fingerprint", "parent_guard_json",
+            "intent_id", "work_kind", "plan_json", "plan_fingerprint", "parent_guard_json",
             "configuration_fingerprint", "schedule_fingerprint", "lifecycle_stage",
             "processing_state", "lease_owner", "lease_expires_at", "attempts",
             "failure_json", "created_at", "updated_at", "acknowledged_at",
@@ -431,6 +443,9 @@ class LifecycleOutboxRepository:
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
+        work_kind = str(row["work_kind"] or "lifecycle")
+        if work_kind != "lifecycle":
+            raise LifecycleOutboxError(f"unsupported outbox work kind for lifecycle reader: {work_kind}")
         plan = _decode_plan(row["plan_json"])
         intent_id = str(row["intent_id"])
         if intent_id != plan.identity.idempotency_key:

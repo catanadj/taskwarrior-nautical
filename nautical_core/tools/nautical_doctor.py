@@ -12,7 +12,7 @@ import sys
 import tomllib
 import zoneinfo
 from collections import defaultdict
-from datetime import timezone
+from datetime import date, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
@@ -453,6 +453,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "No Nautical config file was found; built-in defaults will be used.",
         )
         _check_timezone(findings, {})
+        _check_season_mode(findings, {})
         _check_astronomy(findings, {}, source_hint="defaults")
         _check_uda_aliases(findings, {})
         _check_config_drift(findings, "")
@@ -474,6 +475,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     _check_config_schema(findings, data)
     _check_uda_aliases(findings, data)
     _check_timezone(findings, data)
+    _check_season_mode(findings, data)
     _check_astronomy(findings, data, source_hint=str(config))
     _check_config_drift(findings, str(config))
     _check_navigator_dependencies(findings, data)
@@ -592,6 +594,61 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
         )
         return
     _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
+
+
+def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    """Report the active seasonal backend and preflight astronomical data."""
+    snapshot = effective_config_snapshot()
+    effective = snapshot.get("values") if isinstance(snapshot.get("values"), dict) else {}
+    mode = str((data or {}).get("season_mode", effective.get("season_mode", "fixed")) or "fixed").strip().lower()
+    hemisphere = str(
+        (data or {}).get("season_hemisphere", effective.get("season_hemisphere", "north")) or "north"
+    ).strip().lower()
+    timezone_name = str((data or {}).get("tz", effective.get("tz", "UTC")) or "UTC").strip() or "UTC"
+    if mode not in {"fixed", "astronomical"}:
+        _finding(
+            findings,
+            "config.season_mode.invalid",
+            "error",
+            f"Unsupported seasonal boundary backend: {mode!r}.",
+            fix="Set season_mode to 'fixed' or 'astronomical'.",
+            details={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
+        )
+        return
+    if mode == "fixed":
+        _finding(
+            findings,
+            "config.season_mode",
+            "ok",
+            f"Seasonal boundaries use the fixed backend ({hemisphere} hemisphere).",
+            details={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
+        )
+        return
+    try:
+        from nautical_core.astronomical_seasons import seasonal_events_utc
+
+        events = seasonal_events_utc(date.today().year)
+        local_events = {
+            name: event.astimezone(ZONEINFO_FACTORY(timezone_name)).date().isoformat()
+            for name, event in events.items()
+        }
+    except Exception as exc:
+        _finding(
+            findings,
+            "config.season_mode.astronomical_invalid",
+            "error",
+            f"Astronomical seasonal boundaries are unavailable for {date.today().year}: {exc}",
+            fix="Verify timezone data and use a supported season year/backend, then rerun doctor.",
+            details={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
+        )
+        return
+    _finding(
+        findings,
+        "config.season_mode",
+        "ok",
+        f"Seasonal boundaries use astronomical transitions ({hemisphere} hemisphere, {timezone_name}).",
+        details={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name, "events": local_events},
+    )
 
 
 def _check_astronomy(

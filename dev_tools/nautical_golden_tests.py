@@ -7559,6 +7559,29 @@ def test_doctor_reports_astronomy_preflight_health():
     expect(item is not None and item.get("severity") == "ok", f"doctor astronomy status missing: {findings!r}")
 
 
+def test_doctor_reports_season_backend_and_astronomical_events():
+    """Doctor should make the selected seasonal backend and event dates visible."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_season_mode_test")
+    previous = mod.effective_config_snapshot
+    try:
+        mod.effective_config_snapshot = lambda: {"values": {}, "source": "defaults"}
+        findings = []
+        mod._check_season_mode(findings, {"season_mode": "astronomical", "season_hemisphere": "north", "tz": "UTC"})
+    finally:
+        mod.effective_config_snapshot = previous
+    item = next((item for item in findings if item.get("id") == "config.season_mode"), None)
+    expect(item is not None and item.get("severity") == "ok", f"season backend status missing: {findings!r}")
+    details = item.get("details") or {}
+    expect(details.get("mode") == "astronomical", f"season mode missing from doctor details: {item!r}")
+    expect("spring_equinox" in (details.get("events") or {}), f"season event dates missing: {item!r}")
+
+    findings = []
+    mod._check_season_mode(findings, {"season_mode": "sidereal", "tz": "UTC"})
+    invalid = next((item for item in findings if item.get("id") == "config.season_mode.invalid"), None)
+    expect(invalid is not None and invalid.get("fix"), f"invalid season mode lacked an actionable fix: {findings!r}")
+
+
 def test_doctor_reports_matching_config_drift():
     """Doctor should report unchanged and changed state only for its active config source."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -33370,6 +33393,7 @@ TESTS.extend([
     test_weekday_weekend_single_time,
     test_doctor_reports_missing_timezone_configuration,
     test_doctor_reports_astronomy_preflight_health,
+    test_doctor_reports_season_backend_and_astronomical_events,
     test_doctor_reports_matching_config_drift,
     test_effective_config_snapshot_isolated_and_provenanced,
     test_config_fingerprint_invalidates_persistent_cache_keys,

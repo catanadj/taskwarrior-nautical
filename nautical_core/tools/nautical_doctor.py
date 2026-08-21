@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
-from nautical_core import chain_integrity_lifecycle as reconcile  # noqa: E402
+from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
@@ -1003,13 +1003,13 @@ def _chain_repair_detail(repair: chain_repair.LinkRepair) -> dict[str, Any]:
 
 def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
-    next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
+    next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
     include_deleted = str(parent.get("status") or "").strip() == "deleted"
     return [
         row
         for row in rows
         if str(row.get("chainID") or "").strip() == chain_id
-        and reconcile.int_or_default(row.get("link"), -1) == next_link
+        and lifecycle.int_or_default(row.get("link"), -1) == next_link
         and (include_deleted or str(row.get("status") or "").strip() != "deleted")
     ]
 
@@ -1033,14 +1033,14 @@ def _check_reconcile_plans(
     *,
     rows: list[dict[str, Any]],
 ) -> None:
-    completion_candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
-    deleted_candidates = [row for row in rows if reconcile.is_orphan_deleted_chain_candidate(row)]
+    completion_candidates = [row for row in rows if lifecycle.is_orphan_completion_candidate(row)]
+    deleted_candidates = [row for row in rows if lifecycle.is_orphan_deleted_chain_candidate(row)]
     if not completion_candidates and not deleted_candidates:
         return
 
     hook = None
     generation = None
-    plans: list[reconcile.LifecycleRecoveryDecision] = []
+    plans: list[lifecycle.LifecycleRecoveryDecision] = []
     delayed_expiration_candidates: list[dict[str, Any]] = []
     unavailable = ""
     try:
@@ -1058,7 +1058,7 @@ def _check_reconcile_plans(
     if not unavailable:
         for parent in candidates:
             existing_children = _existing_reconcile_children(rows, parent)
-            plan = reconcile.build_reconcile_plan(
+            plan = lifecycle.build_reconcile_plan(
                 parent,
                 existing_children=existing_children,
                 hook=hook,
@@ -1129,7 +1129,7 @@ def _check_reconcile_plans(
             "plans": [
                 {
                     "action": plan.action,
-                    **reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local),
+                    **lifecycle.describe_plan(plan, fmt_dt_local=fmt_dt_local),
                 }
                 for plan in plans[:10]
             ],

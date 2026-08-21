@@ -23,7 +23,7 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import chain_integrity_lifecycle as reconcile, safe_lock  # noqa: E402
+from nautical_core import chain_integrity_lifecycle as lifecycle, safe_lock  # noqa: E402
 from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
 from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
@@ -267,7 +267,7 @@ def _read_value(read: Any, subject: str) -> Any | None:
 
 
 def _load_reconcile_runtime(task_bin: str | None = None) -> Any:
-    """Load the public core runtime used by reconcile."""
+    """Load the public core runtime used by lifecycle."""
     del task_bin
     import nautical_core as core
 
@@ -326,7 +326,7 @@ def _configuration_state(hook: Any) -> tuple[str, str]:
 def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
     return (
         str(row.get("chainID") or "").strip().casefold(),
-        reconcile.int_or_default(row.get("link"), 0),
+        lifecycle.int_or_default(row.get("link"), 0),
         str(row.get("status") or "").strip().casefold(),
         str(row.get("uuid") or "").strip().casefold(),
     )
@@ -387,13 +387,13 @@ def _candidate_rows(
             row
             for row in rows
             if str(row.get("status") or "").strip().lower() == "completed"
-            and reconcile.is_orphan_completion_candidate(row)
+            and lifecycle.is_orphan_completion_candidate(row)
         ]
         candidates.extend(
             row
             for row in rows
             if str(row.get("status") or "").strip().lower() == "deleted"
-            and reconcile.is_orphan_deleted_chain_candidate(row)
+            and lifecycle.is_orphan_deleted_chain_candidate(row)
         )
         return sorted(candidates, key=_candidate_sort_key)
     raise RuntimeError("reconcile candidate reads require an authoritative snapshot")
@@ -404,7 +404,7 @@ def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, in
     grouped: dict[tuple[str, int], set[str]] = {}
     for row in rows:
         chain_id = str(row.get("chainID") or "").strip()
-        link = reconcile.int_or_default(row.get("link"), 0)
+        link = lifecycle.int_or_default(row.get("link"), 0)
         uuid = str(row.get("uuid") or "").strip().lower()
         if chain_id and link > 0 and uuid:
             grouped.setdefault((chain_id, link), set()).add(uuid)
@@ -448,8 +448,8 @@ def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -
         left = expected.get(field)
         right = fresh.get(field)
         if field == "link":
-            left = reconcile.int_or_default(left, 0)
-            right = reconcile.int_or_default(right, 0)
+            left = lifecycle.int_or_default(left, 0)
+            right = lifecycle.int_or_default(right, 0)
         else:
             left = str(left or "").strip()
             right = str(right or "").strip()
@@ -460,7 +460,7 @@ def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -
 
 def _fresh_native_until_previous(row: dict[str, Any]) -> dict[str, Any] | None:
     chain_id = str(row.get("chainID") or "").strip()
-    link = reconcile.int_or_default(row.get("link"), 0)
+    link = lifecycle.int_or_default(row.get("link"), 0)
     if not chain_id or link <= 1:
         return None
     value = _read_value(
@@ -489,25 +489,25 @@ def _native_until_repairs(
     by_chain_link = {
         (
             str(row.get("chainID") or "").strip(),
-            reconcile.int_or_default(row.get("link"), 0),
+            lifecycle.int_or_default(row.get("link"), 0),
         ): row
         for row in active_rows
     }
     repairs: list[dict[str, Any]] = []
     errors: list[str] = []
     for row in rows:
-        reason = reconcile.invalid_native_until_reason(row, safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value))
+        reason = lifecycle.invalid_native_until_reason(row, safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value))
         if not reason:
             continue
         chain_id = str(row.get("chainID") or "").strip()
-        link = reconcile.int_or_default(row.get("link"), 0)
+        link = lifecycle.int_or_default(row.get("link"), 0)
         previous = by_chain_link.get((chain_id, link - 1))
         if previous is None:
             # Historical predecessors are deliberately outside the active
             # snapshot; fetch only the predecessor needed by this invalid row.
             previous = _fresh_native_until_previous(row)
         item = {
-            "task": reconcile.short_uuid(row.get("uuid")),
+            "task": lifecycle.short_uuid(row.get("uuid")),
             "chainID": chain_id,
             "link": link,
             "target": row.get("due") or row.get("scheduled"),
@@ -519,16 +519,16 @@ def _native_until_repairs(
         if previous is None:
             repair_error = "previous link is unavailable"
         else:
-            previous_reason = reconcile.invalid_native_until_reason(
+            previous_reason = lifecycle.invalid_native_until_reason(
                 previous,
                 safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
             )
             if previous_reason:
                 repair_error = f"previous link is invalid: {previous_reason}"
             else:
-                kind = reconcile.recurrence_kind(row)
+                kind = lifecycle.recurrence_kind(row)
                 core = _runtime_core(hook)
-                repaired, repair_error = reconcile.repair_native_until_from_previous(
+                repaired, repair_error = lifecycle.repair_native_until_from_previous(
                     previous,
                     row,
                     kind=kind,
@@ -539,7 +539,7 @@ def _native_until_repairs(
                 )
         if repair_error or not repaired:
             core = _runtime_core(hook)
-            fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
+            fallback, fallback_error = lifecycle.fallback_native_until_at_day_end(
                 row,
                     safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
                 fmt_isoz=core.fmt_isoz,
@@ -623,7 +623,7 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
         raise RuntimeError("native until repair requires an integration unit of work")
     uuid = str(row.get("uuid") or "").strip()
     chain_id = str(row.get("chainID") or "").strip()
-    link = reconcile.int_or_default(row.get("link"), 0)
+    link = lifecycle.int_or_default(row.get("link"), 0)
     modified = str(row.get("modified") or "").strip()
     expected_until = str(row.get("until") or "").strip()
     if not uuid or not chain_id or link <= 0 or not modified or not expected_until:
@@ -665,7 +665,7 @@ def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bo
 
 def _existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
-    next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
+    next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
     if not chain_id:
         return []
     value = _read_value(
@@ -677,7 +677,7 @@ def _existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
     if str(parent.get("status") or "").strip() == "deleted":
-        evidence = reconcile.deleted_chain_disposition(
+        evidence = lifecycle.deleted_chain_disposition(
             parent,
             safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
         )
@@ -768,7 +768,7 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
     parent_uuid = str(parent.get("uuid") or "").strip()
     status = str(parent.get("status") or "").strip().lower()
     chain_id = str(parent.get("chainID") or "").strip()
-    link = reconcile.int_or_default(parent.get("link"), 0)
+    link = lifecycle.int_or_default(parent.get("link"), 0)
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
     if status not in {"completed", "deleted"}:
@@ -830,7 +830,7 @@ def _verify_applied_child(
             f"post-apply verification found parent nextLink {shown}; expected {child_short}"
         )
     rows = _existing_children(fresh_parent)
-    resolved, child_error = reconcile.resolve_existing_child(
+    resolved, child_error = lifecycle.resolve_existing_child(
         fresh_parent,
         rows,
         include_deleted=True,
@@ -863,11 +863,11 @@ def _verify_applied_child(
     return matched
 
 
-def _stale_plan(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
-    return reconcile.LifecycleRecoveryDecision(
+def _stale_plan(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+    return lifecycle.LifecycleRecoveryDecision(
         "stale",
         parent,
-        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
@@ -895,15 +895,15 @@ def _refresh_plan(
     original_parent: dict[str, Any],
     *,
     generation: ChainGenerationService | None = None,
-) -> reconcile.LifecycleRecoveryDecision:
+) -> lifecycle.LifecycleRecoveryDecision:
     parent = _fresh_parent(original_parent)
     if parent is None:
         return _stale_plan(original_parent, "parent no longer exists")
     status = str(parent.get("status") or "").strip().lower()
     if status == "completed":
-        candidate = reconcile.is_orphan_completion_candidate(parent)
+        candidate = lifecycle.is_orphan_completion_candidate(parent)
     elif status == "deleted":
-        candidate = reconcile.is_orphan_deleted_chain_candidate(parent)
+        candidate = lifecycle.is_orphan_deleted_chain_candidate(parent)
     else:
         candidate = False
     if not candidate:
@@ -927,7 +927,7 @@ def _plan_for_parent(
     parent: dict[str, Any],
     *,
     generation: ChainGenerationService | None = None,
-) -> reconcile.LifecycleRecoveryDecision:
+) -> lifecycle.LifecycleRecoveryDecision:
     """Build the one reconcile plan used by both preview and apply paths."""
     configuration_status, configuration_reason = _configuration_state(hook)
     if configuration_status != "valid":
@@ -937,7 +937,7 @@ def _plan_for_parent(
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
-    return reconcile.build_reconcile_plan(
+    return lifecycle.build_reconcile_plan(
         parent,
         existing_children=existing_children,
         hook=hook,
@@ -988,7 +988,7 @@ def _integrity_request_factory(operation: Any) -> Any:
     modified = str(row.get("modified") or "").strip()
     if not modified:
         raise RuntimeError("integrity target has no modified timestamp")
-    link = reconcile.int_or_default(row.get("link"), 0)
+    link = lifecycle.int_or_default(row.get("link"), 0)
     if link < 0:
         raise RuntimeError("integrity target has an invalid link")
     updates = dict(operation.payload)
@@ -1044,7 +1044,7 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
     snapshot = ChainSnapshot(
         "reconcile-lifecycle-" + str(_UNIT_OF_WORK.mutation_epoch),
         SnapshotCoverage.CHAIN,
-        "reconcile.lifecycle_candidates",
+        "lifecycle.lifecycle_candidates",
         tuple(ChainNode.from_mapping(row) for row in rows),
         configuration.fingerprint,
         True,
@@ -1082,14 +1082,14 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | No
             return row
         if (
             str(row.get("chainID") or "").strip() == lifecycle_plan.identity.chain_id
-            and reconcile.int_or_default(row.get("link"), None) == lifecycle_plan.identity.target_link
+            and lifecycle.int_or_default(row.get("link"), None) == lifecycle_plan.identity.target_link
             and str(row.get("prevLink") or "").strip().lower() == parent_short
         ):
             return row
     return None
 
 
-def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "reconcile.LifecycleRecoveryDecision", hook: Any) -> LifecyclePlan:
+def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "lifecycle.LifecycleRecoveryDecision", hook: Any) -> LifecyclePlan:
     """Ensure a SPAWN_CHILD plan's child payload targets a real, reproducible UUID.
 
     Reconcile may re-run against the same broken chain more than once, and
@@ -1142,7 +1142,7 @@ def _raise_for_lifecycle_outcome(outcome: Any, *, label: str) -> None:
 def _execute_reconcile_lifecycle_plan(
     task_bin: str,
     hook: Any,
-    plan: reconcile.LifecycleRecoveryDecision,
+    plan: lifecycle.LifecycleRecoveryDecision,
     *,
     verified_children: dict[str, dict[str, Any]] | None,
     label: str,
@@ -1187,7 +1187,7 @@ def _execute_reconcile_lifecycle_plan(
     return child_short
 
 
-def _terminal_lifecycle_plan(plan: reconcile.LifecycleRecoveryDecision) -> LifecyclePlan:
+def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> LifecyclePlan:
     """Create the typed terminal plan for a reconcile final/manual decision."""
     parent = plan.parent
     if plan.action == "manual_stop":
@@ -1214,7 +1214,7 @@ def _terminal_lifecycle_plan(plan: reconcile.LifecycleRecoveryDecision) -> Lifec
 def _execute_reconcile_terminal_plan(
     task_bin: str,
     hook: Any,
-    plan: reconcile.LifecycleRecoveryDecision,
+    plan: lifecycle.LifecycleRecoveryDecision,
 ) -> str:
     """Apply a guarded terminal plan through the shared lifecycle application service."""
     lifecycle_plan = _terminal_lifecycle_plan(plan)
@@ -1234,7 +1234,7 @@ def _apply_parent_atomic(
     lease_held: bool = False,
     verified_children: dict[str, dict[str, Any]] | None = None,
     generation: ChainGenerationService | None = None,
-) -> tuple[reconcile.LifecycleRecoveryDecision, str]:
+) -> tuple[lifecycle.LifecycleRecoveryDecision, str]:
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
@@ -1245,7 +1245,7 @@ def _apply_parent_atomic(
         with _parent_apply_lock(taskdata, parent_uuid) as acquired:
             if not acquired:
                 _LOCK_STATS["parent_busy"] += 1
-                raise RuntimeError(f"parent reconcile lock busy: {reconcile.short_uuid(parent_uuid)}")
+                raise RuntimeError(f"parent reconcile lock busy: {lifecycle.short_uuid(parent_uuid)}")
             configuration_status, drift_reason = _configuration_state(hook)
             if configuration_status != "valid":
                 raise _ConfigurationDrift(drift_reason)
@@ -1285,16 +1285,16 @@ def _apply_parent_atomic(
             return plan, ""
 
 
-def _recovery_error(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
-    return reconcile.LifecycleRecoveryDecision(
+def _recovery_error(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+    return lifecycle.LifecycleRecoveryDecision(
         "error",
         parent,
-        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
 
-def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
+def _recovery_terminal(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
     """Classify an expired-but-still-pending child as resumable, not corrupt."""
     if reason.endswith("native until has already elapsed"):
         return _recovery_partial(
@@ -1304,26 +1304,26 @@ def _recovery_terminal(parent: dict[str, Any], reason: str) -> reconcile.Lifecyc
     return _recovery_error(parent, reason)
 
 
-def _recovery_partial(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
-    return reconcile.LifecycleRecoveryDecision(
+def _recovery_partial(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+    return lifecycle.LifecycleRecoveryDecision(
         "partial",
         parent,
-        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
 
-def _recovery_manual_review(parent: dict[str, Any], reason: str) -> reconcile.LifecycleRecoveryDecision:
-    return reconcile.LifecycleRecoveryDecision(
+def _recovery_manual_review(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+    return lifecycle.LifecycleRecoveryDecision(
         "manual_review",
         parent,
-        reconcile.int_or_default(parent.get("link"), 1) + 1,
+        lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
 
 def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> str:
-    _child_short, child_error = reconcile.resolve_existing_child(
+    _child_short, child_error = lifecycle.resolve_existing_child(
         parent,
         [child],
         include_deleted=True,
@@ -1390,7 +1390,7 @@ def _next_recovery_child(
 
 
 def _virtual_expired_child(
-    plan: reconcile.LifecycleRecoveryDecision,
+    plan: lifecycle.LifecycleRecoveryDecision,
     *,
     hook: Any,
     recovery_at: Any,
@@ -1413,7 +1413,7 @@ def _virtual_expired_child(
     child["end"] = until_raw
     child["uuid"] = (
         f"dryrun-{str(child.get('chainID') or 'chain')}-"
-        f"{reconcile.int_or_default(child.get('link'), plan.next_link)}"
+        f"{lifecycle.int_or_default(child.get('link'), plan.next_link)}"
     )
     child.pop("nextLink", None)
     validation_error = _validate_recovery_child(plan.parent, child)
@@ -1433,8 +1433,8 @@ def _reconcile_candidate(
     recovery_at: Any,
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
-) -> list[tuple[reconcile.LifecycleRecoveryDecision, str]]:
-    outcomes: list[tuple[reconcile.LifecycleRecoveryDecision, str]] = []
+) -> list[tuple[lifecycle.LifecycleRecoveryDecision, str]]:
+    outcomes: list[tuple[lifecycle.LifecycleRecoveryDecision, str]] = []
     current = parent
     visited: set[tuple[str, int]] = set()
     expiration_hops = 0
@@ -1443,7 +1443,7 @@ def _reconcile_candidate(
     while True:
         slot = (
             str(current.get("chainID") or "").strip(),
-            reconcile.int_or_default(current.get("link"), 0),
+            lifecycle.int_or_default(current.get("link"), 0),
         )
         if slot in visited:
             outcomes.append((_recovery_error(current, "expiration recovery made no progress"), ""))
@@ -1560,7 +1560,7 @@ def _reconcile_candidate(
         if terminal_error:
             outcomes.append((_recovery_terminal(plan.parent, terminal_error), ""))
             break
-        if not reconcile.is_orphan_deleted_chain_candidate(child):
+        if not lifecycle.is_orphan_deleted_chain_candidate(child):
             break
         current = child
 
@@ -1568,9 +1568,9 @@ def _reconcile_candidate(
 
 
 def _fmt_parent(parent: dict[str, Any]) -> str:
-    uuid = reconcile.short_uuid(parent.get("uuid")) or "????????"
+    uuid = lifecycle.short_uuid(parent.get("uuid")) or "????????"
     chain_id = str(parent.get("chainID") or "?")
-    link = reconcile.int_or_default(parent.get("link"), 0)
+    link = lifecycle.int_or_default(parent.get("link"), 0)
     desc = str(parent.get("description") or "").strip()
     return f"{uuid} chain {chain_id} link {link}" + (f" · {desc}" if desc else "")
 
@@ -1583,8 +1583,8 @@ def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
         print(f"  {key.replace('_', ' ')}: {value}")
 
 
-def _describe_plan(plan: reconcile.LifecycleRecoveryDecision, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
-    evidence = reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local)
+def _describe_plan(plan: lifecycle.LifecycleRecoveryDecision, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
+    evidence = lifecycle.describe_plan(plan, fmt_dt_local=fmt_dt_local)
     child = plan.child if isinstance(plan.child, dict) else {}
     child_until = child.get("until")
     if not child_until:
@@ -1622,14 +1622,14 @@ def _describe_plan(plan: reconcile.LifecycleRecoveryDecision, *, hook: Any, fmt_
 
 
 def _print_plan(
-    plan: reconcile.LifecycleRecoveryDecision,
+    plan: lifecycle.LifecycleRecoveryDecision,
     evidence: dict[str, Any] | None = None,
     *,
     applied_short: str = "",
 ) -> None:
     parent = _fmt_parent(plan.parent)
     if evidence is None:
-        evidence = reconcile.describe_plan(plan)
+        evidence = lifecycle.describe_plan(plan)
     if plan.action == "spawn":
         suffix = f" -> created {applied_short}" if applied_short else ""
         print(_style(f"spawn: {parent}{suffix}", _action_style(plan.action)))
@@ -1640,7 +1640,7 @@ def _print_plan(
         _print_evidence(evidence, ("reason", "next_link", "existing_child"))
     elif plan.action == "legitimate_final":
         suffix = " -> set chain:off" if applied_short else ""
-        label = "terminal" if reconcile.is_terminal_plan(plan) else "final"
+        label = "terminal" if lifecycle.is_terminal_plan(plan) else "final"
         print(_style(f"{label}: {parent} ({plan.reason}){suffix}", _action_style(plan.action)))
         _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
     elif plan.action == "manual_stop":
@@ -1657,7 +1657,7 @@ def _print_plan(
 
 
 def _print_recovery_group(
-    items: list[tuple[reconcile.LifecycleRecoveryDecision, dict[str, Any], str]],
+    items: list[tuple[lifecycle.LifecycleRecoveryDecision, dict[str, Any], str]],
 ) -> None:
     first = items[0][0]
     last, evidence, applied_short = items[-1]
@@ -1665,7 +1665,7 @@ def _print_recovery_group(
     noun = "occurrence" if hops == 1 else "occurrences"
     print(_style(f"recover: {_fmt_parent(first.parent)} -> advanced {hops} {noun}", "cyan"))
     if last.action in {"error", "partial", "legitimate_final", "manual_stop", "stale"}:
-        result = "terminal" if reconcile.is_terminal_plan(last) else last.action.replace("_", " ")
+        result = "terminal" if lifecycle.is_terminal_plan(last) else last.action.replace("_", " ")
         print(_style(f"  result: {result} ({last.reason})", _action_style(last.action)))
         return
     if applied_short:
@@ -1890,10 +1890,10 @@ def main(
             print(_style(line, _action_style(action)))
         for error in native_until_errors:
             print(_style(f"error: native-until: {error}", "red", stream=sys.stderr), file=sys.stderr)
-    plans: list[reconcile.LifecycleRecoveryDecision] = []
+    plans: list[lifecycle.LifecycleRecoveryDecision] = []
     plan_evidence: list[dict[str, Any]] = []
     applied: list[dict[str, Any]] = []
-    outcome_groups: list[list[tuple[reconcile.LifecycleRecoveryDecision, str]]] = []
+    outcome_groups: list[list[tuple[lifecycle.LifecycleRecoveryDecision, str]]] = []
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = _ambiguous_candidate_slots(candidates)
 
@@ -1904,7 +1904,7 @@ def main(
             break
         parent_slot = (
             str(parent.get("chainID") or "").strip(),
-            reconcile.int_or_default(parent.get("link"), 0),
+            lifecycle.int_or_default(parent.get("link"), 0),
         )
         if parent_slot in processed_slots:
             continue
@@ -1945,12 +1945,12 @@ def main(
                     )
                     else "drifted"
                 )
-        rendered: list[tuple[reconcile.LifecycleRecoveryDecision, dict[str, Any], str]] = []
+        rendered: list[tuple[lifecycle.LifecycleRecoveryDecision, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             processed_slots.add(
                 (
                     str(plan.parent.get("chainID") or "").strip(),
-                    reconcile.int_or_default(plan.parent.get("link"), 0),
+                    lifecycle.int_or_default(plan.parent.get("link"), 0),
                 )
             )
             plans.append(plan)
@@ -1962,7 +1962,7 @@ def main(
                 action = "disable_chain" if disabling else plan.action
                 record = {
                     "action": action,
-                    "parent": reconcile.short_uuid(plan.parent.get("uuid")),
+                    "parent": lifecycle.short_uuid(plan.parent.get("uuid")),
                 }
                 if not disabling:
                     record["child"] = applied_short
@@ -2049,7 +2049,7 @@ def main(
         "spawn": sum(1 for p in plans if p.action == "spawn"),
         "backfill_nextlink": sum(1 for p in plans if p.action == "backfill_nextlink"),
         "legitimate_final": sum(1 for p in plans if p.action == "legitimate_final"),
-        "terminal": sum(1 for p in plans if reconcile.is_terminal_plan(p)),
+        "terminal": sum(1 for p in plans if lifecycle.is_terminal_plan(p)),
         "manual_stop": sum(1 for p in plans if p.action == "manual_stop"),
         "stale": sum(1 for p in plans if p.action == "stale"),
         "partial": sum(1 for p in plans if p.action == "partial"),

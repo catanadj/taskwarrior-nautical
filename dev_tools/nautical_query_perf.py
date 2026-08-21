@@ -87,6 +87,20 @@ def _service() -> OccurrenceQueryService:
     return OccurrenceQueryService(uow, core=core)
 
 
+def _batch_service() -> OccurrenceQueryService:
+    rows = tuple(dict(TASK, uuid=f"00000000-0000-0000-0000-{index:012d}", link=index) for index in range(1, 17))
+    repository = _Repository(rows)
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone(timedelta(hours=3)),
+            configuration=SimpleNamespace(fingerprint="query-perf"),
+        ),
+        repository=repository,
+    )
+    return OccurrenceQueryService(uow, core=core)
+
+
 def _read_call_baseline() -> dict[str, int]:
     """Measure the repository reads required by each public selector shape."""
     repository = _Repository((TASK, TASK_BATCH))
@@ -127,6 +141,15 @@ def _request(operation: str = "occurrences") -> OccurrenceQueryRequest:
             "to": "2026-08-24",
             "count": 2,
         }
+    )
+
+
+def _batch_request(*, all_tasks: bool = False) -> OccurrenceQueryRequest:
+    selector = {"all_tasks": True} if all_tasks else {
+        "uuids": [f"00000000-0000-0000-0000-{index:012d}" for index in range(1, 17)]
+    }
+    return OccurrenceQueryRequest.from_mapping(
+        {"selector": selector, "from": "2026-08-24", "to": "2026-08-24", "count": 2}
     )
 
 
@@ -184,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     args = parser.parse_args(argv)
     service = _service()
+    batch_service = _batch_service()
     occurrence_request = _request()
     next_request = _request("next")
     results: dict[str, object] = {
@@ -204,6 +228,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "service_next_warm": _summary(
             _samples(lambda: service.query_next(next_request), args.samples)
+        ),
+        "service_batch_warm": _summary(
+            _samples(lambda: batch_service.query(_batch_request()), args.samples)
+        ),
+        "service_all_active_warm": _summary(
+            _samples(lambda: batch_service.query(_batch_request(all_tasks=True)), args.samples)
         ),
         "repository_read_calls": _read_call_baseline(),
     }

@@ -14,6 +14,7 @@ from .recurrence_context import RecurrenceContext
 from .recurrence_spec import normalize_recurrence_text
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_service import SchedulerService
+from .chain_generation import ChainGenerationService
 from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
 from .query_models import (
     OccurrenceQueryRequest,
@@ -346,6 +347,101 @@ class OccurrenceQueryService:
             results=results,
             status=status,
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+        )
+
+    def _reference_utc(self, task: Mapping[str, Any]) -> datetime:
+        parser = getattr(self._core, "parse_dt_any", None)
+        if not callable(parser):
+            raise QueryServiceError("Nautical datetime parser is unavailable")
+        for field in (("end",) if normalize_recurrence_text(task.get("cp")) else ()) + ("due", "scheduled"):
+            value = task.get(field)
+            if not value:
+                continue
+            parsed = parser(value)
+            if isinstance(parsed, datetime) and parsed.tzinfo is not None and parsed.utcoffset() is not None:
+                return parsed.astimezone(timezone.utc)
+            raise QueryServiceError(f"task {field} is not a valid timezone-aware datetime")
+        raise QueryServiceError("task has no due, scheduled, or completion reference")
+
+    def _query_next_task(self, task: Mapping[str, Any]) -> TaskOccurrenceResult:
+        if task.get("_query_absent"):
+            return TaskOccurrenceResult(None, "absent", failure=_failure("task_absent", "Taskwarrior returned no task", task_uuid=str(task.get("uuid") or "")))
+        if task.get("_query_ambiguous"):
+            return TaskOccurrenceResult(None, "invalid", failure=_failure("ambiguous_uuid", "UUID selector matched more than one task", task_uuid=str(task.get("uuid") or "")))
+        identity: TaskIdentity | None = None
+        try:
+            identity = _task_identity(task)
+            context = self._context_for(task)
+            reference_utc = self._reference_utc(task)
+            if normalize_recurrence_text(task.get("cp")):
+                parent = dict(task)
+                if not parent.get("end"):
+                    formatter = getattr(self._core, "fmt_isoz", None)
+                    if not callable(formatter):
+                        raise QueryServiceError("Nautical datetime formatter is unavailable")
+                    parent["end"] = formatter(reference_utc)
+                child_due, _metadata = ChainGenerationService.from_core(self._core).compute_cp_child_due(parent)
+                if child_due is None:
+                    return TaskOccurrenceResult(identity, "empty")
+                local = child_due.astimezone(self._timezone)
+                record = OccurrenceRecord(
+                    local=local,
+                    utc=child_due.astimezone(timezone.utc),
+                    timezone=_timezone_name(self._timezone),
+                    source="cp",
+                )
+                return TaskOccurrenceResult(identity, "found", (record,))
+            scheduler = SchedulerService.from_task(task, context=context)
+            identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
+            result = scheduler.collect_request(
+                OccurrenceRangeRequest(
+                    cursor=OccurrenceCursor(
+                        reference_utc.astimezone(self._timezone),
+                        inclusive=False,
+                        timezone=self._timezone,
+                    ),
+                    limit=1,
+                    omission_policy="exclude",
+                )
+            )
+            if result.failure is not None:
+                return TaskOccurrenceResult(
+                    identity,
+                    result.status,
+                    failure=_failure("scheduler_unavailable", result.failure.reason, task_uuid=identity.uuid, retryable=result.status == "unavailable"),
+                )
+            records = self._records(result, _timezone_name(self._timezone))
+            return TaskOccurrenceResult(identity, result.status, records, terminal=_terminal(result))
+        except (QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
+            return TaskOccurrenceResult(
+                identity,
+                "invalid",
+                failure=_failure("next_projection_invalid", str(exc), task_uuid=identity.uuid if identity else str(task.get("uuid") or "")),
+            )
+
+    def query_next(self, request: OccurrenceQueryRequest) -> OccurrenceQueryResponse:
+        if not isinstance(request, OccurrenceQueryRequest) or request.operation != "next":
+            raise QueryServiceError("next query requires a request with operation 'next'")
+        rows = self._rows_for(request)
+        if isinstance(rows, QueryFailure):
+            return OccurrenceQueryResponse(
+                request=request,
+                timezone=_timezone_name(self._timezone),
+                status="unavailable",
+                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                failure=rows,
+                schema="nautical.query.next",
+            )
+        results = tuple(self._query_next_task(row) for row in rows)
+        statuses = {item.status for item in results}
+        status = "found" if "found" in statuses else "unavailable" if "unavailable" in statuses else "invalid" if "invalid" in statuses else "absent" if "absent" in statuses else "empty"
+        return OccurrenceQueryResponse(
+            request=request,
+            timezone=_timezone_name(self._timezone),
+            results=results,
+            status=status,
+            configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            schema="nautical.query.next",
         )
 
 

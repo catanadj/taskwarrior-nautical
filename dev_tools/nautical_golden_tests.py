@@ -32392,7 +32392,7 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     expect(exit_code == 0, "capability discovery failed")
     expect(payload["schema"] == "nautical.query.capabilities", "capability schema is incorrect")
     expect(payload["version"] == 1, "capability version is incorrect")
-    expect(payload["operations"] == ["occurrences"], "capability operation list is unstable")
+    expect(payload["operations"] == ["occurrences", "next"], "capability operation list is unstable")
     expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
 
 
@@ -32610,6 +32610,67 @@ def test_query_service_batches_multiple_uuid_reads():
     expect(response.results[1].status == "absent", "batched missing UUID was not absent")
 
 
+def test_query_next_projects_anchor_and_cp_without_mutation():
+    """The next operation uses due/scheduled or completion references read-only."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    anchor_task = {
+        "uuid": "00000000-0000-0000-0000-000000000006",
+        "chainID": "query-next-anchor",
+        "link": 1,
+        "description": "Next anchor",
+        "anchor": "w:mon..sun@t=04:30",
+        "anchor_mode": "skip",
+        "due": "20260824T013000Z",
+    }
+    cp_task = {
+        "uuid": "00000000-0000-0000-0000-000000000007",
+        "chainID": "query-next-cp",
+        "link": 1,
+        "description": "Next cp",
+        "cp": "1d",
+        "due": "20260824T013000Z",
+    }
+
+    class _Repository:
+        def broad_snapshot(self, **kwargs):
+            del kwargs
+            class _Snapshot:
+                def uuid_matches(self, value):
+                    return (anchor_task,) if value.endswith("006") else (cp_task,)
+            return Found(_Snapshot(), "broad:query:uuids")
+
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(anchor_task if value.endswith("006") else cp_task, f"uuid:{value}")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone(timedelta(hours=3)),
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "operation": "next",
+            "selector": {"uuids": [anchor_task["uuid"], cp_task["uuid"]]},
+            "from": "2026-08-24",
+            "count": 1,
+        }
+    )
+    response = OccurrenceQueryService(uow, core=core).query_next(request)
+    expect(response.schema == "nautical.query.next", "next response schema is incorrect")
+    expect(response.status == "found", "next projection did not find a successor")
+    expect(len(response.results) == 2 and all(item.status == "found" for item in response.results), "next projection lost a task")
+    expect(response.results[0].occurrences[0].source == "anchor", "anchor next projection source is incorrect")
+    expect(response.results[1].occurrences[0].source == "cp", "CP next projection source is incorrect")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
@@ -32621,6 +32682,7 @@ TESTS.extend([
     test_query_installed_layout_runs_outside_checkout,
     test_query_service_all_selector_excludes_non_recurrence_rows,
     test_query_service_batches_multiple_uuid_reads,
+    test_query_next_projects_anchor_and_cp_without_mutation,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

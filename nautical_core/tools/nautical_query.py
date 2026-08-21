@@ -23,6 +23,8 @@ from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
     OCCURRENCES_SCHEMA,
     CAPABILITIES_SCHEMA,
+    NEXT_SCHEMA,
+    NEXT_OPERATION,
     DEFAULT_MAX_FILE_SKIPS,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_MAX_OCCURRENCES,
@@ -41,13 +43,13 @@ from nautical_core.query_service import OccurrenceQueryService  # noqa: E402
 from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 
 
-def _error_payload(code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
+def _error_payload(code: str, message: str, *, retryable: bool = False, operation: str = "occurrences") -> dict[str, Any]:
     return {
-        "schema": OCCURRENCES_SCHEMA,
+        "schema": NEXT_SCHEMA if operation == NEXT_OPERATION else OCCURRENCES_SCHEMA,
         "version": QUERY_API_VERSION,
-        "operation": "occurrences",
+        "operation": operation,
         "status": "invalid" if not retryable else "unavailable",
-        "basis": "schedule",
+        "basis": "next" if operation == NEXT_OPERATION else "schedule",
         "timezone": None,
         "query": None,
         "configuration_fingerprint": None,
@@ -68,7 +70,7 @@ def _capabilities_payload() -> dict[str, Any]:
         "schema": CAPABILITIES_SCHEMA,
         "version": QUERY_API_VERSION,
         "status": "ok",
-        "operations": ["occurrences"],
+        "operations": ["occurrences", "next"],
         "selectors": ["uuid", "chain_id", "all"],
         "omission_policies": ["exclude", "include", "report"],
         "timestamps": {
@@ -148,7 +150,7 @@ def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nautical's versioned read-only query API")
-    parser.add_argument("operation", choices=("capabilities", "occurrences"), help="query operation")
+    parser.add_argument("operation", choices=("capabilities", "occurrences", "next"), help="query operation")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--request", help="inline JSON request object, or '-' for stdin")
     source.add_argument("--request-file", help="path to a JSON request object")
@@ -201,10 +203,11 @@ def main(argv: list[str] | None = None) -> int:
                     "from": start,
                     "to": args.to,
                     "count": args.count,
-                    "max_total_occurrences": args.max_total_occurrences,
                     "start_inclusive": args.after is None,
                     "omission_policy": args.omission_policy,
                 }
+                if args.max_total_occurrences is not None:
+                    mapping["max_total_occurrences"] = args.max_total_occurrences
         mapping.setdefault("operation", args.operation)
         request = OccurrenceQueryRequest.from_mapping(mapping)
         unit_of_work = build_operator_uow(
@@ -213,15 +216,16 @@ def main(argv: list[str] | None = None) -> int:
             env=os.environ,
             access=IntegrationAccess.READ_ONLY,
         )
-        response = OccurrenceQueryService(unit_of_work, core=core).query(request)
+        service = OccurrenceQueryService(unit_of_work, core=core)
+        response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
         return _emit(response.to_dict(), exit_code=exit_code)
     except QueryContractError as exc:
         _diagnostic(str(exc))
-        return _emit(_error_payload("invalid_request", str(exc)), exit_code=2)
+        return _emit(_error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)
     except (OSError, RuntimeError, ValueError) as exc:
         _diagnostic(str(exc))
-        return _emit(_error_payload("query_unavailable", str(exc), retryable=True), exit_code=3)
+        return _emit(_error_payload("query_unavailable", str(exc), retryable=True, operation=args.operation), exit_code=3)
 
 
 if __name__ == "__main__":

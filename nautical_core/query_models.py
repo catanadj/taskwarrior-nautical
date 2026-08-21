@@ -14,8 +14,10 @@ from typing import Any, Literal, Mapping
 
 QUERY_API_VERSION = 1
 OCCURRENCES_SCHEMA = "nautical.query.occurrences"
+NEXT_SCHEMA = "nautical.query.next"
 CAPABILITIES_SCHEMA = "nautical.query.capabilities"
 OCCURRENCE_OPERATION = "occurrences"
+NEXT_OPERATION = "next"
 
 DEFAULT_MAX_TASKS = 100
 DEFAULT_MAX_OCCURRENCES = 1000
@@ -210,7 +212,7 @@ class OccurrenceQueryRequest:
             normalized_limits[field] = _positive_int(value, field, maximum)
         if isinstance(self.version, bool) or self.version != QUERY_API_VERSION:
             raise QueryContractError(f"unsupported query API version: {self.version!r}")
-        if self.operation != OCCURRENCE_OPERATION:
+        if self.operation not in {OCCURRENCE_OPERATION, NEXT_OPERATION}:
             raise QueryContractError(f"unsupported query operation: {self.operation!r}")
         object.__setattr__(self, "count", count)
         object.__setattr__(self, "start_inclusive", start_inclusive)
@@ -420,7 +422,8 @@ class OccurrenceQueryResponse:
             raise QueryContractError("query response contains an invalid task result")
         if self.failure is not None and not isinstance(self.failure, QueryFailure):
             raise QueryContractError("query response failure is invalid")
-        if self.schema != OCCURRENCES_SCHEMA or self.version != QUERY_API_VERSION:
+        expected_schema = OCCURRENCES_SCHEMA if self.request.operation == OCCURRENCE_OPERATION else NEXT_SCHEMA
+        if self.schema != expected_schema or self.version != QUERY_API_VERSION:
             raise QueryContractError("unsupported occurrence response schema")
 
     def to_dict(self) -> dict[str, Any]:
@@ -429,7 +432,7 @@ class OccurrenceQueryResponse:
             "version": self.version,
             "operation": self.request.operation,
             "status": self.status,
-            "basis": "schedule",
+            "basis": "schedule" if self.request.operation == OCCURRENCE_OPERATION else "next",
             "timezone": self.timezone,
             "query": self.request.to_dict(),
             "configuration_fingerprint": self.configuration_fingerprint or None,
@@ -451,6 +454,8 @@ __all__ = (
     "HARD_MAX_TOTAL_OCCURRENCES",
     "HARD_MAX_TASKS",
     "OCCURRENCES_SCHEMA",
+    "NEXT_SCHEMA",
+    "NEXT_OPERATION",
     "OccurrenceQueryRequest",
     "OccurrenceQueryResponse",
     "OccurrenceRecord",

@@ -14,6 +14,7 @@ from nautical_core.lifecycle_models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
+    LifecycleRecoveryDecision,
     LifecyclePlan,
     ParentGuard,
     TaskSnapshot,
@@ -55,19 +56,6 @@ def _generation_service(hook: Any = None) -> ChainGenerationService:
 def scheduling_error_message(exc: BaseException) -> str:
     """Keep astronomy failures actionable in dry-run and apply plans."""
     return astronomy.scheduling_error_message(exc)
-
-
-@dataclass(frozen=True)
-class LifecycleRecoveryDecision:
-    action: str
-    parent: dict[str, Any]
-    next_link: int
-    reason: str
-    child: dict[str, Any] | None = None
-    child_short: str = ""
-    child_due: Any = None
-    terminal_kind: str | None = None
-    lifecycle_plan: LifecyclePlan | None = None
 
 
 def is_terminal_plan(plan: LifecycleRecoveryDecision) -> bool:

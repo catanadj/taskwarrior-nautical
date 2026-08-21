@@ -31,6 +31,21 @@ class LifecycleEvent(str, Enum):
     CHAIN_UNTIL = "chain_until"
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleRecoveryDecision:
+    """Typed successor/expiration decision consumed by reconcile and UI."""
+
+    action: str
+    parent: dict[str, Any]
+    next_link: int
+    reason: str
+    child: dict[str, Any] | None = None
+    child_short: str = ""
+    child_due: Any = None
+    terminal_kind: str | None = None
+    lifecycle_plan: "LifecyclePlan | None" = None
+
+
 class LifecycleAction(str, Enum):
     NOOP = "noop"
     UPDATE_PARENT = "update_parent"
@@ -607,6 +622,7 @@ __all__ = (
     "LifecycleOutcome",
     "LifecycleOutcomeKind",
     "LifecyclePlan",
+    "LifecycleRecoveryDecision",
     "ParentGuard",
     "TaskLifecycleState",
     "TaskSnapshot",

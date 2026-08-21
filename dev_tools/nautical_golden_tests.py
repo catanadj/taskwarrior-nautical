@@ -1588,6 +1588,39 @@ def test_chain_integrity_context_keeps_outbox_evidence_separate():
     expect(rejected.coverage is OutboxCoverage.UNAVAILABLE, "outbox repository failure was not unavailable")
 
 
+def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
+    """The planner emits one guarded link plan and refuses incomplete evidence."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_invariants
+    from nautical_core.chain_repair_planner import IntegrityRepairPlanner
+
+    source = ChainNode.from_mapping({
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
+        "status": "pending", "chainID": "planner-chain", "link": 1,
+        "anchor": "w:mon", "nextLink": "bbbbbbbb",
+    })
+    target = ChainNode.from_mapping({
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
+        "status": "pending", "chainID": "planner-chain", "link": 2,
+    })
+    graph = ChainGraph.from_snapshot(ChainSnapshot("planner-snapshot", SnapshotCoverage.CHAIN, "test", (target, source)))
+    context = IntegrityContext(graph, OutboxSnapshot.from_records(()), "cfg-planner")
+    findings = evaluate_invariants(graph)
+    result = IntegrityRepairPlanner().plan(context, findings)
+    expect(len(result.plans) == 1 and not result.refusals, "unique reciprocal repair was not planned")
+    operation = result.plans[0].operations[0]
+    expect(operation.payload == (("prevLink", source.task_uuid),), "repair payload was not explicit")
+    repeat = IntegrityRepairPlanner().plan(context, findings)
+    expect(result.plans == repeat.plans, "repair plan identity was not deterministic")
+
+    partial_graph = ChainGraph.from_snapshot(ChainSnapshot("partial-planner", SnapshotCoverage.CANDIDATES, "test", (target, source)))
+    partial_context = IntegrityContext(partial_graph, OutboxSnapshot.from_records(()))
+    partial = IntegrityRepairPlanner().plan(partial_context, findings)
+    expect(not partial.plans and partial.refusals, "partial evidence produced an automatic plan")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -32162,6 +32195,7 @@ TESTS = [
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_context_keeps_outbox_evidence_separate,
+    test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

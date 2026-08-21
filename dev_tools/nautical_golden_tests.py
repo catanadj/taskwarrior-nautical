@@ -1645,6 +1645,40 @@ def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
     expect(any(plan.reason_code == "missing_link" for plan in slot_result.plans), "missing link was not planned")
 
 
+def test_chain_integrity_application_stays_on_typed_mutation_boundary():
+    """Application delegates metadata plans and refuses unregistered operation kinds."""
+    from types import SimpleNamespace
+
+    from nautical_core.chain_integrity_application import IntegrityApplicationService
+    from nautical_core.chain_integrity_models import (
+        IntegrityOperation,
+        IntegrityRepairPlan,
+        RepairOperationKind,
+        RepairSafety,
+    )
+    from nautical_core.integration_models import MutationOutcomeKind
+
+    operation = IntegrityOperation(
+        "application-op",
+        RepairOperationKind.LINK_REPAIR,
+        "application-chain",
+        "aaaaaaaa-0000-0000-0000-000000000941",
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",),
+        ("link is reciprocal",),
+    )
+    plan = IntegrityRepairPlan(
+        "application-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "reciprocal_link", "test application", (operation,), "cfg-application",
+    )
+    results = IntegrityApplicationService().apply(
+        plan,
+        SimpleNamespace(),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(results[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unregistered mutation was applied")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -32220,6 +32254,7 @@ TESTS = [
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_context_keeps_outbox_evidence_separate,
     test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs,
+    test_chain_integrity_application_stays_on_typed_mutation_boundary,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

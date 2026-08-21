@@ -48,6 +48,7 @@ class IntegrityEngineResult:
     plans: tuple[IntegrityRepairPlan, ...] = ()
     refusals: tuple[PlannerRefusal, ...] = ()
     applications: tuple[IntegrityApplicationResult, ...] = ()
+    chain_statuses: tuple[tuple[str, IntegrityReportStatus], ...] = ()
     reason: str = ""
 
 
@@ -135,22 +136,63 @@ class ChainIntegrityEngine:
         """Audit one already-authoritative snapshot without another export."""
         if not isinstance(snapshot, ChainSnapshot):
             raise TypeError("integrity engine requires a ChainSnapshot")
-        try:
-            graph = ChainGraph.from_snapshot(snapshot)
-        except Exception as exc:
-            return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, snapshot, reason=str(exc))
-        context = IntegrityContext(
-            graph,
-            load_outbox_snapshot(outbox_repository),
-            self._configuration_fingerprint,
-            mutation_epoch,
-        )
-        from .chain_invariants import evaluate_context
+        outbox = load_outbox_snapshot(outbox_repository)
+        groups: dict[str, list] = {}
+        for row in snapshot.rows:
+            groups.setdefault(row.chain_id, []).append(row)
+        if not groups:
+            groups[""] = []
+        findings: list[IntegrityFinding] = []
+        plans: list[IntegrityRepairPlan] = []
+        refusals: list[PlannerRefusal] = []
+        statuses: list[tuple[str, IntegrityReportStatus]] = []
+        for chain_id in sorted(groups):
+            scoped = ChainSnapshot(
+                f"{snapshot.snapshot_id}:{chain_id or 'unassigned'}",
+                snapshot.coverage,
+                snapshot.source,
+                tuple(groups[chain_id]),
+                snapshot.configuration_fingerprint,
+                snapshot.complete_chain_history,
+                snapshot.reason,
+            )
+            try:
+                graph = ChainGraph.from_snapshot(scoped)
+                context = IntegrityContext(
+                    graph, outbox, self._configuration_fingerprint, mutation_epoch,
+                )
+                from .chain_invariants import evaluate_context
 
-        findings = evaluate_context(context)
-        planning: IntegrityPlanningResult = self._planner.plan(context, findings)
-        status = self._status(findings, planning)
-        return IntegrityEngineResult(status, snapshot, findings, planning.plans, planning.refusals)
+                local_findings = evaluate_context(context)
+                planning: IntegrityPlanningResult = self._planner.plan(context, local_findings)
+                local_status = self._status(local_findings, planning)
+            except Exception as exc:
+                local_findings = ()
+                planning = IntegrityPlanningResult((), ())
+                local_status = IntegrityReportStatus.UNAVAILABLE
+                reason = str(exc).strip() or type(exc).__name__
+                return IntegrityEngineResult(
+                    IntegrityReportStatus.UNAVAILABLE,
+                    snapshot,
+                    tuple(findings),
+                    tuple(plans),
+                    tuple(refusals),
+                    chain_statuses=tuple(statuses) + ((chain_id, local_status),),
+                    reason=reason,
+                )
+            findings.extend(local_findings)
+            plans.extend(planning.plans)
+            refusals.extend(planning.refusals)
+            statuses.append((chain_id, local_status))
+        status = self._aggregate_status(tuple(statuses), tuple(plans), tuple(findings))
+        return IntegrityEngineResult(
+            status,
+            snapshot,
+            tuple(findings),
+            tuple(plans),
+            tuple(refusals),
+            chain_statuses=tuple(statuses),
+        )
 
     def apply(
         self,
@@ -187,7 +229,12 @@ class ChainIntegrityEngine:
             ))
         return IntegrityEngineResult(
             self._application_status(applications, result.status), result.snapshot,
-            result.findings, result.plans, result.refusals, tuple(applications), result.reason,
+            result.findings,
+            result.plans,
+            result.refusals,
+            tuple(applications),
+            result.chain_statuses,
+            result.reason,
         )
 
     def drain(
@@ -225,6 +272,23 @@ class ChainIntegrityEngine:
             return IntegrityReportStatus.MANUAL_REVIEW
         if planning.plans or findings:
             return IntegrityReportStatus.REPAIRABLE
+        return IntegrityReportStatus.HEALTHY
+
+    @staticmethod
+    def _aggregate_status(
+        statuses: tuple[tuple[str, IntegrityReportStatus], ...],
+        plans: tuple[IntegrityRepairPlan, ...],
+        findings: tuple[IntegrityFinding, ...],
+    ) -> IntegrityReportStatus:
+        values = {status for _chain, status in statuses}
+        if values and values <= {IntegrityReportStatus.HEALTHY, IntegrityReportStatus.REPAIRABLE}:
+            return IntegrityReportStatus.REPAIRABLE if plans or findings else IntegrityReportStatus.HEALTHY
+        if IntegrityReportStatus.REPAIRABLE in values or plans:
+            return IntegrityReportStatus.REPAIRABLE
+        if IntegrityReportStatus.MANUAL_REVIEW in values:
+            return IntegrityReportStatus.MANUAL_REVIEW
+        if IntegrityReportStatus.UNAVAILABLE in values:
+            return IntegrityReportStatus.UNAVAILABLE
         return IntegrityReportStatus.HEALTHY
 
     @staticmethod

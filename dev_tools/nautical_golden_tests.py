@@ -1425,6 +1425,11 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     invalid = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
     expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
 
+    unit.repository.response = Found(authoritative, "broad:uuid")
+    uuid_read = service.collect(IntegritySnapshotRequest.uuid(rows[0]["uuid"], refresh=True))
+    expect(isinstance(uuid_read, Found), "UUID integrity scope was not collected")
+    expect(unit.repository.calls == 6, "UUID scope did not use the shared snapshot provider")
+
 
 def test_chain_integrity_engine_owns_audit_and_empty_drain():
     """The engine composes typed evidence and owns the integrity drain boundary."""

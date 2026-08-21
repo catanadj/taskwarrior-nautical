@@ -41,6 +41,7 @@ class IntegritySnapshotKind(str, Enum):
 
     CANDIDATES = "candidates"
     CHAIN = "chain"
+    UUID = "uuid"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class IntegritySnapshotRequest:
 
     kind: IntegritySnapshotKind
     chain_id: str = ""
+    task_uuid: str = ""
     statuses: tuple[str, ...] = ALL_TASK_STATUSES
     complete_chain_history: bool = False
     refresh: bool = False
@@ -59,13 +61,17 @@ class IntegritySnapshotRequest:
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid integrity snapshot kind") from exc
         chain_id = str(self.chain_id or "").strip()
+        uuid_value = str(self.task_uuid or "").strip()
         if kind is IntegritySnapshotKind.CHAIN and not chain_id:
             raise ValueError("chain snapshot requires a chainID")
+        if kind is IntegritySnapshotKind.UUID and not uuid_value:
+            raise ValueError("UUID snapshot requires a task UUID")
         statuses = tuple(sorted({str(status).strip().lower() for status in self.statuses if str(status).strip()}))
         if not statuses:
             raise ValueError("integrity snapshot requires statuses")
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "chain_id", chain_id)
+        object.__setattr__(self, "task_uuid", uuid_value)
         object.__setattr__(self, "statuses", statuses)
         object.__setattr__(self, "complete_chain_history", bool(self.complete_chain_history))
         object.__setattr__(self, "refresh", bool(self.refresh))
@@ -93,12 +99,25 @@ class IntegritySnapshotRequest:
         return cls(IntegritySnapshotKind.CHAIN, chain_id=str(chain_id), statuses=tuple(statuses),
                    complete_chain_history=complete_chain_history, refresh=refresh)
 
+    @classmethod
+    def uuid(
+        cls,
+        uuid_value: str,
+        *,
+        statuses: Sequence[str] = ALL_TASK_STATUSES,
+        complete_chain_history: bool = False,
+        refresh: bool = False,
+    ) -> "IntegritySnapshotRequest":
+        return cls(IntegritySnapshotKind.UUID, task_uuid=str(uuid_value), statuses=tuple(statuses),
+                   complete_chain_history=complete_chain_history, refresh=refresh)
+
 
 def _snapshot_id(request: IntegritySnapshotRequest, rows: tuple[dict[str, object], ...], fingerprint: str) -> str:
     payload = {
         "request": {
             "kind": request.kind.value,
             "chain_id": request.chain_id,
+            "uuid": request.task_uuid,
             "statuses": request.statuses,
             "complete_chain_history": request.complete_chain_history,
         },
@@ -151,6 +170,9 @@ class ChainSnapshotService:
         if request.kind is IntegritySnapshotKind.CHAIN:
             filters: tuple[str, ...] = (f"chainID:{request.chain_id}",)
             identity = f"chain:{request.chain_id}"
+        elif request.kind is IntegritySnapshotKind.UUID:
+            filters = (f"uuid:{request.task_uuid}",)
+            identity = f"uuid:{request.task_uuid}"
         else:
             filters = ("chain:on",)
             identity = "chain:on"
@@ -164,7 +186,7 @@ class ChainSnapshotService:
 
     @staticmethod
     def _query(request: IntegritySnapshotRequest) -> str:
-        return f"integrity:{request.kind.value}:{request.chain_id or 'all'}"
+        return f"integrity:{request.kind.value}:{request.chain_id or request.task_uuid or 'all'}"
 
     @staticmethod
     def _empty_snapshot(request: IntegritySnapshotRequest, reason: str) -> ChainSnapshot:

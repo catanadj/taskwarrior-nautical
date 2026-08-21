@@ -115,7 +115,7 @@ class IntegrityApplicationService:
                     persisted.reason,
                 ) for operation in plan.operations)
         for operation in plan.operations:
-            if operation.kind is not RepairOperationKind.METADATA_REPAIR:
+            if operation.kind not in {RepairOperationKind.METADATA_REPAIR, RepairOperationKind.LINK_REPAIR}:
                 results.append(IntegrityApplicationResult(
                     plan.plan_id,
                     operation.operation_id,

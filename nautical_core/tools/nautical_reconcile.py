@@ -967,6 +967,71 @@ def _lifecycle_application_service():
     )
 
 
+def _integrity_request_factory(operation: Any) -> Any:
+    """Build a fresh guarded metadata request for one integrity operation."""
+    if _UNIT_OF_WORK is None:
+        raise RuntimeError("integrity repair requires an integration unit of work")
+    from nautical_core.integration_models import (
+        GuardTimestamp,
+        GuardTimestampField,
+        MetadataRepairPayload,
+        MutationGuard,
+        MutationOperation,
+        MutationRequest,
+    )
+
+    read = _repository().by_uuid(operation.target_uuid, refresh=True)
+    row = _read_value(read, f"integrity target {operation.target_uuid}")
+    if row is None:
+        raise RuntimeError(f"integrity target {operation.target_uuid} is unavailable")
+    row = dict(row)
+    modified = str(row.get("modified") or "").strip()
+    if not modified:
+        raise RuntimeError("integrity target has no modified timestamp")
+    link = reconcile.int_or_default(row.get("link"), 0)
+    if link < 0:
+        raise RuntimeError("integrity target has an invalid link")
+    updates = dict(operation.payload)
+    expected = {key: row.get(key) for key in updates}
+    guard = MutationGuard(
+        task_uuid=str(row.get("uuid") or operation.target_uuid),
+        status=str(row.get("status") or "pending"),
+        chain_id=str(row.get("chainID") or operation.chain_id),
+        link=link,
+        recurrence_identity=recurrence_fingerprint(row),
+        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+        expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
+        chain=str(row.get("chain") or "on"),
+    )
+    return MutationRequest(
+        MutationOperation.METADATA_REPAIR,
+        guard,
+        MetadataRepairPayload.from_mapping(guard.task_uuid, updates, expected=expected),
+    )
+
+
+def _drain_integrity_work() -> tuple[Any, ...]:
+    """Drain only integrity work through the chain engine's typed boundary."""
+    if _UNIT_OF_WORK is None:
+        raise RuntimeError("integrity drain requires an integration unit of work")
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_snapshot import ChainSnapshotService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    configuration = _UNIT_OF_WORK.context.configuration
+    engine = ChainIntegrityEngine(
+        ChainSnapshotService(_UNIT_OF_WORK, configuration_fingerprint=configuration.fingerprint),
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
+    return engine.drain(
+        LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+        owner=f"reconcile-integrity-{os.getpid()}",
+        executor=TaskwarriorMutationService(_UNIT_OF_WORK),
+        request_factory=_integrity_request_factory,
+    )
+
+
 def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | None:
     """Find a task already occupying this exact chain position, by uuid or
     by (chainID, link, prevLink) match, regardless of whether it carries the
@@ -1691,6 +1756,18 @@ def main(
     except Exception as exc:
         return _startup_failure(args, "chain_generation", exc)
     configuration_status, configuration_drift_reason = _configuration_state(hook)
+    integrity_drain_results: tuple[Any, ...] = ()
+    if args.apply and configuration_status == "valid":
+        try:
+            integrity_drain_results = _drain_integrity_work()
+        except Exception as exc:
+            configuration_status = "unavailable"
+            configuration_drift_reason = f"integrity drain unavailable: {type(exc).__name__}: {exc}"
+            if not args.json:
+                print(_style(f"warning: integrity drain deferred: {configuration_drift_reason}", "yellow"))
+        for item in integrity_drain_results:
+            if not args.json and item.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
+                print(_style(f"error: integrity: {item.reason or item.kind.value}", "red", stream=sys.stderr), file=sys.stderr)
     native_until_audit_warning = ""
     native_until_audit_status = "unavailable" if configuration_status != "valid" else "valid"
     if configuration_status != "valid":
@@ -1861,6 +1938,7 @@ def main(
         or native_until_manual_review > 0
         or native_until_audit_skipped > 0
         or bool(configuration_drift_reason)
+        or any(item.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED} for item in integrity_drain_results)
     )
     plan_errors = sum(1 for plan in plans if plan.action == "error")
     native_until_error_count = len(native_until_errors)
@@ -1919,6 +1997,15 @@ def main(
         "native_until_manual_review": native_until_manual_review,
         "native_until_audit_skipped": native_until_audit_skipped,
         "native_until_audit_status": native_until_audit_status,
+        "integrity_drain": [
+            {
+                "plan_id": item.plan_id,
+                "operation_id": item.operation_id,
+                "status": item.kind.value,
+                "reason": item.reason,
+            }
+            for item in integrity_drain_results
+        ],
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),

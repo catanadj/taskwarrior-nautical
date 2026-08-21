@@ -32422,6 +32422,9 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     expect(payload["version"] == 1, "capability version is incorrect")
     expect(payload["operations"] == ["occurrences", "next"], "capability operation list is unstable")
     expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
+    guide = payload.get("guide", {})
+    expect("cp" in guide.get("concepts", {}) and "anchor" in guide.get("concepts", {}), "capability guide omitted core concepts")
+    expect(any("query occurrences" in item for item in guide.get("quick_start", [])), "capability guide omitted a query example")
 
 
 def test_query_process_boundary_emits_one_json_document():

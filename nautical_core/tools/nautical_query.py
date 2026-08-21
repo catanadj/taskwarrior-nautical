@@ -105,6 +105,31 @@ def _capabilities_payload() -> dict[str, Any]:
         "providers": {
             "astronomy": bool(importlib.util.find_spec("astral")),
         },
+        "guide": {
+            "intro": (
+                "Nautical adds recurrence rules to Taskwarrior. An anchor describes "
+                "calendar matches; cp (completion period) schedules the next task "
+                "from completion or its end."
+            ),
+            "concepts": {
+                "anchor": "Calendar recurrence, for example w:mon..fri@t=09:00.",
+                "anchor_file": "Dates supplied by one or more files, optionally combined with an anchor.",
+                "cp": "Completion-based recurrence, for example 1d or rand(11d..14d).",
+                "chain": "Nautical links recurring tasks with chainID and link metadata.",
+                "omissions": "Use exclude, include, or report to control omitted calendar matches.",
+            },
+            "quick_start": [
+                "nautical query capabilities",
+                "nautical query occurrences --uuid TASK_UUID --from 2026-08-24 --count 5",
+                "nautical query occurrences --chain-id CHAIN_ID --from 2026-08-24 --count 10",
+                "nautical query occurrences --all --from 2026-08-24 --to 2026-08-31",
+                "nautical query next --uuid TASK_UUID --from 2026-08-24 --count 1",
+            ],
+            "consumer_rule": (
+                "Read the versioned JSON schema, statuses, and failure codes; do not "
+                "import Nautical internals or parse human-readable panels."
+            ),
+        },
         "future_operations": ["next", "inspect", "chains"],
     }
 

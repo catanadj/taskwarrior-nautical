@@ -32350,12 +32350,49 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
 
 
+def test_query_process_boundary_emits_one_json_document():
+    """The managed launcher keeps capability and invalid-request stdout strict."""
+    launcher = os.path.join(ROOT, "nautical")
+    env = dict(os.environ)
+    env.pop("NAUTICAL_DIAG", None)
+    capability = subprocess.run(
+        [sys.executable, launcher, "query", "capabilities"],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    expect(capability.returncode == 0, "capability subprocess returned a failure")
+    expect(len(capability.stdout.splitlines()) == 1, "capability subprocess emitted multiple stdout lines")
+    expect(capability.stderr == "", "capability subprocess contaminated stderr by default")
+    inline = subprocess.run(
+        [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    stdin = subprocess.run(
+        [sys.executable, launcher, "query", "occurrences", "--request", "-"],
+        input="{}",
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    expect(inline.returncode == 2 and stdin.returncode == 2, "invalid query exit code is unstable")
+    expect(inline.stdout == stdin.stdout, "inline and stdin invalid responses differ")
+    expect(len(inline.stdout.splitlines()) == 1, "invalid query emitted multiple stdout lines")
+    json.loads(inline.stdout)
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
     test_query_cli_emits_one_json_document_for_invalid_request,
     test_query_cli_flags_build_the_same_validated_request,
     test_query_capabilities_is_taskwarrior_free_and_versioned,
+    test_query_process_boundary_emits_one_json_document,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

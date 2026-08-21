@@ -1044,6 +1044,47 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def snapshot_records(self) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
+        """Read every validated intent for one immutable integrity snapshot.
+
+        This is deliberately a repository operation: callers do not inspect
+        SQLite rows or reconstruct lifecycle plans themselves.  A poison row
+        makes the complete snapshot rejected rather than silently omitted.
+        """
+        if not self.path.exists():
+            return OutboxResult(OutboxResultKind.APPLIED), ()
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(
+                f"file:{self.path.resolve()}?mode=ro",
+                uri=True,
+                timeout=self.connect_timeout,
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+            if version != OUTBOX_SCHEMA_VERSION:
+                raise LifecycleOutboxError(
+                    f"outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
+                )
+            self._validate_schema(conn)
+            records: list[LifecycleOutboxRecord] = []
+            for row in conn.execute("SELECT * FROM lifecycle_outbox ORDER BY intent_id ASC"):
+                try:
+                    records.append(self._from_row(row))
+                except LifecycleOutboxError as exc:
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {exc}"), ()
+            return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
+        except LifecycleOutboxError as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), ()
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
+        finally:
+            if conn is not None:
+                conn.close()
+
     def prune_acknowledged(
         self,
         *,

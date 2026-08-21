@@ -7,10 +7,14 @@ from enum import Enum
 import hashlib
 import json
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from .chain_graph import ChainGraph
 from .lifecycle_outbox import LifecycleOutboxRecord
+
+
+class _OutboxRepository(Protocol):
+    def snapshot_records(self) -> tuple[object, tuple[LifecycleOutboxRecord, ...]]: ...
 
 
 class OutboxCoverage(str, Enum):
@@ -112,4 +116,18 @@ class IntegrityContext:
         return self.outbox.coverage is OutboxCoverage.COMPLETE
 
 
-__all__ = ["IntegrityContext", "OutboxCoverage", "OutboxSnapshot"]
+def load_outbox_snapshot(repository: _OutboxRepository) -> OutboxSnapshot:
+    """Load outbox evidence through its repository-owned typed boundary."""
+    try:
+        result, records = repository.snapshot_records()
+    except Exception as exc:
+        return OutboxSnapshot.unavailable(f"{type(exc).__name__}: {exc}")
+    if not getattr(result, "ok", False):
+        return OutboxSnapshot.unavailable(str(getattr(result, "reason", "outbox read failed")))
+    try:
+        return OutboxSnapshot.from_records(records)
+    except Exception as exc:
+        return OutboxSnapshot.unavailable(f"invalid outbox snapshot: {type(exc).__name__}: {exc}")
+
+
+__all__ = ["IntegrityContext", "OutboxCoverage", "OutboxSnapshot", "load_outbox_snapshot"]

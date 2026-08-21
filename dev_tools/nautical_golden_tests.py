@@ -1550,7 +1550,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
 def test_chain_integrity_context_keeps_outbox_evidence_separate():
     """Task graph truth and lifecycle intent evidence retain separate provenance."""
     from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot, load_outbox_snapshot
     from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
     from nautical_core.chain_invariants import evaluate_context
 
@@ -1570,6 +1570,20 @@ def test_chain_integrity_context_keeps_outbox_evidence_separate():
         any(item.invariant_id == "outbox.snapshot_available" and item.status.value == "unavailable" for item in findings),
         "unavailable outbox evidence did not produce an unavailable finding",
     )
+
+    class Repository:
+        def snapshot_records(self):
+            return type("Result", (), {"ok": True, "reason": ""})(), ()
+
+    loaded = load_outbox_snapshot(Repository())
+    expect(loaded.coverage is OutboxCoverage.COMPLETE and not loaded.records, "repository outbox snapshot did not load")
+
+    class FailedRepository:
+        def snapshot_records(self):
+            return type("Result", (), {"ok": False, "reason": "database busy"})(), ()
+
+    rejected = load_outbox_snapshot(FailedRepository())
+    expect(rejected.coverage is OutboxCoverage.UNAVAILABLE, "outbox repository failure was not unavailable")
 
 
 def test_integration_command_and_read_models_enforce_contract():

@@ -154,6 +154,16 @@ def evaluate_invariants(
     findings: list[IntegrityFinding] = []
     for rule in sorted(tuple(rules), key=lambda item: item.invariant_id):
         if graph.snapshot.coverage in {SnapshotCoverage.UNAVAILABLE, SnapshotCoverage.TRUNCATED}:
+            findings.append(_finding(
+                graph,
+                rule.invariant_id,
+                FindingStatus.UNAVAILABLE,
+                FindingSeverity.ERROR,
+                None,
+                "snapshot_coverage_unavailable",
+                f"Cannot evaluate {rule.invariant_id}: snapshot coverage is {graph.snapshot.coverage.value}.",
+                expected=(("coverage", rule.required_coverage.value),),
+            ))
             continue
         findings.extend(rule.evaluate(graph))
     unique: dict[tuple[str, str, tuple[str, ...], str], IntegrityFinding] = {}

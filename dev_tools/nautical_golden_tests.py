@@ -1524,6 +1524,12 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(("edge.reciprocal", "non_reciprocal_reference") in ids, "non-reciprocal edge was not reported")
     expect(findings == evaluate_invariants(graph), "invariant output was not deterministic")
 
+    truncated = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-truncated", SnapshotCoverage.TRUNCATED, "test", (ChainNode.from_mapping(first),)
+    ))
+    unavailable = evaluate_invariants(truncated)
+    expect(unavailable and all(item.status.value == "unavailable" for item in unavailable), "truncation did not fail closed")
+
 
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""

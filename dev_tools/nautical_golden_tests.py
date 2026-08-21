@@ -1515,6 +1515,8 @@ def test_chain_graph_is_deterministic_and_preserves_reference_states():
     expect(graph.status_nodes("completed") == (second,), "status index did not resolve")
     expect(graph.reference(first.task_uuid, "nextLink").state is ReferenceState.RESOLVED, "short UUID was not resolved")
     expect(graph.reference(second.task_uuid, "prevLink").target_uuid == first.task_uuid, "full UUID was not resolved")
+    expect(graph.to_dict() == reordered.to_dict(), "equivalent graphs did not serialize deterministically")
+    expect(graph.to_dict()["references"][0]["state"] == "resolved", "serialized reference state was lost")
 
     missing = ChainNode.from_mapping(
         {

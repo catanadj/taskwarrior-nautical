@@ -134,3 +134,34 @@ class ChainGraph:
             (str(task_uuid or "").strip(), normalized_field),
             ChainReference(normalized_field, "", ReferenceState.UNAVAILABLE, reason="node is outside graph"),
         )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return deterministic diagnostic evidence for this immutable graph.
+
+        This is an invocation-local representation for tests and structured
+        diagnostics, not a persistence format.  Nodes and references are
+        sorted independently so equivalent exports produce identical data
+        regardless of Taskwarrior's row ordering.
+        """
+        nodes = tuple(node.to_dict() for node in self.nodes)
+        references = tuple(
+            {
+                "task_uuid": task_uuid,
+                "field": field,
+                "token": reference.token,
+                "state": reference.state.value,
+                "target_uuid": reference.target_uuid,
+                "target_link": reference.target_link,
+                "reason": reference.reason,
+            }
+            for (task_uuid, field), reference in sorted(self.references.items())
+        )
+        return {
+            "snapshot_id": self.snapshot.snapshot_id,
+            "coverage": self.snapshot.coverage.value,
+            "source": self.snapshot.source,
+            "configuration_fingerprint": self.snapshot.configuration_fingerprint,
+            "complete_chain_history": self.snapshot.complete_chain_history,
+            "nodes": nodes,
+            "references": references,
+        }

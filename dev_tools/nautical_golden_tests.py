@@ -7087,6 +7087,29 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
         expect(repaired.get("operation") == "repair", f"stale launcher was not repaired: {repaired!r}")
         expect(launcher.read_bytes() == (Path(ROOT) / "nautical").read_bytes(), "repair retained a stale launcher")
 
+        command_path = Path(td) / "bin" / "nautical"
+        command_install = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=Path(td) / "command-taskdata",
+            release_id="command-release",
+            smoke=False,
+            launcher_path=command_path,
+        )
+        expect(command_install.get("operation") == "install", f"command install failed: {command_install!r}")
+        expect(command_path.is_symlink(), "user command launcher was not created as a symlink")
+        expect(command_path.resolve() == (Path(td) / "command-taskdata" / "nautical").resolve(), "command launcher points to the wrong target")
+
+        command_path.unlink()
+        command_repair = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=Path(td) / "command-taskdata",
+            release_id="command-release",
+            smoke=False,
+            launcher_path=command_path,
+        )
+        expect(command_repair.get("operation") == "repair", f"missing command launcher was not repaired: {command_repair!r}")
+        expect(command_path.is_symlink(), "repair did not recreate the user command launcher")
+
 
 def test_installer_upgrade_rollback_restores_active_runtime():
     """A failed upgrade should restore its pointer and every managed wrapper."""

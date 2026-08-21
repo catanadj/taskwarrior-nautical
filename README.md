@@ -39,15 +39,20 @@ complete runtime before switching releases, keeps the previous release
 available during upgrades, and leaves an already-current installation
 unchanged.
 
-Register Nautical's Taskwarrior fields and expose its command launcher:
+Register Nautical's Taskwarrior fields. The installer creates or updates
+`~/.local/bin/nautical` as a symlink to the installed launcher:
 
 ```bash
 cp uda.conf ~/.task/uda-nautical.conf
 grep -Fqx "include $HOME/.task/uda-nautical.conf" "$HOME/.taskrc" 2>/dev/null || \
   printf '\ninclude %s\n' "$HOME/.task/uda-nautical.conf" >> "$HOME/.taskrc"
-mkdir -p ~/.local/bin
-ln -sf ~/.task/nautical ~/.local/bin/nautical
 ~/.local/bin/nautical doctor
+```
+
+On Termux, use its executable directory explicitly when installing:
+
+```bash
+./nautical install --launcher-path "$PREFIX/bin/nautical"
 ```
 
 For a custom data directory, set `$TASKDATA` and substitute that path for

@@ -77,6 +77,32 @@ def _target_config_path(taskdata: Path) -> Path | None:
     return None
 
 
+def _validate_launcher_ownership(path: Path, target: Path) -> None:
+    """Reject replacing a PATH entry that is not recognizably Nautical-owned."""
+    if not _lexists(path):
+        return
+    candidate = path.resolve() if path.is_symlink() else path
+    if candidate == target.resolve():
+        return
+    try:
+        text = candidate.read_text(encoding="utf-8")[:131072]
+    except OSError as exc:
+        raise InstallError(f"user launcher cannot be inspected: {path}: {exc}") from exc
+    if "Nautical command-line entry point" not in text or "COMMANDS" not in text:
+        raise InstallError(
+            f"refusing to replace non-Nautical launcher: {path}; "
+            "choose another path with --launcher-path"
+        )
+
+
+def default_launcher_path() -> Path:
+    """Return the user-facing command path managed by the installer."""
+    configured = (os.environ.get("NAUTICAL_LAUNCHER_PATH") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".local" / "bin" / "nautical"
+
+
 class InstallError(RuntimeError):
     pass
 
@@ -362,7 +388,13 @@ def validate_release(root: Path, *, smoke: bool = True) -> dict[str, int]:
     return apis
 
 
-def validate_installed(base: Path, hooks_dir: Path, *, smoke: bool = True) -> dict[str, int]:
+def validate_installed(
+    base: Path,
+    hooks_dir: Path,
+    *,
+    smoke: bool = True,
+    launcher_path: Path | None = None,
+) -> dict[str, int]:
     missing_operator = [name for name in OPERATOR_RUNTIME_FILES if not (base / name).is_file()]
     if missing_operator:
         raise InstallError(
@@ -398,6 +430,13 @@ def validate_installed(base: Path, hooks_dir: Path, *, smoke: bool = True) -> di
                 raise InstallError(f"installed managed file could not be verified: {installed_path}: {exc}") from exc
             if not matches:
                 raise InstallError(f"installed managed file does not match the active release: {installed_path}")
+    if launcher_path is not None and launcher_path.resolve() != launcher.resolve():
+        try:
+            linked_target = launcher_path.resolve(strict=True)
+        except OSError as exc:
+            raise InstallError(f"user launcher is unavailable: {launcher_path}: {exc}") from exc
+        if linked_target != launcher.resolve() or not launcher_path.is_symlink():
+            raise InstallError(f"user launcher is not linked to the installed launcher: {launcher_path}")
     return apis
 
 
@@ -448,6 +487,7 @@ def _lexists(path: Path) -> bool:
 
 
 def _atomic_symlink(target: str, path: Path) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temp = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
     try:
         os.symlink(target, temp)
@@ -489,7 +529,7 @@ def _snapshot_file(path: Path, backup_dir: Path) -> dict[str, Any]:
         return {"kind": "symlink", "target": os.readlink(path)}
     if not path.is_file():
         raise InstallError(f"managed install path is not a file or symlink: {path}")
-    backup = backup_dir / path.name
+    backup = backup_dir / f"{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:12]}-{path.name}"
     shutil.copy2(path, backup)
     return {"kind": "file", "backup": str(backup)}
 
@@ -621,6 +661,7 @@ def _target_plan(
     digest: str,
     apis: dict[str, int],
     smoke: bool,
+    launcher_path: Path | None,
 ) -> dict[str, Any]:
     conflicts = _hook_conflicts(hooks_dir)
     if conflicts:
@@ -645,7 +686,7 @@ def _target_plan(
     operation = "upgrade" if has_existing else "install"
     if previous_release == release_id and release_exists:
         try:
-            validate_installed(base, hooks_dir, smoke=smoke)
+            validate_installed(base, hooks_dir, smoke=smoke, launcher_path=launcher_path)
         except InstallError:
             operation = "repair"
         else:
@@ -665,12 +706,16 @@ def install_release(
     release_id: str = "",
     dry_run: bool = False,
     smoke: bool = True,
+    launcher_path: Path | None = None,
     _fail_after: str = "",
 ) -> dict[str, Any]:
     source = source.expanduser().resolve()
     taskdata = taskdata.expanduser().resolve()
     hooks_dir = (hooks_dir or (taskdata / "hooks")).expanduser().resolve()
     base = hooks_dir.parent
+    launcher_path = launcher_path.expanduser().absolute() if launcher_path is not None else None
+    if launcher_path is not None and launcher_path == (base / "nautical").absolute():
+        launcher_path = None
     if not source.is_dir():
         raise InstallError(f"source directory does not exist: {source}")
     digest = source_digest(source)
@@ -698,6 +743,7 @@ def install_release(
             digest=digest,
             apis=apis,
             smoke=smoke,
+            launcher_path=launcher_path,
         )
         config_path = _target_config_path(taskdata)
         return {
@@ -711,6 +757,7 @@ def install_release(
             "source": str(source),
             "base": str(base),
             "hooks_dir": str(hooks_dir),
+            "launcher_path": str(launcher_path) if launcher_path is not None else str(base / "nautical"),
             "hook_impl_api": apis,
             "config_initialization": (
                 {"path": str(taskdata / "config-nautical.toml"), "tz": detect_local_timezone()}
@@ -750,6 +797,7 @@ def install_release(
                 digest=digest,
                 apis=apis,
                 smoke=smoke,
+                launcher_path=launcher_path,
             )
 
             if plan["release_exists"]:
@@ -773,6 +821,7 @@ def install_release(
                     "source": str(source),
                     "base": str(base),
                     "hooks_dir": str(hooks_dir),
+                    "launcher_path": str(launcher_path) if launcher_path is not None else str(base / "nautical"),
                     "current": str(current),
                     "reused_release": True,
                     "migrated_legacy_core": False,
@@ -823,6 +872,11 @@ def install_release(
                 file_snapshots[target] = _snapshot_file(target, rollback_dir)
                 _atomic_copy(release_dir / name, target, executable=(name != "nautical_navigator.py"))
 
+            if launcher_path is not None:
+                _validate_launcher_ownership(launcher_path, base / "nautical")
+                file_snapshots[launcher_path] = _snapshot_file(launcher_path, rollback_dir)
+                _atomic_symlink(str((base / "nautical").absolute()), launcher_path)
+
             # Remove only Nautical's exact legacy names after the canonical
             # wrappers are installed. Snapshots make this rollback-safe.
             for legacy_name in LEGACY_HOOK_FILES.values():
@@ -838,7 +892,7 @@ def install_release(
             if _fail_after == "before_postcheck":
                 raise InstallError("injected failure before post-install validation")
 
-            installed_apis = validate_installed(base, hooks_dir, smoke=smoke)
+            installed_apis = validate_installed(base, hooks_dir, smoke=smoke, launcher_path=launcher_path)
             if installed_apis != apis:
                 raise InstallError("post-install hook API validation changed unexpectedly")
 
@@ -861,6 +915,7 @@ def install_release(
                 "source": str(source),
                 "base": str(base),
                 "hooks_dir": str(hooks_dir),
+                "launcher_path": str(launcher_path) if launcher_path is not None else str(base / "nautical"),
                 "current": str(current),
                 "reused_release": reused_release,
                 "migrated_legacy_core": bool(migrated_backup),

@@ -48,6 +48,7 @@ def _render(payload: dict) -> None:
         print(f"Previous: {previous}")
     print(f"Target: {payload['base']}")
     print(f"Hooks: {payload['hooks_dir']}")
+    print(f"Command: {payload.get('launcher_path') or Path(payload['base']) / 'nautical'}")
     if payload.get("status") == "dry-run":
         print("Changes: none (dry run)")
     else:
@@ -74,6 +75,11 @@ def main() -> int:
         help="Taskwarrior data directory (default: TASKDATA or ~/.task)",
     )
     parser.add_argument("--hooks-dir", default="", help="override the Taskwarrior hooks directory")
+    parser.add_argument(
+        "--launcher-path",
+        default="",
+        help="user-facing command path (default: ~/.local/bin/nautical; set to $PREFIX/bin/nautical on Termux)",
+    )
     parser.add_argument("--release-id", default="", help="optional stable release identifier")
     parser.add_argument("--dry-run", action="store_true", help="stage and validate without changing the installation")
     parser.add_argument("--json", action="store_true", help="emit JSON only")
@@ -86,6 +92,7 @@ def main() -> int:
             source=Path(args.source),
             taskdata=taskdata,
             hooks_dir=hooks_dir,
+            launcher_path=(Path(args.launcher_path).expanduser() if args.launcher_path else install_runtime.default_launcher_path()),
             release_id=args.release_id,
             dry_run=bool(args.dry_run),
         )

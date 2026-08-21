@@ -9,7 +9,7 @@ PUBLIC_EXPORTS = (
     'effective_config_snapshot', 'effective_config_fingerprint', 'reload_taskdata_config',
     'scheduling_configuration_error', 'validate_scheduling_configuration',
     'scheduler_config_fingerprint', 'configuration_drift', 'DEFAULT_BUSINESS_CALENDAR',
-    'ENABLE_ANCHOR_CACHE', 'LOCAL_TZ_NAME', 'SEASON_HEMISPHERE', 'OMIT_FILE_DIR',
+    'ENABLE_ANCHOR_CACHE', 'LOCAL_TZ_NAME', 'SEASON_HEMISPHERE', 'SEASON_MODE', 'OMIT_FILE_DIR',
     'MAX_LINK_NUMBER', 'PANEL_MODE', 'LIVE_PANEL_DURATION_MS', 'LIVE_PANEL_FOOTER',
     'EXIT_PROGRESS', 'DEFAULT_DUE_HOUR', '_LOCAL_TZ', '_build_anchor_atom_dnf',
     '_cache_atomic_replace', '_cache_lock', '_cache_path', '_clear_all_caches',

@@ -9918,6 +9918,26 @@ def test_config_schema_reports_retired_unknown_and_ineffective_values():
     expect(panel.get("effective") == "rich", f"panel fallback was not reported: {issues!r}")
 
 
+def test_season_mode_configuration_contract():
+    """Season mode should default to fixed and reject unsupported backend names."""
+    from nautical_core import config_schema
+
+    expect(config_schema.spec_default("season_mode") == "fixed", "season mode default changed")
+    expect(
+        not config_schema.validate_config({"season_mode": "fixed"}),
+        "fixed season mode was rejected",
+    )
+    expect(
+        not config_schema.validate_config({"season_mode": "astronomical"}),
+        "astronomical season mode was rejected",
+    )
+    issues = config_schema.validate_config({"season_mode": "lunar"})
+    expect(
+        any(issue.get("kind") == "choice" for issue in issues),
+        f"invalid season mode was not reported: {issues!r}",
+    )
+
+
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should fail fast without stdout JSON."""
     path = _find_hook_file("on-modify.nautical")
@@ -32071,6 +32091,7 @@ TESTS = [
     test_shipped_config_keeps_hook_toggles_top_level,
     test_shipped_config_matches_authoritative_schema,
     test_config_schema_reports_retired_unknown_and_ineffective_values,
+    test_season_mode_configuration_contract,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

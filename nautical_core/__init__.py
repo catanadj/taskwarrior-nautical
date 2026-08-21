@@ -384,6 +384,7 @@ WRAND_SALT = _core_config.WRAND_SALT
 LOCAL_TZ_NAME = _core_config.LOCAL_TZ_NAME
 CONFIG_ERROR = _core_config.configuration_error()
 SEASON_HEMISPHERE = _core_config.SEASON_HEMISPHERE
+SEASON_MODE = _core_config.SEASON_MODE
 HOLIDAY_REGION = _core_config.HOLIDAY_REGION
 ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
 OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
@@ -536,6 +537,12 @@ def scheduling_configuration_error() -> str:
 def validate_scheduling_configuration() -> None:
     """Validate domain-specific scheduling configuration before mutation."""
     try:
+        raw_season_mode = str(_core_config._CONF.get("season_mode", "fixed") or "").strip().lower()
+        valid_season_modes = _core_config.config_schema.CONFIG_SPECS["season_mode"]["choices"]
+        if raw_season_mode not in valid_season_modes:
+            raise ValueError(
+                f"season_mode must be 'fixed' or 'astronomical', got {raw_season_mode!r}"
+            )
         _astronomy.validate_configuration(ASTRONOMY_CONFIG)
 
         for name in sorted(dict(ANCHOR_PRESETS or {})):
@@ -574,6 +581,7 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
         "WRAND_SALT",
         "LOCAL_TZ_NAME",
         "SEASON_HEMISPHERE",
+        "SEASON_MODE",
         "HOLIDAY_REGION",
         "ANCHOR_FILE_DIR",
         "OMIT_FILE_DIR",
@@ -632,7 +640,7 @@ def _refresh_facade_config_exports() -> None:
         and _season_support.active_hemisphere() != configured_hemisphere
     )
     names = (
-        "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "HOLIDAY_REGION",
+        "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "SEASON_MODE", "HOLIDAY_REGION",
         "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
         "BUSINESS_CALENDAR_CONFIG", "ASTRONOMY_CONFIG", "ENABLE_ANCHOR_CACHE",
         "ENABLE_UDA_ALIASES", "ANCHOR_CACHE_DIR_OVERRIDE", "ANCHOR_CACHE_TTL",

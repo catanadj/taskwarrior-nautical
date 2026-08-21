@@ -13,6 +13,11 @@ CONFIG_SPECS: dict[str, dict[str, Any]] = {
         "default": "north",
         "choices": {"north": "north", "south": "south"},
     },
+    "season_mode": {
+        "type": "choice",
+        "default": "fixed",
+        "choices": {"fixed": "fixed", "astronomical": "astronomical"},
+    },
     "anchor_file_dir": {"type": "string", "default": ""},
     "omit_file_dir": {"type": "string", "default": ""},
     "enable_anchor_cache": {"type": "bool", "default": False},

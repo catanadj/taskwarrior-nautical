@@ -1354,6 +1354,78 @@ def test_chain_integrity_models_enforce_observation_and_repair_contract():
         raise AssertionError("integrity repair plan was mutable")
 
 
+def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
+    """Integrity snapshots reuse one authoritative export and fail closed."""
+    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+    from nautical_core.task_read_repository import (
+        AuthoritativeTaskSnapshot,
+        TaskQueryKind,
+        TaskSnapshotScope,
+    )
+
+    command = TaskCommand(("task", "export"), "chain integrity test", 1.0)
+    result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.001)
+    scope = TaskSnapshotScope(TaskQueryKind.BROAD, "chain:on", ("completed", "pending"))
+    rows = (
+        {"uuid": "00000000-0000-0000-0000-000000000901", "status": "pending", "chainID": "snap-chain", "link": 1},
+        {"uuid": "00000000-0000-0000-0000-000000000902", "status": "completed", "chainID": "snap-chain", "link": 2},
+    )
+    authoritative = AuthoritativeTaskSnapshot(scope, rows, result)
+
+    class Repository:
+        calls = 0
+        response = Found(authoritative, "broad:chain:on")
+
+        def broad_snapshot(self, **_kwargs):
+            self.calls += 1
+            return self.response
+
+    class Unit:
+        mutation_epoch = 0
+
+        def __init__(self):
+            self.repository = Repository()
+
+    unit = Unit()
+    service = ChainSnapshotService(unit, configuration_fingerprint="cfg-snapshot")
+    request = IntegritySnapshotRequest.chain("snap-chain")
+    first = service.collect(request)
+    second = service.collect(request)
+    expect(isinstance(first, Found) and isinstance(second, Found), "authoritative snapshot was not found")
+    expect(first.value.rows == second.value.rows and len(first.value.rows) == 2, "snapshot rows were not normalized")
+    expect(unit.repository.calls == 1, "normalized snapshot cache did not reuse the current epoch")
+
+    unit.mutation_epoch = 1
+    service.collect(request)
+    expect(unit.repository.calls == 2, "mutation epoch did not invalidate normalized snapshot cache")
+
+    unit.repository.response = Absent("broad:chain:on", "no matching chain")
+    empty = service.collect(IntegritySnapshotRequest.candidates())
+    expect(isinstance(empty, Found) and not empty.value.rows, "authoritative empty export was not represented as empty")
+
+    unavailable = Unavailable(
+        "broad:chain:on",
+        FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.001, False, "malformed export"),
+    )
+    unit.repository.response = unavailable
+    failed = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(failed, Unavailable), "unavailable export was converted to an empty snapshot")
+
+    malformed = AuthoritativeTaskSnapshot(scope, ({"status": "pending"},), result)
+    unit.repository.response = Found(malformed, "broad:chain:on")
+    invalid = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -31924,6 +31996,7 @@ TESTS = [
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
     test_chain_integrity_models_enforce_observation_and_repair_contract,
+    test_chain_snapshot_service_preserves_authority_and_epoch_cache,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

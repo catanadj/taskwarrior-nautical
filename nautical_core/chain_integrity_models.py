@@ -230,6 +230,7 @@ class ChainSnapshot:
     source: str
     rows: tuple[ChainNode, ...] = ()
     configuration_fingerprint: str = ""
+    complete_chain_history: bool = False
     reason: str = ""
 
     def __post_init__(self) -> None:
@@ -245,6 +246,7 @@ class ChainSnapshot:
             raise IntegrityContractError("snapshot rows must be ChainNode values")
         object.__setattr__(self, "rows", rows)
         object.__setattr__(self, "configuration_fingerprint", str(self.configuration_fingerprint or "").strip())
+        object.__setattr__(self, "complete_chain_history", bool(self.complete_chain_history))
         reason = str(self.reason or "").strip()
         if coverage is SnapshotCoverage.UNAVAILABLE and not reason:
             raise IntegrityContractError("unavailable snapshot requires a reason")

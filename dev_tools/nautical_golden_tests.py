@@ -1474,6 +1474,57 @@ def test_chain_graph_is_deterministic_and_preserves_reference_states():
     )
 
 
+def test_chain_invariant_registry_is_pure_and_deterministic():
+    """Identity, slot, and edge rules produce stable typed findings."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_invariants
+
+    first = {
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000921",
+        "status": "pending",
+        "chainID": "invariant-chain",
+        "link": 1,
+        "nextLink": "bbbbbbbb",
+    }
+    second = {
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000922",
+        "status": "completed",
+        "chainID": "invariant-chain",
+        "link": 2,
+        "prevLink": "aaaaaaaa",
+    }
+    from nautical_core.chain_integrity_models import ChainNode
+    healthy = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-healthy", SnapshotCoverage.CHAIN, "test",
+        (ChainNode.from_mapping(second), ChainNode.from_mapping(first)),
+    ))
+    expect(evaluate_invariants(healthy) == (), "healthy graph produced findings")
+
+    broken = ChainNode.from_mapping({
+        "uuid": "cccccccc-0000-0000-0000-000000000923",
+        "status": "pending",
+        "link": 1,
+        "nextLink": "bbbbbbbb",
+    })
+    duplicate = ChainNode.from_mapping({
+        "uuid": "dddddddd-0000-0000-0000-000000000924",
+        "status": "pending",
+        "chainID": "invariant-chain",
+        "link": 1,
+    })
+    graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-broken", SnapshotCoverage.CANDIDATES, "test",
+        (duplicate, ChainNode.from_mapping(second), broken, ChainNode.from_mapping(first)),
+    ))
+    findings = evaluate_invariants(graph)
+    ids = {(finding.invariant_id, finding.reason_code) for finding in findings}
+    expect(("identity.chain_id_required", "missing_chain_id") in ids, "missing chainID was not reported")
+    expect(("slot.duplicate_occupant", "duplicate_slot") in ids, "duplicate slot was not reported")
+    expect(("edge.reciprocal", "non_reciprocal_reference") in ids, "non-reciprocal edge was not reported")
+    expect(findings == evaluate_invariants(graph), "invariant output was not deterministic")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -32046,6 +32097,7 @@ TESTS = [
     test_chain_integrity_models_enforce_observation_and_repair_contract,
     test_chain_snapshot_service_preserves_authority_and_epoch_cache,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
+    test_chain_invariant_registry_is_pure_and_deterministic,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

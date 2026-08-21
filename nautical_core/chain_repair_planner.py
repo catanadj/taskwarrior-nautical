@@ -113,6 +113,8 @@ class IntegrityRepairPlanner:
         if finding.status is not FindingStatus.REPAIRABLE or finding.reason_code != "non_reciprocal_reference":
             return None
         graph = context.graph
+        if not context.configuration_fingerprint:
+            return None
         if graph.snapshot.coverage not in {SnapshotCoverage.CHAIN, SnapshotCoverage.COMPLETE}:
             return None
         if len(finding.subject_uuids) != 1:

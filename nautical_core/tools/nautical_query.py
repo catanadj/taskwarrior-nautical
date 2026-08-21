@@ -161,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     boundary.add_argument("--after", dest="after", help="exclusive local date or RFC 3339 timestamp")
     parser.add_argument("--to", help="inclusive local date or RFC 3339 timestamp")
     parser.add_argument("--count", type=int, help="maximum number of occurrences per task")
+    parser.add_argument("--max-total-occurrences", type=int, help="aggregate occurrence safety cap")
     parser.add_argument("--omissions", choices=("exclude", "include", "report"), dest="omission_policy", default="exclude")
     args = parser.parse_args(argv)
     if args.operation == "capabilities":
@@ -174,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             args.after,
             args.to,
             args.count,
+            args.max_total_occurrences,
             args.omission_policy if args.omission_policy != "exclude" else None,
         )
         has_flags = any(value not in (None, False, []) for value in flag_values)
@@ -199,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                     "from": start,
                     "to": args.to,
                     "count": args.count,
+                    "max_total_occurrences": args.max_total_occurrences,
                     "start_inclusive": args.after is None,
                     "omission_policy": args.omission_policy,
                 }

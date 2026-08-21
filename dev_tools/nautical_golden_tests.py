@@ -32354,6 +32354,8 @@ def test_query_cli_flags_build_the_same_validated_request():
                 "2026-08-24",
                 "--count",
                 "2",
+                "--max-total-occurrences",
+                "3",
             ]
         )
     payload = json.loads(output.getvalue())

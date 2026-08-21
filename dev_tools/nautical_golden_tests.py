@@ -30598,6 +30598,48 @@ def test_seasonal_selection_scheduler_windows_and_rollover():
         )
 
 
+def test_astronomical_season_selection_scheduler_uses_transition_dates():
+    """Public seasonal scheduling should consume astronomical local-date windows."""
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td)
+        (taskdata / "config-nautical.toml").write_text(
+            'tz = "UTC"\nseason_mode = "astronomical"\nseason_hemisphere = "north"\n',
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env["TASKDATA"] = str(taskdata)
+        env.pop("NAUTICAL_CONFIG", None)
+        env["PYTHONPATH"] = str(ROOT)
+        script = (
+            "import json, os\n"
+            "from datetime import date\n"
+            "import nautical_core as c\n"
+            "c.reload_taskdata_config(os.environ['TASKDATA'])\n"
+            "from nautical_core import position_selection, season_support\n"
+            "dnf = c.validate_anchor_expr_strict('(w:mon)@in-season=1st')\n"
+            "refs = [date(2026, 1, 1), date(2026, 3, 23), date(2026, 6, 22), date(2026, 9, 28), date(2026, 12, 21)]\n"
+            "dates = [c.next_after_expr(dnf, ref, default_seed=date(2026, 1, 1))[0].isoformat() for ref in refs]\n"
+            "advice = position_selection.selection_advice(dnf[0][0])\n"
+            "print(json.dumps({'mode': season_support.active_mode(), 'dates': dates, 'bounds': tuple(x.isoformat() for x in position_selection.period_bounds('spring', date(2026, 4, 1))), 'advice': advice}))\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        expect(proc.returncode == 0, f"astronomical scheduler process failed: {proc.stderr[:800]!r}")
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        expect(payload["mode"] == "astronomical", f"configured season mode was not applied: {payload!r}")
+        expect(
+            payload["dates"] == ["2026-03-23", "2026-06-22", "2026-09-28", "2026-12-21", "2027-03-22"],
+            f"astronomical season date drifted: {payload!r}",
+        )
+        expect(payload["bounds"] == ["2026-03-20", "2026-06-20"], f"astronomical bounds drifted: {payload!r}")
+        expect(any("astronomical" in line for line in payload["advice"]), f"astronomical advice missing: {payload!r}")
+
+
 def test_generic_seasonal_selection_scheduler_and_round_trip():
     """@in-season should select one position independently in every fixed season."""
     from nautical_core import season_support
@@ -32176,6 +32218,7 @@ TESTS = [
     test_season_mode_configuration_contract,
     test_astronomical_season_calculator_contract,
     test_astronomical_season_support_boundaries_are_mode_and_hemisphere_aware,
+    test_astronomical_season_selection_scheduler_uses_transition_dates,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

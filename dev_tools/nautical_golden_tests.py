@@ -32142,7 +32142,161 @@ def test_all_golden_tests_are_registered() -> None:
     expect(not missing, f"unregistered golden tests: {', '.join(missing)}")
 
 
+def test_query_contract_models_round_trip_and_reject_invalid():
+    """The public query contract is immutable, bounded, and JSON-stable."""
+    from nautical_core.query_models import (
+        OccurrenceQueryRequest,
+        OccurrenceQueryResponse,
+        OccurrenceRecord,
+        QueryContractError,
+        QueryFailure,
+        QuerySelector,
+        TaskIdentity,
+        TaskOccurrenceResult,
+    )
+
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "version": 1,
+            "operation": "occurrences",
+            "selector": {"uuids": ["00000000-0000-0000-0000-000000000001"]},
+            "from": "2026-08-21",
+            "to": "2026-08-22",
+            "omission_policy": "report",
+            "max_occurrences": "20",
+        }
+    )
+    request_round_trip = OccurrenceQueryRequest.from_mapping(request.to_dict())
+    expect(request_round_trip == request, "query request did not round-trip through JSON shape")
+    expect(request.max_occurrences == 20, "query limits were not normalized to integers")
+
+    local = datetime(2026, 8, 21, 4, 30, tzinfo=timezone(timedelta(hours=3)))
+    identity = TaskIdentity(
+        uuid="00000000-0000-0000-0000-000000000001",
+        chain_id="query-chain",
+        link=4,
+        description="Morning task \N{SNOWMAN}",
+        recurrence_kind="anchor",
+        expression="w:mon..sun@t=04:30",
+        schedule_fingerprint="schedule-v1",
+    )
+    occurrence = OccurrenceRecord(
+        local=local,
+        utc=local.astimezone(timezone.utc),
+        timezone="Europe/Bucharest",
+        source="anchor",
+    )
+    task_result = TaskOccurrenceResult(identity, "found", (occurrence,))
+    response = OccurrenceQueryResponse(
+        request=request,
+        timezone="Europe/Bucharest",
+        results=(task_result,),
+        status="found",
+        configuration_fingerprint="config-v1",
+    )
+    encoded = json.dumps(response.to_dict(), ensure_ascii=False, sort_keys=True)
+    expect("\\u2603" not in encoded and "snowman" not in encoded.lower(), "query JSON escaped Unicode unexpectedly")
+    expect("\N{SNOWMAN}" in encoded, "query JSON lost Unicode")
+
+    absent = TaskOccurrenceResult(
+        None,
+        "absent",
+        failure=QueryFailure("task_absent", "task was not found", task_uuid=identity.uuid),
+    )
+    expect(absent.to_dict()["task"] is None, "absent query result requires a fabricated task identity")
+
+    invalid_cases = (
+        lambda: QuerySelector(all_tasks=True, chain_id="query-chain"),
+        lambda: OccurrenceQueryRequest.from_mapping(
+            {
+                "selector": {"all_tasks": True},
+                "from": "2026-08-21T04:30:00",
+                "count": 1,
+            }
+        ),
+        lambda: OccurrenceQueryRequest.from_mapping(
+            {"selector": {"all_tasks": True}, "from": "2026-08-22", "to": "2026-08-21"}
+        ),
+        lambda: QueryFailure("bad", "bad", details=()),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except QueryContractError:
+            continue
+        raise AssertionError("invalid query contract value was accepted")
+
+
+def test_occurrence_query_service_projects_schedule_read_only():
+    """The query service reads one task and projects bounded local/UTC records."""
+    from types import SimpleNamespace
+
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000002",
+        "chainID": "query-chain",
+        "link": 1,
+        "description": "Two daily slots",
+        "anchor": "w:mon..sun@t=04:30,12:30",
+        "anchor_mode": "skip",
+    }
+
+    class _Repository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(task, f"uuid:{value}")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone(timedelta(hours=3)),
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    service = OccurrenceQueryService(uow, core=core)
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": [task["uuid"]]},
+            "from": "2026-08-24",
+            "to": "2026-08-24",
+            "omission_policy": "exclude",
+        }
+    )
+    response = service.query(request)
+    expect(response.status == "found", f"query service returned {response.status}")
+    expect(len(response.results) == 1, "query service returned an unexpected task count")
+    result = response.results[0]
+    expect(result.task is not None and result.task.schedule_fingerprint, "query result omitted schedule fingerprint")
+    expect(len(result.occurrences) == 2, f"query service returned {len(result.occurrences)} daily slots")
+    expect(result.occurrences[0].local.hour == 4 and result.occurrences[1].local.hour == 12, "query slots were not ordered")
+    expect(result.occurrences[0].utc.tzinfo is not None, "query result omitted UTC timezone")
+
+
+def test_query_cli_emits_one_json_document_for_invalid_request():
+    """CLI validation failures remain machine-readable and stdout-safe."""
+    from nautical_core.tools import nautical_query
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        exit_code = nautical_query.main(["occurrences", "--request", "{}"])
+    lines = output.getvalue().splitlines()
+    expect(exit_code == 0, "query CLI returned a non-zero protocol status")
+    expect(len(lines) == 1, "query CLI emitted more than one stdout line")
+    payload = json.loads(lines[0])
+    expect(payload["schema"] == "nautical.query.occurrences", "query CLI schema is incorrect")
+    expect(payload["status"] == "invalid", "query CLI did not classify malformed input as invalid")
+    expect(payload["failure"]["code"] == "invalid_request", "query CLI failure code is unstable")
+
+
 TESTS.extend([
+    test_query_contract_models_round_trip_and_reject_invalid,
+    test_occurrence_query_service_projects_schedule_read_only,
+    test_query_cli_emits_one_json_document_for_invalid_request,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

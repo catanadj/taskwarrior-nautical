@@ -1,0 +1,281 @@
+"""Read-only occurrence query orchestration for local consumers."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from types import ModuleType
+from typing import Any, Mapping
+
+from .integration_models import Absent, Found, Unavailable
+from .integration_context import IntegrationAccess
+from .occurrence_outcomes import OccurrenceCollectionResult
+from .recurrence_context import RecurrenceContext
+from .recurrence_spec import normalize_recurrence_text
+from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+from .scheduler_service import SchedulerService
+from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
+from .query_models import (
+    OccurrenceQueryRequest,
+    OccurrenceQueryResponse,
+    OccurrenceRecord,
+    QueryFailure,
+    TaskIdentity,
+    TaskOccurrenceResult,
+)
+
+
+class QueryServiceError(RuntimeError):
+    """Raised when a query cannot be safely constructed or executed."""
+
+
+def _timezone_name(value: tzinfo) -> str:
+    return str(getattr(value, "key", "") or value)
+
+
+def _boundary_local(value: date | datetime, date_only: bool, local_timezone: tzinfo, *, end: bool) -> datetime:
+    if date_only:
+        if not isinstance(value, date) or isinstance(value, datetime):
+            raise QueryServiceError("query date boundary is invalid")
+        if end:
+            next_day = value + timedelta(days=1)
+            return datetime.combine(next_day, time.min, tzinfo=local_timezone) - timedelta(microseconds=1)
+        return datetime.combine(value, time.min, tzinfo=local_timezone)
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise QueryServiceError("query timestamp boundary must be timezone-aware")
+    return value.astimezone(local_timezone)
+
+
+def _link_value(value: object) -> int | None:
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    try:
+        result = int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 0 else None
+
+
+def _task_identity(task: Mapping[str, Any]) -> TaskIdentity:
+    uuid_value = str(task.get("uuid") or "").strip()
+    chain_id = str(task.get("chainID") or "").strip()
+    if not uuid_value:
+        raise QueryServiceError("Taskwarrior row has no UUID")
+    if not chain_id:
+        raise QueryServiceError("Nautical task has no chainID; recurrence identity is incomplete")
+    anchor = normalize_recurrence_text(task.get("anchor"))
+    anchor_file = normalize_recurrence_text(task.get("anchor_file"))
+    cp = normalize_recurrence_text(task.get("cp"))
+    kind = "cp" if cp else "anchor" if anchor else "anchor_file" if anchor_file else ""
+    expression = cp or anchor or anchor_file
+    return TaskIdentity(
+        uuid=uuid_value,
+        chain_id=chain_id,
+        link=_link_value(task.get("link")),
+        description=str(task.get("description") or ""),
+        recurrence_kind=kind,
+        expression=expression,
+    )
+
+
+def _has_recurrence_identity(task: Mapping[str, Any]) -> bool:
+    return bool(
+        str(task.get("chainID") or "").strip()
+        and any(
+            normalize_recurrence_text(task.get(field))
+            for field in ("anchor", "anchor_file", "cp")
+        )
+    )
+
+
+def _failure(code: str, message: str, *, task_uuid: str | None = None, retryable: bool = False, **details: Any) -> QueryFailure:
+    return QueryFailure(code=code, message=message, task_uuid=task_uuid, retryable=retryable, details=details)
+
+
+def _terminal(result: OccurrenceCollectionResult) -> Mapping[str, Any] | None:
+    value = result.terminal
+    if value is None:
+        return None
+    return {
+        "kind": value.kind,
+        "scope": value.scope,
+        "reference": value.reference,
+        "limit": value.limit,
+        "message": str(value),
+    }
+
+
+class OccurrenceQueryService:
+    """Resolve bounded occurrence queries without mutation or subprocesses."""
+
+    def __init__(self, unit_of_work: Any, *, core: ModuleType) -> None:
+        context = getattr(unit_of_work, "context", None)
+        if context is None or getattr(context, "access", None) is not IntegrationAccess.READ_ONLY:
+            raise QueryServiceError("occurrence queries require a read-only Taskwarrior unit of work")
+        self._uow = unit_of_work
+        self._core = core
+        self._timezone = getattr(context, "local_timezone", None)
+        if not isinstance(self._timezone, tzinfo):
+            raise QueryServiceError("validated local timezone is unavailable")
+
+    def _context_for(self, task: Mapping[str, Any]) -> RecurrenceContext:
+        chain_id = str(task.get("chainID") or "").strip()
+        if not chain_id:
+            raise QueryServiceError("Nautical task has no chainID; recurrence identity is incomplete")
+        calendar = None
+        resolver = getattr(self._core, "business_calendar_for_task", None)
+        if callable(resolver):
+            calendar = resolver(dict(task))
+        return RecurrenceContext(
+            chain_id=chain_id,
+            timezone=self._timezone,
+            business_calendar=calendar,
+            astronomy_config=getattr(self._core, "ASTRONOMY_CONFIG", {}),
+            anchor_file_dir=str(getattr(self._core, "ANCHOR_FILE_DIR", "") or ""),
+        )
+
+    def _rows_for(self, request: OccurrenceQueryRequest) -> tuple[Mapping[str, Any], ...] | QueryFailure:
+        repository = self._uow.repository
+        selector = request.selector
+        if selector.all_tasks:
+            read = repository.broad_snapshot(
+                identity="query:all-active",
+                filters=("chain:on",),
+                statuses=ACTIVE_TASK_STATUSES,
+                complete_chain_history=False,
+            )
+            if isinstance(read, Found):
+                rows = tuple(row for row in read.value.rows if _has_recurrence_identity(row))
+                return rows[: request.max_tasks]
+            if isinstance(read, Absent):
+                return ()
+            return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
+        if selector.chain_id:
+            read = repository.chain_snapshot(selector.chain_id, statuses=ALL_TASK_STATUSES, complete_history=True)
+            if isinstance(read, Found):
+                return tuple(read.value)[: request.max_tasks]
+            if isinstance(read, Absent):
+                return _failure("chain_absent", read.reason)
+            return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
+        uuid_rows: list[Mapping[str, Any]] = []
+        for uuid_value in selector.uuids:
+            read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
+            if isinstance(read, Found):
+                uuid_rows.append(read.value)
+                continue
+            if isinstance(read, Absent):
+                uuid_rows.append({"uuid": uuid_value, "_query_absent": True})
+                continue
+            return _failure(
+                "task_read_unavailable",
+                read.evidence.detail,
+                task_uuid=uuid_value,
+                retryable=read.retryable,
+            )
+        return tuple(uuid_rows[: request.max_tasks])
+
+    def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
+        records: list[OccurrenceRecord] = []
+        for item in items:
+            if item.local_datetime is None:
+                continue
+            local = item.local_datetime
+            records.append(
+                OccurrenceRecord(
+                    local=local,
+                    utc=local.astimezone(timezone.utc),
+                    timezone=timezone_name,
+                    source=item.source,
+                    description=item.description,
+                    omitted=bool(item.omitted),
+                )
+            )
+        return tuple(records)
+
+    def _query_task(self, task: Mapping[str, Any], request: OccurrenceQueryRequest) -> TaskOccurrenceResult:
+        if task.get("_query_absent"):
+            return TaskOccurrenceResult(
+                task=None,
+                status="absent",
+                failure=_failure("task_absent", "Taskwarrior returned no task for the requested UUID", task_uuid=str(task.get("uuid") or "")),
+            )
+        try:
+            identity = _task_identity(task)
+            context = self._context_for(task)
+            scheduler = SchedulerService.from_task(task, context=context)
+            identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
+            start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
+            end = (
+                _boundary_local(request.end.value, request.end.date_only, self._timezone, end=True)
+                if request.end is not None else None
+            )
+            range_request = OccurrenceRangeRequest(
+                cursor=OccurrenceCursor(start, inclusive=request.start_inclusive, timezone=self._timezone),
+                end_local=end,
+                limit=request.count or request.max_occurrences,
+                omission_policy=request.omission_policy,
+                max_iterations=request.max_iterations,
+                max_file_skips=request.max_file_skips,
+            )
+            collected = scheduler.collect_request(range_request)
+            failure = None
+            if collected.failure is not None:
+                failure = _failure(
+                    "scheduler_unavailable" if collected.status == "unavailable" else "scheduler_invalid",
+                    collected.failure.reason,
+                    task_uuid=identity.uuid,
+                    retryable=collected.status == "unavailable",
+                    error_type=collected.failure.error_type,
+                )
+            return TaskOccurrenceResult(
+                task=identity,
+                status=collected.status,
+                occurrences=self._records(collected, _timezone_name(self._timezone)),
+                omitted_occurrences=self._records(collected.omitted_occurrences, _timezone_name(self._timezone)),
+                failure=failure,
+                terminal=_terminal(collected),
+            )
+        except (QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
+            uuid_value = str(task.get("uuid") or "") or None
+            return TaskOccurrenceResult(
+                task=None,
+                status="invalid" if isinstance(exc, (TypeError, ValueError, QueryServiceError)) else "unavailable",
+                failure=_failure("task_invalid", str(exc), task_uuid=uuid_value),
+            )
+
+    def query(self, request: OccurrenceQueryRequest) -> OccurrenceQueryResponse:
+        if not isinstance(request, OccurrenceQueryRequest):
+            raise QueryServiceError("occurrence query requires a validated request")
+        rows = self._rows_for(request)
+        if isinstance(rows, QueryFailure):
+            return OccurrenceQueryResponse(
+                request=request,
+                timezone=_timezone_name(self._timezone),
+                status="unavailable",
+                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                failure=rows,
+            )
+        results = tuple(self._query_task(row, request) for row in rows)
+        statuses = {result.status for result in results}
+        if "found" in statuses:
+            status = "found"
+        elif "unavailable" in statuses:
+            status = "unavailable"
+        elif "invalid" in statuses:
+            status = "invalid"
+        elif "exhausted" in statuses:
+            status = "exhausted"
+        elif "absent" in statuses:
+            status = "absent"
+        else:
+            status = "empty"
+        return OccurrenceQueryResponse(
+            request=request,
+            timezone=_timezone_name(self._timezone),
+            results=results,
+            status=status,
+            configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+        )
+
+
+__all__ = ("OccurrenceQueryService", "QueryServiceError")

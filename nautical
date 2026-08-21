@@ -17,6 +17,7 @@ COMMANDS = {
     "queue-status": ROOT / "nautical_core" / "tools" / "nautical_queue_status.py",
     "chain-repair": ROOT / "nautical_core" / "tools" / "nautical_chain_repair.py",
     "reconcile": ROOT / "nautical_core" / "tools" / "nautical_reconcile.py",
+    "query": ROOT / "nautical_core" / "tools" / "nautical_query.py",
     "navigator": ROOT / "nautical_navigator.py",
 }
 ALIASES = {
@@ -49,7 +50,7 @@ def _checkout_root() -> Path | None:
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
         print("usage: nautical <command> [options]")
-        print("commands: install, runtime-clean, doctor, queue-status, chain-repair, reconcile, navigator")
+        print("commands: install, runtime-clean, doctor, queue-status, chain-repair, reconcile, query, navigator")
         return 0
     command = ALIASES.get(sys.argv[1], sys.argv[1])
     target = COMMANDS.get(command)

@@ -88,6 +88,18 @@ def _has_recurrence_identity(task: Mapping[str, Any]) -> bool:
     )
 
 
+def _ordered_rows(rows: tuple[Mapping[str, Any], ...]) -> tuple[Mapping[str, Any], ...]:
+    def key(row: Mapping[str, Any]) -> tuple[str, int, str]:
+        link = _link_value(row.get("link"))
+        return (
+            str(row.get("chainID") or "").strip().lower(),
+            link if link is not None else 2**31 - 1,
+            str(row.get("uuid") or "").strip().lower(),
+        )
+
+    return tuple(sorted(rows, key=key))
+
+
 def _failure(code: str, message: str, *, task_uuid: str | None = None, retryable: bool = False, **details: Any) -> QueryFailure:
     return QueryFailure(code=code, message=message, task_uuid=task_uuid, retryable=retryable, details=details)
 
@@ -146,14 +158,14 @@ class OccurrenceQueryService:
             )
             if isinstance(read, Found):
                 rows = tuple(row for row in read.value.rows if _has_recurrence_identity(row))
-                return rows[: request.max_tasks]
+                return _ordered_rows(rows)[: request.max_tasks]
             if isinstance(read, Absent):
                 return ()
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
         if selector.chain_id:
             read = repository.chain_snapshot(selector.chain_id, statuses=ALL_TASK_STATUSES, complete_history=True)
             if isinstance(read, Found):
-                return tuple(read.value)[: request.max_tasks]
+                return _ordered_rows(tuple(read.value))[: request.max_tasks]
             if isinstance(read, Absent):
                 return _failure("chain_absent", read.reason)
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)

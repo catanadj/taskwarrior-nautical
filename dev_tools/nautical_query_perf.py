@@ -39,24 +39,81 @@ TASK = {
     "anchor_mode": "skip",
     "due": "20260824T013000Z",
 }
+TASK_BATCH = dict(TASK, uuid="00000000-0000-0000-0000-000000000100", link=2)
 
 
 class _Repository:
+    def __init__(self, rows: tuple[dict[str, object], ...] = (TASK,)) -> None:
+        self.calls: list[str] = []
+        self.rows = rows
+
     def by_uuid(self, value, **kwargs):
         del kwargs
+        self.calls.append("uuid")
         return Found(TASK, f"uuid:{value}")
+
+    def chain_snapshot(self, value, **kwargs):
+        del kwargs
+        self.calls.append("chain")
+        return Found(_Snapshot(self.rows), f"chain:{value}")
+
+    def broad_snapshot(self, **kwargs):
+        del kwargs
+        self.calls.append("broad")
+        return Found(_Snapshot(self.rows), "broad:query")
+
+
+class _Snapshot:
+    def __init__(self, rows: tuple[dict[str, object], ...]) -> None:
+        self.rows = rows
+
+    def uuid_matches(self, value: str) -> tuple[dict[str, object], ...]:
+        return tuple(row for row in self.rows if str(row.get("uuid")) == value)
+
+    def __iter__(self):
+        return iter(self.rows)
 
 
 def _service() -> OccurrenceQueryService:
+    repository = _Repository()
     uow = SimpleNamespace(
         context=SimpleNamespace(
             access=IntegrationAccess.READ_ONLY,
             local_timezone=timezone(timedelta(hours=3)),
             configuration=SimpleNamespace(fingerprint="query-perf"),
         ),
-        repository=_Repository(),
+        repository=repository,
     )
     return OccurrenceQueryService(uow, core=core)
+
+
+def _read_call_baseline() -> dict[str, int]:
+    """Measure the repository reads required by each public selector shape."""
+    repository = _Repository((TASK, TASK_BATCH))
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone(timedelta(hours=3)),
+            configuration=SimpleNamespace(fingerprint="query-perf"),
+        ),
+        repository=repository,
+    )
+    service = OccurrenceQueryService(uow, core=core)
+    requests = {
+        "uuid": {"selector": {"uuids": [TASK["uuid"]]}},
+        "chain": {"selector": {"chain_id": TASK["chainID"]}},
+        "all_active": {"selector": {"all_tasks": True}},
+        "batch_uuid": {"selector": {"uuids": [TASK["uuid"], TASK_BATCH["uuid"]]}},
+    }
+    for payload in requests.values():
+        payload.update({"from": "2026-08-24", "to": "2026-08-24", "count": 1})
+    counts: dict[str, int] = {}
+    for name, payload in requests.items():
+        before = len(repository.calls)
+        service.query(OccurrenceQueryRequest.from_mapping(payload))
+        counts[name] = len(repository.calls) - before
+    # The synthetic repository represents one Taskwarrior export per read.
+    return counts
 
 
 def _request(operation: str = "occurrences") -> OccurrenceQueryRequest:
@@ -146,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         "service_next_warm": _summary(
             _samples(lambda: service.query_next(next_request), args.samples)
         ),
+        "repository_read_calls": _read_call_baseline(),
     }
     if args.uuid:
         results["real_taskwarrior_occurrence"] = _real_query(args.uuid, args.taskdata)

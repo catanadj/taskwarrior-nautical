@@ -1721,6 +1721,11 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
         "multi-operation plan bypassed the outbox policy",
     )
 
+    from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+    envelope = IntegrityOutboxEnvelope(metadata_plan, "cfg-application", "schedule-application")
+    restored = IntegrityOutboxEnvelope.from_dict(json.loads(envelope.to_json()))
+    expect(restored.intent_id == envelope.intent_id and restored.plan == metadata_plan, "integrity envelope round trip changed plan")
+
 
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""

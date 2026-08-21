@@ -330,6 +330,35 @@ class IntegrityOperation:
             raise IntegrityContractError("repair operation cannot depend on itself")
         object.__setattr__(self, "depends_on", dependencies)
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "operation_id": self.operation_id,
+            "kind": self.kind.value,
+            "chain_id": self.chain_id,
+            "target_uuid": self.target_uuid,
+            "guard": _thaw(self.guard),
+            "preconditions": list(self.preconditions),
+            "postconditions": list(self.postconditions),
+            "payload": _thaw(self.payload),
+            "depends_on": list(self.depends_on),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityOperation":
+        if not isinstance(value, Mapping):
+            raise IntegrityContractError("integrity operation must be an object")
+        return cls(
+            str(value.get("operation_id") or ""),
+            value.get("kind"),
+            str(value.get("chain_id") or ""),
+            str(value.get("target_uuid") or ""),
+            _freeze_pairs(value.get("guard") if isinstance(value.get("guard"), Mapping) else {}),
+            tuple(value.get("preconditions") or ()),
+            tuple(value.get("postconditions") or ()),
+            _freeze_pairs(value.get("payload") if isinstance(value.get("payload"), Mapping) else {}),
+            tuple(value.get("depends_on") or ()),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class IntegrityRepairPlan:
@@ -370,6 +399,34 @@ class IntegrityRepairPlan:
             raise IntegrityContractError("repair plan contains an unknown operation dependency")
         object.__setattr__(self, "operations", operations)
         object.__setattr__(self, "configuration_fingerprint", str(self.configuration_fingerprint or "").strip())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "plan_id": self.plan_id,
+            "snapshot_id": self.snapshot_id,
+            "chain_id": self.chain_id,
+            "safety": self.safety.value,
+            "reason_code": self.reason_code,
+            "summary": self.summary,
+            "operations": [operation.to_dict() for operation in self.operations],
+            "configuration_fingerprint": self.configuration_fingerprint,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityRepairPlan":
+        if not isinstance(value, Mapping):
+            raise IntegrityContractError("integrity repair plan must be an object")
+        operations = tuple(IntegrityOperation.from_dict(item) for item in (value.get("operations") or ()))
+        return cls(
+            str(value.get("plan_id") or ""),
+            str(value.get("snapshot_id") or ""),
+            str(value.get("chain_id") or ""),
+            value.get("safety"),
+            str(value.get("reason_code") or ""),
+            str(value.get("summary") or ""),
+            operations,
+            str(value.get("configuration_fingerprint") or ""),
+        )
 
 
 @dataclass(frozen=True, slots=True)

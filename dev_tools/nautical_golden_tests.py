@@ -30288,6 +30288,49 @@ def test_fixed_season_calendar_boundaries():
         season_support.configure_hemisphere(previous)
 
 
+def test_astronomical_season_calculator_contract():
+    """The isolated astronomical provider returns ordered, UTC-aware boundaries."""
+    from nautical_core import astronomical_seasons
+
+    events = astronomical_seasons.seasonal_events_utc(2026)
+    expect(tuple(events) == astronomical_seasons.SEASON_EVENT_NAMES, f"event order changed: {events}")
+    values = tuple(events.values())
+    expect(all(value.tzinfo == timezone.utc for value in values), f"events are not UTC-aware: {events}")
+    expect(all(left < right for left, right in zip(values, values[1:])), f"events are not ordered: {events}")
+    expect(
+        tuple(value.date().isoformat() for value in values)
+        == ("2026-03-20", "2026-06-21", "2026-09-23", "2026-12-21"),
+        f"unexpected 2026 astronomical dates: {events}",
+    )
+    expect(
+        astronomical_seasons.season_boundary_utc(2026, "spring") == events["spring_equinox"],
+        "season name lookup did not map to its event",
+    )
+
+    # Public calls return independent mappings even though the calculation is cached.
+    events["spring_equinox"] = datetime.min.replace(tzinfo=timezone.utc)
+    expect(
+        astronomical_seasons.seasonal_event_utc(2026, "spring-equinox").date().isoformat() == "2026-03-20",
+        "cached astronomical results leaked mutable mapping state",
+    )
+    for invalid_year in (True, 2026.0, 0, 10000):
+        try:
+            astronomical_seasons.seasonal_events_utc(invalid_year)
+            raise AssertionError(f"invalid astronomical year was accepted: {invalid_year!r}")
+        except (TypeError, ValueError):
+            pass
+    try:
+        astronomical_seasons.seasonal_event_utc(2026, "equinox")
+        raise AssertionError("ambiguous astronomical event was accepted")
+    except astronomical_seasons.AstronomicalSeasonError as exc:
+        expect("Expected one of" in str(exc), f"unclear astronomical event error: {exc}")
+    try:
+        astronomical_seasons.solar_longitude(datetime(2026, 1, 1))
+        raise AssertionError("naive solar-longitude input was accepted")
+    except TypeError:
+        pass
+
+
 def test_fixed_season_calendar_finds_active_or_next_window():
     """Season lookup should retain an active window and otherwise advance to that season."""
     from nautical_core import season_support
@@ -32092,6 +32135,7 @@ TESTS = [
     test_shipped_config_matches_authoritative_schema,
     test_config_schema_reports_retired_unknown_and_ineffective_values,
     test_season_mode_configuration_contract,
+    test_astronomical_season_calculator_contract,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

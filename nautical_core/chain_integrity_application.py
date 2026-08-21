@@ -24,6 +24,24 @@ class IntegrityMutationRequestFactory(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class IntegrityOutboxPersistResult:
+    accepted: bool
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "accepted", bool(self.accepted))
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+        if not self.accepted and not self.reason:
+            raise ValueError("rejected integrity outbox persistence requires a reason")
+
+
+class IntegrityOutboxSink(Protocol):
+    """Durable owner for multi-operation integrity plans."""
+
+    def persist(self, plan: IntegrityRepairPlan) -> IntegrityOutboxPersistResult: ...
+
+
+@dataclass(frozen=True, slots=True)
 class IntegrityApplicationResult:
     plan_id: str
     operation_id: str
@@ -47,10 +65,30 @@ class IntegrityApplicationService:
         plan: IntegrityRepairPlan,
         executor: _MutationExecutor,
         request_factory: IntegrityMutationRequestFactory,
+        outbox: IntegrityOutboxSink | None = None,
     ) -> tuple[IntegrityApplicationResult, ...]:
         if not isinstance(plan, IntegrityRepairPlan):
             raise TypeError("integrity application requires an IntegrityRepairPlan")
         results: list[IntegrityApplicationResult] = []
+        if len(plan.operations) > 1:
+            if outbox is None:
+                return tuple(IntegrityApplicationResult(
+                    plan.plan_id,
+                    operation.operation_id,
+                    MutationOutcomeKind.MANUAL_REVIEW,
+                    "multi-operation integrity plan requires outbox persistence",
+                ) for operation in plan.operations)
+            try:
+                persisted = outbox.persist(plan)
+            except Exception as exc:
+                persisted = IntegrityOutboxPersistResult(False, f"outbox persistence failed: {type(exc).__name__}: {exc}")
+            if not persisted.accepted:
+                return tuple(IntegrityApplicationResult(
+                    plan.plan_id,
+                    operation.operation_id,
+                    MutationOutcomeKind.MANUAL_REVIEW,
+                    persisted.reason,
+                ) for operation in plan.operations)
         for operation in plan.operations:
             if operation.kind is not RepairOperationKind.METADATA_REPAIR:
                 results.append(IntegrityApplicationResult(
@@ -96,4 +134,10 @@ class IntegrityApplicationService:
             raise ValueError("metadata request payload differs from integrity operation")
 
 
-__all__ = ["IntegrityApplicationResult", "IntegrityApplicationService", "IntegrityMutationRequestFactory"]
+__all__ = [
+    "IntegrityApplicationResult",
+    "IntegrityApplicationService",
+    "IntegrityMutationRequestFactory",
+    "IntegrityOutboxPersistResult",
+    "IntegrityOutboxSink",
+]

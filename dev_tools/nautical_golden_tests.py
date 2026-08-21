@@ -1701,6 +1701,26 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
     )
     expect(guarded[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unvalidated factory request was applied")
 
+    second_operation = IntegrityOperation(
+        "metadata-op-2",
+        RepairOperationKind.METADATA_REPAIR,
+        "application-chain",
+        "bbbbbbbb-0000-0000-0000-000000000942",
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",),
+        ("link is 3",),
+        (("link", 3),),
+    )
+    multi_plan = IntegrityRepairPlan(
+        "multi-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "structural_batch", "test multi-operation application", (metadata_operation, second_operation), "cfg-application",
+    )
+    multi = IntegrityApplicationService().apply(multi_plan, SimpleNamespace(), lambda _operation: SimpleNamespace())
+    expect(
+        multi and all(item.kind is MutationOutcomeKind.MANUAL_REVIEW for item in multi),
+        "multi-operation plan bypassed the outbox policy",
+    )
+
 
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""

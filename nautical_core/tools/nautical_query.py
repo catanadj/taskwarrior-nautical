@@ -15,6 +15,8 @@ from typing import Any, Mapping
 
 CORE_DIR = Path(__file__).resolve().parents[1]
 BASE_DIR = CORE_DIR.parent
+MAX_REQUEST_BYTES = 1_048_576
+MAX_REQUEST_DEPTH = 64
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
@@ -120,6 +122,27 @@ def _diagnostic(message: str) -> None:
         sys.stderr.write(f"[nautical] query: {message}\n")
 
 
+def _decode_request(raw: str, source: str) -> Mapping[str, Any]:
+    if len(raw.encode("utf-8")) > MAX_REQUEST_BYTES:
+        raise QueryContractError(f"{source} exceeds the {MAX_REQUEST_BYTES}-byte limit")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise QueryContractError(f"{source} is not valid JSON: {exc}") from exc
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > MAX_REQUEST_DEPTH:
+            raise QueryContractError(f"{source} exceeds the JSON nesting limit ({MAX_REQUEST_DEPTH})")
+        if isinstance(item, Mapping):
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            pending.extend((child, depth + 1) for child in item)
+    if not isinstance(value, Mapping):
+        raise QueryContractError("query request must be a JSON object")
+    return value
+
+
 def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
     if args.request is not None and args.request_file is not None:
         raise QueryContractError("use either --request or --request-file, not both")
@@ -127,30 +150,20 @@ def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
         raw = sys.stdin.read()
         if not raw.strip():
             raise QueryContractError("stdin request is empty")
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise QueryContractError(f"stdin is not valid JSON: {exc}") from exc
+        value = _decode_request(raw, "stdin")
     elif args.request is not None:
-        try:
-            value = json.loads(args.request)
-        except json.JSONDecodeError as exc:
-            raise QueryContractError(f"--request is not valid JSON: {exc}") from exc
+        value = _decode_request(args.request, "--request")
     elif args.request_file is not None:
         try:
-            value = json.loads(Path(args.request_file).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise QueryContractError(f"request file could not be read as JSON: {exc}") from exc
+            raw = Path(args.request_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise QueryContractError(f"request file could not be read: {exc}") from exc
+        value = _decode_request(raw, "request file")
     else:
         raw = sys.stdin.read()
         if not raw.strip():
             raise QueryContractError("provide a JSON request through stdin, --request, or --request-file")
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise QueryContractError(f"stdin is not valid JSON: {exc}") from exc
-    if not isinstance(value, Mapping):
-        raise QueryContractError("query request must be a JSON object")
+        value = _decode_request(raw, "stdin")
     return value
 
 

@@ -32368,6 +32368,24 @@ def test_query_cli_emits_one_json_document_for_invalid_request():
     expect(payload["failure"]["code"] == "invalid_request", "query CLI failure code is unstable")
 
 
+def test_query_cli_rejects_trailing_oversized_and_deep_requests():
+    """The JSON boundary rejects resource-heavy or ambiguous transports."""
+    from nautical_core.tools import nautical_query
+
+    requests = (
+        '{"selector": {"all_tasks": true}, "count": 1} trailing',
+        "{" + '"x":{' * 70 + '"v":1' + "}" * 70 + "}",
+        "{" + "\"padding\":\"" + ("x" * (1_048_576 + 1)) + "\"}",
+    )
+    for request in requests:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            exit_code = nautical_query.main(["occurrences", "--request", request])
+        payload = json.loads(output.getvalue())
+        expect(exit_code == 2, "hostile query input did not return invalid-input exit code")
+        expect(payload["failure"]["code"] == "invalid_request", "hostile query input used an unstable failure code")
+
+
 def test_query_cli_flags_build_the_same_validated_request():
     """Direct flags produce the same request shape as the JSON transport."""
     from nautical_core.tools import nautical_query
@@ -32711,6 +32729,7 @@ TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
     test_query_cli_emits_one_json_document_for_invalid_request,
+    test_query_cli_rejects_trailing_oversized_and_deep_requests,
     test_query_cli_flags_build_the_same_validated_request,
     test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,

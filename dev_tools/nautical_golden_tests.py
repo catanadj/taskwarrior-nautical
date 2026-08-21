@@ -1547,6 +1547,25 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(("carry.until_after_due", "until_before_due") in temporal_ids, "until ordering was not reported")
 
 
+def test_chain_integrity_context_keeps_outbox_evidence_separate():
+    """Task graph truth and lifecycle intent evidence retain separate provenance."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
+
+    graph = ChainGraph.from_snapshot(ChainSnapshot("context-graph", SnapshotCoverage.CANDIDATES, "taskwarrior", ()))
+    outbox = OutboxSnapshot.from_records(())
+    context = IntegrityContext(graph, outbox, "cfg-context", mutation_epoch=3, metadata={"source": "test"})
+    expect(context.snapshot_id == "context-graph", "context lost graph snapshot identity")
+    expect(context.outbox.coverage is OutboxCoverage.COMPLETE and context.outbox.records == (), "empty outbox was not complete")
+    expect(context.outbox.by_intent("missing") is None, "empty outbox returned a phantom intent")
+    expect(context.metadata["source"] == "test", "context metadata was not preserved")
+
+    unavailable = OutboxSnapshot.unavailable("sqlite unavailable")
+    failed = IntegrityContext(graph, unavailable)
+    expect(not failed.outbox_available and failed.outbox.reason == "sqlite unavailable", "outbox failure was hidden")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -32120,6 +32139,7 @@ TESTS = [
     test_chain_snapshot_service_preserves_authority_and_epoch_cache,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_invariant_registry_is_pure_and_deterministic,
+    test_chain_integrity_context_keeps_outbox_evidence_separate,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

@@ -1622,6 +1622,28 @@ def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
     partial = IntegrityRepairPlanner().plan(partial_context, findings)
     expect(not partial.plans and partial.refusals, "partial evidence produced an automatic plan")
 
+    predecessor = ChainNode.from_mapping({
+        "uuid": "cccccccc-0000-0000-0000-000000000933",
+        "status": "pending", "chainID": "slot-chain", "link": 1,
+        "nextLink": "eeeeeeee",
+    })
+    missing = ChainNode.from_mapping({
+        "uuid": "eeeeeeee-0000-0000-0000-000000000934",
+        "status": "pending", "chainID": "slot-chain",
+        "prevLink": "cccccccc", "nextLink": "ffffffff",
+    })
+    successor = ChainNode.from_mapping({
+        "uuid": "ffffffff-0000-0000-0000-000000000935",
+        "status": "pending", "chainID": "slot-chain", "link": 3,
+        "prevLink": "eeeeeeee",
+    })
+    slot_graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "slot-planner", SnapshotCoverage.CHAIN, "test", (successor, missing, predecessor)
+    ))
+    slot_context = IntegrityContext(slot_graph, OutboxSnapshot.from_records(()), "cfg-planner")
+    slot_result = IntegrityRepairPlanner().plan(slot_context, evaluate_invariants(slot_graph))
+    expect(any(plan.reason_code == "missing_link" for plan in slot_result.plans), "missing link was not planned")
+
 
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""

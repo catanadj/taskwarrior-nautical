@@ -102,15 +102,19 @@ class IntegrityRepairPlanner:
                 graph.snapshot.snapshot_id,
                 operation.chain_id,
                 RepairSafety.SAFE,
-                "reciprocal_link",
-                "Restore one uniquely resolved reciprocal chain link.",
+                "missing_link" if operation.kind is RepairOperationKind.METADATA_REPAIR else "reciprocal_link",
+                "Restore one uniquely inferred numeric chain link."
+                if operation.kind is RepairOperationKind.METADATA_REPAIR
+                else "Restore one uniquely resolved reciprocal chain link.",
                 (operation,),
                 context.configuration_fingerprint,
             ))
         return IntegrityPlanningResult(tuple(plans), tuple(refusals))
 
     def _operation_for(self, context: IntegrityContext, finding: IntegrityFinding) -> IntegrityOperation | None:
-        if finding.status is not FindingStatus.REPAIRABLE or finding.reason_code != "non_reciprocal_reference":
+        if finding.status is not FindingStatus.REPAIRABLE or finding.reason_code not in {
+            "non_reciprocal_reference", "missing_link_between_neighbors",
+        }:
             return None
         graph = context.graph
         if not context.configuration_fingerprint:
@@ -120,9 +124,30 @@ class IntegrityRepairPlanner:
         if len(finding.subject_uuids) != 1:
             return None
         source_matches = graph.uuid_matches(finding.subject_uuids[0])
-        if len(source_matches) != 1 or not source_matches[0].has_complete_identity:
+        if len(source_matches) != 1 or not source_matches[0].chain_id:
             return None
         source = source_matches[0]
+        if finding.reason_code == "missing_link_between_neighbors":
+            expected = dict(finding.expected).get("link")
+            if isinstance(expected, bool) or not isinstance(expected, int) or expected <= 0:
+                return None
+            operation_id = "ciop1-" + hashlib.sha256(
+                f"{graph.snapshot.snapshot_id}:{source.task_uuid}:link:{expected}".encode("utf-8")
+            ).hexdigest()[:24]
+            return IntegrityOperation(
+                operation_id,
+                RepairOperationKind.METADATA_REPAIR,
+                source.chain_id,
+                source.task_uuid,
+                (
+                    ("snapshot_id", graph.snapshot.snapshot_id),
+                    ("target_uuid", source.task_uuid),
+                    ("link", None),
+                ),
+                ("target remains present", "adjacent links still imply the same slot"),
+                (f"link is {expected}",),
+                (("link", expected),),
+            )
         observed = _pairs(finding)
         fields = [
             field for field in ("prevLink", "nextLink")

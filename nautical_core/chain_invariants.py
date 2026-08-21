@@ -107,6 +107,41 @@ def _duplicate_slot_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _missing_link_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    findings: list[IntegrityFinding] = []
+    for node in graph.nodes:
+        if node.link is not None or not node.chain_id:
+            continue
+        previous = graph.reference(node.task_uuid, "prevLink")
+        following = graph.reference(node.task_uuid, "nextLink")
+        if previous.state is not ReferenceState.RESOLVED or following.state is not ReferenceState.RESOLVED:
+            continue
+        previous_nodes = graph.uuid_matches(previous.target_uuid)
+        following_nodes = graph.uuid_matches(following.target_uuid)
+        if len(previous_nodes) != 1 or len(following_nodes) != 1:
+            continue
+        previous_node, following_node = previous_nodes[0], following_nodes[0]
+        if previous_node.chain_id != node.chain_id or following_node.chain_id != node.chain_id:
+            continue
+        if previous_node.link is None or following_node.link is None:
+            continue
+        expected = previous_node.link + 1
+        if following_node.link != expected + 1 or (node.chain_id, expected) in graph.by_slot:
+            continue
+        findings.append(_finding(
+            graph,
+            "slot.missing_link",
+            FindingStatus.REPAIRABLE,
+            FindingSeverity.ERROR,
+            node,
+            "missing_link_between_neighbors",
+            "Adjacent resolved links uniquely determine the missing link number.",
+            observed=(("prevLink", previous_node.link), ("nextLink", following_node.link)),
+            expected=(("link", expected),),
+        ))
+    return tuple(findings)
+
+
 def _edge_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for node in graph.nodes:
@@ -335,6 +370,7 @@ def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
 DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("identity", SnapshotCoverage.CANDIDATES, _identity_rule),
     InvariantRule("slot.duplicate_occupant", SnapshotCoverage.CANDIDATES, _duplicate_slot_rule),
+    InvariantRule("slot.missing_link", SnapshotCoverage.CHAIN, _missing_link_rule),
     InvariantRule("edge", SnapshotCoverage.CANDIDATES, _edge_rule),
     InvariantRule("edge.topology", SnapshotCoverage.CANDIDATES, _topology_rule),
     InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
@@ -350,7 +386,14 @@ def evaluate_invariants(
     """Evaluate rules in stable order and deduplicate identical evidence."""
     findings: list[IntegrityFinding] = []
     for rule in sorted(tuple(rules), key=lambda item: item.invariant_id):
-        if graph.snapshot.coverage in {SnapshotCoverage.UNAVAILABLE, SnapshotCoverage.TRUNCATED}:
+        coverage_ok = (
+            rule.required_coverage is SnapshotCoverage.CANDIDATES
+            and graph.snapshot.coverage in {SnapshotCoverage.CANDIDATES, SnapshotCoverage.CHAIN, SnapshotCoverage.COMPLETE}
+        ) or (
+            rule.required_coverage is SnapshotCoverage.CHAIN
+            and graph.snapshot.coverage in {SnapshotCoverage.CHAIN, SnapshotCoverage.COMPLETE}
+        ) or graph.snapshot.coverage is rule.required_coverage
+        if not coverage_ok:
             findings.append(_finding(
                 graph,
                 rule.invariant_id,

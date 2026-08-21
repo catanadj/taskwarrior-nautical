@@ -1032,6 +1032,40 @@ def _drain_integrity_work() -> tuple[Any, ...]:
     )
 
 
+def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
+    """Audit the authoritative lifecycle export without issuing another export."""
+    if _UNIT_OF_WORK is None:
+        raise RuntimeError("integrity audit requires an integration unit of work")
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    configuration = _UNIT_OF_WORK.context.configuration
+    snapshot = ChainSnapshot(
+        "reconcile-lifecycle-" + str(_UNIT_OF_WORK.mutation_epoch),
+        SnapshotCoverage.CHAIN,
+        "reconcile.lifecycle_candidates",
+        tuple(ChainNode.from_mapping(row) for row in rows),
+        configuration.fingerprint,
+        True,
+    )
+
+    class _NoopProvider:
+        def collect(self, _request: Any) -> Any:
+            raise RuntimeError("reconcile integrity audit uses its supplied snapshot")
+
+    engine = ChainIntegrityEngine(
+        _NoopProvider(),
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
+    return engine, engine.audit_snapshot(
+        snapshot,
+        outbox_repository=LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+        mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
+    )
+
+
 def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | None:
     """Find a task already occupying this exact chain position, by uuid or
     by (chainID, link, prevLink) match, regardless of whether it carries the
@@ -1749,6 +1783,36 @@ def main(
         candidates = _candidate_rows(args.task_bin, hook)
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
+    integrity_audit_result: Any = None
+    integrity_application_results: tuple[Any, ...] = ()
+    try:
+        from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+        if _READ_SNAPSHOT is not None and _READ_SNAPSHOT._rows is not None:
+            integrity_engine, integrity_audit_result = _audit_reconcile_integrity(
+                tuple(_READ_SNAPSHOT._rows)
+            )
+        if integrity_audit_result is not None and integrity_audit_result.status.value == "unavailable":
+            configuration_status = "unavailable"
+            configuration_drift_reason = integrity_audit_result.reason or "integrity audit unavailable"
+        elif integrity_audit_result is not None and args.apply and integrity_audit_result.plans:
+            integrity_application = integrity_engine.apply(
+                integrity_audit_result,
+                executor=TaskwarriorMutationService(_UNIT_OF_WORK),
+                request_factory=_integrity_request_factory,
+                outbox_repository=LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+                owner=f"reconcile-integrity-{os.getpid()}",
+            )
+            integrity_application_results = integrity_application.applications
+            if _READ_SNAPSHOT is not None and integrity_application_results:
+                _READ_SNAPSHOT._rows = None
+                candidates = _candidate_rows(args.task_bin, hook)
+    except Exception as exc:
+        integrity_audit_result = None
+        if args.apply:
+            configuration_status = "unavailable"
+            configuration_drift_reason = f"integrity audit unavailable: {type(exc).__name__}: {exc}"
+        elif os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] integrity audit skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
     taskdata = _locked_taskdata if args.apply else None
     runtime_taskdata = resolved_taskdata
     try:
@@ -2006,6 +2070,14 @@ def main(
             }
             for item in integrity_drain_results
         ],
+        "integrity_audit": None if integrity_audit_result is None else {
+            "status": integrity_audit_result.status.value,
+            "snapshot": integrity_audit_result.snapshot.snapshot_id if integrity_audit_result.snapshot else None,
+            "findings": len(integrity_audit_result.findings),
+            "plans": len(integrity_audit_result.plans),
+            "refusals": len(integrity_audit_result.refusals),
+            "reason": integrity_audit_result.reason,
+        },
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),

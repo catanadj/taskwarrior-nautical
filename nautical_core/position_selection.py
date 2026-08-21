@@ -8,8 +8,9 @@ from typing import Any, Callable, TypedDict
 
 from .season_support import (
     SEASON_NAMES,
+    active_mode,
     active_hemisphere,
-    fixed_season_boundary_description,
+    season_boundary_description,
     next_season_window,
     season_bounds,
     season_window_on_or_after,
@@ -556,10 +557,11 @@ def selection_advice(node: object) -> tuple[str, ...]:
             "ISO years may be counted, so higher positions exist only in some years."
         )
     if normalized["scope"] in SEASON_SCOPES:
-        boundary = fixed_season_boundary_description(normalized["scope"])
-        advice.append(f"{selector} uses fixed {boundary} boundaries.")
+        boundary = season_boundary_description(normalized["scope"])
+        advice.append(f"{selector} uses {active_mode()} {boundary} boundaries.")
     elif normalized["scope"] == "season":
-        advice.append(f"{selector} uses the four fixed seasonal windows for the active hemisphere.")
+        mode = "fixed" if active_mode() == "fixed" else "astronomical"
+        advice.append(f"{selector} uses the four {mode} seasonal windows for the active hemisphere.")
     return tuple(advice)
 
 

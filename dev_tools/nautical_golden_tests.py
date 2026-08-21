@@ -30331,6 +30331,45 @@ def test_astronomical_season_calculator_contract():
         pass
 
 
+def test_astronomical_season_support_boundaries_are_mode_and_hemisphere_aware():
+    """Astronomical mode should expose non-overlapping local-date season windows."""
+    from nautical_core import season_support
+
+    previous_mode = season_support.active_mode()
+    previous_hemisphere = season_support.active_hemisphere()
+    try:
+        season_support.configure_mode("astronomical")
+        season_support.configure_timezone("UTC")
+        season_support.configure_hemisphere("north")
+        expect(
+            season_support.season_bounds("spring", 2026) == (date(2026, 3, 20), date(2026, 6, 20)),
+            "astronomical northern spring boundary drifted",
+        )
+        expect(
+            season_support.season_bounds("winter", 2026) == (date(2026, 12, 21), date(2027, 3, 19)),
+            "astronomical northern winter rollover is incorrect",
+        )
+        season_support.configure_hemisphere("south")
+        expect(
+            season_support.season_bounds("summer", 2026) == (date(2026, 12, 21), date(2027, 3, 19)),
+            "astronomical southern summer rollover is incorrect",
+        )
+        try:
+            season_support.configure_mode("sidereal")
+            raise AssertionError("invalid season mode was accepted by season support")
+        except ValueError as exc:
+            expect("fixed, astronomical" in str(exc), f"unclear season mode error: {exc}")
+        try:
+            season_support.configure_timezone("Not/A_Timezone")
+            raise AssertionError("invalid season timezone was accepted")
+        except ValueError as exc:
+            expect("invalid or unavailable" in str(exc), f"unclear season timezone error: {exc}")
+    finally:
+        season_support.configure_mode(previous_mode)
+        season_support.configure_hemisphere(previous_hemisphere)
+        season_support.configure_timezone(core.LOCAL_TZ_NAME)
+
+
 def test_fixed_season_calendar_finds_active_or_next_window():
     """Season lookup should retain an active window and otherwise advance to that season."""
     from nautical_core import season_support
@@ -32136,6 +32175,7 @@ TESTS = [
     test_config_schema_reports_retired_unknown_and_ineffective_values,
     test_season_mode_configuration_contract,
     test_astronomical_season_calculator_contract,
+    test_astronomical_season_support_boundaries_are_mode_and_hemisphere_aware,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

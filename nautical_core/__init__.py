@@ -467,6 +467,8 @@ def _ensure_tokenutil_constants() -> None:
 
 def _configure_season_support() -> None:
     _season_support.configure_hemisphere(SEASON_HEMISPHERE)
+    _season_support.configure_mode(SEASON_MODE)
+    _season_support.configure_timezone(LOCAL_TZ_NAME)
 
 short_uuid = _common.short_uuid
 
@@ -668,6 +670,11 @@ def _refresh_facade_config_exports() -> None:
         _refresh_timezone()
     if initial_sync and not season_override:
         _configure_season_support()
+    else:
+        # A config reload may change the backend or timezone even when a
+        # caller intentionally keeps a process-local hemisphere override.
+        _season_support.configure_mode(SEASON_MODE)
+        _season_support.configure_timezone(LOCAL_TZ_NAME)
 
 
 # --- Date/time config ---

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo
+
+from .astronomical_seasons import seasonal_event_utc
 
 
 SEASON_NAMES = ("spring", "summer", "autumn", "winter")
 HEMISPHERE_NAMES = ("north", "south")
+SEASON_MODE_NAMES = ("fixed", "astronomical")
 
 _FIXED_BOUNDARIES_BY_HEMISPHERE = {
     "north": {
@@ -21,6 +25,8 @@ _FIXED_BOUNDARIES_BY_HEMISPHERE = {
     },
 }
 _ACTIVE_HEMISPHERE = "north"
+_ACTIVE_MODE = "fixed"
+_ACTIVE_TIMEZONE: tzinfo = timezone.utc
 
 
 def normalize_hemisphere(value: object) -> str:
@@ -44,6 +50,41 @@ def configure_hemisphere(value: object) -> str:
 
 def active_hemisphere() -> str:
     return _ACTIVE_HEMISPHERE
+
+
+def normalize_season_mode(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in SEASON_MODE_NAMES:
+        expected = ", ".join(SEASON_MODE_NAMES)
+        raise ValueError(f"Unknown season mode '{value}'. Expected one of: {expected}.")
+    return normalized
+
+
+def configure_mode(value: object) -> str:
+    """Set the season-boundary backend and return its canonical name."""
+    global _ACTIVE_MODE
+    _ACTIVE_MODE = normalize_season_mode(value)
+    return _ACTIVE_MODE
+
+
+def active_mode() -> str:
+    return _ACTIVE_MODE
+
+
+def configure_timezone(value: object) -> str:
+    """Set the timezone used to turn UTC astronomical instants into dates."""
+    global _ACTIVE_TIMEZONE
+    if isinstance(value, tzinfo):
+        _ACTIVE_TIMEZONE = value
+        return str(getattr(value, "key", value))
+    name = str(value or "").strip()
+    if not name:
+        raise ValueError("Astronomical season timezone cannot be empty.")
+    try:
+        _ACTIVE_TIMEZONE = ZoneInfo(name)
+    except Exception as exc:
+        raise ValueError(f"Astronomical season timezone '{name}' is invalid or unavailable.") from exc
+    return name
 
 
 def _fixed_boundaries() -> dict[str, tuple[tuple[int, int], tuple[int, int]]]:
@@ -74,13 +115,63 @@ def fixed_season_boundary_description(season: object) -> str:
     return _fixed_boundary_description(normalize_season_name(season))
 
 
+_ASTRONOMICAL_EVENTS_BY_HEMISPHERE = {
+    "north": {
+        "spring": ("spring_equinox", "summer_solstice", 0, 0),
+        "summer": ("summer_solstice", "autumn_equinox", 0, 0),
+        "autumn": ("autumn_equinox", "winter_solstice", 0, 0),
+        "winter": ("winter_solstice", "spring_equinox", 0, 1),
+    },
+    "south": {
+        "spring": ("autumn_equinox", "winter_solstice", 0, 0),
+        "summer": ("winter_solstice", "spring_equinox", 0, 1),
+        "autumn": ("spring_equinox", "summer_solstice", 0, 0),
+        "winter": ("summer_solstice", "autumn_equinox", 0, 0),
+    },
+}
+
+
+def _astronomical_boundaries(name: str, start_year: int) -> tuple[date, date]:
+    start_event, end_event, start_offset, end_offset = _ASTRONOMICAL_EVENTS_BY_HEMISPHERE[
+        _ACTIVE_HEMISPHERE
+    ][name]
+    start_event_year = start_year + start_offset
+    end_event_year = start_year + end_offset
+    if end_event_year > 9999:
+        raise ValueError(f"{name.capitalize()} starting in year {start_year} exceeds the supported date range.")
+    start = seasonal_event_utc(start_event_year, start_event).astimezone(_ACTIVE_TIMEZONE).date()
+    end_instant = seasonal_event_utc(end_event_year, end_event)
+    # Season selectors operate on calendar dates.  The next transition's
+    # local date starts the following season, even when its instant is later
+    # in that day, so date windows never overlap.
+    end = end_instant.astimezone(_ACTIVE_TIMEZONE).date() - timedelta(days=1)
+    return start, end
+
+
+def season_boundary_description(season: object) -> str:
+    """Describe the active season backend without exposing implementation detail."""
+    name = normalize_season_name(season)
+    if _ACTIVE_MODE == "fixed":
+        return fixed_season_boundary_description(name)
+    start_event, end_event, _start_offset, _end_offset = _ASTRONOMICAL_EVENTS_BY_HEMISPHERE[
+        _ACTIVE_HEMISPHERE
+    ][name]
+    return (
+        f"{start_event.replace('_', ' ')} through "
+        f"{end_event.replace('_', ' ')}"
+    )
+
+
 def season_bounds(season: object, start_year: int) -> tuple[date, date]:
-    """Return fixed inclusive boundaries, identified by the season's start year."""
+    """Return inclusive boundaries identified by the season's start year."""
     name = normalize_season_name(season)
     if isinstance(start_year, bool) or not isinstance(start_year, int):
         raise TypeError("Season start year must be an integer.")
     if not 1 <= start_year <= 9999:
         raise ValueError("Season start year must be between 1 and 9999.")
+
+    if _ACTIVE_MODE == "astronomical":
+        return _astronomical_boundaries(name, start_year)
 
     (start_month, start_day), (end_month, end_day) = _fixed_boundaries()[name]
     crosses_year = end_month < start_month
@@ -154,13 +245,19 @@ def next_season_window(start: date) -> tuple[str, date, date]:
 __all__ = (
     "HEMISPHERE_NAMES",
     "SEASON_NAMES",
+    "SEASON_MODE_NAMES",
+    "active_mode",
     "active_hemisphere",
+    "configure_mode",
     "configure_hemisphere",
+    "configure_timezone",
     "fixed_season_boundary_description",
     "next_season_window",
     "normalize_hemisphere",
+    "normalize_season_mode",
     "normalize_season_name",
     "season_bounds",
+    "season_boundary_description",
     "season_window_on_or_after",
     "season_windows_on_or_after",
 )

@@ -32641,6 +32641,44 @@ def test_query_service_batches_multiple_uuid_reads():
     expect(response.results[1].status == "absent", "batched missing UUID was not absent")
 
 
+def test_query_service_contains_invalid_task_schedule_errors():
+    """A malformed recurrence in an all-task query becomes a per-task failure."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    broken = {
+        "uuid": "00000000-0000-0000-0000-000000000008",
+        "chainID": "query-broken",
+        "link": 1,
+        "description": "Broken recurrence",
+        "anchor": "(m:1:15 + m:rand)",
+        "anchor_mode": "skip",
+        "status": "pending",
+    }
+
+    class _Repository:
+        def broad_snapshot(self, **kwargs):
+            del kwargs
+            return Found(SimpleNamespace(rows=(broken,)), "broad:query:all-active")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone.utc,
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1}
+    )
+    result = OccurrenceQueryService(uow, core=core).query(request).results[0]
+    expect(result.status == "invalid", f"malformed recurrence did not become an invalid task result: {result.to_dict()}")
+    expect(result.failure is not None and result.failure.code == "task_invalid", "malformed recurrence failure code changed")
+
+
 def test_query_next_projects_anchor_and_cp_without_mutation():
     """The next operation uses due/scheduled or completion references read-only."""
     from nautical_core.integration_context import IntegrationAccess
@@ -32740,6 +32778,7 @@ TESTS.extend([
     test_query_installed_layout_runs_outside_checkout,
     test_query_service_all_selector_excludes_non_recurrence_rows,
     test_query_service_batches_multiple_uuid_reads,
+    test_query_service_contains_invalid_task_schedule_errors,
     test_query_next_projects_anchor_and_cp_without_mutation,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,

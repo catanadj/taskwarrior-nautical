@@ -24,6 +24,7 @@ from .query_models import (
     TaskIdentity,
     TaskOccurrenceResult,
 )
+from .parser_models import ParseError
 
 
 class QueryServiceError(RuntimeError):
@@ -280,11 +281,11 @@ class OccurrenceQueryService:
                 failure=failure,
                 terminal=_terminal(collected),
             )
-        except (QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
+        except (ParseError, QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
             uuid_value = str(task.get("uuid") or "") or None
             return TaskOccurrenceResult(
                 task=None,
-                status="invalid" if isinstance(exc, (TypeError, ValueError, QueryServiceError)) else "unavailable",
+                status="invalid" if isinstance(exc, (ParseError, TypeError, ValueError, QueryServiceError)) else "unavailable",
                 failure=_failure("task_invalid", str(exc), task_uuid=uuid_value),
             )
 
@@ -463,7 +464,7 @@ class OccurrenceQueryService:
             if records and not bounded(records[0].utc):
                 return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
             return TaskOccurrenceResult(identity, result.status, records, terminal=_terminal(result), chain=chain_metadata, lifecycle=lifecycle_metadata)
-        except (QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
+        except (ParseError, QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
             return TaskOccurrenceResult(
                 identity,
                 "invalid",

@@ -7075,6 +7075,18 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
         expect(repaired.get("operation") == "repair", f"damaged active release was not repaired: {repaired!r}")
         expect(repaired.get("changed") is True and wrapper.is_file(), f"repair did not restore the wrapper: {repaired!r}")
 
+        launcher = taskdata / "nautical"
+        launcher.write_text("#!/usr/bin/env python3\n# stale launcher\n", encoding="utf-8")
+        launcher.chmod(0o755)
+        repaired = install_runtime.install_release(
+            source=Path(ROOT),
+            taskdata=taskdata,
+            release_id="release-one",
+            smoke=False,
+        )
+        expect(repaired.get("operation") == "repair", f"stale launcher was not repaired: {repaired!r}")
+        expect(launcher.read_bytes() == (Path(ROOT) / "nautical").read_bytes(), "repair retained a stale launcher")
+
 
 def test_installer_upgrade_rollback_restores_active_runtime():
     """A failed upgrade should restore its pointer and every managed wrapper."""
@@ -7443,6 +7455,11 @@ def test_nautical_dispatches_supported_subcommands():
         expect(target == expected_target, f"wrong target for {command}: {target!r}")
         expect(run_name == "__main__", f"wrong run_name for {command}: {run_name!r}")
         expect(argv[0] == expected_target, f"argv not rewritten for {command}: {argv!r}")
+        if command == "install":
+            expect(
+                argv[1:3] == ["--source", ROOT],
+                f"install did not select the checkout as its source: {argv!r}",
+            )
 
     previous_install_target = mod.COMMANDS["install"]
     previous_source = os.environ.get("NAUTICAL_SOURCE")

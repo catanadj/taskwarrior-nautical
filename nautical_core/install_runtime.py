@@ -384,6 +384,20 @@ def validate_installed(base: Path, hooks_dir: Path, *, smoke: bool = True) -> di
     launcher = base / "nautical"
     if not (launcher.is_file() and os.access(str(launcher), os.X_OK)):
         raise InstallError(f"installed launcher is missing or not executable: {launcher}")
+    active_release = base / ".nautical-runtime" / "current"
+    if active_release.is_dir():
+        installed_files = {
+            **{name: hooks_dir / name for name in HOOK_FILES.values()},
+            **{name: base / name for name in MANAGED_ROOT_FILES},
+        }
+        for name, installed_path in installed_files.items():
+            release_path = active_release / name
+            try:
+                matches = installed_path.read_bytes() == release_path.read_bytes()
+            except OSError as exc:
+                raise InstallError(f"installed managed file could not be verified: {installed_path}: {exc}") from exc
+            if not matches:
+                raise InstallError(f"installed managed file does not match the active release: {installed_path}")
     return apis
 
 

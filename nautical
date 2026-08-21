@@ -42,9 +42,22 @@ def _checkout_root() -> Path | None:
         if resolved.is_file():
             resolved = resolved.parent
         for root in (resolved, *resolved.parents):
-            if (root / "nautical_core" / "tools" / "nautical_install.py").is_file():
+            if all(
+                (root / name).is_file()
+                for name in (
+                    "nautical",
+                    "on-add.nautical",
+                    "on-modify.nautical",
+                    "on-exit.nautical",
+                    "nautical_core/tools/nautical_install.py",
+                )
+            ):
                 return root
     return None
+
+
+def _has_source_argument(arguments: list[str]) -> bool:
+    return any(value == "--source" or value.startswith("--source=") for value in arguments)
 
 
 def main() -> int:
@@ -69,7 +82,12 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-    sys.argv = [str(target), *sys.argv[2:]]
+    arguments = list(sys.argv[2:])
+    if command == "install" and not _has_source_argument(arguments):
+        checkout = _checkout_root()
+        if checkout is not None:
+            arguments = ["--source", str(checkout), *arguments]
+    sys.argv = [str(target), *arguments]
     runpy.run_path(str(target), run_name="__main__")
     return 0
 

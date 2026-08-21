@@ -802,6 +802,75 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def _integrity_transition(
+        self,
+        *,
+        intent_id: str,
+        owner: str,
+        state: OutboxProcessingState,
+        failure: OutboxFailure | None = None,
+    ) -> OutboxResult:
+        intent_id = str(intent_id or "").strip()
+        owner = str(owner or "").strip()
+        if not intent_id or not owner:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="integrity transition requires intent and owner")
+        if state not in {OutboxProcessingState.RETRY, OutboxProcessingState.MANUAL_REVIEW, OutboxProcessingState.ACKNOWLEDGED}:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="invalid integrity transition state")
+        if state is OutboxProcessingState.MANUAL_REVIEW and failure is None:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="manual review requires failure evidence")
+        now = self._clock()
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            with _transaction(conn):
+                row = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
+                    (intent_id, "integrity"),
+                ).fetchone()
+                if row is None:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="no such integrity intent")
+                current = str(row["processing_state"] or "")
+                if current == OutboxProcessingState.ACKNOWLEDGED.value and state is OutboxProcessingState.ACKNOWLEDGED:
+                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED)
+                if current != OutboxProcessingState.CLAIMED.value or str(row["lease_owner"] or "") != owner:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="integrity intent is not owned by caller")
+                encoded_failure = "" if failure is None else failure.to_json()
+                acknowledged_at = now if state is OutboxProcessingState.ACKNOWLEDGED else 0
+                stage = ExecutionStage.FINALIZED.value if state in {
+                    OutboxProcessingState.MANUAL_REVIEW, OutboxProcessingState.ACKNOWLEDGED,
+                } else ExecutionStage.PLANNED.value
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lifecycle_stage=?, lease_owner='', "
+                    "lease_expires_at=0, failure_json=?, acknowledged_at=?, updated_at=? "
+                    "WHERE intent_id=? AND work_kind=? AND processing_state=? AND lease_owner=?",
+                    (state.value, stage, encoded_failure, acknowledged_at, now, intent_id, "integrity",
+                     OutboxProcessingState.CLAIMED.value, owner),
+                )
+                return OutboxResult(OutboxResultKind.APPLIED)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def acknowledge_integrity(self, *, intent_id: str, owner: str) -> OutboxResult:
+        return self._integrity_transition(
+            intent_id=intent_id, owner=owner, state=OutboxProcessingState.ACKNOWLEDGED,
+        )
+
+    def release_integrity_retry(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
+        return self._integrity_transition(
+            intent_id=intent_id, owner=owner, state=OutboxProcessingState.RETRY, failure=failure,
+        )
+
+    def manual_review_integrity(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
+        return self._integrity_transition(
+            intent_id=intent_id, owner=owner, state=OutboxProcessingState.MANUAL_REVIEW, failure=failure,
+        )
+
     def claim_intent(self, *, owner: str, lease_seconds: float, intent_id: str) -> OutboxResult:
         """Claim one specific intent by id, for a caller that must execute
         exactly the record it just staged (e.g. reconcile, which holds a

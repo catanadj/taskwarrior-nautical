@@ -3679,6 +3679,10 @@ def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
         integrity_claim, integrity_records = repo.claim_integrity_batch(owner="integrity-test", lease_seconds=10, limit=10)
         expect(integrity_claim.ok and len(integrity_records) == 1, "integrity claim did not claim shared work")
         expect(integrity_records[0].envelope.intent_id == envelope.intent_id, "integrity claim returned wrong envelope")
+        acknowledged = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
+        expect(acknowledged.ok, f"integrity work was not acknowledged: {acknowledged}")
+        repeated = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
+        expect(repeated.kind is OutboxResultKind.ALREADY_APPLIED, "integrity acknowledgement was not idempotent")
         with sqlite3.connect(str(repo.path)) as conn:
             row = conn.execute("SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?", (envelope.intent_id,)).fetchone()
         expect(row is not None and row[0] == "integrity", "integrity work kind was not stored")

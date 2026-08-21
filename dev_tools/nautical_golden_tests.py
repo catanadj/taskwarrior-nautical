@@ -32214,6 +32214,16 @@ def test_query_contract_models_round_trip_and_reject_invalid():
         failure=QueryFailure("task_absent", "task was not found", task_uuid=identity.uuid),
     )
     expect(absent.to_dict()["task"] is None, "absent query result requires a fabricated task identity")
+    next_request = OccurrenceQueryRequest.from_mapping(
+        {
+            "operation": "next",
+            "selector": {"all_tasks": True},
+            "from": "2026-08-21",
+            "count": 1,
+        }
+    )
+    next_response = OccurrenceQueryResponse(next_request, "Europe/Bucharest")
+    expect(next_response.to_dict()["schema"] == "nautical.query.next", "next response did not select its schema")
 
     invalid_cases = (
         lambda: QuerySelector(all_tasks=True, chain_id="query-chain"),

@@ -423,6 +423,8 @@ class OccurrenceQueryResponse:
         if self.failure is not None and not isinstance(self.failure, QueryFailure):
             raise QueryContractError("query response failure is invalid")
         expected_schema = OCCURRENCES_SCHEMA if self.request.operation == OCCURRENCE_OPERATION else NEXT_SCHEMA
+        if self.schema == OCCURRENCES_SCHEMA and expected_schema == NEXT_SCHEMA:
+            object.__setattr__(self, "schema", NEXT_SCHEMA)
         if self.schema != expected_schema or self.version != QUERY_API_VERSION:
             raise QueryContractError("unsupported occurrence response schema")
 

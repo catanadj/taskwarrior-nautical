@@ -32692,6 +32692,16 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
     )
     bounded_result = OccurrenceQueryService(bounded_uow, core=core).query_next(bounded_request).results[0]
     expect(bounded_result.status == "empty", "next projection ignored chainMax")
+    until_task = dict(anchor_task, chainUntil="2026-08-24T01:00:00Z")
+
+    class _UntilRepository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(until_task, f"uuid:{value}")
+
+    until_uow = SimpleNamespace(context=uow.context, repository=_UntilRepository())
+    until_result = OccurrenceQueryService(until_uow, core=core).query_next(bounded_request).results[0]
+    expect(until_result.status == "empty", "next projection ignored chainUntil")
 
 
 TESTS.extend([

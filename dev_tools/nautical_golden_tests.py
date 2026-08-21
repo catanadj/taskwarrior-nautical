@@ -32679,6 +32679,9 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
     expect(len(response.results) == 2 and all(item.status == "found" for item in response.results), "next projection lost a task")
     expect(response.results[0].occurrences[0].source == "anchor", "anchor next projection source is incorrect")
     expect(response.results[1].occurrences[0].source == "cp", "CP next projection source is incorrect")
+    expect(response.results[0].chain["chainID"] == anchor_task["chainID"], "next chain metadata lost chain identity")
+    expect(response.results[0].lifecycle["child_created"] is False, "next lifecycle metadata implied a created child")
+    expect(response.results[1].lifecycle["reference_field"] == "due", "CP fallback reference field is incorrect")
     bounded_task = dict(anchor_task, chainMax="1")
 
     class _BoundedRepository:

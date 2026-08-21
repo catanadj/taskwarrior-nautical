@@ -374,11 +374,32 @@ class OccurrenceQueryService:
             context = self._context_for(task)
             reference_utc = self._reference_utc(task)
             link = _link_value(task.get("link")) or 1
+            chain_metadata: dict[str, Any] = {
+                "chainID": identity.chain_id,
+                "link": link,
+                "prevLink": str(task.get("prevLink") or "") or None,
+                "nextLink": str(task.get("nextLink") or "") or None,
+                "status": str(task.get("status") or "") or None,
+                "chainMax": task.get("chainMax") or None,
+                "chainUntil": task.get("chainUntil") or None,
+            }
+            recurrence_kind = identity.recurrence_kind
+            reference_field = "end" if recurrence_kind == "cp" and task.get("end") else (
+                "due" if task.get("due") else "scheduled"
+            )
+            lifecycle_metadata: dict[str, Any] = {
+                "projected": True,
+                "basis": "completion-end" if recurrence_kind == "cp" and task.get("end") else "task-reference",
+                "reference_field": reference_field,
+                "reference_utc": reference_utc.isoformat().replace("+00:00", "Z"),
+                "target_field": "scheduled" if not task.get("due") and task.get("scheduled") else "due",
+                "child_created": False,
+            }
             chain_max = task.get("chainMax")
             if chain_max not in (None, ""):
                 try:
                     if link >= int(chain_max):
-                        return TaskOccurrenceResult(identity, "empty")
+                        return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
                 except (TypeError, ValueError) as exc:
                     raise QueryServiceError("chainMax is not an integer") from exc
 
@@ -403,9 +424,11 @@ class OccurrenceQueryService:
                     parent["end"] = formatter(reference_utc)
                 child_due, _metadata = ChainGenerationService.from_core(self._core).compute_cp_child_due(parent)
                 if child_due is None:
-                    return TaskOccurrenceResult(identity, "empty")
+                    return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
                 if not bounded(child_due):
-                    return TaskOccurrenceResult(identity, "empty")
+                    return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
+                lifecycle_metadata["basis_detail"] = str((_metadata or {}).get("basis") or "end+cp")
+                lifecycle_metadata["target_field"] = str((_metadata or {}).get("target_field") or lifecycle_metadata["target_field"])
                 local = child_due.astimezone(self._timezone)
                 record = OccurrenceRecord(
                     local=local,
@@ -413,8 +436,9 @@ class OccurrenceQueryService:
                     timezone=_timezone_name(self._timezone),
                     source="cp",
                 )
-                return TaskOccurrenceResult(identity, "found", (record,))
+                return TaskOccurrenceResult(identity, "found", (record,), chain=chain_metadata, lifecycle=lifecycle_metadata)
             scheduler = SchedulerService.from_task(task, context=context)
+            lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             result = scheduler.collect_request(
                 OccurrenceRangeRequest(
@@ -432,16 +456,20 @@ class OccurrenceQueryService:
                     identity,
                     result.status,
                     failure=_failure("scheduler_unavailable", result.failure.reason, task_uuid=identity.uuid, retryable=result.status == "unavailable"),
+                    chain=chain_metadata,
+                    lifecycle=lifecycle_metadata,
                 )
             records = self._records(result, _timezone_name(self._timezone))
             if records and not bounded(records[0].utc):
-                return TaskOccurrenceResult(identity, "empty")
-            return TaskOccurrenceResult(identity, result.status, records, terminal=_terminal(result))
+                return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
+            return TaskOccurrenceResult(identity, result.status, records, terminal=_terminal(result), chain=chain_metadata, lifecycle=lifecycle_metadata)
         except (QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
             return TaskOccurrenceResult(
                 identity,
                 "invalid",
                 failure=_failure("next_projection_invalid", str(exc), task_uuid=identity.uuid if identity else str(task.get("uuid") or "")),
+                chain=({"chainID": identity.chain_id} if identity is not None else {}),
+                lifecycle={"projected": True, "child_created": False},
             )
 
     def query_next(self, request: OccurrenceQueryRequest) -> OccurrenceQueryResponse:

@@ -71,6 +71,12 @@ def _capabilities_payload() -> dict[str, Any]:
         "version": QUERY_API_VERSION,
         "status": "ok",
         "operations": ["occurrences", "next"],
+        "next": {
+            "basis": "read-only projected successor",
+            "reference": "CP uses end when present, otherwise due/scheduled; anchors use due/scheduled",
+            "metadata": ["chain", "lifecycle"],
+            "mutates_taskwarrior": False,
+        },
         "selectors": ["uuid", "chain_id", "all"],
         "omission_policies": ["exclude", "include", "report"],
         "timestamps": {

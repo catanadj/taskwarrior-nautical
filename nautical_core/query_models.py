@@ -375,6 +375,8 @@ class TaskOccurrenceResult:
     omitted_occurrences: tuple[OccurrenceRecord, ...] = ()
     failure: QueryFailure | None = None
     terminal: Mapping[str, Any] | None = None
+    chain: Mapping[str, Any] = field(default_factory=dict)
+    lifecycle: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.task is not None and not isinstance(self.task, TaskIdentity):
@@ -387,6 +389,10 @@ class TaskOccurrenceResult:
             raise QueryContractError("task occurrence result failure is invalid")
         if self.terminal is not None and not isinstance(self.terminal, Mapping):
             raise QueryContractError("task occurrence terminal evidence must be an object")
+        if not isinstance(self.chain, Mapping) or not isinstance(self.lifecycle, Mapping):
+            raise QueryContractError("task occurrence metadata must be objects")
+        object.__setattr__(self, "chain", dict(self.chain))
+        object.__setattr__(self, "lifecycle", dict(self.lifecycle))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -396,6 +402,8 @@ class TaskOccurrenceResult:
             "omitted_occurrences": [item.to_dict() for item in self.omitted_occurrences],
             "failure": self.failure.to_dict() if self.failure is not None else None,
             "terminal": _json_value(self.terminal) if self.terminal is not None else None,
+            "chain": _json_value(self.chain),
+            "lifecycle": _json_value(self.lifecycle),
         }
 
 

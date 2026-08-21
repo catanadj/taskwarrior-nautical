@@ -32412,6 +32412,69 @@ def test_query_process_boundary_emits_one_json_document():
     json.loads(inline.stdout)
 
 
+def test_query_service_preserves_absent_and_unavailable_task_reads():
+    """Typed repository read states remain distinct in query responses."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        FailureEvidence,
+        TaskCommand,
+        Unavailable,
+    )
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    context = SimpleNamespace(
+        access=IntegrationAccess.READ_ONLY,
+        local_timezone=timezone.utc,
+        configuration=SimpleNamespace(fingerprint="query-config"),
+    )
+
+    class _Repository:
+        def __init__(self, read):
+            self.read = read
+
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            if isinstance(self.read, Absent):
+                return Absent(f"uuid:{value}", self.read.reason)
+            return self.read
+
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": ["00000000-0000-0000-0000-000000000003"]},
+            "from": "2026-08-24",
+            "count": 1,
+        }
+    )
+    absent_uow = SimpleNamespace(
+        context=context,
+        repository=_Repository(Absent("uuid:missing", "no exact match")),
+    )
+    absent_response = OccurrenceQueryService(absent_uow, core=core).query(request)
+    expect(absent_response.status == "absent", "absent repository read changed query status")
+    expect(absent_response.results[0].task is None, "absent repository read fabricated task identity")
+
+    command = TaskCommand(("task", "export"), "query test", 1.0)
+    evidence = FailureEvidence(
+        command,
+        CommandFailureKind.BUSY,
+        2,
+        1,
+        0.01,
+        True,
+        "Taskwarrior lock active",
+    )
+    unavailable_uow = SimpleNamespace(
+        context=context,
+        repository=_Repository(Unavailable("uuid:busy", evidence)),
+    )
+    unavailable_response = OccurrenceQueryService(unavailable_uow, core=core).query(request)
+    expect(unavailable_response.status == "unavailable", "unavailable repository read changed query status")
+    expect(unavailable_response.failure is not None and unavailable_response.failure.retryable, "unavailable read lost retryability")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
@@ -32419,6 +32482,7 @@ TESTS.extend([
     test_query_cli_flags_build_the_same_validated_request,
     test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,
+    test_query_service_preserves_absent_and_unavailable_task_reads,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

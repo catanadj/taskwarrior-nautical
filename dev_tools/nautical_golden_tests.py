@@ -1426,6 +1426,38 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
 
 
+def test_chain_integrity_engine_owns_audit_and_empty_drain():
+    """The engine composes typed evidence and owns the integrity drain boundary."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage, IntegrityReportStatus
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.integration_models import Found
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    class Provider:
+        def collect(self, _request):
+            return Found(
+                ChainSnapshot("engine-snapshot", SnapshotCoverage.CHAIN, "test.provider", complete_chain_history=True),
+                "engine snapshot",
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        repository = LifecycleOutboxRepository(Path(td))
+        expect(repository.open().ok, "engine test outbox did not open")
+        engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-engine")
+        audited = engine.audit(IntegritySnapshotRequest.chain("engine-chain"), outbox_repository=repository)
+        expect(audited.status is IntegrityReportStatus.HEALTHY, f"empty audit was not healthy: {audited}")
+        applied = engine.apply(
+            audited,
+            executor=SimpleNamespace(),
+            request_factory=lambda _operation: None,
+            outbox_repository=repository,
+            owner="engine-test",
+        )
+        expect(applied.status is IntegrityReportStatus.HEALTHY, "empty engine apply changed status")
+        expect(not applied.applications, "empty engine apply produced mutation results")
+
+
 def test_chain_graph_is_deterministic_and_preserves_reference_states():
     """Graph indexes and edge evidence are immutable and order-independent."""
     from nautical_core.chain_graph import ChainGraph
@@ -3689,6 +3721,9 @@ def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
         with sqlite3.connect(str(repo.path)) as conn:
             row = conn.execute("SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?", (envelope.intent_id,)).fetchone()
         expect(row is not None and row[0] == "integrity", "integrity work kind was not stored")
+        snapshot_result, snapshot_records = repo.snapshot_records()
+        expect(snapshot_result.ok and len(snapshot_records) == 1, "shared outbox snapshot lost integrity evidence")
+        expect(snapshot_records[0].intent_id == envelope.intent_id, "shared outbox snapshot returned wrong intent")
 
 
 def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
@@ -32352,6 +32387,7 @@ TESTS = [
     test_lifecycle_models_enforce_transition_contract,
     test_chain_integrity_models_enforce_observation_and_repair_contract,
     test_chain_snapshot_service_preserves_authority_and_epoch_cache,
+    test_chain_integrity_engine_owns_audit_and_empty_drain,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_context_keeps_outbox_evidence_separate,

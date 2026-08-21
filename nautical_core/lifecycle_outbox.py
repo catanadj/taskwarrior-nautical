@@ -1233,7 +1233,7 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
-    def snapshot_records(self) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
+    def snapshot_records(self) -> tuple[OutboxResult, tuple[Any, ...]]:
         """Read every validated intent for one immutable integrity snapshot.
 
         This is deliberately a repository operation: callers do not inspect
@@ -1257,12 +1257,30 @@ class LifecycleOutboxRepository:
                     f"outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
                 )
             self._validate_schema(conn)
-            records: list[LifecycleOutboxRecord] = []
+            from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+
+            records: list[Any] = []
             for row in conn.execute("SELECT * FROM lifecycle_outbox ORDER BY intent_id ASC"):
                 try:
-                    records.append(self._from_row(row))
+                    if str(row["work_kind"] or "lifecycle") == "integrity":
+                        encoded = str(row["plan_json"] or "")
+                        envelope = IntegrityOutboxEnvelope.from_dict(json.loads(encoded))
+                        if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
+                            raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
+                        records.append(IntegrityOutboxRecord(
+                            envelope,
+                            OutboxProcessingState(str(row["processing_state"] or "")),
+                            ExecutionStage(str(row["lifecycle_stage"] or "")),
+                            str(row["lease_owner"] or ""),
+                            float(row["lease_expires_at"] or 0.0),
+                            int(row["attempts"] or 0),
+                        ))
+                    else:
+                        records.append(self._from_row(row))
                 except LifecycleOutboxError as exc:
                     return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {exc}"), ()
+                except Exception as exc:
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {type(exc).__name__}: {exc}"), ()
             return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()

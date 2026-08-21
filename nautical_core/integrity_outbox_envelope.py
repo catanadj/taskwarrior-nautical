@@ -112,5 +112,21 @@ class IntegrityOutboxRecord:
         object.__setattr__(self, "lease_owner", str(self.lease_owner or "").strip())
         object.__setattr__(self, "attempts", int(self.attempts))
 
+    @property
+    def intent_id(self) -> str:
+        return self.envelope.intent_id
+
+    @property
+    def plan(self) -> IntegrityRepairPlan:
+        return self.envelope.plan
+
+    @property
+    def configuration_fingerprint(self) -> str:
+        return self.envelope.configuration_fingerprint
+
+    @property
+    def schedule_fingerprint(self) -> str:
+        return self.envelope.schedule_fingerprint
+
 
 __all__ = ["IntegrityOutboxEnvelope", "IntegrityOutboxRecord", "OutboxWorkKind"]

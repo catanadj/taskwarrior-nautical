@@ -7,14 +7,18 @@ from enum import Enum
 import hashlib
 import json
 from types import MappingProxyType
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, TypeAlias
 
 from .chain_graph import ChainGraph
 from .lifecycle_outbox import LifecycleOutboxRecord
+from .integrity_outbox_envelope import IntegrityOutboxRecord
+
+
+OutboxEvidenceRecord: TypeAlias = LifecycleOutboxRecord | IntegrityOutboxRecord
 
 
 class _OutboxRepository(Protocol):
-    def snapshot_records(self) -> tuple[object, tuple[LifecycleOutboxRecord, ...]]: ...
+    def snapshot_records(self) -> tuple[object, tuple[OutboxEvidenceRecord, ...]]: ...
 
 
 class OutboxCoverage(str, Enum):
@@ -29,7 +33,7 @@ class OutboxSnapshot:
     snapshot_id: str
     coverage: OutboxCoverage
     source: str
-    records: tuple[LifecycleOutboxRecord, ...] = ()
+    records: tuple[OutboxEvidenceRecord, ...] = ()
     reason: str = ""
 
     def __post_init__(self) -> None:
@@ -39,8 +43,8 @@ class OutboxSnapshot:
             raise ValueError("outbox snapshot requires identity and source")
         coverage = OutboxCoverage(self.coverage)
         records = tuple(self.records)
-        if any(not isinstance(record, LifecycleOutboxRecord) for record in records):
-            raise TypeError("outbox snapshot records must be LifecycleOutboxRecord values")
+        if any(not isinstance(record, (LifecycleOutboxRecord, IntegrityOutboxRecord)) for record in records):
+            raise TypeError("outbox snapshot records must be typed outbox records")
         if len({record.intent_id for record in records}) != len(records):
             raise ValueError("outbox snapshot intent IDs must be unique")
         reason = str(self.reason or "").strip()
@@ -53,7 +57,7 @@ class OutboxSnapshot:
         object.__setattr__(self, "reason", reason)
 
     @classmethod
-    def from_records(cls, records: Sequence[LifecycleOutboxRecord], *, source: str = "sqlite.outbox") -> "OutboxSnapshot":
+    def from_records(cls, records: Sequence[OutboxEvidenceRecord], *, source: str = "sqlite.outbox") -> "OutboxSnapshot":
         ordered = tuple(sorted(records, key=lambda record: record.intent_id))
         payload = tuple(
             {
@@ -74,14 +78,14 @@ class OutboxSnapshot:
         digest = hashlib.sha256(str(reason).encode("utf-8")).hexdigest()[:24]
         return cls("ois1-unavailable-" + digest, OutboxCoverage.UNAVAILABLE, source, (), reason)
 
-    def by_intent(self, intent_id: str) -> LifecycleOutboxRecord | None:
+    def by_intent(self, intent_id: str) -> OutboxEvidenceRecord | None:
         wanted = str(intent_id or "").strip()
         for record in self.records:
             if record.intent_id == wanted:
                 return record
         return None
 
-    def for_chain(self, chain_id: str) -> tuple[LifecycleOutboxRecord, ...]:
+    def for_chain(self, chain_id: str) -> tuple[OutboxEvidenceRecord, ...]:
         wanted = str(chain_id or "").strip()
         return tuple(record for record in self.records if record.plan.identity.chain_id == wanted)
 

@@ -373,6 +373,27 @@ class OccurrenceQueryService:
             identity = _task_identity(task)
             context = self._context_for(task)
             reference_utc = self._reference_utc(task)
+            link = _link_value(task.get("link")) or 1
+            chain_max = task.get("chainMax")
+            if chain_max not in (None, ""):
+                try:
+                    if link >= int(chain_max):
+                        return TaskOccurrenceResult(identity, "empty")
+                except (TypeError, ValueError) as exc:
+                    raise QueryServiceError("chainMax is not an integer") from exc
+
+            def bounded(candidate: datetime) -> bool:
+                chain_until = task.get("chainUntil")
+                if not chain_until:
+                    return True
+                parser = getattr(self._core, "parse_dt_any", None)
+                if not callable(parser):
+                    raise QueryServiceError("Nautical datetime parser is unavailable")
+                limit = parser(chain_until)
+                if not isinstance(limit, datetime) or limit.tzinfo is None or limit.utcoffset() is None:
+                    raise QueryServiceError("chainUntil is not a valid timezone-aware datetime")
+                return candidate.astimezone(timezone.utc) <= limit.astimezone(timezone.utc)
+
             if normalize_recurrence_text(task.get("cp")):
                 parent = dict(task)
                 if not parent.get("end"):
@@ -382,6 +403,8 @@ class OccurrenceQueryService:
                     parent["end"] = formatter(reference_utc)
                 child_due, _metadata = ChainGenerationService.from_core(self._core).compute_cp_child_due(parent)
                 if child_due is None:
+                    return TaskOccurrenceResult(identity, "empty")
+                if not bounded(child_due):
                     return TaskOccurrenceResult(identity, "empty")
                 local = child_due.astimezone(self._timezone)
                 record = OccurrenceRecord(
@@ -411,6 +434,8 @@ class OccurrenceQueryService:
                     failure=_failure("scheduler_unavailable", result.failure.reason, task_uuid=identity.uuid, retryable=result.status == "unavailable"),
                 )
             records = self._records(result, _timezone_name(self._timezone))
+            if records and not bounded(records[0].utc):
+                return TaskOccurrenceResult(identity, "empty")
             return TaskOccurrenceResult(identity, result.status, records, terminal=_terminal(result))
         except (QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
             return TaskOccurrenceResult(

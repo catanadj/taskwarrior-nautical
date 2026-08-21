@@ -32669,6 +32669,19 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
     expect(len(response.results) == 2 and all(item.status == "found" for item in response.results), "next projection lost a task")
     expect(response.results[0].occurrences[0].source == "anchor", "anchor next projection source is incorrect")
     expect(response.results[1].occurrences[0].source == "cp", "CP next projection source is incorrect")
+    bounded_task = dict(anchor_task, chainMax="1")
+
+    class _BoundedRepository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(bounded_task, f"uuid:{value}")
+
+    bounded_uow = SimpleNamespace(context=uow.context, repository=_BoundedRepository())
+    bounded_request = OccurrenceQueryRequest.from_mapping(
+        {"operation": "next", "selector": {"uuids": [anchor_task["uuid"]]}, "from": "2026-08-24", "count": 1}
+    )
+    bounded_result = OccurrenceQueryService(bounded_uow, core=core).query_next(bounded_request).results[0]
+    expect(bounded_result.status == "empty", "next projection ignored chainMax")
 
 
 TESTS.extend([

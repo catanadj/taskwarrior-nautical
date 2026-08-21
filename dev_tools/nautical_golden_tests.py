@@ -1489,7 +1489,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     }
     second = {
         "uuid": "bbbbbbbb-0000-0000-0000-000000000922",
-        "status": "completed",
+        "status": "pending",
         "chainID": "invariant-chain",
         "link": 2,
         "prevLink": "aaaaaaaa",

@@ -139,10 +139,92 @@ def _edge_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _topology_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    """Detect forks and cycles without mutating or re-reading the graph."""
+    findings: list[IntegrityFinding] = []
+    incoming: dict[str, list[str]] = {}
+    for node in graph.nodes:
+        reference = graph.reference(node.task_uuid, "nextLink")
+        if reference.state is ReferenceState.RESOLVED:
+            incoming.setdefault(reference.target_uuid, []).append(node.task_uuid)
+    for target_uuid, sources in sorted(incoming.items()):
+        if len(sources) > 1:
+            target = graph.uuid_matches(target_uuid)
+            chain_id = target[0].chain_id if len(target) == 1 else ""
+            findings.append(IntegrityFinding(
+                "edge.fork",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                graph.snapshot.snapshot_id,
+                chain_id,
+                tuple(sorted((*sources, target_uuid))),
+                "multiple_predecessors",
+                "Multiple nodes point to the same successor.",
+                (("target", target_uuid), ("sources", tuple(sorted(sources)))),
+                (("sources", 1),),
+                (("coverage", graph.snapshot.coverage.value),),
+            ))
+    reported: set[tuple[str, ...]] = set()
+    for start in graph.nodes:
+        path: list[str] = []
+        current = start.task_uuid
+        while current:
+            if current in path:
+                cycle = tuple(sorted(path[path.index(current):]))
+                if cycle not in reported:
+                    reported.add(cycle)
+                    findings.append(IntegrityFinding(
+                        "edge.cycle",
+                        FindingStatus.MANUAL_REVIEW,
+                        FindingSeverity.ERROR,
+                        graph.snapshot.snapshot_id,
+                        start.chain_id,
+                        cycle,
+                        "cycle_detected",
+                        "Chain nextLink references form a cycle.",
+                        (("cycle", cycle),),
+                        (("cycle", ()),),
+                        (("coverage", graph.snapshot.coverage.value),),
+                    ))
+                break
+            path.append(current)
+            reference = graph.reference(current, "nextLink")
+            if reference.state is not ReferenceState.RESOLVED:
+                break
+            current = reference.target_uuid
+    return tuple(findings)
+
+
+def _lifecycle_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    findings: list[IntegrityFinding] = []
+    for node in graph.nodes:
+        status = node.status.lower()
+        if status not in {"completed", "deleted"} or str(node.field("chain", "on") or "on").lower() != "on":
+            continue
+        if graph.reference(node.task_uuid, "nextLink").state is not ReferenceState.ABSENT:
+            continue
+        if node.field("chainMax") not in (None, "", "null") or node.field("chainUntil") not in (None, "", "null"):
+            continue
+        findings.append(_finding(
+            graph,
+            "lifecycle.successor_expected",
+            FindingStatus.REPAIRABLE,
+            FindingSeverity.ERROR,
+            node,
+            "missing_successor",
+            "Completed chain-on node has no successor or terminal bound.",
+            observed=(("status", status), ("nextLink", "")),
+            expected=(("nextLink", "successor or terminal bound"),),
+        ))
+    return tuple(findings)
+
+
 DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("identity", SnapshotCoverage.CANDIDATES, _identity_rule),
     InvariantRule("slot.duplicate_occupant", SnapshotCoverage.CANDIDATES, _duplicate_slot_rule),
     InvariantRule("edge", SnapshotCoverage.CANDIDATES, _edge_rule),
+    InvariantRule("edge.topology", SnapshotCoverage.CANDIDATES, _topology_rule),
+    InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
 )
 
 

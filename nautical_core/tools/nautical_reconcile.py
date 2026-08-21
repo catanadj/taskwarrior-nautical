@@ -937,7 +937,14 @@ def _plan_for_parent(
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
-    return lifecycle.build_reconcile_plan(
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+
+    configuration = _UNIT_OF_WORK.context.configuration if _UNIT_OF_WORK is not None else None
+    engine = ChainIntegrityEngine.lifecycle_only(
+        configuration_fingerprint=configuration.fingerprint if configuration is not None else "reconcile",
+        schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "reconcile",
+    )
+    return engine.plan_recovery(
         parent,
         existing_children=existing_children,
         hook=hook,

@@ -35,6 +35,11 @@ class _MutationExecutor(Protocol):
     def repair_metadata(self, request: object) -> object: ...
 
 
+class _NoSnapshotProvider:
+    def collect(self, _request: IntegritySnapshotRequest) -> TaskRead[ChainSnapshot]:
+        raise RuntimeError("this integrity engine instance is lifecycle-planning only")
+
+
 @dataclass(frozen=True, slots=True)
 class IntegrityEngineResult:
     status: IntegrityReportStatus
@@ -70,6 +75,37 @@ class ChainIntegrityEngine:
             raise ValueError("integrity engine requires a schedule fingerprint")
         self._planner = IntegrityRepairPlanner()
         self._application = IntegrityApplicationService()
+
+    @classmethod
+    def lifecycle_only(
+        cls,
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str = "integrity",
+    ) -> "ChainIntegrityEngine":
+        return cls(
+            _NoSnapshotProvider(),
+            configuration_fingerprint=configuration_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
+        )
+
+    def plan_recovery(
+        self,
+        parent: dict[str, object],
+        *,
+        existing_children: list[dict[str, object]],
+        hook: object,
+        generation: object = None,
+    ) -> object:
+        """Build one successor/expiration decision through the engine owner."""
+        from .chain_integrity_lifecycle import build_reconcile_plan
+
+        return build_reconcile_plan(
+            parent,
+            existing_children=existing_children,
+            hook=hook,
+            generation=generation,
+        )
 
     def audit(
         self,

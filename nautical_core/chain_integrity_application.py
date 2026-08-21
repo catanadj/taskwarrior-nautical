@@ -6,14 +6,20 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind
-from .integration_models import MutationOutcome, MutationOutcomeKind, MutationRequest
+from .integration_models import (
+    MetadataRepairPayload,
+    MutationOperation,
+    MutationOutcome,
+    MutationOutcomeKind,
+    MutationRequest,
+)
 
 
 class _MutationExecutor(Protocol):
     def repair_metadata(self, request: MutationRequest) -> MutationOutcome: ...
 
 
-class _MutationRequestFactory(Protocol):
+class IntegrityMutationRequestFactory(Protocol):
     def __call__(self, operation: IntegrityOperation) -> MutationRequest: ...
 
 
@@ -40,7 +46,7 @@ class IntegrityApplicationService:
         self,
         plan: IntegrityRepairPlan,
         executor: _MutationExecutor,
-        request_factory: _MutationRequestFactory,
+        request_factory: IntegrityMutationRequestFactory,
     ) -> tuple[IntegrityApplicationResult, ...]:
         if not isinstance(plan, IntegrityRepairPlan):
             raise TypeError("integrity application requires an IntegrityRepairPlan")
@@ -56,6 +62,7 @@ class IntegrityApplicationService:
                 continue
             try:
                 request = request_factory(operation)
+                self._validate_request(operation, request)
                 outcome = executor.repair_metadata(request)
             except Exception as exc:
                 results.append(IntegrityApplicationResult(
@@ -75,5 +82,18 @@ class IntegrityApplicationService:
                 break
         return tuple(results)
 
+    @staticmethod
+    def _validate_request(operation: IntegrityOperation, request: MutationRequest) -> None:
+        if not isinstance(request, MutationRequest):
+            raise TypeError("integrity request factory returned an untyped request")
+        if request.operation is not MutationOperation.METADATA_REPAIR:
+            raise ValueError("integrity structural repair requires a metadata mutation request")
+        if request.guard.task_uuid != operation.target_uuid or request.guard.chain_id != operation.chain_id:
+            raise ValueError("mutation guard does not match integrity operation target")
+        if not isinstance(request.payload, MetadataRepairPayload):
+            raise TypeError("integrity metadata repair requires MetadataRepairPayload")
+        if request.payload.to_dict() != dict(operation.payload):
+            raise ValueError("metadata request payload differs from integrity operation")
 
-__all__ = ["IntegrityApplicationResult", "IntegrityApplicationService"]
+
+__all__ = ["IntegrityApplicationResult", "IntegrityApplicationService", "IntegrityMutationRequestFactory"]

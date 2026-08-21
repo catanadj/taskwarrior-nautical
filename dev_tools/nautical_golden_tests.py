@@ -1678,6 +1678,29 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
     )
     expect(results[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unregistered mutation was applied")
 
+    metadata_operation = IntegrityOperation(
+        "metadata-op",
+        RepairOperationKind.METADATA_REPAIR,
+        "application-chain",
+        "aaaaaaaa-0000-0000-0000-000000000941",
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",),
+        ("link is 2",),
+        (("link", 2),),
+    )
+    metadata_plan = IntegrityRepairPlan(
+        "metadata-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "missing_link", "test metadata application", (metadata_operation,), "cfg-application",
+    )
+    guarded = IntegrityApplicationService().apply(
+        metadata_plan,
+        SimpleNamespace(repair_metadata=lambda _request: SimpleNamespace(
+            kind=MutationOutcomeKind.APPLIED, reason=""
+        )),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(guarded[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unvalidated factory request was applied")
+
 
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""

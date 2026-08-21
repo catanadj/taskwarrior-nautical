@@ -1217,6 +1217,143 @@ def test_lifecycle_models_enforce_transition_contract():
         raise AssertionError("invalid lifecycle model was accepted")
 
 
+def test_chain_integrity_models_enforce_observation_and_repair_contract():
+    """Integrity observations may be incomplete, but repair plans may not."""
+    from dataclasses import FrozenInstanceError
+
+    from nautical_core.chain_integrity_models import (
+        ChainNode,
+        ChainReference,
+        ChainSnapshot,
+        FindingSeverity,
+        FindingStatus,
+        IntegrityContractError,
+        IntegrityFinding,
+        IntegrityOperation,
+        IntegrityReport,
+        IntegrityReportStatus,
+        IntegrityRepairPlan,
+        ReferenceState,
+        RepairOperationKind,
+        RepairSafety,
+        SnapshotCoverage,
+    )
+
+    node = ChainNode.from_mapping(
+        {
+            "uuid": "00000000-0000-0000-0000-000000000991",
+            "status": "pending",
+            "link": "7.000000",
+            "nextLink": "00000000",
+        }
+    )
+    expect(node.link == 7, "numeric Taskwarrior link was not normalized")
+    expect(not node.has_complete_identity, "missing chainID became a repairable identity")
+    expect(node.field("nextLink") == "00000000", "raw row evidence was discarded")
+
+    complete = ChainNode.from_mapping(
+        {
+            "uuid": "00000000-0000-0000-0000-000000000992",
+            "status": "pending",
+            "chainID": "chain-contract",
+            "link": 8,
+        }
+    )
+    reference = ChainReference(
+        "nextLink",
+        "00000000",
+        ReferenceState.RESOLVED,
+        target_uuid=complete.task_uuid,
+        target_link=8,
+    )
+    expect(reference.state is ReferenceState.RESOLVED, "reference state was not preserved")
+
+    snapshot = ChainSnapshot(
+        "snapshot-contract",
+        SnapshotCoverage.CANDIDATES,
+        "task export",
+        (node, complete),
+        "cfg-contract",
+    )
+    finding = IntegrityFinding(
+        "identity.chain_id_required",
+        FindingStatus.REPAIRABLE,
+        FindingSeverity.ERROR,
+        snapshot.snapshot_id,
+        "chain-contract",
+        (node.task_uuid,),
+        "missing_chain_id",
+        "Nautical recurrence has no chain identity.",
+        observed=(("chainID", ""),),
+        expected=(("chainID", "required"),),
+        evidence=(("coverage", snapshot.coverage.value),),
+    )
+    operation = IntegrityOperation(
+        "operation-contract",
+        RepairOperationKind.LINK_REPAIR,
+        "chain-contract",
+        complete.task_uuid,
+        (("modified", "20260821T120000Z"),),
+        ("target remains present",),
+        ("nextLink is reciprocal",),
+    )
+    plan = IntegrityRepairPlan(
+        "plan-contract",
+        snapshot.snapshot_id,
+        "chain-contract",
+        RepairSafety.SAFE,
+        "reciprocal_link",
+        "Repair one reciprocal chain link.",
+        (operation,),
+        "cfg-contract",
+    )
+    report = IntegrityReport(
+        snapshot,
+        IntegrityReportStatus.REPAIRABLE,
+        (finding,),
+        (plan,),
+    )
+    expect(report.plans[0].operations[0].kind is RepairOperationKind.LINK_REPAIR, "plan operation was changed")
+
+    invalid_cases = (
+        lambda: ChainReference("nextLink", "00000000", ReferenceState.RESOLVED),
+        lambda: ChainSnapshot("snapshot-unavailable", SnapshotCoverage.UNAVAILABLE, "task export"),
+        lambda: IntegrityRepairPlan(
+            "plan-dependency",
+            snapshot.snapshot_id,
+            "chain-contract",
+            RepairSafety.SAFE,
+            "reciprocal_link",
+            "invalid dependency",
+            (
+                IntegrityOperation(
+                    "operation-dependency",
+                    RepairOperationKind.LINK_REPAIR,
+                    "chain-contract",
+                    complete.task_uuid,
+                    (("modified", "20260821T120000Z"),),
+                    ("target remains present",),
+                    ("nextLink is reciprocal",),
+                    depends_on=("missing-operation",),
+                ),
+            ),
+        ),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except IntegrityContractError:
+            continue
+        raise AssertionError("invalid integrity model was accepted")
+
+    try:
+        plan.plan_id = "changed"  # type: ignore[misc]
+    except FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("integrity repair plan was mutable")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -31786,6 +31923,7 @@ TESTS = [
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
+    test_chain_integrity_models_enforce_observation_and_repair_contract,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

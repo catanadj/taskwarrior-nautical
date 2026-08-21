@@ -100,8 +100,8 @@ ready-to-adapt examples whenever you need them.
 
 ## Learn More
 
-- [Systems Manual PDF](./Taskwarrior-Nautical-v5-Systems-Manual.pdf): setup, configuration, grammar, examples, and recovery.
-- [Cheatsheet PDF](./Taskwarrior-Nautical-v5-CheatSheet.pdf): quick anchor and period reference.
+- [Systems Manual PDF](./Taskwarrior-Nautical-v6-Systems-Manual.pdf): setup, configuration, grammar, examples, and recovery.
+- [Cheatsheet PDF](./Taskwarrior-Nautical-v6-CheatSheet.pdf): quick anchor and period reference.
 - [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
 - [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)
 

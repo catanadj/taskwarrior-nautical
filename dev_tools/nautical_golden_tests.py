@@ -1532,6 +1532,20 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     unavailable = evaluate_invariants(truncated)
     expect(unavailable and all(item.status.value == "unavailable" for item in unavailable), "truncation did not fail closed")
 
+    temporal = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-temporal", SnapshotCoverage.CHAIN, "test", (ChainNode.from_mapping({
+            "uuid": "eeeeeeee-0000-0000-0000-000000000925",
+            "status": "pending",
+            "chainID": "temporal-chain",
+            "link": 1,
+            "anchor": "w:mon",
+            "due": "20260821T120000Z",
+            "until": "20260821T110000Z",
+        }),),
+    ))
+    temporal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(temporal)}
+    expect(("carry.until_after_due", "until_before_due") in temporal_ids, "until ordering was not reported")
+
 
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""

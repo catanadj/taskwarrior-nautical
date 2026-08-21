@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Iterable
 
 from .chain_graph import ChainGraph
@@ -253,6 +254,55 @@ def _recurrence_identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]
     return tuple(findings)
 
 
+def _canonical_timestamp(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text or text.lower() == "null":
+        return None
+    try:
+        if text.endswith("Z") and "T" in text and len(text) >= 16 and text[0:8].isdigit():
+            text = f"{text[:4]}-{text[4:6]}-{text[6:8]}{text[8:]}"
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    findings: list[IntegrityFinding] = []
+    for node in graph.nodes:
+        due_raw = node.field("due")
+        due = _canonical_timestamp(due_raw)
+        until_raw = node.field("until")
+        until = _canonical_timestamp(until_raw)
+        scheduled_raw = node.field("scheduled")
+        scheduled = _canonical_timestamp(scheduled_raw)
+        if due is not None and until is not None and until < due:
+            findings.append(_finding(
+                graph,
+                "carry.until_after_due",
+                FindingStatus.REPAIRABLE,
+                FindingSeverity.ERROR,
+                node,
+                "until_before_due",
+                "Native until is earlier than the task due timestamp.",
+                observed=(("due", str(due_raw)), ("until", str(until_raw))),
+                expected=(("until", "at or after due"),),
+            ))
+        if due is not None and scheduled is not None and scheduled > due:
+            findings.append(_finding(
+                graph,
+                "carry.scheduled_before_due",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                node,
+                "scheduled_after_due",
+                "Scheduled timestamp is later than due.",
+                observed=(("scheduled", str(scheduled_raw)), ("due", str(due_raw))),
+                expected=(("scheduled", "at or before due"),),
+            ))
+    return tuple(findings)
+
+
 DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("identity", SnapshotCoverage.CANDIDATES, _identity_rule),
     InvariantRule("slot.duplicate_occupant", SnapshotCoverage.CANDIDATES, _duplicate_slot_rule),
@@ -260,6 +310,7 @@ DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("edge.topology", SnapshotCoverage.CANDIDATES, _topology_rule),
     InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
     InvariantRule("identity.recurrence", SnapshotCoverage.CANDIDATES, _recurrence_identity_rule),
+    InvariantRule("carry.temporal", SnapshotCoverage.CANDIDATES, _temporal_rule),
 )
 
 

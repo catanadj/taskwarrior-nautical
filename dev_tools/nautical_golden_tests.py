@@ -1485,6 +1485,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
         "status": "pending",
         "chainID": "invariant-chain",
         "link": 1,
+        "anchor": "w:mon",
         "nextLink": "bbbbbbbb",
     }
     second = {
@@ -1520,6 +1521,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     findings = evaluate_invariants(graph)
     ids = {(finding.invariant_id, finding.reason_code) for finding in findings}
     expect(("identity.chain_id_required", "missing_chain_id") in ids, "missing chainID was not reported")
+    expect(("identity.recurrence_required", "missing_recurrence_identity") in ids, "missing recurrence identity was not reported")
     expect(("slot.duplicate_occupant", "duplicate_slot") in ids, "duplicate slot was not reported")
     expect(("edge.reciprocal", "non_reciprocal_reference") in ids, "non-reciprocal edge was not reported")
     expect(findings == evaluate_invariants(graph), "invariant output was not deterministic")

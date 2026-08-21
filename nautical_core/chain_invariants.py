@@ -219,12 +219,47 @@ def _lifecycle_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _recurrence_identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    findings: list[IntegrityFinding] = []
+    for node in graph.nodes:
+        if node.link != 1:
+            continue
+        anchor = str(node.field("anchor", "") or "").strip()
+        cp = str(node.field("cp", "") or "").strip()
+        if anchor and cp:
+            findings.append(_finding(
+                graph,
+                "identity.recurrence_exclusive",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                node,
+                "multiple_recurrence_modes",
+                "Chain root contains both anchor and cp recurrence identities.",
+                observed=(("anchor", anchor), ("cp", cp)),
+                expected=(("anchor_or_cp", "exactly one"),),
+            ))
+        elif not anchor and not cp and str(node.field("chain", "on") or "on").lower() == "on":
+            findings.append(_finding(
+                graph,
+                "identity.recurrence_required",
+                FindingStatus.REPAIRABLE,
+                FindingSeverity.ERROR,
+                node,
+                "missing_recurrence_identity",
+                "Chain root has no anchor or cp recurrence identity.",
+                observed=(("anchor", ""), ("cp", "")),
+                expected=(("anchor_or_cp", "required"),),
+            ))
+    return tuple(findings)
+
+
 DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("identity", SnapshotCoverage.CANDIDATES, _identity_rule),
     InvariantRule("slot.duplicate_occupant", SnapshotCoverage.CANDIDATES, _duplicate_slot_rule),
     InvariantRule("edge", SnapshotCoverage.CANDIDATES, _edge_rule),
     InvariantRule("edge.topology", SnapshotCoverage.CANDIDATES, _topology_rule),
     InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
+    InvariantRule("identity.recurrence", SnapshotCoverage.CANDIDATES, _recurrence_identity_rule),
 )
 
 

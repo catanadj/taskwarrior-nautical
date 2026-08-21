@@ -32475,6 +32475,27 @@ def test_query_service_preserves_absent_and_unavailable_task_reads():
     expect(unavailable_response.failure is not None and unavailable_response.failure.retryable, "unavailable read lost retryability")
 
 
+def test_query_installed_layout_runs_outside_checkout():
+    """The managed launcher resolves its own staged core package."""
+    with tempfile.TemporaryDirectory(prefix="nautical-query-runtime-") as runtime_dir:
+        runtime = Path(runtime_dir)
+        shutil.copy2(Path(ROOT) / "nautical", runtime / "nautical")
+        (runtime / "nautical").chmod(0o755)
+        shutil.copytree(Path(ROOT) / "nautical_core", runtime / "nautical_core")
+        proc = subprocess.run(
+            [sys.executable, str(runtime / "nautical"), "query", "capabilities"],
+            cwd="/tmp",
+            text=True,
+            capture_output=True,
+            env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""},
+            check=False,
+        )
+        expect(proc.returncode == 0, f"installed-layout query failed: {proc.stderr or proc.stdout}")
+        expect(proc.stderr == "", "installed-layout query contaminated stderr")
+        payload = json.loads(proc.stdout)
+        expect(payload["schema"] == "nautical.query.capabilities", "installed-layout query schema is incorrect")
+
+
 def test_query_service_all_selector_excludes_non_recurrence_rows():
     """The active-task selector returns only complete recurrence identities."""
     from nautical_core.integration_context import IntegrationAccess
@@ -32565,6 +32586,7 @@ TESTS.extend([
     test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,
     test_query_service_preserves_absent_and_unavailable_task_reads,
+    test_query_installed_layout_runs_outside_checkout,
     test_query_service_all_selector_excludes_non_recurrence_rows,
     test_query_service_batches_multiple_uuid_reads,
     test_anchor_file_spec_rejects_unpadded_times,

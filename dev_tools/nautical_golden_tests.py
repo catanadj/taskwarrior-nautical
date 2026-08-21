@@ -32285,7 +32285,7 @@ def test_query_cli_emits_one_json_document_for_invalid_request():
     with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
         exit_code = nautical_query.main(["occurrences", "--request", "{}"])
     lines = output.getvalue().splitlines()
-    expect(exit_code == 0, "query CLI returned a non-zero protocol status")
+    expect(exit_code == 2, "query CLI did not return the invalid-input exit code")
     expect(len(lines) == 1, "query CLI emitted more than one stdout line")
     payload = json.loads(lines[0])
     expect(payload["schema"] == "nautical.query.occurrences", "query CLI schema is incorrect")
@@ -32293,10 +32293,32 @@ def test_query_cli_emits_one_json_document_for_invalid_request():
     expect(payload["failure"]["code"] == "invalid_request", "query CLI failure code is unstable")
 
 
+def test_query_cli_flags_build_the_same_validated_request():
+    """Direct flags produce the same request shape as the JSON transport."""
+    from nautical_core.tools import nautical_query
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        exit_code = nautical_query.main(
+            [
+                "occurrences",
+                "--all",
+                "--after",
+                "2026-08-24",
+                "--count",
+                "2",
+            ]
+        )
+    payload = json.loads(output.getvalue())
+    expect(exit_code == 3, "unavailable Taskwarrior query did not return exit code 3")
+    expect(payload["failure"]["code"] == "query_unavailable", "flag query did not reach the read boundary")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
     test_query_cli_emits_one_json_document_for_invalid_request,
+    test_query_cli_flags_build_the_same_validated_request,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

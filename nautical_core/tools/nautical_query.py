@@ -50,15 +50,23 @@ def _error_payload(code: str, message: str, *, retryable: bool = False) -> dict[
     }
 
 
-def _emit(payload: Mapping[str, Any]) -> int:
+def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-    return 0
+    return exit_code
 
 
 def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
     if args.request is not None and args.request_file is not None:
         raise QueryContractError("use either --request or --request-file, not both")
-    if args.request is not None:
+    if args.request == "-":
+        raw = sys.stdin.read()
+        if not raw.strip():
+            raise QueryContractError("stdin request is empty")
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise QueryContractError(f"stdin is not valid JSON: {exc}") from exc
+    elif args.request is not None:
         try:
             value = json.loads(args.request)
         except json.JSONDecodeError as exc:
@@ -85,11 +93,56 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nautical's versioned read-only query API")
     parser.add_argument("operation", choices=("occurrences",), help="query operation")
     source = parser.add_mutually_exclusive_group()
-    source.add_argument("--request", help="inline JSON request object")
+    source.add_argument("--request", help="inline JSON request object, or '-' for stdin")
     source.add_argument("--request-file", help="path to a JSON request object")
+    selector = parser.add_mutually_exclusive_group()
+    selector.add_argument("--uuid", action="append", dest="uuids", help="task UUID or unambiguous prefix (repeatable)")
+    selector.add_argument("--chain-id", dest="chain_id", help="chain identity")
+    selector.add_argument("--all", action="store_true", dest="all_tasks", help="all active Nautical tasks")
+    boundary = parser.add_mutually_exclusive_group()
+    boundary.add_argument("--from", dest="start", help="inclusive local date or RFC 3339 timestamp")
+    boundary.add_argument("--after", dest="after", help="exclusive local date or RFC 3339 timestamp")
+    parser.add_argument("--to", help="inclusive local date or RFC 3339 timestamp")
+    parser.add_argument("--count", type=int, help="maximum number of occurrences per task")
+    parser.add_argument("--omissions", choices=("exclude", "include", "report"), dest="omission_policy", default="exclude")
     args = parser.parse_args(argv)
     try:
-        mapping = dict(_request_mapping(args))
+        flag_values = (
+            args.uuids,
+            args.chain_id,
+            args.all_tasks,
+            args.start,
+            args.after,
+            args.to,
+            args.count,
+            args.omission_policy if args.omission_policy != "exclude" else None,
+        )
+        has_flags = any(value not in (None, False, []) for value in flag_values)
+        if (args.request is not None or args.request_file is not None) and has_flags:
+            raise QueryContractError("JSON request input cannot be combined with selector or range flags")
+        if args.request is not None or args.request_file is not None:
+            mapping = dict(_request_mapping(args))
+        else:
+            if args.uuids:
+                selector_mapping = {"uuids": args.uuids}
+            elif args.chain_id:
+                selector_mapping = {"chainID": args.chain_id}
+            elif args.all_tasks:
+                selector_mapping = {"all_tasks": True}
+            else:
+                # Preserve stdin as the default transport when no flags were supplied.
+                mapping = dict(_request_mapping(args))
+                selector_mapping = None
+            if selector_mapping is not None:
+                start = args.after or args.start
+                mapping = {
+                    "selector": selector_mapping,
+                    "from": start,
+                    "to": args.to,
+                    "count": args.count,
+                    "start_inclusive": args.after is None,
+                    "omission_policy": args.omission_policy,
+                }
         mapping.setdefault("operation", args.operation)
         request = OccurrenceQueryRequest.from_mapping(mapping)
         unit_of_work = build_operator_uow(
@@ -99,11 +152,12 @@ def main(argv: list[str] | None = None) -> int:
             access=IntegrationAccess.READ_ONLY,
         )
         response = OccurrenceQueryService(unit_of_work, core=core).query(request)
-        return _emit(response.to_dict())
+        exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
+        return _emit(response.to_dict(), exit_code=exit_code)
     except QueryContractError as exc:
-        return _emit(_error_payload("invalid_request", str(exc)))
+        return _emit(_error_payload("invalid_request", str(exc)), exit_code=2)
     except (OSError, RuntimeError, ValueError) as exc:
-        return _emit(_error_payload("query_unavailable", str(exc), retryable=True))
+        return _emit(_error_payload("query_unavailable", str(exc), retryable=True), exit_code=3)
 
 
 if __name__ == "__main__":

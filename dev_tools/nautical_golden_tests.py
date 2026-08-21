@@ -32224,6 +32224,17 @@ def test_query_contract_models_round_trip_and_reject_invalid():
     )
     next_response = OccurrenceQueryResponse(next_request, "Europe/Bucharest")
     expect(next_response.to_dict()["schema"] == "nautical.query.next", "next response did not select its schema")
+    evaluated_request = OccurrenceQueryRequest.from_mapping(
+        {
+            "operation": "next",
+            "selector": {"all_tasks": True},
+            "at": "2026-08-21T15:00:00+03:00",
+        }
+    )
+    expect(
+        OccurrenceQueryRequest.from_mapping(evaluated_request.to_dict()) == evaluated_request,
+        "evaluated next request did not round-trip through JSON shape",
+    )
 
     invalid_cases = (
         lambda: QuerySelector(all_tasks=True, chain_id="query-chain"),
@@ -32236,6 +32247,21 @@ def test_query_contract_models_round_trip_and_reject_invalid():
         ),
         lambda: OccurrenceQueryRequest.from_mapping(
             {"selector": {"all_tasks": True}, "from": "2026-08-22", "to": "2026-08-21"}
+        ),
+        lambda: OccurrenceQueryRequest.from_mapping(
+            {
+                "operation": "next",
+                "selector": {"all_tasks": True},
+                "at": "2026-08-21",
+            }
+        ),
+        lambda: OccurrenceQueryRequest.from_mapping(
+            {
+                "operation": "next",
+                "selector": {"all_tasks": True},
+                "at": "2026-08-21T15:00:00+03:00",
+                "from": "2026-08-21",
+            }
         ),
         lambda: QueryFailure("bad", "bad", details=()),
     )
@@ -32883,6 +32909,64 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
     expect(until_result.status == "empty", "next projection ignored chainUntil")
 
 
+def test_query_next_reports_daily_skip_mode_progress():
+    """Explicit evaluation time reports daily totals, misses, and the next slot."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000013",
+        "chainID": "query-daily-progress",
+        "link": 1,
+        "description": "Three daily slots",
+        "anchor": "w:mon..sun@t=09:00,12:00,18:00",
+        "anchor_mode": "skip",
+        "due": "20260824T060000Z",
+        "status": "pending",
+    }
+
+    class _Repository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(task, f"uuid:{value}")
+
+    local_timezone = timezone(timedelta(hours=3))
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=local_timezone,
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "operation": "next",
+            "selector": {"uuids": [task["uuid"]]},
+            "at": "2026-08-24T15:00:00+03:00",
+        }
+    )
+    result = OccurrenceQueryService(uow, core=core).query_next(request).results[0]
+    expect(result.status == "found", "evaluated next query did not find the 18:00 slot")
+    expect(result.occurrences[0].local.hour == 18, "skip-mode evaluation selected the wrong next slot")
+    expect(
+        result.lifecycle.get("daily_instances") == {
+            "date": "2026-08-24",
+            "total": 3,
+            "current_position": 1,
+            "missed": 1,
+            "upcoming": 1,
+        },
+        f"daily instance summary is incorrect: {result.lifecycle!r}",
+    )
+    expect(
+        result.lifecycle.get("missed_occurrences") == ["2026-08-24T12:00:00+03:00"],
+        "missed occurrence evidence is incorrect",
+    )
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
@@ -32899,6 +32983,7 @@ TESTS.extend([
     test_query_service_respects_current_task_reference_bounds,
     test_query_service_projects_cp_occurrences_from_current_due,
     test_query_next_projects_anchor_and_cp_without_mutation,
+    test_query_next_reports_daily_skip_mode_progress,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

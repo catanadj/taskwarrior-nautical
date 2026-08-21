@@ -17,6 +17,9 @@ from .scheduler_service import SchedulerService
 from .chain_generation import ChainGenerationService
 from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
 from .query_models import (
+    HARD_MAX_FILE_SKIPS,
+    HARD_MAX_ITERATIONS,
+    HARD_MAX_OCCURRENCES,
     OccurrenceQueryRequest,
     OccurrenceQueryResponse,
     OccurrenceRecord,
@@ -485,7 +488,55 @@ class OccurrenceQueryService:
             raise QueryServiceError(f"task {field} is not a valid timezone-aware datetime")
         raise QueryServiceError("task has no due, scheduled, or completion reference")
 
-    def _query_next_task(self, task: Mapping[str, Any]) -> TaskOccurrenceResult:
+    def _daily_anchor_summary(
+        self,
+        scheduler: SchedulerService,
+        *,
+        due_local: datetime,
+        evaluated_local: datetime,
+        mode: str,
+    ) -> tuple[dict[str, Any], list[str]]:
+        day_start = datetime.combine(evaluated_local.date(), time.min, tzinfo=self._timezone)
+        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        collected = scheduler.collect_request(
+            OccurrenceRangeRequest(
+                cursor=OccurrenceCursor(day_start, inclusive=True, timezone=self._timezone),
+                end_local=day_end,
+                limit=HARD_MAX_OCCURRENCES,
+                omission_policy="exclude",
+                max_iterations=HARD_MAX_ITERATIONS,
+                max_file_skips=HARD_MAX_FILE_SKIPS,
+            )
+        )
+        if collected.failure is not None:
+            raise QueryServiceError(collected.failure.reason)
+        occurrences = [item.local_datetime for item in collected.occurrences if item.local_datetime is not None]
+        current_position = next(
+            (index for index, occurrence in enumerate(occurrences, 1) if occurrence == due_local),
+            None,
+        )
+        missed = (
+            [occurrence for occurrence in occurrences if due_local < occurrence <= evaluated_local]
+            if mode in {"skip", "flex"}
+            else []
+        )
+        upcoming = [occurrence for occurrence in occurrences if occurrence > evaluated_local]
+        return (
+            {
+                "date": evaluated_local.date().isoformat(),
+                "total": len(occurrences),
+                "current_position": current_position,
+                "missed": len(missed),
+                "upcoming": len(upcoming),
+            },
+            [occurrence.isoformat() for occurrence in missed],
+        )
+
+    def _query_next_task(
+        self,
+        task: Mapping[str, Any],
+        request: OccurrenceQueryRequest,
+    ) -> TaskOccurrenceResult:
         if task.get("_query_absent"):
             return TaskOccurrenceResult(None, "absent", failure=_failure("task_absent", "Taskwarrior returned no task", task_uuid=str(task.get("uuid") or "")))
         if task.get("_query_ambiguous"):
@@ -495,6 +546,16 @@ class OccurrenceQueryService:
             identity = _task_identity(task)
             context = self._context_for(task)
             reference_utc = self._reference_utc(task)
+            evaluated_utc = (
+                _boundary_local(
+                    request.evaluation_at.value,
+                    request.evaluation_at.date_only,
+                    self._timezone,
+                    end=False,
+                ).astimezone(timezone.utc)
+                if request.evaluation_at is not None
+                else reference_utc
+            )
             link = _link_value(task.get("link")) or 1
             chain_metadata: dict[str, Any] = {
                 "chainID": identity.chain_id,
@@ -517,6 +578,8 @@ class OccurrenceQueryService:
                 "target_field": "scheduled" if not task.get("due") and task.get("scheduled") else "due",
                 "child_created": False,
             }
+            if request.evaluation_at is not None:
+                lifecycle_metadata["evaluated_at"] = evaluated_utc.astimezone(self._timezone).isoformat()
             chain_max = task.get("chainMax")
             if chain_max not in (None, ""):
                 try:
@@ -539,7 +602,12 @@ class OccurrenceQueryService:
 
             if normalize_recurrence_text(task.get("cp")):
                 parent = dict(task)
-                if not parent.get("end"):
+                if request.evaluation_at is not None:
+                    formatter = getattr(self._core, "fmt_isoz", None)
+                    if not callable(formatter):
+                        raise QueryServiceError("Nautical datetime formatter is unavailable")
+                    parent["end"] = formatter(evaluated_utc)
+                elif not parent.get("end"):
                     formatter = getattr(self._core, "fmt_isoz", None)
                     if not callable(formatter):
                         raise QueryServiceError("Nautical datetime formatter is unavailable")
@@ -562,6 +630,57 @@ class OccurrenceQueryService:
             scheduler = SchedulerService.from_task(task, context=context)
             lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
+            if request.evaluation_at is not None:
+                due_local = reference_utc.astimezone(self._timezone)
+                evaluated_local = evaluated_utc.astimezone(self._timezone)
+                mode = str(task.get("anchor_mode") or "skip").strip().lower() or "skip"
+                selected = scheduler.select_mode(
+                    mode,
+                    due_local=due_local,
+                    end_local=evaluated_local,
+                    due_explicit=bool(task.get("due")),
+                    fallback_hhmm=(due_local.hour, due_local.minute),
+                    default_seed_date=due_local.date(),
+                )
+                if selected.selected_occurrence is None:
+                    return TaskOccurrenceResult(
+                        identity,
+                        "empty",
+                        chain=chain_metadata,
+                        lifecycle=lifecycle_metadata,
+                    )
+                daily_instances, missed_occurrences = self._daily_anchor_summary(
+                    scheduler,
+                    due_local=due_local,
+                    evaluated_local=evaluated_local,
+                    mode=mode,
+                )
+                candidate = selected.selected_occurrence
+                lifecycle_metadata.update(
+                    {
+                        "anchor_mode": mode,
+                        "basis_detail": selected.basis,
+                        "daily_instances": daily_instances,
+                        "missed_occurrences": missed_occurrences,
+                        "next": candidate.isoformat(),
+                    }
+                )
+                if not bounded(candidate):
+                    return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
+                return TaskOccurrenceResult(
+                    identity,
+                    "found",
+                    (
+                        OccurrenceRecord(
+                            local=candidate,
+                            utc=candidate.astimezone(timezone.utc),
+                            timezone=_timezone_name(self._timezone),
+                            source="anchor",
+                        ),
+                    ),
+                    chain=chain_metadata,
+                    lifecycle=lifecycle_metadata,
+                )
             result = scheduler.collect_request(
                 OccurrenceRangeRequest(
                     cursor=OccurrenceCursor(
@@ -607,7 +726,7 @@ class OccurrenceQueryService:
                 failure=rows,
                 schema="nautical.query.next",
             )
-        results = tuple(self._query_next_task(row) for row in rows)
+        results = tuple(self._query_next_task(row, request) for row in rows)
         statuses = {item.status for item in results}
         status = "found" if "found" in statuses else "unavailable" if "unavailable" in statuses else "invalid" if "invalid" in statuses else "absent" if "absent" in statuses else "empty"
         return OccurrenceQueryResponse(

@@ -170,6 +170,7 @@ class OccurrenceQueryRequest:
     selector: QuerySelector
     start: QueryBoundary
     end: QueryBoundary | None = None
+    evaluation_at: QueryBoundary | None = None
     count: int | None = None
     start_inclusive: bool = True
     omission_policy: OmissionPolicy = "exclude"
@@ -188,6 +189,11 @@ class OccurrenceQueryRequest:
             raise QueryContractError("occurrence request requires a start boundary")
         if self.end is not None and not isinstance(self.end, QueryBoundary):
             raise QueryContractError("query end must be a query boundary")
+        if self.evaluation_at is not None:
+            if not isinstance(self.evaluation_at, QueryBoundary) or self.evaluation_at.date_only:
+                raise QueryContractError("query at must be an RFC 3339 timestamp with explicit offset")
+            if self.operation != NEXT_OPERATION:
+                raise QueryContractError("query at is supported only for the next operation")
         if self.end is not None:
             start_value = self.start.value
             end_value = self.end.value
@@ -223,15 +229,25 @@ class OccurrenceQueryRequest:
     def from_mapping(cls, value: Mapping[str, Any]) -> "OccurrenceQueryRequest":
         if not isinstance(value, Mapping):
             raise QueryContractError("occurrence request must be an object")
+        operation = str(value.get("operation", OCCURRENCE_OPERATION))
+        at_value = value.get("at")
+        if at_value is not None and (value.get("from") is not None or value.get("start") is not None):
+            raise QueryContractError("query request cannot specify both at and from")
+        start_value = at_value if at_value is not None else value.get("from", value.get("start"))
         return cls(
             selector=QuerySelector.from_mapping(value.get("selector", {})),
-            start=_parse_boundary(value.get("from", value.get("start")), "from"),
+            start=_parse_boundary(start_value, "at" if at_value is not None else "from"),
             end=(
                 _parse_boundary(value["to"], "to")
                 if value.get("to") is not None
                 else None
             ),
-            count=value.get("count"),
+            evaluation_at=_parse_boundary(at_value, "at") if at_value is not None else None,
+            count=(
+                value.get("count")
+                if value.get("count") is not None
+                else (1 if operation == NEXT_OPERATION and at_value is not None else None)
+            ),
             start_inclusive=_bool(value.get("start_inclusive", True), "start_inclusive"),
             omission_policy=str(value.get("omission_policy", "exclude")),
             max_tasks=value.get("max_tasks", DEFAULT_MAX_TASKS),
@@ -240,7 +256,7 @@ class OccurrenceQueryRequest:
             max_iterations=value.get("max_iterations", DEFAULT_MAX_ITERATIONS),
             max_file_skips=value.get("max_file_skips", DEFAULT_MAX_FILE_SKIPS),
             version=value.get("version", QUERY_API_VERSION),
-            operation=str(value.get("operation", OCCURRENCE_OPERATION)),
+            operation=operation,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -248,8 +264,9 @@ class OccurrenceQueryRequest:
             "version": self.version,
             "operation": self.operation,
             "selector": self.selector.to_dict(),
-            "from": self.start.to_text(),
+            "from": self.start.to_text() if self.evaluation_at is None else None,
             "to": self.end.to_text() if self.end is not None else None,
+            "at": self.evaluation_at.to_text() if self.evaluation_at is not None else None,
             "count": self.count,
             "start_inclusive": self.start_inclusive,
             "omission_policy": self.omission_policy,

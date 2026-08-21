@@ -76,7 +76,8 @@ def _capabilities_payload() -> dict[str, Any]:
         "next": {
             "basis": "read-only projected successor",
             "reference": "CP uses end when present, otherwise due/scheduled; anchors use due/scheduled",
-            "metadata": ["chain", "lifecycle"],
+            "evaluation": "Use at with an RFC 3339 timestamp for mode-aware daily progress.",
+            "metadata": ["chain", "lifecycle", "lifecycle.daily_instances"],
             "mutates_taskwarrior": False,
         },
         "selectors": ["uuid", "chain_id", "all"],
@@ -124,6 +125,7 @@ def _capabilities_payload() -> dict[str, Any]:
                 "nautical query occurrences --chain-id CHAIN_ID --from 2026-08-24 --count 10",
                 "nautical query occurrences --all --from 2026-08-24 --to 2026-08-31",
                 "nautical query next --uuid TASK_UUID --from 2026-08-24 --count 1",
+                "nautical query next --uuid TASK_UUID --at 2026-08-24T15:00:00+03:00",
             ],
             "consumer_rule": (
                 "Read the versioned JSON schema, statuses, and failure codes; do not "
@@ -210,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     boundary = parser.add_mutually_exclusive_group()
     boundary.add_argument("--from", dest="start", help="inclusive local date or RFC 3339 timestamp")
     boundary.add_argument("--after", dest="after", help="exclusive local date or RFC 3339 timestamp")
+    boundary.add_argument("--at", help="lifecycle evaluation timestamp for the next operation")
     parser.add_argument("--to", help="inclusive local date or RFC 3339 timestamp")
     parser.add_argument("--count", type=int, help="maximum number of occurrences per task")
     parser.add_argument("--max-total-occurrences", type=int, help="aggregate occurrence safety cap")
@@ -224,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             args.all_tasks,
             args.start,
             args.after,
+            args.at,
             args.to,
             args.count,
             args.max_total_occurrences,
@@ -246,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                 mapping = dict(_request_mapping(args))
                 selector_mapping = None
             if selector_mapping is not None:
-                start = args.after or args.start
+                start = args.after or args.start or args.at
                 mapping = {
                     "selector": selector_mapping,
                     "from": start,
@@ -255,6 +259,9 @@ def main(argv: list[str] | None = None) -> int:
                     "start_inclusive": args.after is None,
                     "omission_policy": args.omission_policy,
                 }
+                if args.at is not None:
+                    mapping.pop("from", None)
+                    mapping["at"] = args.at
                 if args.max_total_occurrences is not None:
                     mapping["max_total_occurrences"] = args.max_total_occurrences
         mapping.setdefault("operation", args.operation)

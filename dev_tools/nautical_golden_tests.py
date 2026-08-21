@@ -32311,6 +32311,24 @@ def test_occurrence_query_service_projects_schedule_read_only():
         == tuple(item.local for item in result.occurrences),
         "query occurrence projection drifted from SchedulerService",
     )
+    omitted_task = dict(task, omit="y:08-24")
+
+    class _OmitRepository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(omitted_task, f"uuid:{value}")
+
+    report_uow = SimpleNamespace(context=uow.context, repository=_OmitRepository())
+    report_request = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": [task["uuid"]]},
+            "from": "2026-08-24",
+            "to": "2026-08-24",
+            "omission_policy": "report",
+        }
+    )
+    report_result = OccurrenceQueryService(report_uow, core=core).query(report_request).results[0]
+    expect(not report_result.occurrences and report_result.omitted_occurrences, "omission report lost omitted events")
     limited = OccurrenceQueryRequest.from_mapping(
         {
             "selector": {"uuids": [task["uuid"]]},

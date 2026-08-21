@@ -64,6 +64,7 @@ class IntegrityRepairPlanner:
         graph = context.graph
         plans: list[IntegrityRepairPlan] = []
         refusals: list[PlannerRefusal] = []
+        operations_by_field: dict[tuple[str, str], IntegrityOperation] = {}
         for finding in sorted(findings, key=lambda item: (
             item.chain_id, item.subject_uuids, item.invariant_id, item.reason_code,
         )):
@@ -75,6 +76,25 @@ class IntegrityRepairPlanner:
                     self._refusal_reason(context, finding),
                     finding.snapshot_id,
                 ))
+                continue
+            payload_fields = tuple(key for key, _value in operation.payload)
+            for field in payload_fields:
+                conflict_key = (operation.target_uuid, field)
+                previous = operations_by_field.get(conflict_key)
+                if previous is not None:
+                    if previous.payload == operation.payload:
+                        operation = None
+                        break
+                    refusals.append(PlannerRefusal(
+                        finding.invariant_id,
+                        "conflicting_repair",
+                        "incompatible repairs target the same task field",
+                        finding.snapshot_id,
+                    ))
+                    operation = None
+                    break
+                operations_by_field[conflict_key] = operation
+            if operation is None:
                 continue
             plan_id = _plan_id(graph.snapshot.snapshot_id, operation.chain_id, operation, context.configuration_fingerprint)
             plans.append(IntegrityRepairPlan(
@@ -141,6 +161,8 @@ class IntegrityRepairPlanner:
             return "repair requires complete chain coverage"
         if finding.status is not FindingStatus.REPAIRABLE:
             return "finding is not automatically repairable"
+        if finding.invariant_id.startswith("lifecycle."):
+            return "lifecycle successor decisions belong to LifecyclePlanner"
         return "no unique guarded operation is defined for this finding"
 
 

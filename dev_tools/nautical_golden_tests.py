@@ -1614,6 +1614,8 @@ def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
     expect(operation.payload == (("prevLink", source.task_uuid),), "repair payload was not explicit")
     repeat = IntegrityRepairPlanner().plan(context, findings)
     expect(result.plans == repeat.plans, "repair plan identity was not deterministic")
+    duplicate_result = IntegrityRepairPlanner().plan(context, findings + findings)
+    expect(len(duplicate_result.plans) == 1, "equivalent repair findings were not collapsed")
 
     partial_graph = ChainGraph.from_snapshot(ChainSnapshot("partial-planner", SnapshotCoverage.CANDIDATES, "test", (target, source)))
     partial_context = IntegrityContext(partial_graph, OutboxSnapshot.from_records(()))

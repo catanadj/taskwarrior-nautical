@@ -115,3 +115,52 @@ def season_window_on_or_after(season: object, value: date) -> tuple[date, date]:
         if end >= day:
             return start, end
     raise OverflowError(f"No representable {name} season exists on or after {day.isoformat()}.")
+
+
+def season_windows_on_or_after(value: date) -> tuple[str, date, date]:
+    """Return the active or next fixed-season window chronologically."""
+    if not isinstance(value, date):
+        raise TypeError("Season window reference must be a date.")
+    day = date(value.year, value.month, value.day)
+    candidates: list[tuple[date, date, str]] = []
+    first_year = max(1, day.year - 2)
+    last_year = min(9999, day.year + 2)
+    for start_year in range(first_year, last_year + 1):
+        for name in SEASON_NAMES:
+            try:
+                start, end = season_bounds(name, start_year)
+            except ValueError:
+                continue
+            candidates.append((start, end, name))
+    candidates.sort(key=lambda item: item[0])
+    for start, end, name in candidates:
+        if start <= day <= end or start >= day:
+            return name, start, end
+    raise OverflowError(f"No representable fixed season exists on or after {day.isoformat()}.")
+
+
+def next_season_window(start: date) -> tuple[str, date, date]:
+    """Return the fixed-season window strictly after ``start``."""
+    if not isinstance(start, date):
+        raise TypeError("Season start must be a date.")
+    probe = start + timedelta(days=1)
+    while True:
+        name, window_start, window_end = season_windows_on_or_after(probe)
+        if window_start > start:
+            return name, window_start, window_end
+        probe = window_end + timedelta(days=1)
+
+
+__all__ = (
+    "HEMISPHERE_NAMES",
+    "SEASON_NAMES",
+    "active_hemisphere",
+    "configure_hemisphere",
+    "fixed_season_boundary_description",
+    "next_season_window",
+    "normalize_hemisphere",
+    "normalize_season_name",
+    "season_bounds",
+    "season_window_on_or_after",
+    "season_windows_on_or_after",
+)

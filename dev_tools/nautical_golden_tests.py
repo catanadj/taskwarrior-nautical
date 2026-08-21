@@ -30398,6 +30398,14 @@ def test_seasonal_selection_parser_contract():
         except ValueError as exc:
             expect(f"{scope} limit of {limit}" in str(exc), f"unclear {scope} limit error: {exc}")
 
+    generic = position_selection.parse_group_selection_modifier("@in-season=first,92nd,last")
+    expect(generic == ("season", (1, 92, -1), ""), f"bad generic season parse: {generic}")
+    try:
+        position_selection.parse_positions("93rd", "season")
+        raise AssertionError("generic season position limit was not enforced")
+    except ValueError as exc:
+        expect("season limit of 92" in str(exc), f"unclear generic season limit error: {exc}")
+
     impossible = (
         ("(w:mon)@in-autumn=15th", "at most 14 matching dates per autumn"),
         ("(m:1)@in-winter=4th", "at most 3 matching dates per winter"),
@@ -30486,6 +30494,44 @@ def test_seasonal_selection_scheduler_windows_and_rollover():
             core.factor_matches_on(dnf[0][0], expected, seed),
             f"seasonal factor did not match its scheduled date: {expression}",
         )
+
+
+def test_generic_seasonal_selection_scheduler_and_round_trip():
+    """@in-season should select one position independently in every fixed season."""
+    from nautical_core import season_support
+
+    previous = season_support.active_hemisphere()
+    season_support.configure_hemisphere("north")
+    expression = "(w:mon)@in-season=1st"
+    try:
+        dnf = core.validate_anchor_expr_strict(expression)
+        node = dnf[0][0]
+        expect(node.get("scope") == "season", f"generic season scope was lost: {node}")
+        first, _meta = core.next_after_expr(dnf, date(2026, 1, 1), default_seed=date(2026, 1, 1))
+        expect(first == date(2026, 3, 2), f"generic season spring date drifted: {first}")
+        for reference, expected in (
+            (date(2026, 3, 2), date(2026, 6, 1)),
+            (date(2026, 6, 1), date(2026, 9, 7)),
+            (date(2026, 9, 7), date(2026, 12, 7)),
+            (date(2026, 12, 7), date(2027, 3, 1)),
+        ):
+            actual, _meta = core.next_after_expr(dnf, reference, default_seed=date(2026, 1, 1))
+            expect(actual == expected, f"generic season rollover drifted: {reference} -> {actual}")
+        expect(
+            core.describe_anchor_expr(expression) == "the first Monday of each season",
+            "generic season natural text is unclear",
+        )
+        expect(
+            core.acf_to_original_format(core.build_acf(expression)) == "(w:mon)@in-season=first",
+            "generic season ACF did not round-trip",
+        )
+        season_support.configure_hemisphere("south")
+        southern, _meta = core.next_after_expr(
+            dnf, date(2026, 8, 1), default_seed=date(2026, 1, 1)
+        )
+        expect(southern == date(2026, 9, 7), f"southern generic season drifted: {southern}")
+    finally:
+        season_support.configure_hemisphere(previous)
 
 
 def test_seasonal_selection_scheduler_post_modifiers():
@@ -31279,6 +31325,7 @@ TESTS = [
     test_seasonal_selection_parser_contract,
     test_seasonal_selection_acf_round_trip,
     test_seasonal_selection_scheduler_windows_and_rollover,
+    test_generic_seasonal_selection_scheduler_and_round_trip,
     test_seasonal_selection_scheduler_post_modifiers,
     test_seasonal_selection_boundary_and_overflow_contract,
     test_seasonal_selection_natural_language_and_advice,

@@ -346,7 +346,11 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                         default_seed=ref_d,
                     ):
                         scope = str(factor.get("scope") or "season")
-                        boundary = core["_season_support"].fixed_season_boundary_description(scope)
+                        boundary = (
+                            "the four fixed seasonal windows"
+                            if scope == "season"
+                            else core["_season_support"].fixed_season_boundary_description(scope)
+                        )
                         raise core["AndTermUnsatisfiable"](
                             f"@in-{scope} candidate expression has no dates within its fixed "
                             f"{boundary} window."

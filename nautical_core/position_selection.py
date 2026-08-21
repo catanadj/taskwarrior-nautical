@@ -10,8 +10,10 @@ from .season_support import (
     SEASON_NAMES,
     active_hemisphere,
     fixed_season_boundary_description,
+    next_season_window,
     season_bounds,
     season_window_on_or_after,
+    season_windows_on_or_after,
 )
 from .tokenutil import (
     WD_ABBR,
@@ -39,13 +41,15 @@ POSITION_LIMITS = {
     "summer": 92,
     "autumn": 91,
     "winter": 91,
+    "season": 92,
 }
 SEASON_SCOPES = frozenset(SEASON_NAMES)
+SEASON_SELECTION_SCOPES = frozenset((*SEASON_NAMES, "season"))
 
 _ORDINAL_RE = re.compile(r"^(\d+)(st|nd|rd|th)?$")
 _REVERSE_ORDINAL_RE = re.compile(r"^(\d+)(st|nd|rd|th)-last$")
 _GROUP_SELECTION_RE = re.compile(
-    rf"^in-(week|month|quarter|year|{'|'.join(SEASON_NAMES)})=(.*)$"
+    rf"^in-(week|month|quarter|year|season|{'|'.join(SEASON_NAMES)})=(.*)$"
 )
 _MAX_POSITION_TEXT_LENGTH = 4096
 _DEFAULT_PERIOD_SCAN_LIMIT = 128
@@ -154,7 +158,7 @@ def parse_group_selection_modifier(
     if match is None:
         raise ValueError(
             "Invalid positional selector. Use @in-week, @in-month, @in-quarter, "
-            "or @in-year, or a seasonal selector such as @in-spring, "
+            "or @in-year, or a seasonal selector such as @in-season or @in-spring, "
             "on a parenthesized expression."
         )
     scope, raw_positions = match.groups()
@@ -189,7 +193,7 @@ def describe_selection(node: object, inner_description: str) -> str:
     noun = "date" if len(labels) == 1 else "dates"
     inner = inner_description.strip() or "the candidate expression"
     scope = normalized["scope"]
-    if scope in SEASON_SCOPES:
+    if scope in SEASON_SELECTION_SCOPES:
         weekday = re.fullmatch(
             r"(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)s",
             inner,
@@ -197,6 +201,8 @@ def describe_selection(node: object, inner_description: str) -> str:
         if weekday:
             weekday_noun = weekday.group(1) if len(labels) == 1 else inner
             return f"the {position_text} {weekday_noun} of each {scope}"
+        if scope == "season":
+            return f"the {position_text} matching {noun} from {inner} during each season"
         return f"the {position_text} matching {noun} from {inner} during each {scope}"
     return f"the {position_text} matching {noun} from {inner} in each {normalized['scope']}"
 
@@ -451,6 +457,7 @@ def _atom_capacity_upper(atom: dict[str, Any], scope: str) -> int:
             "summer": 14,
             "autumn": 14,
             "winter": 14,
+            "season": 14,
         }[scope]
         return min(limit, len(weekdays) * per_weekday)
     if typ == "m":
@@ -466,6 +473,7 @@ def _atom_capacity_upper(atom: dict[str, Any], scope: str) -> int:
             "summer": 3,
             "autumn": 3,
             "winter": 3,
+            "season": 3,
         }[scope]
         return min(limit, per_month * months)
     if typ == "y":
@@ -550,6 +558,8 @@ def selection_advice(node: object) -> tuple[str, ...]:
     if normalized["scope"] in SEASON_SCOPES:
         boundary = fixed_season_boundary_description(normalized["scope"])
         advice.append(f"{selector} uses fixed {boundary} boundaries.")
+    elif normalized["scope"] == "season":
+        advice.append(f"{selector} uses the four fixed seasonal windows for the active hemisphere.")
     return tuple(advice)
 
 
@@ -579,7 +589,7 @@ def seasonal_candidate_has_match(
     """Return whether a seasonal candidate matches within a bounded Gregorian sample."""
     normalized = normalize_selection_node(node)
     scope = normalized["scope"]
-    if scope not in SEASON_SCOPES:
+    if scope not in SEASON_SELECTION_SCOPES:
         return True
     if not callable(matches_on):
         raise TypeError("Seasonal candidate matcher must be callable.")
@@ -602,19 +612,21 @@ def seasonal_candidate_has_match(
         candidate_expr.append(candidate_term)
 
     first_year = max(1, seed.year - 1)
+    scopes = SEASON_NAMES if scope == "season" else (scope,)
     for start_year in range(first_year, min(9999, first_year + years)):
-        try:
-            start, end = season_bounds(scope, start_year)
-        except ValueError:
-            break
-        current = start
-        while current <= end:
-            if any(
-                all(matches_on(factor, current, seed) for factor in term)
-                for term in candidate_expr
-            ):
-                return True
-            current += timedelta(days=1)
+        for season_scope in scopes:
+            try:
+                start, end = season_bounds(season_scope, start_year)
+            except ValueError:
+                continue
+            current = start
+            while current <= end:
+                if any(
+                    all(matches_on(factor, current, seed) for factor in term)
+                    for term in candidate_expr
+                ):
+                    return True
+                current += timedelta(days=1)
     return False
 
 
@@ -719,6 +731,10 @@ def period_bounds(scope: str, value: date) -> tuple[date, date]:
     if normalized_scope in SEASON_SCOPES:
         return season_window_on_or_after(normalized_scope, day)
 
+    if normalized_scope == "season":
+        _, start, end = season_windows_on_or_after(day)
+        return start, end
+
     return date(day.year, 1, 1), date(day.year, 12, 31)
 
 
@@ -728,11 +744,15 @@ def next_period_start(scope: str, value: date) -> date:
     normalized_scope = _normalize_scope(scope)
     if normalized_scope in SEASON_SCOPES:
         return season_bounds(normalized_scope, start.year + 1)[0]
+    if normalized_scope == "season":
+        return next_season_window(start)[1]
     return end + timedelta(days=1)
 
 
 def _previous_period_probe(scope: str, period_start: date) -> date:
-    if scope not in SEASON_SCOPES:
+    if scope not in SEASON_SCOPES and scope != "season":
+        return period_start - timedelta(days=1)
+    if scope == "season":
         return period_start - timedelta(days=1)
     previous_year = period_start.year - 1
     if previous_year < 1:
@@ -1000,6 +1020,7 @@ def candidate_cache_info():
 __all__ = (
     "POSITION_LIMITS",
     "SEASON_SCOPES",
+    "SEASON_SELECTION_SCOPES",
     "SelectionNode",
     "candidate_capacity_upper_bound",
     "candidate_cache_info",

@@ -6,7 +6,7 @@ from .time_windows import parse_random_time_window_spec, validate_time_schedule_
 
 CACHE_SCHEMA_VERSION = 2
 _CACHE_VERSION_KEY = "_nautical_cache_version"
-_SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", *SEASON_NAMES))
+_SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", "season", *SEASON_NAMES))
 
 
 def is_atom_like(atom) -> bool:

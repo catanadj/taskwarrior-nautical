@@ -129,6 +129,11 @@ def _capabilities_payload() -> dict[str, Any]:
                 "Read the versioned JSON schema, statuses, and failure codes; do not "
                 "import Nautical internals or parse human-readable panels."
             ),
+            "task_range_rule": (
+                "For task selectors, occurrences never precede the task's current due "
+                "or scheduled reference; expression-only calendar expansion is a "
+                "separate future operation."
+            ),
         },
         "future_operations": ["next", "inspect", "chains"],
     }

@@ -77,6 +77,8 @@ def _task_identity(task: Mapping[str, Any]) -> TaskIdentity:
         description=str(task.get("description") or ""),
         recurrence_kind=kind,
         expression=expression,
+        current_due=str(task.get("due") or ""),
+        current_scheduled=str(task.get("scheduled") or ""),
     )
 
 
@@ -227,6 +229,19 @@ class OccurrenceQueryService:
             )
         return tuple(records)
 
+    def _task_reference_local(self, task: Mapping[str, Any]) -> datetime | None:
+        """Return the task's current recurrence reference in query timezone."""
+        raw = task.get("due") or task.get("scheduled")
+        if not raw:
+            return None
+        parser = getattr(self._core, "parse_dt_any", None)
+        if not callable(parser):
+            raise QueryServiceError("Nautical datetime parser is unavailable")
+        parsed = parser(raw)
+        if not isinstance(parsed, datetime) or parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise QueryServiceError("task due/scheduled value is not a valid timezone-aware datetime")
+        return parsed.astimezone(self._timezone)
+
     def _query_task(self, task: Mapping[str, Any], request: OccurrenceQueryRequest) -> TaskOccurrenceResult:
         if task.get("_query_absent"):
             return TaskOccurrenceResult(
@@ -251,12 +266,20 @@ class OccurrenceQueryService:
             scheduler = SchedulerService.from_task(task, context=context)
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
+            task_reference = self._task_reference_local(task)
+            if task_reference is not None and task_reference > start:
+                start = task_reference
+                start_inclusive = True
+            else:
+                start_inclusive = request.start_inclusive
             end = (
                 _boundary_local(request.end.value, request.end.date_only, self._timezone, end=True)
                 if request.end is not None else None
             )
+            if end is not None and end < start:
+                return TaskOccurrenceResult(task=identity, status="empty")
             range_request = OccurrenceRangeRequest(
-                cursor=OccurrenceCursor(start, inclusive=request.start_inclusive, timezone=self._timezone),
+                cursor=OccurrenceCursor(start, inclusive=start_inclusive, timezone=self._timezone),
                 end_local=end,
                 limit=request.count or request.max_occurrences,
                 omission_policy=request.omission_policy,

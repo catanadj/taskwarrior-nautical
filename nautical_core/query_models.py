@@ -303,13 +303,22 @@ class TaskIdentity:
     recurrence_kind: str = ""
     expression: str = ""
     schedule_fingerprint: str = ""
+    current_due: str = ""
+    current_scheduled: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "uuid", _text(self.uuid, "task UUID"))
         object.__setattr__(self, "chain_id", _text(self.chain_id, "task chainID"))
         if self.link is not None and (isinstance(self.link, bool) or not isinstance(self.link, int) or self.link < 0):
             raise QueryContractError("task link must be a non-negative integer")
-        for field in ("description", "recurrence_kind", "expression", "schedule_fingerprint"):
+        for field in (
+            "description",
+            "recurrence_kind",
+            "expression",
+            "schedule_fingerprint",
+            "current_due",
+            "current_scheduled",
+        ):
             object.__setattr__(self, field, str(getattr(self, field) or ""))
 
     def to_dict(self) -> dict[str, Any]:
@@ -321,6 +330,8 @@ class TaskIdentity:
             "recurrence_kind": self.recurrence_kind,
             "expression": self.expression,
             "schedule_fingerprint": self.schedule_fingerprint,
+            "current_due": self.current_due or None,
+            "current_scheduled": self.current_scheduled or None,
         }
 
 

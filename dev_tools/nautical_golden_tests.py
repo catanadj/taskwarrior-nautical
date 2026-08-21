@@ -32425,6 +32425,7 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     guide = payload.get("guide", {})
     expect("cp" in guide.get("concepts", {}) and "anchor" in guide.get("concepts", {}), "capability guide omitted core concepts")
     expect(any("query occurrences" in item for item in guide.get("quick_start", [])), "capability guide omitted a query example")
+    expect("task_range_rule" in guide, "capability guide omitted task reference semantics")
 
 
 def test_query_process_boundary_emits_one_json_document():
@@ -32679,6 +32680,50 @@ def test_query_service_contains_invalid_task_schedule_errors():
     expect(result.failure is not None and result.failure.code == "task_invalid", "malformed recurrence failure code changed")
 
 
+def test_query_service_respects_current_task_reference_bounds():
+    """Task occurrence queries do not project calendar matches before current due."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    task = {
+        "uuid": "00000000-0000-0000-0000-000000000009",
+        "chainID": "query-reference",
+        "link": 4,
+        "description": "Future task",
+        "anchor": "w:mon",
+        "anchor_mode": "all",
+        "due": "2030-01-07T09:00:00+00:00",
+        "status": "pending",
+    }
+
+    class _Repository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(task, f"uuid:{value}")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone.utc,
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": [task["uuid"]]},
+            "from": "2026-08-24",
+            "to": "2026-08-31",
+            "count": 20,
+        }
+    )
+    result = OccurrenceQueryService(uow, core=core).query(request).results[0]
+    expect(result.status == "empty", "query projected occurrences before the task due")
+    expect(result.task is not None and result.task.current_due == task["due"], "query omitted current due metadata")
+
+
 def test_query_next_projects_anchor_and_cp_without_mutation():
     """The next operation uses due/scheduled or completion references read-only."""
     from nautical_core.integration_context import IntegrationAccess
@@ -32779,6 +32824,7 @@ TESTS.extend([
     test_query_service_all_selector_excludes_non_recurrence_rows,
     test_query_service_batches_multiple_uuid_reads,
     test_query_service_contains_invalid_task_schedule_errors,
+    test_query_service_respects_current_task_reference_bounds,
     test_query_next_projects_anchor_and_cp_without_mutation,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,

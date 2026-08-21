@@ -1426,6 +1426,54 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
 
 
+def test_chain_graph_is_deterministic_and_preserves_reference_states():
+    """Graph indexes and edge evidence are immutable and order-independent."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
+
+    first = ChainNode.from_mapping(
+        {
+            "uuid": "aaaaaaaa-0000-0000-0000-000000000911",
+            "status": "pending",
+            "chainID": "graph-chain",
+            "link": 1,
+            "nextLink": "bbbbbbbb",
+        }
+    )
+    second = ChainNode.from_mapping(
+        {
+            "uuid": "bbbbbbbb-0000-0000-0000-000000000912",
+            "status": "completed",
+            "chainID": "graph-chain",
+            "link": 2,
+            "prevLink": first.task_uuid,
+        }
+    )
+    snapshot = ChainSnapshot("graph-snapshot", SnapshotCoverage.CHAIN, "test", (second, first))
+    graph = ChainGraph.from_snapshot(snapshot)
+    reordered = ChainGraph.from_snapshot(ChainSnapshot("graph-snapshot", SnapshotCoverage.CHAIN, "test", (first, second)))
+    expect(tuple(node.task_uuid for node in graph.nodes) == tuple(node.task_uuid for node in reordered.nodes), "graph order was not deterministic")
+    expect(graph.slot_nodes("graph-chain", 1) == (first,), "slot index did not resolve")
+    expect(graph.status_nodes("completed") == (second,), "status index did not resolve")
+    expect(graph.reference(first.task_uuid, "nextLink").state is ReferenceState.RESOLVED, "short UUID was not resolved")
+    expect(graph.reference(second.task_uuid, "prevLink").target_uuid == first.task_uuid, "full UUID was not resolved")
+
+    missing = ChainNode.from_mapping(
+        {
+            "uuid": "cccccccc-0000-0000-0000-000000000913",
+            "status": "pending",
+            "chainID": "graph-chain",
+            "link": 3,
+            "nextLink": "outside0",
+        }
+    )
+    missing_graph = ChainGraph.from_snapshot(ChainSnapshot("graph-missing", SnapshotCoverage.CHAIN, "test", (missing,)))
+    expect(
+        missing_graph.reference(missing.task_uuid, "nextLink").state is ReferenceState.OUTSIDE_COVERAGE,
+        "unresolved edge was silently discarded",
+    )
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -31997,6 +32045,7 @@ TESTS = [
     test_lifecycle_models_enforce_transition_contract,
     test_chain_integrity_models_enforce_observation_and_repair_contract,
     test_chain_snapshot_service_preserves_authority_and_epoch_cache,
+    test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

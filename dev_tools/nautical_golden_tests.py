@@ -1425,10 +1425,29 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     invalid = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
     expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
 
+    duplicate_rows = (
+        rows[0],
+        {**rows[0], "status": "completed", "link": 2},
+    )
+    duplicate = AuthoritativeTaskSnapshot(scope, duplicate_rows, result)
+    unit.repository.response = Found(duplicate, "broad:chain:on")
+    duplicate_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(duplicate_read, Unavailable), "duplicate full UUID reached the integrity graph")
+    expect("duplicate full UUID" in duplicate_read.evidence.detail, "duplicate UUID failure lost its reason")
+
+    wrong_chain = AuthoritativeTaskSnapshot(
+        scope,
+        ({**rows[0], "chainID": "other-chain"},),
+        result,
+    )
+    unit.repository.response = Found(wrong_chain, "broad:chain:on")
+    wrong_chain_read = service.collect(IntegritySnapshotRequest.chain("snap-chain", refresh=True))
+    expect(isinstance(wrong_chain_read, Unavailable), "narrow chain scope accepted a mismatched row")
+
     unit.repository.response = Found(authoritative, "broad:uuid")
     uuid_read = service.collect(IntegritySnapshotRequest.uuid(rows[0]["uuid"], refresh=True))
     expect(isinstance(uuid_read, Found), "UUID integrity scope was not collected")
-    expect(unit.repository.calls == 6, "UUID scope did not use the shared snapshot provider")
+    expect(unit.repository.calls == 8, "UUID scope did not use the shared snapshot provider")
 
 
 def test_chain_integrity_engine_owns_audit_and_empty_drain():

@@ -150,6 +150,9 @@ class ChainSnapshotService:
             snapshot = self._empty_snapshot(request, read.reason)
             self._normalized[cache_key] = snapshot
             return Found(snapshot, self._query(request))
+        validation_error = self._validate_rows(request, read.value)
+        if validation_error:
+            return Unavailable(self._query(request), self._invalid_response(read.value, validation_error))
         try:
             rows = tuple(ChainNode.from_mapping(row) for row in read.value.rows)
         except (TypeError, ValueError) as exc:
@@ -165,6 +168,35 @@ class ChainSnapshotService:
         )
         self._normalized[cache_key] = snapshot
         return Found(snapshot, self._query(request))
+
+    @staticmethod
+    def _validate_rows(
+        request: IntegritySnapshotRequest,
+        snapshot: AuthoritativeTaskSnapshot,
+    ) -> str:
+        """Reject impossible identity evidence before graph construction.
+
+        A duplicate full UUID cannot represent two Taskwarrior tasks.  Letting
+        it reach the graph makes short-link resolution and slot repair
+        ambiguous, so the complete export is unavailable instead.  Narrow
+        chain reads also must not silently return rows from another chain.
+        """
+        seen: set[str] = set()
+        for row in snapshot.rows:
+            uuid_value = str(row.get("uuid") or "").strip().lower()
+            if not uuid_value:
+                return "chain export contains a row without a UUID"
+            if uuid_value in seen:
+                return f"chain export contains duplicate full UUID {uuid_value}"
+            seen.add(uuid_value)
+            if request.kind is IntegritySnapshotKind.CHAIN:
+                chain_id = str(row.get("chainID") or row.get("chain_id") or "").strip()
+                if chain_id != request.chain_id:
+                    return (
+                        f"chain export returned row {uuid_value} with chainID "
+                        f"{chain_id or '<empty>'}, expected {request.chain_id}"
+                    )
+        return ""
 
     def _read(self, request: IntegritySnapshotRequest) -> TaskRead[AuthoritativeTaskSnapshot]:
         if request.kind is IntegritySnapshotKind.CHAIN:

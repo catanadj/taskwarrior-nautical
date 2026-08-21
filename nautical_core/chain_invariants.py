@@ -277,6 +277,10 @@ def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
         until = _canonical_timestamp(until_raw)
         scheduled_raw = node.field("scheduled")
         scheduled = _canonical_timestamp(scheduled_raw)
+        wait_raw = node.field("wait")
+        wait = _canonical_timestamp(wait_raw)
+        chain_until_raw = node.field("chainUntil")
+        chain_until = _canonical_timestamp(chain_until_raw)
         if due is not None and until is not None and until < due:
             findings.append(_finding(
                 graph,
@@ -300,6 +304,30 @@ def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
                 "Scheduled timestamp is later than due.",
                 observed=(("scheduled", str(scheduled_raw)), ("due", str(due_raw))),
                 expected=(("scheduled", "at or before due"),),
+            ))
+        if due is not None and wait is not None and wait > due:
+            findings.append(_finding(
+                graph,
+                "carry.wait_before_due",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                node,
+                "wait_after_due",
+                "Wait timestamp is later than due.",
+                observed=(("wait", str(wait_raw)), ("due", str(due_raw))),
+                expected=(("wait", "at or before due"),),
+            ))
+        if due is not None and chain_until is not None and chain_until < due:
+            findings.append(_finding(
+                graph,
+                "carry.chain_until_after_due",
+                FindingStatus.REPAIRABLE,
+                FindingSeverity.ERROR,
+                node,
+                "chain_until_before_due",
+                "Chain end point is earlier than the current due timestamp.",
+                observed=(("chainUntil", str(chain_until_raw)), ("due", str(due_raw))),
+                expected=(("chainUntil", "at or after due"),),
             ))
     return tuple(findings)
 

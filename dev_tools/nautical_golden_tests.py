@@ -1541,10 +1541,12 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
             "anchor": "w:mon",
             "due": "20260821T120000Z",
             "until": "20260821T110000Z",
+            "wait": "20260821T130000Z",
         }),),
     ))
     temporal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(temporal)}
     expect(("carry.until_after_due", "until_before_due") in temporal_ids, "until ordering was not reported")
+    expect(("carry.wait_before_due", "wait_after_due") in temporal_ids, "wait ordering was not reported")
 
 
 def test_chain_integrity_context_keeps_outbox_evidence_separate():

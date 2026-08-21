@@ -242,6 +242,72 @@ class OccurrenceQueryService:
             raise QueryServiceError("task due/scheduled value is not a valid timezone-aware datetime")
         return parsed.astimezone(self._timezone)
 
+    def _query_cp_task(
+        self,
+        task: Mapping[str, Any],
+        identity: TaskIdentity,
+        request: OccurrenceQueryRequest,
+    ) -> TaskOccurrenceResult:
+        """Project CP slots from the task's current due/end without mutation."""
+        reference = self._task_reference_local(task)
+        if reference is None:
+            raise QueryServiceError("CP task has no due or scheduled reference")
+        start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
+        end = (
+            _boundary_local(request.end.value, request.end.date_only, self._timezone, end=True)
+            if request.end is not None else None
+        )
+        chain_until = task.get("chainUntil")
+        if chain_until:
+            parser = getattr(self._core, "parse_dt_any", None)
+            if not callable(parser):
+                raise QueryServiceError("Nautical datetime parser is unavailable")
+            parsed_until = parser(chain_until)
+            if not isinstance(parsed_until, datetime) or parsed_until.tzinfo is None or parsed_until.utcoffset() is None:
+                raise QueryServiceError("chainUntil is not a valid timezone-aware datetime")
+            until_local = parsed_until.astimezone(self._timezone)
+            end = until_local if end is None else min(end, until_local)
+        if end is not None and end < start:
+            return TaskOccurrenceResult(identity, "empty")
+        link = _link_value(task.get("link")) or 1
+        chain_max = task.get("chainMax")
+        max_link = None if chain_max in (None, "") else int(float(str(chain_max)))
+        limit = request.count or request.max_occurrences
+        current = reference
+        records: list[OccurrenceRecord] = []
+        generator = ChainGenerationService.from_core(self._core)
+        while len(records) < limit:
+            within_start = current > start or (request.start_inclusive and current == start)
+            within_end = end is None or current <= end
+            if within_start and within_end:
+                records.append(
+                    OccurrenceRecord(
+                        local=current,
+                        utc=current.astimezone(timezone.utc),
+                        timezone=_timezone_name(self._timezone),
+                        source="cp",
+                    )
+                )
+            if end is not None and current >= end:
+                break
+            if max_link is not None and link >= max_link:
+                break
+            parent = dict(task)
+            stamp = self._core.fmt_isoz(current.astimezone(timezone.utc))
+            parent["end"] = stamp
+            parent["due"] = stamp
+            parent["link"] = link
+            child_due, _metadata = generator.compute_cp_child_due(parent)
+            if child_due is None:
+                break
+            current = child_due.astimezone(self._timezone)
+            link += 1
+        return TaskOccurrenceResult(
+            identity,
+            "found" if records else "empty",
+            tuple(records),
+        )
+
     def _query_task(self, task: Mapping[str, Any], request: OccurrenceQueryRequest) -> TaskOccurrenceResult:
         if task.get("_query_absent"):
             return TaskOccurrenceResult(
@@ -262,6 +328,8 @@ class OccurrenceQueryService:
             )
         try:
             identity = _task_identity(task)
+            if identity.recurrence_kind == "cp":
+                return self._query_cp_task(task, identity, request)
             context = self._context_for(task)
             scheduler = SchedulerService.from_task(task, context=context)
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)

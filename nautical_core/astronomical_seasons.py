@@ -6,11 +6,13 @@ season points; the seasonal scheduler can adopt it only after its accuracy and
 failure behavior have been validated independently.
 
 The solar-longitude approximation follows the low-precision Meeus equations
-used by the relevant ``solar_longitude_after`` path in PyCalCal.  PyCalCal is
+used by the relevant ``solar_longitude_after`` path in PyCalCal.  
+PyCalCal (https://github.com/espinielli/pycalcal) is
 MIT-licensed for its author-written portions (the project also contains
 separately licensed Calendrica material); this module is a small, independent
 stdlib-only adaptation rather than a vendored copy.  Results are suitable for
 calendar boundaries and recurrence dates, not precision ephemeris work.
+
 """
 from __future__ import annotations
 

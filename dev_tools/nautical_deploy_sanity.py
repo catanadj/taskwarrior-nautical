@@ -435,6 +435,39 @@ def _check_package_layout(root: Path, env: dict[str, str]) -> list[dict]:
     return out
 
 
+def _check_query_operator(root: Path, env: dict[str, str]) -> list[dict]:
+    """Smoke-test the installed-style query launcher without Taskwarrior data."""
+    launcher = root / "nautical"
+    if not launcher.is_file():
+        return [{"kind": "query", "name": "launcher", "ok": False, "message": "nautical launcher missing"}]
+    query_env = dict(env)
+    query_env["PYTHONPATH"] = str(root) + os.pathsep + str(query_env.get("PYTHONPATH") or "")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(launcher), "query", "capabilities"],
+            cwd=str(root),
+            env=query_env,
+            text=True,
+            capture_output=True,
+            timeout=8.0,
+        )
+        ok, message = _strict_json_object(proc.stdout)
+        if proc.returncode != 0:
+            ok = False
+            message = (proc.stderr or proc.stdout or f"exit={proc.returncode}").strip()
+        if ok:
+            try:
+                payload = json.loads(proc.stdout)
+                ok = payload.get("schema") == "nautical.query.capabilities"
+                message = "ok" if ok else "unexpected capability schema"
+            except Exception as exc:
+                ok = False
+                message = f"invalid capability JSON: {exc}"
+        return [{"kind": "query", "name": "capabilities", "ok": bool(ok), "message": message}]
+    except Exception as exc:
+        return [{"kind": "query", "name": "capabilities", "ok": False, "message": f"{type(exc).__name__}: {exc}"}]
+
+
 def _check_performance_workflow(root: Path) -> list[dict]:
     """Ensure the performance job provisions the tools its benchmark invokes."""
     workflow = root / ".github" / "workflows" / "perf-budget.yml"
@@ -562,6 +595,7 @@ def main() -> int:
         layout_env.pop("NAUTICAL_DIAG", None)
         layout_env.pop("NAUTICAL_DIAG_LOG", None)
         results.extend(_check_package_layout(root, layout_env))
+        results.extend(_check_query_operator(root, layout_env))
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
         results.extend(_check_removed_ownership(root))

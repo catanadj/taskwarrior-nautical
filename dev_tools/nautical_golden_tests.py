@@ -32410,6 +32410,18 @@ def test_query_process_boundary_emits_one_json_document():
     expect(inline.stdout == stdin.stdout, "inline and stdin invalid responses differ")
     expect(len(inline.stdout.splitlines()) == 1, "invalid query emitted multiple stdout lines")
     json.loads(inline.stdout)
+    diagnostic_env = dict(env)
+    diagnostic_env["NAUTICAL_DIAG"] = "1"
+    diagnostic = subprocess.run(
+        [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
+        text=True,
+        capture_output=True,
+        env=diagnostic_env,
+        check=False,
+    )
+    expect(diagnostic.returncode == 2, "diagnostic query changed the invalid exit code")
+    expect(diagnostic.stderr.startswith("[nautical] query:"), "diagnostics were not routed to stderr")
+    expect(len(diagnostic.stdout.splitlines()) == 1, "diagnostic query contaminated stdout")
 
 
 def test_query_service_preserves_absent_and_unavailable_task_reads():

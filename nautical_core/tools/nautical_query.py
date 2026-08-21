@@ -104,6 +104,11 @@ def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
     return exit_code
 
 
+def _diagnostic(message: str) -> None:
+    if os.environ.get("NAUTICAL_DIAG") == "1":
+        sys.stderr.write(f"[nautical] query: {message}\n")
+
+
 def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
     if args.request is not None and args.request_file is not None:
         raise QueryContractError("use either --request or --request-file, not both")
@@ -206,8 +211,10 @@ def main(argv: list[str] | None = None) -> int:
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
         return _emit(response.to_dict(), exit_code=exit_code)
     except QueryContractError as exc:
+        _diagnostic(str(exc))
         return _emit(_error_payload("invalid_request", str(exc)), exit_code=2)
     except (OSError, RuntimeError, ValueError) as exc:
+        _diagnostic(str(exc))
         return _emit(_error_payload("query_unavailable", str(exc), retryable=True), exit_code=3)
 
 

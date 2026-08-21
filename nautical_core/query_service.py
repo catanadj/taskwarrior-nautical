@@ -255,7 +255,34 @@ class OccurrenceQueryService:
                 configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
                 failure=rows,
             )
-        results = tuple(self._query_task(row, request) for row in rows)
+        raw_results = tuple(self._query_task(row, request) for row in rows)
+        results_list: list[TaskOccurrenceResult] = []
+        total = 0
+        for result in raw_results:
+            available = max(0, request.max_total_occurrences - total)
+            if len(result.occurrences) > available:
+                results_list.append(
+                    replace(
+                        result,
+                        status="exhausted",
+                        occurrences=result.occurrences[:available],
+                        failure=_failure(
+                            "total_occurrence_limit",
+                            "query total occurrence limit was reached",
+                            task_uuid=result.task.uuid if result.task is not None else None,
+                            limit=request.max_total_occurrences,
+                        ),
+                        terminal={
+                            "kind": "total_query_limit",
+                            "limit": request.max_total_occurrences,
+                        },
+                    )
+                )
+                total = request.max_total_occurrences
+                continue
+            results_list.append(result)
+            total += len(result.occurrences)
+        results = tuple(results_list)
         statuses = {result.status for result in results}
         if "found" in statuses:
             status = "found"

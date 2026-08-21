@@ -19,10 +19,12 @@ OCCURRENCE_OPERATION = "occurrences"
 
 DEFAULT_MAX_TASKS = 100
 DEFAULT_MAX_OCCURRENCES = 1000
+DEFAULT_MAX_TOTAL_OCCURRENCES = 10000
 DEFAULT_MAX_ITERATIONS = 512
 DEFAULT_MAX_FILE_SKIPS = 512
 HARD_MAX_TASKS = 1000
 HARD_MAX_OCCURRENCES = 10000
+HARD_MAX_TOTAL_OCCURRENCES = 100000
 HARD_MAX_ITERATIONS = 10000
 HARD_MAX_FILE_SKIPS = 10000
 
@@ -124,7 +126,7 @@ class QuerySelector:
     all_tasks: bool = False
 
     def __post_init__(self) -> None:
-        uuids = tuple(_text(item, "task UUID") for item in self.uuids)
+        uuids = tuple(dict.fromkeys(_text(item, "task UUID") for item in self.uuids))
         chain_id = _text(self.chain_id, "chainID", required=False)
         if not isinstance(self.all_tasks, bool):
             raise QueryContractError("all_tasks must be boolean")
@@ -171,6 +173,7 @@ class OccurrenceQueryRequest:
     omission_policy: OmissionPolicy = "exclude"
     max_tasks: int = DEFAULT_MAX_TASKS
     max_occurrences: int = DEFAULT_MAX_OCCURRENCES
+    max_total_occurrences: int = DEFAULT_MAX_TOTAL_OCCURRENCES
     max_iterations: int = DEFAULT_MAX_ITERATIONS
     max_file_skips: int = DEFAULT_MAX_FILE_SKIPS
     version: int = QUERY_API_VERSION
@@ -200,6 +203,7 @@ class OccurrenceQueryRequest:
         for field, value, maximum in (
             ("max_tasks", self.max_tasks, HARD_MAX_TASKS),
             ("max_occurrences", self.max_occurrences, HARD_MAX_OCCURRENCES),
+            ("max_total_occurrences", self.max_total_occurrences, HARD_MAX_TOTAL_OCCURRENCES),
             ("max_iterations", self.max_iterations, HARD_MAX_ITERATIONS),
             ("max_file_skips", self.max_file_skips, HARD_MAX_FILE_SKIPS),
         ):
@@ -230,6 +234,7 @@ class OccurrenceQueryRequest:
             omission_policy=str(value.get("omission_policy", "exclude")),
             max_tasks=value.get("max_tasks", DEFAULT_MAX_TASKS),
             max_occurrences=value.get("max_occurrences", DEFAULT_MAX_OCCURRENCES),
+            max_total_occurrences=value.get("max_total_occurrences", DEFAULT_MAX_TOTAL_OCCURRENCES),
             max_iterations=value.get("max_iterations", DEFAULT_MAX_ITERATIONS),
             max_file_skips=value.get("max_file_skips", DEFAULT_MAX_FILE_SKIPS),
             version=value.get("version", QUERY_API_VERSION),
@@ -248,6 +253,7 @@ class OccurrenceQueryRequest:
             "omission_policy": self.omission_policy,
             "max_tasks": self.max_tasks,
             "max_occurrences": self.max_occurrences,
+            "max_total_occurrences": self.max_total_occurrences,
             "max_iterations": self.max_iterations,
             "max_file_skips": self.max_file_skips,
         }
@@ -437,10 +443,12 @@ __all__ = (
     "DEFAULT_MAX_FILE_SKIPS",
     "DEFAULT_MAX_ITERATIONS",
     "DEFAULT_MAX_OCCURRENCES",
+    "DEFAULT_MAX_TOTAL_OCCURRENCES",
     "DEFAULT_MAX_TASKS",
     "HARD_MAX_FILE_SKIPS",
     "HARD_MAX_ITERATIONS",
     "HARD_MAX_OCCURRENCES",
+    "HARD_MAX_TOTAL_OCCURRENCES",
     "HARD_MAX_TASKS",
     "OCCURRENCES_SCHEMA",
     "OccurrenceQueryRequest",

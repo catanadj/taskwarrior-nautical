@@ -32169,6 +32169,16 @@ def test_query_contract_models_round_trip_and_reject_invalid():
     request_round_trip = OccurrenceQueryRequest.from_mapping(request.to_dict())
     expect(request_round_trip == request, "query request did not round-trip through JSON shape")
     expect(request.max_occurrences == 20, "query limits were not normalized to integers")
+    duplicate_selector = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": ["same", "same"]},
+            "from": "2026-08-21",
+            "count": 1,
+            "max_total_occurrences": 2,
+        }
+    )
+    expect(duplicate_selector.selector.uuids == ("same",), "duplicate UUID selectors were not deduplicated")
+    expect(duplicate_selector.max_total_occurrences == 2, "total occurrence limit was not normalized")
 
     local = datetime(2026, 8, 21, 4, 30, tzinfo=timezone(timedelta(hours=3)))
     identity = TaskIdentity(
@@ -32275,6 +32285,17 @@ def test_occurrence_query_service_projects_schedule_read_only():
     expect(len(result.occurrences) == 2, f"query service returned {len(result.occurrences)} daily slots")
     expect(result.occurrences[0].local.hour == 4 and result.occurrences[1].local.hour == 12, "query slots were not ordered")
     expect(result.occurrences[0].utc.tzinfo is not None, "query result omitted UTC timezone")
+    limited = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": [task["uuid"]]},
+            "from": "2026-08-24",
+            "to": "2026-08-24",
+            "max_total_occurrences": 1,
+        }
+    )
+    limited_result = service.query(limited).results[0]
+    expect(limited_result.status == "exhausted", "total query cap did not report exhaustion")
+    expect(len(limited_result.occurrences) == 1, "total query cap returned too many occurrences")
 
 
 def test_query_cli_emits_one_json_document_for_invalid_request():

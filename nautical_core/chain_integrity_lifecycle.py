@@ -435,7 +435,7 @@ def _build_expiration_child_with_day_end(
     )
 
 
-def _build_reconcile_plan_unscoped(
+def _plan_recovery_decision_unscoped(
     parent: dict[str, Any],
     *,
     existing_children: list[dict[str, Any]],
@@ -689,7 +689,7 @@ def _build_reconcile_plan_unscoped(
     )
 
 
-def build_reconcile_plan(
+def plan_recovery_decision(
     parent: dict[str, Any],
     *,
     existing_children: list[dict[str, Any]],
@@ -701,7 +701,7 @@ def build_reconcile_plan(
     core = generation.core
     use_task_calendar = getattr(core, "use_task_business_calendar", None)
     if not callable(use_task_calendar):
-        return _build_reconcile_plan_unscoped(
+        return _plan_recovery_decision_unscoped(
             parent,
             existing_children=existing_children,
             hook=hook,
@@ -719,7 +719,7 @@ def build_reconcile_plan(
             f"invalid business calendar: {exc}",
         )
     with calendar_context:
-        return _build_reconcile_plan_unscoped(
+        return _plan_recovery_decision_unscoped(
             parent,
             existing_children=existing_children,
             hook=hook,

@@ -1058,7 +1058,7 @@ def _check_reconcile_plans(
     if not unavailable:
         for parent in candidates:
             existing_children = _existing_reconcile_children(rows, parent)
-            plan = lifecycle.build_reconcile_plan(
+            plan = lifecycle.plan_recovery_decision(
                 parent,
                 existing_children=existing_children,
                 hook=hook,

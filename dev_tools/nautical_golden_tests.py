@@ -4430,7 +4430,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
         validated_configuration={"scheduler_fingerprint": "completion"},
         compare_datetimes=lambda left, right: (left > right) - (left < right),
     )
-    reconcile_plan = reconcile.build_reconcile_plan(
+    reconcile_plan = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -14091,7 +14091,7 @@ def test_moon_phase_operational_errors_are_actionable():
         "link": 1,
         "anchor": "moon:full",
     }
-    plan = reconcile.build_reconcile_plan(
+    plan = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=type("Hook", (), {"core": core})(),
@@ -18097,7 +18097,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         "until": mod.core.fmt_isoz(until_2300),
         "end": mod.core.fmt_isoz(until_2300),
     }
-    plan = reconcile.build_reconcile_plan(expired_parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(expired_parent, existing_children=[], hook=mod)
     reconciled_until = mod.core.to_local(mod.core.parse_dt_any((plan.child or {}).get("until")))
     expect(plan.action == "spawn", f"expired anchor should produce a child plan: {plan}")
     expect(
@@ -18125,7 +18125,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
             raise ValueError("native until must be later than the child recurrence target")
 
     failing_generation = FailingBuildGeneration.from_core(mod.core)
-    untyped_plan = reconcile.build_reconcile_plan(
+    untyped_plan = reconcile.plan_recovery_decision(
         early_until_parent,
         existing_children=[],
         hook=mod,
@@ -18136,7 +18136,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         f"reconcile treated an untyped exception message as a carry conflict: {untyped_plan}",
     )
 
-    early_plan = reconcile.build_reconcile_plan(early_until_parent, existing_children=[], hook=mod)
+    early_plan = reconcile.plan_recovery_decision(early_until_parent, existing_children=[], hook=mod)
     early_until = mod.core.to_local(mod.core.parse_dt_any((early_plan.child or {}).get("until")))
     expect(early_plan.action == "spawn", f"expired anchor should still produce a child plan: {early_plan}")
     expect(
@@ -25558,7 +25558,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
 
     import nautical_core.chain_integrity_lifecycle as reconcile
 
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
     expect("wait carry failed" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
 
@@ -27873,18 +27873,18 @@ def test_reconcile_candidate_and_plan_paths():
             "prevLink": "11111111",
         }
     ]
-    plan = reconcile.build_reconcile_plan(parent, existing_children=existing, hook=None)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=existing, hook=None)
     expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
     duplicate = {
         **existing[0],
         "uuid": "33333333-0000-0000-0000-000000000003",
     }
-    ambiguous = reconcile.build_reconcile_plan(parent, existing_children=[*existing, duplicate], hook=None)
+    ambiguous = reconcile.plan_recovery_decision(parent, existing_children=[*existing, duplicate], hook=None)
     expect(
         ambiguous.action == "error" and "multiple tasks" in ambiguous.reason,
         f"duplicate next slots must fail closed: {ambiguous}",
     )
-    nonreciprocal = reconcile.build_reconcile_plan(
+    nonreciprocal = reconcile.plan_recovery_decision(
         parent,
         existing_children=[dict(existing[0], prevLink="beeswax")],
         hook=None,
@@ -27893,7 +27893,7 @@ def test_reconcile_candidate_and_plan_paths():
         nonreciprocal.action == "error" and "prevLink" in nonreciprocal.reason,
         f"nonreciprocal next slot must fail closed: {nonreciprocal}",
     )
-    recurrence_mismatch = reconcile.build_reconcile_plan(
+    recurrence_mismatch = reconcile.plan_recovery_decision(
         parent,
         existing_children=[dict(existing[0], cp="P2D")],
         hook=None,
@@ -27902,7 +27902,7 @@ def test_reconcile_candidate_and_plan_paths():
         recurrence_mismatch.action == "error" and "recurrence field cp" in recurrence_mismatch.reason,
         f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
     )
-    null_recurrence = reconcile.build_reconcile_plan(
+    null_recurrence = reconcile.plan_recovery_decision(
         parent,
         existing_children=[dict(existing[0], anchor_file="null")],
         hook=None,
@@ -27949,7 +27949,7 @@ def test_reconcile_candidate_and_plan_paths():
             }
 
     generation = FakeGeneration()
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
     expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
     evidence = reconcile.describe_plan(plan)
@@ -27958,7 +27958,7 @@ def test_reconcile_candidate_and_plan_paths():
     expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
 
     capped = dict(parent, chainMax=2)
-    plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(capped, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
     class ExhaustingGeneration(FakeGeneration):
@@ -27967,7 +27967,7 @@ def test_reconcile_candidate_and_plan_paths():
                 "cp scheduling", reference=date(9999, 1, 1), limit=1
             )
 
-    terminal = reconcile.build_reconcile_plan(
+    terminal = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -27992,7 +27992,7 @@ def test_reconcile_candidate_and_plan_paths():
                 kind=core.OccurrenceSearchExhausted.SEARCH_LIMIT,
             )
 
-    search_limited = reconcile.build_reconcile_plan(
+    search_limited = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -28062,12 +28062,12 @@ def test_reconcile_plan_uses_task_business_calendar_context():
         "bc": "work",
     }
     generation = FakeGeneration()
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
     expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
     expect(not FakeCore.active, "task business-calendar context leaked after planning")
 
-    invalid = reconcile.build_reconcile_plan(dict(parent, bc="missing"), existing_children=[], hook=None, generation=generation)
+    invalid = reconcile.plan_recovery_decision(dict(parent, bc="missing"), existing_children=[], hook=None, generation=generation)
     expect(invalid.action == "error", f"invalid calendar was not rejected: {invalid}")
     expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
 
@@ -28113,7 +28113,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
         safe_parse_datetime=mod._safe_parse_datetime,
     )
     expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
-    manual_plan = reconcile.build_reconcile_plan(manual, existing_children=[], hook=mod)
+    manual_plan = reconcile.plan_recovery_decision(manual, existing_children=[], hook=mod)
     expect(manual_plan.action == "manual_stop", f"manual deletion should disable the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
     expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
@@ -28467,7 +28467,7 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
         "wait": mod.core.fmt_isoz(wait),
         "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
     }
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(plan.action == "spawn" and plan.child is not None, f"valid hookless carry did not produce a child: {plan}")
     child_due = mod.core.parse_dt_any(plan.child.get("due"))
     child_scheduled = mod.core.parse_dt_any(plan.child.get("scheduled"))
@@ -28476,10 +28476,10 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     expect(child_wait - child_due == wait - due, f"wait carry drifted: {plan.child!r}")
 
     malformed = dict(parent, scheduled="not-a-date")
-    failed = reconcile.build_reconcile_plan(malformed, existing_children=[], hook=mod)
+    failed = reconcile.plan_recovery_decision(malformed, existing_children=[], hook=mod)
     expect(failed.action == "error" and "scheduled field" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
     malformed_wait = dict(parent, wait="not-a-date")
-    failed_wait = reconcile.build_reconcile_plan(malformed_wait, existing_children=[], hook=mod)
+    failed_wait = reconcile.plan_recovery_decision(malformed_wait, existing_children=[], hook=mod)
     expect(failed_wait.action == "error" and "wait carry" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
@@ -28534,17 +28534,17 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         "prevLink": "11111111",
     }
 
-    backfill = reconcile.build_reconcile_plan(parent, existing_children=[deleted_child], hook=mod)
+    backfill = reconcile.plan_recovery_decision(parent, existing_children=[deleted_child], hook=mod)
     expect(
         backfill.action == "backfill_nextlink" and backfill.child_short == "22222222",
         f"deleted next slot should be backfilled rather than duplicated: {backfill}",
     )
 
-    capped = reconcile.build_reconcile_plan(dict(parent, chainMax=1), existing_children=[], hook=mod)
+    capped = reconcile.plan_recovery_decision(dict(parent, chainMax=1), existing_children=[], hook=mod)
     expect(capped.action == "legitimate_final" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
 
     chain_until = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
-    limited = reconcile.build_reconcile_plan(
+    limited = reconcile.plan_recovery_decision(
         dict(parent, chainUntil=mod.core.fmt_isoz(chain_until)),
         existing_children=[],
         hook=mod,
@@ -28554,7 +28554,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         f"chainUntil not enforced against expired successor: {limited}",
     )
 
-    spawned = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    spawned = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(spawned.action == "spawn", f"expected expiration spawn plan: {spawned}")
     expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
     expect((spawned.child or {}).get("until"), f"spawned child should carry relative until: {spawned}")
@@ -29062,7 +29062,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
                 "chainID": parent.get("chainID"),
             }
 
-    plan = reconcile.build_reconcile_plan(
+    plan = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -31690,7 +31690,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         "due": stamp(date(2026, 3, 2), (9, 0)),
         "end": stamp(date(2026, 7, 1), (10, 0)),
     }
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(plan.action == "spawn", f"reconcile did not spawn seasonal child: {plan}")
     child_local = mod.core.to_local(plan.child_due)
     expect(
@@ -31707,7 +31707,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         "link": 2,
         "prevLink": "11111111",
     }
-    repeated = reconcile.build_reconcile_plan(parent, existing_children=[existing], hook=mod)
+    repeated = reconcile.plan_recovery_decision(parent, existing_children=[existing], hook=mod)
     expect(
         repeated.action == "backfill_nextlink" and repeated.child_short == "22222222",
         f"reconcile duplicated an existing seasonal slot: {repeated}",

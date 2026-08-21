@@ -98,9 +98,9 @@ class ChainIntegrityEngine:
         generation: object = None,
     ) -> object:
         """Build one successor/expiration decision through the engine owner."""
-        from .chain_integrity_lifecycle import build_reconcile_plan
+        from .chain_integrity_lifecycle import plan_recovery_decision
 
-        return build_reconcile_plan(
+        return plan_recovery_decision(
             parent,
             existing_children=existing_children,
             hook=hook,

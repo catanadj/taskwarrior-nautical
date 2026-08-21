@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Callable, Iterable
 
 from .chain_graph import ChainGraph
+from .chain_integrity_context import IntegrityContext, OutboxCoverage
 from .chain_integrity_models import (
     ChainNode,
     FindingSeverity,
@@ -343,4 +344,82 @@ def evaluate_invariants(
     )))
 
 
-__all__ = ["DEFAULT_INVARIANTS", "InvariantRule", "evaluate_invariants"]
+def _outbox_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
+    graph = context.graph
+    if context.outbox.coverage is OutboxCoverage.UNAVAILABLE:
+        return (IntegrityFinding(
+            "outbox.snapshot_available",
+            FindingStatus.UNAVAILABLE,
+            FindingSeverity.ERROR,
+            graph.snapshot.snapshot_id,
+            "",
+            (),
+            "outbox_unavailable",
+            f"Lifecycle intent evidence is unavailable: {context.outbox.reason}",
+            (),
+            (("outbox", "available"),),
+            (("outbox_snapshot", context.outbox.snapshot_id),),
+        ),)
+    findings: list[IntegrityFinding] = []
+    for record in context.outbox.records:
+        identity = record.plan.identity
+        parent_matches = graph.uuid_matches(identity.parent_uuid)
+        chain_nodes = graph.chain_nodes(identity.chain_id)
+        if not parent_matches or not chain_nodes:
+            if graph.snapshot.coverage is not SnapshotCoverage.COMPLETE:
+                findings.append(IntegrityFinding(
+                    "outbox.parent_coverage",
+                    FindingStatus.UNAVAILABLE,
+                    FindingSeverity.ERROR,
+                    graph.snapshot.snapshot_id,
+                    identity.chain_id,
+                    (identity.parent_uuid,),
+                    "parent_outside_coverage",
+                    "Outbox intent references task evidence outside the graph coverage.",
+                    (("intent_id", record.intent_id),),
+                    (("parent", "covered"),),
+                    (("outbox_snapshot", context.outbox.snapshot_id),),
+                ))
+            else:
+                findings.append(IntegrityFinding(
+                    "outbox.parent_present",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    graph.snapshot.snapshot_id,
+                    identity.chain_id,
+                    (identity.parent_uuid,),
+                    "outbox_parent_missing",
+                    "Outbox intent references a missing parent task.",
+                    (("intent_id", record.intent_id),),
+                    (("parent", "present"),),
+                    (("outbox_snapshot", context.outbox.snapshot_id),),
+                ))
+        if context.configuration_fingerprint and record.configuration_fingerprint != context.configuration_fingerprint:
+            findings.append(IntegrityFinding(
+                "outbox.configuration_fingerprint",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                graph.snapshot.snapshot_id,
+                identity.chain_id,
+                (identity.parent_uuid,),
+                "configuration_drift",
+                "Outbox intent was created under a different configuration fingerprint.",
+                (("intent_id", record.intent_id), ("observed", record.configuration_fingerprint)),
+                (("configuration", context.configuration_fingerprint),),
+                (("outbox_snapshot", context.outbox.snapshot_id),),
+            ))
+    return tuple(findings)
+
+
+def evaluate_context(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
+    """Evaluate graph rules plus separated outbox evidence in stable order."""
+    findings = (*evaluate_invariants(context.graph), *_outbox_rule(context))
+    unique: dict[tuple[str, str, tuple[str, ...], str], IntegrityFinding] = {}
+    for finding in findings:
+        unique.setdefault((finding.invariant_id, finding.chain_id, finding.subject_uuids, finding.reason_code), finding)
+    return tuple(sorted(unique.values(), key=lambda item: (
+        item.chain_id, item.subject_uuids, item.invariant_id, item.reason_code,
+    )))
+
+
+__all__ = ["DEFAULT_INVARIANTS", "InvariantRule", "evaluate_context", "evaluate_invariants"]

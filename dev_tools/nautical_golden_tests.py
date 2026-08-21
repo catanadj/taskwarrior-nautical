@@ -1552,6 +1552,7 @@ def test_chain_integrity_context_keeps_outbox_evidence_separate():
     from nautical_core.chain_graph import ChainGraph
     from nautical_core.chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot
     from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_context
 
     graph = ChainGraph.from_snapshot(ChainSnapshot("context-graph", SnapshotCoverage.CANDIDATES, "taskwarrior", ()))
     outbox = OutboxSnapshot.from_records(())
@@ -1564,6 +1565,11 @@ def test_chain_integrity_context_keeps_outbox_evidence_separate():
     unavailable = OutboxSnapshot.unavailable("sqlite unavailable")
     failed = IntegrityContext(graph, unavailable)
     expect(not failed.outbox_available and failed.outbox.reason == "sqlite unavailable", "outbox failure was hidden")
+    findings = evaluate_context(failed)
+    expect(
+        any(item.invariant_id == "outbox.snapshot_available" and item.status.value == "unavailable" for item in findings),
+        "unavailable outbox evidence did not produce an unavailable finding",
+    )
 
 
 def test_integration_command_and_read_models_enforce_contract():

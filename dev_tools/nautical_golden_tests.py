@@ -32314,11 +32314,27 @@ def test_query_cli_flags_build_the_same_validated_request():
     expect(payload["failure"]["code"] == "query_unavailable", "flag query did not reach the read boundary")
 
 
+def test_query_capabilities_is_taskwarrior_free_and_versioned():
+    """Capability discovery is stable and does not require Taskwarrior data."""
+    from nautical_core.tools import nautical_query
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+        exit_code = nautical_query.main(["capabilities"])
+    payload = json.loads(output.getvalue())
+    expect(exit_code == 0, "capability discovery failed")
+    expect(payload["schema"] == "nautical.query.capabilities", "capability schema is incorrect")
+    expect(payload["version"] == 1, "capability version is incorrect")
+    expect(payload["operations"] == ["occurrences"], "capability operation list is unstable")
+    expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
     test_query_cli_emits_one_json_document_for_invalid_request,
     test_query_cli_flags_build_the_same_validated_request,
+    test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

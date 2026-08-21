@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -21,6 +22,15 @@ import nautical_core as core  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
     OCCURRENCES_SCHEMA,
+    CAPABILITIES_SCHEMA,
+    DEFAULT_MAX_FILE_SKIPS,
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_MAX_OCCURRENCES,
+    DEFAULT_MAX_TASKS,
+    HARD_MAX_FILE_SKIPS,
+    HARD_MAX_ITERATIONS,
+    HARD_MAX_OCCURRENCES,
+    HARD_MAX_TASKS,
     QUERY_API_VERSION,
     OccurrenceQueryRequest,
     QueryContractError,
@@ -47,6 +57,41 @@ def _error_payload(code: str, message: str, *, retryable: bool = False) -> dict[
             "task_uuid": None,
             "details": {},
         },
+    }
+
+
+def _capabilities_payload() -> dict[str, Any]:
+    """Describe the public query surface without reading Taskwarrior data."""
+    return {
+        "schema": CAPABILITIES_SCHEMA,
+        "version": QUERY_API_VERSION,
+        "status": "ok",
+        "operations": ["occurrences"],
+        "selectors": ["uuid", "chain_id", "all"],
+        "omission_policies": ["exclude", "include", "report"],
+        "timestamps": {
+            "formats": ["ISO-8601 date", "RFC 3339 timestamp with explicit offset"],
+            "date_semantics": "local calendar date in Nautical's configured timezone",
+            "returned": ["local", "utc"],
+        },
+        "limits": {
+            "defaults": {
+                "tasks": DEFAULT_MAX_TASKS,
+                "occurrences": DEFAULT_MAX_OCCURRENCES,
+                "iterations": DEFAULT_MAX_ITERATIONS,
+                "file_skips": DEFAULT_MAX_FILE_SKIPS,
+            },
+            "hard": {
+                "tasks": HARD_MAX_TASKS,
+                "occurrences": HARD_MAX_OCCURRENCES,
+                "iterations": HARD_MAX_ITERATIONS,
+                "file_skips": HARD_MAX_FILE_SKIPS,
+            },
+        },
+        "providers": {
+            "astronomy": bool(importlib.util.find_spec("astral")),
+        },
+        "future_operations": ["next", "inspect", "chains"],
     }
 
 
@@ -91,7 +136,7 @@ def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nautical's versioned read-only query API")
-    parser.add_argument("operation", choices=("occurrences",), help="query operation")
+    parser.add_argument("operation", choices=("capabilities", "occurrences"), help="query operation")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--request", help="inline JSON request object, or '-' for stdin")
     source.add_argument("--request-file", help="path to a JSON request object")
@@ -106,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--count", type=int, help="maximum number of occurrences per task")
     parser.add_argument("--omissions", choices=("exclude", "include", "report"), dest="omission_policy", default="exclude")
     args = parser.parse_args(argv)
+    if args.operation == "capabilities":
+        return _emit(_capabilities_payload())
     try:
         flag_values = (
             args.uuids,

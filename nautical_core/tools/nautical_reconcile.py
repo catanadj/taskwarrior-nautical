@@ -23,7 +23,7 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import reconcile, safe_lock  # noqa: E402
+from nautical_core import chain_integrity_lifecycle as reconcile, safe_lock  # noqa: E402
 from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
 from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402

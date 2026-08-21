@@ -672,7 +672,7 @@ _MODULE_SPECS = {
         "_RECONCILE",
         "_RECONCILE_LOAD_FAILED",
         "reconcile.py",
-        "nautical_core.reconcile",
+        "nautical_core.chain_integrity_lifecycle",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",

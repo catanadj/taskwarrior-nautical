@@ -4378,7 +4378,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
 
     from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
     from nautical_core.lifecycle_planner import RecurrenceCandidate, plan_candidate_successor
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
     parent = {
@@ -10919,7 +10919,7 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
 def test_non_hour_dst_carry_and_reconcile_share_core_policy():
     """Wait, until, and reconcile repair must share 30-minute gap handling."""
     from zoneinfo import ZoneInfo
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_non_hour_dst_carry_test")
@@ -14069,7 +14069,7 @@ def test_moon_phase_operational_errors_are_actionable():
     expect("Install astral" in astronomy.scheduling_error_message(foreign_error), "foreign error message was not actionable")
 
 
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     class FailingGeneration:
         core = core
@@ -18011,7 +18011,7 @@ def test_on_modify_build_child_carries_until_across_dst():
 
 def test_on_modify_native_until_calendar_and_exact_carry_policy():
     """native until should use calendar carry by default and exact carry with the +1s marker."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_native_until_carry_policy_test")
@@ -25556,7 +25556,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     expect(not spawned, "completion attempted a child spawn after carry failure")
     expect(not panels, f"carry helper should not render before finalization: {panels!r}")
 
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
     expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
@@ -27845,7 +27845,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 
 def test_reconcile_candidate_and_plan_paths():
     """Hookless-completion repair should target only active completed orphans."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -28008,7 +28008,7 @@ def test_reconcile_candidate_and_plan_paths():
 
 def test_reconcile_plan_uses_task_business_calendar_context():
     """Reconcile scheduling and child construction must share the task calendar."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     class FakeCore:
         active = False
@@ -28074,7 +28074,7 @@ def test_reconcile_plan_uses_task_business_calendar_context():
 
 def test_reconcile_expiration_candidate_requires_expiry_evidence():
     """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
@@ -28413,7 +28413,7 @@ def test_reconcile_json_startup_failures_are_structured():
 
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
     """Expired CP links should advance from due/scheduled rather than their deletion end."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
@@ -28449,7 +28449,7 @@ def test_reconcile_expiration_cp_advances_from_recurrence_target():
 
 def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     """Hookless recovery should preserve and verify scheduled/wait offsets."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
     due = mod.core.build_local_datetime(date(2026, 7, 20), (10, 0))
@@ -28485,7 +28485,7 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
 
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     """Expired anchor links should select the first slot after the prior recurrence target."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
@@ -28510,7 +28510,7 @@ def test_reconcile_expiration_anchor_advances_from_recurrence_target():
 
 def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     """Expiration plans should honor chain limits and recognize an already-expired next slot."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_plan_test")
@@ -29016,7 +29016,7 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
 
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -29075,7 +29075,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
 
 def test_reconcile_evidence_includes_local_child_time_when_formatter_available():
     """Reconcile evidence should include the local interpretation of a planned child."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -29168,7 +29168,7 @@ def test_reconcile_tool_defaults_core_path_to_install_base():
 
 def test_reconcile_tool_print_plan_includes_evidence():
     """Reconcile dry-run output should explain why each action is safe."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_tool_print_test")
@@ -31663,7 +31663,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
 
 def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook_path = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook_path, "_nautical_seasonal_reconcile_test")
@@ -31736,7 +31736,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
 
 def test_reconcile_repairs_invalid_native_until_from_previous_link():
     """Hookless due moves should recover the prior link's native-until carry policy."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook_path = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook_path, "_nautical_until_reconcile_test")

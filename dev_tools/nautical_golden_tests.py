@@ -1447,6 +1447,8 @@ def test_chain_integrity_engine_owns_audit_and_empty_drain():
         engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-engine")
         audited = engine.audit(IntegritySnapshotRequest.chain("engine-chain"), outbox_repository=repository)
         expect(audited.status is IntegrityReportStatus.HEALTHY, f"empty audit was not healthy: {audited}")
+        replayed = engine.audit_snapshot(audited.snapshot, outbox_repository=repository)
+        expect(replayed == audited, "authoritative snapshot audit was not deterministic")
         applied = engine.apply(
             audited,
             executor=SimpleNamespace(),

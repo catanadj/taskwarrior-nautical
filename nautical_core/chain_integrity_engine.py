@@ -83,7 +83,22 @@ class ChainIntegrityEngine:
             return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=read.evidence.detail)
         if not isinstance(read, Found):
             return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason="integrity snapshot is absent")
-        snapshot = read.value
+        return self.audit_snapshot(
+            read.value,
+            outbox_repository=outbox_repository,
+            mutation_epoch=mutation_epoch,
+        )
+
+    def audit_snapshot(
+        self,
+        snapshot: ChainSnapshot,
+        *,
+        outbox_repository: LifecycleOutboxRepository,
+        mutation_epoch: int = 0,
+    ) -> IntegrityEngineResult:
+        """Audit one already-authoritative snapshot without another export."""
+        if not isinstance(snapshot, ChainSnapshot):
+            raise TypeError("integrity engine requires a ChainSnapshot")
         try:
             graph = ChainGraph.from_snapshot(snapshot)
         except Exception as exc:

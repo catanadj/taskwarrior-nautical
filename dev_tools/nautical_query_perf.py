@@ -113,6 +113,8 @@ def _read_call_baseline() -> dict[str, int]:
         service.query(OccurrenceQueryRequest.from_mapping(payload))
         counts[name] = len(repository.calls) - before
     # The synthetic repository represents one Taskwarrior export per read.
+    if any(value != 1 for value in counts.values()):
+        raise RuntimeError(f"query read budget exceeded: {counts}")
     return counts
 
 

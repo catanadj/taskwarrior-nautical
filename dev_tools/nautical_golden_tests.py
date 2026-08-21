@@ -32245,6 +32245,9 @@ def test_occurrence_query_service_projects_schedule_read_only():
     from nautical_core.integration_models import Found
     from nautical_core.query_models import OccurrenceQueryRequest
     from nautical_core.query_service import OccurrenceQueryService
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+    from nautical_core.scheduler_service import SchedulerService
 
     task = {
         "uuid": "00000000-0000-0000-0000-000000000002",
@@ -32285,6 +32288,29 @@ def test_occurrence_query_service_projects_schedule_read_only():
     expect(len(result.occurrences) == 2, f"query service returned {len(result.occurrences)} daily slots")
     expect(result.occurrences[0].local.hour == 4 and result.occurrences[1].local.hour == 12, "query slots were not ordered")
     expect(result.occurrences[0].utc.tzinfo is not None, "query result omitted UTC timezone")
+    direct_context = RecurrenceContext(
+        chain_id=task["chainID"],
+        timezone=uow.context.local_timezone,
+        business_calendar=core.business_calendar_for_task(dict(task)),
+        astronomy_config=core.ASTRONOMY_CONFIG,
+        anchor_file_dir=core.ANCHOR_FILE_DIR,
+    )
+    direct = SchedulerService.from_task(task, context=direct_context).collect_request(
+        OccurrenceRangeRequest(
+            OccurrenceCursor(
+                datetime(2026, 8, 24, tzinfo=uow.context.local_timezone),
+                inclusive=True,
+                timezone=uow.context.local_timezone,
+            ),
+            end_local=datetime(2026, 8, 24, 23, 59, 59, tzinfo=uow.context.local_timezone),
+            limit=10,
+        )
+    )
+    expect(
+        tuple(item.local_datetime for item in direct.occurrences)
+        == tuple(item.local for item in result.occurrences),
+        "query occurrence projection drifted from SchedulerService",
+    )
     limited = OccurrenceQueryRequest.from_mapping(
         {
             "selector": {"uuids": [task["uuid"]]},

@@ -30640,6 +30640,50 @@ def test_astronomical_season_selection_scheduler_uses_transition_dates():
         expect(any("astronomical" in line for line in payload["advice"]), f"astronomical advice missing: {payload!r}")
 
 
+def test_astronomical_season_local_date_and_overflow_contract():
+    """Astronomical season dates should follow local midnight and fail at range limits."""
+    from nautical_core import season_support
+
+    previous_mode = season_support.active_mode()
+    previous_hemisphere = season_support.active_hemisphere()
+    try:
+        season_support.configure_mode("astronomical")
+        season_support.configure_hemisphere("north")
+        season_support.configure_timezone("Pacific/Kiritimati")
+        expect(
+            season_support.season_bounds("spring", 2026)
+            == (date(2026, 3, 21), date(2026, 6, 20)),
+            "positive-offset local transition date was not preserved",
+        )
+        season_support.configure_timezone("America/Adak")
+        expect(
+            season_support.season_bounds("summer", 2026)
+            == (date(2026, 6, 20), date(2026, 9, 21)),
+            "negative-offset local transition date was not preserved",
+        )
+        for timezone_name in ("Pacific/Kiritimati", "America/Adak"):
+            season_support.configure_timezone(timezone_name)
+            windows = [season_support.season_bounds(name, 2026) for name in season_support.SEASON_NAMES]
+            expect(
+                all(left[1] + timedelta(days=1) == right[0] for left, right in zip(windows, windows[1:])),
+                f"astronomical windows have a gap or overlap in {timezone_name}: {windows}",
+            )
+        season_support.configure_timezone("UTC")
+        expect(
+            season_support.season_bounds("spring", 9999)[0].year == 9999,
+            "last representable astronomical spring was not available",
+        )
+        try:
+            season_support.season_bounds("winter", 9999)
+            raise AssertionError("astronomical winter overflow was accepted")
+        except ValueError as exc:
+            expect("supported date range" in str(exc), f"unclear astronomical overflow: {exc}")
+    finally:
+        season_support.configure_mode(previous_mode)
+        season_support.configure_hemisphere(previous_hemisphere)
+        season_support.configure_timezone(core.LOCAL_TZ_NAME)
+
+
 def test_generic_seasonal_selection_scheduler_and_round_trip():
     """@in-season should select one position independently in every fixed season."""
     from nautical_core import season_support
@@ -32219,6 +32263,7 @@ TESTS = [
     test_astronomical_season_calculator_contract,
     test_astronomical_season_support_boundaries_are_mode_and_hemisphere_aware,
     test_astronomical_season_selection_scheduler_uses_transition_dates,
+    test_astronomical_season_local_date_and_overflow_contract,
     test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 

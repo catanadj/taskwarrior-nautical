@@ -32518,6 +32518,45 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
     expect(response.results[0].task is not None and response.results[0].task.uuid == recurrence["uuid"], "all selector chose the wrong task")
 
 
+def test_query_service_batches_multiple_uuid_reads():
+    """Multiple UUID selectors share one authoritative snapshot and preserve ambiguity."""
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    class _Snapshot:
+        def uuid_matches(self, value):
+            if value == "ambiguous":
+                return ({"uuid": "ambiguous-1"}, {"uuid": "ambiguous-2"})
+            return ()
+
+    class _Repository:
+        def broad_snapshot(self, **kwargs):
+            del kwargs
+            return Found(_Snapshot(), "broad:query:uuids")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=timezone.utc,
+            configuration=SimpleNamespace(fingerprint="query-config"),
+        ),
+        repository=_Repository(),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": ["ambiguous", "missing"]},
+            "from": "2026-08-24",
+            "count": 1,
+        }
+    )
+    response = OccurrenceQueryService(uow, core=core).query(request)
+    expect(response.status == "invalid", "ambiguous UUID batch did not report invalid status")
+    expect(response.results[0].failure is not None and response.results[0].failure.code == "ambiguous_uuid", "ambiguous UUID was not explicit")
+    expect(response.results[1].status == "absent", "batched missing UUID was not absent")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
@@ -32527,6 +32566,7 @@ TESTS.extend([
     test_query_process_boundary_emits_one_json_document,
     test_query_service_preserves_absent_and_unavailable_task_reads,
     test_query_service_all_selector_excludes_non_recurrence_rows,
+    test_query_service_batches_multiple_uuid_reads,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

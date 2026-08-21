@@ -157,14 +157,35 @@ class OccurrenceQueryService:
             if isinstance(read, Absent):
                 return _failure("chain_absent", read.reason)
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
-        uuid_rows: list[Mapping[str, Any]] = []
+        if len(selector.uuids) > 1:
+            read = repository.broad_snapshot(
+                identity="query:uuids",
+                filters=(),
+                statuses=ALL_TASK_STATUSES,
+                complete_chain_history=True,
+            )
+            if not isinstance(read, Found):
+                if isinstance(read, Absent):
+                    return _failure("task_snapshot_absent", read.reason)
+                return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
+            uuid_rows: list[Mapping[str, Any]] = []
+            for uuid_value in selector.uuids:
+                matches = read.value.uuid_matches(uuid_value)
+                if not matches:
+                    uuid_rows.append({"uuid": uuid_value, "_query_absent": True})
+                elif len(matches) == 1:
+                    uuid_rows.append(matches[0])
+                else:
+                    uuid_rows.append({"uuid": uuid_value, "_query_ambiguous": True})
+            return tuple(uuid_rows[: request.max_tasks])
+        single_rows: list[Mapping[str, Any]] = []
         for uuid_value in selector.uuids:
             read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
             if isinstance(read, Found):
-                uuid_rows.append(read.value)
+                single_rows.append(read.value)
                 continue
             if isinstance(read, Absent):
-                uuid_rows.append({"uuid": uuid_value, "_query_absent": True})
+                single_rows.append({"uuid": uuid_value, "_query_absent": True})
                 continue
             return _failure(
                 "task_read_unavailable",
@@ -172,7 +193,7 @@ class OccurrenceQueryService:
                 task_uuid=uuid_value,
                 retryable=read.retryable,
             )
-        return tuple(uuid_rows[: request.max_tasks])
+        return tuple(single_rows[: request.max_tasks])
 
     def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
         records: list[OccurrenceRecord] = []
@@ -198,6 +219,17 @@ class OccurrenceQueryService:
                 task=None,
                 status="absent",
                 failure=_failure("task_absent", "Taskwarrior returned no task for the requested UUID", task_uuid=str(task.get("uuid") or "")),
+            )
+        if task.get("_query_ambiguous"):
+            uuid_value = str(task.get("uuid") or "")
+            return TaskOccurrenceResult(
+                task=None,
+                status="invalid",
+                failure=_failure(
+                    "ambiguous_uuid",
+                    "UUID selector matched more than one task",
+                    task_uuid=uuid_value,
+                ),
             )
         try:
             identity = _task_identity(task)

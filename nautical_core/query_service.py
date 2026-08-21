@@ -150,6 +150,20 @@ class OccurrenceQueryService:
             anchor_file_dir=str(getattr(self._core, "ANCHOR_FILE_DIR", "") or ""),
         )
 
+    def _starts_after_request_end(
+        self,
+        task: Mapping[str, Any],
+        request: OccurrenceQueryRequest,
+    ) -> bool:
+        if request.end is None:
+            return False
+        try:
+            reference = self._task_reference_local(task)
+            end = _boundary_local(request.end.value, request.end.date_only, self._timezone, end=True)
+        except (QueryServiceError, OSError, TypeError, ValueError):
+            return False
+        return reference is not None and reference > end
+
     def _rows_for(self, request: OccurrenceQueryRequest) -> tuple[Mapping[str, Any], ...] | QueryFailure:
         repository = self._uow.repository
         selector = request.selector
@@ -161,7 +175,12 @@ class OccurrenceQueryService:
                 complete_chain_history=False,
             )
             if isinstance(read, Found):
-                rows = tuple(row for row in read.value.rows if _has_recurrence_identity(row))
+                rows = tuple(
+                    row
+                    for row in read.value.rows
+                    if _has_recurrence_identity(row)
+                    and not self._starts_after_request_end(row, request)
+                )
                 return _ordered_rows(rows)[: request.max_tasks]
             if isinstance(read, Absent):
                 return ()
@@ -393,6 +412,17 @@ class OccurrenceQueryService:
                 failure=rows,
             )
         raw_results = tuple(self._query_task(row, request) for row in rows)
+        if request.selector.all_tasks:
+            raw_results = tuple(
+                result
+                for result in raw_results
+                if not (
+                    result.status == "empty"
+                    and not result.occurrences
+                    and not result.omitted_occurrences
+                    and result.failure is None
+                )
+            )
         results_list: list[TaskOccurrenceResult] = []
         total = 0
         for result in raw_results:

@@ -32581,11 +32581,32 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
         "description": "Ordinary task",
         "status": "pending",
     }
+    future = {
+        "uuid": "00000000-0000-0000-0000-000000000011",
+        "chainID": "query-future",
+        "link": 1,
+        "description": "Far future",
+        "anchor": "(m:1:15 + m:rand)",
+        "due": "20300107T090000Z",
+        "status": "pending",
+    }
+    empty_in_range = {
+        "uuid": "00000000-0000-0000-0000-000000000012",
+        "chainID": "query-empty",
+        "link": 1,
+        "description": "No match in range",
+        "anchor": "y:12-31",
+        "due": "20260101T090000Z",
+        "status": "pending",
+    }
 
     class _Repository:
         def broad_snapshot(self, **kwargs):
             del kwargs
-            return Found(SimpleNamespace(rows=(recurrence, ordinary)), "broad:query:all-active")
+            return Found(
+                SimpleNamespace(rows=(recurrence, ordinary, future, empty_in_range)),
+                "broad:query:all-active",
+            )
 
     uow = SimpleNamespace(
         context=SimpleNamespace(
@@ -32596,7 +32617,12 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
         repository=_Repository(),
     )
     request = OccurrenceQueryRequest.from_mapping(
-        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1}
+        {
+            "selector": {"all_tasks": True},
+            "from": "2026-08-24",
+            "to": "2026-08-31",
+            "count": 1,
+        }
     )
     response = OccurrenceQueryService(uow, core=core).query(request)
     expect(len(response.results) == 1, "all selector returned a non-recurrence task")

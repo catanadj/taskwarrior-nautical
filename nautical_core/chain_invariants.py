@@ -363,6 +363,34 @@ def _outbox_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for record in context.outbox.records:
         identity = record.plan.identity
+        if record.stage is not record.plan.stage:
+            findings.append(IntegrityFinding(
+                "outbox.stage_agreement",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                graph.snapshot.snapshot_id,
+                identity.chain_id,
+                (identity.parent_uuid,),
+                "stage_mismatch",
+                "Outbox lifecycle stage differs from the persisted plan stage.",
+                (("intent_id", record.intent_id), ("record_stage", record.stage.value)),
+                (("plan_stage", record.plan.stage.value),),
+                (("outbox_snapshot", context.outbox.snapshot_id),),
+            ))
+        if record.state.value in {"manual_review", "quarantined"} and record.failure is None:
+            findings.append(IntegrityFinding(
+                "outbox.failure_evidence",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                graph.snapshot.snapshot_id,
+                identity.chain_id,
+                (identity.parent_uuid,),
+                "terminal_without_failure",
+                "Outbox terminal review state has no durable failure evidence.",
+                (("intent_id", record.intent_id), ("state", record.state.value)),
+                (("failure", "present"),),
+                (("outbox_snapshot", context.outbox.snapshot_id),),
+            ))
         parent_matches = graph.uuid_matches(identity.parent_uuid)
         chain_nodes = graph.chain_nodes(identity.chain_id)
         if not parent_matches or not chain_nodes:

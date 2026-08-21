@@ -14296,6 +14296,18 @@ def test_cp_duration_parser_and_dst_preserve_whole_days():
         timedelta(days=20),
         timedelta(hours=16),
     ], "cp sequence should accept mixed Taskwarrior-style and ISO tokens"
+    assert core.parse_cp_sequence("7d*3,14d") == [
+        timedelta(days=7),
+        timedelta(days=7),
+        timedelta(days=7),
+        timedelta(days=14),
+    ], "cp repeat groups should expand into ordinary sequence tokens"
+    assert core.cp_sequence_interval_for_link("7d*3,14d", 4) == timedelta(days=14), "repeat group sequence boundary is wrong"
+    assert core.cp_sequence_interval_for_link("7d*3,14d", 5) == timedelta(days=7), "repeat group sequence should cycle"
+    repeated_random = core.cp_sequence_interval_for_link("rand(3d..7d)*2", 2, "cp-repeat")
+    explicit_random = core.cp_sequence_interval_for_link("rand(3d..7d),rand(3d..7d)", 2, "cp-repeat")
+    assert repeated_random == explicit_random, "repeat-group random selection changed the canonical sequence"
+    assert "positive repeat count" in (core.cp_sequence_parse_error("7d*0") or ""), "zero repeat count should fail clearly"
     assert core.cp_sequence_interval_for_link("3d,20d,7d", 1) == timedelta(days=3), "link #1 should use first interval"
     assert core.cp_sequence_interval_for_link("3d,20d,7d", 2) == timedelta(days=20), "link #2 should use second interval"
     assert core.cp_sequence_interval_for_link("3d,20d,7d", 4) == timedelta(days=3), "sequence should repeat"
@@ -23477,16 +23489,16 @@ def test_time_window_partition_rounding_preserves_boundaries():
 
 def test_hour_only_time_lists_normalize_across_anchor_and_anchor_file():
     """Ordinary @t lists should accept hour-only tokens consistently across sources."""
-    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=06,12:30,18")
+    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=9,12:30,18")
     expect(
-        dnf[0][0]["mods"].get("t") == [(6, 0), (12, 30), (18, 0)],
+        dnf[0][0]["mods"].get("t") == [(9, 0), (12, 30), (18, 0)],
         f"hour-only anchor list was not normalized: {dnf!r}",
     )
     import nautical_core.anchor_files as anchor_files
 
-    _name, mods = anchor_files.parse_anchor_file_spec("events.csv@t=06,12:30,18")
+    _name, mods = anchor_files.parse_anchor_file_spec("events.csv@t=9,12:30,18")
     expect(
-        mods.get("t") == [(6, 0), (12, 30), (18, 0)],
+        mods.get("t") == [(9, 0), (12, 30), (18, 0)],
         f"hour-only anchor_file list was not normalized: {mods!r}",
     )
 

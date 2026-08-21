@@ -15,6 +15,43 @@ _CP_RE = re.compile(
 _CP_TOKEN_RE = re.compile(r"(?P<sign>[+-]?)(?P<n>\d+)(?P<u>w|d|h|m|s)", re.I)
 _CP_RAND_RE = re.compile(r"^rand\((?P<lo>.+)\.\.(?P<hi>.+)\)$", re.I)
 _CP_JITTER_RE = re.compile(r"^(?P<base>.+)~(?P<spread>.+)$", re.I)
+_CP_REPEAT_RE = re.compile(r"^(?P<base>.+)\*(?P<count>\d+)$", re.I)
+_MAX_CP_SEQUENCE_ITEMS = 1000
+
+
+def _expanded_cp_parts(cp: str) -> tuple[list[str], str | None]:
+    """Expand bounded ``duration*count`` groups before normal CP parsing."""
+    raw_parts = [part.strip() for part in str(cp or "").strip().split(",")]
+    expanded: list[str] = []
+    for position, part in enumerate(raw_parts, start=1):
+        repeat = _CP_REPEAT_RE.fullmatch(part)
+        if repeat is None:
+            if "*" in part:
+                return [], (
+                    f"invalid repeat '{part}' at position {position}: "
+                    "expected <duration>*<count>"
+                )
+            expanded.append(part)
+            continue
+        base = repeat.group("base").strip()
+        count = int(repeat.group("count"))
+        if not base or count < 1:
+            return [], (
+                f"invalid repeat '{part}' at position {position}: "
+                "the duration and a positive repeat count are required"
+            )
+        if len(expanded) + count > _MAX_CP_SEQUENCE_ITEMS:
+            return [], (
+                f"cp sequence expands beyond {_MAX_CP_SEQUENCE_ITEMS} items at position {position}; "
+                "use a shorter repeat count"
+            )
+        expanded.extend([base] * count)
+    return expanded, None
+
+
+def _canonical_cp_sequence(cp: str) -> str:
+    parts, error = _expanded_cp_parts(cp)
+    return str(cp).strip() if error is not None else ",".join(parts)
 
 
 def parse_cp_duration(dur: str):
@@ -120,7 +157,9 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     raw = str(cp).strip()
     if not raw:
         return "cp is empty"
-    parts = [part.strip() for part in raw.split(",")]
+    parts, expansion_error = _expanded_cp_parts(raw)
+    if expansion_error is not None:
+        return expansion_error
     for idx, part in enumerate(parts, start=1):
         if not part:
             return f"empty duration at position {idx}"
@@ -166,7 +205,10 @@ def parse_cp_sequence_tokens(cp: str):
     if cp_sequence_parse_error(cp):
         return None
     tokens = []
-    for part in (item.strip() for item in str(cp).strip().split(",")):
+    parts, expansion_error = _expanded_cp_parts(cp)
+    if expansion_error is not None:
+        return None
+    for part in parts:
         token = _parse_cp_token(part)
         if token is None:
             return None
@@ -209,13 +251,14 @@ def cp_sequence_interval_for_token(
     token_index: int,
     chain_id: str | None = None,
 ) -> timedelta | None:
+    canonical_cp = _canonical_cp_sequence(cp)
     if token.get("kind") == "fixed":
         duration = token.get("duration")
         return duration if isinstance(duration, timedelta) else None
     if token.get("kind") == "rand":
         return _cp_rand_duration_for_token(
             token,
-            cp=cp,
+            cp=canonical_cp,
             link_no=link_no,
             token_index=token_index,
             chain_id=chain_id,

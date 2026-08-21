@@ -12,7 +12,7 @@ from .time_windows import parse_time_window_spec
 from .time_windows import parse_random_time_window_spec
 
 
-_HHMM_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+_HHMM_RE = re.compile(r"^\d{1,2}:[0-5]\d$")
 
 
 def _apply_offset(hhmm: tuple[int, int], offset_minutes: int) -> tuple[int, int]:
@@ -25,7 +25,8 @@ def _parse_hhmm(value: str) -> tuple[int, int] | None:
     if not _HHMM_RE.fullmatch(token):
         return None
     hour, minute = token.split(":", 1)
-    return int(hour), int(minute)
+    parsed_hour = int(hour)
+    return (parsed_hour, int(minute)) if parsed_hour <= 23 else None
 
 
 def resolve_time_slots(

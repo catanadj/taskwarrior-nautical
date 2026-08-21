@@ -19,7 +19,7 @@ _DURATION_RE = re.compile(
     r"^(?:(?P<hours>\d+(?:\.\d+)?)h(?:(?P<minutes>\d+)(?:m|min))?|"
     r"(?P<minutes_only>\d+)(?:m|min))$"
 )
-_CLOCK_TOKEN_RE = re.compile(r"^(?:[01]\d|2[0-3])(?::[0-5]\d)?$")
+_CLOCK_TOKEN_RE = re.compile(r"^\d{1,2}(?::[0-5]\d)?$")
 _RANDOM_WINDOW_RE = re.compile(
     r"^rand\((?P<start>(?:[01]\d|2[0-3])(?::[0-5]\d)?)\.\."
     r"(?P<end>(?:[01]\d|2[0-3])(?::[0-5]\d)?)(?:/(?P<count>\d+))?\)$"
@@ -38,7 +38,10 @@ def parse_clock_value(value: str) -> tuple[int, int] | None:
     text = str(value or "").strip()
     if not _CLOCK_TOKEN_RE.fullmatch(text):
         return None
-    return _parse_clock(text)
+    hour, minute = _parse_clock(text)
+    if hour > 23:
+        return None
+    return hour, minute
 
 
 def _clock_minutes(value: tuple[int, int]) -> int:

@@ -12,6 +12,15 @@ from typing import Any, Callable, Iterable
 
 from . import chain_integrity_lifecycle as lifecycle
 from .native_until_integrity import NativeUntilAudit, audit_result
+from .integration_models import (
+    GuardTimestamp,
+    GuardTimestampField,
+    MutationGuard,
+    MutationOperation,
+    MutationRequest,
+    NativeUntilRepairPayload,
+)
+from .lifecycle_models import recurrence_fingerprint
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +50,37 @@ class IntegrityRecoveryService:
             return []
         value = self._child_lookup(chain_id, next_link)
         return [dict(value)] if value is not None else []
+
+    @staticmethod
+    def native_until_request(
+        row: dict[str, Any],
+        new_until: str,
+        *,
+        mutation_epoch: int,
+    ) -> MutationRequest:
+        """Build the guarded native-until mutation without Taskwarrior I/O."""
+        uuid = str(row.get("uuid") or "").strip()
+        chain_id = str(row.get("chainID") or "").strip()
+        link = lifecycle.int_or_default(row.get("link"), 0)
+        modified = str(row.get("modified") or "").strip()
+        expected_until = str(row.get("until") or "").strip()
+        if not uuid or not chain_id or link <= 0 or not modified or not expected_until:
+            raise ValueError("native until repair lacks task identity")
+        guard = MutationGuard(
+            task_uuid=uuid,
+            status=str(row.get("status") or ""),
+            chain_id=chain_id,
+            link=link,
+            recurrence_identity=recurrence_fingerprint(row),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+            expected_mutation_epoch=mutation_epoch,
+            chain=str(row.get("chain") or "on"),
+        )
+        return MutationRequest(
+            MutationOperation.NATIVE_UNTIL_REPAIR,
+            guard,
+            NativeUntilRepairPayload(uuid, expected_until, str(new_until)),
+        )
 
     @staticmethod
     def candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:

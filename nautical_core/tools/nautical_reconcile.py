@@ -41,13 +41,7 @@ from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: 
 from nautical_core.integration_models import (  # noqa: E402
     Absent,
     Found,
-    GuardTimestamp,
-    GuardTimestampField,
-    MutationGuard,
-    MutationOperation,
     MutationOutcomeKind,
-    MutationRequest,
-    NativeUntilRepairPayload,
     Unavailable,
 )
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
@@ -558,29 +552,10 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
     del task_bin
     if _UNIT_OF_WORK is None:
         raise RuntimeError("native until repair requires an integration unit of work")
-    uuid = str(row.get("uuid") or "").strip()
-    chain_id = str(row.get("chainID") or "").strip()
-    link = lifecycle.int_or_default(row.get("link"), 0)
-    modified = str(row.get("modified") or "").strip()
-    expected_until = str(row.get("until") or "").strip()
-    if not uuid or not chain_id or link <= 0 or not modified or not expected_until:
-        raise RuntimeError("native until repair lacks task identity")
-    from nautical_core.lifecycle_models import recurrence_fingerprint
-
-    guard = MutationGuard(
-        task_uuid=uuid,
-        status=str(row.get("status") or ""),
-        chain_id=chain_id,
-        link=link,
-        recurrence_identity=recurrence_fingerprint(row),
-        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
-        expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
-        chain=str(row.get("chain") or "on"),
-    )
-    request = MutationRequest(
-        MutationOperation.NATIVE_UNTIL_REPAIR,
-        guard,
-        NativeUntilRepairPayload(uuid, expected_until, str(new_until)),
+    request = IntegrityRecoveryService.native_until_request(
+        row,
+        new_until,
+        mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
     )
     outcome = TaskwarriorMutationService(_UNIT_OF_WORK).apply(request)
     if outcome.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:

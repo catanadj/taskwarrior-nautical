@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+import fcntl
+import os
+import random
+import time
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -164,6 +168,7 @@ class LifecycleReconciliationService:
         with safe_lock(
             reconcile_lock_path(taskdata), retries=1, sleep_base=0.0,
             stale_after=_RECONCILE_LOCK_STALE_SECONDS,
+            fcntl_mod=fcntl, os_mod=os, time_mod=time, random_mod=random,
         ) as acquired:
             yield acquired
 
@@ -174,6 +179,7 @@ class LifecycleReconciliationService:
             retries=_PARENT_LOCK_RETRIES,
             sleep_base=_PARENT_LOCK_SLEEP_SECONDS,
             stale_after=_PARENT_LOCK_STALE_SECONDS,
+            fcntl_mod=fcntl, os_mod=os, time_mod=time, random_mod=random,
         ) as acquired:
             yield acquired
 
@@ -211,7 +217,7 @@ class LifecycleReconciliationService:
         resolved = resolve_plan(plan)
         lifecycle_plan = getattr(resolved, "lifecycle_plan", None)
         if lifecycle_plan is None:
-            raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
+            raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan: {resolved!r}")
         staged = service.stage(
             lifecycle_plan,
             configuration_fingerprint=configuration_fingerprint,

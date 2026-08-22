@@ -1065,7 +1065,9 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | No
     return None
 
 
-def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "lifecycle.LifecycleRecoveryDecision", hook: Any) -> LifecyclePlan:
+def _lifecycle_plan_with_resolved_child_uuid(
+    recon_plan: "lifecycle.LifecycleRecoveryDecision", hook: Any
+) -> "lifecycle.LifecycleRecoveryDecision":
     """Ensure a SPAWN_CHILD plan's child payload targets a real, reproducible UUID.
 
     Reconcile may re-run against the same broken chain more than once, and
@@ -1078,18 +1080,18 @@ def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "lifecycle.LifecycleRec
     """
     lifecycle_plan = recon_plan.lifecycle_plan
     if not isinstance(lifecycle_plan, LifecyclePlan) or lifecycle_plan.action is not LifecycleAction.SPAWN_CHILD:
-        return lifecycle_plan
+        return recon_plan
     child = lifecycle_plan.child_dict()
     existing = _find_positional_child(lifecycle_plan)
     resolved_uuid = str(existing.get("uuid") or "").strip() if existing is not None else ""
     if not resolved_uuid:
         resolved_uuid = _stable_child_uuid(hook, recon_plan.parent, child)
     if not resolved_uuid or resolved_uuid == str(child.get("uuid") or "").strip():
-        return lifecycle_plan
+        return recon_plan
     child["uuid"] = resolved_uuid
     patch = dict(lifecycle_plan.parent_patch_dict())
     patch["nextLink"] = resolved_uuid[:8]
-    return LifecyclePlan.from_mappings(
+    resolved_plan = LifecyclePlan.from_mappings(
         identity=lifecycle_plan.identity,
         action=lifecycle_plan.action,
         parent_guard=lifecycle_plan.parent_guard,
@@ -1097,6 +1099,17 @@ def _lifecycle_plan_with_resolved_child_uuid(recon_plan: "lifecycle.LifecycleRec
         parent_patch=patch,
         expected_postconditions=lifecycle_plan.expected_postconditions,
         max_attempts=lifecycle_plan.max_attempts,
+    )
+    return lifecycle.LifecycleRecoveryDecision(
+        recon_plan.action,
+        recon_plan.parent,
+        recon_plan.next_link,
+        recon_plan.reason,
+        child=resolved_plan.child_dict(),
+        child_short=resolved_uuid[:8],
+        child_due=recon_plan.child_due,
+        terminal_kind=recon_plan.terminal_kind,
+        lifecycle_plan=resolved_plan,
     )
 
 
@@ -1131,7 +1144,7 @@ def _execute_reconcile_lifecycle_plan(
     """
     lifecycle_plan = getattr(plan, "lifecycle_plan", None)
     if not isinstance(lifecycle_plan, LifecyclePlan):
-        raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
+        raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan: {plan!r}")
     configuration = _UNIT_OF_WORK.context.configuration
     staged, outcome, child_short, _verified = _lifecycle_reconciliation_service().execute_lifecycle_plan(
         plan,

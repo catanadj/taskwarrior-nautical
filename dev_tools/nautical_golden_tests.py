@@ -29352,7 +29352,10 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
             env=env,
             timeout=20.0,
         )
-        expect(applied.returncode == 0, f"real expiration reconcile failed: {applied.stderr!r}")
+        expect(
+            applied.returncode == 0,
+            f"real expiration reconcile failed: stdout={applied.stdout!r} stderr={applied.stderr!r}",
+        )
         summary = json.loads(applied.stdout)
         expect(summary.get("spawn") == 1 and len(summary.get("applied") or []) == 1, f"unexpected apply: {summary!r}")
 

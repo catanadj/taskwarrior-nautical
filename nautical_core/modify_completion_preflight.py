@@ -91,6 +91,18 @@ def completion_existing_next_or_fail(
     panel,
     print_task,
 ) -> bool:
+    declared_next = str(new.get("nextLink") or "").strip()
+    if declared_next:
+        panel(
+            "ℹ Spawn skipped",
+            [
+                ("Reason", "This completed task already records a next link."),
+                ("Existing", f"{short(declared_next)}"),
+            ],
+            kind="note",
+        )
+        print_task(new)
+        return False
     existing_next = existing_next_lookup(new, next_no)
     if isinstance(existing_next, Unavailable):
         panel(

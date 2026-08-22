@@ -33428,19 +33428,26 @@ def test_query_cli_flags_build_the_same_validated_request():
     from nautical_core.tools import nautical_query
 
     output = io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-        exit_code = nautical_query.main(
-            [
-                "occurrences",
-                "--all",
-                "--after",
-                "2026-08-24",
-                "--count",
-                "2",
-                "--max-total-occurrences",
-                "3",
-            ]
-        )
+    previous_builder = nautical_query.build_operator_uow
+    nautical_query.build_operator_uow = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("test read boundary unavailable")
+    )
+    try:
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            exit_code = nautical_query.main(
+                [
+                    "occurrences",
+                    "--all",
+                    "--after",
+                    "2026-08-24",
+                    "--count",
+                    "2",
+                    "--max-total-occurrences",
+                    "3",
+                ]
+            )
+    finally:
+        nautical_query.build_operator_uow = previous_builder
     payload = json.loads(output.getvalue())
     expect(exit_code == 3, "unavailable Taskwarrior query did not return exit code 3")
     expect(payload["failure"]["code"] == "query_unavailable", "flag query did not reach the read boundary")

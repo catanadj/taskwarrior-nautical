@@ -297,6 +297,7 @@ class LifecycleOutboxRepository:
         self.path = lifecycle_outbox_path(self.taskdata)
         self.connect_timeout = max(0.1, float(connect_timeout))
         self._clock = clock
+        self._schema_identity: tuple[int, int, int] | None = None
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -316,6 +317,21 @@ class LifecycleOutboxRepository:
                 os.chmod(path, 0o600)
 
     def open(self) -> OutboxResult:
+        if self._schema_identity is not None:
+            probe: sqlite3.Connection | None = None
+            try:
+                stat = self.path.stat()
+                identity = (int(stat.st_dev), int(stat.st_ino), int(stat.st_mtime_ns))
+                if identity == self._schema_identity:
+                    probe = self._connect()
+                    version = int(probe.execute("PRAGMA user_version").fetchone()[0] or 0)
+                    if version == OUTBOX_SCHEMA_VERSION:
+                        return OutboxResult(OutboxResultKind.APPLIED)
+            except Exception:
+                self._schema_identity = None
+            finally:
+                if probe is not None:
+                    probe.close()
         last: Exception | None = None
         for attempt in range(_INIT_RETRIES):
             conn: sqlite3.Connection | None = None
@@ -323,6 +339,8 @@ class LifecycleOutboxRepository:
                 conn = self._connect()
                 self._initialize(conn)
                 self._secure_state_files()
+                stat = self.path.stat()
+                self._schema_identity = (int(stat.st_dev), int(stat.st_ino), int(stat.st_mtime_ns))
                 return OutboxResult(OutboxResultKind.APPLIED)
             except sqlite3.OperationalError as exc:
                 last = exc

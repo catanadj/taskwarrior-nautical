@@ -174,7 +174,10 @@ def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     elif args.chain_id:
         request = IntegritySnapshotRequest.chain(args.chain_id)
     else:
-        request = IntegritySnapshotRequest.candidates()
+        # An explicit whole-system audit already requests the complete
+        # authoritative history. Avoid bounded hydration of every chain,
+        # which would otherwise stop at the per-engine safety cap.
+        request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
     unit_of_work = build_operator_uow(
         core=core,
         task_binary=shutil.which("task") or "task",

@@ -129,32 +129,14 @@ class _ConfigurationReason(str):
         return value
 
 
-class _NativeUntilAudit:
-    """Typed native-until integrity result used to gate reconcile mutation."""
-
-    __slots__ = ("status", "repairs", "errors", "reason")
-
-    def __init__(
-        self,
-        status: str,
-        repairs: list[dict[str, Any]] | None = None,
-        errors: list[str] | None = None,
-        reason: str = "",
-    ) -> None:
-        if status not in {"valid", "invalid", "unavailable"}:
-            raise ValueError(f"invalid native-until audit status: {status}")
-        self.status = status
-        self.repairs = list(repairs or [])
-        self.errors = list(errors or [])
-        self.reason = str(reason or "").strip()
+from nautical_core.native_until_integrity import NativeUntilAudit, audit_result
 
 
 def _native_until_audit_result(
     repairs: list[dict[str, Any]],
     errors: list[str],
-) -> _NativeUntilAudit:
-    status = "invalid" if repairs or errors else "valid"
-    return _NativeUntilAudit(status, repairs, errors)
+) -> NativeUntilAudit:
+    return audit_result(repairs, errors)
 
 _ANSI = {
     "dim": "\033[2m",

@@ -375,31 +375,6 @@ def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
     )
 
 
-def _candidate_rows(
-    task_bin: str,
-    hook: Any,
-    *,
-    snapshot: _ReconcileSnapshot | None = None,
-) -> list[dict[str, Any]]:
-    snapshot = snapshot or _READ_SNAPSHOT
-    if snapshot is not None:
-        rows = snapshot.candidate_rows()
-        candidates = [
-            row
-            for row in rows
-            if str(row.get("status") or "").strip().lower() == "completed"
-            and lifecycle.is_orphan_completion_candidate(row)
-        ]
-        candidates.extend(
-            row
-            for row in rows
-            if str(row.get("status") or "").strip().lower() == "deleted"
-            and lifecycle.is_orphan_deleted_chain_candidate(row)
-        )
-        return sorted(candidates, key=_candidate_sort_key)
-    raise RuntimeError("reconcile candidate reads require an authoritative snapshot")
-
-
 def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
     """Return candidate slots with more than one distinct parent identity."""
     grouped: dict[tuple[str, int], set[str]] = {}

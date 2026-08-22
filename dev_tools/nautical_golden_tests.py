@@ -28750,7 +28750,9 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
             return _found_task(tuple(reversed(rows)))
 
     snapshot = tool._ReconcileSnapshot(Repository())
-    found = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    found = tool.LifecycleReconciliationService(
+        snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
+    ).candidates()
     expect(
         [(row["chainID"], row["link"]) for row in found] == [("a-chain", 2), ("z-chain", 3)],
         f"candidate order was not deterministic: {found}",
@@ -28790,7 +28792,9 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
             return _found_task(tuple(rows))
 
     snapshot = tool._ReconcileSnapshot(Repository())
-    candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    candidates = tool.LifecycleReconciliationService(
+        snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
+    ).candidates()
     tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     expect(candidates == [rows[0]], f"candidate view included non-candidates: {candidates!r}")
@@ -28810,7 +28814,9 @@ def test_reconcile_empty_snapshot_is_authoritative():
             return _absent_task("no lifecycle candidates")
 
     snapshot = tool._ReconcileSnapshot(Repository())
-    candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    candidates = tool.LifecycleReconciliationService(
+        snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
+    ).candidates()
     active = tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
     expect(len(calls) == 1, f"empty snapshot triggered repeated exports: {calls!r}")

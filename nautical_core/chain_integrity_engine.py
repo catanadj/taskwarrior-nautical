@@ -304,16 +304,12 @@ class ChainIntegrityEngine:
             schedule_fingerprint=self._schedule_fingerprint,
         )
         for plan in result.plans:
-            if len(plan.operations) == 1:
-                applications.extend(self._application.apply(plan, executor, request_factory))
-            else:
-                persisted = sink.persist(plan)
-                if not persisted.accepted:
-                    applications.extend(IntegrityApplicationResult(
-                        plan.plan_id, operation.operation_id,
-                        MutationOutcomeKind.MANUAL_REVIEW,
-                        persisted.reason,
-                    ) for operation in plan.operations)
+            # Keep single- and multi-operation plans on the same application
+            # boundary.  The service persists multi-step work before any
+            # external mutation and owns the refusal result on failure.
+            applications.extend(self._application.apply(
+                plan, executor, request_factory, sink,
+            ))
         if drain:
             applications.extend(self.drain(
                 outbox_repository, owner=owner, executor=executor, request_factory=request_factory,

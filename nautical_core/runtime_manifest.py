@@ -43,6 +43,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_models",
         "lifecycle_models",
         "lifecycle_planner",
+        "chain_integrity_lifecycle",
         "lifecycle_application",
         "lifecycle_outbox",
         "modify_feedback",

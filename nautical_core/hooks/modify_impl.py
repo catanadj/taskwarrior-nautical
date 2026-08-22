@@ -599,6 +599,12 @@ _MODULE_SPECS = {
         "lifecycle_planner.py",
         "nautical_core.lifecycle_planner",
     ),
+    "chain_integrity_lifecycle": (
+        "_CHAIN_INTEGRITY_LIFECYCLE",
+        "_CHAIN_INTEGRITY_LIFECYCLE_LOAD_FAILED",
+        "chain_integrity_lifecycle.py",
+        "nautical_core.chain_integrity_lifecycle",
+    ),
     "lifecycle_application": (
         "_LIFECYCLE_APPLICATION",
         "_LIFECYCLE_APPLICATION_LOAD_FAILED",

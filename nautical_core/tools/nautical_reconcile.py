@@ -1387,6 +1387,47 @@ def _virtual_expired_child(
     return child, ""
 
 
+class _ReconcileRecoveryOperations:
+    """Typed policy port used by LifecycleReconciliationService."""
+
+    def __init__(self, task_bin: str, hook: Any):
+        self.task_bin = task_bin
+        self.hook = hook
+
+    def apply_parent(self, parent, *, taskdata, lease_held, verified_children, generation):
+        return _apply_parent_atomic(
+            self.task_bin, self.hook, parent, taskdata=taskdata,
+            lease_held=lease_held, verified_children=verified_children, generation=generation,
+        )
+
+    def plan_parent(self, parent, *, generation):
+        return _plan_for_parent(self.task_bin, self.hook, parent, generation=generation)
+
+    def next_child(self, parent, child_short):
+        return _next_recovery_child(parent, child_short)
+
+    def virtual_child(self, plan, *, recovery_at):
+        return _virtual_expired_child(plan, hook=self.hook, recovery_at=recovery_at)
+
+    def terminal_error(self, child, recovery_at):
+        return _terminal_recovery_error(child, self.hook, recovery_at)
+
+    def is_orphan_deleted(self, child):
+        return lifecycle.is_orphan_deleted_chain_candidate(child)
+
+    def recovery_error(self, parent, reason):
+        return _recovery_error(parent, reason)
+
+    def recovery_partial(self, parent, reason):
+        return _recovery_partial(parent, reason)
+
+    def recovery_manual_review(self, parent, reason):
+        return _recovery_manual_review(parent, reason)
+
+    def recovery_terminal(self, parent, reason):
+        return _recovery_terminal(parent, reason)
+
+
 def _reconcile_candidate(
     task_bin: str,
     hook: Any,
@@ -1399,138 +1440,16 @@ def _reconcile_candidate(
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
 ) -> list[tuple[lifecycle.LifecycleRecoveryDecision, str]]:
-    outcomes: list[tuple[lifecycle.LifecycleRecoveryDecision, str]] = []
-    current = parent
-    visited: set[tuple[str, int]] = set()
-    expiration_hops = 0
-    verified_children: dict[str, dict[str, Any]] = {}
-
-    while True:
-        slot = (
-            str(current.get("chainID") or "").strip(),
-            lifecycle.int_or_default(current.get("link"), 0),
-        )
-        if slot in visited:
-            outcomes.append((_recovery_error(current, "expiration recovery made no progress"), ""))
-            break
-        visited.add(slot)
-
-        is_deleted = str(current.get("status") or "").strip().lower() == "deleted"
-        if is_deleted and expiration_hops >= max_expiration_hops:
-            outcomes.append(
-                (
-                    _recovery_partial(
-                        current,
-                        f"expiration recovery hop limit reached at {max_expiration_hops}; "
-                        "rerun to continue or increase --max-expiration-hops",
-                    ),
-                    "",
-                )
-            )
-            break
-
-        if apply:
-            if taskdata is None:
-                raise RuntimeError("Taskwarrior data location is unavailable")
-            try:
-                plan, applied_short = _apply_parent_atomic(
-                    task_bin,
-                    hook,
-                    current,
-                    taskdata=taskdata,
-                    lease_held=lease_held,
-                    verified_children=verified_children,
-                )
-            except _ConfigurationDrift as exc:
-                outcomes.append((_recovery_partial(current, str(exc)), ""))
-                break
-            except _LifecycleRetryable as exc:
-                outcomes.append((_recovery_partial(current, str(exc)), ""))
-                break
-            except _LifecycleManualReview as exc:
-                outcomes.append((_recovery_manual_review(current, str(exc)), ""))
-                break
-            except Exception as exc:
-                reason = str(exc).strip() or type(exc).__name__
-                outcomes.append((_recovery_error(current, reason), ""))
-                break
-        else:
-            try:
-                plan = _plan_for_parent(
-                    task_bin,
-                    hook,
-                    current,
-                    generation=generation or _chain_generation_for_hook(hook),
-                )
-            except _ConfigurationDrift as exc:
-                outcomes.append((_recovery_partial(current, str(exc)), ""))
-                break
-            except _PlanReadUnavailable as exc:
-                outcomes.append((_recovery_partial(current, str(exc)), ""))
-                break
-            except Exception as exc:
-                reason = str(exc).strip() or type(exc).__name__
-                outcomes.append((_recovery_error(current, reason), ""))
-                break
-            applied_short = ""
-        outcomes.append((plan, applied_short))
-
-        if not is_deleted or plan.action not in {"spawn", "backfill_nextlink"}:
-            break
-        expiration_hops += 1
-
-        if apply or plan.action == "backfill_nextlink":
-            child_short = applied_short or plan.child_short
-            try:
-                cached_child = verified_children.get(str(child_short or "").strip().lower())
-                cached_terminal_error = (
-                    _terminal_recovery_error(cached_child, hook, recovery_at)
-                    if cached_child is not None
-                    else ""
-                )
-                if (
-                    cached_child is not None
-                    and str(cached_child.get("status") or "").strip().lower() != "deleted"
-                    and not cached_terminal_error
-                ):
-                    child = cached_child
-                else:
-                    child = _next_recovery_child(plan.parent, child_short)
-            except _RecoveryLookupUnavailable as exc:
-                outcomes.append((_recovery_partial(plan.parent, str(exc)), ""))
-                break
-            except Exception as exc:
-                outcomes.append((_recovery_error(plan.parent, str(exc)), ""))
-                break
-        else:
-            child, child_error = _virtual_expired_child(
-                plan,
-                hook=hook,
-                recovery_at=recovery_at,
-            )
-            if child_error:
-                outcomes.append((_recovery_error(plan.parent, child_error), ""))
-                break
-            if child is None:
-                terminal_error = _terminal_recovery_error(
-                    dict(plan.child or {}),
-                    hook,
-                    recovery_at,
-                )
-                if terminal_error:
-                    outcomes.append((_recovery_terminal(plan.parent, terminal_error), ""))
-                break
-
-        terminal_error = _terminal_recovery_error(child, hook, recovery_at)
-        if terminal_error:
-            outcomes.append((_recovery_terminal(plan.parent, terminal_error), ""))
-            break
-        if not lifecycle.is_orphan_deleted_chain_candidate(child):
-            break
-        current = child
-
-    return outcomes
-
+    return _lifecycle_reconciliation_service().recover_candidate(
+        parent,
+        operations=_ReconcileRecoveryOperations(task_bin, hook),
+        taskdata=taskdata,
+        apply=apply,
+        max_expiration_hops=max_expiration_hops,
+        recovery_at=recovery_at,
+        lease_held=lease_held,
+        generation=generation,
+    )
 
 def _fmt_parent(parent: dict[str, Any]) -> str:
     uuid = lifecycle.short_uuid(parent.get("uuid")) or "????????"

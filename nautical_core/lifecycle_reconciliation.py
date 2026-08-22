@@ -30,6 +30,22 @@ class LifecycleChildRepository(Protocol):
     def exact_child_slot(self, chain_id: str, link: int, *, refresh: bool = False) -> object: ...
 
 
+class LifecycleRecoveryOperations(Protocol):
+    """Policy operations used by the service-owned recovery loop."""
+
+    def apply_parent(self, parent: dict[str, Any], *, taskdata: Path, lease_held: bool,
+                     verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[Any, str]: ...
+    def plan_parent(self, parent: dict[str, Any], *, generation: ChainGenerationService | None) -> Any: ...
+    def next_child(self, parent: dict[str, Any], child_short: str) -> dict[str, Any]: ...
+    def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[dict[str, Any] | None, str]: ...
+    def terminal_error(self, child: dict[str, Any], recovery_at: Any) -> str: ...
+    def is_orphan_deleted(self, child: dict[str, Any]) -> bool: ...
+    def recovery_error(self, parent: dict[str, Any], reason: str) -> Any: ...
+    def recovery_partial(self, parent: dict[str, Any], reason: str) -> Any: ...
+    def recovery_manual_review(self, parent: dict[str, Any], reason: str) -> Any: ...
+    def recovery_terminal(self, parent: dict[str, Any], reason: str) -> Any: ...
+
+
 def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
     return (
         str(row.get("chainID") or "").strip().casefold(),
@@ -141,6 +157,81 @@ class LifecycleReconciliationService:
         if isinstance(result, Found):
             return [dict(result.value)]
         raise RuntimeError(f"child slot {chain_id}:{next_link} returned an invalid read result")
+
+    def recover_candidate(
+        self,
+        parent: dict[str, Any],
+        *,
+        operations: LifecycleRecoveryOperations,
+        taskdata: Path | None,
+        apply: bool,
+        max_expiration_hops: int,
+        recovery_at: Any,
+        lease_held: bool = False,
+        generation: ChainGenerationService | None = None,
+    ) -> list[tuple[Any, str]]:
+        """Run bounded successor recovery; policy and mutation stay typed ports."""
+        outcomes: list[tuple[Any, str]] = []
+        current = parent
+        visited: set[tuple[str, int]] = set()
+        expiration_hops = 0
+        verified_children: dict[str, dict[str, Any]] = {}
+        while True:
+            slot = (str(current.get("chainID") or "").strip(), lifecycle.int_or_default(current.get("link"), 0))
+            if slot in visited:
+                outcomes.append((operations.recovery_error(current, "expiration recovery made no progress"), ""))
+                break
+            visited.add(slot)
+            is_deleted = str(current.get("status") or "").strip().lower() == "deleted"
+            if is_deleted and expiration_hops >= max_expiration_hops:
+                outcomes.append((operations.recovery_partial(current, f"expiration recovery hop limit reached at {max_expiration_hops}; rerun to continue or increase --max-expiration-hops"), ""))
+                break
+            if apply:
+                if taskdata is None:
+                    raise RuntimeError("Taskwarrior data location is unavailable")
+                try:
+                    plan, applied_short = operations.apply_parent(
+                        current, taskdata=taskdata, lease_held=lease_held,
+                        verified_children=verified_children, generation=generation,
+                    )
+                except Exception as exc:
+                    outcomes.append((operations.recovery_error(current, str(exc).strip() or type(exc).__name__), ""))
+                    break
+            else:
+                try:
+                    plan = operations.plan_parent(current, generation=generation)
+                except Exception as exc:
+                    outcomes.append((operations.recovery_error(current, str(exc).strip() or type(exc).__name__), ""))
+                    break
+                applied_short = ""
+            outcomes.append((plan, applied_short))
+            if not is_deleted or plan.action not in {"spawn", "backfill_nextlink"}:
+                break
+            expiration_hops += 1
+            child_short = applied_short or plan.child_short
+            try:
+                child = operations.next_child(plan.parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
+                if child is None:
+                    child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
+                    if child_error:
+                        outcomes.append((operations.recovery_error(plan.parent, child_error), ""))
+                        break
+                    if child is None:
+                        terminal_error = operations.terminal_error(dict(plan.child or {}), recovery_at)
+                        if terminal_error:
+                            outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
+                        break
+            except Exception as exc:
+                outcomes.append((operations.recovery_error(plan.parent, str(exc).strip() or type(exc).__name__), ""))
+                break
+            terminal_error = operations.terminal_error(child, recovery_at)
+            if terminal_error:
+                outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
+                break
+            if not operations.is_orphan_deleted(child):
+                break
+            current = child
+        return outcomes
 
 
 __all__ = ["LifecycleReconciliationService"]

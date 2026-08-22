@@ -1843,6 +1843,13 @@ def main(
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),
         "slowest_export_seconds": round(_EXPORT_STATS["slowest_seconds"], 4),
         "snapshot_hits": _EXPORT_STATS["snapshot_hits"],
+        "task_command_calls": int(_UNIT_OF_WORK.commands.calls),
+        "task_command_attempts": int(_UNIT_OF_WORK.commands.attempts),
+        "task_command_duration": round(_UNIT_OF_WORK.commands.duration, 6),
+        "task_command_failures": int(_UNIT_OF_WORK.commands.failures),
+        "task_command_by_purpose": dict(_UNIT_OF_WORK.commands.by_purpose),
+        "task_command_budget": int(_UNIT_OF_WORK.commands.context.command_budget),
+        "task_command_budget_exceeded": bool(_UNIT_OF_WORK.commands.budget_exceeded),
         "lock_contention": dict(_LOCK_STATS),
         "plans": [
             {

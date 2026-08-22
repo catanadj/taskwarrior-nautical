@@ -1781,6 +1781,9 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 or not 1 <= int(report.get("export_rows", 0)) <= history_rows
                 or float(report.get("integrity_seconds", -1.0)) < 0.0
                 or float(report.get("integrity_application_seconds", -1.0)) < 0.0
+                or int(report.get("task_command_calls", -1)) < 1
+                or int(report.get("task_command_attempts", -1)) < int(report.get("task_command_calls", 0))
+                or bool(report.get("task_command_budget_exceeded", True))
             ):
                 raise RuntimeError(f"healthy reconcile workflow bounded snapshot budget failed: {report!r}")
             reconcile_samples.append(time.perf_counter() - started)

@@ -5230,12 +5230,12 @@ def test_exit_probe_is_conservative_across_queue_states():
         expect(probe.probe_exit_work(root).definitely_empty, "empty lifecycle outbox should not force a drain")
 
         with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
             conn.commit()
         expect(probe.probe_exit_work(root).may_have_work, "future outbox schema should force the full hook")
 
         with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("PRAGMA user_version = 1")
+            conn.execute("PRAGMA user_version = 2")
             conn.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
             conn.commit()
         expect(probe.probe_exit_work(root).may_have_work, "ready outbox row should force a drain")
@@ -7654,7 +7654,7 @@ def test_queue_status_and_doctor_report_schema_health():
         expect((payload.get("outbox") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
 
         with sqlite3.connect(str(db_path)) as conn:
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
         proc = subprocess.run(
             [sys.executable, status_path, "--taskdata", td, "--json"],
             text=True,
@@ -7775,11 +7775,12 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
 
         db = state_dir / ".nautical_lifecycle_outbox.db"
         with sqlite3.connect(str(db)) as conn:
-            conn.execute("PRAGMA user_version = 1")
+            conn.execute("PRAGMA user_version = 2")
             conn.execute(
                 """
                 CREATE TABLE lifecycle_outbox (
                     intent_id TEXT PRIMARY KEY,
+                    work_kind TEXT NOT NULL DEFAULT 'lifecycle',
                     plan_json TEXT NOT NULL,
                     plan_fingerprint TEXT NOT NULL,
                     parent_guard_json TEXT NOT NULL,
@@ -7799,10 +7800,10 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
             )
             conn.execute(
                 "INSERT INTO lifecycle_outbox "
-                "(intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
+                "(intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
                 "schedule_fingerprint, lifecycle_stage, processing_state, lease_owner, lease_expires_at, "
                 "attempts, failure_json, created_at, updated_at) "
-                "VALUES (?, '{}', 'pf', '{}', 'cf', 'sf', 'planned', 'claimed', 'old-worker', 1.0, 3, '', 1.0, 1.0)",
+                "VALUES (?, 'lifecycle', '{}', 'pf', '{}', 'cf', 'sf', 'planned', 'claimed', 'old-worker', 1.0, 3, '', 1.0, 1.0)",
                 ("outbox-stale",),
             )
             conn.commit()

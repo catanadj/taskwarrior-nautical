@@ -20,7 +20,6 @@ import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core.chain_integrity_engine import ChainIntegrityEngine  # noqa: E402
 from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
 from nautical_core.lifecycle_outbox import LifecycleOutboxRepository  # noqa: E402
-from nautical_core import chain_repair  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
     GuardTimestamp,
@@ -29,33 +28,14 @@ from nautical_core.integration_models import (  # noqa: E402
     MutationGuard,
     MutationOperation,
     MutationRequest,
-    MutationOutcomeKind,
 )
 from nautical_core.lifecycle_models import recurrence_fingerprint  # noqa: E402
-from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
     build_operator_uow,
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
-
-
-def _export(repository: TaskReadRepository) -> list[dict[str, Any]]:
-    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    read = repository.broad_snapshot(
-        identity="chain-repair",
-        filters=("chainID.not:",),
-        statuses=ALL_TASK_STATUSES,
-        complete_chain_history=True,
-    )
-    if isinstance(read, Found):
-        return [dict(row) for row in read.value.rows]
-    if isinstance(read, Absent):
-        return []
-    if isinstance(read, Unavailable):
-        raise RuntimeError(f"chain repair task read unavailable: {read.evidence.detail}")
-    raise RuntimeError("chain repair task repository returned an invalid result")
 
 
 def _request_for_operation(unit_of_work: TaskwarriorUnitOfWork, operation: Any) -> MutationRequest:
@@ -91,37 +71,6 @@ def _request_for_operation(unit_of_work: TaskwarriorUnitOfWork, operation: Any) 
     )
     request = MutationRequest(MutationOperation.METADATA_REPAIR, guard, payload)
     return request
-
-
-def _apply_repair(unit_of_work: TaskwarriorUnitOfWork, repair: chain_repair.LinkRepair) -> None:
-    """Test/tooling helper retained while the public command migrates plans."""
-    read = unit_of_work.repository.by_uuid(repair.uuid, refresh=True)
-    if isinstance(read, Unavailable):
-        raise RuntimeError(read.evidence.detail or "chain repair guard read unavailable")
-    if isinstance(read, Absent) or not isinstance(read, Found):
-        raise RuntimeError("chain repair target is absent")
-    row = read.value
-    try:
-        link = int(float(str(row.get("link") or "").strip()))
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise RuntimeError("chain repair target has no numeric link") from exc
-    modified = str(row.get("modified") or "").strip()
-    if not modified:
-        raise RuntimeError("chain repair target has no modified timestamp")
-    guard = MutationGuard(
-        task_uuid=repair.uuid, status=str(row.get("status") or ""),
-        chain_id=str(row.get("chainID") or ""), link=link,
-        recurrence_identity=recurrence_fingerprint(dict(row)),
-        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
-        expected_mutation_epoch=unit_of_work.mutation_epoch, chain=str(row.get("chain") or "on"),
-    )
-    request = MutationRequest(
-        MutationOperation.METADATA_REPAIR, guard,
-        MetadataRepairPayload.from_mapping(repair.uuid, {repair.field: repair.new}, expected={repair.field: repair.old}),
-    )
-    outcome = TaskwarriorMutationService(unit_of_work).apply(request)
-    if outcome.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
-        raise RuntimeError(outcome.reason or outcome.kind.value)
 
 
 def _failure(args: argparse.Namespace, stage: str, exc: Exception) -> int:

@@ -138,7 +138,7 @@ class _ConfigurationReason(str):
 
 
 from nautical_core.native_until_integrity import NativeUntilAudit, audit_result
-from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
+from nautical_core.chain_integrity_engine import ChainIntegrityEngine
 
 
 def _native_until_audit_result(
@@ -466,7 +466,11 @@ def _native_until_repairs(
         ): row
         for row in active_rows
     }
-    recovery_audit = IntegrityRecoveryService().audit_native_until(
+    recovery_engine = ChainIntegrityEngine.lifecycle_only(
+        configuration_fingerprint="reconcile-recovery",
+        schedule_fingerprint="reconcile-recovery",
+    )
+    recovery_audit = recovery_engine.audit_native_until(
         active_rows,
         predecessor=_fresh_native_until_previous,
         safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),

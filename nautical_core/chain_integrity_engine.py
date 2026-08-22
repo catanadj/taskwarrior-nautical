@@ -26,6 +26,7 @@ from .chain_integrity_models import (
     SnapshotCoverage,
 )
 from .chain_repair_planner import IntegrityPlanningResult, IntegrityRepairPlanner, PlannerRefusal
+from .chain_integrity_recovery import IntegrityRecoveryService, RecoveryAudit
 from .chain_snapshot import IntegritySnapshotKind, IntegritySnapshotRequest
 from .integration_models import (
     CommandFailureKind,
@@ -92,6 +93,7 @@ class ChainIntegrityEngine:
         self._max_hydrated_chains = max_hydrated_chains
         self._planner = IntegrityRepairPlanner()
         self._application = IntegrityApplicationService()
+        self._recovery = IntegrityRecoveryService()
 
     @classmethod
     def lifecycle_only(
@@ -122,6 +124,17 @@ class ChainIntegrityEngine:
             existing_children=existing_children,
             hook=hook,
             generation=generation,
+        )
+
+    def audit_native_until(self, rows, *, predecessor, safe_parse_datetime, fmt_isoz, utc_to_local_naive, local_naive_to_utc) -> RecoveryAudit:
+        """Delegate recovery evidence through the single integrity owner."""
+        return self._recovery.audit_native_until(
+            rows,
+            predecessor=predecessor,
+            safe_parse_datetime=safe_parse_datetime,
+            fmt_isoz=fmt_isoz,
+            utc_to_local_naive=utc_to_local_naive,
+            local_naive_to_utc=local_naive_to_utc,
         )
 
     def audit(

@@ -33394,15 +33394,19 @@ def test_operator_processes_concurrent_contracts_share_taskdata_safely():
         env.pop("NAUTICAL_DIAG", None)
         launcher = os.path.join(ROOT, "nautical")
         commands = (
-            [sys.executable, launcher, "query", "capabilities"],
-            [sys.executable, launcher, "reconcile", "--json", "--task-bin", "/missing/task"],
-            [sys.executable, launcher, "doctor", "--json"],
-            [sys.executable, launcher, "query", "integrity", "--all"],
+            ([sys.executable, launcher, "query", "capabilities"], True),
+            ([sys.executable, launcher, "reconcile", "--json", "--task-bin", "/missing/task"], True),
+            ([sys.executable, launcher, "doctor", "--json"], True),
+            ([sys.executable, launcher, "query", "integrity", "--all"], True),
+            ([sys.executable, os.path.join(ROOT, "on-exit.nautical")], False),
         )
-        processes = [subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for command in commands]
+        processes = [subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for command, _ in commands]
         results = [process.communicate(timeout=30) for process in processes]
-        for (stdout, stderr), command in zip(results, commands):
-            json.loads(stdout)
+        for (stdout, stderr), (command, json_expected) in zip(results, commands):
+            if json_expected:
+                json.loads(stdout)
+            else:
+                expect(stdout == "", f"concurrent empty-exit hook wrote stdout: {stdout!r}")
             expect("Traceback" not in stderr, f"concurrent operator leaked traceback: {command}: {stderr!r}")
 
 

@@ -3258,6 +3258,7 @@ def test_child_import_rejects_incomplete_existing_rows():
         ("wrong status", lambda row: row.update(status="completed")),
         ("disabled chain", lambda row: row.update(chain="off")),
         ("changed recurrence metadata", lambda row: row.update(cp="2d")),
+        ("sync replacement", lambda row: row.update(chainID="replacement-chain", link=99)),
     ):
         child = dict(payload_map)
         mutate(child)

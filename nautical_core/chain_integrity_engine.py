@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Protocol
 
 from .chain_graph import ChainGraph
@@ -20,10 +22,20 @@ from .chain_integrity_models import (
     IntegrityFinding,
     IntegrityRepairPlan,
     IntegrityReportStatus,
+    ReferenceState,
+    SnapshotCoverage,
 )
 from .chain_repair_planner import IntegrityPlanningResult, IntegrityRepairPlanner, PlannerRefusal
-from .chain_snapshot import IntegritySnapshotRequest
-from .integration_models import Found, MutationOutcomeKind, TaskRead, Unavailable
+from .chain_snapshot import IntegritySnapshotKind, IntegritySnapshotRequest
+from .integration_models import (
+    CommandFailureKind,
+    FailureEvidence,
+    Found,
+    MutationOutcomeKind,
+    TaskCommand,
+    TaskRead,
+    Unavailable,
+)
 from .lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure
 
 
@@ -66,6 +78,7 @@ class ChainIntegrityEngine:
         *,
         configuration_fingerprint: str,
         schedule_fingerprint: str = "integrity",
+        max_hydrated_chains: int = 32,
     ) -> None:
         self._snapshots = snapshots
         self._configuration_fingerprint = str(configuration_fingerprint or "").strip()
@@ -74,6 +87,9 @@ class ChainIntegrityEngine:
             raise ValueError("integrity engine requires a configuration fingerprint")
         if not self._schedule_fingerprint:
             raise ValueError("integrity engine requires a schedule fingerprint")
+        if isinstance(max_hydrated_chains, bool) or not isinstance(max_hydrated_chains, int) or max_hydrated_chains < 1:
+            raise ValueError("max_hydrated_chains must be a positive integer")
+        self._max_hydrated_chains = max_hydrated_chains
         self._planner = IntegrityRepairPlanner()
         self._application = IntegrityApplicationService()
 
@@ -120,11 +136,85 @@ class ChainIntegrityEngine:
             return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=read.evidence.detail)
         if not isinstance(read, Found):
             return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason="integrity snapshot is absent")
+        hydrated = self._hydrate_required(request, read.value)
+        if isinstance(hydrated, Unavailable):
+            return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=hydrated.evidence.detail)
+        snapshot, hydrated_chains = hydrated
         return self.audit_snapshot(
-            read.value,
+            snapshot,
             outbox_repository=outbox_repository,
             mutation_epoch=mutation_epoch,
+            hydrated_chains=hydrated_chains,
         )
+
+    def _hydrate_required(
+        self,
+        request: IntegritySnapshotRequest,
+        snapshot: ChainSnapshot,
+    ) -> tuple[ChainSnapshot, frozenset[str]] | Unavailable:
+        """Hydrate only chains whose candidate evidence has unresolved edges."""
+        if request.kind is not IntegritySnapshotKind.CANDIDATES or request.complete_chain_history:
+            return snapshot, frozenset()
+        graph = ChainGraph.from_snapshot(snapshot)
+        required: set[str] = set()
+        for node in graph.nodes:
+            if not node.chain_id:
+                continue
+            if any(
+                graph.reference(node.task_uuid, field).state is ReferenceState.OUTSIDE_COVERAGE
+                for field in ("prevLink", "nextLink")
+            ):
+                required.add(node.chain_id)
+            elif node.link is not None and node.link > 1 and not str(node.field("prevLink", "") or "").strip():
+                required.add(node.chain_id)
+        if not required:
+            return snapshot, frozenset()
+        if len(required) > self._max_hydrated_chains:
+            return Unavailable(
+                "integrity:bounded-hydration",
+                self._failure_evidence(
+                    "bounded hydration requires "
+                    f"{len(required)} chains, limit is {self._max_hydrated_chains}"
+                ),
+            )
+        rows_by_uuid = {node.task_uuid.lower(): node for node in snapshot.rows}
+        for chain_id in sorted(required):
+            read = self._snapshots.collect(IntegritySnapshotRequest.chain(
+                chain_id,
+                statuses=request.statuses,
+                complete_chain_history=True,
+                refresh=request.refresh,
+            ))
+            if isinstance(read, Unavailable):
+                return read
+            if not isinstance(read, Found) or not read.value.rows:
+                return Unavailable(
+                    f"integrity:chain:{chain_id}",
+                    self._failure_evidence(f"required chain hydration returned no rows for {chain_id}"),
+                )
+            for node in read.value.rows:
+                rows_by_uuid[node.task_uuid.lower()] = node
+        rows = tuple(sorted(rows_by_uuid.values(), key=lambda node: (node.chain_id, node.link is None, node.link or 0, node.task_uuid)))
+        encoded = json.dumps(
+            {"base": snapshot.snapshot_id, "hydrated": sorted(required), "rows": [node.to_dict() for node in rows]},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        hydrated_snapshot = ChainSnapshot(
+            "cis1-hydrated-" + hashlib.sha256(encoded).hexdigest()[:24],
+            snapshot.coverage,
+            "taskwarrior.authoritative_export+bounded_hydration",
+            rows,
+            snapshot.configuration_fingerprint,
+            snapshot.complete_chain_history,
+        )
+        return hydrated_snapshot, frozenset(required)
+
+    @staticmethod
+    def _failure_evidence(detail: str) -> FailureEvidence:
+        command = TaskCommand(("task", "export"), "integrity bounded hydration", 1.0)
+        return FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 0, 1, 0.0, False, detail)
 
     def audit_snapshot(
         self,
@@ -132,6 +222,7 @@ class ChainIntegrityEngine:
         *,
         outbox_repository: LifecycleOutboxRepository,
         mutation_epoch: int = 0,
+        hydrated_chains: frozenset[str] = frozenset(),
     ) -> IntegrityEngineResult:
         """Audit one already-authoritative snapshot without another export."""
         if not isinstance(snapshot, ChainSnapshot):
@@ -149,11 +240,11 @@ class ChainIntegrityEngine:
         for chain_id in sorted(groups):
             scoped = ChainSnapshot(
                 f"{snapshot.snapshot_id}:{chain_id or 'unassigned'}",
-                snapshot.coverage,
+                SnapshotCoverage.CHAIN if chain_id in hydrated_chains else snapshot.coverage,
                 snapshot.source,
                 tuple(groups[chain_id]),
                 snapshot.configuration_fingerprint,
-                snapshot.complete_chain_history,
+                snapshot.complete_chain_history or chain_id in hydrated_chains,
                 snapshot.reason,
             )
             try:

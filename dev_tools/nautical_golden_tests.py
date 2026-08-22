@@ -141,7 +141,7 @@ def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
 
 
 def _found_task(row):
-    from nautical_core.integration_models import Found
+    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
     return Found(row, "isolated test read")
 
 
@@ -1455,7 +1455,13 @@ def test_chain_integrity_engine_owns_audit_and_empty_drain():
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine
     from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage, IntegrityReportStatus
     from nautical_core.chain_snapshot import IntegritySnapshotRequest
-    from nautical_core.integration_models import Found
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        Unavailable,
+    )
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     class Provider:
@@ -1482,6 +1488,91 @@ def test_chain_integrity_engine_owns_audit_and_empty_drain():
         )
         expect(applied.status is IntegrityReportStatus.HEALTHY, "empty engine apply changed status")
         expect(not applied.applications, "empty engine apply produced mutation results")
+
+
+def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():
+    """Unresolved candidate edges trigger bounded chain reads, not broad history exports."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_snapshot import IntegritySnapshotKind, IntegritySnapshotRequest
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        Unavailable,
+    )
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    parent = ChainNode.from_mapping({
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "hydrate-chain",
+        "link": 2,
+        "prevLink": "outside0",
+    })
+    predecessor = ChainNode.from_mapping({
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "hydrate-chain",
+        "link": 1,
+        "nextLink": parent.task_uuid,
+    })
+    broad = ChainSnapshot("hydrate-candidates", SnapshotCoverage.CANDIDATES, "test", (parent,))
+
+    class Provider:
+        def __init__(self):
+            self.requests = []
+
+        def collect(self, request):
+            self.requests.append(request)
+            if request.kind is IntegritySnapshotKind.CANDIDATES:
+                return Found(broad, "candidates")
+            return Found(
+                ChainSnapshot("hydrate-chain-full", SnapshotCoverage.CHAIN, "test", (parent, predecessor)),
+                "chain:hydrate-chain",
+            )
+
+    provider = Provider()
+    engine = ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1)
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        expect(outbox.open().ok, "hydration test outbox did not open")
+        result = engine.audit(IntegritySnapshotRequest.candidates(), outbox_repository=outbox)
+    expect(result.status.value != "unavailable", f"bounded hydration unexpectedly failed: {result}")
+    expect(len(result.snapshot.rows) == 2, "hydrated predecessor was not merged into the snapshot")
+    expect(any(item.kind is IntegritySnapshotKind.CHAIN for item in provider.requests), "narrow chain read was not used")
+
+    class UnavailableProvider(Provider):
+        def collect(self, request):
+            if request.kind is IntegritySnapshotKind.CHAIN:
+                command = TaskCommand(("task", "export"), "hydration test", 1.0)
+                return Unavailable(
+                    "chain:hydrate-chain",
+                    FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.001, True, "database busy"),
+                )
+            return super().collect(request)
+
+    unavailable_provider = UnavailableProvider()
+    unavailable_engine = ChainIntegrityEngine(
+        unavailable_provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        expect(outbox.open().ok, "unavailable hydration outbox did not open")
+        unavailable_result = unavailable_engine.audit(
+            IntegritySnapshotRequest.candidates(), outbox_repository=outbox,
+        )
+    expect(unavailable_result.status.value == "unavailable", "unavailable hydration did not fail closed")
+
+    try:
+        ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("zero hydration bound was accepted")
 
 
 def test_chain_graph_is_deterministic_and_preserves_reference_states():
@@ -32437,6 +32528,7 @@ TESTS = [
     test_chain_integrity_models_enforce_observation_and_repair_contract,
     test_chain_snapshot_service_preserves_authority_and_epoch_cache,
     test_chain_integrity_engine_owns_audit_and_empty_drain,
+    test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_context_keeps_outbox_evidence_separate,

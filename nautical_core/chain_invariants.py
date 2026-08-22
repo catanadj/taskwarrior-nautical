@@ -13,6 +13,7 @@ from .chain_integrity_models import (
     FindingSeverity,
     FindingStatus,
     IntegrityFinding,
+    LifecycleIntent,
     ReferenceState,
     SnapshotCoverage,
 )
@@ -236,12 +237,13 @@ def _topology_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
 def _lifecycle_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for node in graph.nodes:
-        status = node.status.lower()
-        if status not in {"completed", "deleted"} or str(node.field("chain", "on") or "on").lower() != "on":
+        intent = node.lifecycle_intent
+        if intent not in {LifecycleIntent.COMPLETED, LifecycleIntent.DELETED}:
             continue
+        status = intent.value
         if graph.reference(node.task_uuid, "nextLink").state is not ReferenceState.ABSENT:
             continue
-        if status == "deleted":
+        if intent is LifecycleIntent.DELETED:
             until = _canonical_timestamp(node.field("until"))
             ended = _canonical_timestamp(node.field("end"))
             if until is None or ended is None:
@@ -290,9 +292,7 @@ def _terminal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     """Validate terminal bounds before they suppress successor recovery."""
     findings: list[IntegrityFinding] = []
     for node in graph.nodes:
-        if node.status.lower() not in {"completed", "deleted"}:
-            continue
-        if str(node.field("chain", "on") or "on").strip().lower() != "on":
+        if node.lifecycle_intent not in {LifecycleIntent.COMPLETED, LifecycleIntent.DELETED}:
             continue
         if graph.reference(node.task_uuid, "nextLink").state is not ReferenceState.ABSENT:
             continue

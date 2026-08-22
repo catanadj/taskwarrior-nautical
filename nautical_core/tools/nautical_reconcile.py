@@ -1211,6 +1211,7 @@ def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> Lifec
         return terminal_plan_for_snapshot(
             TaskSnapshot.from_mapping(parent),
             event,
+            terminal_kind=plan.terminal_kind,
         )
     except Exception as exc:
         raise _LifecycleManualReview(

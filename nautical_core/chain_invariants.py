@@ -594,7 +594,7 @@ def _finalization_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...
                     "Acknowledged terminal plan does not match the persisted parent tip.",
                     observed=(("nextLink", next_ref.state.value), ("chain", chain_state)),
                     expected=(("nextLink", "absent"), ("chain", "off")),
-                    evidence=(("intent_id", record.intent_id), ("terminal_kind", identity.event.value)),
+                    evidence=(("intent_id", record.intent_id), ("terminal_kind", record.plan.terminal_kind or identity.event.value)),
                 ))
     return tuple(findings)
 

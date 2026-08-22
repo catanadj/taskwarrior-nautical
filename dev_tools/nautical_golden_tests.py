@@ -1749,6 +1749,7 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
         parent_guard=guard,
         parent_patch={"chain": "off"},
         expected_postconditions=("chain_off", "no_successor"),
+        terminal_kind="date_limit",
     )
     record = LifecycleOutboxRecord(
         identity.idempotency_key,
@@ -1782,6 +1783,8 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
         not any(item.reason_code == "terminal_postcondition_mismatch" for item in disabled_findings),
         "valid terminal postcondition was rejected",
     )
+    restored = type(plan).from_dict(plan.to_dict())
+    expect(restored.terminal_kind == "date_limit", "terminal exhaustion kind was not durable")
 
 
 def test_chain_integrity_context_keeps_outbox_evidence_separate():

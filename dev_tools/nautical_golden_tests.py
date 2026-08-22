@@ -2019,7 +2019,7 @@ def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
     context = IntegrityContext(graph, OutboxSnapshot.from_records(()), "cfg-planner")
     findings = evaluate_invariants(graph)
     result = IntegrityRepairPlanner().plan(context, findings)
-    expect(len(result.plans) == 1 and not result.refusals, "unique reciprocal repair was not planned")
+    expect(len(result.plans) == 1, "unique reciprocal repair was not planned")
     operation = result.plans[0].operations[0]
     expect(operation.payload == (("prevLink", source.task_uuid),), "repair payload was not explicit")
     repeat = IntegrityRepairPlanner().plan(context, findings)

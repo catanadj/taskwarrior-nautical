@@ -74,13 +74,13 @@ def _identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     for node in graph.nodes:
         if not node.chain_id:
             findings.append(_finding(
-                graph, "identity.chain_id_required", FindingStatus.REPAIRABLE, FindingSeverity.ERROR, node,
+                graph, "identity.chain_id_required", FindingStatus.MANUAL_REVIEW, FindingSeverity.ERROR, node,
                 "missing_chain_id", "Chain node has no chainID.",
                 observed=(("chainID", ""),), expected=(("chainID", "required"),),
             ))
         if node.link is None:
             findings.append(_finding(
-                graph, "identity.link_required", FindingStatus.REPAIRABLE, FindingSeverity.ERROR, node,
+                graph, "identity.link_required", FindingStatus.MANUAL_REVIEW, FindingSeverity.ERROR, node,
                 "missing_link", "Chain node has no positive numeric link.",
                 observed=(("link", None),), expected=(("link", "positive integer"),),
             ))
@@ -442,7 +442,7 @@ def _recurrence_identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]
             findings.append(_finding(
                 graph,
                 "identity.recurrence_required",
-                FindingStatus.REPAIRABLE,
+                FindingStatus.MANUAL_REVIEW,
                 FindingSeverity.ERROR,
                 node,
                 "missing_recurrence_identity",
@@ -483,7 +483,7 @@ def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
             findings.append(_finding(
                 graph,
                 "carry.until_after_due",
-                FindingStatus.REPAIRABLE,
+                FindingStatus.MANUAL_REVIEW,
                 FindingSeverity.ERROR,
                 node,
                 "until_before_due",
@@ -519,7 +519,7 @@ def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
             findings.append(_finding(
                 graph,
                 "carry.chain_until_after_due",
-                FindingStatus.REPAIRABLE,
+                FindingStatus.MANUAL_REVIEW,
                 FindingSeverity.ERROR,
                 node,
                 "chain_until_before_due",

@@ -974,11 +974,6 @@ def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) 
     return sorted(set(paths))
 
 
-def _short_uuid(value: object) -> str:
-    raw = str(value or "").strip().lower()
-    return raw.split("-")[0] if "-" in raw else raw[:8]
-
-
 def _task_detail(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "uuid": str(row.get("uuid") or ""),
@@ -1197,7 +1192,7 @@ def _overall_status(findings: list[dict[str, Any]]) -> str:
 
 def _format_task(task: dict[str, Any]) -> str:
     uuid = str(task.get("uuid") or "")
-    short = _short_uuid(uuid) or "unknown"
+    short = lifecycle.short_uuid(uuid) or "unknown"
     description = str(task.get("description") or "").strip() or "(no description)"
     parts = [f"{short} {description}"]
     chain_id = str(task.get("chainID") or "").strip()

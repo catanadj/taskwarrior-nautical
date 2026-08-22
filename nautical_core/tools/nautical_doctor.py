@@ -40,6 +40,7 @@ from nautical_core.integration_context import (  # noqa: E402
     ValidatedNauticalConfiguration,
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
+from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -129,16 +130,14 @@ def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]
     return proc.ok, proc.stdout.strip()
 
 
-def _task_export(repository: TaskReadRepository) -> tuple[bool, list[dict[str, Any]], str]:
-    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    read = repository.broad_snapshot(
-        identity="doctor-chain-inspection",
-        filters=(),
-        statuses=ALL_TASK_STATUSES,
-        complete_chain_history=True,
-    )
+def _task_export(unit_of_work: TaskwarriorUnitOfWork) -> tuple[bool, list[dict[str, Any]], str]:
+    unit_of_work.repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    read = ChainSnapshotService(
+        unit_of_work,
+        configuration_fingerprint=unit_of_work.context.configuration.fingerprint,
+    ).collect(IntegritySnapshotRequest.candidates(complete_chain_history=True))
     if isinstance(read, Found):
-        return True, [dict(row) for row in read.value.rows], ""
+        return True, [node.to_dict() for node in read.value.rows], ""
     if isinstance(read, Absent):
         return True, [], ""
     if isinstance(read, Unavailable):
@@ -1140,14 +1139,14 @@ def _check_reconcile_plans(
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
-    repository: TaskReadRepository | None,
+    unit_of_work: TaskwarriorUnitOfWork | None,
 ) -> dict[str, int]:
-    if repository is None:
+    if unit_of_work is None:
         ok = False
         rows: list[dict[str, Any]] = []
         err = "validated integration context is unavailable"
     else:
-        ok, rows, err = _task_export(repository)
+        ok, rows, err = _task_export(unit_of_work)
     if not ok:
         _finding(
             findings,
@@ -1545,7 +1544,7 @@ def main() -> int:
     obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
     counts = _check_chains(
         findings,
-        repository=unit_of_work.repository if unit_of_work is not None else None,
+        unit_of_work=unit_of_work,
     )
 
     status = _overall_status(findings)

@@ -16,6 +16,7 @@ from .chain_integrity_models import (
     ReferenceState,
     SnapshotCoverage,
 )
+from .lifecycle_models import recurrence_fingerprint
 
 
 InvariantEvaluator = Callable[[ChainGraph], tuple[IntegrityFinding, ...]]
@@ -581,6 +582,46 @@ def _finalization_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...
                     ))
                 continue
             parent = matches[0]
+            guard = record.plan.parent_guard
+            observed_identity = {
+                "status": parent.status,
+                "chain": str(parent.field("chain", "on") or "on"),
+                "chainID": parent.chain_id,
+                "link": parent.link,
+            }
+            guard_identity = {
+                "status": guard.status,
+                "chain": guard.chain,
+                "chainID": guard.chain_id,
+                "link": guard.link,
+            }
+            if observed_identity != guard_identity:
+                findings.append(_finding(
+                    graph,
+                    "lifecycle.finalization_guard",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    parent,
+                    "terminal_guard_mismatch",
+                    "Terminal exhaustion evidence was created for different parent identity facts.",
+                    observed=tuple(sorted(observed_identity.items())),
+                    expected=tuple(sorted(guard_identity.items())),
+                    evidence=(("intent_id", record.intent_id),),
+                ))
+            observed_fingerprint = recurrence_fingerprint(parent.to_dict())
+            if guard.recurrence_fingerprint and guard.recurrence_fingerprint != observed_fingerprint:
+                findings.append(_finding(
+                    graph,
+                    "lifecycle.finalization_recurrence_guard",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    parent,
+                    "terminal_recurrence_guard_mismatch",
+                    "Terminal exhaustion evidence is stale for the persisted recurrence inputs.",
+                    observed=(("recurrence_fingerprint", observed_fingerprint),),
+                    expected=(("recurrence_fingerprint", guard.recurrence_fingerprint),),
+                    evidence=(("intent_id", record.intent_id),),
+                ))
             next_ref = graph.reference(parent.task_uuid, "nextLink")
             chain_state = str(parent.field("chain", "on") or "on").strip().lower()
             if next_ref.state is not ReferenceState.ABSENT or chain_state == "on":

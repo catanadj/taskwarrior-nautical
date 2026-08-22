@@ -1773,6 +1773,10 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
         any(item.reason_code == "terminal_postcondition_mismatch" for item in findings),
         "terminal postcondition mismatch was not reported",
     )
+    expect(
+        any(item.reason_code == "terminal_recurrence_guard_mismatch" for item in findings),
+        "stale terminal recurrence evidence was not reported",
+    )
 
     disabled = ChainNode.from_mapping({**node.to_dict(), "chain": "off"})
     disabled_graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-ok", SnapshotCoverage.CHAIN, "test", (disabled,)))

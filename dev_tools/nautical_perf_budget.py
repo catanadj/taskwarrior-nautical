@@ -1866,6 +1866,47 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             float(budgets.get("workflow_reconcile_candidates", budgets.get("workflow_reconcile", 3.0))),
         )
 
+        candidate_apply_data = root / "reconcile-candidates-apply"
+        candidate_apply_data.mkdir()
+        candidate_apply_env = dict(base_env, TASKDATA=str(candidate_apply_data))
+        candidate_apply_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in candidate_tasks),
+            text=True,
+            capture_output=True,
+            env=candidate_apply_env,
+            timeout=30.0,
+        )
+        if candidate_apply_import.returncode != 0:
+            raise RuntimeError(
+                "candidate apply fixture import failed: "
+                f"{(candidate_apply_import.stderr or candidate_apply_import.stdout or '').strip()}"
+            )
+        apply_started = time.perf_counter()
+        apply_proc = subprocess.run(
+            [*reconcile_cmd, "--apply"],
+            text=True,
+            capture_output=True,
+            env=candidate_apply_env,
+            timeout=60.0,
+        )
+        if apply_proc.returncode != 0:
+            raise RuntimeError(
+                "candidate reconcile apply failed: "
+                f"{(apply_proc.stderr or apply_proc.stdout or '').strip()}"
+            )
+        try:
+            apply_report = json.loads(apply_proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("candidate reconcile apply returned invalid JSON") from exc
+        if int(apply_report.get("spawn", 0)) <= 0 or not apply_report.get("applied"):
+            raise RuntimeError("candidate reconcile apply did not create guarded successors")
+        results["workflow_reconcile_candidates_apply"] = _measure_workflow(
+            "workflow_reconcile_candidates_apply",
+            [time.perf_counter() - apply_started],
+            float(budgets.get("workflow_reconcile_candidates_apply", 12.0)),
+        )
+
         long_data = root / "reconcile-long-history"
         long_data.mkdir()
         long_env = dict(base_env, TASKDATA=str(long_data))

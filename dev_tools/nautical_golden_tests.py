@@ -7814,7 +7814,7 @@ def test_doctor_installation_json_and_verifier_contract():
         expect(payload.get("counts") == {"tasks": 0, "nautical_tasks": 0, "chains": 0}, "installation check audited tasks")
         expect(payload.get("outbox") == {}, "installation check audited the lifecycle outbox")
 
-        from nautical_core.tools.nautical_install_verify import build_report
+        from nautical_core.tools.nautical_install_verify import build_report, render
 
         launcher = Path(td) / "nautical"
         launcher.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -7836,6 +7836,10 @@ def test_doctor_installation_json_and_verifier_contract():
         report = build_report(verifier_payload, platform="Termux", launcher=launcher)
         expect(report.get("status") == "passed", f"operational findings leaked into installation status: {report!r}")
         expect(not report.get("manual_actions"), f"operational findings leaked into install actions: {report!r}")
+        rendered = io.StringIO()
+        with contextlib.redirect_stdout(rendered):
+            render(report)
+        expect("\x1b[" not in rendered.getvalue(), "redirected installation report contains terminal styling")
 
         legacy_payload = dict(verifier_payload)
         legacy_payload["findings"] = [

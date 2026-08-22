@@ -15,6 +15,20 @@ KEEP_CHECKOUT=0
 CHECKOUT=""
 PLATFORM="Linux"
 
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    STYLE_BOLD=$'\033[1m'
+    STYLE_CYAN=$'\033[36m'
+    STYLE_GREEN=$'\033[32m'
+    STYLE_YELLOW=$'\033[33m'
+    STYLE_RESET=$'\033[0m'
+else
+    STYLE_BOLD=""
+    STYLE_CYAN=""
+    STYLE_GREEN=""
+    STYLE_YELLOW=""
+    STYLE_RESET=""
+fi
+
 usage() {
     cat <<'EOF'
 Usage: bootstrap.sh [options]
@@ -34,8 +48,36 @@ EOF
 }
 
 die() {
-    printf 'Nautical bootstrap: %s\n' "$1" >&2
+    printf '%sNautical bootstrap:%s %s\n' "$STYLE_YELLOW" "$STYLE_RESET" "$1" >&2
     exit 2
+}
+
+render_banner() {
+    local columns="${COLUMNS:-80}"
+    local detected=""
+    if command -v tput >/dev/null 2>&1 && detected="$(tput cols 2>/dev/null)" && [[ "$detected" =~ ^[0-9]+$ ]]; then
+        columns="$detected"
+    fi
+    if [[ -t 1 && "$columns" -ge 78 ]]; then
+        printf '%s%s' "$STYLE_BOLD" "$STYLE_CYAN"
+        cat <<'EOF'
+                                           88                       88
+                                     ,d    ""                       88
+                                     88                             88
+8b,dPPYba,  ,adPPYYba, 88       88 MM88MMM 88  ,adPPYba, ,adPPYYba, 88
+88P'   `"8a ""     `Y8 88       88   88    88 a8"     "" ""     `Y8 88
+88       88 ,adPPPPP88 88       88   88    88 8b         ,adPPPPP88 88
+88       88 88,    ,88 "8a,   ,a88   88,   88 "8a,   ,aa 88,    ,88 88
+88       88 `"8bbdP"Y8  `"YbbdP'Y8   "Y888 88  `"Ybbd8"' `"8bbdP"Y8 88
+EOF
+        printf '%s\n' "$STYLE_RESET"
+    else
+        printf '\n%s%sTaskwarrior Nautical%s\n\n' "$STYLE_BOLD" "$STYLE_CYAN" "$STYLE_RESET"
+    fi
+}
+
+step() {
+    printf '\n%s%s[%s/4]%s %s\n' "$STYLE_BOLD" "$STYLE_CYAN" "$1" "$STYLE_RESET" "$2"
 }
 
 missing_python_requirements() {
@@ -119,9 +161,17 @@ if shutil.which("nautical") is None and launcher.name == "nautical":
     optional.append(f"Add {launcher.parent} to PATH or invoke {launcher}.")
 
 symbols = {"passed": "+", "attention": "!", "failed": "x"}
-print("\nPost-install verification")
+color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+styles = {
+    "passed": "\033[32m" if color else "",
+    "attention": "\033[33m" if color else "",
+    "failed": "\033[31m" if color else "",
+    "heading": "\033[1;36m" if color else "",
+    "reset": "\033[0m" if color else "",
+}
+print(f"\n{styles['heading']}Post-install verification{styles['reset']}")
 for name, status, detail in checks:
-    print(f"  {symbols[status]} {name}: {detail}")
+    print(f"  {styles[status]}{symbols[status]}{styles['reset']} {name}: {detail}")
 if manual:
     print("\nManual action")
     for action in manual:
@@ -212,10 +262,10 @@ else
     command -v task >/dev/null 2>&1 || die "Taskwarrior is required; install task before Nautical"
 fi
 
-printf '\nTaskwarrior Nautical\n'
-printf 'Installing release: %s\n' "$VERSION"
-printf 'Platform: %s\n' "$PLATFORM"
-printf 'Taskdata: %s\n\n' "$TASKDATA"
+render_banner
+printf '%sRelease%s   %s\n' "$STYLE_BOLD" "$STYLE_RESET" "$VERSION"
+printf '%sPlatform%s  %s\n' "$STYLE_BOLD" "$STYLE_RESET" "$PLATFORM"
+printf '%sTaskdata%s  %s\n' "$STYLE_BOLD" "$STYLE_RESET" "$TASKDATA"
 
 if [[ -n "$LAUNCHER_PATH" ]]; then
     case "$LAUNCHER_PATH" in
@@ -234,9 +284,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-printf 'Downloading release...\n'
+step 1 "Downloading release"
 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$VERSION" "$REPOSITORY" "$CHECKOUT"
 
+step 2 "Checking Python requirements"
 requirements_file="$CHECKOUT/requirements.txt"
 [[ -f "$requirements_file" ]] || die "release is missing requirements.txt"
 missing_requirements="$(missing_python_requirements "$requirements_file")"
@@ -259,7 +310,7 @@ if [[ -n "$missing_requirements" ]]; then
         fi
     fi
     python3 -m pip --version >/dev/null 2>&1 || die "pip is unavailable for python3; install python3-pip (or Termux's python package)"
-    printf 'Installing Python requirements...\n'
+    printf '%sInstalling Python requirements...%s\n' "$STYLE_GREEN" "$STYLE_RESET"
     python3 -m pip install -r "$requirements_file" || die "Python requirement installation failed"
     remaining_requirements="$(missing_python_requirements "$requirements_file")"
     [[ -z "$remaining_requirements" ]] || die "Python requirements remain unavailable: $remaining_requirements"
@@ -270,13 +321,13 @@ install_args=(install --source "$CHECKOUT" --taskdata "$TASKDATA")
 [[ -n "$HOOKS_DIR" ]] && install_args+=(--hooks-dir "$HOOKS_DIR")
 ((DRY_RUN)) && install_args+=(--dry-run)
 
-printf 'Running the validated installer...\n'
+step 3 "Installing Nautical"
 python3 "$CHECKOUT/nautical" "${install_args[@]}"
 
 if (( ! DRY_RUN )); then
     launcher="${LAUNCHER_PATH:-$HOME/.local/bin/nautical}"
     if [[ -x "$launcher" ]]; then
-        printf '\nVerifying the completed installation...\n'
+        step 4 "Verifying installation"
         doctor_report="$CHECKOUT/doctor-installation.json"
         doctor_args=(doctor --taskdata "$TASKDATA" --json)
         if "$launcher" doctor --help 2>&1 | grep -q -- '--installation-only'; then
@@ -304,4 +355,6 @@ if (( ! DRY_RUN )); then
         printf '\nManual action required: installed launcher is not executable at %s\n' "$launcher"
         exit 2
     fi
+else
+    step 4 "Dry-run complete"
 fi

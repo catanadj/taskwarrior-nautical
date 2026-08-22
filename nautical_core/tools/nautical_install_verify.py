@@ -99,10 +99,19 @@ def build_report(
 
 def render(report: dict[str, Any]) -> None:
     symbols = {"passed": "+", "attention": "!", "failed": "x"}
-    print("\nPost-install verification")
+    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    styles = {
+        "passed": "\033[32m" if color else "",
+        "attention": "\033[33m" if color else "",
+        "failed": "\033[31m" if color else "",
+        "heading": "\033[1;36m" if color else "",
+        "reset": "\033[0m" if color else "",
+    }
+    print(f"\n{styles['heading']}Post-install verification{styles['reset']}")
     for check in report.get("checks") or []:
         status = str(check.get("status") or "failed")
-        print(f"  {symbols.get(status, '?')} {check.get('name')}: {check.get('detail')}")
+        style = styles.get(status, styles["failed"])
+        print(f"  {style}{symbols.get(status, '?')}{styles['reset']} {check.get('name')}: {check.get('detail')}")
     manual = report.get("manual_actions") or []
     optional = report.get("optional_actions") or []
     if manual:

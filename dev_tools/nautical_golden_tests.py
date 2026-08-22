@@ -8536,7 +8536,6 @@ def test_nautical_dispatches_supported_subcommands():
         "install": os.path.join(ROOT, "nautical_core", "tools", "nautical_install.py"),
         "doctor": os.path.join(ROOT, "nautical_core", "tools", "nautical_doctor.py"),
         "queue-status": os.path.join(ROOT, "nautical_core", "tools", "nautical_queue_status.py"),
-        "chain-repair": os.path.join(ROOT, "nautical_core", "tools", "nautical_chain_repair.py"),
         "reconcile": os.path.join(ROOT, "nautical_core", "tools", "nautical_reconcile.py"),
         "navigator": os.path.join(ROOT, "nautical_navigator.py"),
     }
@@ -29806,22 +29805,6 @@ def test_task_command_retries_only_opted_in_locks():
     expect(write.kind is CommandFailureKind.BUSY and write.attempt == 1, f"write was unexpectedly retried: {write}")
 
 
-def test_chain_repair_command_failure_is_structured():
-    """Chain repair JSON mode should report command and apply failures without a traceback."""
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
-        "_nautical_chain_repair_command_failure_test",
-    )
-    output = io.StringIO()
-    errors = io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-        result = tool.main(["--json", "--task-bin", "/definitely/missing/task-Ω"])
-    payload = json.loads(output.getvalue())
-    expect(result == 1 and payload.get("stage") == "integration_context", f"failure was not structured: {payload}")
-    expect("task-Ω" in payload.get("error", ""), f"Unicode command detail was lost: {payload}")
-    expect("Traceback" not in errors.getvalue(), f"chain repair leaked a traceback: {errors.getvalue()!r}")
-
-
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     """on-modify should reuse one full-chain export across preflight and later feedback prep when chain context is needed."""
     hook = _find_hook_file("on-modify.nautical")
@@ -32931,7 +32914,6 @@ TESTS = [
     test_reconcile_subprocess_output_contracts,
     test_task_command_classifies_boundary_failures,
     test_task_command_retries_only_opted_in_locks,
-    test_chain_repair_command_failure_is_structured,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,

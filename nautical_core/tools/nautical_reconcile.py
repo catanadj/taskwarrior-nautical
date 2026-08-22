@@ -596,16 +596,14 @@ def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bo
         return False
 
 
-def _existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
-    chain_id = str(parent.get("chainID") or "").strip()
-    next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
-    if not chain_id:
-        return []
-    value = _read_value(
-        _repository().exact_child_slot(chain_id, next_link, refresh=True),
-        f"child slot {chain_id}:{next_link}",
-    )
-    return [dict(value)] if value is not None else []
+def _recovery_existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
+    """Adapt the authoritative repository read to the recovery service."""
+    return IntegrityRecoveryService(
+        child_lookup=lambda chain_id, link: _read_value(
+            _repository().exact_child_slot(chain_id, link, refresh=True),
+            f"child slot {chain_id}:{link}",
+        ),
+    ).existing_children(parent)
 
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
@@ -616,7 +614,7 @@ def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any
         )
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return []
-    return _existing_children(parent)
+    return _recovery_existing_children(parent)
 
 
 def _expiration_hop_limit(value: str) -> int:
@@ -762,7 +760,7 @@ def _verify_applied_child(
         raise RuntimeError(
             f"post-apply verification found parent nextLink {shown}; expected {child_short}"
         )
-    rows = _existing_children(fresh_parent)
+    rows = _recovery_existing_children(fresh_parent)
     resolved, child_error = lifecycle.resolve_existing_child(
         fresh_parent,
         rows,
@@ -989,7 +987,7 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | No
     """
     child = lifecycle_plan.child_dict()
     child_uuid = str(child.get("uuid") or "").strip().lower()
-    rows = _existing_children({"chainID": lifecycle_plan.identity.chain_id, "link": lifecycle_plan.identity.source_link})
+    rows = _recovery_existing_children({"chainID": lifecycle_plan.identity.chain_id, "link": lifecycle_plan.identity.source_link})
     parent_short = str(lifecycle_plan.identity.parent_uuid or "").strip().lower()[:8]
     for row in rows:
         row_uuid = str(row.get("uuid") or "").strip().lower()

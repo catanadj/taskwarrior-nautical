@@ -30,6 +30,18 @@ class RecoveryAudit:
 class IntegrityRecoveryService:
     """Build typed recovery evidence from one authoritative chain snapshot."""
 
+    def __init__(self, *, child_lookup: Callable[[str, int], dict[str, Any] | None] | None = None) -> None:
+        self._child_lookup = child_lookup
+
+    def existing_children(self, parent: dict[str, Any]) -> list[dict[str, Any]]:
+        """Resolve the single successor slot without owning repository I/O."""
+        chain_id = str(parent.get("chainID") or "").strip()
+        next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
+        if not chain_id or self._child_lookup is None:
+            return []
+        value = self._child_lookup(chain_id, next_link)
+        return [dict(value)] if value is not None else []
+
     @staticmethod
     def candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
         return (

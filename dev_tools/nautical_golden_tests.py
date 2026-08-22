@@ -33533,6 +33533,21 @@ def test_query_cli_emits_one_json_document_for_invalid_request():
     expect(payload["failure"]["code"] == "invalid_request", "query CLI failure code is unstable")
 
 
+def test_integrity_consumers_share_report_components():
+    """Doctor, query, and reconcile consume the same stable integrity components."""
+    from nautical_core.chain_integrity_engine import IntegrityEngineResult
+    from nautical_core.chain_integrity_models import IntegrityReportStatus
+    from nautical_core.integrity_report import components, doctor_findings, public_payload
+
+    result = IntegrityEngineResult(IntegrityReportStatus.HEALTHY, reason="")
+    shared = components(result)
+    payload = public_payload(result, query={"kind": "all"}, configuration_fingerprint="cfg")
+    expect(payload["status"] == shared["status"], "query integrity status diverged from shared report")
+    expect(payload["findings"] == shared["findings"], "query findings diverged from shared report")
+    expect(payload["plans"] == shared["plans"], "query plans diverged from shared report")
+    expect(doctor_findings(result)[0]["id"] == "chains.integrity", "Doctor healthy identity diverged")
+
+
 def test_query_cli_rejects_trailing_oversized_and_deep_requests():
     """The JSON boundary rejects resource-heavy or ambiguous transports."""
     from nautical_core.tools import nautical_query
@@ -34110,6 +34125,7 @@ TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
     test_query_cli_emits_one_json_document_for_invalid_request,
+    test_integrity_consumers_share_report_components,
     test_query_cli_rejects_trailing_oversized_and_deep_requests,
     test_query_cli_flags_build_the_same_validated_request,
     test_query_capabilities_is_taskwarrior_free_and_versioned,

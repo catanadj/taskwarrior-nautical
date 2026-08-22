@@ -58,6 +58,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
 from nautical_core.reconcile_report import exit_code, render_human, render_json  # noqa: E402
+from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
     CallbackLifecycleRecoveryOperations,
@@ -1913,14 +1914,7 @@ def main(
             }
             for item in integrity_drain_results
         ],
-        "integrity_audit": None if integrity_audit_result is None else {
-            "status": integrity_audit_result.status.value,
-            "snapshot": integrity_audit_result.snapshot.snapshot_id if integrity_audit_result.snapshot else None,
-            "findings": len(integrity_audit_result.findings),
-            "plans": len(integrity_audit_result.plans),
-            "refusals": len(integrity_audit_result.refusals),
-            "reason": integrity_audit_result.reason,
-        },
+        "integrity_audit": None if integrity_audit_result is None else integrity_components(integrity_audit_result),
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),

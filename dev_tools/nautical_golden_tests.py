@@ -2133,6 +2133,29 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
         "unsafe integrity plan crossed the application boundary",
     )
 
+    lifecycle_operation = IntegrityOperation(
+        "lifecycle-op", RepairOperationKind.LIFECYCLE_TRANSITION,
+        "application-chain", operation.target_uuid,
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",), ("lifecycle transition applied",),
+        (("action", "complete"),),
+    )
+    lifecycle_plan = IntegrityRepairPlan(
+        "lifecycle-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "lifecycle", "lifecycle work belongs to the lifecycle service", (lifecycle_operation,),
+        "cfg-application",
+    )
+    lifecycle_result = IntegrityApplicationService().apply(
+        lifecycle_plan,
+        SimpleNamespace(repair_metadata=lambda _request: (_ for _ in ()).throw(AssertionError("misrouted lifecycle operation"))),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(
+        lifecycle_result[0].kind is MutationOutcomeKind.MANUAL_REVIEW
+        and "no application adapter" in lifecycle_result[0].reason,
+        "lifecycle operation crossed the structural application boundary",
+    )
+
     metadata_operation = IntegrityOperation(
         "metadata-op",
         RepairOperationKind.METADATA_REPAIR,

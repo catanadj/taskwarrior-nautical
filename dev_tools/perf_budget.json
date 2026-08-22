@@ -94,7 +94,8 @@
       "workflow_reconcile_empty": 3.0,
       "workflow_reconcile_candidates": 6.0,
       "workflow_reconcile_long_history": 12.0,
-      "workflow_reconcile_corrupted": 6.0
+      "workflow_reconcile_corrupted": 6.0,
+      "workflow_reconcile_mixed": 8.0
     },
     "task_call_budgets": {
       "workflow_queue_drain": {
@@ -117,7 +118,10 @@
     },
     "reconcile_candidate_chains": 32,
     "reconcile_long_history_rows": 2048,
-    "reconcile_corrupted_chains": 16
+    "reconcile_corrupted_chains": 16,
+    "reconcile_mixed_healthy_rows": 8,
+    "reconcile_mixed_candidates": 8,
+    "reconcile_mixed_corrupted": 4
   },
   "extended_workload": {
     "enabled": true,

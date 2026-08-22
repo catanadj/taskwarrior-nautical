@@ -1915,6 +1915,91 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             corrupt_samples,
             float(budgets.get("workflow_reconcile_corrupted", budgets.get("workflow_reconcile", 3.0))),
         )
+
+        mixed_data = root / "reconcile-mixed"
+        mixed_data.mkdir()
+        mixed_env = dict(base_env, TASKDATA=str(mixed_data))
+        mixed_tasks = []
+        mixed_healthy_count = max(2, int(workflow_cfg.get("reconcile_mixed_healthy_rows", 8)))
+        healthy_rows = []
+        for link in range(1, mixed_healthy_count + 1):
+            row = {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/healthy/{link}")),
+                "status": "completed",
+                "description": f"Mixed healthy benchmark {link}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": "reconcile-mixed-healthy",
+                "link": link,
+                "due": "20260101T090000Z",
+            }
+            if healthy_rows:
+                row["prevLink"] = healthy_rows[-1]["uuid"][:8]
+            healthy_rows.append(row)
+        for index, row in enumerate(healthy_rows):
+            if index + 1 < len(healthy_rows):
+                row["nextLink"] = healthy_rows[index + 1]["uuid"][:8]
+        mixed_tasks.extend(healthy_rows)
+        for index in range(max(1, int(workflow_cfg.get("reconcile_mixed_candidates", 8)))):
+            mixed_tasks.append({
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/candidate/{index}")),
+                "status": "completed",
+                "description": f"Mixed candidate benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": f"reconcile-mixed-candidate-{index}",
+                "link": 1,
+                "due": "20260101T090000Z",
+            })
+        for index in range(max(1, int(workflow_cfg.get("reconcile_mixed_corrupted", 4)))):
+            chain_id = f"reconcile-mixed-corrupt-{index}"
+            first_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/corrupt/{index}/first"))
+            second_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/corrupt/{index}/second"))
+            common = {
+                "status": "pending",
+                "description": f"Mixed corrupted benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": chain_id,
+                "link": 1,
+                "due": "20260101T090000Z",
+            }
+            mixed_tasks.extend([
+                dict(common, uuid=first_uuid, nextLink=second_uuid[:8]),
+                dict(common, uuid=second_uuid, prevLink=first_uuid[:8]),
+            ])
+        mixed_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in mixed_tasks),
+            text=True,
+            capture_output=True,
+            env=mixed_env,
+            timeout=30.0,
+        )
+        if mixed_import.returncode != 0:
+            raise RuntimeError(
+                "mixed reconcile fixture import failed: "
+                f"{(mixed_import.stderr or mixed_import.stdout or '').strip()}"
+            )
+        mixed_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=mixed_env, timeout=30.0)
+            if proc.returncode not in (0, 1, 2):
+                raise RuntimeError(f"mixed reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("mixed reconcile workflow returned invalid JSON") from exc
+            audit = report.get("integrity_audit") if isinstance(report, dict) else None
+            if not isinstance(audit, dict) or not audit.get("findings") or int(report.get("candidates", 0)) <= 0:
+                raise RuntimeError("mixed reconcile workflow did not preserve both candidate and integrity evidence")
+            mixed_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_mixed"] = _measure_workflow(
+            "workflow_reconcile_mixed",
+            mixed_samples,
+            float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
+        )
         return results
 
 

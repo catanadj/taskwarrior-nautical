@@ -7,6 +7,38 @@ from typing import Any
 from .chain_integrity_engine import IntegrityEngineResult
 
 
+def _snapshot_payload(snapshot: Any) -> dict[str, Any] | None:
+    """Serialize the immutable snapshot model without depending on graph APIs."""
+    if snapshot is None:
+        return None
+    return {
+        "snapshot_id": snapshot.snapshot_id,
+        "coverage": snapshot.coverage.value,
+        "source": snapshot.source,
+        "row_count": len(snapshot.rows),
+        "configuration_fingerprint": snapshot.configuration_fingerprint,
+        "complete_chain_history": snapshot.complete_chain_history,
+        "reason": snapshot.reason,
+    }
+
+
+def _finding_payload(finding: Any) -> dict[str, Any]:
+    """Serialize an immutable finding model for operator-facing reports."""
+    return {
+        "invariant_id": finding.invariant_id,
+        "status": finding.status.value,
+        "severity": finding.severity.value,
+        "snapshot_id": finding.snapshot_id,
+        "chain_id": finding.chain_id,
+        "subject_uuids": list(finding.subject_uuids),
+        "reason_code": finding.reason_code,
+        "message": finding.message,
+        "observed": dict(finding.observed),
+        "expected": dict(finding.expected),
+        "evidence": dict(finding.evidence),
+    }
+
+
 def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
     """Map stable engine findings to Doctor's presentation contract."""
     findings: list[dict[str, Any]] = []
@@ -95,7 +127,7 @@ def summary(result: IntegrityEngineResult) -> dict[str, Any]:
     """Return a stable, presentation-neutral integrity summary."""
     return {
         "status": result.status.value,
-        "snapshot": result.snapshot.to_dict() if result.snapshot is not None else None,
+        "snapshot": _snapshot_payload(result.snapshot),
         "findings": len(result.findings),
         "plans": len(result.plans),
         "refusals": len(result.refusals),
@@ -107,8 +139,8 @@ def components(result: IntegrityEngineResult) -> dict[str, Any]:
     """Return the stable evidence components shared by all consumers."""
     return {
         "status": result.status.value,
-        "snapshot": result.snapshot.to_dict() if result.snapshot is not None else None,
-        "findings": [finding.to_dict() for finding in result.findings],
+        "snapshot": _snapshot_payload(result.snapshot),
+        "findings": [_finding_payload(finding) for finding in result.findings],
         "plans": [plan.to_dict() for plan in result.plans],
         "refusals": [
             {

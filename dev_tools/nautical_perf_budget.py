@@ -1748,6 +1748,61 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             empty_samples,
             float(budgets.get("workflow_reconcile_empty", budgets.get("workflow_reconcile", 3.0))),
         )
+
+        # Candidate-heavy audits must prove that the benchmark contains
+        # actionable integrity evidence.  A zero-candidate run would only
+        # measure the healthy path again.
+        candidate_data = root / "reconcile-candidates"
+        candidate_data.mkdir()
+        candidate_env = dict(base_env, TASKDATA=str(candidate_data))
+        candidate_count = max(1, int(workflow_cfg.get("reconcile_candidate_chains", 32)))
+        candidate_tasks = [
+            {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-candidate/{index}")),
+                "status": "completed",
+                "description": f"Reconcile candidate benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": f"reconcile-candidate-{index}",
+                "link": 1,
+                "due": "20260101T090000Z",
+            }
+            for index in range(candidate_count)
+        ]
+        candidate_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in candidate_tasks),
+            text=True,
+            capture_output=True,
+            env=candidate_env,
+            timeout=30.0,
+        )
+        if candidate_import.returncode != 0:
+            raise RuntimeError(
+                "reconcile candidate fixture import failed: "
+                f"{(candidate_import.stderr or candidate_import.stdout or '').strip()}"
+            )
+        candidate_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=candidate_env, timeout=30.0)
+            if proc.returncode not in (0, 1, 2):
+                raise RuntimeError(
+                    f"candidate reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("candidate reconcile workflow returned invalid JSON") from exc
+            summary = report if isinstance(report, dict) else {}
+            if int(summary.get("candidates", 0)) <= 0 and not summary.get("plans"):
+                raise RuntimeError("candidate reconcile workflow produced no integrity candidates or plans")
+            candidate_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_candidates"] = _measure_workflow(
+            "workflow_reconcile_candidates",
+            candidate_samples,
+            float(budgets.get("workflow_reconcile_candidates", budgets.get("workflow_reconcile", 3.0))),
+        )
         return results
 
 

@@ -44,6 +44,8 @@ from nautical_core.query_models import (  # noqa: E402
 from nautical_core.query_service import OccurrenceQueryService  # noqa: E402
 from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 
+INTEGRITY_SCHEMA = "nautical.query.integrity"
+
 
 def _error_payload(code: str, message: str, *, retryable: bool = False, operation: str = "occurrences") -> dict[str, Any]:
     return {
@@ -72,7 +74,7 @@ def _capabilities_payload() -> dict[str, Any]:
         "schema": CAPABILITIES_SCHEMA,
         "version": QUERY_API_VERSION,
         "status": "ok",
-        "operations": ["occurrences", "next"],
+        "operations": ["occurrences", "next", "integrity"],
         "next": {
             "basis": "read-only projected successor",
             "reference": "CP uses end when present, otherwise due/scheduled; anchors use due/scheduled",
@@ -137,7 +139,7 @@ def _capabilities_payload() -> dict[str, Any]:
                 "separate future operation."
             ),
         },
-        "future_operations": ["next", "inspect", "chains"],
+        "future_operations": ["inspect", "chains"],
     }
 
 
@@ -152,6 +154,62 @@ def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
 def _diagnostic(message: str) -> None:
     if os.environ.get("NAUTICAL_DIAG") == "1":
         sys.stderr.write(f"[nautical] query: {message}\n")
+
+
+def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    """Run a read-only integrity audit through the shared engine boundary."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    selected = sum(bool(value) for value in (args.uuids, args.chain_id, args.all_tasks))
+    if selected != 1:
+        raise QueryContractError("integrity query requires exactly one of --uuid, --chain-id, or --all")
+    if args.uuids:
+        if len(args.uuids) != 1:
+            raise QueryContractError("integrity query accepts one --uuid")
+        request = IntegritySnapshotRequest.uuid(args.uuids[0], complete_chain_history=True)
+    elif args.chain_id:
+        request = IntegritySnapshotRequest.chain(args.chain_id)
+    else:
+        request = IntegritySnapshotRequest.candidates()
+    unit_of_work = build_operator_uow(
+        core=core,
+        task_binary=shutil.which("task") or "task",
+        env=os.environ,
+        access=IntegrationAccess.READ_ONLY,
+    )
+    configuration = unit_of_work.context.configuration
+    engine = ChainIntegrityEngine(
+        ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint),
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
+    result = engine.audit(
+        request,
+        outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
+        mutation_epoch=unit_of_work.mutation_epoch,
+    )
+    snapshot = result.snapshot
+    payload = {
+        "schema": INTEGRITY_SCHEMA,
+        "version": 1,
+        "operation": "integrity",
+        "status": result.status.value,
+        "configuration_fingerprint": configuration.fingerprint,
+        "query": {"kind": request.kind.value, "chainID": request.chain_id or None, "uuid": request.task_uuid or None},
+        "snapshot": snapshot.to_dict() if snapshot is not None else None,
+        "findings": [finding.to_dict() for finding in result.findings],
+        "plans": [plan.to_dict() for plan in result.plans],
+        "refusals": [
+            {"invariant_id": item.invariant_id, "reason_code": item.reason_code,
+             "reason": item.reason, "snapshot_id": item.snapshot_id}
+            for item in result.refusals
+        ],
+        "chain_statuses": [{"chainID": chain_id, "status": status.value} for chain_id, status in result.chain_statuses],
+        "failure": {"message": result.reason} if result.reason else None,
+    }
+    return payload, 3 if result.status.value == "unavailable" else 0
 
 
 def _decode_request(raw: str, source: str) -> Mapping[str, Any]:
@@ -201,7 +259,7 @@ def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nautical's versioned read-only query API")
-    parser.add_argument("operation", choices=("capabilities", "occurrences", "next"), help="query operation")
+    parser.add_argument("operation", choices=("capabilities", "occurrences", "next", "integrity"), help="query operation")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--request", help="inline JSON request object, or '-' for stdin")
     source.add_argument("--request-file", help="path to a JSON request object")
@@ -220,6 +278,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.operation == "capabilities":
         return _emit(_capabilities_payload())
+    if args.operation == "integrity":
+        try:
+            payload, exit_code = _integrity_payload(args)
+            return _emit(payload, exit_code=exit_code)
+        except QueryContractError as exc:
+            _diagnostic(str(exc))
+            return _emit({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
+                          "status": "invalid", "findings": [], "plans": [],
+                          "failure": {"code": "invalid_request", "message": str(exc)}}, exit_code=2)
+        except (OSError, RuntimeError, ValueError) as exc:
+            _diagnostic(str(exc))
+            return _emit({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
+                          "status": "unavailable", "findings": [], "plans": [],
+                          "failure": {"code": "query_unavailable", "message": str(exc)}}, exit_code=3)
     try:
         flag_values = (
             args.uuids,

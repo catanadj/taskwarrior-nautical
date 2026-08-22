@@ -33733,7 +33733,7 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     expect(exit_code == 0, "capability discovery failed")
     expect(payload["schema"] == "nautical.query.capabilities", "capability schema is incorrect")
     expect(payload["version"] == 1, "capability version is incorrect")
-    expect(payload["operations"] == ["occurrences", "next"], "capability operation list is unstable")
+    expect(payload["operations"] == ["occurrences", "next", "integrity"], "capability operation list is unstable")
     expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
     guide = payload.get("guide", {})
     expect("cp" in guide.get("concepts", {}) and "anchor" in guide.get("concepts", {}), "capability guide omitted core concepts")

@@ -128,6 +128,7 @@ def _capabilities_payload() -> dict[str, Any]:
                 "nautical query occurrences --all --from 2026-08-24 --to 2026-08-31",
                 "nautical query next --uuid TASK_UUID --from 2026-08-24 --count 1",
                 "nautical query next --uuid TASK_UUID --at 2026-08-24T15:00:00+03:00",
+                "nautical query integrity --chain-id CHAIN_ID",
             ],
             "consumer_rule": (
                 "Read the versioned JSON schema, statuses, and failure codes; do not "

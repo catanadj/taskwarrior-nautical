@@ -399,6 +399,30 @@ def _carry_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
             child_value = _canonical_timestamp(child.field(field))
             if parent_value is None or child_value is None:
                 continue
+            if field == "until":
+                parent_exact = parent_value.second == 1
+                child_exact = child_value.second == 1
+                if parent_exact != child_exact:
+                    findings.append(IntegrityFinding(
+                        "carry.child_until_policy",
+                        FindingStatus.MANUAL_REVIEW,
+                        FindingSeverity.ERROR,
+                        graph.snapshot.snapshot_id,
+                        parent.chain_id,
+                        (parent.task_uuid, child.task_uuid),
+                        "child_until_policy_changed",
+                        "Child until changed between calendar and exact carry policy.",
+                        (("parent_policy", "exact" if parent_exact else "calendar"),
+                         ("child_policy", "exact" if child_exact else "calendar")),
+                        (("child_policy", "exact" if parent_exact else "calendar"),),
+                        (("parent_link", parent.link), ("child_link", child.link)),
+                    ))
+                    continue
+                # Calendar carry preserves a local day/time policy, not a raw
+                # due-to-until duration. Without a timezone in the immutable
+                # graph, changing elapsed seconds is not evidence of damage.
+                if not parent_exact:
+                    continue
             parent_delta = (parent_value - parent_due).total_seconds()
             child_delta = (child_value - child_due).total_seconds()
             if parent_delta == child_delta:

@@ -1242,6 +1242,12 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
         write(f"  Observed: {observed}")
     if expected:
         write(f"  Expected: {expected}")
+    historical_count = details.get("historical_count")
+    if historical_count:
+        write(f"  Observations: {historical_count} completed-link finding(s)")
+    detail_command = str(details.get("detail_command") or "").strip()
+    if detail_command:
+        write(f"  Details: {detail_command}")
     error = str(details.get("error") or "").strip()
     if error:
         write(f"  Detail: {error}")
@@ -1319,10 +1325,57 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
         write(f"    {field} -> {target_text}{suffix}")
 
 
+def _historical_summaries(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse completed-link evidence while leaving JSON output lossless."""
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in findings:
+        if item.get("severity") != "info":
+            continue
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        if not details.get("historical"):
+            continue
+        chain_id = str(details.get("chainID") or "").strip() or "unassigned"
+        invariant_id = str(details.get("invariant_id") or item.get("id") or "historical")
+        observed = details.get("observed") if isinstance(details.get("observed"), dict) else {}
+        field = str(observed.get("field") or "").strip()
+        key = (chain_id, invariant_id, field)
+        group = groups.setdefault(key, {"count": 0, "subjects": set()})
+        group["count"] += 1
+        group["subjects"].update(str(value) for value in details.get("subjects") or () if value)
+
+    summaries: list[dict[str, Any]] = []
+    for (chain_id, invariant_id, field), group in sorted(groups.items()):
+        count = int(group["count"])
+        label = f" {field}" if field else ""
+        summaries.append({
+            "id": "chains.historical_summary",
+            "severity": "info",
+            "message": f"{count} completed-link{label} observation(s) retained for audit.",
+            "fix": "No action is required; current pending-chain findings are reported separately.",
+            "details": {
+                "chainID": chain_id,
+                "invariant_id": invariant_id,
+                "historical_count": count,
+                "subjects": sorted(group["subjects"])[:8],
+                "detail_command": f"nautical query integrity --chain-id {chain_id}",
+            },
+        })
+    return summaries
+
+
 def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     stream = stream if stream is not None else sys.stdout
     enabled = _color_enabled(stream)
-    findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+    raw_findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+    historical = [
+        item for item in raw_findings
+        if item.get("severity") == "info"
+        and isinstance(item.get("details"), dict)
+        and item["details"].get("historical")
+    ]
+    findings = [item for item in raw_findings if item not in historical]
+    historical_summaries = _historical_summaries(historical)
+    findings.extend(historical_summaries)
     counts = {
         severity: sum(1 for item in findings if item.get("severity") == severity)
         for severity in ("ok", "warn", "error", "info")
@@ -1337,10 +1390,14 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     ok_text = _paint(f"{counts['ok']} ok", "green", enabled=enabled)
     warn_text = _paint(f"{counts['warn']} warnings", "yellow", enabled=enabled)
     error_text = _paint(f"{counts['error']} failures", "red", enabled=enabled)
-    info_text = _paint(f"{counts['info']} historical", "cyan", enabled=enabled)
+    info_text = _paint(
+        f"{len(historical)} historical observations in {len(historical_summaries)} groups",
+        "cyan",
+        enabled=enabled,
+    )
     write(
         "Checks: "
-        f"{len(findings)} total | "
+        f"{len(findings) - len(historical_summaries)} current | "
         f"{ok_text} | {warn_text} | {error_text} | {info_text}"
     )
     timezone = _timezone_summary(payload.get("findings") or [])

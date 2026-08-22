@@ -1869,6 +1869,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
                 "anchor": "w:mon",
                 "due": "20260822T120000Z",
                 "scheduled": "20260822T110000Z",
+                "until": "20260822T230000Z",
                 "nextLink": "13131313",
             }),
             ChainNode.from_mapping({
@@ -1879,6 +1880,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
                 "link": 2,
                 "due": "20260822T110000Z",
                 "scheduled": "20260822T103000Z",
+                "until": "20260823T230000Z",
                 "prevLink": "12121212",
             }),
         ),
@@ -1896,6 +1898,33 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
         ("carry.child_relative_offset", "child_carry_offset_changed") in continuity_ids,
         "changed child carry offset was not reported",
     )
+    until_findings = [
+        item for item in evaluate_invariants(backward)
+        if dict(item.observed).get("field") == "until"
+    ]
+    expect(not until_findings, "calendar until carry was incorrectly compared as an elapsed offset")
+
+    exact_until = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-exact-until", SnapshotCoverage.CANDIDATES, "test", (
+            ChainNode.from_mapping({
+                "uuid": "14141414-0000-0000-0000-000000000930",
+                "status": "completed", "chain": "on", "chainID": "exact-until", "link": 1,
+                "cp": "1d", "due": "20260822T100000Z", "until": "20260822T230001Z",
+                "nextLink": "15151515",
+            }),
+            ChainNode.from_mapping({
+                "uuid": "15151515-0000-0000-0000-000000000931",
+                "status": "pending", "chain": "on", "chainID": "exact-until", "link": 2,
+                "cp": "1d", "due": "20260823T100000Z", "until": "20260823T220001Z",
+                "prevLink": "14141414",
+            }),
+        ),
+    ))
+    exact_findings = [
+        item for item in evaluate_invariants(exact_until)
+        if dict(item.observed).get("field") == "until"
+    ]
+    expect(exact_findings, "exact until carry offset change was not reported")
 
 
 def test_chain_integrity_finalization_evidence_matches_parent_postcondition():

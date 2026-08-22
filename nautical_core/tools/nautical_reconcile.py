@@ -138,6 +138,7 @@ class _ConfigurationReason(str):
 
 
 from nautical_core.native_until_integrity import NativeUntilAudit, audit_result
+from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
 
 
 def _native_until_audit_result(
@@ -493,6 +494,16 @@ def _native_until_repairs(
         ): row
         for row in active_rows
     }
+    recovery_audit = IntegrityRecoveryService().audit_native_until(
+        active_rows,
+        predecessor=_fresh_native_until_previous,
+        safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
+        fmt_isoz=_runtime_core(hook).fmt_isoz,
+        utc_to_local_naive=_runtime_core(hook).utc_to_local_naive,
+        local_naive_to_utc=_runtime_core(hook).local_naive_to_utc,
+    )
+    if not apply:
+        return list(recovery_audit.native_until.repairs), list(recovery_audit.native_until.errors)
     repairs: list[dict[str, Any]] = []
     errors: list[str] = []
     for row in rows:

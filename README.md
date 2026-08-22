@@ -20,7 +20,7 @@ Install the current stable release in one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/bootstrap.sh \
-  | bash -s -- --version v6.5.2
+  | bash -s -- --version v6.5.3
 ```
 
 To try the latest pushed fixes before the next stable release, use
@@ -32,7 +32,7 @@ Use `--dry-run` to validate without changing anything. For Termux, pass the
 launcher location explicitly:
 
 ```bash
-bash bootstrap.sh --version v6.5.2 --launcher-path "$PREFIX/bin/nautical"
+bash bootstrap.sh --version v6.5.3 --launcher-path "$PREFIX/bin/nautical"
 ```
 
 For an auditable install, download the bootstrap first, inspect it, then run

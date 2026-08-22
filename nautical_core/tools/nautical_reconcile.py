@@ -1628,16 +1628,21 @@ def main(
         return _startup_failure(args, "candidate_export", exc)
     integrity_audit_result: Any = None
     integrity_application_results: tuple[Any, ...] = ()
+    integrity_seconds = 0.0
+    integrity_application_seconds = 0.0
     try:
         from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
         if _READ_SNAPSHOT is not None and _READ_SNAPSHOT._rows is not None:
+            integrity_started = time.perf_counter()
             integrity_engine, integrity_audit_result = _audit_reconcile_integrity(
                 tuple(_READ_SNAPSHOT._rows)
             )
+            integrity_seconds = time.perf_counter() - integrity_started
         if integrity_audit_result is not None and integrity_audit_result.status.value == "unavailable":
             configuration_status = "unavailable"
             configuration_drift_reason = integrity_audit_result.reason or "integrity audit unavailable"
         elif integrity_audit_result is not None and args.apply and integrity_audit_result.plans:
+            application_started = time.perf_counter()
             integrity_application = integrity_engine.apply(
                 integrity_audit_result,
                 executor=TaskwarriorMutationService(_UNIT_OF_WORK),
@@ -1646,6 +1651,7 @@ def main(
                 owner=f"reconcile-integrity-{os.getpid()}",
             )
             integrity_application_results = integrity_application.applications
+            integrity_application_seconds = time.perf_counter() - application_started
             if _READ_SNAPSHOT is not None and integrity_application_results:
                 _READ_SNAPSHOT._rows = None
                 candidates = _LIFECYCLE_SERVICE.candidates()
@@ -1915,6 +1921,8 @@ def main(
             for item in integrity_drain_results
         ],
         "integrity_audit": None if integrity_audit_result is None else integrity_components(integrity_audit_result),
+        "integrity_seconds": round(integrity_seconds, 6),
+        "integrity_application_seconds": round(integrity_application_seconds, 6),
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),

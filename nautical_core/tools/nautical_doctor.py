@@ -1479,7 +1479,10 @@ def main() -> int:
         "findings": findings,
     }
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        # Diagnostics may include timezone/provider objects supplied by an
+        # optional backend. Keep the JSON boundary strict without allowing a
+        # presentation-only value to make Doctor crash.
+        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
     else:
         _render_text(payload)
     return 2 if status == "error" else 1 if status == "warn" else 0

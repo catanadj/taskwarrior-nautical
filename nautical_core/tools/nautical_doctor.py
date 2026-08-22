@@ -1148,6 +1148,7 @@ def _check_chains(
 
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine
     from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.integrity_report import doctor_findings
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     configuration = unit_of_work.context.configuration if unit_of_work is not None else None
@@ -1162,40 +1163,8 @@ def _check_chains(
             outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
             mutation_epoch=unit_of_work.mutation_epoch,
         )
-    repairs = tuple(integrity.plans) if integrity is not None else ()
-    if repairs:
-        _finding(
-            findings,
-            "chains.repair_available",
-            "warn",
-            f"{len(repairs)} safe chain repair(s) are available.",
-            fix="Run nautical chain-repair --apply after reviewing the dry-run output.",
-            details={"repairs": [plan.to_dict() for plan in repairs[:10]]},
-        )
-    repair_issues = tuple(integrity.refusals) if integrity is not None else ()
-    if repair_issues:
-        reason_counts: dict[str, int] = defaultdict(int)
-        for issue in repair_issues:
-            reason_counts[str(issue.reason or issue.reason_code).strip()] += 1
-        _finding(
-            findings,
-            "chains.repair_review",
-            "warn",
-            f"{len(repair_issues)} chain repair issue(s) need review.",
-            fix="Run nautical chain-repair and inspect the 'why:' lines.",
-            details={
-                "reasons": dict(sorted(reason_counts.items())),
-                "issues": [
-                    {
-                        "kind": issue.reason_code,
-                        "chainID": "",
-                        "message": issue.reason,
-                        "tasks": [],
-                    }
-                    for issue in repair_issues[:10]
-                ],
-            },
-        )
+    if integrity is not None:
+        findings.extend(doctor_findings(integrity))
     _check_reconcile_plans(findings, rows=rows)
 
     nautical = [

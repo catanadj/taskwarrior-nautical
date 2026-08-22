@@ -29875,6 +29875,29 @@ def test_reconcile_startup_config_failure_is_structured():
     expect(payload.get("configuration_drift") == "invalid timezone", f"configuration detail was lost: {payload!r}")
 
 
+def test_reconcile_subprocess_output_contracts():
+    """Operator subprocess modes keep JSON on stdout and diagnostics on stderr."""
+    tool = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    base = [sys.executable, str(tool), "--task-bin", "/missing/nautical-task"]
+    json_run = subprocess.run(
+        [*base, "--json"], cwd=str(ROOT), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    expect(json_run.returncode == 1, f"JSON startup failure returned {json_run.returncode}")
+    payload = json.loads(json_run.stdout)
+    expect(payload.get("status") == "error", f"JSON startup status was not error: {payload!r}")
+    expect(payload.get("startup_errors") == 1, f"JSON startup error count missing: {payload!r}")
+    expect(json_run.stderr == "", f"JSON mode leaked diagnostics to stderr: {json_run.stderr!r}")
+
+    human_run = subprocess.run(
+        base, cwd=str(ROOT), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
+    expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
+    expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
+
+
 def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs():
     """Human reconcile output should keep outcomes concise and display repaired until locally."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -33041,6 +33064,7 @@ TESTS = [
     test_reconcile_configuration_verification_fails_closed,
     test_reconcile_native_until_audit_failure_matrix_fails_closed,
     test_reconcile_startup_config_failure_is_structured,
+    test_reconcile_subprocess_output_contracts,
     test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
     test_task_command_classifies_boundary_failures,
     test_task_command_retries_only_opted_in_locks,

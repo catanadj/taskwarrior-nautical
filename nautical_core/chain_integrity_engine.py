@@ -339,6 +339,28 @@ class ChainIntegrityEngine:
             return ()
         applications: list[IntegrityApplicationResult] = []
         for record in records:
+            envelope = record.envelope
+            if (
+                envelope.configuration_fingerprint != self._configuration_fingerprint
+                or envelope.schedule_fingerprint != self._schedule_fingerprint
+            ):
+                reason = (
+                    "integrity configuration drift: "
+                    f"configuration={envelope.configuration_fingerprint!r}->{self._configuration_fingerprint!r}, "
+                    f"schedule={envelope.schedule_fingerprint!r}->{self._schedule_fingerprint!r}"
+                )
+                review = repository.manual_review_integrity(
+                    intent_id=envelope.intent_id,
+                    owner=owner,
+                    failure=OutboxFailure("configuration_drift", reason),
+                )
+                applications.append(IntegrityApplicationResult(
+                    envelope.plan.plan_id,
+                    envelope.plan.operations[0].operation_id,
+                    MutationOutcomeKind.MANUAL_REVIEW if review.ok else MutationOutcomeKind.RETRYABLE,
+                    reason if review.ok else f"manual-review persistence failed: {review.reason or review.kind.value}",
+                ))
+                continue
             results = self._application.apply(record.envelope.plan, executor, request_factory, _AlreadyPersistedSink())
             applications.extend(results)
             if results and all(item.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED} for item in results):

@@ -33381,6 +33381,24 @@ def test_query_process_boundary_emits_one_json_document():
     expect(len(diagnostic.stdout.splitlines()) == 1, "diagnostic query contaminated stdout")
 
 
+def test_operator_processes_concurrent_contracts_share_taskdata_safely():
+    """Concurrent query/reconcile operators keep isolated JSON contracts."""
+    with tempfile.TemporaryDirectory(prefix="nautical-concurrent-operators-") as td:
+        env = dict(os.environ)
+        env.update({"TASKDATA": td, "NAUTICAL_CORE_PATH": ROOT})
+        env.pop("NAUTICAL_DIAG", None)
+        launcher = os.path.join(ROOT, "nautical")
+        commands = (
+            [sys.executable, launcher, "query", "capabilities"],
+            [sys.executable, launcher, "reconcile", "--json", "--task-bin", "/missing/task"],
+        )
+        processes = [subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for command in commands]
+        results = [process.communicate(timeout=30) for process in processes]
+        for (stdout, stderr), command in zip(results, commands):
+            json.loads(stdout)
+            expect("Traceback" not in stderr, f"concurrent operator leaked traceback: {command}: {stderr!r}")
+
+
 def test_query_service_preserves_absent_and_unavailable_task_reads():
     """Typed repository read states remain distinct in query responses."""
     from nautical_core.integration_context import IntegrationAccess
@@ -33884,6 +33902,7 @@ TESTS.extend([
     test_query_cli_flags_build_the_same_validated_request,
     test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,
+    test_operator_processes_concurrent_contracts_share_taskdata_safely,
     test_query_service_preserves_absent_and_unavailable_task_reads,
     test_query_installed_layout_runs_outside_checkout,
     test_query_service_all_selector_excludes_non_recurrence_rows,

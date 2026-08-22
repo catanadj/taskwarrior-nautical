@@ -151,10 +151,12 @@ def _diagnostic_read_uow(
     env: dict[str, str],
 ) -> TaskwarriorUnitOfWork:
     """Read Taskwarrior state without claiming valid scheduling configuration."""
+    diagnostic_env = dict(env)
+    diagnostic_env["TASKDATA"] = str(taskdata.resolve())
     context = IntegrationContext(
         taskdata.resolve(),
         "doctor-recovery",
-        (str(task_bin), f"rc.data.location={taskdata.resolve()}"),
+        (str(task_bin),),
         ValidatedNauticalConfiguration("doctor", "unavailable", "unavailable", "UTC", ()),
         timezone.utc,
         SilentDiagnostics(),
@@ -163,7 +165,7 @@ def _diagnostic_read_uow(
         256,
         IntegrationAccess.READ_ONLY,
     )
-    return TaskwarriorUnitOfWork.create(context, env=env)
+    return TaskwarriorUnitOfWork.create(context, env=diagnostic_env)
 
 
 def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> Path:
@@ -246,12 +248,24 @@ def _check_runtime(
     taskdata: Path,
 ) -> Path:
     proc = unit_of_work.client.execute(
-        ["--version"],
+        [],
         purpose="doctor Taskwarrior query",
         timeout=30.0,
         attempts=2,
         retry_delay=0.1,
     )
+    # Real Taskwarrior accepts the neutral invocation even with an explicit
+    # data-location override. Keep a narrow fallback for minimal test/tool
+    # shims that only implement the historical version probe.
+    if not proc.ok:
+        version_probe = unit_of_work.client.execute(
+            ["--version"],
+            purpose="doctor Taskwarrior version fallback",
+            timeout=30.0,
+            attempts=1,
+        )
+        if version_probe.ok:
+            proc = version_probe
     if not proc.ok:
         _finding(
             findings,
@@ -269,7 +283,7 @@ def _check_runtime(
             findings,
             "taskwarrior.version",
             "ok",
-            f"Taskwarrior {(proc.stdout or '').strip() or 'version detected'}.",
+            "Taskwarrior command is available.",
         )
 
     if not taskdata.exists():

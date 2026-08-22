@@ -10,7 +10,8 @@ from types import MappingProxyType
 from typing import Mapping, Protocol, Sequence, TypeAlias
 
 from .chain_graph import ChainGraph
-from .lifecycle_outbox import LifecycleOutboxRecord
+from .lifecycle_models import LifecycleAction, LifecycleEvent
+from .lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
 from .integrity_outbox_envelope import IntegrityOutboxRecord
 
 
@@ -88,6 +89,24 @@ class OutboxSnapshot:
     def for_chain(self, chain_id: str) -> tuple[OutboxEvidenceRecord, ...]:
         wanted = str(chain_id or "").strip()
         return tuple(record for record in self.records if record.plan.identity.chain_id == wanted)
+
+    def terminal_records(self, chain_id: str) -> tuple[LifecycleOutboxRecord, ...]:
+        """Return acknowledged, finalized lifecycle plans for one chain."""
+        wanted = str(chain_id or "").strip()
+        return tuple(
+            record for record in self.records
+            if isinstance(record, LifecycleOutboxRecord)
+            and record.plan.identity.chain_id == wanted
+            and record.state is OutboxProcessingState.ACKNOWLEDGED
+            and record.stage.value == "finalized"
+            and record.plan.action is LifecycleAction.FINALIZE_CHAIN
+            and record.plan.identity.event in {
+                LifecycleEvent.CHAIN_MAX,
+                LifecycleEvent.CHAIN_UNTIL,
+                LifecycleEvent.EXPIRE,
+                LifecycleEvent.MANUAL_DELETE,
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)

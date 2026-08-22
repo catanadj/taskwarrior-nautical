@@ -556,9 +556,52 @@ def _outbox_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _finalization_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
+    """Check acknowledged terminal plans against the persisted parent tip."""
+    graph = context.graph
+    findings: list[IntegrityFinding] = []
+    for chain_id in sorted({record.plan.identity.chain_id for record in context.outbox.records}):
+        for record in context.outbox.terminal_records(chain_id):
+            identity = record.plan.identity
+            matches = graph.uuid_matches(identity.parent_uuid)
+            if len(matches) != 1:
+                if graph.snapshot.coverage is not SnapshotCoverage.COMPLETE:
+                    findings.append(IntegrityFinding(
+                        "lifecycle.finalization_parent_coverage",
+                        FindingStatus.UNAVAILABLE,
+                        FindingSeverity.ERROR,
+                        graph.snapshot.snapshot_id,
+                        identity.chain_id,
+                        (identity.parent_uuid,),
+                        "terminal_parent_outside_coverage",
+                        "Acknowledged terminal plan cannot be verified outside snapshot coverage.",
+                        (("intent_id", record.intent_id),),
+                        (("parent", "covered"),),
+                        (("outbox_snapshot", context.outbox.snapshot_id),),
+                    ))
+                continue
+            parent = matches[0]
+            next_ref = graph.reference(parent.task_uuid, "nextLink")
+            chain_state = str(parent.field("chain", "on") or "on").strip().lower()
+            if next_ref.state is not ReferenceState.ABSENT or chain_state == "on":
+                findings.append(_finding(
+                    graph,
+                    "lifecycle.finalization_postcondition",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    parent,
+                    "terminal_postcondition_mismatch",
+                    "Acknowledged terminal plan does not match the persisted parent tip.",
+                    observed=(("nextLink", next_ref.state.value), ("chain", chain_state)),
+                    expected=(("nextLink", "absent"), ("chain", "off")),
+                    evidence=(("intent_id", record.intent_id), ("terminal_kind", identity.event.value)),
+                ))
+    return tuple(findings)
+
+
 def evaluate_context(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
     """Evaluate graph rules plus separated outbox evidence in stable order."""
-    findings = (*evaluate_invariants(context.graph), *_outbox_rule(context))
+    findings = (*evaluate_invariants(context.graph), *_outbox_rule(context), *_finalization_rule(context))
     unique: dict[tuple[str, str, tuple[str, ...], str], IntegrityFinding] = {}
     for finding in findings:
         unique.setdefault((finding.invariant_id, finding.chain_id, finding.subject_uuids, finding.reason_code), finding)

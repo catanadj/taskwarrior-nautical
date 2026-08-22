@@ -1721,6 +1721,69 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     )
 
 
+def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
+    """Acknowledged terminal plans require a disabled, unlinked persisted tip."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_context
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import (
+        ExecutionStage,
+        LifecycleOutboxRecord,
+        OutboxProcessingState,
+    )
+
+    parent_uuid = "11111111-0000-0000-0000-000000000927"
+    identity = LifecycleIdentity("final-chain", parent_uuid, 2, None, LifecycleEvent.CHAIN_UNTIL)
+    guard = ParentGuard.from_mapping({
+        "status": "completed",
+        "chain": "on",
+        "chainID": "final-chain",
+        "link": 2,
+        "recurrence_fingerprint": "fp-final",
+    })
+    plan = LifecyclePlan.from_mappings(
+        identity=identity,
+        action=LifecycleAction.FINALIZE_CHAIN,
+        parent_guard=guard,
+        parent_patch={"chain": "off"},
+        expected_postconditions=("chain_off", "no_successor"),
+    )
+    record = LifecycleOutboxRecord(
+        identity.idempotency_key,
+        plan,
+        "cfg-final",
+        "sched-final",
+        OutboxProcessingState.ACKNOWLEDGED,
+        ExecutionStage.FINALIZED,
+    )
+    node = ChainNode.from_mapping({
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "final-chain",
+        "link": 2,
+    })
+    graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-test", SnapshotCoverage.CHAIN, "test", (node,)))
+    context = IntegrityContext(graph, OutboxSnapshot.from_records((record,)), "cfg-final")
+    findings = evaluate_context(context)
+    expect(
+        any(item.reason_code == "terminal_postcondition_mismatch" for item in findings),
+        "terminal postcondition mismatch was not reported",
+    )
+
+    disabled = ChainNode.from_mapping({**node.to_dict(), "chain": "off"})
+    disabled_graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-ok", SnapshotCoverage.CHAIN, "test", (disabled,)))
+    disabled_findings = evaluate_context(IntegrityContext(
+        disabled_graph, OutboxSnapshot.from_records((record,)), "cfg-final",
+    ))
+    expect(
+        not any(item.reason_code == "terminal_postcondition_mismatch" for item in disabled_findings),
+        "valid terminal postcondition was rejected",
+    )
+
+
 def test_chain_integrity_context_keeps_outbox_evidence_separate():
     """Task graph truth and lifecycle intent evidence retain separate provenance."""
     from nautical_core.chain_graph import ChainGraph
@@ -32531,6 +32594,7 @@ TESTS = [
     test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_invariant_registry_is_pure_and_deterministic,
+    test_chain_integrity_finalization_evidence_matches_parent_postcondition,
     test_chain_integrity_context_keeps_outbox_evidence_separate,
     test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs,
     test_chain_integrity_application_stays_on_typed_mutation_boundary,

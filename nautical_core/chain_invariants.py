@@ -544,6 +544,34 @@ DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("carry.temporal", SnapshotCoverage.CANDIDATES, _temporal_rule),
 )
 
+# Explicit ownership for checks that historically lived in operator tools.
+# This is intentionally data, not executable coupling: front ends may render
+# these owners, but the registry remains the only source of invariant logic.
+INVARIANT_OWNERSHIP: dict[str, tuple[str, ...]] = {
+    "doctor.chain_identity": ("identity",),
+    "doctor.chain_slots": ("slot.duplicate_occupant", "slot.missing_link"),
+    "doctor.chain_links": ("edge", "edge.topology"),
+    "chain_repair.link_inference": ("slot.missing_link", "edge"),
+    "native_until.predecessor_and_order": ("carry.temporal",),
+    "reconcile.lifecycle_recovery": ("lifecycle", "terminal", "continuity.child_temporal_order"),
+    "reconcile.recurrence_identity": ("identity.recurrence",),
+}
+
+PRESENTATION_ONLY_CHECKS: frozenset[str] = frozenset({
+    "doctor.installation",
+    "doctor.configuration",
+    "doctor.dependencies",
+    "reconcile.rendering",
+})
+
+
+def validate_ownership_map() -> None:
+    """Fail fast if a front-end ownership entry references no registry rule."""
+    known = {rule.invariant_id for rule in DEFAULT_INVARIANTS}
+    missing = sorted({owner for owners in INVARIANT_OWNERSHIP.values() for owner in owners} - known)
+    if missing:
+        raise RuntimeError("invariant ownership map references unknown rules: " + ", ".join(missing))
+
 
 def evaluate_invariants(
     graph: ChainGraph,

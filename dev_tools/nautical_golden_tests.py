@@ -1700,6 +1700,19 @@ def test_chain_graph_covers_required_structural_shapes():
     )
 
 
+def test_invariant_ownership_map_covers_operator_checks():
+    """Doctor, repair, native-until, and reconcile checks have registry owners."""
+    from nautical_core.chain_invariants import DEFAULT_INVARIANTS, INVARIANT_OWNERSHIP, validate_ownership_map
+
+    validate_ownership_map()
+    known = {rule.invariant_id for rule in DEFAULT_INVARIANTS}
+    expect(INVARIANT_OWNERSHIP, "invariant ownership map is empty")
+    expect(
+        all(owner in known for owners in INVARIANT_OWNERSHIP.values() for owner in owners),
+        "operator check ownership references an unknown invariant",
+    )
+
+
 def test_chain_invariant_registry_is_pure_and_deterministic():
     """Identity, slot, and edge rules produce stable typed findings."""
     from nautical_core.chain_graph import ChainGraph
@@ -32757,6 +32770,7 @@ TESTS = [
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_graph_exposes_lifecycle_and_topology_queries,
     test_chain_graph_covers_required_structural_shapes,
+    test_invariant_ownership_map_covers_operator_checks,
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_finalization_evidence_matches_parent_postcondition,
     test_chain_integrity_context_keeps_outbox_evidence_separate,

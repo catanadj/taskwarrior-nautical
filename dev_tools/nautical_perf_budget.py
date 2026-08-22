@@ -1716,7 +1716,9 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=reconcile_env, timeout=30.0)
             if proc.returncode != 0:
                 raise RuntimeError(f"reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
-            json.loads(proc.stdout or "{}")
+            report = json.loads(proc.stdout or "{}")
+            if not isinstance(report, dict) or int(report.get("export_calls", 0)) != 1:
+                raise RuntimeError("healthy reconcile workflow did not use exactly one broad snapshot")
             reconcile_samples.append(time.perf_counter() - started)
         results["workflow_reconcile"] = _measure_workflow(
             "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
@@ -1742,6 +1744,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 raise RuntimeError("empty reconcile workflow returned invalid JSON") from exc
             if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
                 raise RuntimeError("empty reconcile workflow returned an invalid report")
+            if int(report.get("export_calls", 0)) != 1:
+                raise RuntimeError("empty reconcile workflow did not use exactly one broad snapshot")
             empty_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_empty"] = _measure_workflow(
             "workflow_reconcile_empty",

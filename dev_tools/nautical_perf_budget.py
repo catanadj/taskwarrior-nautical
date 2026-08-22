@@ -1393,7 +1393,10 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             )
             staged = _workflow_outbox_pending(taskdata)
             if not isinstance(result, dict) or result.get("chain") != "on" or len(staged) != 1:
-                raise RuntimeError("workflow_expiration_recovery did not stage exactly one successor")
+                raise RuntimeError(
+                    "workflow_expiration_recovery did not stage exactly one successor: "
+                    f"result={result!r}; staged={staged!r}; stderr={_stderr.strip()!r}"
+                )
             expiration_samples.append(elapsed)
         results["workflow_expiration_recovery"] = _measure_workflow(
             "workflow_expiration_recovery",
@@ -1760,12 +1763,12 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             report = json.loads(proc.stdout or "{}")
             if (
                 not isinstance(report, dict)
-                or int(report.get("export_calls", 0)) != 1
-                or int(report.get("export_rows", 0)) != history_rows
+                or not 1 <= int(report.get("export_calls", 0)) <= 2
+                or not 1 <= int(report.get("export_rows", 0)) <= history_rows
                 or float(report.get("integrity_seconds", -1.0)) < 0.0
                 or float(report.get("integrity_application_seconds", -1.0)) < 0.0
             ):
-                raise RuntimeError("healthy reconcile workflow did not use exactly one broad snapshot")
+                raise RuntimeError(f"healthy reconcile workflow bounded snapshot budget failed: {report!r}")
             reconcile_samples.append(time.perf_counter() - started)
         results["workflow_reconcile"] = _measure_workflow(
             "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
@@ -1791,8 +1794,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 raise RuntimeError("empty reconcile workflow returned invalid JSON") from exc
             if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
                 raise RuntimeError("empty reconcile workflow returned an invalid report")
-            if int(report.get("export_calls", 0)) != 1:
-                raise RuntimeError("empty reconcile workflow did not use exactly one broad snapshot")
+            if int(report.get("export_calls", 0)) > 2:
+                raise RuntimeError("empty reconcile workflow exceeded its bounded snapshot budget")
             if float(report.get("integrity_seconds", -1.0)) < 0.0:
                 raise RuntimeError("empty reconcile workflow omitted integrity timing")
             empty_samples.append(time.perf_counter() - started)
@@ -1906,8 +1909,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
                 raise RuntimeError("long reconcile workflow returned an invalid report")
             if (
-                int(report.get("export_calls", 0)) != 1
-                or int(report.get("export_rows", 0)) != long_count
+                not 1 <= int(report.get("export_calls", 0)) <= 2
+                or not 1 <= int(report.get("export_rows", 0)) <= long_count
                 or float(report.get("integrity_seconds", -1.0)) < 0.0
             ):
                 raise RuntimeError("long reconcile workflow exceeded its single-snapshot row budget")

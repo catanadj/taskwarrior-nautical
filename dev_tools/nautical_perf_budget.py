@@ -1858,6 +1858,63 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             long_samples,
             float(budgets.get("workflow_reconcile_long_history", budgets.get("workflow_reconcile", 3.0))),
         )
+
+        corrupt_data = root / "reconcile-corrupted"
+        corrupt_data.mkdir()
+        corrupt_env = dict(base_env, TASKDATA=str(corrupt_data))
+        corrupt_tasks = []
+        corrupt_count = max(1, int(workflow_cfg.get("reconcile_corrupted_chains", 16)))
+        for index in range(corrupt_count):
+            chain_id = f"reconcile-corrupt-{index}"
+            first_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-corrupt/{index}/first"))
+            second_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-corrupt/{index}/second"))
+            common = {
+                "status": "pending",
+                "description": f"Corrupted reconcile benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": chain_id,
+                "link": 1,
+                "due": "20260101T090000Z",
+            }
+            corrupt_tasks.extend([
+                dict(common, uuid=first_uuid, nextLink=second_uuid[:8]),
+                dict(common, uuid=second_uuid, prevLink=first_uuid[:8]),
+            ])
+        corrupt_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in corrupt_tasks),
+            text=True,
+            capture_output=True,
+            env=corrupt_env,
+            timeout=30.0,
+        )
+        if corrupt_import.returncode != 0:
+            raise RuntimeError(
+                "corrupted reconcile fixture import failed: "
+                f"{(corrupt_import.stderr or corrupt_import.stdout or '').strip()}"
+            )
+        corrupt_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=corrupt_env, timeout=30.0)
+            if proc.returncode not in (0, 1, 2):
+                raise RuntimeError(
+                    f"corrupted reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("corrupted reconcile workflow returned invalid JSON") from exc
+            audit = report.get("integrity_audit") if isinstance(report, dict) else None
+            if not isinstance(audit, dict) or not audit.get("findings"):
+                raise RuntimeError("corrupted reconcile workflow hid its integrity findings")
+            corrupt_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_corrupted"] = _measure_workflow(
+            "workflow_reconcile_corrupted",
+            corrupt_samples,
+            float(budgets.get("workflow_reconcile_corrupted", budgets.get("workflow_reconcile", 3.0))),
+        )
         return results
 
 

@@ -29329,6 +29329,8 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
             env=env,
             timeout=15.0,
         )
+
+
         expect(imported_delayed.returncode == 0, f"delayed fixture import failed: {imported_delayed.stderr!r}")
 
         recovered = subprocess.run(
@@ -29380,6 +29382,62 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         expect(
             json.loads(repeated_delayed.stdout).get("candidates") == 0,
             f"delayed recovery should be idempotent: {repeated_delayed.stdout!r}",
+        )
+
+
+def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
+    """A duplicate chain slot is refused by the real apply boundary."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return
+    with tempfile.TemporaryDirectory(prefix="nautical-duplicate-slot-") as td:
+        root = Path(td)
+        data_dir = root / "data"
+        data_dir.mkdir()
+        taskrc = root / "taskrc"
+        taskrc.write_text(
+            "\n".join([
+                f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
+                "uda.cp.type=string", "uda.chain.type=string", "uda.chainID.type=string",
+                "uda.link.type=numeric", "uda.prevLink.type=string", "uda.nextLink.type=string",
+                "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
+            ]) + "\n", encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update({
+            "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
+            "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
+            "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
+        })
+        rows = [{
+            "uuid": uuid, "status": "deleted", "description": "duplicate slot",
+            "entry": "20260820T080000Z", "modified": "20260820T100000Z",
+            "end": "20260820T100000Z", "due": "20260820T090000Z",
+            "until": "20260820T100000Z", "cp": "1d", "chain": "on",
+            "chainID": "duplicate-slot", "link": 1,
+        } for uuid in (
+            "11111111-0000-0000-0000-000000000001",
+            "22222222-0000-0000-0000-000000000002",
+        )]
+        imported = subprocess.run(
+            [task_bin, "rc.hooks=off", "import"],
+            input="".join(json.dumps(row) + "\n" for row in rows),
+            text=True, capture_output=True, env=env, timeout=15.0,
+        )
+        expect(imported.returncode == 0, f"duplicate fixture import failed: {imported.stderr!r}")
+        applied = subprocess.run(
+            [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+             "--apply", "--task-bin", task_bin, "--json"],
+            text=True, capture_output=True, env=env, timeout=20.0,
+        )
+        expect(applied.returncode == 1, f"duplicate slot unexpectedly applied: {applied.stdout!r}")
+        payload = json.loads(applied.stdout)
+        expect(payload.get("spawn") == 0 and payload.get("applied") == [], f"duplicate slot mutated: {payload!r}")
+        audit = payload.get("integrity_audit") or {}
+        expect(audit.get("status") == "manual_review", f"duplicate slot was not manual review: {payload!r}")
+        expect(
+            any(finding.get("invariant_id") == "slot.duplicate_occupant" for finding in audit.get("findings", ())),
+            f"duplicate-slot finding was not reported: {payload!r}",
         )
 
 
@@ -32776,6 +32834,7 @@ TESTS = [
     test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_expired_pending_child_is_resumable_partial,
     test_reconcile_expiration_real_taskwarrior_round_trip,
+    test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,

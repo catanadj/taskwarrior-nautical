@@ -1644,6 +1644,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
         "status": "pending",
         "chainID": "invariant-chain",
         "link": 2,
+        "anchor": "w:mon",
         "prevLink": "aaaaaaaa",
     }
     from nautical_core.chain_integrity_models import ChainNode
@@ -1728,6 +1729,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
                 "chain": "on",
                 "chainID": "continuity-chain",
                 "link": 1,
+                "anchor": "w:mon",
                 "due": "20260822T120000Z",
                 "nextLink": "13131313",
             }),
@@ -1746,6 +1748,10 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(
         ("continuity.child_temporal_order", "child_not_after_parent") in continuity_ids,
         "backward child target was not reported",
+    )
+    expect(
+        ("continuity.child_recurrence_identity", "child_recurrence_identity_mismatch") in continuity_ids,
+        "child recurrence identity loss was not reported",
     )
 
 

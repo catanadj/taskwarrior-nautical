@@ -317,21 +317,36 @@ def _child_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
         child_raw = child.field("due") or child.field("scheduled")
         parent_dt = _canonical_timestamp(parent_raw)
         child_dt = _canonical_timestamp(child_raw)
-        if parent_dt is None or child_dt is None or child_dt > parent_dt:
-            continue
-        findings.append(IntegrityFinding(
-            "continuity.child_temporal_order",
-            FindingStatus.MANUAL_REVIEW,
-            FindingSeverity.ERROR,
-            graph.snapshot.snapshot_id,
-            parent.chain_id,
-            (parent.task_uuid, child.task_uuid),
-            "child_not_after_parent",
-            "Resolved child recurrence target is not later than its parent target.",
-            (("parent_target", str(parent_raw)), ("child_target", str(child_raw))),
-            (("child_target", "after parent_target"),),
-            (("parent_link", parent.link), ("child_link", child.link), ("coverage", graph.snapshot.coverage.value)),
-        ))
+        if parent_dt is not None and child_dt is not None and child_dt <= parent_dt:
+            findings.append(IntegrityFinding(
+                    "continuity.child_temporal_order",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    graph.snapshot.snapshot_id,
+                    parent.chain_id,
+                    (parent.task_uuid, child.task_uuid),
+                    "child_not_after_parent",
+                    "Resolved child recurrence target is not later than its parent target.",
+                    (("parent_target", str(parent_raw)), ("child_target", str(child_raw))),
+                    (("child_target", "after parent_target"),),
+                    (("parent_link", parent.link), ("child_link", child.link), ("coverage", graph.snapshot.coverage.value)),
+            ))
+        parent_kind = next((field for field in ("anchor", "anchor_file", "cp") if str(parent.field(field, "") or "").strip()), "")
+        child_kind = next((field for field in ("anchor", "anchor_file", "cp") if str(child.field(field, "") or "").strip()), "")
+        if parent_kind and parent_kind != child_kind:
+            findings.append(IntegrityFinding(
+                "continuity.child_recurrence_identity",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                graph.snapshot.snapshot_id,
+                parent.chain_id,
+                (parent.task_uuid, child.task_uuid),
+                "child_recurrence_identity_mismatch",
+                "Resolved child does not retain the parent recurrence kind.",
+                (("parent_kind", parent_kind), ("child_kind", child_kind or "<missing>")),
+                (("child_kind", parent_kind),),
+                (("parent_link", parent.link), ("child_link", child.link)),
+            ))
     return tuple(findings)
 
 

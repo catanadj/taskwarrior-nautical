@@ -83,6 +83,13 @@ class IntegrityApplicationResult:
         object.__setattr__(self, "kind", MutationOutcomeKind(self.kind))
         object.__setattr__(self, "reason", str(self.reason or "").strip())
 
+    @property
+    def stale(self) -> bool:
+        """Whether the plan's guard became stale rather than malformed."""
+        return self.kind is MutationOutcomeKind.CONFLICT and (
+            self.reason.startswith("guard ") or "mutation epoch changed" in self.reason
+        )
+
 
 class IntegrityApplicationService:
     """Apply only supported typed operations through the mutation gateway."""

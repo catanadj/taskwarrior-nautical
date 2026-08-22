@@ -2089,7 +2089,7 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
     """Application delegates metadata plans and refuses unregistered operation kinds."""
     from types import SimpleNamespace
 
-    from nautical_core.chain_integrity_application import IntegrityApplicationService
+    from nautical_core.chain_integrity_application import IntegrityApplicationResult, IntegrityApplicationService
     from nautical_core.chain_integrity_models import (
         IntegrityOperation,
         IntegrityRepairPlan,
@@ -2117,6 +2117,10 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
         lambda _operation: SimpleNamespace(),
     )
     expect(results[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unregistered mutation was applied")
+    stale = IntegrityApplicationResult(
+        "stale-plan", "stale-op", MutationOutcomeKind.CONFLICT, "guard modified changed"
+    )
+    expect(stale.stale, "guard conflict was not classified as stale")
 
     unsafe_plan = IntegrityRepairPlan(
         "unsafe-application-plan", "application-snapshot", "application-chain", RepairSafety.MANUAL,

@@ -182,6 +182,7 @@ class ChainSnapshotService:
         chain reads also must not silently return rows from another chain.
         """
         seen: set[str] = set()
+        allowed_statuses = frozenset(request.statuses)
         for row in snapshot.rows:
             uuid_value = str(row.get("uuid") or "").strip().lower()
             if not uuid_value:
@@ -189,6 +190,11 @@ class ChainSnapshotService:
             if uuid_value in seen:
                 return f"chain export contains duplicate full UUID {uuid_value}"
             seen.add(uuid_value)
+            status = str(row.get("status") or "").strip().lower()
+            if not status:
+                return f"chain export row {uuid_value} has no status"
+            if status not in allowed_statuses:
+                return f"chain export row {uuid_value} has status {status!r} outside requested scope"
             if request.kind is IntegritySnapshotKind.CHAIN:
                 chain_id = str(row.get("chainID") or row.get("chain_id") or "").strip()
                 if chain_id != request.chain_id:

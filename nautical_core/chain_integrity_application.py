@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from .chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind
+from .chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
 from .integration_models import (
     MetadataRepairPayload,
     MutationOperation,
@@ -15,7 +15,9 @@ from .integration_models import (
 )
 
 
-class _MutationExecutor(Protocol):
+class IntegrityMutationExecutor(Protocol):
+    """Typed mutation-capable boundary owned by the integration layer."""
+
     def repair_metadata(self, request: MutationRequest) -> MutationOutcome: ...
 
 
@@ -88,12 +90,20 @@ class IntegrityApplicationService:
     def apply(
         self,
         plan: IntegrityRepairPlan,
-        executor: _MutationExecutor,
+        executor: IntegrityMutationExecutor,
         request_factory: IntegrityMutationRequestFactory,
         outbox: IntegrityOutboxSink | None = None,
     ) -> tuple[IntegrityApplicationResult, ...]:
         if not isinstance(plan, IntegrityRepairPlan):
             raise TypeError("integrity application requires an IntegrityRepairPlan")
+        invalid = self.validate_plan(plan)
+        if invalid:
+            return tuple(IntegrityApplicationResult(
+                plan.plan_id,
+                operation.operation_id,
+                MutationOutcomeKind.MANUAL_REVIEW,
+                invalid,
+            ) for operation in plan.operations)
         results: list[IntegrityApplicationResult] = []
         if len(plan.operations) > 1:
             if outbox is None:
@@ -146,6 +156,15 @@ class IntegrityApplicationService:
         return tuple(results)
 
     @staticmethod
+    def validate_plan(plan: IntegrityRepairPlan) -> str:
+        """Return an actionable refusal for a plan outside the apply contract."""
+        if plan.safety is not RepairSafety.SAFE:
+            return "integrity application accepts only SAFE repair plans"
+        if not plan.configuration_fingerprint:
+            return "integrity repair plan has no configuration fingerprint"
+        return ""
+
+    @staticmethod
     def _validate_request(operation: IntegrityOperation, request: MutationRequest) -> None:
         if not isinstance(request, MutationRequest):
             raise TypeError("integrity request factory returned an untyped request")
@@ -161,6 +180,7 @@ class IntegrityApplicationService:
 
 __all__ = [
     "IntegrityApplicationResult",
+    "IntegrityMutationExecutor",
     "IntegrityApplicationService",
     "IntegrityMutationRequestFactory",
     "IntegrityOutboxPersistResult",

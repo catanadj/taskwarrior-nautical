@@ -2118,6 +2118,21 @@ def test_chain_integrity_application_stays_on_typed_mutation_boundary():
     )
     expect(results[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unregistered mutation was applied")
 
+    unsafe_plan = IntegrityRepairPlan(
+        "unsafe-application-plan", "application-snapshot", "application-chain", RepairSafety.MANUAL,
+        "manual_only", "must not be applied automatically", (operation,), "cfg-application",
+    )
+    unsafe = IntegrityApplicationService().apply(
+        unsafe_plan,
+        SimpleNamespace(repair_metadata=lambda _request: (_ for _ in ()).throw(AssertionError("mutated unsafe plan"))),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(
+        unsafe[0].kind is MutationOutcomeKind.MANUAL_REVIEW
+        and "SAFE" in unsafe[0].reason,
+        "unsafe integrity plan crossed the application boundary",
+    )
+
     metadata_operation = IntegrityOperation(
         "metadata-op",
         RepairOperationKind.METADATA_REPAIR,

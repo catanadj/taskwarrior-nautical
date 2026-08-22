@@ -241,6 +241,35 @@ def _lifecycle_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
             continue
         if graph.reference(node.task_uuid, "nextLink").state is not ReferenceState.ABSENT:
             continue
+        if status == "deleted":
+            until = _canonical_timestamp(node.field("until"))
+            ended = _canonical_timestamp(node.field("end"))
+            if until is None or ended is None:
+                findings.append(_finding(
+                    graph,
+                    "lifecycle.deleted_disposition",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    node,
+                    "deleted_expiration_evidence_unavailable",
+                    "Deleted chain-on tip lacks reliable expiration evidence.",
+                    observed=(("until", node.field("until")), ("end", node.field("end"))),
+                    expected=(("until", "parseable"), ("end", "parseable")),
+                ))
+                continue
+            if ended < until:
+                findings.append(_finding(
+                    graph,
+                    "lifecycle.deleted_disposition",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    node,
+                    "deleted_before_expiration",
+                    "Deleted chain-on tip ended before native until and must not auto-spawn.",
+                    observed=(("until", node.field("until")), ("end", node.field("end"))),
+                    expected=(("end", "at or after until"),),
+                ))
+                continue
         if node.field("chainMax") not in (None, "", "null") or node.field("chainUntil") not in (None, "", "null"):
             continue
         findings.append(_finding(

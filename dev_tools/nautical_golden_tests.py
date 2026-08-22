@@ -1721,6 +1721,21 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
         "malformed chainUntil incorrectly justified terminal recovery",
     )
 
+    deleted = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-deleted", SnapshotCoverage.CANDIDATES, "test", (ChainNode.from_mapping({
+            "uuid": "abababab-0000-0000-0000-000000000931",
+            "status": "deleted",
+            "chain": "on",
+            "chainID": "deleted-chain",
+            "link": 3,
+        }),),
+    ))
+    deleted_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(deleted)}
+    expect(
+        ("lifecycle.deleted_disposition", "deleted_expiration_evidence_unavailable") in deleted_ids,
+        "deleted tip without expiration evidence was treated as a spawn candidate",
+    )
+
     backward = ChainGraph.from_snapshot(ChainSnapshot(
         "invariant-continuity", SnapshotCoverage.CANDIDATES, "test", (
             ChainNode.from_mapping({

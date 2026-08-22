@@ -257,14 +257,6 @@ def _read_value(read: Any, subject: str) -> Any | None:
     raise _PlanReadUnavailable(f"{subject} returned an invalid typed result")
 
 
-def _load_reconcile_runtime(task_bin: str | None = None) -> Any:
-    """Load the public core runtime used by lifecycle."""
-    del task_bin
-    import nautical_core as core
-
-    return core
-
-
 def _configuration_drift_reason(hook: Any) -> str:
     """Compatibility string for callers; failures are never treated as valid."""
     check = _configuration_verification(hook)
@@ -1635,10 +1627,9 @@ def main(
                 _unit_of_work=_unit_of_work,
             )
 
-    try:
-        hook = _load_reconcile_runtime(args.task_bin)
-    except Exception as exc:
-        return _startup_failure(args, "hook_load", exc)
+    # Reconcile is an operator front end over the public core package.  It
+    # must not dynamically load or expose a hook-runtime seam.
+    hook = nautical_core_package
     try:
         core = _runtime_core(hook)
         fmt_dt_local = getattr(core, "fmt_dt_local", None)

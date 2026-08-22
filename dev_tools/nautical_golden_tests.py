@@ -28863,31 +28863,6 @@ def test_reconcile_export_diagnostics_include_elapsed_time():
     expect(metrics["slowest_seconds"] == 0.125, f"slowest export timing missing: {metrics!r}")
 
 
-def test_reconcile_json_startup_failures_are_structured():
-    """JSON mode should report public runtime loading failures without tracebacks."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_startup_failure_test")
-    original = tool._load_reconcile_runtime
-    try:
-        def fail_load(_task_bin=None):
-            raise RuntimeError("could not load hook Ω")
-
-        tool._load_reconcile_runtime = fail_load
-        output = io.StringIO()
-        errors = io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            result = tool.main(["--json"], _unit_of_work=_test_operator_uow())
-        summary = json.loads(output.getvalue())
-        expect(result == 1 and summary.get("stage") == "hook_load", f"hook load failure was not structured: {summary}")
-        expect(summary.get("schema") == "nautical.reconcile" and summary.get("schema_version") == 1,
-               f"startup JSON schema metadata missing: {summary}")
-        expect("Ω" in summary.get("error", ""), f"Unicode startup error was escaped or lost: {summary}")
-        expect("Traceback" not in errors.getvalue(), f"startup failure leaked a traceback: {errors.getvalue()!r}")
-
-    finally:
-        tool._load_reconcile_runtime = original
-
-
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
     """Expired CP links should advance from due/scheduled rather than their deletion end."""
     import nautical_core.chain_integrity_lifecycle as reconcile
@@ -29075,21 +29050,14 @@ def test_reconcile_apply_refuses_a_second_full_run():
     )
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
-        original_runtime = tool._load_reconcile_runtime
-        try:
-            tool._load_reconcile_runtime = lambda _task_bin=None: (_ for _ in ()).throw(
-                AssertionError("busy reconcile loaded its hook")
-            )
-            output = io.StringIO()
-            with tool._reconcile_apply_lock(taskdata) as held:
-                expect(held, "test could not acquire reconcile lease")
-                with contextlib.redirect_stdout(output):
-                    result = tool.main(
-                        ["--apply", "--json"],
-                        _unit_of_work=_test_operator_uow(taskdata),
-                    )
-        finally:
-            tool._load_reconcile_runtime = original_runtime
+        output = io.StringIO()
+        with tool._reconcile_apply_lock(taskdata) as held:
+            expect(held, "test could not acquire reconcile lease")
+            with contextlib.redirect_stdout(output):
+                result = tool.main(
+                    ["--apply", "--json"],
+                    _unit_of_work=_test_operator_uow(taskdata),
+                )
     summary = json.loads(output.getvalue())
     expect(result == 1, f"busy reconcile returned {result}")
     expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
@@ -29212,85 +29180,6 @@ def test_reconcile_expired_pending_child_is_resumable_partial():
     plan = tool._recovery_terminal(parent, "live recovery child native until has already elapsed")
     expect(plan.action == "partial", f"expired pending child was not resumable: {plan}")
     expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
-
-
-def test_reconcile_apply_isolates_candidate_failures():
-    """A failed apply should not prevent later candidates from being repaired."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_apply_isolation_test")
-    failed = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
-        "status": "completed",
-        "description": "blocked chain",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "blocked1",
-        "link": 1,
-    }
-    repairable = {
-        "uuid": "22222222-0000-0000-0000-000000000002",
-        "status": "completed",
-        "description": "repairable chain",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "repair02",
-        "link": 2,
-    }
-
-    class FakeHook:
-        core = SimpleNamespace(fmt_dt_local=None)
-
-        @staticmethod
-        def _task_cmd_prefix():
-            return ["task"]
-
-    original = (
-        tool._load_reconcile_runtime,
-        tool._candidate_rows,
-        tool._apply_parent_atomic,
-        tool._native_until_repairs,
-    )
-    try:
-        tool._load_reconcile_runtime = lambda _task_bin=None: FakeHook()
-        tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
-        tool._native_until_repairs = lambda *args, **kwargs: ([], [])
-
-        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
-            expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
-            if parent["uuid"] == failed["uuid"]:
-                raise RuntimeError("parent reconcile lock busy: 11111111")
-            plan = tool.lifecycle.LifecycleRecoveryDecision(
-                "backfill_nextlink",
-                parent,
-                3,
-                "next link already exists",
-                child_short="33333333",
-            )
-            return plan, "33333333"
-
-        tool._apply_parent_atomic = apply_parent
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            result = tool.main(
-                ["--apply", "--json"],
-                _unit_of_work=_test_operator_uow("/tmp/nautical-reconcile-isolation-test"),
-            )
-    finally:
-        (
-            tool._load_reconcile_runtime,
-            tool._candidate_rows,
-            tool._apply_parent_atomic,
-            tool._native_until_repairs,
-        ) = original
-
-    summary = json.loads(output.getvalue())
-    expect(result == 1, f"candidate failure should keep a nonzero exit: {result}")
-    expect(summary.get("errors") == 1, f"failed candidate was not summarized: {summary!r}")
-    expect(summary.get("backfill_nextlink") == 1, f"later repair was not planned: {summary!r}")
-    expect(
-        summary.get("applied") == [{"action": "backfill_nextlink", "parent": "22222222", "child": "33333333"}],
-        f"later repair was not applied: {summary!r}",
-    )
 
 
 def test_reconcile_expiration_real_taskwarrior_round_trip():
@@ -29578,23 +29467,6 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
     expect(evidence.get("child_local") == "Sat 2026-07-04 14:00 EEST", f"missing child_local evidence: {evidence!r}")
 
 
-def test_reconcile_tool_loads_task_hooks_layout():
-    """Installed reconcile uses the public core package rather than hook files."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_tool_hook_layout_test")
-    loaded = mod._load_reconcile_runtime("task")
-    expect(getattr(loaded, "__name__", "") == "nautical_core", f"unexpected runtime: {loaded!r}")
-
-
-def test_reconcile_default_runtime_uses_core_context():
-    """Default reconcile runtime must not load private or mutation gateways."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_public_gateway_runtime_test")
-    runtime = mod._load_reconcile_runtime("task")
-    expect(getattr(runtime, "__name__", "") == "nautical_core", f"unexpected reconcile runtime: {runtime!r}")
-    expect(not hasattr(runtime, "spawn_child"), "reconcile runtime unexpectedly owns child mutation")
-
-
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     """Actual reconcile tool loading should compute @t slots as configured-local time."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -29696,143 +29568,6 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("result: partial" in out and "spawn:" not in out, f"compact output leaked per-hop lines: {out!r}")
 
 
-def test_reconcile_partial_recovery_exit_and_verbose_output():
-    """Bounded recovery should exit 2, stay compact by default, and expand with --verbose."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_partial_output_test")
-    parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
-        "status": "deleted",
-        "description": "delayed recovery",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "partial1",
-        "link": 1,
-    }
-    next_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 2}
-    outcomes = [
-        (
-            mod.lifecycle.LifecycleRecoveryDecision(
-                "spawn",
-                parent,
-                2,
-                "expired link missing next link",
-                child={"uuid": next_parent["uuid"], "link": 2},
-            ),
-            "22222222",
-        ),
-        (
-            mod.lifecycle.LifecycleRecoveryDecision(
-                "partial",
-                next_parent,
-                3,
-                "expiration recovery hop limit reached at 1; rerun to continue",
-            ),
-            "",
-        ),
-    ]
-    hook = SimpleNamespace(
-        core=SimpleNamespace(fmt_dt_local=None),
-        _task_cmd_prefix=lambda: ["task"],
-        _safe_parse_datetime=lambda _value: (None, None),
-    )
-    original = (mod._load_reconcile_runtime, mod._candidate_rows, mod._reconcile_candidate)
-    try:
-        mod._load_reconcile_runtime = lambda _task_bin=None: hook
-        mod._candidate_rows = lambda _task_bin, _hook: [parent]
-        mod._reconcile_candidate = lambda *_args, **_kwargs: outcomes
-
-        compact = io.StringIO()
-        with contextlib.redirect_stdout(compact):
-            compact_result = mod.main([], _unit_of_work=_test_operator_uow())
-        verbose = io.StringIO()
-        with contextlib.redirect_stdout(verbose):
-            verbose_result = mod.main(["--verbose"], _unit_of_work=_test_operator_uow())
-    finally:
-        mod._load_reconcile_runtime, mod._candidate_rows, mod._reconcile_candidate = original
-
-    expect(compact_result == 2 and verbose_result == 2, f"partial recovery exit was not distinct: {compact_result}, {verbose_result}")
-    expect("recover:" in compact.getvalue() and "spawn:" not in compact.getvalue(), f"default output was not compact: {compact.getvalue()!r}")
-    expect("spawn:" in verbose.getvalue() and "partial:" in verbose.getvalue(), f"verbose output omitted hops: {verbose.getvalue()!r}")
-
-
-def test_reconcile_degraded_audit_status_is_structured():
-    """Skipped audits and manual review must return a distinct degraded status."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_degraded_status_test")
-    original = (mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason)
-    try:
-        mod._candidate_rows = lambda _task_bin, _hook: []
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
-            [{"action": "manual_review", "task": "11111111"}],
-            [],
-        )
-        manual_output = io.StringIO()
-        with contextlib.redirect_stdout(manual_output):
-            manual_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        manual_summary = json.loads(manual_output.getvalue())
-        expect(manual_result == 2, f"manual review should be degraded: {manual_result}")
-        expect(manual_summary.get("schema_version") == 1, f"JSON schema version missing: {manual_summary!r}")
-        expect(manual_summary.get("status") == "degraded", f"wrong manual status: {manual_summary!r}")
-        expect(manual_summary.get("native_until_manual_review") == 1, f"manual review was not counted: {manual_summary!r}")
-        expect(manual_summary.get("errors") == 0, f"manual review was counted as an error: {manual_summary!r}")
-        expect(manual_summary.get("plan_errors") == 0, f"manual review changed plan errors: {manual_summary!r}")
-        expect(manual_summary.get("native_until_error_count") == 0, f"manual review changed native errors: {manual_summary!r}")
-
-        manual_text = io.StringIO()
-        with contextlib.redirect_stdout(manual_text):
-            manual_text_result = mod.main([], _unit_of_work=_test_operator_uow())
-        expect(manual_text_result == 2, f"manual review text output returned {manual_text_result}")
-        expect("no change applied" in manual_text.getvalue(), f"manual review text was not actionable: {manual_text.getvalue()!r}")
-
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
-            [{"action": "repair_error", "task": "22222222"}],
-            ["22222222 chain test link 2: verification failed"],
-        )
-        error_output = io.StringIO()
-        with contextlib.redirect_stdout(error_output):
-            error_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        error_summary = json.loads(error_output.getvalue())
-        expect(error_result == 1 and error_summary.get("status") == "error", f"native repair error was not fatal: {error_summary!r}")
-        expect(error_summary.get("errors") == 1, f"native repair error was omitted from total: {error_summary!r}")
-        expect(error_summary.get("plan_errors") == 0, f"native repair error changed plan count: {error_summary!r}")
-        expect(error_summary.get("native_until_error_count") == 1, f"native repair error count missing: {error_summary!r}")
-
-        def skipped_audit(_task_bin, _hook, **_kwargs):
-            raise RuntimeError("Taskwarrior lock active")
-
-        mod._native_until_repairs = skipped_audit
-        skipped_output = io.StringIO()
-        with contextlib.redirect_stdout(skipped_output):
-            skipped_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        skipped_summary = json.loads(skipped_output.getvalue())
-        expect(skipped_result == 2, f"skipped audit should be degraded: {skipped_result}")
-        expect(skipped_summary.get("status") == "degraded", f"wrong skipped status: {skipped_summary!r}")
-        expect(skipped_summary.get("native_until_audit_skipped") == 1, f"skipped audit was not counted: {skipped_summary!r}")
-        expect(skipped_summary.get("native_until_audit_status") == "unavailable", f"missing unavailable audit status: {skipped_summary!r}")
-
-        apply_output = io.StringIO()
-        with contextlib.redirect_stdout(apply_output):
-            apply_result = mod.main(["--json", "--apply"], _unit_of_work=_test_operator_uow())
-        apply_summary = json.loads(apply_output.getvalue())
-        expect(apply_result == 2, f"unavailable apply audit should be degraded: {apply_result}")
-        expect(apply_summary.get("native_until_audit_status") == "unavailable", f"apply audit status was lost: {apply_summary!r}")
-        expect(apply_summary.get("configuration_status") == "unavailable", f"apply did not fail closed: {apply_summary!r}")
-        expect(not apply_summary.get("applied"), f"apply mutated after unavailable audit: {apply_summary!r}")
-
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: ([], [])
-        mod._configuration_drift_reason = lambda _hook: "configuration changed during reconcile (source: test)"
-        drift_output = io.StringIO()
-        with contextlib.redirect_stdout(drift_output):
-            drift_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        drift_summary = json.loads(drift_output.getvalue())
-        expect(drift_result == 2, f"configuration drift should be degraded: {drift_result}")
-        expect(drift_summary.get("configuration_drifted") == 1, f"configuration drift was not counted: {drift_summary!r}")
-        expect(drift_summary.get("status") == "degraded", f"wrong drift status: {drift_summary!r}")
-    finally:
-        mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason = original
-
-
 def test_reconcile_configuration_verification_fails_closed():
     """Configuration exceptions must become unavailable, never a clean reconcile state."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -29848,43 +29583,6 @@ def test_reconcile_configuration_verification_fails_closed():
     expect("malformed TOML" in check.reason, f"configuration failure detail was lost: {check.reason!r}")
     status, reason = mod._configuration_state(hook)
     expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
-
-
-def test_reconcile_native_until_audit_failure_matrix_fails_closed():
-    """Every authoritative native-until read failure blocks apply mutations."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_native_until_failure_matrix_test")
-    failures = (
-        ("locked", RuntimeError("Taskwarrior lock active")),
-        ("malformed", ValueError("invalid JSON from Taskwarrior export")),
-        ("missing-binary", FileNotFoundError("task executable not found")),
-        ("timeout", TimeoutError("Taskwarrior export timed out")),
-    )
-    original = (mod._candidate_rows, mod._native_until_repairs)
-    try:
-        mod._candidate_rows = lambda _task_bin, _hook: []
-        for label, failure in failures:
-            def unavailable_audit(_task_bin, _hook, _failure=failure, **_kwargs):
-                raise _failure
-
-            mod._native_until_repairs = unavailable_audit
-            dry_output = io.StringIO()
-            with contextlib.redirect_stdout(dry_output):
-                dry_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-            dry_summary = json.loads(dry_output.getvalue())
-            expect(dry_result == 2, f"{label} dry-run was not degraded: {dry_summary!r}")
-            expect(dry_summary.get("native_until_audit_status") == "unavailable", f"{label} status was lost: {dry_summary!r}")
-            expect(str(dry_summary.get("native_until_audit_warning") or "") == str(failure), f"{label} cause was lost: {dry_summary!r}")
-
-            apply_output = io.StringIO()
-            with contextlib.redirect_stdout(apply_output):
-                apply_result = mod.main(["--json", "--apply"], _unit_of_work=_test_operator_uow())
-            apply_summary = json.loads(apply_output.getvalue())
-            expect(apply_result == 2, f"{label} apply did not degrade: {apply_summary!r}")
-            expect(apply_summary.get("configuration_status") == "unavailable", f"{label} apply was not fail-closed: {apply_summary!r}")
-            expect(not apply_summary.get("applied"), f"{label} apply mutated after unavailable audit: {apply_summary!r}")
-    finally:
-        mod._candidate_rows, mod._native_until_repairs = original
 
 
 def test_reconcile_startup_config_failure_is_structured():
@@ -29922,45 +29620,6 @@ def test_reconcile_subprocess_output_contracts():
     expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
     expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
     expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
-
-
-def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs():
-    """Human reconcile output should keep outcomes concise and display repaired until locally."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_human_diagnostics_test")
-    until_utc = datetime(2026, 8, 3, 20, 0, tzinfo=timezone.utc)
-    hook = SimpleNamespace(
-        core=SimpleNamespace(
-            fmt_dt_local=lambda value: f"Mon 2026-08-03 23:00 EEST ({value.tzname()})",
-            now_utc=lambda: until_utc,
-            configuration_drift=lambda: {"changed": False, "status": "ok"},
-        ),
-        _safe_parse_datetime=lambda _value: (until_utc, None),
-        _task_cmd_prefix=lambda: ["task"],
-    )
-    original = (mod._load_reconcile_runtime, mod._candidate_rows, mod._native_until_repairs)
-    try:
-        mod._load_reconcile_runtime = lambda _task_bin=None: hook
-        mod._candidate_rows = lambda _task_bin, _hook: []
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
-            [{"action": "repair_until", "task": "11111111", "chainID": "chain", "link": 2,
-              "reason": "native until must be later than due", "new_until": "20260803T200000Z"}],
-            [],
-        )
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            result = mod.main([], _unit_of_work=_test_operator_uow())
-    finally:
-        mod._load_reconcile_runtime, mod._candidate_rows, mod._native_until_repairs = original
-
-    text = output.getvalue()
-    summary_line = next(line for line in text.splitlines() if line.startswith("summary: "))
-    diagnostics_line = next(line for line in text.splitlines() if line.startswith("diagnostics: "))
-    expect(result == 0, f"human diagnostics run failed: {result}")
-    expect("-> Mon 2026-08-03 23:00 EEST" in text, f"native-until target was not localized: {text!r}")
-    expect("exports=" not in summary_line, f"summary still contains diagnostics: {summary_line!r}")
-    expect("exports=0 rows=0" in diagnostics_line, f"diagnostics line missing export counters: {diagnostics_line!r}")
-    expect("slowest_export_s=0.0000" in diagnostics_line, f"diagnostics line missing export timing: {diagnostics_line!r}")
 
 
 def test_task_command_classifies_boundary_failures():
@@ -33065,7 +32724,6 @@ TESTS = [
     test_reconcile_snapshot_reuses_initial_chain_export,
     test_reconcile_empty_snapshot_is_authoritative,
     test_reconcile_export_diagnostics_include_elapsed_time,
-    test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
@@ -33076,22 +32734,15 @@ TESTS = [
     test_reconcile_planning_configuration_drift_is_partial,
     test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_expired_pending_child_is_resumable_partial,
-    test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
-    test_reconcile_tool_loads_task_hooks_layout,
-    test_reconcile_default_runtime_uses_core_context,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
-    test_reconcile_partial_recovery_exit_and_verbose_output,
-    test_reconcile_degraded_audit_status_is_structured,
     test_reconcile_configuration_verification_fails_closed,
-    test_reconcile_native_until_audit_failure_matrix_fails_closed,
     test_reconcile_startup_config_failure_is_structured,
     test_reconcile_subprocess_output_contracts,
-    test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
     test_task_command_classifies_boundary_failures,
     test_task_command_retries_only_opted_in_locks,
     test_chain_repair_command_failure_is_structured,

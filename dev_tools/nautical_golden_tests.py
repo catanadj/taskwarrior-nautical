@@ -7786,8 +7786,8 @@ def test_queue_status_explicit_prune_reports_maintenance_result():
         expect(maintenance.get("removed") == 0, f"unexpected maintenance removal: {payload!r}")
 
 
-def test_doctor_json_has_stable_schema_marker():
-    """Doctor JSON should expose a stable schema marker for automation."""
+def test_doctor_installation_json_and_verifier_contract():
+    """Installation checks remain bounded and produce a concise report."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         env = os.environ.copy()
@@ -7800,7 +7800,7 @@ def test_doctor_json_has_stable_schema_marker():
             }
         )
         proc = subprocess.run(
-            [sys.executable, path, "--taskdata", td, "--json"],
+            [sys.executable, path, "--taskdata", td, "--json", "--installation-only"],
             text=True,
             capture_output=True,
             env=env,
@@ -7810,6 +7810,32 @@ def test_doctor_json_has_stable_schema_marker():
         payload = json.loads((proc.stdout or "").strip() or "{}")
         expect(payload.get("schema") == "nautical.doctor", f"doctor schema missing: {payload!r}")
         expect(payload.get("schema_version") == 1, f"doctor schema version missing: {payload!r}")
+        expect(payload.get("scope") == "installation", f"doctor installation scope missing: {payload!r}")
+        expect(payload.get("counts") == {"tasks": 0, "nautical_tasks": 0, "chains": 0}, "installation check audited tasks")
+        expect(payload.get("outbox") == {}, "installation check audited the lifecycle outbox")
+
+        from nautical_core.tools.nautical_install_verify import build_report
+
+        launcher = Path(td) / "nautical"
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        launcher.chmod(0o700)
+        verifier_payload = {
+            "taskdata": td,
+            "findings": [
+                {"id": "taskwarrior.version", "severity": "ok"},
+                {"id": "taskdata.access", "severity": "ok"},
+                {"id": "install.runtime", "severity": "ok"},
+                {"id": "hook.add", "severity": "ok"},
+                {"id": "hook.modify", "severity": "ok"},
+                {"id": "hook.exit", "severity": "ok"},
+                {"id": "uda.anchor", "severity": "ok"},
+                {"id": "config.timezone", "severity": "ok"},
+                {"id": "chains.carry.child_relative_offset", "severity": "error", "fix": "ignore history"},
+            ],
+        }
+        report = build_report(verifier_payload, platform="Termux", launcher=launcher)
+        expect(report.get("status") == "passed", f"operational findings leaked into installation status: {report!r}")
+        expect(not report.get("manual_actions"), f"operational findings leaked into install actions: {report!r}")
 
 
 def test_operator_queue_status_json_ok_empty_taskdata():
@@ -32593,7 +32619,7 @@ TESTS = [
     test_queue_status_json_ok_empty_taskdata,
     test_queue_status_does_not_initialize_missing_outbox,
     test_queue_status_explicit_prune_reports_maintenance_result,
-    test_doctor_json_has_stable_schema_marker,
+    test_doctor_installation_json_and_verifier_contract,
     test_operator_queue_status_json_ok_empty_taskdata,
     test_queue_status_warns_on_stale_processing_and_dead_letters,
     test_doctor_reports_healthy_installation,

@@ -27,13 +27,11 @@ To try the latest pushed fixes before the next stable release, use
 `--version main` instead.
 
 The bootstrap downloads a temporary pinned release, runs the validated
-installer, checks the installed runtime with Doctor, and removes the checkout.
-Use `--dry-run` to validate without changing anything. For Termux, pass the
-launcher location explicitly:
-
-```bash
-bash bootstrap.sh --version v6.5.3 --launcher-path "$PREFIX/bin/nautical"
-```
+installer, verifies the runtime, hooks, UDAs, timezone, and launcher, then
+removes the checkout. It detects Termux and installs the command in
+`$PREFIX/bin`; other systems use `~/.local/bin`. Any required manual action is
+shown only when automatic setup or verification could not complete it. Use
+`--dry-run` to validate without changing anything.
 
 For an auditable install, download the bootstrap first, inspect it, then run
 it. Set `TASKDATA` or pass `--taskdata` for a custom Taskwarrior data directory.
@@ -43,13 +41,8 @@ trees and repairs.
 The installer also creates `uda-nautical.conf` and adds its include to your
 Taskwarrior rc file when the fields are not already configured. Existing UDA
 files are preserved. It creates `~/.local/bin/nautical` as the user-facing
-launcher and runs a Doctor check after installation.
-
-On Termux, use its executable directory explicitly when installing:
-
-```bash
-./nautical install --launcher-path "$PREFIX/bin/nautical"
-```
+launcher on standard Linux systems; the bootstrap selects `$PREFIX/bin` on
+Termux. A focused Doctor check runs after installation.
 
 For a custom data directory, set `$TASKDATA` and substitute that path for
 `~/.task` above.

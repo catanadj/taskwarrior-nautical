@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPOSITORY="https://github.com/catanadj/taskwarrior-nautical.git"
-DEFAULT_VERSION="v6.5.2"
+DEFAULT_VERSION="v6.5.3"
 VERSION="${NAUTICAL_VERSION:-$DEFAULT_VERSION}"
 TASKDATA="${TASKDATA:-$HOME/.task}"
 LAUNCHER_PATH=""
@@ -12,6 +12,7 @@ HOOKS_DIR=""
 DRY_RUN=0
 KEEP_CHECKOUT=0
 CHECKOUT=""
+PLATFORM="Linux"
 
 usage() {
     cat <<'EOF'
@@ -20,7 +21,7 @@ Usage: bootstrap.sh [options]
 Download and install a pinned Nautical release.
 
 Options:
-  --version REF         Release tag or branch (default: v6.5.2)
+  --version REF         Release tag or branch (default: v6.5.3)
   --taskdata PATH       Taskwarrior data directory (default: TASKDATA or ~/.task)
   --launcher-path PATH  User-facing launcher path (use $PREFIX/bin/nautical on Termux)
   --hooks-dir PATH      Taskwarrior hooks directory override
@@ -33,6 +34,90 @@ EOF
 die() {
     printf 'Nautical bootstrap: %s\n' "$1" >&2
     exit 2
+}
+
+render_legacy_verification() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+report_path, platform, launcher_text = sys.argv[1:]
+launcher = Path(launcher_text).expanduser()
+try:
+    payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
+except Exception as exc:
+    print(f"Post-install verification could not be read: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+
+def group(prefix):
+    items = [item for item in findings if str(item.get("id") or "").startswith(prefix)]
+    if not items or any(item.get("severity") == "error" for item in items):
+        return "failed"
+    if any(item.get("severity") == "warn" for item in items):
+        return "attention"
+    return "passed"
+
+checks = [
+    ("Platform", "passed", platform),
+    ("Taskwarrior", group("taskwarrior."), "command available"),
+    ("Taskdata", group("taskdata."), str(payload.get("taskdata") or "")),
+    ("Runtime", group("install."), "managed release active"),
+    ("Hooks", group("hook."), "add, modify, and exit"),
+    ("Launcher", "passed" if launcher.is_file() and os.access(launcher, os.X_OK) else "failed", str(launcher)),
+    ("UDAs", group("uda."), "Taskwarrior fields registered"),
+    ("Timezone", group("config.timezone"), "explicit scheduling timezone"),
+]
+required_prefixes = ("integration.", "taskwarrior.", "taskdata.", "hook.", "uda.", "install.", "config.")
+optional_prefixes = ("navigator.", "astronomy.")
+manual = []
+optional = []
+seen = set()
+for item in findings:
+    if item.get("severity") == "ok":
+        continue
+    check_id = str(item.get("id") or "")
+    destination = optional if check_id.startswith(optional_prefixes) else manual if check_id.startswith(required_prefixes) else None
+    if destination is None:
+        continue
+    action = str(item.get("fix") or item.get("message") or "Inspect this finding.").strip()
+    if (check_id, action) not in seen:
+        seen.add((check_id, action))
+        destination.append(action)
+if shutil.which("nautical") is None and launcher.name == "nautical":
+    optional.append(f"Add {launcher.parent} to PATH or invoke {launcher}.")
+
+symbols = {"passed": "+", "attention": "!", "failed": "x"}
+print("\nPost-install verification")
+for name, status, detail in checks:
+    print(f"  {symbols[status]} {name}: {detail}")
+if manual:
+    print("\nManual action")
+    for action in manual:
+        print(f"  ! {action}")
+if optional:
+    print("\nOptional")
+    for action in optional:
+        print(f"  ! {action}")
+failed = any(status == "failed" for _, status, _ in checks) or any(
+    item.get("severity") == "error"
+    and str(item.get("id") or "").startswith(required_prefixes + ("astronomy.",))
+    for item in findings
+)
+if failed:
+    print("\nInstallation verification failed. Resolve the required actions before using Nautical.")
+    raise SystemExit(2)
+if manual:
+    print(f"\nInstallation completed; {len(manual)} manual action(s) remain.")
+    raise SystemExit(1)
+if optional:
+    print("\nCore installation verified. Optional enhancements are listed above.")
+    raise SystemExit(1)
+print("\nInstallation verified. Nautical is ready.")
+PY
 }
 
 while (($#)); do
@@ -75,12 +160,29 @@ while (($#)); do
     esac
 done
 
-command -v git >/dev/null 2>&1 || die "git is required"
-command -v python3 >/dev/null 2>&1 || die "python3 is required"
-command -v task >/dev/null 2>&1 || die "Taskwarrior is required; install task before Nautical"
+if [[ -n "${TERMUX_VERSION:-}" ]] || [[ "${PREFIX:-}" == */com.termux/files/usr ]]; then
+    PLATFORM="Termux"
+    if [[ -z "$LAUNCHER_PATH" ]]; then
+        [[ -n "${PREFIX:-}" ]] || die "Termux was detected but PREFIX is unavailable"
+        LAUNCHER_PATH="$PREFIX/bin/nautical"
+    fi
+else
+    PLATFORM="$(uname -s 2>/dev/null || printf 'Linux')"
+fi
+
+if [[ "$PLATFORM" == "Termux" ]]; then
+    command -v git >/dev/null 2>&1 || die "git is required; run: pkg install git"
+    command -v python3 >/dev/null 2>&1 || die "python is required; run: pkg install python"
+    command -v task >/dev/null 2>&1 || die "Taskwarrior is required; run: pkg install taskwarrior"
+else
+    command -v git >/dev/null 2>&1 || die "git is required"
+    command -v python3 >/dev/null 2>&1 || die "python3 is required"
+    command -v task >/dev/null 2>&1 || die "Taskwarrior is required; install task before Nautical"
+fi
 
 printf '\nTaskwarrior Nautical\n'
 printf 'Installing release: %s\n' "$VERSION"
+printf 'Platform: %s\n' "$PLATFORM"
 printf 'Taskdata: %s\n\n' "$TASKDATA"
 
 if [[ -n "$LAUNCHER_PATH" ]]; then
@@ -114,9 +216,32 @@ python3 "$CHECKOUT/nautical" "${install_args[@]}"
 if (( ! DRY_RUN )); then
     launcher="${LAUNCHER_PATH:-$HOME/.local/bin/nautical}"
     if [[ -x "$launcher" ]]; then
-        printf '\nRunning post-install Doctor check...\n'
-        "$launcher" doctor --taskdata "$TASKDATA"
+        printf '\nVerifying the completed installation...\n'
+        doctor_report="$CHECKOUT/doctor-installation.json"
+        doctor_args=(doctor --taskdata "$TASKDATA" --json)
+        if "$launcher" doctor --help 2>&1 | grep -q -- '--installation-only'; then
+            doctor_args+=(--installation-only)
+        fi
+        doctor_status=0
+        "$launcher" "${doctor_args[@]}" >"$doctor_report" || doctor_status=$?
+        verification_status=0
+        verifier="$CHECKOUT/nautical_core/tools/nautical_install_verify.py"
+        if [[ -f "$verifier" ]]; then
+            python3 "$verifier" \
+                --input "$doctor_report" \
+                --platform "$PLATFORM" \
+                --launcher "$launcher" || verification_status=$?
+        else
+            render_legacy_verification "$doctor_report" "$PLATFORM" "$launcher" || verification_status=$?
+        fi
+        if ((verification_status == 2)); then
+            exit 2
+        fi
+        if ((doctor_status > 2)); then
+            exit 2
+        fi
     else
-        printf '\nInstall completed; run nautical doctor to validate the runtime.\n'
+        printf '\nManual action required: installed launcher is not executable at %s\n' "$launcher"
+        exit 2
     fi
 fi

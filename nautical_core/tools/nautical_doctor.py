@@ -1440,6 +1440,11 @@ def main() -> int:
     parser.add_argument("--taskdata", default=None)
     parser.add_argument("--task-bin", default=shutil.which("task") or "task")
     parser.add_argument("--json", action="store_true", help="emit JSON only")
+    parser.add_argument(
+        "--installation-only",
+        action="store_true",
+        help="check installation and configuration without auditing task chains or lifecycle state",
+    )
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
     parser.add_argument("--clean-cache", action="store_true", help="prune expired and orphaned anchor cache files")
     args = parser.parse_args()
@@ -1516,12 +1521,17 @@ def main() -> int:
             "Anchor cache cleanup completed." if not gc_errors else "Anchor cache cleanup completed with errors.",
             details=gc_result,
         )
-    outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
-    obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
-    counts = _check_chains(
-        findings,
-        unit_of_work=unit_of_work,
-    )
+    if args.installation_only:
+        outbox = {}
+        obsolete_queue_state = []
+        counts = {"tasks": 0, "nautical_tasks": 0, "chains": 0}
+    else:
+        outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
+        obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
+        counts = _check_chains(
+            findings,
+            unit_of_work=unit_of_work,
+        )
 
     status = _overall_status(findings)
     payload = {
@@ -1533,6 +1543,7 @@ def main() -> int:
         "counts": counts,
         "outbox": outbox,
         "obsolete_queue_state": obsolete_queue_state,
+        "scope": "installation" if args.installation_only else "full",
         "findings": findings,
     }
     if args.json:

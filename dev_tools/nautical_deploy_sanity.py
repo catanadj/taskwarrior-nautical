@@ -22,6 +22,7 @@ ROOT = HERE.parent
 
 
 REQUIRED_RUNTIME_FILES = (
+    "bootstrap.sh",
     "on-add.nautical",
     "on-modify.nautical",
     "on-exit.nautical",
@@ -46,6 +47,7 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/query_service.py",
     "nautical_core/tools/nautical_query.py",
     "nautical_core/tools/nautical_install.py",
+    "nautical_core/tools/nautical_install_verify.py",
 )
 
 

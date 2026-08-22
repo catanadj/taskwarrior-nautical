@@ -16,46 +16,15 @@ designed to express it.
 
 ## Install
 
-Install the current stable release in one command:
+Install or upgrade the current stable release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/bootstrap.sh \
-  | bash -s -- --version v6.5.3
+curl -fsSL https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/bootstrap.sh | bash
 ```
 
-To try the latest pushed fixes before the next stable release, use
-`--version main` instead.
-
-The bootstrap downloads a temporary pinned release, runs the validated
-installer, verifies the runtime, hooks, UDAs, timezone, and launcher, then
-removes the checkout. It detects Termux and installs the command in
-`$PREFIX/bin`; other systems use `~/.local/bin`. Any required manual action is
-shown only when automatic setup or verification could not complete it. Use
-`--dry-run` to validate without changing anything.
-
-For an auditable install, download the bootstrap first, inspect it, then run
-it. Set `TASKDATA` or pass `--taskdata` for a custom Taskwarrior data directory.
-The lower-level `./nautical install` command remains available for local release
-trees and repairs.
-
-The installer also creates `uda-nautical.conf` and adds its include to your
-Taskwarrior rc file when the fields are not already configured. Existing UDA
-files are preserved. It creates `~/.local/bin/nautical` as the user-facing
-launcher on standard Linux systems; the bootstrap selects `$PREFIX/bin` on
-Termux. A focused Doctor check runs after installation.
-
-For a custom data directory, set `$TASKDATA` and substitute that path for
-`~/.task` above.
-
-Install Navigator and the formatted-panel dependencies:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-The installer writes an explicit local IANA timezone to a new installation's
-`config-nautical.toml`. Existing configurations are preserved; Doctor reports
-when a timezone is missing or unavailable.
+The installer detects Linux or Termux, configures the launcher, hooks, and
+Taskwarrior fields, then verifies the result. It preserves existing settings
+and reports any manual action that remains.
 
 Create a first task:
 

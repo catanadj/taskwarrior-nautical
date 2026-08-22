@@ -81,6 +81,8 @@ CONFIG_SPECS: dict[str, dict[str, Any]] = {
 DEPRECATED_CONFIG_KEYS = {
     "holiday_region": "Holiday behavior is defined with [business_calendar.<name>]; holiday_region has no effect.",
     "verify_import": "Child imports are always verified; verify_import no longer changes behavior.",
+    "spawn_queue_max_bytes": "The retired JSON spawn queue was removed; remove this key (the lifecycle outbox is the supported work store).",
+    "spawn_queue_drain_max_items": "The retired JSON spawn queue was removed; use outbox_drain_max_items if a drain limit is needed.",
 }
 
 

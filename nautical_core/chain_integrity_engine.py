@@ -15,7 +15,7 @@ from .chain_integrity_application import (
     IntegrityOutboxPersistResult,
     RepositoryIntegrityOutboxSink,
 )
-from .chain_integrity_context import IntegrityContext, OutboxSnapshot, load_outbox_snapshot
+from .chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot, load_outbox_snapshot
 from .chain_integrity_models import (
     ChainSnapshot,
     FindingStatus,
@@ -245,6 +245,14 @@ class ChainIntegrityEngine:
         if not isinstance(snapshot, ChainSnapshot):
             raise TypeError("integrity engine requires a ChainSnapshot")
         outbox = load_outbox_snapshot(outbox_repository)
+        # A poisoned outbox is one global evidence failure, not a per-chain
+        # finding. Stop before evaluating every chain against incomplete data.
+        if outbox.coverage is OutboxCoverage.UNAVAILABLE:
+            return IntegrityEngineResult(
+                IntegrityReportStatus.UNAVAILABLE,
+                snapshot,
+                reason=outbox.reason or "lifecycle intent evidence is unavailable",
+            )
         groups: dict[str, list] = {}
         for row in snapshot.rows:
             groups.setdefault(row.chain_id, []).append(row)

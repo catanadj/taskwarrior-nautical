@@ -1227,9 +1227,27 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
     def write(line: str = "") -> None:
         print(line, file=stream)
 
+    chain_id = str(details.get("chainID") or details.get("chain_id") or "").strip()
+    subjects = details.get("subjects") or details.get("subject_uuids") or ()
+    if chain_id or subjects:
+        subject_values = [str(item).strip() for item in subjects if str(item).strip()]
+        suffix = ""
+        if subject_values:
+            shown = ",".join(value[:8] for value in subject_values[:8])
+            suffix = f" tasks={shown}{'…' if len(subject_values) > 8 else ''}"
+        write(f"  Affected: chain={chain_id or '?'}{suffix}")
+    observed = details.get("observed")
+    expected = details.get("expected")
+    if observed:
+        write(f"  Observed: {observed}")
+    if expected:
+        write(f"  Expected: {expected}")
     error = str(details.get("error") or "").strip()
     if error:
         write(f"  Detail: {error}")
+    reason = str(details.get("reason") or "").strip()
+    if reason and reason != error:
+        write(f"  Detail: {reason}")
     for issue in details.get("issues") or []:
         if not isinstance(issue, dict):
             write(f"  Detail: {issue}")

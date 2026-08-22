@@ -14,30 +14,28 @@ dates, multiple times, changing intervals, or a fixed end point, the same system
 scales with it. If you can describe when something should happen, Nautical is
 designed to express it.
 
-## Start Here
+## Install
 
-Download Nautical and run the installer:
-
-```bash
-git clone --depth 1 https://github.com/catanadj/taskwarrior-nautical.git
-cd taskwarrior-nautical
-./nautical install --dry-run
-./nautical install
-```
-
-The same `./nautical install` command handles first installation, upgrades,
-repairs, and safe re-runs. For later upgrades, update the checkout and run it
-again:
+Install the current stable release in one command:
 
 ```bash
-git pull --ff-only
-./nautical install
+curl -fsSL https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/bootstrap.sh \
+  | bash -s -- --version v6.5.2
 ```
 
-The installer uses `$TASKDATA` when set, otherwise `~/.task`. It validates the
-complete runtime before switching releases, keeps the previous release
-available during upgrades, and leaves an already-current installation
-unchanged.
+The bootstrap downloads a temporary pinned release, runs the validated
+installer, checks the installed runtime with Doctor, and removes the checkout.
+Use `--dry-run` to validate without changing anything. For Termux, pass the
+launcher location explicitly:
+
+```bash
+bash bootstrap.sh --version v6.5.2 --launcher-path "$PREFIX/bin/nautical"
+```
+
+For an auditable install, download the bootstrap first, inspect it, then run
+it. Set `TASKDATA` or pass `--taskdata` for a custom Taskwarrior data directory.
+The lower-level `./nautical install` command remains available for local release
+trees and repairs.
 
 Register Nautical's Taskwarrior fields. The installer creates or updates
 `~/.local/bin/nautical` as a symlink to the installed launcher:

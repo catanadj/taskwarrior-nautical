@@ -37,6 +37,24 @@ class LifecycleReconciliationService:
     repository: LifecycleChildRepository
     configuration_fingerprint: str
     schedule_fingerprint: str
+    unit_of_work: Any = None
+
+    def application_service(self) -> Any:
+        """Build the sole lifecycle mutation service for this invocation."""
+        if self.unit_of_work is None:
+            raise RuntimeError("lifecycle application requires a mutation-capable unit of work")
+        from .lifecycle_application import LifecycleApplicationService
+        from .lifecycle_outbox import LifecycleOutboxRepository
+        from .taskwarrior_mutations import TaskwarriorMutationService
+        import os
+
+        return LifecycleApplicationService(
+            unit_of_work=self.unit_of_work,
+            mutations=TaskwarriorMutationService(self.unit_of_work),
+            outbox=LifecycleOutboxRepository(self.unit_of_work.outbox.taskdata),
+            owner=f"reconcile-{os.getpid()}",
+            lease_seconds=120.0,
+        )
 
     def candidates(self) -> list[dict[str, Any]]:
         rows = self.snapshot.candidate_rows()

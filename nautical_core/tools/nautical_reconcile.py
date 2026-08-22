@@ -372,6 +372,7 @@ def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
         _READ_SNAPSHOT.repository,
         configuration_fingerprint=configuration.fingerprint if configuration is not None else "reconcile",
         schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "reconcile",
+        unit_of_work=_UNIT_OF_WORK,
     )
 
 
@@ -920,28 +921,6 @@ def _plan_for_parent(
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
 
 
-def _lifecycle_application_service():
-    """One shared staging+execution service, built from the same unit of
-    work reconcile already constructs for reads and mutations. Reused by
-    both the spawn/backfill path (stage + execute_staged) and the terminal
-    path (apply_immediate) so reconcile and the live hooks apply lifecycle
-    transitions through identical logic.
-    """
-    from nautical_core.lifecycle_application import LifecycleApplicationService
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    if _UNIT_OF_WORK is None:
-        raise RuntimeError("reconcile lifecycle execution requires a mutation-capable unit of work")
-    outbox = LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
-    return LifecycleApplicationService(
-        unit_of_work=_UNIT_OF_WORK,
-        mutations=TaskwarriorMutationService(_UNIT_OF_WORK),
-        outbox=outbox,
-        owner=f"reconcile-{os.getpid()}",
-        lease_seconds=120.0,
-    )
-
-
 def _integrity_request_factory(operation: Any) -> Any:
     """Build a fresh guarded metadata request for one integrity operation."""
     if _UNIT_OF_WORK is None:
@@ -1137,7 +1116,7 @@ def _execute_reconcile_lifecycle_plan(
     if not isinstance(lifecycle_plan, LifecyclePlan):
         raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
     resolved_plan = _lifecycle_plan_with_resolved_child_uuid(plan, hook)
-    service = _lifecycle_application_service()
+    service = _lifecycle_reconciliation_service().application_service()
     configuration = _UNIT_OF_WORK.context.configuration
     staged = service.stage(
         resolved_plan,
@@ -1199,7 +1178,7 @@ def _execute_reconcile_terminal_plan(
 ) -> str:
     """Apply a guarded terminal plan through the shared lifecycle application service."""
     lifecycle_plan = _terminal_lifecycle_plan(plan)
-    service = _lifecycle_application_service()
+    service = _lifecycle_reconciliation_service().application_service()
     outcome = service.apply_immediate(lifecycle_plan)
     _raise_for_lifecycle_outcome(outcome, label="terminal transition")
     return "off"
@@ -1756,6 +1735,7 @@ def main(
         _READ_REPOSITORY,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
+        unit_of_work=_UNIT_OF_WORK,
     )
     try:
         candidates = _LIFECYCLE_SERVICE.candidates()

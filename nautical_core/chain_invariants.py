@@ -730,9 +730,55 @@ def _finalization_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...
     return tuple(findings)
 
 
+def _acknowledged_postcondition_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
+    """Verify durable acknowledged lifecycle postconditions against the graph."""
+    graph = context.graph
+    findings: list[IntegrityFinding] = []
+    for record in context.outbox.records:
+        state = getattr(record, "state", None)
+        if not hasattr(record, "plan") or getattr(state, "value", "") != "acknowledged":
+            continue
+        plan = record.plan
+        parent_matches = graph.uuid_matches(plan.identity.parent_uuid)
+        if len(parent_matches) != 1:
+            continue
+        parent = parent_matches[0]
+        child = plan.child_dict()
+        expected_child = str(child.get("uuid") or "").strip().lower()
+        expected_link = str(plan.parent_patch_dict().get("nextLink") or "").strip().lower()
+        for postcondition in plan.expected_postconditions:
+            satisfied = True
+            if postcondition in {"child_exists", "child_present"}:
+                satisfied = bool(expected_child and len(graph.uuid_matches(expected_child)) == 1)
+            elif postcondition in {"parent_linked", "parent_next_linked"}:
+                actual = str(parent.field("nextLink", "") or "").strip().lower()
+                satisfied = bool(expected_link and actual == expected_link)
+            elif postcondition in {"chain_off", "parent_chain_off"}:
+                satisfied = str(parent.field("chain", "on") or "on").strip().lower() == "off"
+            if not satisfied:
+                findings.append(_finding(
+                    graph,
+                    "outbox.acknowledged_postcondition",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    parent,
+                    "acknowledged_postcondition_mismatch",
+                    "Acknowledged lifecycle intent does not satisfy its persisted postcondition.",
+                    observed=(("postcondition", postcondition),),
+                    expected=(("postcondition", "satisfied"),),
+                    evidence=(("intent_id", record.intent_id),),
+                ))
+    return tuple(findings)
+
+
 def evaluate_context(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
     """Evaluate graph rules plus separated outbox evidence in stable order."""
-    findings = (*evaluate_invariants(context.graph), *_outbox_rule(context), *_finalization_rule(context))
+    findings = (
+        *evaluate_invariants(context.graph),
+        *_outbox_rule(context),
+        *_finalization_rule(context),
+        *_acknowledged_postcondition_rule(context),
+    )
     unique: dict[tuple[str, str, tuple[str, ...], str], IntegrityFinding] = {}
     for finding in findings:
         unique.setdefault((finding.invariant_id, finding.chain_id, finding.subject_uuids, finding.reason_code), finding)

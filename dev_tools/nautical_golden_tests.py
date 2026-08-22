@@ -1830,6 +1830,31 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
     restored = type(plan).from_dict(plan.to_dict())
     expect(restored.terminal_kind == "date_limit", "terminal exhaustion kind was not durable")
 
+    spawn_identity = LifecycleIdentity("final-chain", parent_uuid, 2, 3, LifecycleEvent.COMPLETE)
+    spawn_plan = LifecyclePlan.from_mappings(
+        identity=spawn_identity,
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=guard,
+        child_payload={"uuid": "22222222-0000-0000-0000-000000000930"},
+        parent_patch={"nextLink": "22222222"},
+        expected_postconditions=("child_exists", "parent_linked"),
+    )
+    spawn_record = LifecycleOutboxRecord(
+        spawn_identity.idempotency_key,
+        spawn_plan,
+        "cfg-final",
+        "sched-final",
+        OutboxProcessingState.ACKNOWLEDGED,
+        ExecutionStage.FINALIZED,
+    )
+    spawn_findings = evaluate_context(IntegrityContext(
+        graph, OutboxSnapshot.from_records((spawn_record,)), "cfg-final",
+    ))
+    expect(
+        any(item.reason_code == "acknowledged_postcondition_mismatch" for item in spawn_findings),
+        "acknowledged spawn postcondition drift was not reported",
+    )
+
 
 def test_chain_integrity_context_keeps_outbox_evidence_separate():
     """Task graph truth and lifecycle intent evidence retain separate provenance."""

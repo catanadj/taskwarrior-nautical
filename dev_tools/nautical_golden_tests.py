@@ -3061,6 +3061,11 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     expect(deleted.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE}, f"deleted parent was applied: {deleted}")
     expect(not uow.client.calls, "deleted parent reached the mutation command")
     uow.repository.rows[parent_uuid] = parent
+    parent["status"] = "pending"
+    completion_changed = service.apply(stale_request)
+    expect(completion_changed.kind is MutationOutcomeKind.CONFLICT, f"changed completion state was not rejected: {completion_changed}")
+    expect(not uow.client.calls, "changed completion state reached the mutation command")
+    parent["status"] = "completed"
 
     child = ChildImportPayload.from_mapping(
         {
@@ -3297,6 +3302,15 @@ def test_child_import_rejects_incomplete_existing_rows():
     expect(
         future_outcome.kind is MutationOutcomeKind.CONFLICT,
         f"future-dated deleted child was incorrectly accepted: {future_outcome}",
+    )
+
+    existing_uow = Uow({parent_uuid: dict(parent), child_uuid: dict(payload_map)})
+    existing_outcome = TaskwarriorMutationService(existing_uow).apply(
+        MutationRequest(MutationOperation.CHILD_IMPORT, guard, ChildImportPayload.from_mapping(payload_map, parent_uuid=parent_uuid))
+    )
+    expect(
+        existing_outcome.kind is MutationOutcomeKind.ALREADY_APPLIED,
+        f"child created between snapshot and apply was not acknowledged idempotently: {existing_outcome}",
     )
 
 

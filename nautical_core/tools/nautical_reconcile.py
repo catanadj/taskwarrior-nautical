@@ -57,6 +57,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
+from nautical_core.reconcile_report import render_human, render_json  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -2086,35 +2087,11 @@ def main(
         "housekeeping": housekeeping,
     }
     if args.json:
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        print(render_json(summary))
     else:
-        summary_line = (
-            "summary: "
-            f"{summary['mode']}; candidates={summary['candidates']} "
-            f"spawn={summary['spawn']} backfill={summary['backfill_nextlink']} "
-            f"expiration_hops={summary['expiration_hops']} recovered={summary['recovered_chains']} "
-            f"final={summary['legitimate_final']} manual={summary['manual_stop']} "
-            f"terminal={summary['terminal']} "
-            f"stale={summary['stale']} partial={summary['partial']} errors={summary['errors']}"
-            f" plan_errors={summary['plan_errors']}"
-            f" native_until_errors={summary['native_until_error_count']}"
-            f" native_until={len(summary['native_until_repairs'])}"
-            f" manual_review={summary['native_until_manual_review']}"
-            f" audit_skipped={summary['native_until_audit_skipped']}"
-            f" config={summary['configuration_status']}"
-            f" housekeeping={summary['housekeeping'].get('status', 'unknown')}"
-        )
-        summary_color = "red" if has_errors else "yellow" if degraded else "green"
-        print(_style(summary_line, summary_color))
-        diagnostics_line = (
-            "diagnostics: "
-            f"exports={summary['export_calls']} rows={summary['export_rows']} "
-            f"export_s={summary['export_seconds']:.4f} "
-            f"slowest_export_s={summary['slowest_export_seconds']:.4f} "
-            f"snapshot_hits={summary['snapshot_hits']} "
-            f"lock_busy={sum(summary['lock_contention'].values())}"
-        )
-        print(_style(diagnostics_line, "dim"))
+        summary_line, diagnostics_line = render_human(summary, _style)
+        print(summary_line)
+        print(diagnostics_line)
     if has_errors:
         return 1
     return 2 if degraded else 0

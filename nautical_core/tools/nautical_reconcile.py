@@ -369,6 +369,7 @@ def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
     configuration = _UNIT_OF_WORK.context.configuration if _UNIT_OF_WORK is not None else None
     return LifecycleReconciliationService(
         _READ_SNAPSHOT,
+        _READ_SNAPSHOT.repository,
         configuration_fingerprint=configuration.fingerprint if configuration is not None else "reconcile",
         schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "reconcile",
     )
@@ -933,16 +934,15 @@ def _plan_for_parent(
     if configuration_status != "valid":
         raise _ConfigurationDrift(configuration_reason)
     try:
-        existing_children = _existing_children_for_plan(task_bin, parent, hook)
+        return _lifecycle_reconciliation_service().plan(
+            parent,
+            hook=hook,
+            generation=generation or _chain_generation_for_hook(hook),
+            safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
+        )
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
-    return _lifecycle_reconciliation_service().plan(
-        parent,
-        existing_children=existing_children,
-        hook=hook,
-        generation=generation or _chain_generation_for_hook(hook),
-    )
 
 
 def _lifecycle_application_service():
@@ -1778,6 +1778,7 @@ def main(
     configuration = _UNIT_OF_WORK.context.configuration
     _LIFECYCLE_SERVICE = LifecycleReconciliationService(
         snapshot,
+        _READ_REPOSITORY,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
     )

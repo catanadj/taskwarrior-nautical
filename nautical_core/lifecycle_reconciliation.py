@@ -8,10 +8,16 @@ from typing import Any, Protocol
 from . import chain_integrity_lifecycle as lifecycle
 from .chain_generation import ChainGenerationService
 from .chain_integrity_engine import ChainIntegrityEngine
+from .integration_models import Absent, Found, Unavailable
+from .lifecycle_models import DeletionDisposition
 
 
 class LifecycleSnapshot(Protocol):
     def candidate_rows(self) -> list[dict[str, Any]]: ...
+
+
+class LifecycleChildRepository(Protocol):
+    def exact_child_slot(self, chain_id: str, link: int, *, refresh: bool = False) -> object: ...
 
 
 def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -28,6 +34,7 @@ class LifecycleReconciliationService:
     """Own candidate selection and lifecycle schedule projection."""
 
     snapshot: LifecycleSnapshot
+    repository: LifecycleChildRepository
     configuration_fingerprint: str
     schedule_fingerprint: str
 
@@ -49,10 +56,14 @@ class LifecycleReconciliationService:
         self,
         parent: dict[str, Any],
         *,
-        existing_children: list[dict[str, Any]],
         hook: Any,
         generation: ChainGenerationService,
+        safe_parse_datetime: Any,
     ) -> lifecycle.LifecycleRecoveryDecision:
+        existing_children = self.existing_children(
+            parent,
+            safe_parse_datetime=safe_parse_datetime,
+        )
         engine = ChainIntegrityEngine.lifecycle_only(
             configuration_fingerprint=self.configuration_fingerprint,
             schedule_fingerprint=self.schedule_fingerprint,
@@ -63,6 +74,27 @@ class LifecycleReconciliationService:
             hook=hook,
             generation=generation,
         )
+
+    def existing_children(self, parent: dict[str, Any], *, safe_parse_datetime: Any) -> list[dict[str, Any]]:
+        if str(parent.get("status") or "").strip().lower() == "deleted":
+            evidence = lifecycle.deleted_chain_disposition(
+                parent,
+                safe_parse_datetime=safe_parse_datetime,
+            )
+            if evidence.disposition is not DeletionDisposition.EXPIRATION:
+                return []
+        chain_id = str(parent.get("chainID") or "").strip()
+        next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
+        if not chain_id:
+            return []
+        result = self.repository.exact_child_slot(chain_id, next_link, refresh=True)
+        if isinstance(result, Unavailable):
+            raise RuntimeError(result.evidence.detail or f"child slot {chain_id}:{next_link} unavailable")
+        if isinstance(result, Absent):
+            return []
+        if isinstance(result, Found):
+            return [dict(result.value)]
+        raise RuntimeError(f"child slot {chain_id}:{next_link} returned an invalid read result")
 
 
 __all__ = ["LifecycleReconciliationService"]

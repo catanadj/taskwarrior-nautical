@@ -135,6 +135,12 @@ class ChainSnapshotService:
         self._uow = unit_of_work
         self._repository = unit_of_work.repository
         self._configuration_fingerprint = str(configuration_fingerprint or "").strip()
+        context = getattr(unit_of_work, "context", None)
+        validated = getattr(getattr(context, "configuration", None), "fingerprint", "")
+        if validated and self._configuration_fingerprint and validated != self._configuration_fingerprint:
+            raise ValueError("integrity snapshot configuration fingerprint differs from invocation context")
+        if not self._configuration_fingerprint and validated:
+            self._configuration_fingerprint = str(validated).strip()
         self._normalized: dict[tuple[int, IntegritySnapshotRequest], ChainSnapshot] = {}
 
     def collect(self, request: IntegritySnapshotRequest) -> TaskRead[ChainSnapshot]:

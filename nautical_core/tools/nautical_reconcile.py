@@ -453,13 +453,6 @@ def _native_until_repairs(
         snapshot=snapshot or (_reconcile_runtime_state().snapshot if _reconcile_runtime_state() is not None else None),
     )
     rows = active_rows
-    by_chain_link = {
-        (
-            str(row.get("chainID") or "").strip(),
-            lifecycle.int_or_default(row.get("link"), 0),
-        ): row
-        for row in active_rows
-    }
     recovery_engine = ChainIntegrityEngine.lifecycle_only(
         configuration_fingerprint="reconcile-recovery",
         schedule_fingerprint="reconcile-recovery",
@@ -491,60 +484,35 @@ def _native_until_repairs(
             continue
         repaired = str(item.get("new_until") or "").strip()
         if apply:
-            if taskdata is None:
-                item["action"] = "repair_error"
-                item["repair_error"] = "Taskwarrior data location is unavailable for native-until locking"
-                errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
-                continue
-            with _reconcile_mutation_lock(taskdata, lease_held=lease_held) as reconcile_acquired:
-                if not reconcile_acquired:
-                    _LOCK_STATS["reconcile_busy"] += 1
-                    item["action"] = "repair_error"
-                    item["repair_error"] = "another reconcile apply is already running"
-                else:
-                    parent_lock = _parent_apply_lock(taskdata, str(row.get("uuid") or ""))
-                    with parent_lock as acquired:
-                        if not acquired:
-                            _LOCK_STATS["parent_busy"] += 1
-                            item["action"] = "repair_error"
-                            item["repair_error"] = "native-until repair lock busy"
-                        else:
-                            fresh = _fresh_parent(row)
-                            guard_error = _native_until_guard_error(row, fresh) if fresh else "native-until target disappeared"
-                            fresh_previous = _fresh_native_until_previous(fresh or row)
-                            if not guard_error:
-                                if (previous is None) != (fresh_previous is None):
-                                    guard_error = "native-until predecessor changed during repair"
-                                elif previous is not None and fresh_previous is not None:
-                                    guard_error = _native_until_guard_error(previous, fresh_previous)
-                            if guard_error:
-                                item["action"] = "repair_error"
-                                item["repair_error"] = guard_error
-                            else:
-                                configuration_status, drift_reason = _configuration_state(hook)
-                                if configuration_status != "valid":
-                                    item["action"] = "manual_review"
-                                    item["repair_error"] = drift_reason
-                                    item["configuration_drift"] = True
-                                    item["configuration_status"] = configuration_status
-                                    return repairs, errors
-                                try:
-                                    _modify_native_until(task_bin, fresh, repaired)
-                                    verified = _fresh_parent(fresh)
-                                    if verified is None or not _native_until_matches(verified, repaired, hook):
-                                        actual = str((verified or {}).get("until") or "<missing>")
-                                        item["action"] = "repair_error"
-                                        item["repair_error"] = (
-                                            f"native until repair verification failed (expected {repaired}; found {actual})"
-                                        )
-                                    else:
-                                        item["applied"] = True
-                                        by_chain_link[(chain_id, link)] = dict(verified)
-                                except Exception as exc:
-                                    item["action"] = "repair_error"
-                                    item["repair_error"] = str(exc).strip() or type(exc).__name__
-                if item.get("action") == "repair_error":
-                    errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
+            error = recovery_engine.apply_native_until_candidate(
+                row,
+                previous,
+                item,
+                repaired=repaired,
+                taskdata=taskdata,
+                lease_held=lease_held,
+                mutation_lock=lambda data, held: _reconcile_mutation_lock(data, lease_held=held),
+                parent_lock=_parent_apply_lock,
+                refresh_parent=_fresh_parent,
+                refresh_previous=_fresh_native_until_previous,
+                guard_error=lambda expected, fresh, fresh_previous: (
+                    _native_until_guard_error(expected, fresh)
+                    if fresh is not None
+                    else "native-until target disappeared"
+                ) or (
+                    "native-until predecessor changed during repair"
+                    if (previous is None) != (fresh_previous is None)
+                    else _native_until_guard_error(previous, fresh_previous)
+                    if previous is not None and fresh_previous is not None
+                    else None
+                ),
+                configuration=lambda: _configuration_state(hook),
+                mutate=lambda fresh, target: _modify_native_until(task_bin, fresh, target),
+                verify=lambda verified, target: verified is not None and _native_until_matches(verified, target, hook),
+                on_lock_busy=lambda kind: _LOCK_STATS.__setitem__(f"{kind}_busy", _LOCK_STATS[f"{kind}_busy"] + 1),
+            )
+            if error:
+                errors.append(f"{item['task']} chain {chain_id} link {link}: {error}")
     return repairs, errors
 
 

@@ -137,6 +137,10 @@ class ChainIntegrityEngine:
             local_naive_to_utc=local_naive_to_utc,
         )
 
+    def apply_native_until_candidate(self, row, previous, item, **kwargs):
+        """Apply one guarded recovery candidate through the recovery owner."""
+        return self._recovery.apply_native_until_candidate(row, previous, item, **kwargs)
+
     def audit(
         self,
         request: IntegritySnapshotRequest,

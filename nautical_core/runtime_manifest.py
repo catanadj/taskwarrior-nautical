@@ -147,6 +147,12 @@ OPERATOR_FORBIDDEN_HOOK_IMPORTS = (
     "nautical_core.hooks.exit_impl",
     "nautical_core.hook_runtime",
 )
+PURE_INTEGRITY_MODULES = (
+    "nautical_core/chain_graph.py",
+    "nautical_core/chain_integrity_models.py",
+    "nautical_core/chain_invariants.py",
+    "nautical_core/chain_repair_planner.py",
+)
 
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
@@ -159,4 +165,5 @@ __all__ = (
     "HOOK_RUNTIME_FILES",
     "OPERATOR_RUNTIME_FILES",
     "OPERATOR_FORBIDDEN_HOOK_IMPORTS",
+    "PURE_INTEGRITY_MODULES",
 )

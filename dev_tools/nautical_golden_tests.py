@@ -9599,6 +9599,12 @@ def test_deploy_sanity_enforces_removed_lifecycle_ownership():
             f"operator hook import was not rejected: {failures!r}",
         )
 
+    results = module._check_removed_ownership(Path(ROOT))
+    expect(
+        any(item.get("name") == "pure-integrity:nautical_core/chain_graph.py" for item in results),
+        f"pure integrity import checks were not reported: {results!r}",
+    )
+
 
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""

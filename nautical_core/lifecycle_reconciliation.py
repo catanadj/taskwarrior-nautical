@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from . import chain_integrity_lifecycle as lifecycle
 from .chain_generation import ChainGenerationService
@@ -45,6 +45,61 @@ class LifecycleRecoveryOperations(Protocol):
     def recovery_manual_review(self, parent: dict[str, Any], reason: str) -> Any: ...
     def recovery_terminal(self, parent: dict[str, Any], reason: str) -> Any: ...
     def recovery_from_exception(self, parent: dict[str, Any], exc: Exception) -> Any: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CallbackLifecycleRecoveryOperations:
+    """Typed callback port for the reconcile-specific Taskwarrior adapter.
+
+    The service owns the recovery loop; this small port keeps Taskwarrior
+    mechanics outside it while avoiding another operator-side orchestration
+    class.
+    """
+
+    apply_parent_callback: Callable[..., tuple[Any, str]]
+    plan_parent_callback: Callable[..., Any]
+    next_child_callback: Callable[..., dict[str, Any]]
+    virtual_child_callback: Callable[..., tuple[dict[str, Any] | None, str]]
+    terminal_error_callback: Callable[..., str]
+    is_orphan_deleted_callback: Callable[..., bool]
+    recovery_error_callback: Callable[..., Any]
+    recovery_partial_callback: Callable[..., Any]
+    recovery_manual_review_callback: Callable[..., Any]
+    recovery_terminal_callback: Callable[..., Any]
+    recovery_exception_callback: Callable[..., Any]
+
+    def apply_parent(self, parent, **kwargs):
+        return self.apply_parent_callback(parent, **kwargs)
+
+    def plan_parent(self, parent, **kwargs):
+        return self.plan_parent_callback(parent, **kwargs)
+
+    def next_child(self, parent, child_short):
+        return self.next_child_callback(parent, child_short)
+
+    def virtual_child(self, plan, **kwargs):
+        return self.virtual_child_callback(plan, **kwargs)
+
+    def terminal_error(self, child, recovery_at):
+        return self.terminal_error_callback(child, recovery_at)
+
+    def is_orphan_deleted(self, child):
+        return self.is_orphan_deleted_callback(child)
+
+    def recovery_error(self, parent, reason):
+        return self.recovery_error_callback(parent, reason)
+
+    def recovery_partial(self, parent, reason):
+        return self.recovery_partial_callback(parent, reason)
+
+    def recovery_manual_review(self, parent, reason):
+        return self.recovery_manual_review_callback(parent, reason)
+
+    def recovery_terminal(self, parent, reason):
+        return self.recovery_terminal_callback(parent, reason)
+
+    def recovery_from_exception(self, parent, exc):
+        return self.recovery_exception_callback(parent, exc)
 
 
 def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -280,4 +335,4 @@ class LifecycleReconciliationService:
         return outcomes
 
 
-__all__ = ["LifecycleReconciliationService"]
+__all__ = ["CallbackLifecycleRecoveryOperations", "LifecycleReconciliationService"]

@@ -58,7 +58,10 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
 from nautical_core.reconcile_report import exit_code, render_human, render_json  # noqa: E402
-from nautical_core.lifecycle_reconciliation import LifecycleReconciliationService  # noqa: E402
+from nautical_core.lifecycle_reconciliation import (  # noqa: E402
+    CallbackLifecycleRecoveryOperations,
+    LifecycleReconciliationService,
+)
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -1379,55 +1382,6 @@ def _virtual_expired_child(
     return child, ""
 
 
-class _ReconcileRecoveryOperations:
-    """Typed policy port used by LifecycleReconciliationService."""
-
-    def __init__(self, task_bin: str, hook: Any):
-        self.task_bin = task_bin
-        self.hook = hook
-
-    def apply_parent(self, parent, *, taskdata, lease_held, verified_children, generation):
-        return _apply_parent_atomic(
-            self.task_bin, self.hook, parent, taskdata=taskdata,
-            lease_held=lease_held, verified_children=verified_children, generation=generation,
-        )
-
-    def plan_parent(self, parent, *, generation):
-        return _plan_for_parent(self.task_bin, self.hook, parent, generation=generation)
-
-    def next_child(self, parent, child_short):
-        return _next_recovery_child(parent, child_short)
-
-    def virtual_child(self, plan, *, recovery_at):
-        return _virtual_expired_child(plan, hook=self.hook, recovery_at=recovery_at)
-
-    def terminal_error(self, child, recovery_at):
-        return _terminal_recovery_error(child, self.hook, recovery_at)
-
-    def is_orphan_deleted(self, child):
-        return lifecycle.is_orphan_deleted_chain_candidate(child)
-
-    def recovery_error(self, parent, reason):
-        return _recovery_error(parent, reason)
-
-    def recovery_partial(self, parent, reason):
-        return _recovery_partial(parent, reason)
-
-    def recovery_manual_review(self, parent, reason):
-        return _recovery_manual_review(parent, reason)
-
-    def recovery_terminal(self, parent, reason):
-        return _recovery_terminal(parent, reason)
-
-    def recovery_from_exception(self, parent, exc):
-        reason = str(exc).strip() or type(exc).__name__
-        if isinstance(exc, (_ConfigurationDrift, _LifecycleRetryable, _PlanReadUnavailable)):
-            return _recovery_partial(parent, reason)
-        if isinstance(exc, _LifecycleManualReview):
-            return _recovery_manual_review(parent, reason)
-        return _recovery_error(parent, reason)
-
-
 def _reconcile_candidate(
     task_bin: str,
     hook: Any,
@@ -1440,9 +1394,37 @@ def _reconcile_candidate(
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
 ) -> list[tuple[lifecycle.LifecycleRecoveryDecision, str]]:
+    def recovery_from_exception(candidate: dict[str, Any], exc: Exception) -> Any:
+        reason = str(exc).strip() or type(exc).__name__
+        if isinstance(exc, (_ConfigurationDrift, _LifecycleRetryable, _PlanReadUnavailable)):
+            return _recovery_partial(candidate, reason)
+        if isinstance(exc, _LifecycleManualReview):
+            return _recovery_manual_review(candidate, reason)
+        return _recovery_error(candidate, reason)
+
     return _lifecycle_reconciliation_service().recover_candidate(
         parent,
-        operations=_ReconcileRecoveryOperations(task_bin, hook),
+        operations=CallbackLifecycleRecoveryOperations(
+            apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(
+                task_bin, hook, candidate, **kwargs,
+            ),
+            plan_parent_callback=lambda candidate, **kwargs: _plan_for_parent(
+                task_bin, hook, candidate, **kwargs,
+            ),
+            next_child_callback=_next_recovery_child,
+            virtual_child_callback=lambda candidate, **kwargs: _virtual_expired_child(
+                candidate, hook=hook, **kwargs,
+            ),
+            terminal_error_callback=lambda child, recovery_at: _terminal_recovery_error(
+                child, hook, recovery_at,
+            ),
+            is_orphan_deleted_callback=lifecycle.is_orphan_deleted_chain_candidate,
+            recovery_error_callback=_recovery_error,
+            recovery_partial_callback=_recovery_partial,
+            recovery_manual_review_callback=_recovery_manual_review,
+            recovery_terminal_callback=_recovery_terminal,
+            recovery_exception_callback=recovery_from_exception,
+        ),
         taskdata=taskdata,
         apply=apply,
         max_expiration_hops=max_expiration_hops,

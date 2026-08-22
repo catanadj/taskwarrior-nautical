@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,9 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
+from nautical_core.chain_integrity_engine import ChainIntegrityEngine  # noqa: E402
+from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
+from nautical_core.lifecycle_outbox import LifecycleOutboxRepository  # noqa: E402
 from nautical_core import chain_repair  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.integration_models import (  # noqa: E402
@@ -54,8 +58,8 @@ def _export(repository: TaskReadRepository) -> list[dict[str, Any]]:
     raise RuntimeError("chain repair task repository returned an invalid result")
 
 
-def _apply_repair(unit_of_work: TaskwarriorUnitOfWork, repair: chain_repair.LinkRepair) -> None:
-    read = unit_of_work.repository.by_uuid(repair.uuid, refresh=True)
+def _request_for_operation(unit_of_work: TaskwarriorUnitOfWork, operation: Any) -> MutationRequest:
+    read = unit_of_work.repository.by_uuid(operation.target_uuid, refresh=True)
     if isinstance(read, Unavailable):
         raise RuntimeError(read.evidence.detail or "chain repair guard read unavailable")
     if isinstance(read, Absent):
@@ -63,24 +67,17 @@ def _apply_repair(unit_of_work: TaskwarriorUnitOfWork, repair: chain_repair.Link
     if not isinstance(read, Found):
         raise RuntimeError("chain repair guard read was invalid")
     row = read.value
-    raw_link = str(row.get("link") or "").strip()
-    if not raw_link and repair.field == "link":
-        # A missing link is the repair target, so the slot identity is the
-        # only trustworthy link value available for the guard.  Other repair
-        # fields still require an existing numeric link and fail closed.
-        link = repair.link
-    else:
-        try:
-            link = int(float(raw_link))
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise RuntimeError("chain repair target has no numeric link") from exc
+    try:
+        link = int(float(str(row.get("link") or "").strip()))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("chain repair target has no numeric link") from exc
     modified = str(row.get("modified") or "").strip()
     if not modified:
         raise RuntimeError("chain repair target has no modified timestamp")
     guard = MutationGuard(
-        task_uuid=repair.uuid,
+        task_uuid=operation.target_uuid,
         status=str(row.get("status") or ""),
-        chain_id=str(row.get("chainID") or ""),
+        chain_id=str(row.get("chainID") or operation.chain_id),
         link=link,
         recurrence_identity=recurrence_fingerprint(dict(row)),
         timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
@@ -88,34 +85,43 @@ def _apply_repair(unit_of_work: TaskwarriorUnitOfWork, repair: chain_repair.Link
         chain=str(row.get("chain") or "on"),
     )
     payload = MetadataRepairPayload.from_mapping(
-        repair.uuid,
-        {repair.field: repair.new},
-        expected={repair.field: repair.old},
+        operation.target_uuid,
+        dict(operation.payload),
+        expected={key: row.get(key) for key in operation.payload},
     )
     request = MutationRequest(MutationOperation.METADATA_REPAIR, guard, payload)
+    return request
+
+
+def _apply_repair(unit_of_work: TaskwarriorUnitOfWork, repair: chain_repair.LinkRepair) -> None:
+    """Test/tooling helper retained while the public command migrates plans."""
+    read = unit_of_work.repository.by_uuid(repair.uuid, refresh=True)
+    if isinstance(read, Unavailable):
+        raise RuntimeError(read.evidence.detail or "chain repair guard read unavailable")
+    if isinstance(read, Absent) or not isinstance(read, Found):
+        raise RuntimeError("chain repair target is absent")
+    row = read.value
+    try:
+        link = int(float(str(row.get("link") or "").strip()))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("chain repair target has no numeric link") from exc
+    modified = str(row.get("modified") or "").strip()
+    if not modified:
+        raise RuntimeError("chain repair target has no modified timestamp")
+    guard = MutationGuard(
+        task_uuid=repair.uuid, status=str(row.get("status") or ""),
+        chain_id=str(row.get("chainID") or ""), link=link,
+        recurrence_identity=recurrence_fingerprint(dict(row)),
+        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+        expected_mutation_epoch=unit_of_work.mutation_epoch, chain=str(row.get("chain") or "on"),
+    )
+    request = MutationRequest(
+        MutationOperation.METADATA_REPAIR, guard,
+        MetadataRepairPayload.from_mapping(repair.uuid, {repair.field: repair.new}, expected={repair.field: repair.old}),
+    )
     outcome = TaskwarriorMutationService(unit_of_work).apply(request)
     if outcome.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
         raise RuntimeError(outcome.reason or outcome.kind.value)
-
-
-def _print_repair(repair: chain_repair.LinkRepair, *, applied: bool) -> None:
-    old = repair.old or "-"
-    suffix = " applied" if applied else ""
-    print(f"repair:{suffix} {repair.short} chain {repair.chain_id} link {repair.link} {repair.field}: {old} -> {repair.new}")
-
-
-def _print_issue(issue: chain_repair.ChainIssue) -> None:
-    print(f"issue: {issue.chain_id} {issue.kind}: {issue.message}")
-    for task in issue.tasks[:5]:
-        print(
-            "  "
-            f"{task.get('short') or '????????'} link {task.get('link') or '-'} "
-            f"prev:{task.get('prevLink') or '-'} next:{task.get('nextLink') or '-'} "
-            f"{task.get('description') or ''}".rstrip()
-        )
-        reason = str(task.get("reason") or "").strip()
-        if reason:
-            print(f"    why: {reason}")
 
 
 def _failure(args: argparse.Namespace, stage: str, exc: Exception) -> int:
@@ -162,48 +168,41 @@ def main(
         except Exception as exc:
             return _failure(args, "integration_context", exc)
     try:
-        tasks = _export(_unit_of_work.repository)
+        config = _unit_of_work.context.configuration
+        engine = ChainIntegrityEngine(
+            ChainSnapshotService(_unit_of_work, configuration_fingerprint=config.fingerprint),
+            configuration_fingerprint=config.fingerprint,
+            schedule_fingerprint=config.scheduler_fingerprint,
+        )
+        result = engine.audit(
+            IntegritySnapshotRequest.candidates(complete_chain_history=True),
+            outbox_repository=LifecycleOutboxRepository(_unit_of_work.outbox.taskdata),
+            mutation_epoch=_unit_of_work.mutation_epoch,
+        )
+        applied_result = result
+        if args.apply and result.plans:
+            applied_result = engine.apply(
+                result,
+                executor=TaskwarriorMutationService(_unit_of_work),
+                request_factory=lambda operation: _request_for_operation(_unit_of_work, operation),
+                outbox_repository=LifecycleOutboxRepository(_unit_of_work.outbox.taskdata),
+                owner=f"chain-repair-{os.getpid()}",
+            )
     except Exception as exc:
-        return _failure(args, "task_export", exc)
-    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
-    applied: list[dict[str, Any]] = []
-    apply_error: dict[str, Any] | None = None
-
-    for issue in issues:
-        if not args.json:
-            _print_issue(issue)
-
-    for repair in repairs:
-        if args.apply:
-            try:
-                _apply_repair(_unit_of_work, repair)
-            except Exception as exc:
-                apply_error = {
-                    "repair": repair.__dict__,
-                    "error": str(exc).strip() or type(exc).__name__,
-                }
-                if not args.json:
-                    print(f"error: repair apply: {apply_error['error']}", file=sys.stderr)
-                break
-            applied.append(repair.__dict__)
-        if not args.json:
-            _print_repair(repair, applied=args.apply)
+        return _failure(args, "integrity_audit", exc)
 
     summary = {
         "mode": "apply" if args.apply else "dry-run",
-        "repairs": len(repairs),
-        "issues": len(issues),
-        "applied": applied,
-        "issue_details": [issue.__dict__ for issue in issues],
+        "repairs": len(result.plans),
+        "issues": len(result.refusals),
+        "applied": [item.__dict__ for item in applied_result.applications],
+        "issue_details": [issue.__dict__ for issue in result.refusals],
     }
-    if apply_error is not None:
-        summary["error"] = apply_error
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
-        error_suffix = " errors=1" if apply_error is not None else ""
-        print(f"summary: {summary['mode']}; repairs={summary['repairs']} issues={summary['issues']}{error_suffix}")
-    return 1 if issues or apply_error is not None else 0
+        print(f"summary: {summary['mode']}; repairs={summary['repairs']} issues={summary['issues']}")
+    return 1 if result.refusals or result.status.value in {"unavailable", "manual_review"} else 0
 
 
 if __name__ == "__main__":

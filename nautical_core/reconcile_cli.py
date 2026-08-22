@@ -15,7 +15,13 @@ def build_parser(
     parser = argparse.ArgumentParser(
         description="Repair Nautical chains after hookless completion, expiration, or deletion."
     )
-    parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="Apply repairs.")
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview repairs without mutating Taskwarrior (the default).",
+    )
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")

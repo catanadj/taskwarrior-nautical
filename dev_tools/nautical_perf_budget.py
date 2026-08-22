@@ -1803,6 +1803,61 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             candidate_samples,
             float(budgets.get("workflow_reconcile_candidates", budgets.get("workflow_reconcile", 3.0))),
         )
+
+        long_data = root / "reconcile-long-history"
+        long_data.mkdir()
+        long_env = dict(base_env, TASKDATA=str(long_data))
+        long_count = max(history_rows, int(workflow_cfg.get("reconcile_long_history_rows", 2048)))
+        long_tasks = []
+        for link in range(1, long_count + 1):
+            task = {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-long/{link}")),
+                "status": "completed",
+                "description": f"Long reconcile benchmark {link}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": "reconcile-long-chain",
+                "link": link,
+                "due": f"202601{min(link, 28):02d}T090000Z",
+            }
+            if link > 1:
+                task["prevLink"] = long_tasks[-1]["uuid"][:8]
+            if link < long_count:
+                task["nextLink"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-long/{link + 1}"))[:8]
+            long_tasks.append(task)
+        long_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in long_tasks),
+            text=True,
+            capture_output=True,
+            env=long_env,
+            timeout=60.0,
+        )
+        if long_import.returncode != 0:
+            raise RuntimeError(
+                "long reconcile fixture import failed: "
+                f"{(long_import.stderr or long_import.stdout or '').strip()}"
+            )
+        long_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=long_env, timeout=60.0)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"long reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("long reconcile workflow returned invalid JSON") from exc
+            if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
+                raise RuntimeError("long reconcile workflow returned an invalid report")
+            long_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_long_history"] = _measure_workflow(
+            "workflow_reconcile_long_history",
+            long_samples,
+            float(budgets.get("workflow_reconcile_long_history", budgets.get("workflow_reconcile", 3.0))),
+        )
         return results
 
 

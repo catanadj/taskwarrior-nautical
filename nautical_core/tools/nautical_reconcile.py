@@ -325,20 +325,32 @@ def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
 class _ReconcileSnapshot:
     """Immutable read-phase views for active links and recovery candidates.
 
-    Completed/deleted history is intentionally kept out of the active snapshot.
+    By default completed/deleted history is limited to rows without a successor;
+    ``full_audit`` explicitly restores complete history for deep validation.
     Native-until repair reads a predecessor by chain/link only when an active
     row actually needs repair.
     """
 
-    def __init__(self, repository: TaskReadRepository, *, scope_filter: str | None = None):
+    def __init__(
+        self,
+        repository: TaskReadRepository,
+        *,
+        scope_filter: str | None = None,
+        full_audit: bool = False,
+    ):
         self.repository = repository
         self.scope_filter = str(scope_filter or "").strip() or None
+        self.full_audit = bool(full_audit)
         self._rows: tuple[dict[str, Any], ...] | None = None
 
     def _all_rows(self) -> tuple[dict[str, Any], ...]:
         if self._rows is None:
             value = _read_value(
-                self.repository.lifecycle_candidates(statuses=ALL_TASK_STATUSES, scope_filter=self.scope_filter),
+                self.repository.lifecycle_candidates(
+                    statuses=ALL_TASK_STATUSES,
+                    scope_filter=self.scope_filter,
+                    bounded=not self.full_audit,
+                ),
                 "reconcile lifecycle snapshot",
             )
             self._rows = tuple(dict(row) for row in (value or ()))
@@ -1612,7 +1624,11 @@ def main(
     _READ_REPOSITORY = _unit_of_work.repository
     _READ_REPOSITORY.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
     scope_filter = f"chainID:{args.chain_id}" if args.chain_id else f"uuid:{args.uuid}" if args.uuid else None
-    snapshot = _ReconcileSnapshot(_READ_REPOSITORY, scope_filter=scope_filter)
+    snapshot = _ReconcileSnapshot(
+        _READ_REPOSITORY,
+        scope_filter=scope_filter,
+        full_audit=bool(args.full_audit),
+    )
     _READ_SNAPSHOT = snapshot
     configuration = _UNIT_OF_WORK.context.configuration
     _LIFECYCLE_SERVICE = LifecycleReconciliationService(
@@ -1892,6 +1908,7 @@ def main(
         "configuration_drifted": int(configuration_status == "drifted"),
         "configuration_drift": configuration_drift_reason,
         "mode": "apply" if args.apply else "dry-run",
+        "audit_mode": "full" if args.full_audit else "bounded",
         "scope": {"chainID": args.chain_id, "uuid": args.uuid},
         "candidates": len(candidates),
         "expiration_hops": expiration_hops,

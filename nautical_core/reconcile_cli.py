@@ -19,6 +19,11 @@ def build_parser(
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")
+    parser.add_argument(
+        "--full-audit",
+        action="store_true",
+        help="Export complete chain history for deep validation; default audits active tips and unresolved terminals.",
+    )
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--chain-id", help="Restrict audit and recovery to one chainID.")
     scope.add_argument("--uuid", help="Restrict audit and recovery to one task UUID.")

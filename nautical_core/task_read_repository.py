@@ -650,6 +650,7 @@ class TaskReadRepository:
         *,
         statuses: Sequence[str] = ("completed", "deleted", "pending"),
         scope_filter: str | None = None,
+        bounded: bool = False,
         refresh: bool = False,
     ) -> TaskRead[tuple[TaskRow, ...]]:
         scope_filter = str(scope_filter or "").strip()
@@ -662,7 +663,17 @@ class TaskReadRepository:
             )
         identity = "chain:on" if not scope_filter else f"chain:on {scope_filter}"
         scope = TaskSnapshotScope(TaskQueryKind.LIFECYCLE_CANDIDATES, identity, tuple(statuses))
-        filters = ("chain:on",) if not scope_filter else ("chain:on", scope_filter)
+        if bounded:
+            # Keep active work and only terminal rows that can still require a
+            # successor.  Full history remains available through --full-audit.
+            terminal = ("(", "status:completed", "or", "status:deleted", ")", "nextLink:")
+            filters = (
+                "chain:on", "(", "status:pending", "or", "status:waiting", "or", *terminal, ")",
+            )
+        else:
+            filters = ("chain:on",) if not scope_filter else ("chain:on", scope_filter)
+        if scope_filter and bounded:
+            filters = (*filters, scope_filter)
         read = self._export(scope, filters, empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
         if not isinstance(read, Found):
             return read

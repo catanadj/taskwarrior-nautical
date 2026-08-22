@@ -350,6 +350,46 @@ def _child_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _carry_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    """Check relative carried timing only across one resolved edge."""
+    findings: list[IntegrityFinding] = []
+    for parent in graph.nodes:
+        reference = graph.reference(parent.task_uuid, "nextLink")
+        if reference.state is not ReferenceState.RESOLVED:
+            continue
+        children = graph.uuid_matches(reference.target_uuid)
+        if len(children) != 1:
+            continue
+        child = children[0]
+        parent_due = _canonical_timestamp(parent.field("due"))
+        child_due = _canonical_timestamp(child.field("due"))
+        if parent_due is None or child_due is None:
+            continue
+        for field in ("scheduled", "wait", "until"):
+            parent_value = _canonical_timestamp(parent.field(field))
+            child_value = _canonical_timestamp(child.field(field))
+            if parent_value is None or child_value is None:
+                continue
+            parent_delta = (parent_value - parent_due).total_seconds()
+            child_delta = (child_value - child_due).total_seconds()
+            if parent_delta == child_delta:
+                continue
+            findings.append(IntegrityFinding(
+                "carry.child_relative_offset",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                graph.snapshot.snapshot_id,
+                parent.chain_id,
+                (parent.task_uuid, child.task_uuid),
+                "child_carry_offset_changed",
+                f"Child {field} offset does not preserve the parent recurrence carry.",
+                (("field", field), ("parent_offset_seconds", parent_delta), ("child_offset_seconds", child_delta)),
+                (("offset_seconds", parent_delta),),
+                (("parent_link", parent.link), ("child_link", child.link)),
+            ))
+    return tuple(findings)
+
+
 def _recurrence_identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for node in graph.nodes:
@@ -470,6 +510,7 @@ DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
     InvariantRule("terminal", SnapshotCoverage.CANDIDATES, _terminal_rule),
     InvariantRule("continuity.child_temporal_order", SnapshotCoverage.CANDIDATES, _child_continuity_rule),
+    InvariantRule("carry.child_relative_offset", SnapshotCoverage.CANDIDATES, _carry_continuity_rule),
     InvariantRule("identity.recurrence", SnapshotCoverage.CANDIDATES, _recurrence_identity_rule),
     InvariantRule("carry.temporal", SnapshotCoverage.CANDIDATES, _temporal_rule),
 )

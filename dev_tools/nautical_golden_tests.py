@@ -1731,6 +1731,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
                 "link": 1,
                 "anchor": "w:mon",
                 "due": "20260822T120000Z",
+                "scheduled": "20260822T110000Z",
                 "nextLink": "13131313",
             }),
             ChainNode.from_mapping({
@@ -1740,6 +1741,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
                 "chainID": "continuity-chain",
                 "link": 2,
                 "due": "20260822T110000Z",
+                "scheduled": "20260822T103000Z",
                 "prevLink": "12121212",
             }),
         ),
@@ -1752,6 +1754,10 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(
         ("continuity.child_recurrence_identity", "child_recurrence_identity_mismatch") in continuity_ids,
         "child recurrence identity loss was not reported",
+    )
+    expect(
+        ("carry.child_relative_offset", "child_carry_offset_changed") in continuity_ids,
+        "changed child carry offset was not reported",
     )
 
 

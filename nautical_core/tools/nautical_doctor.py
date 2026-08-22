@@ -1168,106 +1168,10 @@ def _check_chains(
     _check_reconcile_plans(findings, rows=rows)
 
     nautical = [
-        row
-        for row in rows
+        row for row in rows
         if any(str(row.get(field) or "").strip() for field in RECURRENCE_FIELDS)
         or str(row.get("chainID") or "").strip()
     ]
-    by_short: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        short = _short_uuid(row.get("uuid"))
-        if short:
-            by_short[short].append(row)
-
-    missing_chain = [row for row in nautical if any(row.get(field) for field in RECURRENCE_FIELDS) and not row.get("chainID")]
-    if missing_chain:
-        _finding(
-            findings,
-            "chains.missing_chainid",
-            "error",
-            f"{len(missing_chain)} Nautical task(s) are missing chainID.",
-            fix="Run dev_tools/nautical_backfill_chainid.py, review its output, then retry.",
-            details={"tasks": [_task_detail(row) for row in missing_chain[:10]]},
-        )
-
-    slots: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
-    for row in nautical:
-        if str(row.get("status") or "").lower() == "deleted":
-            continue
-        chain_id = str(row.get("chainID") or "").strip()
-        try:
-            link_no = int(row.get("link"))
-        except Exception:
-            continue
-        if chain_id:
-            slots[(chain_id, link_no)].append(row)
-    duplicates = {slot: members for slot, members in slots.items() if len(members) > 1}
-    if duplicates:
-        sample = [
-            {
-                "chainID": chain_id,
-                "link": link,
-                "tasks": [_task_detail(row) for row in members],
-            }
-            for (chain_id, link), members in list(duplicates.items())[:10]
-        ]
-        _finding(
-            findings,
-            "chains.duplicate_slots",
-            "error",
-            f"{len(duplicates)} duplicate chain slot(s) were found.",
-            fix="Inspect the duplicate tasks before deleting or merging anything.",
-            details={"slots": sample},
-        )
-
-    dangling: list[dict[str, Any]] = []
-    nonreciprocal: list[dict[str, Any]] = []
-    for row in nautical:
-        uuid = str(row.get("uuid") or "")
-        current_short = _short_uuid(uuid)
-        for field, reciprocal in (("prevLink", "nextLink"), ("nextLink", "prevLink")):
-            token = _short_uuid(row.get(field))
-            if not token:
-                continue
-            matches = by_short.get(token, [])
-            if len(matches) != 1:
-                dangling.append(
-                    {
-                        "task": _task_detail(row),
-                        "field": field,
-                        "target": token,
-                        "matches": len(matches),
-                    }
-                )
-                continue
-            target = matches[0]
-            if _short_uuid(target.get(reciprocal)) != current_short:
-                nonreciprocal.append(
-                    {
-                        "task": _task_detail(row),
-                        "field": field,
-                        "target": _task_detail(target),
-                        "expected_reciprocal": reciprocal,
-                    }
-                )
-    if dangling:
-        _finding(
-            findings,
-            "chains.dangling_links",
-            "warn",
-            f"{len(dangling)} unresolved chain link(s) were found.",
-            details={"links": dangling[:10]},
-        )
-    if nonreciprocal:
-        _finding(
-            findings,
-            "chains.nonreciprocal_links",
-            "warn",
-            f"{len(nonreciprocal)} non-reciprocal chain link(s) were found.",
-            details={"links": nonreciprocal[:10]},
-        )
-    if not any(item["id"].startswith("chains.") and item["severity"] != "ok" for item in findings):
-        _finding(findings, "chains.integrity", "ok", f"Chain integrity is clean across {len(nautical)} Nautical task(s).")
 
     return {
         "tasks": len(rows),

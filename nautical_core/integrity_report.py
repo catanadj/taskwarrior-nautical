@@ -39,6 +39,21 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             ),
             "details": details,
         })
+    if result.status.value == "unavailable":
+        findings.append({
+            "id": "chains.integrity_unavailable",
+            "severity": "error",
+            "message": "Chain integrity could not be evaluated.",
+            "fix": "Retry after resolving the reported Taskwarrior or configuration error.",
+            "details": {"reason": result.reason},
+        })
+    elif result.status.value == "healthy" and not findings:
+        findings.append({
+            "id": "chains.integrity",
+            "severity": "ok",
+            "message": "Chain integrity is clean.",
+            "details": {"snapshot": result.snapshot.snapshot_id if result.snapshot is not None else None},
+        })
     if result.plans:
         findings.append({
             "id": "chains.repair_available",

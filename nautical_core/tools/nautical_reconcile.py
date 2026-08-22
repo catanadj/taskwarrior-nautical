@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 import json
 import os
@@ -1198,11 +1198,16 @@ def _apply_parent_atomic(
     parent_uuid = str(original_parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
-    with _reconcile_mutation_lock(taskdata, lease_held=lease_held) as reconcile_acquired:
+    reconciliation = _lifecycle_reconciliation_service()
+    with (
+        reconciliation.reconcile_lock(taskdata)
+        if not lease_held
+        else nullcontext(True)
+    ) as reconcile_acquired:
         if not reconcile_acquired:
             _LOCK_STATS["reconcile_busy"] += 1
             raise RuntimeError("another reconcile apply is already running")
-        with _parent_apply_lock(taskdata, parent_uuid) as acquired:
+        with reconciliation.parent_lock(taskdata, parent_uuid) as acquired:
             if not acquired:
                 _LOCK_STATS["parent_busy"] += 1
                 raise RuntimeError(f"parent reconcile lock busy: {lifecycle.short_uuid(parent_uuid)}")

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Protocol
 
 from . import chain_integrity_lifecycle as lifecycle
@@ -10,6 +12,14 @@ from .chain_generation import ChainGenerationService
 from .chain_integrity_engine import ChainIntegrityEngine
 from .integration_models import Absent, Found, Unavailable
 from .lifecycle_models import DeletionDisposition
+from .lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path
+from .cache_locking import safe_lock
+
+
+_PARENT_LOCK_RETRIES = 600
+_PARENT_LOCK_SLEEP_SECONDS = 0.1
+_PARENT_LOCK_STALE_SECONDS = 300.0
+_RECONCILE_LOCK_STALE_SECONDS = 300.0
 
 
 class LifecycleSnapshot(Protocol):
@@ -38,6 +48,24 @@ class LifecycleReconciliationService:
     configuration_fingerprint: str
     schedule_fingerprint: str
     unit_of_work: Any = None
+
+    @contextmanager
+    def reconcile_lock(self, taskdata: Path):
+        with safe_lock(
+            reconcile_lock_path(taskdata), retries=1, sleep_base=0.0,
+            stale_after=_RECONCILE_LOCK_STALE_SECONDS,
+        ) as acquired:
+            yield acquired
+
+    @contextmanager
+    def parent_lock(self, taskdata: Path, parent_uuid: str):
+        with safe_lock(
+            parent_nextlink_lock_path(taskdata, parent_uuid),
+            retries=_PARENT_LOCK_RETRIES,
+            sleep_base=_PARENT_LOCK_SLEEP_SECONDS,
+            stale_after=_PARENT_LOCK_STALE_SECONDS,
+        ) as acquired:
+            yield acquired
 
     def application_service(self) -> Any:
         """Build the sole lifecycle mutation service for this invocation."""

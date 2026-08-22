@@ -31747,6 +31747,53 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
 
 
+def test_integrity_recovery_fault_matrix_fails_closed():
+    """Recovery evidence keeps unavailable/malformed predecessor states explicit."""
+    from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
+
+    def parse(value):
+        try:
+            return datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc), None
+        except Exception as exc:
+            return None, str(exc)
+
+    def fmt(value):
+        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    row = {
+        "uuid": "00000000-0000-0000-0000-000000000701",
+        "chainID": "fault-recovery",
+        "link": 2,
+        "status": "pending",
+        "due": "20260820T100000Z",
+        "until": "20260820T090000Z",
+    }
+    service = IntegrityRecoveryService()
+    unavailable = service.audit_native_until(
+        [row],
+        predecessor=lambda _row: None,
+        safe_parse_datetime=parse,
+        fmt_isoz=fmt,
+        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
+        local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+    )
+    expect(unavailable.native_until.status == "invalid", f"unavailable predecessor was hidden: {unavailable}")
+    expect(unavailable.candidates and unavailable.candidates[0].item.get("fallback") == "local 23:00",
+           f"day-end fallback was not explicit: {unavailable}")
+
+    malformed = service.audit_native_until(
+        [{**row, "due": "not-a-date"}],
+        predecessor=lambda _row: None,
+        safe_parse_datetime=lambda _value: (None, "malformed datetime"),
+        fmt_isoz=fmt,
+        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
+        local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+    )
+    expect(malformed.native_until.status == "invalid", f"malformed evidence was hidden: {malformed}")
+    expect(malformed.native_until.repairs and malformed.native_until.repairs[0].get("action") == "manual_review",
+           f"malformed evidence fabricated a repair: {malformed}")
+
+
 def test_seasonal_selection_business_calendar_and_cache_identity():
     """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
     from nautical_core import position_selection
@@ -32717,6 +32764,7 @@ TESTS = [
     test_reconcile_plan_uses_task_business_calendar_context,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
+    test_integrity_recovery_fault_matrix_fails_closed,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,
     test_reconcile_reuses_verified_live_recovery_child,

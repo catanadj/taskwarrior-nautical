@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
 import os
@@ -77,7 +78,6 @@ _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
 _EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, "snapshot_hits": 0}
 _LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
-_READ_REPOSITORY: TaskReadRepository | None = None
 _UNIT_OF_WORK: TaskwarriorUnitOfWork | None = None
 
 
@@ -241,9 +241,10 @@ def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any])
 
 
 def _repository() -> TaskReadRepository:
-    if _READ_REPOSITORY is None:
+    state = _reconcile_runtime_state()
+    if state is None:
         raise RuntimeError("reconcile task read repository is unavailable")
-    return _READ_REPOSITORY
+    return state.repository
 
 
 def _read_value(read: Any, subject: str) -> Any | None:
@@ -374,23 +375,36 @@ class _ReconcileSnapshot:
         ]
 
 
-_READ_SNAPSHOT: _ReconcileSnapshot | None = None
-_LIFECYCLE_SERVICE: LifecycleReconciliationService | None = None
+class _ReconcileRuntimeState:
+    """Invocation-scoped read/service state; never shared between runs."""
+
+    __slots__ = ("repository", "snapshot", "lifecycle_service")
+
+    def __init__(
+        self,
+        repository: TaskReadRepository,
+        snapshot: _ReconcileSnapshot,
+        lifecycle_service: LifecycleReconciliationService,
+    ) -> None:
+        self.repository = repository
+        self.snapshot = snapshot
+        self.lifecycle_service = lifecycle_service
+
+
+_RECONCILE_RUNTIME: ContextVar[_ReconcileRuntimeState | None] = ContextVar(
+    "nautical_reconcile_runtime", default=None,
+)
+
+
+def _reconcile_runtime_state() -> _ReconcileRuntimeState | None:
+    return _RECONCILE_RUNTIME.get()
 
 
 def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
-    if _LIFECYCLE_SERVICE is not None:
-        return _LIFECYCLE_SERVICE
-    if _READ_SNAPSHOT is None:
-        raise RuntimeError("lifecycle reconciliation service requires an invocation snapshot")
-    configuration = _UNIT_OF_WORK.context.configuration if _UNIT_OF_WORK is not None else None
-    return LifecycleReconciliationService(
-        _READ_SNAPSHOT,
-        _READ_SNAPSHOT.repository,
-        configuration_fingerprint=configuration.fingerprint if configuration is not None else "reconcile",
-        schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "reconcile",
-        unit_of_work=_UNIT_OF_WORK,
-    )
+    state = _reconcile_runtime_state()
+    if state is not None:
+        return state.lifecycle_service
+    raise RuntimeError("lifecycle reconciliation service requires an invocation snapshot")
 
 
 def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
@@ -477,7 +491,7 @@ def _native_until_repairs(
     active_rows = _active_chain_rows(
         task_bin,
         include_inactive=False,
-        snapshot=snapshot or _READ_SNAPSHOT,
+        snapshot=snapshot or (_reconcile_runtime_state().snapshot if _reconcile_runtime_state() is not None else None),
     )
     rows = active_rows
     by_chain_link = {
@@ -1632,27 +1646,28 @@ def main(
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
         return _startup_failure(args, "runtime", exc)
-    global _READ_REPOSITORY, _READ_SNAPSHOT, _UNIT_OF_WORK, _LIFECYCLE_SERVICE
+    global _UNIT_OF_WORK
     _UNIT_OF_WORK = _unit_of_work
-    _READ_REPOSITORY = _unit_of_work.repository
-    _READ_REPOSITORY.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    repository = _unit_of_work.repository
+    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
     scope_filter = f"chainID:{args.chain_id}" if args.chain_id else f"uuid:{args.uuid}" if args.uuid else None
     snapshot = _ReconcileSnapshot(
-        _READ_REPOSITORY,
+        repository,
         scope_filter=scope_filter,
         full_audit=bool(args.full_audit),
     )
-    _READ_SNAPSHOT = snapshot
     configuration = _UNIT_OF_WORK.context.configuration
-    _LIFECYCLE_SERVICE = LifecycleReconciliationService(
+    lifecycle_service = LifecycleReconciliationService(
         snapshot,
-        _READ_REPOSITORY,
+        repository,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
         unit_of_work=_UNIT_OF_WORK,
     )
+    runtime_state = _ReconcileRuntimeState(repository, snapshot, lifecycle_service)
+    _RECONCILE_RUNTIME.set(runtime_state)
     try:
-        candidates = _LIFECYCLE_SERVICE.candidates()
+        candidates = lifecycle_service.candidates()
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
     integrity_audit_result: Any = None
@@ -1661,10 +1676,10 @@ def main(
     integrity_application_seconds = 0.0
     try:
         from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-        if _READ_SNAPSHOT is not None and _READ_SNAPSHOT._rows is not None:
+        if snapshot._rows is not None:
             integrity_started = time.perf_counter()
             integrity_engine, integrity_audit_result = _audit_reconcile_integrity(
-                tuple(_READ_SNAPSHOT._rows)
+                tuple(snapshot._rows)
             )
             integrity_seconds = time.perf_counter() - integrity_started
         if integrity_audit_result is not None and integrity_audit_result.status.value == "unavailable":
@@ -1681,9 +1696,9 @@ def main(
             )
             integrity_application_results = integrity_application.applications
             integrity_application_seconds = time.perf_counter() - application_started
-            if _READ_SNAPSHOT is not None and integrity_application_results:
-                _READ_SNAPSHOT._rows = None
-                candidates = _LIFECYCLE_SERVICE.candidates()
+            if integrity_application_results:
+                snapshot._rows = None
+                candidates = lifecycle_service.candidates()
     except Exception as exc:
         integrity_audit_result = None
         if args.apply:

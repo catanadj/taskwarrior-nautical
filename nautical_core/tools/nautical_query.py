@@ -161,6 +161,7 @@ def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     """Run a read-only integrity audit through the shared engine boundary."""
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine
     from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.integrity_report import public_payload
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     selected = sum(bool(value) for value in (args.uuids, args.chain_id, args.all_tasks))
@@ -191,25 +192,11 @@ def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
         mutation_epoch=unit_of_work.mutation_epoch,
     )
-    snapshot = result.snapshot
-    payload = {
-        "schema": INTEGRITY_SCHEMA,
-        "version": 1,
-        "operation": "integrity",
-        "status": result.status.value,
-        "configuration_fingerprint": configuration.fingerprint,
-        "query": {"kind": request.kind.value, "chainID": request.chain_id or None, "uuid": request.task_uuid or None},
-        "snapshot": snapshot.to_dict() if snapshot is not None else None,
-        "findings": [finding.to_dict() for finding in result.findings],
-        "plans": [plan.to_dict() for plan in result.plans],
-        "refusals": [
-            {"invariant_id": item.invariant_id, "reason_code": item.reason_code,
-             "reason": item.reason, "snapshot_id": item.snapshot_id}
-            for item in result.refusals
-        ],
-        "chain_statuses": [{"chainID": chain_id, "status": status.value} for chain_id, status in result.chain_statuses],
-        "failure": {"message": result.reason} if result.reason else None,
-    }
+    payload = public_payload(
+        result,
+        query={"kind": request.kind.value, "chainID": request.chain_id or None, "uuid": request.task_uuid or None},
+        configuration_fingerprint=configuration.fingerprint,
+    )
     return payload, 3 if result.status.value == "unavailable" else 0
 
 

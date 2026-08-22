@@ -103,4 +103,38 @@ def summary(result: IntegrityEngineResult) -> dict[str, Any]:
     }
 
 
-__all__ = ["doctor_findings", "summary"]
+def public_payload(
+    result: IntegrityEngineResult,
+    *,
+    query: dict[str, Any],
+    configuration_fingerprint: str,
+) -> dict[str, Any]:
+    """Serialize one engine result for external read-only consumers."""
+    return {
+        "schema": "nautical.query.integrity",
+        "version": 1,
+        "operation": "integrity",
+        "status": result.status.value,
+        "configuration_fingerprint": str(configuration_fingerprint or ""),
+        "query": query,
+        "snapshot": result.snapshot.to_dict() if result.snapshot is not None else None,
+        "findings": [finding.to_dict() for finding in result.findings],
+        "plans": [plan.to_dict() for plan in result.plans],
+        "refusals": [
+            {
+                "invariant_id": item.invariant_id,
+                "reason_code": item.reason_code,
+                "reason": item.reason,
+                "snapshot_id": item.snapshot_id,
+            }
+            for item in result.refusals
+        ],
+        "chain_statuses": [
+            {"chainID": chain_id, "status": status.value}
+            for chain_id, status in result.chain_statuses
+        ],
+        "failure": {"message": result.reason} if result.reason else None,
+    }
+
+
+__all__ = ["doctor_findings", "public_payload", "summary"]

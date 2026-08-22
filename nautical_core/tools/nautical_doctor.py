@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
+from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
@@ -989,17 +989,6 @@ def _task_detail(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _chain_repair_detail(repair: chain_repair.LinkRepair) -> dict[str, Any]:
-    return {
-        "task": repair.short,
-        "chainID": repair.chain_id,
-        "link": repair.link,
-        "field": repair.field,
-        "old": repair.old,
-        "new": repair.new,
-    }
-
-
 def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
     next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
@@ -1157,7 +1146,23 @@ def _check_chains(
         )
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
 
-    repairs, repair_issues = chain_repair.plan_chain_link_repairs(rows)
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    configuration = unit_of_work.context.configuration if unit_of_work is not None else None
+    integrity = None
+    if unit_of_work is not None and configuration is not None:
+        integrity = ChainIntegrityEngine(
+            ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint),
+            configuration_fingerprint=configuration.fingerprint,
+            schedule_fingerprint=configuration.scheduler_fingerprint,
+        ).audit(
+            IntegritySnapshotRequest.candidates(complete_chain_history=True),
+            outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
+            mutation_epoch=unit_of_work.mutation_epoch,
+        )
+    repairs = tuple(integrity.plans) if integrity is not None else ()
     if repairs:
         _finding(
             findings,
@@ -1165,14 +1170,13 @@ def _check_chains(
             "warn",
             f"{len(repairs)} safe chain repair(s) are available.",
             fix="Run nautical chain-repair --apply after reviewing the dry-run output.",
-            details={"repairs": [_chain_repair_detail(repair) for repair in repairs[:10]]},
+            details={"repairs": [plan.to_dict() for plan in repairs[:10]]},
         )
+    repair_issues = tuple(integrity.refusals) if integrity is not None else ()
     if repair_issues:
         reason_counts: dict[str, int] = defaultdict(int)
         for issue in repair_issues:
-            for task in issue.tasks:
-                reason = str(task.get("reason") or issue.message or issue.kind).strip()
-                reason_counts[reason] += 1
+            reason_counts[str(issue.reason or issue.reason_code).strip()] += 1
         _finding(
             findings,
             "chains.repair_review",
@@ -1183,10 +1187,10 @@ def _check_chains(
                 "reasons": dict(sorted(reason_counts.items())),
                 "issues": [
                     {
-                        "kind": issue.kind,
-                        "chainID": issue.chain_id,
-                        "message": issue.message,
-                        "tasks": issue.tasks[:5],
+                        "kind": issue.reason_code,
+                        "chainID": "",
+                        "message": issue.reason,
+                        "tasks": [],
                     }
                     for issue in repair_issues[:10]
                 ],

@@ -194,7 +194,13 @@ class ChainSnapshotService:
             ))
         return ChainSnapshot(
             _snapshot_id(request, raw_rows, self._configuration_fingerprint),
-            coverage or (SnapshotCoverage.CHAIN if request.kind is IntegritySnapshotKind.CHAIN else SnapshotCoverage.CANDIDATES),
+            coverage or (
+                SnapshotCoverage.CHAIN
+                if request.kind is IntegritySnapshotKind.CHAIN
+                else SnapshotCoverage.COMPLETE
+                if request.complete_chain_history
+                else SnapshotCoverage.CANDIDATES
+            ),
             source,
             normalized,
             self._configuration_fingerprint,
@@ -273,7 +279,11 @@ class ChainSnapshotService:
     def _empty_snapshot(request: IntegritySnapshotRequest, reason: str) -> ChainSnapshot:
         return ChainSnapshot(
             "cis1-empty-" + hashlib.sha256(ChainSnapshotService._query(request).encode()).hexdigest()[:16],
-            SnapshotCoverage.CHAIN if request.kind is IntegritySnapshotKind.CHAIN else SnapshotCoverage.CANDIDATES,
+            SnapshotCoverage.CHAIN
+            if request.kind is IntegritySnapshotKind.CHAIN
+            else SnapshotCoverage.COMPLETE
+            if request.complete_chain_history
+            else SnapshotCoverage.CANDIDATES,
             "taskwarrior.authoritative_export",
             (),
             complete_chain_history=request.complete_chain_history,

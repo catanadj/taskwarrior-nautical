@@ -33396,6 +33396,8 @@ def test_operator_processes_concurrent_contracts_share_taskdata_safely():
         commands = (
             [sys.executable, launcher, "query", "capabilities"],
             [sys.executable, launcher, "reconcile", "--json", "--task-bin", "/missing/task"],
+            [sys.executable, launcher, "doctor", "--json"],
+            [sys.executable, launcher, "query", "integrity", "--all"],
         )
         processes = [subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for command in commands]
         results = [process.communicate(timeout=30) for process in processes]

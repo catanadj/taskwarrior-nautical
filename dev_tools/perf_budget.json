@@ -100,6 +100,10 @@
       "integrity_scale_1000": 2.0,
       "integrity_scale_10000": 10.0
     },
+    "slow_device_budgets_seconds": {
+      "workflow_queue_drain": 10.0,
+      "workflow_queue_drain_partial_recovery": 16.0
+    },
     "task_call_budgets": {
       "workflow_queue_drain": {
         "run_task_calls": 27,

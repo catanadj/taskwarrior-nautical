@@ -1195,11 +1195,17 @@ def _import_workflow_rows(rows: Sequence[dict], *, env: dict[str, str]) -> None:
         raise RuntimeError(f"workflow parent fixture import failed: {(proc.stderr or proc.stdout or '').strip()}")
 
 
-def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
+def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[str, dict]:
     """Exercise completion, queue-drain, and reconcile paths in isolation."""
     workflow_cfg = cfg.get("workflow_perf")
     if not isinstance(workflow_cfg, dict) or not workflow_cfg.get("enabled", True):
         return {}
+    workflow_cfg = dict(workflow_cfg)
+    budgets_override = workflow_cfg.get("slow_device_budgets_seconds") if slow_device else None
+    if isinstance(budgets_override, dict):
+        budgets = dict(workflow_cfg.get("budgets_seconds") or {})
+        budgets.update(budgets_override)
+        workflow_cfg["budgets_seconds"] = budgets
     repeats = max(1, int(workflow_cfg.get("repeats", 3)))
     budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
     with tempfile.TemporaryDirectory(prefix="nautical-workflow-perf-") as td:
@@ -2306,7 +2312,7 @@ def main() -> int:
         if args.enforce and not result["pass"]:
             failures.append(name)
 
-    workflow_results = _bench_expensive_workflows(cfg)
+    workflow_results = _bench_expensive_workflows(cfg, slow_device=args.slow_device)
     for name, result in workflow_results.items():
         results[name] = result
         if args.enforce and not result["pass"]:

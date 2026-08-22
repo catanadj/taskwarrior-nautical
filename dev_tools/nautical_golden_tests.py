@@ -9423,6 +9423,11 @@ def test_perf_budget_config_covers_cache_io_checks():
         <= set(workflow_budgets or {}),
         f"expensive workflow budgets are incomplete: {workflow_budgets}",
     )
+    workflow_slow_budgets = workflow_perf.get("slow_device_budgets_seconds") if isinstance(workflow_perf, dict) else None
+    expect(
+        {"workflow_queue_drain", "workflow_queue_drain_partial_recovery"} <= set(workflow_slow_budgets or {}),
+        "slow-device workflow budgets are incomplete",
+    )
     extended = obj.get("extended_workload") if isinstance(obj, dict) else None
     expect(isinstance(extended, dict), "extended_workload config must be present")
     extended_budgets = extended.get("budgets_seconds") if isinstance(extended, dict) else None

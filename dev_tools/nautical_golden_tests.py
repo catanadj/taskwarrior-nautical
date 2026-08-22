@@ -1523,6 +1523,10 @@ def test_integrity_engine_report_is_frontend_parity_contract():
             tuple(item.to_dict() for item in first.findings) == tuple(item.to_dict() for item in second.findings),
             "front ends did not receive identical findings for one snapshot",
         )
+        expect(
+            tuple(item.to_dict() for item in first.plans) == tuple(item.to_dict() for item in second.plans),
+            "front ends did not receive identical repair plans for one snapshot",
+        )
 
 
 def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():

@@ -47,6 +47,43 @@ class LifecycleRecoveryOperations(Protocol):
     def recovery_from_exception(self, parent: dict[str, Any], exc: Exception) -> Any: ...
 
 
+class LifecycleApplyOperations(Protocol):
+    def configuration_state(self, hook: Any) -> tuple[str, str]: ...
+    def refresh_plan(self, parent: dict[str, Any], *, generation: ChainGenerationService | None) -> Any: ...
+    def execute_plan(self, plan: Any, *, verified_children: dict[str, dict[str, Any]] | None,
+                     label: str, strict_uuid: bool) -> str: ...
+    def terminal_plan(self, plan: Any) -> str: ...
+    def lock_busy(self, kind: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CallbackLifecycleApplyOperations:
+    """Taskwarrior-specific callbacks used by the service-owned dispatcher."""
+
+    configuration_callback: Callable[..., tuple[str, str]]
+    refresh_callback: Callable[..., Any]
+    execute_callback: Callable[..., str]
+    terminal_callback: Callable[..., str]
+    lock_callback: Callable[..., None]
+
+    def configuration_state(self, hook):
+        return self.configuration_callback(hook)
+
+    def refresh_plan(self, parent, *, generation):
+        return self.refresh_callback(parent, generation=generation)
+
+    def execute_plan(self, plan, *, verified_children, label, strict_uuid):
+        return self.execute_callback(
+            plan, verified_children=verified_children, label=label, strict_uuid=strict_uuid,
+        )
+
+    def terminal_plan(self, plan):
+        return self.terminal_callback(plan)
+
+    def lock_busy(self, kind):
+        self.lock_callback(kind)
+
+
 @dataclass(frozen=True, slots=True)
 class CallbackLifecycleRecoveryOperations:
     """Typed callback port for the reconcile-specific Taskwarrior adapter.
@@ -100,6 +137,7 @@ class CallbackLifecycleRecoveryOperations:
 
     def recovery_from_exception(self, parent, exc):
         return self.recovery_exception_callback(parent, exc)
+
 
 
 def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -200,6 +238,49 @@ class LifecycleReconciliationService:
         """Apply a typed terminal lifecycle plan through the shared service."""
         outcome = self.application_service().apply_immediate(terminal_plan_factory(plan))
         return outcome
+
+    def apply_parent(
+        self,
+        parent: dict[str, Any],
+        *,
+        operations: LifecycleApplyOperations,
+        taskdata: Path,
+        lease_held: bool = False,
+        verified_children: dict[str, dict[str, Any]] | None = None,
+        generation: ChainGenerationService | None = None,
+        hook: Any = None,
+    ) -> tuple[Any, str]:
+        """Own locks and action dispatch for one candidate mutation."""
+        parent_uuid = str(parent.get("uuid") or "").strip()
+        if not parent_uuid:
+            raise RuntimeError("parent task has no UUID")
+        lock = self.reconcile_lock(taskdata) if not lease_held else nullcontext(True)
+        with lock as reconcile_acquired:
+            if not reconcile_acquired:
+                operations.lock_busy("reconcile")
+                raise RuntimeError("another reconcile apply is already running")
+            with self.parent_lock(taskdata, parent_uuid) as acquired:
+                if not acquired:
+                    operations.lock_busy("parent")
+                    raise RuntimeError(f"parent reconcile lock busy: {lifecycle.short_uuid(parent_uuid)}")
+                status, reason = operations.configuration_state(hook)
+                if status != "valid":
+                    raise RuntimeError(reason)
+                plan = operations.refresh_plan(parent, generation=generation)
+                if plan.action == "spawn":
+                    return plan, operations.execute_plan(
+                        plan, verified_children=verified_children,
+                        label="transition", strict_uuid=True,
+                    )
+                if plan.action == "backfill_nextlink":
+                    return plan, operations.execute_plan(
+                        plan, verified_children=verified_children,
+                        label="backfill", strict_uuid=False,
+                    )
+                if plan.action in {"legitimate_final", "manual_stop"}:
+                    return plan, operations.terminal_plan(plan)
+                return plan, ""
+
 
     def candidates(self) -> list[dict[str, Any]]:
         rows = self.snapshot.candidate_rows()
@@ -335,4 +416,8 @@ class LifecycleReconciliationService:
         return outcomes
 
 
-__all__ = ["CallbackLifecycleRecoveryOperations", "LifecycleReconciliationService"]
+__all__ = [
+    "CallbackLifecycleApplyOperations",
+    "CallbackLifecycleRecoveryOperations",
+    "LifecycleReconciliationService",
+]

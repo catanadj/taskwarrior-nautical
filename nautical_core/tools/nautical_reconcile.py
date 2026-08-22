@@ -59,6 +59,7 @@ from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # no
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
 from nautical_core.reconcile_report import exit_code, render_human, render_json  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
+    CallbackLifecycleApplyOperations,
     CallbackLifecycleRecoveryOperations,
     LifecycleReconciliationService,
 )
@@ -1190,59 +1191,36 @@ def _apply_parent_atomic(
     verified_children: dict[str, dict[str, Any]] | None = None,
     generation: ChainGenerationService | None = None,
 ) -> tuple[lifecycle.LifecycleRecoveryDecision, str]:
-    parent_uuid = str(original_parent.get("uuid") or "").strip()
-    if not parent_uuid:
-        raise RuntimeError("parent task has no UUID")
-    reconciliation = _lifecycle_reconciliation_service()
-    with (
-        reconciliation.reconcile_lock(taskdata)
-        if not lease_held
-        else nullcontext(True)
-    ) as reconcile_acquired:
-        if not reconcile_acquired:
-            _LOCK_STATS["reconcile_busy"] += 1
-            raise RuntimeError("another reconcile apply is already running")
-        with reconciliation.parent_lock(taskdata, parent_uuid) as acquired:
-            if not acquired:
-                _LOCK_STATS["parent_busy"] += 1
-                raise RuntimeError(f"parent reconcile lock busy: {lifecycle.short_uuid(parent_uuid)}")
-            configuration_status, drift_reason = _configuration_state(hook)
-            if configuration_status != "valid":
-                raise _ConfigurationDrift(drift_reason)
-            if generation is None:
-                plan = _refresh_plan(task_bin, hook, original_parent)
-            else:
-                plan = _refresh_plan(
-                    task_bin,
-                    hook,
-                    original_parent,
-                    generation=generation,
-                )
-            if plan.action == "spawn":
-                if not plan.child:
-                    raise RuntimeError("spawn plan has no child payload")
-                child_short = _execute_reconcile_lifecycle_plan(
-                    task_bin,
-                    hook,
-                    plan,
-                    verified_children=verified_children,
-                    label="transition",
-                    strict_uuid=True,
-                )
-                return plan, child_short
-            if plan.action == "backfill_nextlink":
-                child_short = _execute_reconcile_lifecycle_plan(
-                    task_bin,
-                    hook,
-                    plan,
-                    verified_children=verified_children,
-                    label="backfill",
-                    strict_uuid=False,
-                )
-                return plan, child_short
-            if plan.action in {"legitimate_final", "manual_stop"}:
-                return plan, _execute_reconcile_terminal_plan(task_bin, hook, plan)
-            return plan, ""
+    def lock_busy(kind: str) -> None:
+        _LOCK_STATS[f"{kind}_busy"] += 1
+
+    def validated_configuration(current_hook: Any) -> tuple[str, str]:
+        status, reason = _configuration_state(current_hook)
+        if status != "valid":
+            raise _ConfigurationDrift(reason)
+        return status, reason
+
+    operations = CallbackLifecycleApplyOperations(
+        configuration_callback=validated_configuration,
+        refresh_callback=lambda parent, *, generation: _refresh_plan(
+            task_bin, hook, parent, generation=generation,
+        ),
+        execute_callback=lambda plan, *, verified_children, label, strict_uuid: _execute_reconcile_lifecycle_plan(
+            task_bin, hook, plan, verified_children=verified_children,
+            label=label, strict_uuid=strict_uuid,
+        ),
+        terminal_callback=lambda plan: _execute_reconcile_terminal_plan(task_bin, hook, plan),
+        lock_callback=lock_busy,
+    )
+    return _lifecycle_reconciliation_service().apply_parent(
+        original_parent,
+        operations=operations,
+        taskdata=taskdata,
+        lease_held=lease_held,
+        verified_children=verified_children,
+        generation=generation,
+        hook=hook,
+    )
 
 
 def _recovery_error(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:

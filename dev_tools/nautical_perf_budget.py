@@ -1721,6 +1721,33 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         results["workflow_reconcile"] = _measure_workflow(
             "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
         )
+
+        # Keep an empty audit as a first-class workload.  This catches startup,
+        # snapshot, and report overhead without accidentally measuring stale
+        # queue cleanup or a failed Taskwarrior export.
+        empty_data = root / "reconcile-empty"
+        empty_data.mkdir()
+        empty_env = dict(base_env, TASKDATA=str(empty_data))
+        empty_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=empty_env, timeout=30.0)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"empty reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("empty reconcile workflow returned invalid JSON") from exc
+            if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
+                raise RuntimeError("empty reconcile workflow returned an invalid report")
+            empty_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_empty"] = _measure_workflow(
+            "workflow_reconcile_empty",
+            empty_samples,
+            float(budgets.get("workflow_reconcile_empty", budgets.get("workflow_reconcile", 3.0))),
+        )
         return results
 
 

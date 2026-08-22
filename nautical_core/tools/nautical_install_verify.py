@@ -19,8 +19,10 @@ def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
     ]
 
 
-def _group_status(items: list[dict[str, Any]]) -> str:
-    if not items or any(item.get("severity") == "error" for item in items):
+def _group_status(items: list[dict[str, Any]], *, empty_status: str = "failed") -> str:
+    if not items:
+        return empty_status
+    if any(item.get("severity") == "error" for item in items):
         return "failed"
     if any(item.get("severity") == "warn" for item in items):
         return "attention"
@@ -41,7 +43,11 @@ def build_report(
         {"name": "Runtime", "status": _group_status(_items(payload, "install.")), "detail": "managed release active"},
         {"name": "Hooks", "status": _group_status(_items(payload, "hook.")), "detail": "add, modify, and exit"},
         {"name": "Launcher", "status": "passed" if launcher.is_file() and os.access(launcher, os.X_OK) else "failed", "detail": str(launcher)},
-        {"name": "UDAs", "status": _group_status(_items(payload, "uda.")), "detail": "Taskwarrior fields registered"},
+        {
+            "name": "UDAs",
+            "status": _group_status(_items(payload, "uda."), empty_status="passed"),
+            "detail": "Taskwarrior fields registered",
+        },
         {"name": "Timezone", "status": _group_status(_items(payload, "config.timezone")), "detail": "explicit scheduling timezone"},
     ]
 

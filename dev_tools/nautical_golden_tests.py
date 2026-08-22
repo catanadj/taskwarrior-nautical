@@ -7837,6 +7837,13 @@ def test_doctor_installation_json_and_verifier_contract():
         expect(report.get("status") == "passed", f"operational findings leaked into installation status: {report!r}")
         expect(not report.get("manual_actions"), f"operational findings leaked into install actions: {report!r}")
 
+        legacy_payload = dict(verifier_payload)
+        legacy_payload["findings"] = [
+            item for item in verifier_payload["findings"] if not str(item.get("id") or "").startswith("uda.")
+        ]
+        legacy_report = build_report(legacy_payload, platform="Linux", launcher=launcher)
+        expect(legacy_report.get("status") == "passed", f"healthy legacy UDA evidence was rejected: {legacy_report!r}")
+
 
 def test_operator_queue_status_json_ok_empty_taskdata():
     """installed queue status should work from nautical_core/tools."""
@@ -8028,6 +8035,11 @@ def test_doctor_reports_healthy_installation():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "ok", f"unexpected doctor status: {obj}")
         expect((obj.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {obj}")
+        findings = obj.get("findings") or []
+        expect(
+            any(item.get("id") == "uda.registration" and item.get("severity") == "ok" for item in findings),
+            f"healthy UDA registration evidence is missing: {obj}",
+        )
 
 
 def test_doctor_hook_inventory_allows_third_party_and_symlink_install():

@@ -316,9 +316,11 @@ def _check_hooks_and_udas(
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
     validated = _check_hook_installation(findings, hooks_dir=hooks_dir, env=env)
+    udas_valid = True
     for name, expected in REQUIRED_UDAS.items():
         ok, actual = _task_get(unit_of_work, f"rc.uda.{name}.type")
         if not ok or not actual:
+            udas_valid = False
             _finding(
                 findings,
                 f"uda.{name}.missing",
@@ -327,6 +329,7 @@ def _check_hooks_and_udas(
                 fix="Include Nautical's uda.conf from your Taskwarrior configuration.",
             )
         elif actual.lower() != expected:
+            udas_valid = False
             _finding(
                 findings,
                 f"uda.{name}.type",
@@ -334,6 +337,13 @@ def _check_hooks_and_udas(
                 f"UDA '{name}' has type '{actual}', expected '{expected}'.",
                 fix=f"Set uda.{name}.type={expected}.",
             )
+    if udas_valid:
+        _finding(
+            findings,
+            "uda.registration",
+            "ok",
+            f"All {len(REQUIRED_UDAS)} required Nautical UDAs are registered.",
+        )
     return validated
 
 

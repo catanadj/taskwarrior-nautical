@@ -53,9 +53,11 @@ except Exception as exc:
     raise SystemExit(2)
 findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
 
-def group(prefix):
+def group(prefix, empty_status="failed"):
     items = [item for item in findings if str(item.get("id") or "").startswith(prefix)]
-    if not items or any(item.get("severity") == "error" for item in items):
+    if not items:
+        return empty_status
+    if any(item.get("severity") == "error" for item in items):
         return "failed"
     if any(item.get("severity") == "warn" for item in items):
         return "attention"
@@ -68,7 +70,7 @@ checks = [
     ("Runtime", group("install."), "managed release active"),
     ("Hooks", group("hook."), "add, modify, and exit"),
     ("Launcher", "passed" if launcher.is_file() and os.access(launcher, os.X_OK) else "failed", str(launcher)),
-    ("UDAs", group("uda."), "Taskwarrior fields registered"),
+    ("UDAs", group("uda.", empty_status="passed"), "Taskwarrior fields registered"),
     ("Timezone", group("config.timezone"), "explicit scheduling timezone"),
 ]
 required_prefixes = ("integration.", "taskwarrior.", "taskdata.", "hook.", "uda.", "install.", "config.")

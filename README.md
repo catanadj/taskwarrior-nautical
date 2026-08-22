@@ -40,15 +40,10 @@ it. Set `TASKDATA` or pass `--taskdata` for a custom Taskwarrior data directory.
 The lower-level `./nautical install` command remains available for local release
 trees and repairs.
 
-Register Nautical's Taskwarrior fields. The installer creates or updates
-`~/.local/bin/nautical` as a symlink to the installed launcher:
-
-```bash
-cp uda.conf ~/.task/uda-nautical.conf
-grep -Fqx "include $HOME/.task/uda-nautical.conf" "$HOME/.taskrc" 2>/dev/null || \
-  printf '\ninclude %s\n' "$HOME/.task/uda-nautical.conf" >> "$HOME/.taskrc"
-~/.local/bin/nautical doctor
-```
+The installer also creates `uda-nautical.conf` and adds its include to your
+Taskwarrior rc file when the fields are not already configured. Existing UDA
+files are preserved. It creates `~/.local/bin/nautical` as the user-facing
+launcher and runs a Doctor check after installation.
 
 On Termux, use its executable directory explicitly when installing:
 

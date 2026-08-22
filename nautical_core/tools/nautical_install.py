@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -32,6 +33,67 @@ _RESULT_LABELS = {
 }
 
 
+def _taskrc_path() -> Path:
+    raw = os.environ.get("TASKRC", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".taskrc"
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _configure_udas(source: Path, taskdata: Path, *, dry_run: bool) -> dict[str, object]:
+    """Install Nautical's UDA include without overwriting user customizations."""
+    source_file = source / "uda.conf"
+    if not source_file.is_file():
+        raise RuntimeError(f"Nautical UDA definition is missing: {source_file}")
+    uda_file = taskdata / "uda-nautical.conf"
+    taskrc = _taskrc_path()
+    include_line = f"include {uda_file}"
+    uda_exists = uda_file.is_file()
+    taskrc_exists = taskrc.is_file()
+    taskrc_text = taskrc.read_text(encoding="utf-8") if taskrc_exists else ""
+    included = any(line.strip() == include_line for line in taskrc_text.splitlines())
+    actions: list[str] = []
+    if not uda_exists:
+        actions.append(f"create {uda_file}")
+    if not included:
+        actions.append(f"include {uda_file} in {taskrc}")
+    if dry_run:
+        return {
+            "status": "planned" if actions else "current",
+            "uda_file": str(uda_file),
+            "taskrc": str(taskrc),
+            "actions": actions,
+        }
+    taskdata.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not uda_exists:
+        _atomic_write(uda_file, source_file.read_text(encoding="utf-8"))
+    if not included:
+        prefix = taskrc_text
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        _atomic_write(taskrc, f"{prefix}{include_line}\n")
+    return {
+        "status": "configured" if actions else "current",
+        "uda_file": str(uda_file),
+        "taskrc": str(taskrc),
+        "actions": actions,
+    }
+
+
 def _render(payload: dict) -> None:
     operation = str(payload.get("operation") or "install")
     if payload.get("status") == "dry-run":
@@ -54,6 +116,12 @@ def _render(payload: dict) -> None:
     else:
         print(f"Launcher: {Path(payload['base']) / 'nautical'}")
         print("Validation: passed")
+    uda = payload.get("uda_configuration")
+    if isinstance(uda, dict):
+        status = str(uda.get("status") or "unknown")
+        print(f"UDAs: {status} ({uda.get('uda_file')})")
+        for action in uda.get("actions") or []:
+            print(f"UDA action: {action}")
     if payload.get("migrated_legacy_core"):
         print(f"Legacy core backup: {payload.get('legacy_backup')}")
     for path in payload.get("migrated_configs") or []:
@@ -94,6 +162,11 @@ def main() -> int:
             hooks_dir=hooks_dir,
             launcher_path=(Path(args.launcher_path).expanduser() if args.launcher_path else install_runtime.default_launcher_path()),
             release_id=args.release_id,
+            dry_run=bool(args.dry_run),
+        )
+        payload["uda_configuration"] = _configure_udas(
+            Path(args.source).expanduser().resolve(),
+            taskdata,
             dry_run=bool(args.dry_run),
         )
     except Exception as exc:

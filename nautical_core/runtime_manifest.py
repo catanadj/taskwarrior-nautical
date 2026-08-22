@@ -120,6 +120,7 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/reconcile_report.py",
     "nautical_core/lifecycle_reconciliation.py",
     "nautical_core/integrity_report.py",
+    "nautical_core/chain_integrity_recovery.py",
     "nautical_core/tools/nautical_query.py",
 )
 

@@ -29470,6 +29470,62 @@ def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
         )
 
 
+def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
+    """A deleted anchor occurrence receives one real linked successor."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return
+    with tempfile.TemporaryDirectory(prefix="nautical-anchor-repair-") as td:
+        root = Path(td)
+        data_dir = root / "data"
+        data_dir.mkdir()
+        taskrc = root / "taskrc"
+        taskrc.write_text(
+            "\n".join([
+                f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
+                "uda.anchor.type=string", "uda.anchor_mode.type=string", "uda.chain.type=string",
+                "uda.chainID.type=string", "uda.link.type=numeric", "uda.prevLink.type=string",
+                "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
+            ]) + "\n", encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update({
+            "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
+            "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
+            "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
+        })
+        parent = {
+            "uuid": "33333333-0000-0000-0000-000000000003", "status": "deleted",
+            "description": "Anchor repair", "entry": "20260820T080000Z",
+            "modified": "20260820T100000Z", "end": "20260820T100000Z",
+            "due": "20260820T090000Z", "until": "20260820T100000Z",
+            "anchor": "w:mon", "anchor_mode": "skip", "chain": "on",
+            "chainID": "anchor-real", "link": 1,
+        }
+        imported = subprocess.run(
+            [task_bin, "rc.hooks=off", "import"], input=json.dumps(parent) + "\n",
+            text=True, capture_output=True, env=env, timeout=15.0,
+        )
+        expect(imported.returncode == 0, f"anchor fixture import failed: {imported.stderr!r}")
+        applied = subprocess.run(
+            [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+             "--apply", "--task-bin", task_bin, "--json"],
+            text=True, capture_output=True, env=env, timeout=20.0,
+        )
+        expect(applied.returncode == 0, f"anchor reconcile failed: {applied.stderr!r}")
+        payload = json.loads(applied.stdout)
+        expect(payload.get("spawn") == 1 and len(payload.get("applied") or []) == 1, f"anchor was not repaired: {payload!r}")
+        exported = subprocess.run(
+            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:anchor-real", "export"],
+            text=True, capture_output=True, env=env, timeout=15.0,
+        )
+        expect(exported.returncode == 0, f"anchor verification export failed: {exported.stderr!r}")
+        rows = json.loads(exported.stdout)
+        expect(len(rows) == 2, f"anchor repair created the wrong number of rows: {rows!r}")
+        by_link = {int(float(row.get("link"))): row for row in rows}
+        expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"anchor parent was not linked: {rows!r}")
+
+
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
     import nautical_core.chain_integrity_lifecycle as reconcile
@@ -32864,6 +32920,7 @@ TESTS = [
     test_reconcile_expired_pending_child_is_resumable_partial,
     test_reconcile_expiration_real_taskwarrior_round_trip,
     test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
+    test_reconcile_real_taskwarrior_anchor_repair_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,

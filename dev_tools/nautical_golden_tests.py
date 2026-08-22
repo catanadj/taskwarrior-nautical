@@ -1656,6 +1656,45 @@ def test_chain_graph_exposes_lifecycle_and_topology_queries():
     expect(graph.lifecycle_nodes(LifecycleIntent.DISABLED.value)[0].task_uuid.startswith("cccc"), "disabled intent failed")
 
 
+def test_chain_graph_covers_required_structural_shapes():
+    """Branch, cycle, duplicate, disconnected, partial, and ambiguous evidence remain visible."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
+
+    rows = (
+        {"uuid": "11111111-0000-0000-0000-000000000921", "status": "pending", "chainID": "shape", "link": 1,
+         "nextLink": "22222222"},
+        {"uuid": "22222222-0000-0000-0000-000000000922", "status": "pending", "chainID": "shape", "link": 2,
+         "prevLink": "11111111", "nextLink": "11111111"},
+        {"uuid": "33333333-0000-0000-0000-000000000923", "status": "pending", "chainID": "shape", "link": 2,
+         "prevLink": "11111111"},
+        {"uuid": "44444444-0000-0000-0000-000000000924", "status": "pending", "chainID": "other", "link": 1},
+        {"uuid": "44444444-0000-0000-0000-000000000925", "status": "pending", "chainID": "other", "link": 2},
+        {"uuid": "55555555-0000-0000-0000-000000000926", "status": "pending", "chainID": "shape", "link": 3,
+         "nextLink": "missing9"},
+    )
+    graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "graph-shapes", SnapshotCoverage.CANDIDATES, "test",
+        tuple(ChainNode.from_mapping(row) for row in rows),
+    ))
+    expect(len(graph.slot_nodes("shape", 2)) == 2, "duplicate slot evidence was lost")
+    expect(graph.reference(rows[1]["uuid"], "nextLink").state is ReferenceState.RESOLVED, "cycle edge was lost")
+    expect(graph.reference(rows[5]["uuid"], "nextLink").state is ReferenceState.OUTSIDE_COVERAGE, "partial edge was hidden")
+    expect(len(graph.orphan_candidates()) == 1, "orphan candidate query was not deterministic")
+    expect(len(graph.chain_nodes("other")) == 2, "disconnected chain was lost")
+    ambiguous = ChainNode.from_mapping({
+        "uuid": "66666666-0000-0000-0000-000000000927", "status": "pending", "chainID": "shape", "link": 4,
+        "nextLink": "44444444",
+    })
+    ambiguous_graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "graph-ambiguous", SnapshotCoverage.CANDIDATES, "test", graph.nodes + (ambiguous,)
+    ))
+    expect(
+        ambiguous_graph.reference(ambiguous.task_uuid, "nextLink").state is ReferenceState.AMBIGUOUS,
+        "ambiguous short reference was not preserved",
+    )
+
+
 def test_chain_invariant_registry_is_pure_and_deterministic():
     """Identity, slot, and edge rules produce stable typed findings."""
     from nautical_core.chain_graph import ChainGraph
@@ -32712,6 +32751,7 @@ TESTS = [
     test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_graph_exposes_lifecycle_and_topology_queries,
+    test_chain_graph_covers_required_structural_shapes,
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_finalization_evidence_matches_parent_postcondition,
     test_chain_integrity_context_keeps_outbox_evidence_separate,

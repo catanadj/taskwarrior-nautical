@@ -1115,34 +1115,25 @@ def _execute_reconcile_lifecycle_plan(
     lifecycle_plan = getattr(plan, "lifecycle_plan", None)
     if not isinstance(lifecycle_plan, LifecyclePlan):
         raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
-    resolved_plan = _lifecycle_plan_with_resolved_child_uuid(plan, hook)
-    service = _lifecycle_reconciliation_service().application_service()
     configuration = _UNIT_OF_WORK.context.configuration
-    staged = service.stage(
-        resolved_plan,
+    staged, outcome, child_short, _verified = _lifecycle_reconciliation_service().execute_lifecycle_plan(
+        plan,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
+        resolve_plan=lambda candidate: _lifecycle_plan_with_resolved_child_uuid(candidate, hook),
+        verify_child=lambda parent, short, strict_uuid: _verify_applied_child(
+            task_bin, parent, short, hook=hook, strict_uuid=strict_uuid,
+        ),
+        verified_children=verified_children,
+        strict_uuid=strict_uuid,
+        label=label,
     )
-    if not staged.ok:
+    if staged is not None and not staged.ok:
         _raise_for_lifecycle_outcome(staged, label=f"{label} staging")
-    outcome = service.execute_staged(
-        resolved_plan,
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
-    _raise_for_lifecycle_outcome(outcome, label=label)
-    child_short = resolved_plan.parent_patch_dict().get("nextLink") or plan.child_short
+    if outcome is not None:
+        _raise_for_lifecycle_outcome(outcome, label=label)
     if not child_short:
         raise RuntimeError(f"lifecycle {label} produced no child identity")
-    verified = _verify_applied_child(
-        task_bin,
-        plan.parent,
-        child_short,
-        hook=hook,
-        strict_uuid=strict_uuid,
-    )
-    if verified_children is not None:
-        verified_children[str(child_short).strip().lower()] = verified
     return child_short
 
 
@@ -1178,8 +1169,9 @@ def _execute_reconcile_terminal_plan(
 ) -> str:
     """Apply a guarded terminal plan through the shared lifecycle application service."""
     lifecycle_plan = _terminal_lifecycle_plan(plan)
-    service = _lifecycle_reconciliation_service().application_service()
-    outcome = service.apply_immediate(lifecycle_plan)
+    outcome = _lifecycle_reconciliation_service().apply_terminal_plan(
+        plan, terminal_plan_factory=lambda _plan: lifecycle_plan,
+    )
     _raise_for_lifecycle_outcome(outcome, label="terminal transition")
     return "off"
 
@@ -1426,6 +1418,14 @@ class _ReconcileRecoveryOperations:
 
     def recovery_terminal(self, parent, reason):
         return _recovery_terminal(parent, reason)
+
+    def recovery_from_exception(self, parent, exc):
+        reason = str(exc).strip() or type(exc).__name__
+        if isinstance(exc, (_ConfigurationDrift, _LifecycleRetryable, _PlanReadUnavailable)):
+            return _recovery_partial(parent, reason)
+        if isinstance(exc, _LifecycleManualReview):
+            return _recovery_manual_review(parent, reason)
+        return _recovery_error(parent, reason)
 
 
 def _reconcile_candidate(

@@ -44,6 +44,7 @@ class LifecycleRecoveryOperations(Protocol):
     def recovery_partial(self, parent: dict[str, Any], reason: str) -> Any: ...
     def recovery_manual_review(self, parent: dict[str, Any], reason: str) -> Any: ...
     def recovery_terminal(self, parent: dict[str, Any], reason: str) -> Any: ...
+    def recovery_from_exception(self, parent: dict[str, Any], exc: Exception) -> Any: ...
 
 
 def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
@@ -99,6 +100,51 @@ class LifecycleReconciliationService:
             owner=f"reconcile-{os.getpid()}",
             lease_seconds=120.0,
         )
+
+    def execute_lifecycle_plan(
+        self,
+        plan: Any,
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+        resolve_plan: Any,
+        verify_child: Any,
+        verified_children: dict[str, dict[str, Any]] | None,
+        strict_uuid: bool,
+        label: str,
+    ) -> tuple[Any, Any, str, dict[str, Any] | None]:
+        """Stage, execute, and verify one successor lifecycle plan."""
+        service = self.application_service()
+        resolved = resolve_plan(plan)
+        lifecycle_plan = getattr(resolved, "lifecycle_plan", None)
+        if lifecycle_plan is None:
+            raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan")
+        staged = service.stage(
+            lifecycle_plan,
+            configuration_fingerprint=configuration_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
+        )
+        if not staged.ok:
+            return staged, None, "", None
+        outcome = service.execute_staged(
+            lifecycle_plan,
+            configuration_fingerprint=configuration_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
+        )
+        if not outcome.ok:
+            return staged, outcome, "", None
+        child_short = lifecycle_plan.parent_patch_dict().get("nextLink") or resolved.child_short
+        if not child_short:
+            return staged, outcome, "", None
+        verified = verify_child(resolved.parent, child_short, strict_uuid=strict_uuid)
+        if verified_children is not None:
+            verified_children[str(child_short).strip().lower()] = verified
+        return staged, outcome, str(child_short), verified
+
+    def apply_terminal_plan(self, plan: Any, *, terminal_plan_factory: Any) -> Any:
+        """Apply a typed terminal lifecycle plan through the shared service."""
+        outcome = self.application_service().apply_immediate(terminal_plan_factory(plan))
+        return outcome
 
     def candidates(self) -> list[dict[str, Any]]:
         rows = self.snapshot.candidate_rows()
@@ -195,13 +241,13 @@ class LifecycleReconciliationService:
                         verified_children=verified_children, generation=generation,
                     )
                 except Exception as exc:
-                    outcomes.append((operations.recovery_error(current, str(exc).strip() or type(exc).__name__), ""))
+                    outcomes.append((operations.recovery_from_exception(current, exc), ""))
                     break
             else:
                 try:
                     plan = operations.plan_parent(current, generation=generation)
                 except Exception as exc:
-                    outcomes.append((operations.recovery_error(current, str(exc).strip() or type(exc).__name__), ""))
+                    outcomes.append((operations.recovery_from_exception(current, exc), ""))
                     break
                 applied_short = ""
             outcomes.append((plan, applied_short))
@@ -222,7 +268,7 @@ class LifecycleReconciliationService:
                             outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
                         break
             except Exception as exc:
-                outcomes.append((operations.recovery_error(plan.parent, str(exc).strip() or type(exc).__name__), ""))
+                outcomes.append((operations.recovery_from_exception(plan.parent, exc), ""))
                 break
             terminal_error = operations.terminal_error(child, recovery_at)
             if terminal_error:

@@ -138,6 +138,15 @@ REMOVED_RECONCILE_SYMBOLS = (
     "legacy_hook",
     "_RECONCILE_PROTOCOL",
 )
+# Operator commands compose the integrity/lifecycle services; they must not
+# regain ownership by importing a hook implementation directly.
+OPERATOR_FORBIDDEN_HOOK_IMPORTS = (
+    "nautical_core.hooks",
+    "nautical_core.hooks.add_impl",
+    "nautical_core.hooks.modify_impl",
+    "nautical_core.hooks.exit_impl",
+    "nautical_core.hook_runtime",
+)
 
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
@@ -145,4 +154,9 @@ for _event in HOOK_RUNTIME_FILES:
     HOOK_RUNTIME_FILES[_event] += ("panel_colours.py",)
 
 
-__all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES", "OPERATOR_RUNTIME_FILES")
+__all__ = (
+    "HOOK_LAZY_MODULES",
+    "HOOK_RUNTIME_FILES",
+    "OPERATOR_RUNTIME_FILES",
+    "OPERATOR_FORBIDDEN_HOOK_IMPORTS",
+)

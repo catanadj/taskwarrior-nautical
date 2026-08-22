@@ -9586,6 +9586,19 @@ def test_deploy_sanity_enforces_removed_lifecycle_ownership():
         failures = [item for item in module._check_removed_ownership(staged) if not item.get("ok")]
         expect(len(failures) >= 2, f"reintroduced ownership paths were not rejected: {failures!r}")
 
+    with tempfile.TemporaryDirectory() as td:
+        staged = Path(td)
+        (staged / "nautical_core" / "tools").mkdir(parents=True)
+        shutil.copy2(Path(ROOT) / "nautical_core" / "runtime_manifest.py", staged / "nautical_core" / "runtime_manifest.py")
+        (staged / "nautical_core" / "tools" / "nautical_reconcile.py").write_text(
+            "from nautical_core.hooks import modify_impl\n", encoding="utf-8"
+        )
+        failures = [item for item in module._check_removed_ownership(staged) if not item.get("ok")]
+        expect(
+            any(item.get("name") == "operator-hook-imports:nautical_core/tools/nautical_reconcile.py" for item in failures),
+            f"operator hook import was not rejected: {failures!r}",
+        )
+
 
 def test_perf_hook_fast_path_ratio_enforcement():
     """Hook latency checks should enforce the normalized fast/full median ratio."""

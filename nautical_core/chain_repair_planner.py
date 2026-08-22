@@ -27,6 +27,8 @@ class PlannerRefusal:
     reason_code: str
     reason: str
     snapshot_id: str
+    chain_id: str = ""
+    subject_uuids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,8 @@ class IntegrityRepairPlanner:
                     finding.reason_code,
                     self._refusal_reason(context, finding),
                     finding.snapshot_id,
+                    finding.chain_id,
+                    finding.subject_uuids,
                 ))
                 continue
             payload_fields = tuple(key for key, _value in operation.payload)
@@ -90,6 +94,8 @@ class IntegrityRepairPlanner:
                         "conflicting_repair",
                         "incompatible repairs target the same task field",
                         finding.snapshot_id,
+                        finding.chain_id,
+                        finding.subject_uuids,
                     ))
                     operation = None
                     break

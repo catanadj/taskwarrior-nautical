@@ -1234,9 +1234,13 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
         if not isinstance(issue, dict):
             write(f"  Detail: {issue}")
             continue
+        kind = issue.get("kind") or issue.get("invariant_id") or "?"
+        chain_id = issue.get("chainID") or issue.get("chain_id") or "?"
+        subjects = issue.get("subjects") or issue.get("subject_uuids") or ()
+        subject_text = f" subjects={','.join(str(item)[:8] for item in subjects[:3])}" if subjects else ""
         write(
             "  Issue: "
-            f"{issue.get('kind') or '?'} chain={issue.get('chainID') or '?'} "
+            f"{kind} chain={chain_id}{subject_text} "
             f"{issue.get('message') or ''}".rstrip()
         )
         for task in issue.get("tasks") or []:

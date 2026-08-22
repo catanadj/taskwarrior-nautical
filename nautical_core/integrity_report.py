@@ -91,7 +91,7 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             "id": "chains.repair_available",
             "severity": "warn",
             "message": f"{len(result.plans)} safe chain repair(s) are available.",
-            "fix": "Run nautical chain-repair --apply after reviewing the dry-run output.",
+            "fix": "Run nautical reconcile --apply after reviewing the dry-run output.",
             "details": {"repairs": [plan.to_dict() for plan in result.plans[:10]]},
         })
     if result.refusals:
@@ -99,7 +99,7 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             "id": "chains.repair_review",
             "severity": "warn",
             "message": f"{len(result.refusals)} chain repair issue(s) need review.",
-            "fix": "Run nautical chain-repair and inspect the refusal evidence.",
+            "fix": "Run nautical query integrity --all for evidence, then use reconcile for applicable repairs.",
             "details": {
                 "reasons": {
                     str(item.reason or item.reason_code).strip(): sum(
@@ -115,6 +115,8 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
                         "reason_code": item.reason_code,
                         "message": item.reason,
                         "snapshot": item.snapshot_id,
+                        "chainID": item.chain_id,
+                        "subjects": list(item.subject_uuids),
                     }
                     for item in result.refusals[:10]
                 ],

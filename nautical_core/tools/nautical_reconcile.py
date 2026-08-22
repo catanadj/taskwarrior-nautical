@@ -631,7 +631,7 @@ def _parent_identity_error(parent: dict[str, Any]) -> str:
 
     raw_link = parent.get("link")
     if raw_link is None or not str(raw_link).strip():
-        return "parent link is missing; post-v2 reconcile requires a stamped link; run chain-repair --apply if deterministic"
+        return "parent link is missing; post-v2 reconcile requires a stamped link; inspect with nautical query integrity --all"
     if isinstance(raw_link, bool):
         return f"parent link is invalid: {raw_link!r}"
     try:

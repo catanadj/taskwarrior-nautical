@@ -1325,7 +1325,7 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
     counts = {
         severity: sum(1 for item in findings if item.get("severity") == severity)
-        for severity in ("ok", "warn", "error")
+        for severity in ("ok", "warn", "error", "info")
     }
     status = str(payload.get("status") or "unknown")
 
@@ -1337,15 +1337,16 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     ok_text = _paint(f"{counts['ok']} ok", "green", enabled=enabled)
     warn_text = _paint(f"{counts['warn']} warnings", "yellow", enabled=enabled)
     error_text = _paint(f"{counts['error']} failures", "red", enabled=enabled)
+    info_text = _paint(f"{counts['info']} historical", "cyan", enabled=enabled)
     write(
         "Checks: "
         f"{len(findings)} total | "
-        f"{ok_text} | {warn_text} | {error_text}"
+        f"{ok_text} | {warn_text} | {error_text} | {info_text}"
     )
     timezone = _timezone_summary(payload.get("findings") or [])
     if timezone:
         write(f"Timezone: {timezone}")
-    for section in ("error", "warn", "ok"):
+    for section in ("error", "warn", "info", "ok"):
         items = [item for item in findings if item.get("severity") == section]
         if not items:
             continue

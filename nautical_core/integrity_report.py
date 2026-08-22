@@ -42,7 +42,16 @@ def _finding_payload(finding: Any) -> dict[str, Any]:
 def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
     """Map stable engine findings to Doctor's presentation contract."""
     findings: list[dict[str, Any]] = []
+    task_status = {
+        node.task_uuid.lower(): str(node.status or "").strip().lower()
+        for node in (result.snapshot.rows if result.snapshot is not None else ())
+    }
+    historical_statuses = {"completed", "deleted"}
     for finding in result.findings:
+        subject_statuses = [task_status.get(uuid.lower()) for uuid in finding.subject_uuids]
+        historical = bool(subject_statuses) and all(
+            status in historical_statuses for status in subject_statuses
+        )
         severity = {
             "healthy": "ok",
             "repairable": "warn",
@@ -50,6 +59,8 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             "manual_review": "warn",
             "unavailable": "error",
         }.get(finding.status.value, "error")
+        if historical:
+            severity = "info"
         details = {
             "invariant_id": finding.invariant_id,
             "reason_code": finding.reason_code,
@@ -59,12 +70,16 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             "expected": dict(finding.expected),
             "evidence": dict(finding.evidence),
             "snapshot": finding.snapshot_id,
+            "historical": historical,
         }
         findings.append({
             "id": f"chains.{finding.invariant_id}",
             "severity": severity,
             "message": finding.message,
             "fix": (
+                "Historical finding retained for audit; no action is required unless the chain is reactivated."
+                if historical
+                else
                 "Review the integrity evidence and run nautical reconcile --apply."
                 if finding.status.value == "repairable"
                 else "Inspect the invariant evidence before modifying tasks."

@@ -1721,6 +1721,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 not isinstance(report, dict)
                 or int(report.get("export_calls", 0)) != 1
                 or int(report.get("export_rows", 0)) != history_rows
+                or float(report.get("integrity_seconds", -1.0)) < 0.0
+                or float(report.get("integrity_application_seconds", -1.0)) < 0.0
             ):
                 raise RuntimeError("healthy reconcile workflow did not use exactly one broad snapshot")
             reconcile_samples.append(time.perf_counter() - started)
@@ -1750,6 +1752,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 raise RuntimeError("empty reconcile workflow returned an invalid report")
             if int(report.get("export_calls", 0)) != 1:
                 raise RuntimeError("empty reconcile workflow did not use exactly one broad snapshot")
+            if float(report.get("integrity_seconds", -1.0)) < 0.0:
+                raise RuntimeError("empty reconcile workflow omitted integrity timing")
             empty_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_empty"] = _measure_workflow(
             "workflow_reconcile_empty",
@@ -1860,7 +1864,11 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 raise RuntimeError("long reconcile workflow returned invalid JSON") from exc
             if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
                 raise RuntimeError("long reconcile workflow returned an invalid report")
-            if int(report.get("export_calls", 0)) != 1 or int(report.get("export_rows", 0)) != long_count:
+            if (
+                int(report.get("export_calls", 0)) != 1
+                or int(report.get("export_rows", 0)) != long_count
+                or float(report.get("integrity_seconds", -1.0)) < 0.0
+            ):
                 raise RuntimeError("long reconcile workflow exceeded its single-snapshot row budget")
             long_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_long_history"] = _measure_workflow(

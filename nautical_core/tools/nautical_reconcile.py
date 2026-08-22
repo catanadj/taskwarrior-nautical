@@ -28,6 +28,7 @@ from nautical_core import chain_integrity_lifecycle as lifecycle, safe_lock  # n
 from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
 from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,

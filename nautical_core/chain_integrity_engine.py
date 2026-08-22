@@ -344,11 +344,21 @@ class ChainIntegrityEngine:
             if results and all(item.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED} for item in results):
                 repository.acknowledge_integrity(intent_id=record.envelope.intent_id, owner=owner)
             else:
-                repository.manual_review_integrity(
+                review = repository.manual_review_integrity(
                     intent_id=record.envelope.intent_id,
                     owner=owner,
                     failure=OutboxFailure("integrity_application", results[-1].reason if results else "no application result"),
                 )
+                if not review.ok:
+                    # Do not claim durable review when the state transition
+                    # itself failed; retain an explicit unavailable outcome.
+                    reason = review.reason or review.kind.value
+                    applications.append(IntegrityApplicationResult(
+                        record.envelope.plan.plan_id,
+                        results[-1].operation_id if results else record.envelope.intent_id,
+                        MutationOutcomeKind.RETRYABLE,
+                        f"manual-review persistence failed: {reason}",
+                    ))
         return tuple(applications)
 
     @staticmethod

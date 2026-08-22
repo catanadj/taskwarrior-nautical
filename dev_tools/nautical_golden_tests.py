@@ -34256,6 +34256,54 @@ def test_lifecycle_application_outbox_faults_are_retryable():
                f"manual-review persistence failure was not retryable: {review}")
 
 
+def test_lifecycle_configuration_drift_blocks_mutation():
+    """A plan persisted under one configuration cannot mutate under another."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+
+    class _Uow:
+        mutation_epoch = 0
+
+    class _Mutations:
+        def __init__(self):
+            self.calls = 0
+
+        def apply(self, _request):
+            self.calls += 1
+            raise AssertionError("configuration drift must block mutation")
+
+    parent_uuid = "00000000-0000-0000-0000-000000000851"
+    child_uuid = "00000000-0000-0000-0000-000000000852"
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("cfg-drift", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard("completed", "on", "cfg-drift", 1, "rf-cfg-drift", "20260101T000000Z"),
+        child_payload={"uuid": child_uuid, "chainID": "cfg-drift", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        mutations = _Mutations()
+        service = LifecycleApplicationService(
+            unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="cfg-drift",
+        )
+        staged = service.stage(plan, configuration_fingerprint="cfg-before", schedule_fingerprint="sch")
+        expect(staged.ok, f"configuration-drift plan did not stage: {staged}")
+        result = service.drain(limit=1, configuration_fingerprint="cfg-after", schedule_fingerprint="sch")
+        expect(len(result.outcomes) == 1, f"expected one drift outcome: {result.outcomes}")
+        outcome = result.outcomes[0]
+        expect(outcome.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW, f"drift was not rejected: {outcome}")
+        expect("configuration" in outcome.reason.lower(), f"drift reason was not actionable: {outcome.reason}")
+        expect(mutations.calls == 0, "configuration drift reached the mutation gateway")
+        _, status = outbox.status()
+        expect(status["states"].get("manual_review") == 1, f"drift was not durably recorded: {status}")
+
+
 def test_lifecycle_application_conflict_and_retry_budget_outcomes():
     """Conflicts surface as manual_review; retryable failures that exhaust the
     budget quarantine the intent rather than looping."""
@@ -34663,6 +34711,7 @@ TESTS.extend([
     test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
     test_lifecycle_application_outbox_faults_are_retryable,
+    test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,
     test_lifecycle_application_execute_staged_targets_exact_intent,

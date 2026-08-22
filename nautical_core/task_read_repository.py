@@ -13,6 +13,7 @@ from .integration_models import (
     CommandFailureKind,
     FailureEvidence,
     Found,
+    TaskCommand,
     TaskCommandResult,
     TaskRead,
     Unavailable,
@@ -655,8 +656,12 @@ class TaskReadRepository:
     ) -> TaskRead[tuple[TaskRow, ...]]:
         scope_filter = str(scope_filter or "").strip()
         if scope_filter and any(token in scope_filter for token in (" ", "\n", "\r", "\t")):
+            command = TaskCommand(("task", scope_filter), "lifecycle candidate scope", 1.0)
             return self._failure(
-                TaskCommand(("task", scope_filter), "lifecycle candidate scope", 1.0),
+                TaskCommandResult(
+                    command, 2, "", "invalid lifecycle candidate scope",
+                    CommandFailureKind.INVALID_RESPONSE, 1, 0.0,
+                ),
                 "lifecycle candidate scope",
                 kind=CommandFailureKind.INVALID_RESPONSE,
                 detail="lifecycle candidate scope must be one Taskwarrior filter token",
@@ -669,7 +674,7 @@ class TaskReadRepository:
             # Keep active work and only terminal rows that can still require a
             # successor.  Full history remains available through --full-audit.
             terminal = ("(", "status:completed", "or", "status:deleted", ")", "nextLink:")
-            filters = (
+            filters: tuple[str, ...] = (
                 "chain:on", "(", "status:pending", "or", "status:waiting", "or", *terminal, ")",
             )
         else:

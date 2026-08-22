@@ -356,14 +356,14 @@ def _check_removed_ownership(root: Path) -> list[dict]:
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            imports: set[str] = set()
+            pure_imports: set[str] = set()
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
-                    imports.update(alias.name for alias in node.names)
+                    pure_imports.update(alias.name for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and node.module:
-                    imports.add(node.module)
+                    pure_imports.add(node.module)
             violations = sorted(
-                name for name in imports
+                name for name in pure_imports
                 if any(token in name.casefold() for token in forbidden_pure_tokens)
             )
             results.append({

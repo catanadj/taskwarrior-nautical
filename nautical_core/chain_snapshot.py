@@ -13,6 +13,7 @@ from .integration_models import (
     CommandFailureKind,
     FailureEvidence,
     Found,
+    TaskCommand,
     TaskRead,
     Unavailable,
 )

@@ -302,6 +302,39 @@ def _terminal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _child_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    """Validate temporal continuity only across one resolved parent edge."""
+    findings: list[IntegrityFinding] = []
+    for parent in graph.nodes:
+        reference = graph.reference(parent.task_uuid, "nextLink")
+        if reference.state is not ReferenceState.RESOLVED:
+            continue
+        children = graph.uuid_matches(reference.target_uuid)
+        if len(children) != 1:
+            continue
+        child = children[0]
+        parent_raw = parent.field("due") or parent.field("scheduled")
+        child_raw = child.field("due") or child.field("scheduled")
+        parent_dt = _canonical_timestamp(parent_raw)
+        child_dt = _canonical_timestamp(child_raw)
+        if parent_dt is None or child_dt is None or child_dt > parent_dt:
+            continue
+        findings.append(IntegrityFinding(
+            "continuity.child_temporal_order",
+            FindingStatus.MANUAL_REVIEW,
+            FindingSeverity.ERROR,
+            graph.snapshot.snapshot_id,
+            parent.chain_id,
+            (parent.task_uuid, child.task_uuid),
+            "child_not_after_parent",
+            "Resolved child recurrence target is not later than its parent target.",
+            (("parent_target", str(parent_raw)), ("child_target", str(child_raw))),
+            (("child_target", "after parent_target"),),
+            (("parent_link", parent.link), ("child_link", child.link), ("coverage", graph.snapshot.coverage.value)),
+        ))
+    return tuple(findings)
+
+
 def _recurrence_identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for node in graph.nodes:
@@ -421,6 +454,7 @@ DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("edge.topology", SnapshotCoverage.CANDIDATES, _topology_rule),
     InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
     InvariantRule("terminal", SnapshotCoverage.CANDIDATES, _terminal_rule),
+    InvariantRule("continuity.child_temporal_order", SnapshotCoverage.CANDIDATES, _child_continuity_rule),
     InvariantRule("identity.recurrence", SnapshotCoverage.CANDIDATES, _recurrence_identity_rule),
     InvariantRule("carry.temporal", SnapshotCoverage.CANDIDATES, _temporal_rule),
 )

@@ -1720,6 +1720,34 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
         "malformed chainUntil incorrectly justified terminal recovery",
     )
 
+    backward = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-continuity", SnapshotCoverage.CANDIDATES, "test", (
+            ChainNode.from_mapping({
+                "uuid": "12121212-0000-0000-0000-000000000928",
+                "status": "completed",
+                "chain": "on",
+                "chainID": "continuity-chain",
+                "link": 1,
+                "due": "20260822T120000Z",
+                "nextLink": "13131313",
+            }),
+            ChainNode.from_mapping({
+                "uuid": "13131313-0000-0000-0000-000000000929",
+                "status": "pending",
+                "chain": "on",
+                "chainID": "continuity-chain",
+                "link": 2,
+                "due": "20260822T110000Z",
+                "prevLink": "12121212",
+            }),
+        ),
+    ))
+    continuity_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(backward)}
+    expect(
+        ("continuity.child_temporal_order", "child_not_after_parent") in continuity_ids,
+        "backward child target was not reported",
+    )
+
 
 def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
     """Acknowledged terminal plans require a disabled, unlinked persisted tip."""

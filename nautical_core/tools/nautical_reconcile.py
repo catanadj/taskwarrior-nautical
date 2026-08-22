@@ -56,6 +56,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
     build_operator_uow,
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
+from nautical_core.reconcile_cli import build_parser  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -1715,24 +1716,10 @@ def main(
     _locked_taskdata: Path | None = None,
     _unit_of_work: TaskwarriorUnitOfWork | None = None,
 ) -> int:
-    parser = argparse.ArgumentParser(description="Repair Nautical chains after hookless completion, expiration, or deletion.")
-    parser.add_argument("--apply", action="store_true", help="Apply repairs. Default is dry-run.")
-    parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
-    parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")
-    scope = parser.add_mutually_exclusive_group()
-    scope.add_argument("--chain-id", help="Restrict audit and recovery to one chainID.")
-    scope.add_argument("--uuid", help="Restrict audit and recovery to one task UUID.")
-    parser.add_argument(
-        "--no-housekeeping",
-        action="store_true",
-        help="Skip opportunistic lifecycle outbox housekeeping for this run.",
-    )
-    parser.add_argument(
-        "--max-expiration-hops",
-        type=_expiration_hop_limit,
-        default=_DEFAULT_EXPIRATION_HOPS,
-        help=f"Maximum expired links recovered per chain (default: {_DEFAULT_EXPIRATION_HOPS}).",
+    parser = build_parser(
+        expiration_hop_limit=_expiration_hop_limit,
+        default_expiration_hops=_DEFAULT_EXPIRATION_HOPS,
+        max_expiration_hops=_MAX_EXPIRATION_HOPS,
     )
     args = parser.parse_args(argv)
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)

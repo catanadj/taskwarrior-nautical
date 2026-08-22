@@ -1020,6 +1020,7 @@ def _check_reconcile_plans(
     findings: list[dict[str, Any]],
     *,
     rows: list[dict[str, Any]],
+    unit_of_work: TaskwarriorUnitOfWork | None = None,
 ) -> None:
     completion_candidates = [row for row in rows if lifecycle.is_orphan_completion_candidate(row)]
     deleted_candidates = [row for row in rows if lifecycle.is_orphan_deleted_chain_candidate(row)]
@@ -1044,9 +1045,18 @@ def _check_reconcile_plans(
         unavailable = str(exc)
     candidates = [*completion_candidates, *deleted_candidates]
     if not unavailable:
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+
+        configuration = unit_of_work.context.configuration if unit_of_work is not None else None
+        integrity_engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint=configuration.fingerprint if configuration is not None else "doctor",
+            schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "doctor",
+        )
         for parent in candidates:
             existing_children = _existing_reconcile_children(rows, parent)
-            plan = lifecycle.plan_recovery_decision(
+            # Recovery planning belongs to the integrity engine.  Doctor only
+            # supplies the current snapshot evidence and formats the result.
+            plan = integrity_engine.plan_recovery(
                 parent,
                 existing_children=existing_children,
                 hook=hook,
@@ -1165,7 +1175,7 @@ def _check_chains(
         )
     if integrity is not None:
         findings.extend(doctor_findings(integrity))
-    _check_reconcile_plans(findings, rows=rows)
+    _check_reconcile_plans(findings, rows=rows, unit_of_work=unit_of_work)
 
     nautical = [
         row for row in rows

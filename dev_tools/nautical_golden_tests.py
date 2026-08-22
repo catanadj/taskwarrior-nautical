@@ -3048,6 +3048,20 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         )
 
     service = TaskwarriorMutationService(uow)
+    snapshot_parent = dict(parent)
+    stale_request = request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 0)
+    parent["modified"] = "20260813T100001Z"
+    stale = service.apply(stale_request)
+    expect(stale.kind is MutationOutcomeKind.CONFLICT, f"modified parent was not rejected: {stale}")
+    expect(not uow.client.calls, "stale parent guard reached the mutation command")
+    parent.clear()
+    parent.update(snapshot_parent)
+    uow.repository.rows.pop(parent_uuid)
+    deleted = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 0))
+    expect(deleted.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE}, f"deleted parent was applied: {deleted}")
+    expect(not uow.client.calls, "deleted parent reached the mutation command")
+    uow.repository.rows[parent_uuid] = parent
+
     child = ChildImportPayload.from_mapping(
         {
             "uuid": child_uuid,

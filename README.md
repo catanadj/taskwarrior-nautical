@@ -23,6 +23,9 @@ curl -fsSL https://raw.githubusercontent.com/catanadj/taskwarrior-nautical/main/
   | bash -s -- --version v6.5.2
 ```
 
+To try the latest pushed fixes before the next stable release, use
+`--version main` instead.
+
 The bootstrap downloads a temporary pinned release, runs the validated
 installer, checks the installed runtime with Doctor, and removes the checkout.
 Use `--dry-run` to validate without changing anything. For Termux, pass the

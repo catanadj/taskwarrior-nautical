@@ -101,7 +101,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 printf 'Downloading release...\n'
-git clone --depth 1 --branch "$VERSION" "$REPOSITORY" "$CHECKOUT" >/dev/null
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$VERSION" "$REPOSITORY" "$CHECKOUT"
 
 install_args=(install --source "$CHECKOUT" --taskdata "$TASKDATA")
 [[ -n "$LAUNCHER_PATH" ]] && install_args+=(--launcher-path "$LAUNCHER_PATH")

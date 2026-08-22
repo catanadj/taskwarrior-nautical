@@ -1608,6 +1608,27 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(("carry.until_after_due", "until_before_due") in temporal_ids, "until ordering was not reported")
     expect(("carry.wait_before_due", "wait_after_due") in temporal_ids, "wait ordering was not reported")
 
+    terminal = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-terminal", SnapshotCoverage.CANDIDATES, "test", (ChainNode.from_mapping({
+            "uuid": "ffffffff-0000-0000-0000-000000000926",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "terminal-chain",
+            "link": 4,
+            "chainMax": "not-a-number",
+            "chainUntil": "not-a-date",
+        }),),
+    ))
+    terminal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(terminal)}
+    expect(
+        ("terminal.chain_max_valid", "invalid_chain_max_terminal_bound") in terminal_ids,
+        "malformed chainMax incorrectly justified terminal recovery",
+    )
+    expect(
+        ("terminal.chain_until_valid", "invalid_chain_until_terminal_bound") in terminal_ids,
+        "malformed chainUntil incorrectly justified terminal recovery",
+    )
+
 
 def test_chain_integrity_context_keeps_outbox_evidence_separate():
     """Task graph truth and lifecycle intent evidence retain separate provenance."""

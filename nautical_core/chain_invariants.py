@@ -256,6 +256,51 @@ def _lifecycle_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _terminal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    """Validate terminal bounds before they suppress successor recovery."""
+    findings: list[IntegrityFinding] = []
+    for node in graph.nodes:
+        if node.status.lower() not in {"completed", "deleted"}:
+            continue
+        if str(node.field("chain", "on") or "on").strip().lower() != "on":
+            continue
+        if graph.reference(node.task_uuid, "nextLink").state is not ReferenceState.ABSENT:
+            continue
+        chain_max = node.field("chainMax")
+        if chain_max not in (None, "", "null"):
+            valid_max = not isinstance(chain_max, bool)
+            try:
+                valid_max = valid_max and int(float(str(chain_max).strip())) > 0
+            except (TypeError, ValueError, OverflowError):
+                valid_max = False
+            if not valid_max:
+                findings.append(_finding(
+                    graph,
+                    "terminal.chain_max_valid",
+                    FindingStatus.MANUAL_REVIEW,
+                    FindingSeverity.ERROR,
+                    node,
+                    "invalid_chain_max_terminal_bound",
+                    "Terminal chainMax is malformed and cannot justify stopping recovery.",
+                    observed=(("chainMax", chain_max),),
+                    expected=(("chainMax", "positive integer"),),
+                ))
+        chain_until = node.field("chainUntil")
+        if chain_until not in (None, "", "null") and _canonical_timestamp(chain_until) is None:
+            findings.append(_finding(
+                graph,
+                "terminal.chain_until_valid",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                node,
+                "invalid_chain_until_terminal_bound",
+                "Terminal chainUntil is malformed and cannot justify stopping recovery.",
+                observed=(("chainUntil", chain_until),),
+                expected=(("chainUntil", "timezone-aware timestamp"),),
+            ))
+    return tuple(findings)
+
+
 def _recurrence_identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for node in graph.nodes:
@@ -374,6 +419,7 @@ DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("edge", SnapshotCoverage.CANDIDATES, _edge_rule),
     InvariantRule("edge.topology", SnapshotCoverage.CANDIDATES, _topology_rule),
     InvariantRule("lifecycle", SnapshotCoverage.CANDIDATES, _lifecycle_rule),
+    InvariantRule("terminal", SnapshotCoverage.CANDIDATES, _terminal_rule),
     InvariantRule("identity.recurrence", SnapshotCoverage.CANDIDATES, _recurrence_identity_rule),
     InvariantRule("carry.temporal", SnapshotCoverage.CANDIDATES, _temporal_rule),
 )

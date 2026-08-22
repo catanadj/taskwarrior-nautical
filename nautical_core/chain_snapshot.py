@@ -156,6 +156,10 @@ class ChainSnapshotService:
             snapshot = self._empty_snapshot(request, read.reason)
             self._normalized[cache_key] = snapshot
             return Found(snapshot, self._query(request))
+        if read.value.truncated:
+            return Unavailable(self._query(request), self._invalid_response(
+                read.value, "authoritative chain export was truncated",
+            ))
         validation_error = self._validate_rows(request, read.value)
         if validation_error:
             return Unavailable(self._query(request), self._invalid_response(read.value, validation_error))

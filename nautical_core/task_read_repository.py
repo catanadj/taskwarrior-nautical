@@ -95,6 +95,7 @@ class AuthoritativeTaskSnapshot:
     scope: TaskSnapshotScope
     rows: tuple[TaskRow, ...]
     command_result: TaskCommandResult
+    truncated: bool = False
     by_uuid: Mapping[str, tuple[TaskRow, ...]] = field(init=False, repr=False)
     by_short_uuid: Mapping[str, tuple[TaskRow, ...]] = field(init=False, repr=False)
     by_chain: Mapping[str, tuple[TaskRow, ...]] = field(init=False, repr=False)
@@ -105,6 +106,8 @@ class AuthoritativeTaskSnapshot:
             raise TypeError("authoritative snapshot requires a TaskSnapshotScope")
         if not isinstance(self.command_result, TaskCommandResult) or not self.command_result.ok:
             raise ValueError("authoritative snapshot requires a successful command result")
+        if not isinstance(self.truncated, bool):
+            raise ValueError("authoritative snapshot truncation marker must be boolean")
         copied_rows: list[TaskRow] = []
         uuid_index: dict[str, list[TaskRow]] = {}
         short_index: dict[str, list[TaskRow]] = {}

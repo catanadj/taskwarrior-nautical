@@ -357,6 +357,12 @@ def _smoke_navigator(base: Path) -> None:
         raise InstallError(f"Navigator validation could not run: {exc}") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        missing_module = re.search(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)", detail)
+        if missing_module:
+            raise InstallError(
+                f"Navigator requires the missing Python module '{missing_module.group(1)}'; "
+                "install this release's requirements.txt and retry"
+            )
         raise InstallError(f"Navigator validation failed: {detail}")
 
 

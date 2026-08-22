@@ -8261,6 +8261,36 @@ def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
         expect(command_path.is_symlink(), "repair did not recreate the user command launcher")
 
 
+def test_installer_navigator_dependency_failure_is_actionable():
+    """Navigator smoke failures should identify missing requirements without a traceback."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "nautical_navigator.py").write_text("# test navigator\n", encoding="utf-8")
+        original_run = install_runtime.subprocess.run
+        install_runtime.subprocess.run = lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=(
+                "Traceback (most recent call last):\n"
+                "  File 'nautical_navigator.py', line 1, in <module>\n"
+                "ModuleNotFoundError: No module named 'rich'\n"
+            ),
+        )
+        try:
+            install_runtime._smoke_navigator(root)
+        except install_runtime.InstallError as exc:
+            message = str(exc)
+            expect("missing Python module 'rich'" in message, f"missing dependency was not identified: {message}")
+            expect("requirements.txt" in message, f"dependency remedy is not actionable: {message}")
+            expect("Traceback" not in message, f"dependency failure leaked a traceback: {message}")
+        else:
+            raise AssertionError("missing Navigator dependency did not fail validation")
+        finally:
+            install_runtime.subprocess.run = original_run
+
+
 def test_installer_upgrade_rollback_restores_active_runtime():
     """A failed upgrade should restore its pointer and every managed wrapper."""
     from nautical_core import install_runtime
@@ -32639,6 +32669,7 @@ TESTS = [
     test_doctor_hook_inventory_rejects_duplicates_without_counting_backups,
     test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch,
     test_installer_dry_run_fresh_install_and_idempotent_reinstall,
+    test_installer_navigator_dependency_failure_is_actionable,
     test_installer_upgrade_rollback_restores_active_runtime,
     test_installer_migrates_legacy_core_and_rolls_back_first_switch,
     test_installer_lock_and_duplicate_hook_guards,

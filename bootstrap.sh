@@ -10,6 +10,7 @@ TASKDATA="${TASKDATA:-$HOME/.task}"
 LAUNCHER_PATH=""
 HOOKS_DIR=""
 DRY_RUN=0
+INSTALL_DEPS=0
 KEEP_CHECKOUT=0
 CHECKOUT=""
 PLATFORM="Linux"
@@ -26,6 +27,7 @@ Options:
   --launcher-path PATH  User-facing launcher path (use $PREFIX/bin/nautical on Termux)
   --hooks-dir PATH      Taskwarrior hooks directory override
   --dry-run             Validate the release without changing the installation
+  --install-deps        Install missing Python requirements without prompting
   --keep-checkout       Keep the temporary release checkout for inspection
   -h, --help            Show this help
 EOF
@@ -34,6 +36,30 @@ EOF
 die() {
     printf 'Nautical bootstrap: %s\n' "$1" >&2
     exit 2
+}
+
+missing_python_requirements() {
+    python3 - "$1" <<'PY'
+from importlib import metadata
+from pathlib import Path
+import re
+import sys
+
+missing = []
+for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    match = re.match(r"([A-Za-z0-9_.-]+)", line)
+    if match is None:
+        continue
+    name = match.group(1)
+    try:
+        metadata.version(name)
+    except metadata.PackageNotFoundError:
+        missing.append(name)
+print(", ".join(missing))
+PY
 }
 
 render_legacy_verification() {
@@ -148,6 +174,10 @@ while (($#)); do
             DRY_RUN=1
             shift
             ;;
+        --install-deps)
+            INSTALL_DEPS=1
+            shift
+            ;;
         --keep-checkout)
             KEEP_CHECKOUT=1
             shift
@@ -206,6 +236,34 @@ trap cleanup EXIT INT TERM
 
 printf 'Downloading release...\n'
 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$VERSION" "$REPOSITORY" "$CHECKOUT"
+
+requirements_file="$CHECKOUT/requirements.txt"
+[[ -f "$requirements_file" ]] || die "release is missing requirements.txt"
+missing_requirements="$(missing_python_requirements "$requirements_file")"
+if [[ -n "$missing_requirements" ]]; then
+    printf '\nMissing Python requirements: %s\n' "$missing_requirements"
+    if ((DRY_RUN)); then
+        die "dry-run cannot install dependencies; rerun normally and approve installation, or use --install-deps"
+    fi
+    if (( ! INSTALL_DEPS )); then
+        if [[ -r /dev/tty && -w /dev/tty ]]; then
+            printf 'Install them now with %s? [Y/n] ' "$(command -v python3)" >/dev/tty
+            reply=""
+            IFS= read -r reply </dev/tty || true
+            case "${reply,,}" in
+                ""|y|yes) INSTALL_DEPS=1 ;;
+                *) die "Python requirements are required; rerun the bootstrap with --install-deps" ;;
+            esac
+        else
+            die "Python requirements are required; rerun the bootstrap with --install-deps"
+        fi
+    fi
+    python3 -m pip --version >/dev/null 2>&1 || die "pip is unavailable for python3; install python3-pip (or Termux's python package)"
+    printf 'Installing Python requirements...\n'
+    python3 -m pip install -r "$requirements_file" || die "Python requirement installation failed"
+    remaining_requirements="$(missing_python_requirements "$requirements_file")"
+    [[ -z "$remaining_requirements" ]] || die "Python requirements remain unavailable: $remaining_requirements"
+fi
 
 install_args=(install --source "$CHECKOUT" --taskdata "$TASKDATA")
 [[ -n "$LAUNCHER_PATH" ]] && install_args+=(--launcher-path "$LAUNCHER_PATH")

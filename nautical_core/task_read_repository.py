@@ -649,10 +649,21 @@ class TaskReadRepository:
         self,
         *,
         statuses: Sequence[str] = ("completed", "deleted", "pending"),
+        scope_filter: str | None = None,
         refresh: bool = False,
     ) -> TaskRead[tuple[TaskRow, ...]]:
-        scope = TaskSnapshotScope(TaskQueryKind.LIFECYCLE_CANDIDATES, "chain:on", tuple(statuses))
-        read = self._export(scope, ("chain:on",), empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
+        scope_filter = str(scope_filter or "").strip()
+        if scope_filter and any(token in scope_filter for token in (" ", "\n", "\r", "\t")):
+            return self._failure(
+                TaskCommand(("task", scope_filter), "lifecycle candidate scope", 1.0),
+                "lifecycle candidate scope",
+                kind=CommandFailureKind.INVALID_RESPONSE,
+                detail="lifecycle candidate scope must be one Taskwarrior filter token",
+            )
+        identity = "chain:on" if not scope_filter else f"chain:on {scope_filter}"
+        scope = TaskSnapshotScope(TaskQueryKind.LIFECYCLE_CANDIDATES, identity, tuple(statuses))
+        filters = ("chain:on",) if not scope_filter else ("chain:on", scope_filter)
+        read = self._export(scope, filters, empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
         if not isinstance(read, Found):
             return read
         if any(str(row.get("chain") or "").strip().lower() != "on" for row in read.value.rows):

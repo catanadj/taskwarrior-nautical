@@ -322,14 +322,15 @@ class _ReconcileSnapshot:
     row actually needs repair.
     """
 
-    def __init__(self, repository: TaskReadRepository):
+    def __init__(self, repository: TaskReadRepository, *, scope_filter: str | None = None):
         self.repository = repository
+        self.scope_filter = str(scope_filter or "").strip() or None
         self._rows: tuple[dict[str, Any], ...] | None = None
 
     def _all_rows(self) -> tuple[dict[str, Any], ...]:
         if self._rows is None:
             value = _read_value(
-                self.repository.lifecycle_candidates(statuses=ALL_TASK_STATUSES),
+                self.repository.lifecycle_candidates(statuses=ALL_TASK_STATUSES, scope_filter=self.scope_filter),
                 "reconcile lifecycle snapshot",
             )
             self._rows = tuple(dict(row) for row in (value or ()))
@@ -1719,6 +1720,9 @@ def main(
     parser.add_argument("--task-bin", default="task", help="Taskwarrior binary to execute.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary.")
     parser.add_argument("--verbose", action="store_true", help="Print every delayed-recovery hop.")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--chain-id", help="Restrict audit and recovery to one chainID.")
+    scope.add_argument("--uuid", help="Restrict audit and recovery to one task UUID.")
     parser.add_argument(
         "--no-housekeeping",
         action="store_true",
@@ -1772,7 +1776,8 @@ def main(
     _UNIT_OF_WORK = _unit_of_work
     _READ_REPOSITORY = _unit_of_work.repository
     _READ_REPOSITORY.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    snapshot = _ReconcileSnapshot(_READ_REPOSITORY)
+    scope_filter = f"chainID:{args.chain_id}" if args.chain_id else f"uuid:{args.uuid}" if args.uuid else None
+    snapshot = _ReconcileSnapshot(_READ_REPOSITORY, scope_filter=scope_filter)
     _READ_SNAPSHOT = snapshot
     try:
         candidates = _candidate_rows(args.task_bin, hook)
@@ -2038,6 +2043,7 @@ def main(
         "configuration_drifted": int(configuration_status == "drifted"),
         "configuration_drift": configuration_drift_reason,
         "mode": "apply" if args.apply else "dry-run",
+        "scope": {"chainID": args.chain_id, "uuid": args.uuid},
         "candidates": len(candidates),
         "expiration_hops": expiration_hops,
         "recovered_chains": recovered_chains,

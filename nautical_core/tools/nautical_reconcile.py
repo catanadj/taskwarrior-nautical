@@ -57,7 +57,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
-from nautical_core.reconcile_report import render_human, render_json  # noqa: E402
+from nautical_core.reconcile_report import exit_code, render_human, render_json  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -2092,9 +2092,7 @@ def main(
         summary_line, diagnostics_line = render_human(summary, _style)
         print(summary_line)
         print(diagnostics_line)
-    if has_errors:
-        return 1
-    return 2 if degraded else 0
+    return exit_code(summary)
 
 
 if __name__ == "__main__":

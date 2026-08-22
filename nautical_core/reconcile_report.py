@@ -44,4 +44,14 @@ def render_human(summary: Mapping[str, Any], style: Callable[[str, str], str]) -
     return style(summary_line, summary_color), style(diagnostics_line, "dim")
 
 
-__all__ = ["render_human", "render_json"]
+def exit_code(summary: Mapping[str, Any]) -> int:
+    """Map the stable report status to the reconcile process contract."""
+    status = str(summary.get("status") or "error")
+    if status == "error":
+        return 1
+    if status == "degraded":
+        return 2
+    return 0
+
+
+__all__ = ["exit_code", "render_human", "render_json"]

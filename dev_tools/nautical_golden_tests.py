@@ -9302,7 +9302,7 @@ def test_doctor_reports_reconcile_backfill_plans():
             env=env,
             timeout=8.0,
         )
-        expect(p.returncode == 2, f"expected doctor error exit 2, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        expect(p.returncode == 1, f"expected doctor warning exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         findings = {item.get("id"): item for item in obj.get("findings") or []}
         expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")

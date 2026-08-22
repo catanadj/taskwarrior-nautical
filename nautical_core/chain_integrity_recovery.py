@@ -30,6 +30,33 @@ class RecoveryAudit:
 class IntegrityRecoveryService:
     """Build typed recovery evidence from one authoritative chain snapshot."""
 
+    @staticmethod
+    def candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
+        return (
+            str(row.get("chainID") or "").strip().casefold(),
+            lifecycle.int_or_default(row.get("link"), 0),
+            str(row.get("status") or "").strip().casefold(),
+            str(row.get("uuid") or "").strip().casefold(),
+        )
+
+    @staticmethod
+    def ambiguous_candidate_slots(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], str]:
+        grouped: dict[tuple[str, int], set[str]] = {}
+        for row in rows:
+            chain_id = str(row.get("chainID") or "").strip()
+            link = lifecycle.int_or_default(row.get("link"), 0)
+            uuid = str(row.get("uuid") or "").strip().lower()
+            if chain_id and link > 0 and uuid:
+                grouped.setdefault((chain_id, link), set()).add(uuid)
+        return {
+            slot: (
+                f"ambiguous candidate slot chain {slot[0]} link {slot[1]} "
+                f"has {len(uuids)} distinct parent tasks"
+            )
+            for slot, uuids in grouped.items()
+            if len(uuids) > 1
+        }
+
     def audit_native_until(
         self,
         rows: Iterable[dict[str, Any]],

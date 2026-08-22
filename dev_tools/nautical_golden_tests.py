@@ -28781,7 +28781,7 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
         f"candidate order was not deterministic: {found}",
     )
     duplicate = {**rows[1], "uuid": "22222222-0000-0000-0000-000000000002"}
-    conflicts = tool._ambiguous_candidate_slots([rows[1], duplicate])
+    conflicts = tool.IntegrityRecoveryService.ambiguous_candidate_slots([rows[1], duplicate])
     expect(("a-chain", 2) in conflicts and "2 distinct parent tasks" in conflicts[("a-chain", 2)],
            f"duplicate candidate slot was not rejected: {conflicts!r}")
 

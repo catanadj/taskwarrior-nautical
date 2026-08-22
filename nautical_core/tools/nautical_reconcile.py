@@ -307,15 +307,6 @@ def _configuration_state(hook: Any) -> tuple[str, str]:
     return str(getattr(reason, "status", "drifted" if reason else "valid")), str(reason)
 
 
-def _candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
-    return (
-        str(row.get("chainID") or "").strip().casefold(),
-        lifecycle.int_or_default(row.get("link"), 0),
-        str(row.get("status") or "").strip().casefold(),
-        str(row.get("uuid") or "").strip().casefold(),
-    )
-
-
 class _ReconcileSnapshot:
     """Immutable read-phase views for active links and recovery candidates.
 
@@ -400,25 +391,6 @@ def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
     raise RuntimeError("lifecycle reconciliation service requires an invocation snapshot")
 
 
-def _ambiguous_candidate_slots(rows: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
-    """Return candidate slots with more than one distinct parent identity."""
-    grouped: dict[tuple[str, int], set[str]] = {}
-    for row in rows:
-        chain_id = str(row.get("chainID") or "").strip()
-        link = lifecycle.int_or_default(row.get("link"), 0)
-        uuid = str(row.get("uuid") or "").strip().lower()
-        if chain_id and link > 0 and uuid:
-            grouped.setdefault((chain_id, link), set()).add(uuid)
-    return {
-        slot: (
-            f"ambiguous candidate slot chain {slot[0]} link {slot[1]} "
-            f"has {len(uuids)} distinct parent tasks"
-        )
-        for slot, uuids in grouped.items()
-        if len(uuids) > 1
-    }
-
-
 def _active_chain_rows(
     task_bin: str,
     *,
@@ -435,7 +407,7 @@ def _active_chain_rows(
             for row in rows
             if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
         ),
-        key=_candidate_sort_key,
+        key=IntegrityRecoveryService.candidate_sort_key,
     )
 
 
@@ -1740,7 +1712,7 @@ def main(
     applied: list[dict[str, Any]] = []
     outcome_groups: list[list[tuple[lifecycle.LifecycleRecoveryDecision, str]]] = []
     processed_slots: set[tuple[str, int]] = set()
-    ambiguous_slots = _ambiguous_candidate_slots(candidates)
+    ambiguous_slots = IntegrityRecoveryService.ambiguous_candidate_slots(candidates)
 
     for parent in candidates:
         if configuration_status == "valid":

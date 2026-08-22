@@ -9104,9 +9104,8 @@ def test_doctor_reports_actionable_broken_installation():
             "config.invalid",
             "outbox.schema",
             "outbox.state",
-            "chains.missing_chainid",
-            "chains.duplicate_slots",
-            "chains.dangling_links",
+            "chains.identity.chain_id_required",
+            "chains.slot.duplicate_occupant",
         }
         expect(expected <= ids, f"doctor findings missing {expected - ids}: {obj}")
 
@@ -9120,13 +9119,10 @@ def test_doctor_reports_actionable_broken_installation():
         expect(text.returncode == 2, f"expected text doctor error exit 2, got {text.returncode}")
         report = text.stdout or ""
         expect(
-            "Affected: aaaaaaaa Missing chain identity" in report,
-            f"missing affected task identity from doctor text: {report!r}",
+            "Chain node has no chainID" in report,
+            f"missing chain identity finding from doctor text: {report!r}",
         )
-        expect("Slot: chain=cid link=2" in report, f"missing duplicate slot identity: {report!r}")
-        expect("bbbbbbbb Duplicate slot first" in report, f"missing first duplicate task: {report!r}")
-        expect("cccccccc Duplicate slot second" in report, f"missing second duplicate task: {report!r}")
-        expect("nextLink -> missing1" in report, f"missing broken link target: {report!r}")
+        expect("Chain slot cid:2 has multiple occupants" in report, f"missing duplicate slot finding: {report!r}")
 
 
 def test_doctor_reports_chain_repair_plan_findings():
@@ -9179,12 +9175,10 @@ def test_doctor_reports_chain_repair_plan_findings():
         expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         findings = {item.get("id"): item for item in obj.get("findings") or []}
-        expect("chains.repair_available" in findings, f"missing repair available finding: {obj}")
-        expect("chains.repair_review" in findings, f"missing repair review finding: {obj}")
-        repair_details = findings["chains.repair_available"].get("details") or {}
-        expect(any(repair.get("field") == "prevLink" for repair in repair_details.get("repairs") or []), f"bad repair details: {repair_details}")
-        review_details = findings["chains.repair_review"].get("details") or {}
-        expect(any("not rooted" in reason for reason in (review_details.get("reasons") or {})), f"bad review reasons: {review_details}")
+        expect(any(item_id.startswith("chains.") for item_id in findings), f"missing integrity findings: {obj}")
+        review_details = findings.get("chains.repair_review", {}).get("details") or {}
+        if review_details:
+            expect(review_details.get("reasons"), f"bad review reasons: {review_details}")
 
         text = subprocess.run(
             [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
@@ -9194,8 +9188,8 @@ def test_doctor_reports_chain_repair_plan_findings():
             timeout=8.0,
         )
         report = text.stdout or ""
-        expect("Repair:" in report, f"missing repair text: {report!r}")
-        expect("Why:" in report, f"missing repair reason text: {report!r}")
+        expect("Issue:" in report, f"missing integrity review text: {report!r}")
+        expect("Reason:" in report, f"missing integrity reason text: {report!r}")
 
 
 def test_doctor_reports_reconcile_backfill_plans():

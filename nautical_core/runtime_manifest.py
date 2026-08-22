@@ -54,7 +54,6 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "anchor_omit",
         "add_anchor_compute",
         "panel_diagnostics",
-        "reconcile",
         "hook_context",
         "hook_engine",
         "hook_results",

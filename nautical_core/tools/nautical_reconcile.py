@@ -1201,9 +1201,9 @@ def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> Lifec
         event = LifecycleEvent.MANUAL_DELETE
     elif str(parent.get("status") or "").strip().lower() == "deleted":
         event = LifecycleEvent.EXPIRE
-    elif "chainmax" in str(plan.reason).replace(" ", "").lower():
+    elif plan.terminal_kind == "chain_max":
         event = LifecycleEvent.CHAIN_MAX
-    elif "chainuntil" in str(plan.reason).replace(" ", "").lower():
+    elif plan.terminal_kind == "chain_until":
         event = LifecycleEvent.CHAIN_UNTIL
     else:
         event = LifecycleEvent.COMPLETE

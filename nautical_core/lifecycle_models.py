@@ -436,7 +436,9 @@ class LifecyclePlan:
         if isinstance(self.max_attempts, bool) or not isinstance(self.max_attempts, int) or self.max_attempts < 1:
             raise LifecycleContractError("max_attempts must be a positive integer")
         terminal_kind = None if self.terminal_kind in (None, "") else str(self.terminal_kind).strip()
-        if terminal_kind is not None and terminal_kind not in {"date_limit", "search_limit"}:
+        if terminal_kind is not None and terminal_kind not in {
+            "date_limit", "search_limit", "chain_max", "chain_until",
+        }:
             raise LifecycleContractError("invalid lifecycle terminal kind")
         object.__setattr__(self, "action", action)
         object.__setattr__(self, "stage", stage)

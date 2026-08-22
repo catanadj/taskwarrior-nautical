@@ -545,7 +545,9 @@ def _plan_recovery_decision_unscoped(
         return LifecycleRecoveryDecision("error", parent, next_link, f"invalid chainUntil: {until_err}")
 
     if cpmax and next_link > cpmax:
-        return LifecycleRecoveryDecision("legitimate_final", parent, next_link, "reached chainMax")
+        return LifecycleRecoveryDecision(
+            "legitimate_final", parent, next_link, "reached chainMax", terminal_kind="chain_max",
+        )
 
     try:
         if is_expiration:
@@ -570,7 +572,10 @@ def _plan_recovery_decision_unscoped(
     if not child_due:
         return LifecycleRecoveryDecision("error", parent, next_link, "could not compute next recurrence timestamp")
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
-        return LifecycleRecoveryDecision("legitimate_final", parent, next_link, "reached chainUntil", child_due=child_due)
+        return LifecycleRecoveryDecision(
+            "legitimate_final", parent, next_link, "reached chainUntil",
+            child_due=child_due, terminal_kind="chain_until",
+        )
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))

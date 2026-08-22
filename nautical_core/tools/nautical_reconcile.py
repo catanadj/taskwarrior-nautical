@@ -58,6 +58,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
 from nautical_core.reconcile_report import exit_code, render_human, render_json  # noqa: E402
+from nautical_core.lifecycle_reconciliation import LifecycleReconciliationService  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -357,6 +358,20 @@ class _ReconcileSnapshot:
 
 
 _READ_SNAPSHOT: _ReconcileSnapshot | None = None
+_LIFECYCLE_SERVICE: LifecycleReconciliationService | None = None
+
+
+def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
+    if _LIFECYCLE_SERVICE is not None:
+        return _LIFECYCLE_SERVICE
+    if _READ_SNAPSHOT is None:
+        raise RuntimeError("lifecycle reconciliation service requires an invocation snapshot")
+    configuration = _UNIT_OF_WORK.context.configuration if _UNIT_OF_WORK is not None else None
+    return LifecycleReconciliationService(
+        _READ_SNAPSHOT,
+        configuration_fingerprint=configuration.fingerprint if configuration is not None else "reconcile",
+        schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "reconcile",
+    )
 
 
 def _candidate_rows(
@@ -922,14 +937,7 @@ def _plan_for_parent(
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-
-    configuration = _UNIT_OF_WORK.context.configuration if _UNIT_OF_WORK is not None else None
-    engine = ChainIntegrityEngine.lifecycle_only(
-        configuration_fingerprint=configuration.fingerprint if configuration is not None else "reconcile",
-        schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "reconcile",
-    )
-    return engine.plan_recovery(
+    return _lifecycle_reconciliation_service().plan(
         parent,
         existing_children=existing_children,
         hook=hook,
@@ -1760,15 +1768,21 @@ def main(
         recovery_at = now_utc() if callable(now_utc) else datetime.now(timezone.utc)
     except Exception as exc:
         return _startup_failure(args, "runtime", exc)
-    global _READ_REPOSITORY, _READ_SNAPSHOT, _UNIT_OF_WORK
+    global _READ_REPOSITORY, _READ_SNAPSHOT, _UNIT_OF_WORK, _LIFECYCLE_SERVICE
     _UNIT_OF_WORK = _unit_of_work
     _READ_REPOSITORY = _unit_of_work.repository
     _READ_REPOSITORY.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
     scope_filter = f"chainID:{args.chain_id}" if args.chain_id else f"uuid:{args.uuid}" if args.uuid else None
     snapshot = _ReconcileSnapshot(_READ_REPOSITORY, scope_filter=scope_filter)
     _READ_SNAPSHOT = snapshot
+    configuration = _UNIT_OF_WORK.context.configuration
+    _LIFECYCLE_SERVICE = LifecycleReconciliationService(
+        snapshot,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+    )
     try:
-        candidates = _candidate_rows(args.task_bin, hook)
+        candidates = _LIFECYCLE_SERVICE.candidates()
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
     integrity_audit_result: Any = None
@@ -1793,7 +1807,7 @@ def main(
             integrity_application_results = integrity_application.applications
             if _READ_SNAPSHOT is not None and integrity_application_results:
                 _READ_SNAPSHOT._rows = None
-                candidates = _candidate_rows(args.task_bin, hook)
+                candidates = _LIFECYCLE_SERVICE.candidates()
     except Exception as exc:
         integrity_audit_result = None
         if args.apply:

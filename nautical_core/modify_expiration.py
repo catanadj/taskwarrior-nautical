@@ -128,7 +128,7 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
         _compute_cp_child_due=services.compute_cp_child_due,
         _build_child_from_parent=services.build_child_from_parent,
     )
-    plan = reconcile.build_reconcile_plan(task, existing_children=[], hook=plan_hook)
+    plan = reconcile.plan_recovery_decision(task, existing_children=[], hook=plan_hook)
 
     if plan.action == "legitimate_final":
         apply_terminal_transition(task, LifecycleEvent.EXPIRE)

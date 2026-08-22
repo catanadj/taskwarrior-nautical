@@ -76,6 +76,10 @@ task add "Weekly review" anchor:"w:mon"
 
 Complete it with `task <id> done`; Nautical queues the next Monday review.
 
+When hooks are interrupted or a task is changed outside Nautical, the system
+can audit the chain and safely recover missing links through `nautical doctor`
+and `nautical reconcile`.
+
 ## Two Ways To Repeat
 
 Use `cp` when the next task follows a period from completion:

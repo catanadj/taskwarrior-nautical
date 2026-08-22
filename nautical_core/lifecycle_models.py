@@ -31,6 +31,21 @@ class LifecycleEvent(str, Enum):
     CHAIN_UNTIL = "chain_until"
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleRecoveryDecision:
+    """Typed successor/expiration decision consumed by reconcile and UI."""
+
+    action: str
+    parent: dict[str, Any]
+    next_link: int
+    reason: str
+    child: dict[str, Any] | None = None
+    child_short: str = ""
+    child_due: Any = None
+    terminal_kind: str | None = None
+    lifecycle_plan: "LifecyclePlan | None" = None
+
+
 class LifecycleAction(str, Enum):
     NOOP = "noop"
     UPDATE_PARENT = "update_parent"
@@ -401,6 +416,7 @@ class LifecyclePlan:
     parent_patch: FrozenPairs = ()
     expected_postconditions: tuple[str, ...] = ()
     max_attempts: int = 3
+    terminal_kind: str | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -419,11 +435,17 @@ class LifecyclePlan:
             raise LifecycleContractError("plan identity and parent guard link differ")
         if isinstance(self.max_attempts, bool) or not isinstance(self.max_attempts, int) or self.max_attempts < 1:
             raise LifecycleContractError("max_attempts must be a positive integer")
+        terminal_kind = None if self.terminal_kind in (None, "") else str(self.terminal_kind).strip()
+        if terminal_kind is not None and terminal_kind not in {
+            "date_limit", "search_limit", "chain_max", "chain_until",
+        }:
+            raise LifecycleContractError("invalid lifecycle terminal kind")
         object.__setattr__(self, "action", action)
         object.__setattr__(self, "stage", stage)
         object.__setattr__(self, "child_payload", tuple(self.child_payload))
         object.__setattr__(self, "parent_patch", tuple(self.parent_patch))
         object.__setattr__(self, "expected_postconditions", tuple(str(item) for item in self.expected_postconditions))
+        object.__setattr__(self, "terminal_kind", terminal_kind)
 
     @classmethod
     def from_mappings(
@@ -437,6 +459,7 @@ class LifecyclePlan:
         expected_postconditions: tuple[str, ...] = (),
         max_attempts: int = 3,
         stage: ExecutionStage = ExecutionStage.PLANNED,
+        terminal_kind: str | None = None,
     ) -> "LifecyclePlan":
         return cls(
             identity=identity,
@@ -447,6 +470,7 @@ class LifecyclePlan:
             parent_patch=_freeze_pairs(parent_patch),
             expected_postconditions=expected_postconditions,
             max_attempts=max_attempts,
+            terminal_kind=terminal_kind,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -467,6 +491,7 @@ class LifecyclePlan:
             "parent_patch": self.parent_patch_dict(),
             "expected_postconditions": list(self.expected_postconditions),
             "max_attempts": self.max_attempts,
+            "terminal_kind": self.terminal_kind,
         }
 
     @classmethod
@@ -506,6 +531,7 @@ class LifecyclePlan:
             parent_patch=parent_patch,
             expected_postconditions=tuple(str(item) for item in expected),
             max_attempts=max_attempts,
+            terminal_kind=value.get("terminal_kind"),
         )
 
     def child_dict(self) -> dict[str, Any]:
@@ -607,6 +633,7 @@ __all__ = (
     "LifecycleOutcome",
     "LifecycleOutcomeKind",
     "LifecyclePlan",
+    "LifecycleRecoveryDecision",
     "ParentGuard",
     "TaskLifecycleState",
     "TaskSnapshot",

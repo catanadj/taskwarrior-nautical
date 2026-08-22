@@ -43,6 +43,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_models",
         "lifecycle_models",
         "lifecycle_planner",
+        "chain_integrity_lifecycle",
         "lifecycle_application",
         "lifecycle_outbox",
         "modify_feedback",
@@ -54,7 +55,6 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "anchor_omit",
         "add_anchor_compute",
         "panel_diagnostics",
-        "reconcile",
         "hook_context",
         "hook_engine",
         "hook_results",
@@ -114,8 +114,12 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/tools/nautical_runtime_cleanup.py",
     "nautical_core/tools/nautical_doctor.py",
     "nautical_core/tools/nautical_queue_status.py",
-    "nautical_core/tools/nautical_chain_repair.py",
     "nautical_core/tools/nautical_reconcile.py",
+    "nautical_core/reconcile_cli.py",
+    "nautical_core/reconcile_report.py",
+    "nautical_core/lifecycle_reconciliation.py",
+    "nautical_core/integrity_report.py",
+    "nautical_core/chain_integrity_recovery.py",
     "nautical_core/tools/nautical_query.py",
 )
 
@@ -134,6 +138,21 @@ REMOVED_RECONCILE_SYMBOLS = (
     "legacy_hook",
     "_RECONCILE_PROTOCOL",
 )
+# Operator commands compose the integrity/lifecycle services; they must not
+# regain ownership by importing a hook implementation directly.
+OPERATOR_FORBIDDEN_HOOK_IMPORTS = (
+    "nautical_core.hooks",
+    "nautical_core.hooks.add_impl",
+    "nautical_core.hooks.modify_impl",
+    "nautical_core.hooks.exit_impl",
+    "nautical_core.hook_runtime",
+)
+PURE_INTEGRITY_MODULES = (
+    "nautical_core/chain_graph.py",
+    "nautical_core/chain_integrity_models.py",
+    "nautical_core/chain_invariants.py",
+    "nautical_core/chain_repair_planner.py",
+)
 
 # ``panel_colours`` is a core-facade lazy sibling rather than a hook
 # ``_module()`` dependency, but it must still be present in staged releases.
@@ -141,4 +160,10 @@ for _event in HOOK_RUNTIME_FILES:
     HOOK_RUNTIME_FILES[_event] += ("panel_colours.py",)
 
 
-__all__ = ("HOOK_LAZY_MODULES", "HOOK_RUNTIME_FILES", "OPERATOR_RUNTIME_FILES")
+__all__ = (
+    "HOOK_LAZY_MODULES",
+    "HOOK_RUNTIME_FILES",
+    "OPERATOR_RUNTIME_FILES",
+    "OPERATOR_FORBIDDEN_HOOK_IMPORTS",
+    "PURE_INTEGRITY_MODULES",
+)

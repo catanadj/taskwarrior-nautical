@@ -13,6 +13,7 @@ from .integration_models import (
     CommandFailureKind,
     FailureEvidence,
     Found,
+    TaskCommand,
     TaskCommandResult,
     TaskRead,
     Unavailable,
@@ -95,6 +96,7 @@ class AuthoritativeTaskSnapshot:
     scope: TaskSnapshotScope
     rows: tuple[TaskRow, ...]
     command_result: TaskCommandResult
+    truncated: bool = False
     by_uuid: Mapping[str, tuple[TaskRow, ...]] = field(init=False, repr=False)
     by_short_uuid: Mapping[str, tuple[TaskRow, ...]] = field(init=False, repr=False)
     by_chain: Mapping[str, tuple[TaskRow, ...]] = field(init=False, repr=False)
@@ -105,6 +107,8 @@ class AuthoritativeTaskSnapshot:
             raise TypeError("authoritative snapshot requires a TaskSnapshotScope")
         if not isinstance(self.command_result, TaskCommandResult) or not self.command_result.ok:
             raise ValueError("authoritative snapshot requires a successful command result")
+        if not isinstance(self.truncated, bool):
+            raise ValueError("authoritative snapshot truncation marker must be boolean")
         copied_rows: list[TaskRow] = []
         uuid_index: dict[str, list[TaskRow]] = {}
         short_index: dict[str, list[TaskRow]] = {}
@@ -646,10 +650,38 @@ class TaskReadRepository:
         self,
         *,
         statuses: Sequence[str] = ("completed", "deleted", "pending"),
+        scope_filter: str | None = None,
+        bounded: bool = False,
         refresh: bool = False,
     ) -> TaskRead[tuple[TaskRow, ...]]:
-        scope = TaskSnapshotScope(TaskQueryKind.LIFECYCLE_CANDIDATES, "chain:on", tuple(statuses))
-        read = self._export(scope, ("chain:on",), empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
+        scope_filter = str(scope_filter or "").strip()
+        if scope_filter and any(token in scope_filter for token in (" ", "\n", "\r", "\t")):
+            command = TaskCommand(("task", scope_filter), "lifecycle candidate scope", 1.0)
+            return self._failure(
+                TaskCommandResult(
+                    command, 2, "", "invalid lifecycle candidate scope",
+                    CommandFailureKind.INVALID_RESPONSE, 1, 0.0,
+                ),
+                "lifecycle candidate scope",
+                kind=CommandFailureKind.INVALID_RESPONSE,
+                detail="lifecycle candidate scope must be one Taskwarrior filter token",
+            )
+        identity = "chain:on" if not scope_filter else f"chain:on {scope_filter}"
+        if bounded:
+            identity = f"{identity}|bounded"
+        scope = TaskSnapshotScope(TaskQueryKind.LIFECYCLE_CANDIDATES, identity, tuple(statuses))
+        if bounded:
+            # Keep active work and only terminal rows that can still require a
+            # successor.  Full history remains available through --full-audit.
+            terminal = ("(", "status:completed", "or", "status:deleted", ")", "nextLink:")
+            filters: tuple[str, ...] = (
+                "chain:on", "(", "status:pending", "or", "status:waiting", "or", *terminal, ")",
+            )
+        else:
+            filters = ("chain:on",) if not scope_filter else ("chain:on", scope_filter)
+        if scope_filter and bounded:
+            filters = (*filters, scope_filter)
+        read = self._export(scope, filters, empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
         if not isinstance(read, Found):
             return read
         if any(str(row.get("chain") or "").strip().lower() != "on" for row in read.value.rows):

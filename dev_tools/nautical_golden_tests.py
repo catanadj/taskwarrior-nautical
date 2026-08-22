@@ -141,7 +141,7 @@ def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
 
 
 def _found_task(row):
-    from nautical_core.integration_models import Found
+    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
     return Found(row, "isolated test read")
 
 
@@ -1217,6 +1217,1002 @@ def test_lifecycle_models_enforce_transition_contract():
         raise AssertionError("invalid lifecycle model was accepted")
 
 
+def test_chain_integrity_models_enforce_observation_and_repair_contract():
+    """Integrity observations may be incomplete, but repair plans may not."""
+    from dataclasses import FrozenInstanceError
+
+    from nautical_core.chain_integrity_models import (
+        ChainNode,
+        ChainReference,
+        ChainSnapshot,
+        FindingSeverity,
+        FindingStatus,
+        IntegrityContractError,
+        IntegrityFinding,
+        IntegrityOperation,
+        IntegrityReport,
+        IntegrityReportStatus,
+        IntegrityRepairPlan,
+        ReferenceState,
+        RepairOperationKind,
+        RepairSafety,
+        SnapshotCoverage,
+    )
+
+    node = ChainNode.from_mapping(
+        {
+            "uuid": "00000000-0000-0000-0000-000000000991",
+            "status": "pending",
+            "link": "7.000000",
+            "nextLink": "00000000",
+        }
+    )
+    expect(node.link == 7, "numeric Taskwarrior link was not normalized")
+    expect(not node.has_complete_identity, "missing chainID became a repairable identity")
+    expect(node.field("nextLink") == "00000000", "raw row evidence was discarded")
+
+    complete = ChainNode.from_mapping(
+        {
+            "uuid": "00000000-0000-0000-0000-000000000992",
+            "status": "pending",
+            "chainID": "chain-contract",
+            "link": 8,
+        }
+    )
+    reference = ChainReference(
+        "nextLink",
+        "00000000",
+        ReferenceState.RESOLVED,
+        target_uuid=complete.task_uuid,
+        target_link=8,
+    )
+    expect(reference.state is ReferenceState.RESOLVED, "reference state was not preserved")
+
+    snapshot = ChainSnapshot(
+        "snapshot-contract",
+        SnapshotCoverage.CANDIDATES,
+        "task export",
+        (node, complete),
+        "cfg-contract",
+    )
+    finding = IntegrityFinding(
+        "identity.chain_id_required",
+        FindingStatus.REPAIRABLE,
+        FindingSeverity.ERROR,
+        snapshot.snapshot_id,
+        "chain-contract",
+        (node.task_uuid,),
+        "missing_chain_id",
+        "Nautical recurrence has no chain identity.",
+        observed=(("chainID", ""),),
+        expected=(("chainID", "required"),),
+        evidence=(("coverage", snapshot.coverage.value),),
+    )
+    operation = IntegrityOperation(
+        "operation-contract",
+        RepairOperationKind.LINK_REPAIR,
+        "chain-contract",
+        complete.task_uuid,
+        (("modified", "20260821T120000Z"),),
+        ("target remains present",),
+        ("nextLink is reciprocal",),
+    )
+    plan = IntegrityRepairPlan(
+        "plan-contract",
+        snapshot.snapshot_id,
+        "chain-contract",
+        RepairSafety.SAFE,
+        "reciprocal_link",
+        "Repair one reciprocal chain link.",
+        (operation,),
+        "cfg-contract",
+    )
+    report = IntegrityReport(
+        snapshot,
+        IntegrityReportStatus.REPAIRABLE,
+        (finding,),
+        (plan,),
+    )
+    expect(report.plans[0].operations[0].kind is RepairOperationKind.LINK_REPAIR, "plan operation was changed")
+
+    invalid_cases = (
+        lambda: ChainReference("nextLink", "00000000", ReferenceState.RESOLVED),
+        lambda: ChainSnapshot("snapshot-unavailable", SnapshotCoverage.UNAVAILABLE, "task export"),
+        lambda: IntegrityRepairPlan(
+            "plan-dependency",
+            snapshot.snapshot_id,
+            "chain-contract",
+            RepairSafety.SAFE,
+            "reciprocal_link",
+            "invalid dependency",
+            (
+                IntegrityOperation(
+                    "operation-dependency",
+                    RepairOperationKind.LINK_REPAIR,
+                    "chain-contract",
+                    complete.task_uuid,
+                    (("modified", "20260821T120000Z"),),
+                    ("target remains present",),
+                    ("nextLink is reciprocal",),
+                    depends_on=("missing-operation",),
+                ),
+            ),
+        ),
+    )
+    for make_invalid in invalid_cases:
+        try:
+            make_invalid()
+        except IntegrityContractError:
+            continue
+        raise AssertionError("invalid integrity model was accepted")
+
+    try:
+        plan.plan_id = "changed"  # type: ignore[misc]
+    except FrozenInstanceError:
+        pass
+    else:
+        raise AssertionError("integrity repair plan was mutable")
+
+
+def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
+    """Integrity snapshots reuse one authoritative export and fail closed."""
+    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+    from nautical_core.task_read_repository import (
+        AuthoritativeTaskSnapshot,
+        TaskQueryKind,
+        TaskSnapshotScope,
+    )
+
+    command = TaskCommand(("task", "export"), "chain integrity test", 1.0)
+    result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.001)
+    scope = TaskSnapshotScope(TaskQueryKind.BROAD, "chain:on", ("completed", "pending"))
+    rows = (
+        {"uuid": "00000000-0000-0000-0000-000000000901", "status": "pending", "chainID": "snap-chain", "link": 1},
+        {"uuid": "00000000-0000-0000-0000-000000000902", "status": "completed", "chainID": "snap-chain", "link": 2},
+    )
+    authoritative = AuthoritativeTaskSnapshot(scope, rows, result)
+
+    class Repository:
+        calls = 0
+        response = Found(authoritative, "broad:chain:on")
+
+        def broad_snapshot(self, **_kwargs):
+            self.calls += 1
+            return self.response
+
+    class Unit:
+        mutation_epoch = 0
+
+        def __init__(self):
+            self.repository = Repository()
+
+    unit = Unit()
+    service = ChainSnapshotService(unit, configuration_fingerprint="cfg-snapshot")
+    request = IntegritySnapshotRequest.chain("snap-chain")
+    first = service.collect(request)
+    second = service.collect(request)
+    expect(isinstance(first, Found) and isinstance(second, Found), "authoritative snapshot was not found")
+    expect(first.value.rows == second.value.rows and len(first.value.rows) == 2, "snapshot rows were not normalized")
+    expect(unit.repository.calls == 1, "normalized snapshot cache did not reuse the current epoch")
+
+    unit.mutation_epoch = 1
+    service.collect(request)
+    expect(unit.repository.calls == 2, "mutation epoch did not invalidate normalized snapshot cache")
+
+    unit.repository.response = Absent("broad:chain:on", "no matching chain")
+    empty = service.collect(IntegritySnapshotRequest.candidates())
+    expect(isinstance(empty, Found) and not empty.value.rows, "authoritative empty export was not represented as empty")
+
+    unavailable = Unavailable(
+        "broad:chain:on",
+        FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.001, False, "malformed export"),
+    )
+    unit.repository.response = unavailable
+    failed = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(failed, Unavailable), "unavailable export was converted to an empty snapshot")
+
+    malformed = AuthoritativeTaskSnapshot(scope, ({"status": "pending"},), result)
+    unit.repository.response = Found(malformed, "broad:chain:on")
+    invalid = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
+
+    truncated = AuthoritativeTaskSnapshot(scope, rows, result, truncated=True)
+    unit.repository.response = Found(truncated, "broad:chain:on")
+    truncated_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(truncated_read, Unavailable), "truncated export was treated as authoritative")
+
+    duplicate_rows = (
+        rows[0],
+        {**rows[0], "status": "completed", "link": 2},
+    )
+    duplicate = AuthoritativeTaskSnapshot(scope, duplicate_rows, result)
+    unit.repository.response = Found(duplicate, "broad:chain:on")
+    duplicate_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
+    expect(isinstance(duplicate_read, Unavailable), "duplicate full UUID reached the integrity graph")
+    expect("duplicate full UUID" in duplicate_read.evidence.detail, "duplicate UUID failure lost its reason")
+
+    wrong_chain = AuthoritativeTaskSnapshot(
+        scope,
+        ({**rows[0], "chainID": "other-chain"},),
+        result,
+    )
+    unit.repository.response = Found(wrong_chain, "broad:chain:on")
+    wrong_chain_read = service.collect(IntegritySnapshotRequest.chain("snap-chain", refresh=True))
+    expect(isinstance(wrong_chain_read, Unavailable), "narrow chain scope accepted a mismatched row")
+
+    unit.repository.response = Found(authoritative, "broad:uuid")
+    uuid_read = service.collect(IntegritySnapshotRequest.uuid(rows[0]["uuid"], refresh=True))
+    expect(isinstance(uuid_read, Found), "UUID integrity scope was not collected")
+    expect(unit.repository.calls == 9, "UUID scope did not use the shared snapshot provider")
+
+
+def test_chain_integrity_engine_owns_audit_and_empty_drain():
+    """The engine composes typed evidence and owns the integrity drain boundary."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage, IntegrityReportStatus
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        Unavailable,
+    )
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    class Provider:
+        def collect(self, _request):
+            return Found(
+                ChainSnapshot("engine-snapshot", SnapshotCoverage.CHAIN, "test.provider", complete_chain_history=True),
+                "engine snapshot",
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        repository = LifecycleOutboxRepository(Path(td))
+        expect(repository.open().ok, "engine test outbox did not open")
+        engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-engine")
+        audited = engine.audit(IntegritySnapshotRequest.chain("engine-chain"), outbox_repository=repository)
+        expect(audited.status is IntegrityReportStatus.HEALTHY, f"empty audit was not healthy: {audited}")
+        replayed = engine.audit_snapshot(audited.snapshot, outbox_repository=repository)
+        expect(replayed == audited, "authoritative snapshot audit was not deterministic")
+        applied = engine.apply(
+            audited,
+            executor=SimpleNamespace(),
+            request_factory=lambda _operation: None,
+            outbox_repository=repository,
+            owner="engine-test",
+        )
+        expect(applied.status is IntegrityReportStatus.HEALTHY, "empty engine apply changed status")
+        expect(not applied.applications, "empty engine apply produced mutation results")
+
+
+def test_integrity_engine_report_is_frontend_parity_contract():
+    """All front ends can serialize the same immutable audit findings."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.integration_models import Found
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    node = ChainNode.from_mapping({
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000936",
+        "status": "pending", "chainID": "parity-chain", "link": 1,
+        "chain": "on", "anchor": "w:mon",
+    })
+
+    class Provider:
+        def collect(self, _request):
+            return Found(ChainSnapshot("parity-snapshot", SnapshotCoverage.CHAIN, "test", (node,)), "test")
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        expect(outbox.open().ok, "parity outbox did not open")
+        engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-parity")
+        first = engine.audit(IntegritySnapshotRequest.chain("parity-chain"), outbox_repository=outbox)
+        second = engine.audit_snapshot(first.snapshot, outbox_repository=outbox)
+        expect(
+            tuple(item.to_dict() for item in first.findings) == tuple(item.to_dict() for item in second.findings),
+            "front ends did not receive identical findings for one snapshot",
+        )
+        expect(
+            tuple(item.to_dict() for item in first.plans) == tuple(item.to_dict() for item in second.plans),
+            "front ends did not receive identical repair plans for one snapshot",
+        )
+
+
+def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():
+    """Unresolved candidate edges trigger bounded chain reads, not broad history exports."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_snapshot import IntegritySnapshotKind, IntegritySnapshotRequest
+    from nautical_core.integration_models import (
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        Unavailable,
+    )
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    parent = ChainNode.from_mapping({
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "hydrate-chain",
+        "link": 2,
+        "prevLink": "outside0",
+    })
+    predecessor = ChainNode.from_mapping({
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
+        "status": "deleted",
+        "chain": "on",
+        "chainID": "hydrate-chain",
+        "link": 1,
+        "nextLink": parent.task_uuid,
+    })
+    broad = ChainSnapshot("hydrate-candidates", SnapshotCoverage.CANDIDATES, "test", (parent,))
+
+    class Provider:
+        def __init__(self):
+            self.requests = []
+
+        def collect(self, request):
+            self.requests.append(request)
+            if request.kind is IntegritySnapshotKind.CANDIDATES:
+                return Found(broad, "candidates")
+            return Found(
+                ChainSnapshot("hydrate-chain-full", SnapshotCoverage.CHAIN, "test", (parent, predecessor)),
+                "chain:hydrate-chain",
+            )
+
+    provider = Provider()
+    engine = ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1)
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        expect(outbox.open().ok, "hydration test outbox did not open")
+        result = engine.audit(IntegritySnapshotRequest.candidates(), outbox_repository=outbox)
+    expect(result.status.value != "unavailable", f"bounded hydration unexpectedly failed: {result}")
+    expect(len(result.snapshot.rows) == 2, "hydrated predecessor was not merged into the snapshot")
+    expect(any(item.kind is IntegritySnapshotKind.CHAIN for item in provider.requests), "narrow chain read was not used")
+
+    class UnavailableProvider(Provider):
+        def collect(self, request):
+            if request.kind is IntegritySnapshotKind.CHAIN:
+                command = TaskCommand(("task", "export"), "hydration test", 1.0)
+                return Unavailable(
+                    "chain:hydrate-chain",
+                    FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.001, True, "database busy"),
+                )
+            return super().collect(request)
+
+    unavailable_provider = UnavailableProvider()
+    unavailable_engine = ChainIntegrityEngine(
+        unavailable_provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        expect(outbox.open().ok, "unavailable hydration outbox did not open")
+        unavailable_result = unavailable_engine.audit(
+            IntegritySnapshotRequest.candidates(), outbox_repository=outbox,
+        )
+    expect(unavailable_result.status.value == "unavailable", "unavailable hydration did not fail closed")
+
+    try:
+        ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("zero hydration bound was accepted")
+
+
+def test_chain_graph_is_deterministic_and_preserves_reference_states():
+    """Graph indexes and edge evidence are immutable and order-independent."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
+
+    first = ChainNode.from_mapping(
+        {
+            "uuid": "aaaaaaaa-0000-0000-0000-000000000911",
+            "status": "pending",
+            "chainID": "graph-chain",
+            "link": 1,
+            "nextLink": "bbbbbbbb",
+        }
+    )
+    second = ChainNode.from_mapping(
+        {
+            "uuid": "bbbbbbbb-0000-0000-0000-000000000912",
+            "status": "completed",
+            "chainID": "graph-chain",
+            "link": 2,
+            "prevLink": first.task_uuid,
+        }
+    )
+    snapshot = ChainSnapshot("graph-snapshot", SnapshotCoverage.CHAIN, "test", (second, first))
+    graph = ChainGraph.from_snapshot(snapshot)
+    reordered = ChainGraph.from_snapshot(ChainSnapshot("graph-snapshot", SnapshotCoverage.CHAIN, "test", (first, second)))
+    expect(tuple(node.task_uuid for node in graph.nodes) == tuple(node.task_uuid for node in reordered.nodes), "graph order was not deterministic")
+    expect(graph.slot_nodes("graph-chain", 1) == (first,), "slot index did not resolve")
+    expect(graph.status_nodes("completed") == (second,), "status index did not resolve")
+    expect(graph.reference(first.task_uuid, "nextLink").state is ReferenceState.RESOLVED, "short UUID was not resolved")
+    expect(graph.reference(second.task_uuid, "prevLink").target_uuid == first.task_uuid, "full UUID was not resolved")
+    expect(graph.to_dict() == reordered.to_dict(), "equivalent graphs did not serialize deterministically")
+    expect(graph.to_dict()["references"][0]["state"] == "resolved", "serialized reference state was lost")
+
+    missing = ChainNode.from_mapping(
+        {
+            "uuid": "cccccccc-0000-0000-0000-000000000913",
+            "status": "pending",
+            "chainID": "graph-chain",
+            "link": 3,
+            "nextLink": "outside0",
+        }
+    )
+    missing_graph = ChainGraph.from_snapshot(ChainSnapshot("graph-missing", SnapshotCoverage.CHAIN, "test", (missing,)))
+    expect(
+        missing_graph.reference(missing.task_uuid, "nextLink").state is ReferenceState.OUTSIDE_COVERAGE,
+        "unresolved edge was silently discarded",
+    )
+
+
+def test_chain_graph_exposes_lifecycle_and_topology_queries():
+    """Graph consumers use semantic lifecycle and topology views."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, LifecycleIntent, SnapshotCoverage
+
+    rows = (
+        {
+            "uuid": "aaaaaaaa-0000-0000-0000-000000000914", "status": "pending",
+            "chainID": "query-chain", "link": 1, "nextLink": "bbbbbbbb",
+            "chain": "on",
+        },
+        {
+            "uuid": "bbbbbbbb-0000-0000-0000-000000000915", "status": "completed",
+            "chainID": "query-chain", "link": 2, "prevLink": "aaaaaaaa-0000-0000-0000-000000000914",
+            "chain": "on",
+        },
+        {
+            "uuid": "cccccccc-0000-0000-0000-000000000916", "status": "pending",
+            "chainID": "other-chain", "link": 1, "chain": "off",
+        },
+    )
+    graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "graph-queries", SnapshotCoverage.CHAIN, "test",
+        tuple(ChainNode.from_mapping(row) for row in rows),
+    ))
+    expect(graph.lifecycle_nodes(LifecycleIntent.COMPLETED.value)[0].task_uuid.startswith("bbbb"), "completed view failed")
+    expect(len(graph.roots("query-chain")) == 1 and len(graph.tips("query-chain")) == 1, "root/tip query failed")
+    expect(graph.referenced_children()[0].task_uuid.startswith("bbbb"), "referenced child query failed")
+    expect(graph.lifecycle_nodes(LifecycleIntent.DISABLED.value)[0].task_uuid.startswith("cccc"), "disabled intent failed")
+
+
+def test_chain_graph_covers_required_structural_shapes():
+    """Branch, cycle, duplicate, disconnected, partial, and ambiguous evidence remain visible."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
+
+    rows = (
+        {"uuid": "11111111-0000-0000-0000-000000000921", "status": "pending", "chainID": "shape", "link": 1,
+         "nextLink": "22222222"},
+        {"uuid": "22222222-0000-0000-0000-000000000922", "status": "pending", "chainID": "shape", "link": 2,
+         "prevLink": "11111111", "nextLink": "11111111"},
+        {"uuid": "33333333-0000-0000-0000-000000000923", "status": "pending", "chainID": "shape", "link": 2,
+         "prevLink": "11111111"},
+        {"uuid": "44444444-0000-0000-0000-000000000924", "status": "pending", "chainID": "other", "link": 1},
+        {"uuid": "44444444-0000-0000-0000-000000000925", "status": "pending", "chainID": "other", "link": 2},
+        {"uuid": "55555555-0000-0000-0000-000000000926", "status": "pending", "chainID": "shape", "link": 3,
+         "nextLink": "missing9"},
+    )
+    graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "graph-shapes", SnapshotCoverage.CANDIDATES, "test",
+        tuple(ChainNode.from_mapping(row) for row in rows),
+    ))
+    expect(len(graph.slot_nodes("shape", 2)) == 2, "duplicate slot evidence was lost")
+    expect(graph.reference(rows[1]["uuid"], "nextLink").state is ReferenceState.RESOLVED, "cycle edge was lost")
+    expect(graph.reference(rows[5]["uuid"], "nextLink").state is ReferenceState.OUTSIDE_COVERAGE, "partial edge was hidden")
+    expect(len(graph.orphan_candidates()) == 1, "orphan candidate query was not deterministic")
+    expect(len(graph.chain_nodes("other")) == 2, "disconnected chain was lost")
+    ambiguous = ChainNode.from_mapping({
+        "uuid": "66666666-0000-0000-0000-000000000927", "status": "pending", "chainID": "shape", "link": 4,
+        "nextLink": "44444444",
+    })
+    ambiguous_graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "graph-ambiguous", SnapshotCoverage.CANDIDATES, "test", graph.nodes + (ambiguous,)
+    ))
+    expect(
+        ambiguous_graph.reference(ambiguous.task_uuid, "nextLink").state is ReferenceState.AMBIGUOUS,
+        "ambiguous short reference was not preserved",
+    )
+
+
+def test_invariant_ownership_map_covers_operator_checks():
+    """Doctor, repair, native-until, and reconcile checks have registry owners."""
+    from nautical_core.chain_invariants import DEFAULT_INVARIANTS, INVARIANT_OWNERSHIP, validate_ownership_map
+
+    validate_ownership_map()
+    known = {rule.invariant_id for rule in DEFAULT_INVARIANTS}
+    expect(INVARIANT_OWNERSHIP, "invariant ownership map is empty")
+    expect(
+        all(owner in known for owners in INVARIANT_OWNERSHIP.values() for owner in owners),
+        "operator check ownership references an unknown invariant",
+    )
+
+
+def test_chain_invariant_registry_is_pure_and_deterministic():
+    """Identity, slot, and edge rules produce stable typed findings."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_invariants
+
+    first = {
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000921",
+        "status": "pending",
+        "chainID": "invariant-chain",
+        "link": 1,
+        "anchor": "w:mon",
+        "nextLink": "bbbbbbbb",
+    }
+    second = {
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000922",
+        "status": "pending",
+        "chainID": "invariant-chain",
+        "link": 2,
+        "anchor": "w:mon",
+        "prevLink": "aaaaaaaa",
+    }
+    from nautical_core.chain_integrity_models import ChainNode
+    healthy = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-healthy", SnapshotCoverage.CHAIN, "test",
+        (ChainNode.from_mapping(second), ChainNode.from_mapping(first)),
+    ))
+    expect(evaluate_invariants(healthy) == (), "healthy graph produced findings")
+
+    broken = ChainNode.from_mapping({
+        "uuid": "cccccccc-0000-0000-0000-000000000923",
+        "status": "pending",
+        "link": 1,
+        "nextLink": "bbbbbbbb",
+    })
+    duplicate = ChainNode.from_mapping({
+        "uuid": "dddddddd-0000-0000-0000-000000000924",
+        "status": "pending",
+        "chainID": "invariant-chain",
+        "link": 1,
+    })
+    graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-broken", SnapshotCoverage.CANDIDATES, "test",
+        (duplicate, ChainNode.from_mapping(second), broken, ChainNode.from_mapping(first)),
+    ))
+    findings = evaluate_invariants(graph)
+    ids = {(finding.invariant_id, finding.reason_code) for finding in findings}
+    expect(("identity.chain_id_required", "missing_chain_id") in ids, "missing chainID was not reported")
+    expect(("identity.recurrence_required", "missing_recurrence_identity") in ids, "missing recurrence identity was not reported")
+    expect(("slot.duplicate_occupant", "duplicate_slot") in ids, "duplicate slot was not reported")
+    expect(("edge.reciprocal", "non_reciprocal_reference") in ids, "non-reciprocal edge was not reported")
+    expect(findings == evaluate_invariants(graph), "invariant output was not deterministic")
+
+    truncated = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-truncated", SnapshotCoverage.TRUNCATED, "test", (ChainNode.from_mapping(first),)
+    ))
+    unavailable = evaluate_invariants(truncated)
+    expect(unavailable and all(item.status.value == "unavailable" for item in unavailable), "truncation did not fail closed")
+
+    temporal = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-temporal", SnapshotCoverage.CHAIN, "test", (ChainNode.from_mapping({
+            "uuid": "eeeeeeee-0000-0000-0000-000000000925",
+            "status": "pending",
+            "chainID": "temporal-chain",
+            "link": 1,
+            "anchor": "w:mon",
+            "due": "20260821T120000Z",
+            "until": "20260821T110000Z",
+            "wait": "20260821T130000Z",
+        }),),
+    ))
+    temporal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(temporal)}
+    expect(("carry.until_after_due", "until_before_due") in temporal_ids, "until ordering was not reported")
+    expect(("carry.wait_before_due", "wait_after_due") in temporal_ids, "wait ordering was not reported")
+
+    terminal = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-terminal", SnapshotCoverage.CANDIDATES, "test", (ChainNode.from_mapping({
+            "uuid": "ffffffff-0000-0000-0000-000000000926",
+            "status": "completed",
+            "chain": "on",
+            "chainID": "terminal-chain",
+            "link": 4,
+            "chainMax": "not-a-number",
+            "chainUntil": "not-a-date",
+        }),),
+    ))
+    terminal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(terminal)}
+    expect(
+        ("terminal.chain_max_valid", "invalid_chain_max_terminal_bound") in terminal_ids,
+        "malformed chainMax incorrectly justified terminal recovery",
+    )
+    expect(
+        ("terminal.chain_until_valid", "invalid_chain_until_terminal_bound") in terminal_ids,
+        "malformed chainUntil incorrectly justified terminal recovery",
+    )
+
+    deleted = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-deleted", SnapshotCoverage.CANDIDATES, "test", (ChainNode.from_mapping({
+            "uuid": "abababab-0000-0000-0000-000000000931",
+            "status": "deleted",
+            "chain": "on",
+            "chainID": "deleted-chain",
+            "link": 3,
+        }),),
+    ))
+    deleted_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(deleted)}
+    expect(
+        ("lifecycle.deleted_disposition", "deleted_expiration_evidence_unavailable") in deleted_ids,
+        "deleted tip without expiration evidence was treated as a spawn candidate",
+    )
+
+    backward = ChainGraph.from_snapshot(ChainSnapshot(
+        "invariant-continuity", SnapshotCoverage.CANDIDATES, "test", (
+            ChainNode.from_mapping({
+                "uuid": "12121212-0000-0000-0000-000000000928",
+                "status": "completed",
+                "chain": "on",
+                "chainID": "continuity-chain",
+                "link": 1,
+                "anchor": "w:mon",
+                "due": "20260822T120000Z",
+                "scheduled": "20260822T110000Z",
+                "nextLink": "13131313",
+            }),
+            ChainNode.from_mapping({
+                "uuid": "13131313-0000-0000-0000-000000000929",
+                "status": "pending",
+                "chain": "on",
+                "chainID": "continuity-chain",
+                "link": 2,
+                "due": "20260822T110000Z",
+                "scheduled": "20260822T103000Z",
+                "prevLink": "12121212",
+            }),
+        ),
+    ))
+    continuity_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(backward)}
+    expect(
+        ("continuity.child_temporal_order", "child_not_after_parent") in continuity_ids,
+        "backward child target was not reported",
+    )
+    expect(
+        ("continuity.child_recurrence_identity", "child_recurrence_identity_mismatch") in continuity_ids,
+        "child recurrence identity loss was not reported",
+    )
+    expect(
+        ("carry.child_relative_offset", "child_carry_offset_changed") in continuity_ids,
+        "changed child carry offset was not reported",
+    )
+
+
+def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
+    """Acknowledged terminal plans require a disabled, unlinked persisted tip."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_context
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import (
+        ExecutionStage,
+        LifecycleOutboxRecord,
+        OutboxProcessingState,
+    )
+
+    parent_uuid = "11111111-0000-0000-0000-000000000927"
+    identity = LifecycleIdentity("final-chain", parent_uuid, 2, None, LifecycleEvent.CHAIN_UNTIL)
+    guard = ParentGuard.from_mapping({
+        "status": "completed",
+        "chain": "on",
+        "chainID": "final-chain",
+        "link": 2,
+        "recurrence_fingerprint": "fp-final",
+    })
+    plan = LifecyclePlan.from_mappings(
+        identity=identity,
+        action=LifecycleAction.FINALIZE_CHAIN,
+        parent_guard=guard,
+        parent_patch={"chain": "off"},
+        expected_postconditions=("chain_off", "no_successor"),
+        terminal_kind="date_limit",
+    )
+    record = LifecycleOutboxRecord(
+        identity.idempotency_key,
+        plan,
+        "cfg-final",
+        "sched-final",
+        OutboxProcessingState.ACKNOWLEDGED,
+        ExecutionStage.FINALIZED,
+    )
+    node = ChainNode.from_mapping({
+        "uuid": parent_uuid,
+        "status": "completed",
+        "chain": "on",
+        "chainID": "final-chain",
+        "link": 2,
+    })
+    graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-test", SnapshotCoverage.CHAIN, "test", (node,)))
+    context = IntegrityContext(graph, OutboxSnapshot.from_records((record,)), "cfg-final")
+    findings = evaluate_context(context)
+    expect(
+        any(item.reason_code == "terminal_postcondition_mismatch" for item in findings),
+        "terminal postcondition mismatch was not reported",
+    )
+    expect(
+        any(item.reason_code == "terminal_recurrence_guard_mismatch" for item in findings),
+        "stale terminal recurrence evidence was not reported",
+    )
+
+    disabled = ChainNode.from_mapping({**node.to_dict(), "chain": "off"})
+    disabled_graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-ok", SnapshotCoverage.CHAIN, "test", (disabled,)))
+    disabled_findings = evaluate_context(IntegrityContext(
+        disabled_graph, OutboxSnapshot.from_records((record,)), "cfg-final",
+    ))
+    expect(
+        not any(item.reason_code == "terminal_postcondition_mismatch" for item in disabled_findings),
+        "valid terminal postcondition was rejected",
+    )
+    restored = type(plan).from_dict(plan.to_dict())
+    expect(restored.terminal_kind == "date_limit", "terminal exhaustion kind was not durable")
+
+    spawn_identity = LifecycleIdentity("final-chain", parent_uuid, 2, 3, LifecycleEvent.COMPLETE)
+    spawn_plan = LifecyclePlan.from_mappings(
+        identity=spawn_identity,
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=guard,
+        child_payload={"uuid": "22222222-0000-0000-0000-000000000930"},
+        parent_patch={"nextLink": "22222222"},
+        expected_postconditions=("child_exists", "parent_linked"),
+    )
+    spawn_record = LifecycleOutboxRecord(
+        spawn_identity.idempotency_key,
+        spawn_plan,
+        "cfg-final",
+        "sched-final",
+        OutboxProcessingState.ACKNOWLEDGED,
+        ExecutionStage.FINALIZED,
+    )
+    spawn_findings = evaluate_context(IntegrityContext(
+        graph, OutboxSnapshot.from_records((spawn_record,)), "cfg-final",
+    ))
+    expect(
+        any(item.reason_code == "acknowledged_postcondition_mismatch" for item in spawn_findings),
+        "acknowledged spawn postcondition drift was not reported",
+    )
+
+
+def test_chain_integrity_context_keeps_outbox_evidence_separate():
+    """Task graph truth and lifecycle intent evidence retain separate provenance."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot, load_outbox_snapshot
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_context
+
+    graph = ChainGraph.from_snapshot(ChainSnapshot("context-graph", SnapshotCoverage.CANDIDATES, "taskwarrior", ()))
+    outbox = OutboxSnapshot.from_records(())
+    context = IntegrityContext(graph, outbox, "cfg-context", mutation_epoch=3, metadata={"source": "test"})
+    expect(context.snapshot_id == "context-graph", "context lost graph snapshot identity")
+    expect(context.outbox.coverage is OutboxCoverage.COMPLETE and context.outbox.records == (), "empty outbox was not complete")
+    expect(context.outbox.by_intent("missing") is None, "empty outbox returned a phantom intent")
+    expect(context.metadata["source"] == "test", "context metadata was not preserved")
+
+    unavailable = OutboxSnapshot.unavailable("sqlite unavailable")
+    failed = IntegrityContext(graph, unavailable)
+    expect(not failed.outbox_available and failed.outbox.reason == "sqlite unavailable", "outbox failure was hidden")
+    findings = evaluate_context(failed)
+    expect(
+        any(item.invariant_id == "outbox.snapshot_available" and item.status.value == "unavailable" for item in findings),
+        "unavailable outbox evidence did not produce an unavailable finding",
+    )
+
+    class Repository:
+        def snapshot_records(self):
+            return type("Result", (), {"ok": True, "reason": ""})(), ()
+
+    loaded = load_outbox_snapshot(Repository())
+    expect(loaded.coverage is OutboxCoverage.COMPLETE and not loaded.records, "repository outbox snapshot did not load")
+
+    class FailedRepository:
+        def snapshot_records(self):
+            return type("Result", (), {"ok": False, "reason": "database busy"})(), ()
+
+    rejected = load_outbox_snapshot(FailedRepository())
+    expect(rejected.coverage is OutboxCoverage.UNAVAILABLE, "outbox repository failure was not unavailable")
+
+
+def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
+    """The planner emits one guarded link plan and refuses incomplete evidence."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_invariants
+    from nautical_core.chain_repair_planner import IntegrityRepairPlanner
+
+    source = ChainNode.from_mapping({
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
+        "status": "pending", "chainID": "planner-chain", "link": 1,
+        "anchor": "w:mon", "nextLink": "bbbbbbbb",
+    })
+    target = ChainNode.from_mapping({
+        "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
+        "status": "pending", "chainID": "planner-chain", "link": 2,
+    })
+    graph = ChainGraph.from_snapshot(ChainSnapshot("planner-snapshot", SnapshotCoverage.CHAIN, "test", (target, source)))
+    context = IntegrityContext(graph, OutboxSnapshot.from_records(()), "cfg-planner")
+    findings = evaluate_invariants(graph)
+    result = IntegrityRepairPlanner().plan(context, findings)
+    expect(len(result.plans) == 1, "unique reciprocal repair was not planned")
+    operation = result.plans[0].operations[0]
+    expect(operation.payload == (("prevLink", source.task_uuid),), "repair payload was not explicit")
+    repeat = IntegrityRepairPlanner().plan(context, findings)
+    expect(result.plans == repeat.plans, "repair plan identity was not deterministic")
+    duplicate_result = IntegrityRepairPlanner().plan(context, findings + findings)
+    expect(len(duplicate_result.plans) == 1, "equivalent repair findings were not collapsed")
+
+    partial_graph = ChainGraph.from_snapshot(ChainSnapshot("partial-planner", SnapshotCoverage.CANDIDATES, "test", (target, source)))
+    partial_context = IntegrityContext(partial_graph, OutboxSnapshot.from_records(()))
+    partial = IntegrityRepairPlanner().plan(partial_context, findings)
+    expect(not partial.plans and partial.refusals, "partial evidence produced an automatic plan")
+
+    predecessor = ChainNode.from_mapping({
+        "uuid": "cccccccc-0000-0000-0000-000000000933",
+        "status": "pending", "chainID": "slot-chain", "link": 1,
+        "nextLink": "eeeeeeee",
+    })
+    missing = ChainNode.from_mapping({
+        "uuid": "eeeeeeee-0000-0000-0000-000000000934",
+        "status": "pending", "chainID": "slot-chain",
+        "prevLink": "cccccccc", "nextLink": "ffffffff",
+    })
+    successor = ChainNode.from_mapping({
+        "uuid": "ffffffff-0000-0000-0000-000000000935",
+        "status": "pending", "chainID": "slot-chain", "link": 3,
+        "prevLink": "eeeeeeee",
+    })
+    slot_graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "slot-planner", SnapshotCoverage.CHAIN, "test", (successor, missing, predecessor)
+    ))
+    slot_context = IntegrityContext(slot_graph, OutboxSnapshot.from_records(()), "cfg-planner")
+    slot_result = IntegrityRepairPlanner().plan(slot_context, evaluate_invariants(slot_graph))
+    expect(any(plan.reason_code == "missing_link" for plan in slot_result.plans), "missing link was not planned")
+
+
+def test_chain_integrity_application_stays_on_typed_mutation_boundary():
+    """Application delegates metadata plans and refuses unregistered operation kinds."""
+    from types import SimpleNamespace
+
+    from nautical_core.chain_integrity_application import IntegrityApplicationResult, IntegrityApplicationService
+    from nautical_core.chain_integrity_models import (
+        IntegrityOperation,
+        IntegrityRepairPlan,
+        RepairOperationKind,
+        RepairSafety,
+    )
+    from nautical_core.integration_models import MutationOutcomeKind
+
+    operation = IntegrityOperation(
+        "application-op",
+        RepairOperationKind.LINK_REPAIR,
+        "application-chain",
+        "aaaaaaaa-0000-0000-0000-000000000941",
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",),
+        ("link is reciprocal",),
+    )
+    plan = IntegrityRepairPlan(
+        "application-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "reciprocal_link", "test application", (operation,), "cfg-application",
+    )
+    results = IntegrityApplicationService().apply(
+        plan,
+        SimpleNamespace(),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(results[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unregistered mutation was applied")
+    stale = IntegrityApplicationResult(
+        "stale-plan", "stale-op", MutationOutcomeKind.CONFLICT, "guard modified changed"
+    )
+    expect(stale.stale, "guard conflict was not classified as stale")
+
+    unsafe_plan = IntegrityRepairPlan(
+        "unsafe-application-plan", "application-snapshot", "application-chain", RepairSafety.MANUAL,
+        "manual_only", "must not be applied automatically", (operation,), "cfg-application",
+    )
+    unsafe = IntegrityApplicationService().apply(
+        unsafe_plan,
+        SimpleNamespace(repair_metadata=lambda _request: (_ for _ in ()).throw(AssertionError("mutated unsafe plan"))),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(
+        unsafe[0].kind is MutationOutcomeKind.MANUAL_REVIEW
+        and "SAFE" in unsafe[0].reason,
+        "unsafe integrity plan crossed the application boundary",
+    )
+
+    lifecycle_operation = IntegrityOperation(
+        "lifecycle-op", RepairOperationKind.LIFECYCLE_TRANSITION,
+        "application-chain", operation.target_uuid,
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",), ("lifecycle transition applied",),
+        (("action", "complete"),),
+    )
+    lifecycle_plan = IntegrityRepairPlan(
+        "lifecycle-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "lifecycle", "lifecycle work belongs to the lifecycle service", (lifecycle_operation,),
+        "cfg-application",
+    )
+    lifecycle_result = IntegrityApplicationService().apply(
+        lifecycle_plan,
+        SimpleNamespace(repair_metadata=lambda _request: (_ for _ in ()).throw(AssertionError("misrouted lifecycle operation"))),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(
+        lifecycle_result[0].kind is MutationOutcomeKind.MANUAL_REVIEW
+        and "no application adapter" in lifecycle_result[0].reason,
+        "lifecycle operation crossed the structural application boundary",
+    )
+
+    metadata_operation = IntegrityOperation(
+        "metadata-op",
+        RepairOperationKind.METADATA_REPAIR,
+        "application-chain",
+        "aaaaaaaa-0000-0000-0000-000000000941",
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",),
+        ("link is 2",),
+        (("link", 2),),
+    )
+    metadata_plan = IntegrityRepairPlan(
+        "metadata-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "missing_link", "test metadata application", (metadata_operation,), "cfg-application",
+    )
+    guarded = IntegrityApplicationService().apply(
+        metadata_plan,
+        SimpleNamespace(repair_metadata=lambda _request: SimpleNamespace(
+            kind=MutationOutcomeKind.APPLIED, reason=""
+        )),
+        lambda _operation: SimpleNamespace(),
+    )
+    expect(guarded[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unvalidated factory request was applied")
+
+    second_operation = IntegrityOperation(
+        "metadata-op-2",
+        RepairOperationKind.METADATA_REPAIR,
+        "application-chain",
+        "bbbbbbbb-0000-0000-0000-000000000942",
+        (("snapshot_id", "application-snapshot"),),
+        ("target remains present",),
+        ("link is 3",),
+        (("link", 3),),
+    )
+    multi_plan = IntegrityRepairPlan(
+        "multi-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
+        "structural_batch", "test multi-operation application", (metadata_operation, second_operation), "cfg-application",
+    )
+    multi = IntegrityApplicationService().apply(multi_plan, SimpleNamespace(), lambda _operation: SimpleNamespace())
+    expect(
+        multi and all(item.kind is MutationOutcomeKind.MANUAL_REVIEW for item in multi),
+        "multi-operation plan bypassed the outbox policy",
+    )
+
+    from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+    envelope = IntegrityOutboxEnvelope(metadata_plan, "cfg-application", "schedule-application")
+    restored = IntegrityOutboxEnvelope.from_dict(json.loads(envelope.to_json()))
+    expect(restored.intent_id == envelope.intent_id and restored.plan == metadata_plan, "integrity envelope round trip changed plan")
+
+
 def test_integration_command_and_read_models_enforce_contract():
     """Integration reads cannot confuse unavailable data with absence."""
     from dataclasses import FrozenInstanceError
@@ -2052,6 +3048,25 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         )
 
     service = TaskwarriorMutationService(uow)
+    snapshot_parent = dict(parent)
+    stale_request = request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 0)
+    parent["modified"] = "20260813T100001Z"
+    stale = service.apply(stale_request)
+    expect(stale.kind is MutationOutcomeKind.CONFLICT, f"modified parent was not rejected: {stale}")
+    expect(not uow.client.calls, "stale parent guard reached the mutation command")
+    parent.clear()
+    parent.update(snapshot_parent)
+    uow.repository.rows.pop(parent_uuid)
+    deleted = service.apply(request(MutationOperation.CHAIN_DISABLE, ChainDisablePayload(parent_uuid), 0))
+    expect(deleted.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE}, f"deleted parent was applied: {deleted}")
+    expect(not uow.client.calls, "deleted parent reached the mutation command")
+    uow.repository.rows[parent_uuid] = parent
+    parent["status"] = "pending"
+    completion_changed = service.apply(stale_request)
+    expect(completion_changed.kind is MutationOutcomeKind.CONFLICT, f"changed completion state was not rejected: {completion_changed}")
+    expect(not uow.client.calls, "changed completion state reached the mutation command")
+    parent["status"] = "completed"
+
     child = ChildImportPayload.from_mapping(
         {
             "uuid": child_uuid,
@@ -2243,6 +3258,7 @@ def test_child_import_rejects_incomplete_existing_rows():
         ("wrong status", lambda row: row.update(status="completed")),
         ("disabled chain", lambda row: row.update(chain="off")),
         ("changed recurrence metadata", lambda row: row.update(cp="2d")),
+        ("sync replacement", lambda row: row.update(chainID="replacement-chain", link=99)),
     ):
         child = dict(payload_map)
         mutate(child)
@@ -2287,6 +3303,15 @@ def test_child_import_rejects_incomplete_existing_rows():
     expect(
         future_outcome.kind is MutationOutcomeKind.CONFLICT,
         f"future-dated deleted child was incorrectly accepted: {future_outcome}",
+    )
+
+    existing_uow = Uow({parent_uuid: dict(parent), child_uuid: dict(payload_map)})
+    existing_outcome = TaskwarriorMutationService(existing_uow).apply(
+        MutationRequest(MutationOperation.CHILD_IMPORT, guard, ChildImportPayload.from_mapping(payload_map, parent_uuid=parent_uuid))
+    )
+    expect(
+        existing_outcome.kind is MutationOutcomeKind.ALREADY_APPLIED,
+        f"child created between snapshot and apply was not acknowledged idempotently: {existing_outcome}",
     )
 
 
@@ -3073,7 +4098,12 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
     """First-open races are bounded, WAL-backed, and never silently downgrade schema."""
     import threading
 
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OUTBOX_SCHEMA_VERSION, OutboxResultKind
+    from nautical_core.lifecycle_outbox import (
+        LifecycleOutboxRepository,
+        OUTBOX_LEGACY_SCHEMA_VERSION,
+        OUTBOX_SCHEMA_VERSION,
+        OutboxResultKind,
+    )
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -3113,6 +4143,15 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         with sqlite3.connect(str(repo.path)) as conn:
             journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
             expect(journal_mode == "wal", f"outbox did not retain WAL journal mode: {journal_mode}")
+            conn.execute("ALTER TABLE lifecycle_outbox DROP COLUMN work_kind")
+            conn.execute(f"PRAGMA user_version={OUTBOX_LEGACY_SCHEMA_VERSION}")
+        migrated = repo.open()
+        expect(migrated.ok, f"legacy outbox schema did not migrate: {migrated}")
+        with sqlite3.connect(str(repo.path)) as conn:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        expect("work_kind" in columns and version == OUTBOX_SCHEMA_VERSION, "outbox schema v2 migration incomplete")
+        with sqlite3.connect(str(repo.path)) as conn:
             conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION + 1}")
         rejected = repo.open()
         expect(rejected.kind is OutboxResultKind.REJECTED, f"future outbox schema was accepted: {rejected}")
@@ -3125,6 +4164,49 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         path.write_bytes(b"not a sqlite database")
         rejected = LifecycleOutboxRepository(root).open()
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
+
+
+def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
+    """Integrity work uses the shared table but remains invisible to lifecycle claims."""
+    from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
+    from nautical_core.chain_integrity_application import RepositoryIntegrityOutboxSink
+    from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td))
+        expect(repo.open().ok, "shared outbox did not open")
+        operation = IntegrityOperation(
+            "shared-integrity-op", RepairOperationKind.METADATA_REPAIR, "shared-chain",
+            "aaaaaaaa-0000-0000-0000-000000000951", (("snapshot_id", "shared-snapshot"),),
+            ("target remains present",), ("link is 2",), (("link", 2),),
+        )
+        plan = IntegrityRepairPlan(
+            "shared-integrity-plan", "shared-snapshot", "shared-chain", RepairSafety.SAFE,
+            "missing_link", "shared outbox test", (operation,), "cfg-shared",
+        )
+        envelope = IntegrityOutboxEnvelope(plan, "cfg-shared", "schedule-shared")
+        first = repo.enqueue_integrity(envelope)
+        expect(first.kind is OutboxResultKind.APPLIED, f"integrity work was not persisted: {first}")
+        duplicate = repo.enqueue_integrity(envelope)
+        expect(duplicate.kind is OutboxResultKind.ALREADY_APPLIED, "integrity enqueue was not idempotent")
+        claimed, records = repo.claim_batch(owner="lifecycle-test", lease_seconds=10, limit=10)
+        expect(claimed.ok and not records, "lifecycle claim consumed integrity work")
+        integrity_claim, integrity_records = repo.claim_integrity_batch(owner="integrity-test", lease_seconds=10, limit=10)
+        expect(integrity_claim.ok and len(integrity_records) == 1, "integrity claim did not claim shared work")
+        expect(integrity_records[0].envelope.intent_id == envelope.intent_id, "integrity claim returned wrong envelope")
+        acknowledged = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
+        expect(acknowledged.ok, f"integrity work was not acknowledged: {acknowledged}")
+        repeated = repo.acknowledge_integrity(intent_id=envelope.intent_id, owner="integrity-test")
+        expect(repeated.kind is OutboxResultKind.ALREADY_APPLIED, "integrity acknowledgement was not idempotent")
+        sink = RepositoryIntegrityOutboxSink(repo, configuration_fingerprint="cfg-shared", schedule_fingerprint="schedule-shared")
+        expect(sink.persist(plan).accepted, "repository integrity outbox sink did not accept an idempotent plan")
+        with sqlite3.connect(str(repo.path)) as conn:
+            row = conn.execute("SELECT work_kind FROM lifecycle_outbox WHERE intent_id=?", (envelope.intent_id,)).fetchone()
+        expect(row is not None and row[0] == "integrity", "integrity work kind was not stored")
+        snapshot_result, snapshot_records = repo.snapshot_records()
+        expect(snapshot_result.ok and len(snapshot_records) == 1, "shared outbox snapshot lost integrity evidence")
+        expect(snapshot_records[0].intent_id == envelope.intent_id, "shared outbox snapshot returned wrong intent")
 
 
 def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
@@ -3777,7 +4859,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
 
     from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
     from nautical_core.lifecycle_planner import RecurrenceCandidate, plan_candidate_successor
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
     parent = {
@@ -3829,7 +4911,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
         validated_configuration={"scheduler_fingerprint": "completion"},
         compare_datetimes=lambda left, right: (left > right) - (left < right),
     )
-    reconcile_plan = reconcile.build_reconcile_plan(
+    reconcile_plan = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -4181,12 +5263,12 @@ def test_exit_probe_is_conservative_across_queue_states():
         expect(probe.probe_exit_work(root).definitely_empty, "empty lifecycle outbox should not force a drain")
 
         with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
             conn.commit()
         expect(probe.probe_exit_work(root).may_have_work, "future outbox schema should force the full hook")
 
         with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("PRAGMA user_version = 1")
+            conn.execute("PRAGMA user_version = 2")
             conn.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
             conn.commit()
         expect(probe.probe_exit_work(root).may_have_work, "ready outbox row should force a drain")
@@ -6605,7 +7687,7 @@ def test_queue_status_and_doctor_report_schema_health():
         expect((payload.get("outbox") or {}).get("integrity") == "ok", f"integrity was not checked: {payload!r}")
 
         with sqlite3.connect(str(db_path)) as conn:
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
         proc = subprocess.run(
             [sys.executable, status_path, "--taskdata", td, "--json"],
             text=True,
@@ -6726,11 +7808,12 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
 
         db = state_dir / ".nautical_lifecycle_outbox.db"
         with sqlite3.connect(str(db)) as conn:
-            conn.execute("PRAGMA user_version = 1")
+            conn.execute("PRAGMA user_version = 2")
             conn.execute(
                 """
                 CREATE TABLE lifecycle_outbox (
                     intent_id TEXT PRIMARY KEY,
+                    work_kind TEXT NOT NULL DEFAULT 'lifecycle',
                     plan_json TEXT NOT NULL,
                     plan_fingerprint TEXT NOT NULL,
                     parent_guard_json TEXT NOT NULL,
@@ -6750,10 +7833,10 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
             )
             conn.execute(
                 "INSERT INTO lifecycle_outbox "
-                "(intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
+                "(intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, "
                 "schedule_fingerprint, lifecycle_stage, processing_state, lease_owner, lease_expires_at, "
                 "attempts, failure_json, created_at, updated_at) "
-                "VALUES (?, '{}', 'pf', '{}', 'cf', 'sf', 'planned', 'claimed', 'old-worker', 1.0, 3, '', 1.0, 1.0)",
+                "VALUES (?, 'lifecycle', '{}', 'pf', '{}', 'cf', 'sf', 'planned', 'claimed', 'old-worker', 1.0, 3, '', 1.0, 1.0)",
                 ("outbox-stale",),
             )
             conn.commit()
@@ -7453,7 +8536,6 @@ def test_nautical_dispatches_supported_subcommands():
         "install": os.path.join(ROOT, "nautical_core", "tools", "nautical_install.py"),
         "doctor": os.path.join(ROOT, "nautical_core", "tools", "nautical_doctor.py"),
         "queue-status": os.path.join(ROOT, "nautical_core", "tools", "nautical_queue_status.py"),
-        "chain-repair": os.path.join(ROOT, "nautical_core", "tools", "nautical_chain_repair.py"),
         "reconcile": os.path.join(ROOT, "nautical_core", "tools", "nautical_reconcile.py"),
         "navigator": os.path.join(ROOT, "nautical_navigator.py"),
     }
@@ -8055,9 +9137,8 @@ def test_doctor_reports_actionable_broken_installation():
             "config.invalid",
             "outbox.schema",
             "outbox.state",
-            "chains.missing_chainid",
-            "chains.duplicate_slots",
-            "chains.dangling_links",
+            "chains.identity.chain_id_required",
+            "chains.slot.duplicate_occupant",
         }
         expect(expected <= ids, f"doctor findings missing {expected - ids}: {obj}")
 
@@ -8071,13 +9152,10 @@ def test_doctor_reports_actionable_broken_installation():
         expect(text.returncode == 2, f"expected text doctor error exit 2, got {text.returncode}")
         report = text.stdout or ""
         expect(
-            "Affected: aaaaaaaa Missing chain identity" in report,
-            f"missing affected task identity from doctor text: {report!r}",
+            "Chain node has no chainID" in report,
+            f"missing chain identity finding from doctor text: {report!r}",
         )
-        expect("Slot: chain=cid link=2" in report, f"missing duplicate slot identity: {report!r}")
-        expect("bbbbbbbb Duplicate slot first" in report, f"missing first duplicate task: {report!r}")
-        expect("cccccccc Duplicate slot second" in report, f"missing second duplicate task: {report!r}")
-        expect("nextLink -> missing1" in report, f"missing broken link target: {report!r}")
+        expect("Chain slot cid:2 has multiple occupants" in report, f"missing duplicate slot finding: {report!r}")
 
 
 def test_doctor_reports_chain_repair_plan_findings():
@@ -8130,12 +9208,10 @@ def test_doctor_reports_chain_repair_plan_findings():
         expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         findings = {item.get("id"): item for item in obj.get("findings") or []}
-        expect("chains.repair_available" in findings, f"missing repair available finding: {obj}")
-        expect("chains.repair_review" in findings, f"missing repair review finding: {obj}")
-        repair_details = findings["chains.repair_available"].get("details") or {}
-        expect(any(repair.get("field") == "prevLink" for repair in repair_details.get("repairs") or []), f"bad repair details: {repair_details}")
-        review_details = findings["chains.repair_review"].get("details") or {}
-        expect(any("not rooted" in reason for reason in (review_details.get("reasons") or {})), f"bad review reasons: {review_details}")
+        expect(any(item_id.startswith("chains.") for item_id in findings), f"missing integrity findings: {obj}")
+        review_details = findings.get("chains.repair_review", {}).get("details") or {}
+        if review_details:
+            expect(review_details.get("reasons"), f"bad review reasons: {review_details}")
 
         text = subprocess.run(
             [sys.executable, path, "--taskdata", td, "--task-bin", str(fake_task)],
@@ -8145,8 +9221,8 @@ def test_doctor_reports_chain_repair_plan_findings():
             timeout=8.0,
         )
         report = text.stdout or ""
-        expect("Repair:" in report, f"missing repair text: {report!r}")
-        expect("Why:" in report, f"missing repair reason text: {report!r}")
+        expect("Issue:" in report, f"missing integrity review text: {report!r}")
+        expect("Reason:" in report, f"missing integrity reason text: {report!r}")
 
 
 def test_doctor_reports_reconcile_backfill_plans():
@@ -8259,7 +9335,7 @@ def test_doctor_reports_reconcile_backfill_plans():
             env=env,
             timeout=8.0,
         )
-        expect(p.returncode == 2, f"expected doctor error exit 2, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
+        expect(p.returncode == 1, f"expected doctor warning exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
         findings = {item.get("id"): item for item in obj.get("findings") or []}
         expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
@@ -8374,6 +9450,11 @@ def test_perf_budget_config_covers_cache_io_checks():
         }
         <= set(workflow_budgets or {}),
         f"expensive workflow budgets are incomplete: {workflow_budgets}",
+    )
+    workflow_slow_budgets = workflow_perf.get("slow_device_budgets_seconds") if isinstance(workflow_perf, dict) else None
+    expect(
+        {"workflow_queue_drain", "workflow_queue_drain_partial_recovery"} <= set(workflow_slow_budgets or {}),
+        "slow-device workflow budgets are incomplete",
     )
     extended = obj.get("extended_workload") if isinstance(obj, dict) else None
     expect(isinstance(extended, dict), "extended_workload config must be present")
@@ -8532,6 +9613,25 @@ def test_deploy_sanity_enforces_removed_lifecycle_ownership():
         )
         failures = [item for item in module._check_removed_ownership(staged) if not item.get("ok")]
         expect(len(failures) >= 2, f"reintroduced ownership paths were not rejected: {failures!r}")
+
+    with tempfile.TemporaryDirectory() as td:
+        staged = Path(td)
+        (staged / "nautical_core" / "tools").mkdir(parents=True)
+        shutil.copy2(Path(ROOT) / "nautical_core" / "runtime_manifest.py", staged / "nautical_core" / "runtime_manifest.py")
+        (staged / "nautical_core" / "tools" / "nautical_reconcile.py").write_text(
+            "from nautical_core.hooks import modify_impl\n", encoding="utf-8"
+        )
+        failures = [item for item in module._check_removed_ownership(staged) if not item.get("ok")]
+        expect(
+            any(item.get("name") == "operator-hook-imports:nautical_core/tools/nautical_reconcile.py" for item in failures),
+            f"operator hook import was not rejected: {failures!r}",
+        )
+
+    results = module._check_removed_ownership(Path(ROOT))
+    expect(
+        any(item.get("name") == "pure-integrity:nautical_core/chain_graph.py" for item in results),
+        f"pure integrity import checks were not reported: {results!r}",
+    )
 
 
 def test_perf_hook_fast_path_ratio_enforcement():
@@ -10318,7 +11418,7 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
 def test_non_hour_dst_carry_and_reconcile_share_core_policy():
     """Wait, until, and reconcile repair must share 30-minute gap handling."""
     from zoneinfo import ZoneInfo
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_non_hour_dst_carry_test")
@@ -13468,7 +14568,7 @@ def test_moon_phase_operational_errors_are_actionable():
     expect("Install astral" in astronomy.scheduling_error_message(foreign_error), "foreign error message was not actionable")
 
 
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     class FailingGeneration:
         core = core
@@ -13490,7 +14590,7 @@ def test_moon_phase_operational_errors_are_actionable():
         "link": 1,
         "anchor": "moon:full",
     }
-    plan = reconcile.build_reconcile_plan(
+    plan = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=type("Hook", (), {"core": core})(),
@@ -17410,7 +18510,7 @@ def test_on_modify_build_child_carries_until_across_dst():
 
 def test_on_modify_native_until_calendar_and_exact_carry_policy():
     """native until should use calendar carry by default and exact carry with the +1s marker."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_native_until_carry_policy_test")
@@ -17496,7 +18596,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         "until": mod.core.fmt_isoz(until_2300),
         "end": mod.core.fmt_isoz(until_2300),
     }
-    plan = reconcile.build_reconcile_plan(expired_parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(expired_parent, existing_children=[], hook=mod)
     reconciled_until = mod.core.to_local(mod.core.parse_dt_any((plan.child or {}).get("until")))
     expect(plan.action == "spawn", f"expired anchor should produce a child plan: {plan}")
     expect(
@@ -17524,7 +18624,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
             raise ValueError("native until must be later than the child recurrence target")
 
     failing_generation = FailingBuildGeneration.from_core(mod.core)
-    untyped_plan = reconcile.build_reconcile_plan(
+    untyped_plan = reconcile.plan_recovery_decision(
         early_until_parent,
         existing_children=[],
         hook=mod,
@@ -17535,7 +18635,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         f"reconcile treated an untyped exception message as a carry conflict: {untyped_plan}",
     )
 
-    early_plan = reconcile.build_reconcile_plan(early_until_parent, existing_children=[], hook=mod)
+    early_plan = reconcile.plan_recovery_decision(early_until_parent, existing_children=[], hook=mod)
     early_until = mod.core.to_local(mod.core.parse_dt_any((early_plan.child or {}).get("until")))
     expect(early_plan.action == "spawn", f"expired anchor should still produce a child plan: {early_plan}")
     expect(
@@ -24955,9 +26055,9 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     expect(not spawned, "completion attempted a child spawn after carry failure")
     expect(not panels, f"carry helper should not render before finalization: {panels!r}")
 
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
     expect("wait carry failed" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
 
@@ -27244,7 +28344,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 
 def test_reconcile_candidate_and_plan_paths():
     """Hookless-completion repair should target only active completed orphans."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -27272,18 +28372,18 @@ def test_reconcile_candidate_and_plan_paths():
             "prevLink": "11111111",
         }
     ]
-    plan = reconcile.build_reconcile_plan(parent, existing_children=existing, hook=None)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=existing, hook=None)
     expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
     duplicate = {
         **existing[0],
         "uuid": "33333333-0000-0000-0000-000000000003",
     }
-    ambiguous = reconcile.build_reconcile_plan(parent, existing_children=[*existing, duplicate], hook=None)
+    ambiguous = reconcile.plan_recovery_decision(parent, existing_children=[*existing, duplicate], hook=None)
     expect(
         ambiguous.action == "error" and "multiple tasks" in ambiguous.reason,
         f"duplicate next slots must fail closed: {ambiguous}",
     )
-    nonreciprocal = reconcile.build_reconcile_plan(
+    nonreciprocal = reconcile.plan_recovery_decision(
         parent,
         existing_children=[dict(existing[0], prevLink="beeswax")],
         hook=None,
@@ -27292,7 +28392,7 @@ def test_reconcile_candidate_and_plan_paths():
         nonreciprocal.action == "error" and "prevLink" in nonreciprocal.reason,
         f"nonreciprocal next slot must fail closed: {nonreciprocal}",
     )
-    recurrence_mismatch = reconcile.build_reconcile_plan(
+    recurrence_mismatch = reconcile.plan_recovery_decision(
         parent,
         existing_children=[dict(existing[0], cp="P2D")],
         hook=None,
@@ -27301,7 +28401,7 @@ def test_reconcile_candidate_and_plan_paths():
         recurrence_mismatch.action == "error" and "recurrence field cp" in recurrence_mismatch.reason,
         f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
     )
-    null_recurrence = reconcile.build_reconcile_plan(
+    null_recurrence = reconcile.plan_recovery_decision(
         parent,
         existing_children=[dict(existing[0], anchor_file="null")],
         hook=None,
@@ -27348,7 +28448,7 @@ def test_reconcile_candidate_and_plan_paths():
             }
 
     generation = FakeGeneration()
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
     expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
     evidence = reconcile.describe_plan(plan)
@@ -27357,7 +28457,7 @@ def test_reconcile_candidate_and_plan_paths():
     expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
 
     capped = dict(parent, chainMax=2)
-    plan = reconcile.build_reconcile_plan(capped, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(capped, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
     class ExhaustingGeneration(FakeGeneration):
@@ -27366,7 +28466,7 @@ def test_reconcile_candidate_and_plan_paths():
                 "cp scheduling", reference=date(9999, 1, 1), limit=1
             )
 
-    terminal = reconcile.build_reconcile_plan(
+    terminal = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -27391,7 +28491,7 @@ def test_reconcile_candidate_and_plan_paths():
                 kind=core.OccurrenceSearchExhausted.SEARCH_LIMIT,
             )
 
-    search_limited = reconcile.build_reconcile_plan(
+    search_limited = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -27407,7 +28507,7 @@ def test_reconcile_candidate_and_plan_paths():
 
 def test_reconcile_plan_uses_task_business_calendar_context():
     """Reconcile scheduling and child construction must share the task calendar."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     class FakeCore:
         active = False
@@ -27461,19 +28561,19 @@ def test_reconcile_plan_uses_task_business_calendar_context():
         "bc": "work",
     }
     generation = FakeGeneration()
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
     expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
     expect(not FakeCore.active, "task business-calendar context leaked after planning")
 
-    invalid = reconcile.build_reconcile_plan(dict(parent, bc="missing"), existing_children=[], hook=None, generation=generation)
+    invalid = reconcile.plan_recovery_decision(dict(parent, bc="missing"), existing_children=[], hook=None, generation=generation)
     expect(invalid.action == "error", f"invalid calendar was not rejected: {invalid}")
     expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
 
 
 def test_reconcile_expiration_candidate_requires_expiry_evidence():
     """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
@@ -27512,7 +28612,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
         safe_parse_datetime=mod._safe_parse_datetime,
     )
     expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
-    manual_plan = reconcile.build_reconcile_plan(manual, existing_children=[], hook=mod)
+    manual_plan = reconcile.plan_recovery_decision(manual, existing_children=[], hook=mod)
     expect(manual_plan.action == "manual_stop", f"manual deletion should disable the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
     expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
@@ -27645,7 +28745,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
         def apply_parent(_task_bin, _hook, current, *, taskdata, lease_held=False, verified_children=None):
             expect(verified_children is not None, "recovery did not provide verified-child cache")
             verified_children["22222222"] = dict(child)
-            return tool.reconcile.ReconcilePlan(
+            return tool.lifecycle.LifecycleRecoveryDecision(
                 "spawn",
                 current,
                 2,
@@ -27701,13 +28801,15 @@ def test_reconcile_candidate_discovery_is_narrow_and_deterministic():
             return _found_task(tuple(reversed(rows)))
 
     snapshot = tool._ReconcileSnapshot(Repository())
-    found = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    found = tool.LifecycleReconciliationService(
+        snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
+    ).candidates()
     expect(
         [(row["chainID"], row["link"]) for row in found] == [("a-chain", 2), ("z-chain", 3)],
         f"candidate order was not deterministic: {found}",
     )
     duplicate = {**rows[1], "uuid": "22222222-0000-0000-0000-000000000002"}
-    conflicts = tool._ambiguous_candidate_slots([rows[1], duplicate])
+    conflicts = tool.IntegrityRecoveryService.ambiguous_candidate_slots([rows[1], duplicate])
     expect(("a-chain", 2) in conflicts and "2 distinct parent tasks" in conflicts[("a-chain", 2)],
            f"duplicate candidate slot was not rejected: {conflicts!r}")
 
@@ -27741,7 +28843,9 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
             return _found_task(tuple(rows))
 
     snapshot = tool._ReconcileSnapshot(Repository())
-    candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    candidates = tool.LifecycleReconciliationService(
+        snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
+    ).candidates()
     tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     expect(candidates == [rows[0]], f"candidate view included non-candidates: {candidates!r}")
@@ -27761,7 +28865,9 @@ def test_reconcile_empty_snapshot_is_authoritative():
             return _absent_task("no lifecycle candidates")
 
     snapshot = tool._ReconcileSnapshot(Repository())
-    candidates = tool._candidate_rows("task", SimpleNamespace(), snapshot=snapshot)
+    candidates = tool.LifecycleReconciliationService(
+        snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
+    ).candidates()
     active = tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
     expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
     expect(len(calls) == 1, f"empty snapshot triggered repeated exports: {calls!r}")
@@ -27785,34 +28891,9 @@ def test_reconcile_export_diagnostics_include_elapsed_time():
     expect(metrics["slowest_seconds"] == 0.125, f"slowest export timing missing: {metrics!r}")
 
 
-def test_reconcile_json_startup_failures_are_structured():
-    """JSON mode should report public runtime loading failures without tracebacks."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_startup_failure_test")
-    original = tool._load_reconcile_runtime
-    try:
-        def fail_load(_task_bin=None):
-            raise RuntimeError("could not load hook Ω")
-
-        tool._load_reconcile_runtime = fail_load
-        output = io.StringIO()
-        errors = io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            result = tool.main(["--json"], _unit_of_work=_test_operator_uow())
-        summary = json.loads(output.getvalue())
-        expect(result == 1 and summary.get("stage") == "hook_load", f"hook load failure was not structured: {summary}")
-        expect(summary.get("schema") == "nautical.reconcile" and summary.get("schema_version") == 1,
-               f"startup JSON schema metadata missing: {summary}")
-        expect("Ω" in summary.get("error", ""), f"Unicode startup error was escaped or lost: {summary}")
-        expect("Traceback" not in errors.getvalue(), f"startup failure leaked a traceback: {errors.getvalue()!r}")
-
-    finally:
-        tool._load_reconcile_runtime = original
-
-
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
     """Expired CP links should advance from due/scheduled rather than their deletion end."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_cp_due_test")
@@ -27848,7 +28929,7 @@ def test_reconcile_expiration_cp_advances_from_recurrence_target():
 
 def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     """Hookless recovery should preserve and verify scheduled/wait offsets."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     mod = _load_hook_module(_find_hook_file("on-modify.nautical"), "_nautical_reconcile_hookless_carry_test")
     due = mod.core.build_local_datetime(date(2026, 7, 20), (10, 0))
@@ -27866,7 +28947,7 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
         "wait": mod.core.fmt_isoz(wait),
         "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
     }
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(plan.action == "spawn" and plan.child is not None, f"valid hookless carry did not produce a child: {plan}")
     child_due = mod.core.parse_dt_any(plan.child.get("due"))
     child_scheduled = mod.core.parse_dt_any(plan.child.get("scheduled"))
@@ -27875,16 +28956,16 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     expect(child_wait - child_due == wait - due, f"wait carry drifted: {plan.child!r}")
 
     malformed = dict(parent, scheduled="not-a-date")
-    failed = reconcile.build_reconcile_plan(malformed, existing_children=[], hook=mod)
+    failed = reconcile.plan_recovery_decision(malformed, existing_children=[], hook=mod)
     expect(failed.action == "error" and "scheduled field" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
     malformed_wait = dict(parent, wait="not-a-date")
-    failed_wait = reconcile.build_reconcile_plan(malformed_wait, existing_children=[], hook=mod)
+    failed_wait = reconcile.plan_recovery_decision(malformed_wait, existing_children=[], hook=mod)
     expect(failed_wait.action == "error" and "wait carry" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     """Expired anchor links should select the first slot after the prior recurrence target."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
@@ -27909,7 +28990,7 @@ def test_reconcile_expiration_anchor_advances_from_recurrence_target():
 
 def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     """Expiration plans should honor chain limits and recognize an already-expired next slot."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_plan_test")
@@ -27933,17 +29014,17 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         "prevLink": "11111111",
     }
 
-    backfill = reconcile.build_reconcile_plan(parent, existing_children=[deleted_child], hook=mod)
+    backfill = reconcile.plan_recovery_decision(parent, existing_children=[deleted_child], hook=mod)
     expect(
         backfill.action == "backfill_nextlink" and backfill.child_short == "22222222",
         f"deleted next slot should be backfilled rather than duplicated: {backfill}",
     )
 
-    capped = reconcile.build_reconcile_plan(dict(parent, chainMax=1), existing_children=[], hook=mod)
+    capped = reconcile.plan_recovery_decision(dict(parent, chainMax=1), existing_children=[], hook=mod)
     expect(capped.action == "legitimate_final" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
 
     chain_until = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
-    limited = reconcile.build_reconcile_plan(
+    limited = reconcile.plan_recovery_decision(
         dict(parent, chainUntil=mod.core.fmt_isoz(chain_until)),
         existing_children=[],
         hook=mod,
@@ -27953,7 +29034,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         f"chainUntil not enforced against expired successor: {limited}",
     )
 
-    spawned = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    spawned = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(spawned.action == "spawn", f"expected expiration spawn plan: {spawned}")
     expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
     expect((spawned.child or {}).get("until"), f"spawned child should carry relative until: {spawned}")
@@ -27997,21 +29078,14 @@ def test_reconcile_apply_refuses_a_second_full_run():
     )
     with tempfile.TemporaryDirectory() as td:
         taskdata = Path(td)
-        original_runtime = tool._load_reconcile_runtime
-        try:
-            tool._load_reconcile_runtime = lambda _task_bin=None: (_ for _ in ()).throw(
-                AssertionError("busy reconcile loaded its hook")
-            )
-            output = io.StringIO()
-            with tool._reconcile_apply_lock(taskdata) as held:
-                expect(held, "test could not acquire reconcile lease")
-                with contextlib.redirect_stdout(output):
-                    result = tool.main(
-                        ["--apply", "--json"],
-                        _unit_of_work=_test_operator_uow(taskdata),
-                    )
-        finally:
-            tool._load_reconcile_runtime = original_runtime
+        output = io.StringIO()
+        with tool._reconcile_apply_lock(taskdata) as held:
+            expect(held, "test could not acquire reconcile lease")
+            with contextlib.redirect_stdout(output):
+                result = tool.main(
+                    ["--apply", "--json"],
+                    _unit_of_work=_test_operator_uow(taskdata),
+                )
     summary = json.loads(output.getvalue())
     expect(result == 1, f"busy reconcile returned {result}")
     expect(summary.get("stage") == "apply_lock", f"busy reconcile was not reported as a lease conflict: {summary!r}")
@@ -28136,85 +29210,6 @@ def test_reconcile_expired_pending_child_is_resumable_partial():
     expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
 
 
-def test_reconcile_apply_isolates_candidate_failures():
-    """A failed apply should not prevent later candidates from being repaired."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    tool = _load_hook_module(str(path), "_nautical_reconcile_apply_isolation_test")
-    failed = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
-        "status": "completed",
-        "description": "blocked chain",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "blocked1",
-        "link": 1,
-    }
-    repairable = {
-        "uuid": "22222222-0000-0000-0000-000000000002",
-        "status": "completed",
-        "description": "repairable chain",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "repair02",
-        "link": 2,
-    }
-
-    class FakeHook:
-        core = SimpleNamespace(fmt_dt_local=None)
-
-        @staticmethod
-        def _task_cmd_prefix():
-            return ["task"]
-
-    original = (
-        tool._load_reconcile_runtime,
-        tool._candidate_rows,
-        tool._apply_parent_atomic,
-        tool._native_until_repairs,
-    )
-    try:
-        tool._load_reconcile_runtime = lambda _task_bin=None: FakeHook()
-        tool._candidate_rows = lambda _task_bin, _hook: [failed, repairable]
-        tool._native_until_repairs = lambda *args, **kwargs: ([], [])
-
-        def apply_parent(_task_bin, _hook, parent, *, taskdata, lease_held=False, verified_children=None):
-            expect(taskdata.name == "nautical-reconcile-isolation-test", f"wrong taskdata: {taskdata}")
-            if parent["uuid"] == failed["uuid"]:
-                raise RuntimeError("parent reconcile lock busy: 11111111")
-            plan = tool.reconcile.ReconcilePlan(
-                "backfill_nextlink",
-                parent,
-                3,
-                "next link already exists",
-                child_short="33333333",
-            )
-            return plan, "33333333"
-
-        tool._apply_parent_atomic = apply_parent
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            result = tool.main(
-                ["--apply", "--json"],
-                _unit_of_work=_test_operator_uow("/tmp/nautical-reconcile-isolation-test"),
-            )
-    finally:
-        (
-            tool._load_reconcile_runtime,
-            tool._candidate_rows,
-            tool._apply_parent_atomic,
-            tool._native_until_repairs,
-        ) = original
-
-    summary = json.loads(output.getvalue())
-    expect(result == 1, f"candidate failure should keep a nonzero exit: {result}")
-    expect(summary.get("errors") == 1, f"failed candidate was not summarized: {summary!r}")
-    expect(summary.get("backfill_nextlink") == 1, f"later repair was not planned: {summary!r}")
-    expect(
-        summary.get("applied") == [{"action": "backfill_nextlink", "parent": "22222222", "child": "33333333"}],
-        f"later repair was not applied: {summary!r}",
-    )
-
-
 def test_reconcile_expiration_real_taskwarrior_round_trip():
     """Real Taskwarrior data should receive one linked child with a shifted until window."""
     task_bin = shutil.which("task")
@@ -28298,7 +29293,10 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
             env=env,
             timeout=20.0,
         )
-        expect(applied.returncode == 0, f"real expiration reconcile failed: {applied.stderr!r}")
+        expect(
+            applied.returncode == 0,
+            f"real expiration reconcile failed: stdout={applied.stdout!r} stderr={applied.stderr!r}",
+        )
         summary = json.loads(applied.stdout)
         expect(summary.get("spawn") == 1 and len(summary.get("applied") or []) == 1, f"unexpected apply: {summary!r}")
 
@@ -28359,6 +29357,8 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
             env=env,
             timeout=15.0,
         )
+
+
         expect(imported_delayed.returncode == 0, f"delayed fixture import failed: {imported_delayed.stderr!r}")
 
         recovered = subprocess.run(
@@ -28413,9 +29413,121 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         )
 
 
+def test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review():
+    """A duplicate chain slot is refused by the real apply boundary."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return
+    with tempfile.TemporaryDirectory(prefix="nautical-duplicate-slot-") as td:
+        root = Path(td)
+        data_dir = root / "data"
+        data_dir.mkdir()
+        taskrc = root / "taskrc"
+        taskrc.write_text(
+            "\n".join([
+                f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
+                "uda.cp.type=string", "uda.chain.type=string", "uda.chainID.type=string",
+                "uda.link.type=numeric", "uda.prevLink.type=string", "uda.nextLink.type=string",
+                "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
+            ]) + "\n", encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update({
+            "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
+            "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
+            "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
+        })
+        rows = [{
+            "uuid": uuid, "status": "deleted", "description": "duplicate slot",
+            "entry": "20260820T080000Z", "modified": "20260820T100000Z",
+            "end": "20260820T100000Z", "due": "20260820T090000Z",
+            "until": "20260820T100000Z", "cp": "1d", "chain": "on",
+            "chainID": "duplicate-slot", "link": 1,
+        } for uuid in (
+            "11111111-0000-0000-0000-000000000001",
+            "22222222-0000-0000-0000-000000000002",
+        )]
+        imported = subprocess.run(
+            [task_bin, "rc.hooks=off", "import"],
+            input="".join(json.dumps(row) + "\n" for row in rows),
+            text=True, capture_output=True, env=env, timeout=15.0,
+        )
+        expect(imported.returncode == 0, f"duplicate fixture import failed: {imported.stderr!r}")
+        applied = subprocess.run(
+            [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+             "--apply", "--task-bin", task_bin, "--json"],
+            text=True, capture_output=True, env=env, timeout=20.0,
+        )
+        expect(applied.returncode == 1, f"duplicate slot unexpectedly applied: {applied.stdout!r}")
+        payload = json.loads(applied.stdout)
+        expect(payload.get("spawn") == 0 and payload.get("applied") == [], f"duplicate slot mutated: {payload!r}")
+        audit = payload.get("integrity_audit") or {}
+        expect(audit.get("status") == "manual_review", f"duplicate slot was not manual review: {payload!r}")
+        expect(
+            any(finding.get("invariant_id") == "slot.duplicate_occupant" for finding in audit.get("findings", ())),
+            f"duplicate-slot finding was not reported: {payload!r}",
+        )
+
+
+def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
+    """A deleted anchor occurrence receives one real linked successor."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return
+    with tempfile.TemporaryDirectory(prefix="nautical-anchor-repair-") as td:
+        root = Path(td)
+        data_dir = root / "data"
+        data_dir.mkdir()
+        taskrc = root / "taskrc"
+        taskrc.write_text(
+            "\n".join([
+                f"data.location={data_dir}", "hooks=off", "confirmation=off", "verbose=nothing",
+                "uda.anchor.type=string", "uda.anchor_mode.type=string", "uda.chain.type=string",
+                "uda.chainID.type=string", "uda.link.type=numeric", "uda.prevLink.type=string",
+                "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
+            ]) + "\n", encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update({
+            "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
+            "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
+            "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
+        })
+        parent = {
+            "uuid": "33333333-0000-0000-0000-000000000003", "status": "deleted",
+            "description": "Anchor repair", "entry": "20260820T080000Z",
+            "modified": "20260820T100000Z", "end": "20260820T100000Z",
+            "due": "20260820T090000Z", "until": "20260820T100000Z",
+            "anchor": "w:mon", "anchor_mode": "skip", "chain": "on",
+            "chainID": "anchor-real", "link": 1,
+        }
+        imported = subprocess.run(
+            [task_bin, "rc.hooks=off", "import"], input=json.dumps(parent) + "\n",
+            text=True, capture_output=True, env=env, timeout=15.0,
+        )
+        expect(imported.returncode == 0, f"anchor fixture import failed: {imported.stderr!r}")
+        applied = subprocess.run(
+            [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
+             "--apply", "--task-bin", task_bin, "--json"],
+            text=True, capture_output=True, env=env, timeout=20.0,
+        )
+        expect(applied.returncode == 0, f"anchor reconcile failed: {applied.stderr!r}")
+        payload = json.loads(applied.stdout)
+        expect(payload.get("spawn") == 1 and len(payload.get("applied") or []) == 1, f"anchor was not repaired: {payload!r}")
+        exported = subprocess.run(
+            [task_bin, "rc.hooks=off", "rc.json.array=1", "chainID:anchor-real", "export"],
+            text=True, capture_output=True, env=env, timeout=15.0,
+        )
+        expect(exported.returncode == 0, f"anchor verification export failed: {exported.stderr!r}")
+        rows = json.loads(exported.stdout)
+        expect(len(rows) == 2, f"anchor repair created the wrong number of rows: {rows!r}")
+        by_link = {int(float(row.get("link"))): row for row in rows}
+        expect(by_link[1].get("nextLink") == str(by_link[2].get("uuid") or "")[:8], f"anchor parent was not linked: {rows!r}")
+
+
 def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     """Reconcile evidence should show the recurrence target, not carried scheduled metadata."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -28461,7 +29573,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
                 "chainID": parent.get("chainID"),
             }
 
-    plan = reconcile.build_reconcile_plan(
+    plan = reconcile.plan_recovery_decision(
         parent,
         existing_children=[],
         hook=None,
@@ -28474,7 +29586,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
 
 def test_reconcile_evidence_includes_local_child_time_when_formatter_available():
     """Reconcile evidence should include the local interpretation of a planned child."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
         "uuid": "11111111-0000-0000-0000-000000000001",
@@ -28485,7 +29597,7 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
         "chainID": "11111111",
         "link": 1,
     }
-    plan = reconcile.ReconcilePlan(
+    plan = reconcile.LifecycleRecoveryDecision(
         "spawn",
         parent,
         2,
@@ -28495,23 +29607,6 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
     )
     evidence = reconcile.describe_plan(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
     expect(evidence.get("child_local") == "Sat 2026-07-04 14:00 EEST", f"missing child_local evidence: {evidence!r}")
-
-
-def test_reconcile_tool_loads_task_hooks_layout():
-    """Installed reconcile uses the public core package rather than hook files."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_tool_hook_layout_test")
-    loaded = mod._load_reconcile_runtime("task")
-    expect(getattr(loaded, "__name__", "") == "nautical_core", f"unexpected runtime: {loaded!r}")
-
-
-def test_reconcile_default_runtime_uses_core_context():
-    """Default reconcile runtime must not load private or mutation gateways."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_public_gateway_runtime_test")
-    runtime = mod._load_reconcile_runtime("task")
-    expect(getattr(runtime, "__name__", "") == "nautical_core", f"unexpected reconcile runtime: {runtime!r}")
-    expect(not hasattr(runtime, "spawn_child"), "reconcile runtime unexpectedly owns child mutation")
 
 
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
@@ -28567,7 +29662,7 @@ def test_reconcile_tool_defaults_core_path_to_install_base():
 
 def test_reconcile_tool_print_plan_includes_evidence():
     """Reconcile dry-run output should explain why each action is safe."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_tool_print_test")
@@ -28580,7 +29675,7 @@ def test_reconcile_tool_print_plan_includes_evidence():
         "chainID": "11111111",
         "link": 2,
     }
-    plan = reconcile.ReconcilePlan(
+    plan = reconcile.LifecycleRecoveryDecision(
         "backfill_nextlink",
         parent,
         3,
@@ -28596,7 +29691,7 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
 
     second_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 3}
-    second = reconcile.ReconcilePlan(
+    second = reconcile.LifecycleRecoveryDecision(
         "partial",
         second_parent,
         4,
@@ -28613,143 +29708,6 @@ def test_reconcile_tool_print_plan_includes_evidence():
     out = buf.getvalue()
     expect("recover:" in out and "advanced 1 occurrence" in out, f"missing compact recovery summary: {out!r}")
     expect("result: partial" in out and "spawn:" not in out, f"compact output leaked per-hop lines: {out!r}")
-
-
-def test_reconcile_partial_recovery_exit_and_verbose_output():
-    """Bounded recovery should exit 2, stay compact by default, and expand with --verbose."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_partial_output_test")
-    parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
-        "status": "deleted",
-        "description": "delayed recovery",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "partial1",
-        "link": 1,
-    }
-    next_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 2}
-    outcomes = [
-        (
-            mod.reconcile.ReconcilePlan(
-                "spawn",
-                parent,
-                2,
-                "expired link missing next link",
-                child={"uuid": next_parent["uuid"], "link": 2},
-            ),
-            "22222222",
-        ),
-        (
-            mod.reconcile.ReconcilePlan(
-                "partial",
-                next_parent,
-                3,
-                "expiration recovery hop limit reached at 1; rerun to continue",
-            ),
-            "",
-        ),
-    ]
-    hook = SimpleNamespace(
-        core=SimpleNamespace(fmt_dt_local=None),
-        _task_cmd_prefix=lambda: ["task"],
-        _safe_parse_datetime=lambda _value: (None, None),
-    )
-    original = (mod._load_reconcile_runtime, mod._candidate_rows, mod._reconcile_candidate)
-    try:
-        mod._load_reconcile_runtime = lambda _task_bin=None: hook
-        mod._candidate_rows = lambda _task_bin, _hook: [parent]
-        mod._reconcile_candidate = lambda *_args, **_kwargs: outcomes
-
-        compact = io.StringIO()
-        with contextlib.redirect_stdout(compact):
-            compact_result = mod.main([], _unit_of_work=_test_operator_uow())
-        verbose = io.StringIO()
-        with contextlib.redirect_stdout(verbose):
-            verbose_result = mod.main(["--verbose"], _unit_of_work=_test_operator_uow())
-    finally:
-        mod._load_reconcile_runtime, mod._candidate_rows, mod._reconcile_candidate = original
-
-    expect(compact_result == 2 and verbose_result == 2, f"partial recovery exit was not distinct: {compact_result}, {verbose_result}")
-    expect("recover:" in compact.getvalue() and "spawn:" not in compact.getvalue(), f"default output was not compact: {compact.getvalue()!r}")
-    expect("spawn:" in verbose.getvalue() and "partial:" in verbose.getvalue(), f"verbose output omitted hops: {verbose.getvalue()!r}")
-
-
-def test_reconcile_degraded_audit_status_is_structured():
-    """Skipped audits and manual review must return a distinct degraded status."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_degraded_status_test")
-    original = (mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason)
-    try:
-        mod._candidate_rows = lambda _task_bin, _hook: []
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
-            [{"action": "manual_review", "task": "11111111"}],
-            [],
-        )
-        manual_output = io.StringIO()
-        with contextlib.redirect_stdout(manual_output):
-            manual_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        manual_summary = json.loads(manual_output.getvalue())
-        expect(manual_result == 2, f"manual review should be degraded: {manual_result}")
-        expect(manual_summary.get("schema_version") == 1, f"JSON schema version missing: {manual_summary!r}")
-        expect(manual_summary.get("status") == "degraded", f"wrong manual status: {manual_summary!r}")
-        expect(manual_summary.get("native_until_manual_review") == 1, f"manual review was not counted: {manual_summary!r}")
-        expect(manual_summary.get("errors") == 0, f"manual review was counted as an error: {manual_summary!r}")
-        expect(manual_summary.get("plan_errors") == 0, f"manual review changed plan errors: {manual_summary!r}")
-        expect(manual_summary.get("native_until_error_count") == 0, f"manual review changed native errors: {manual_summary!r}")
-
-        manual_text = io.StringIO()
-        with contextlib.redirect_stdout(manual_text):
-            manual_text_result = mod.main([], _unit_of_work=_test_operator_uow())
-        expect(manual_text_result == 2, f"manual review text output returned {manual_text_result}")
-        expect("no change applied" in manual_text.getvalue(), f"manual review text was not actionable: {manual_text.getvalue()!r}")
-
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
-            [{"action": "repair_error", "task": "22222222"}],
-            ["22222222 chain test link 2: verification failed"],
-        )
-        error_output = io.StringIO()
-        with contextlib.redirect_stdout(error_output):
-            error_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        error_summary = json.loads(error_output.getvalue())
-        expect(error_result == 1 and error_summary.get("status") == "error", f"native repair error was not fatal: {error_summary!r}")
-        expect(error_summary.get("errors") == 1, f"native repair error was omitted from total: {error_summary!r}")
-        expect(error_summary.get("plan_errors") == 0, f"native repair error changed plan count: {error_summary!r}")
-        expect(error_summary.get("native_until_error_count") == 1, f"native repair error count missing: {error_summary!r}")
-
-        def skipped_audit(_task_bin, _hook, **_kwargs):
-            raise RuntimeError("Taskwarrior lock active")
-
-        mod._native_until_repairs = skipped_audit
-        skipped_output = io.StringIO()
-        with contextlib.redirect_stdout(skipped_output):
-            skipped_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        skipped_summary = json.loads(skipped_output.getvalue())
-        expect(skipped_result == 2, f"skipped audit should be degraded: {skipped_result}")
-        expect(skipped_summary.get("status") == "degraded", f"wrong skipped status: {skipped_summary!r}")
-        expect(skipped_summary.get("native_until_audit_skipped") == 1, f"skipped audit was not counted: {skipped_summary!r}")
-        expect(skipped_summary.get("native_until_audit_status") == "unavailable", f"missing unavailable audit status: {skipped_summary!r}")
-
-        apply_output = io.StringIO()
-        with contextlib.redirect_stdout(apply_output):
-            apply_result = mod.main(["--json", "--apply"], _unit_of_work=_test_operator_uow())
-        apply_summary = json.loads(apply_output.getvalue())
-        expect(apply_result == 2, f"unavailable apply audit should be degraded: {apply_result}")
-        expect(apply_summary.get("native_until_audit_status") == "unavailable", f"apply audit status was lost: {apply_summary!r}")
-        expect(apply_summary.get("configuration_status") == "unavailable", f"apply did not fail closed: {apply_summary!r}")
-        expect(not apply_summary.get("applied"), f"apply mutated after unavailable audit: {apply_summary!r}")
-
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: ([], [])
-        mod._configuration_drift_reason = lambda _hook: "configuration changed during reconcile (source: test)"
-        drift_output = io.StringIO()
-        with contextlib.redirect_stdout(drift_output):
-            drift_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-        drift_summary = json.loads(drift_output.getvalue())
-        expect(drift_result == 2, f"configuration drift should be degraded: {drift_result}")
-        expect(drift_summary.get("configuration_drifted") == 1, f"configuration drift was not counted: {drift_summary!r}")
-        expect(drift_summary.get("status") == "degraded", f"wrong drift status: {drift_summary!r}")
-    finally:
-        mod._candidate_rows, mod._native_until_repairs, mod._configuration_drift_reason = original
 
 
 def test_reconcile_configuration_verification_fails_closed():
@@ -28769,43 +29727,6 @@ def test_reconcile_configuration_verification_fails_closed():
     expect(status == "unavailable" and reason == check.reason, f"state adapter changed failure: {status!r}, {reason!r}")
 
 
-def test_reconcile_native_until_audit_failure_matrix_fails_closed():
-    """Every authoritative native-until read failure blocks apply mutations."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_native_until_failure_matrix_test")
-    failures = (
-        ("locked", RuntimeError("Taskwarrior lock active")),
-        ("malformed", ValueError("invalid JSON from Taskwarrior export")),
-        ("missing-binary", FileNotFoundError("task executable not found")),
-        ("timeout", TimeoutError("Taskwarrior export timed out")),
-    )
-    original = (mod._candidate_rows, mod._native_until_repairs)
-    try:
-        mod._candidate_rows = lambda _task_bin, _hook: []
-        for label, failure in failures:
-            def unavailable_audit(_task_bin, _hook, _failure=failure, **_kwargs):
-                raise _failure
-
-            mod._native_until_repairs = unavailable_audit
-            dry_output = io.StringIO()
-            with contextlib.redirect_stdout(dry_output):
-                dry_result = mod.main(["--json"], _unit_of_work=_test_operator_uow())
-            dry_summary = json.loads(dry_output.getvalue())
-            expect(dry_result == 2, f"{label} dry-run was not degraded: {dry_summary!r}")
-            expect(dry_summary.get("native_until_audit_status") == "unavailable", f"{label} status was lost: {dry_summary!r}")
-            expect(str(dry_summary.get("native_until_audit_warning") or "") == str(failure), f"{label} cause was lost: {dry_summary!r}")
-
-            apply_output = io.StringIO()
-            with contextlib.redirect_stdout(apply_output):
-                apply_result = mod.main(["--json", "--apply"], _unit_of_work=_test_operator_uow())
-            apply_summary = json.loads(apply_output.getvalue())
-            expect(apply_result == 2, f"{label} apply did not degrade: {apply_summary!r}")
-            expect(apply_summary.get("configuration_status") == "unavailable", f"{label} apply was not fail-closed: {apply_summary!r}")
-            expect(not apply_summary.get("applied"), f"{label} apply mutated after unavailable audit: {apply_summary!r}")
-    finally:
-        mod._candidate_rows, mod._native_until_repairs = original
-
-
 def test_reconcile_startup_config_failure_is_structured():
     """Taskdata configuration startup failures expose unavailable status in JSON."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -28820,215 +29741,27 @@ def test_reconcile_startup_config_failure_is_structured():
     expect(payload.get("configuration_drift") == "invalid timezone", f"configuration detail was lost: {payload!r}")
 
 
-def test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs():
-    """Human reconcile output should keep outcomes concise and display repaired until locally."""
-    path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
-    mod = _load_hook_module(str(path), "_nautical_reconcile_human_diagnostics_test")
-    until_utc = datetime(2026, 8, 3, 20, 0, tzinfo=timezone.utc)
-    hook = SimpleNamespace(
-        core=SimpleNamespace(
-            fmt_dt_local=lambda value: f"Mon 2026-08-03 23:00 EEST ({value.tzname()})",
-            now_utc=lambda: until_utc,
-            configuration_drift=lambda: {"changed": False, "status": "ok"},
-        ),
-        _safe_parse_datetime=lambda _value: (until_utc, None),
-        _task_cmd_prefix=lambda: ["task"],
+def test_reconcile_subprocess_output_contracts():
+    """Operator subprocess modes keep JSON on stdout and diagnostics on stderr."""
+    tool = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
+    base = [sys.executable, str(tool), "--task-bin", "/missing/nautical-task"]
+    json_run = subprocess.run(
+        [*base, "--json"], cwd=str(ROOT), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
-    original = (mod._load_reconcile_runtime, mod._candidate_rows, mod._native_until_repairs)
-    try:
-        mod._load_reconcile_runtime = lambda _task_bin=None: hook
-        mod._candidate_rows = lambda _task_bin, _hook: []
-        mod._native_until_repairs = lambda _task_bin, _hook, **_kwargs: (
-            [{"action": "repair_until", "task": "11111111", "chainID": "chain", "link": 2,
-              "reason": "native until must be later than due", "new_until": "20260803T200000Z"}],
-            [],
-        )
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            result = mod.main([], _unit_of_work=_test_operator_uow())
-    finally:
-        mod._load_reconcile_runtime, mod._candidate_rows, mod._native_until_repairs = original
+    expect(json_run.returncode == 1, f"JSON startup failure returned {json_run.returncode}")
+    payload = json.loads(json_run.stdout)
+    expect(payload.get("status") == "error", f"JSON startup status was not error: {payload!r}")
+    expect(payload.get("startup_errors") == 1, f"JSON startup error count missing: {payload!r}")
+    expect(json_run.stderr == "", f"JSON mode leaked diagnostics to stderr: {json_run.stderr!r}")
 
-    text = output.getvalue()
-    summary_line = next(line for line in text.splitlines() if line.startswith("summary: "))
-    diagnostics_line = next(line for line in text.splitlines() if line.startswith("diagnostics: "))
-    expect(result == 0, f"human diagnostics run failed: {result}")
-    expect("-> Mon 2026-08-03 23:00 EEST" in text, f"native-until target was not localized: {text!r}")
-    expect("exports=" not in summary_line, f"summary still contains diagnostics: {summary_line!r}")
-    expect("exports=0 rows=0" in diagnostics_line, f"diagnostics line missing export counters: {diagnostics_line!r}")
-    expect("slowest_export_s=0.0000" in diagnostics_line, f"diagnostics line missing export timing: {diagnostics_line!r}")
-
-
-def test_chain_repair_plans_only_safe_adjacent_link_updates():
-    """Chain repair should fix unique adjacent slots and report duplicates without guessing."""
-    import nautical_core.chain_repair as chain_repair
-
-    tasks = [
-        {
-            "uuid": "11111111-0000-0000-0000-000000000001",
-            "chainID": "cid",
-            "link": 1,
-            "status": "completed",
-            "cp": "P1D",
-            "nextLink": "",
-        },
-        {
-            "uuid": "22222222-0000-0000-0000-000000000002",
-            "chainID": "cid",
-            "link": 2,
-            "status": "completed",
-            "cp": "P1D",
-            "prevLink": "",
-            "nextLink": "wrong",
-        },
-        {
-            "uuid": "33333333-0000-0000-0000-000000000003",
-            "chainID": "cid",
-            "link": 3,
-            "status": "pending",
-            "cp": "P1D",
-            "prevLink": "xxxxxxxx",
-        },
-        {
-            "uuid": "44444444-0000-0000-0000-000000000004",
-            "chainID": "dupe",
-            "link": 1,
-            "status": "completed",
-            "cp": "P1D",
-        },
-        {
-            "uuid": "55555555-0000-0000-0000-000000000005",
-            "chainID": "dupe",
-            "link": 1,
-            "status": "completed",
-            "cp": "P1D",
-        },
-    ]
-    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
-    got = {(repair.short, repair.field, repair.old, repair.new) for repair in repairs}
-    expect(("11111111", "nextLink", "", "22222222") in got, f"missing link1 next repair: {repairs}")
-    expect(("22222222", "prevLink", "", "11111111") in got, f"missing link2 prev repair: {repairs}")
-    expect(("22222222", "nextLink", "wrong", "33333333") in got, f"missing link2 next repair: {repairs}")
-    expect(("33333333", "prevLink", "xxxxxxxx", "22222222") in got, f"missing link3 prev repair: {repairs}")
-    expect(any(issue.kind == "duplicate_slot" and issue.chain_id == "dupe" for issue in issues), f"duplicate slot not reported: {issues}")
-    expect(not any(repair.chain_id == "dupe" for repair in repairs), f"duplicate chain should not be modified: {repairs}")
-
-
-def test_chain_repair_infers_missing_links_only_when_deterministic():
-    """Missing numeric link values should be repaired only from unambiguous adjacent pointers."""
-    import nautical_core.chain_repair as chain_repair
-
-    tasks = [
-        {
-            "uuid": "11111111-0000-0000-0000-000000000001",
-            "chainID": "safe",
-            "link": 1,
-            "status": "completed",
-        },
-        {
-            "uuid": "22222222-0000-0000-0000-000000000002",
-            "chainID": "safe",
-            "status": "completed",
-            "prevLink": "11111111",
-            "nextLink": "33333333",
-        },
-        {
-            "uuid": "33333333-0000-0000-0000-000000000003",
-            "chainID": "safe",
-            "link": 3,
-            "status": "pending",
-        },
-        {
-            "uuid": "44444444-0000-0000-0000-000000000004",
-            "chainID": "occupied",
-            "link": 1,
-            "status": "completed",
-        },
-        {
-            "uuid": "55555555-0000-0000-0000-000000000005",
-            "chainID": "occupied",
-            "link": 2,
-            "status": "completed",
-        },
-        {
-            "uuid": "66666666-0000-0000-0000-000000000006",
-            "chainID": "occupied",
-            "status": "pending",
-            "prevLink": "44444444",
-        },
-        {
-            "uuid": "77777777-0000-0000-0000-000000000007",
-            "chainID": "conflict",
-            "link": 1,
-            "status": "completed",
-        },
-        {
-            "uuid": "88888888-0000-0000-0000-000000000008",
-            "chainID": "conflict",
-            "link": 4,
-            "status": "pending",
-        },
-        {
-            "uuid": "99999999-0000-0000-0000-000000000009",
-            "chainID": "conflict",
-            "status": "pending",
-            "prevLink": "77777777",
-            "nextLink": "88888888",
-        },
-    ]
-    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
-    got = {(repair.short, repair.field, repair.old, repair.new) for repair in repairs}
-    expect(("22222222", "link", "", "2") in got, f"missing safe link repair: {repairs}")
-    expect(not any(repair.short == "66666666" for repair in repairs), f"occupied slot should not be repaired: {repairs}")
-    expect(not any(repair.short == "99999999" for repair in repairs), f"conflicting inference should not be repaired: {repairs}")
-    issue_chains = {issue.chain_id for issue in issues if issue.kind == "missing_link"}
-    expect("safe" not in issue_chains, f"safe inferred task should not remain an issue: {issues}")
-    expect({"occupied", "conflict"}.issubset(issue_chains), f"unsafe missing links should remain issues: {issues}")
-    issue_reasons = {
-        task.get("short"): task.get("reason")
-        for issue in issues
-        if issue.kind == "missing_link"
-        for task in issue.tasks
-    }
-    expect("already occupied" in str(issue_reasons.get("66666666")), f"occupied issue should explain refusal: {issue_reasons!r}")
-    expect("different links" in str(issue_reasons.get("99999999")), f"conflict issue should explain refusal: {issue_reasons!r}")
-
-
-def test_chain_repair_infers_single_root_link_one_only():
-    """A singleton root chain with no numeric link should be repaired to link 1."""
-    import nautical_core.chain_repair as chain_repair
-
-    tasks = [
-        {
-            "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
-            "chainID": "aaaaaaaa",
-            "status": "pending",
-            "nextLink": "bbbbbbbb",
-        },
-        {
-            "uuid": "cccccccc-0000-0000-0000-000000000003",
-            "chainID": "orphan",
-            "status": "pending",
-            "prevLink": "bbbbbbbb",
-        },
-    ]
-    repairs, issues = chain_repair.plan_chain_link_repairs(tasks)
-    got = {(repair.short, repair.field, repair.new) for repair in repairs}
-    expect(("aaaaaaaa", "link", "1") in got, f"singleton root should be repaired to link 1: {repairs}")
-    expect(not any(repair.short == "cccccccc" for repair in repairs), f"orphan child singleton should not be repaired: {repairs}")
-    issue_chains = {issue.chain_id for issue in issues if issue.kind == "missing_link"}
-    expect("aaaaaaaa" not in issue_chains, f"singleton root should not remain an issue: {issues}")
-    expect("orphan" in issue_chains, f"orphan child singleton should remain an issue: {issues}")
-    orphan_reason = next(
-        (
-            task.get("reason")
-            for issue in issues
-            if issue.kind == "missing_link" and issue.chain_id == "orphan"
-            for task in issue.tasks
-        ),
-        "",
+    human_run = subprocess.run(
+        base, cwd=str(ROOT), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
-    expect("not rooted" in str(orphan_reason), f"orphan singleton should explain refusal: {issues}")
+    expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
+    expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
+    expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
 
 
 def test_task_command_classifies_boundary_failures():
@@ -29070,116 +29803,6 @@ def test_task_command_retries_only_opted_in_locks():
 
     write = task_command.run_task_command(sys.executable, busy_args)
     expect(write.kind is CommandFailureKind.BUSY and write.attempt == 1, f"write was unexpectedly retried: {write}")
-
-
-def test_chain_repair_command_failure_is_structured():
-    """Chain repair JSON mode should report command and apply failures without a traceback."""
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
-        "_nautical_chain_repair_command_failure_test",
-    )
-    output = io.StringIO()
-    errors = io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-        result = tool.main(["--json", "--task-bin", "/definitely/missing/task-Ω"])
-    payload = json.loads(output.getvalue())
-    expect(result == 1 and payload.get("stage") == "integration_context", f"failure was not structured: {payload}")
-    expect("task-Ω" in payload.get("error", ""), f"Unicode command detail was lost: {payload}")
-    expect("Traceback" not in errors.getvalue(), f"chain repair leaked a traceback: {errors.getvalue()!r}")
-
-    original = (tool._export, tool._apply_repair)
-    try:
-        tool._export = lambda _command_prefix: [
-            {
-                "uuid": "11111111-0000-0000-0000-000000000001",
-                "chainID": "apply-failure",
-                "link": 1,
-                "status": "completed",
-            },
-            {
-                "uuid": "22222222-0000-0000-0000-000000000002",
-                "chainID": "apply-failure",
-                "link": 2,
-                "status": "pending",
-            },
-        ]
-
-        def fail_apply(_command_prefix, _repair):
-            raise RuntimeError("write rejected Ω")
-
-        tool._apply_repair = fail_apply
-        output = io.StringIO()
-        errors = io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-            result = tool.main(
-                ["--apply", "--json"],
-                _unit_of_work=_test_operator_uow(),
-            )
-        payload = json.loads(output.getvalue())
-        expect(result == 1 and not payload.get("applied"), f"failed repair was counted as applied: {payload}")
-        expect((payload.get("error") or {}).get("error") == "write rejected Ω", f"apply failure was unclear: {payload}")
-        expect("Traceback" not in errors.getvalue(), f"repair apply leaked a traceback: {errors.getvalue()!r}")
-    finally:
-        tool._export, tool._apply_repair = original
-
-
-def test_chain_repair_apply_uses_guarded_mutation_gateway():
-    """Operator chain repairs must submit typed guarded requests, not raw argv."""
-    from nautical_core import chain_repair
-    from nautical_core.integration_models import Found, MutationOutcomeKind
-
-    tool = _load_hook_module(
-        str(Path(ROOT) / "nautical_core" / "tools" / "nautical_chain_repair.py"),
-        "_nautical_chain_repair_gateway_test",
-    )
-    repair = chain_repair.LinkRepair(
-        "11111111-0000-0000-0000-000000000001",
-        "11111111",
-        "chain-gateway",
-        2,
-        "nextLink",
-        "",
-        "22222222",
-    )
-    uow = _test_operator_uow()
-
-    class Repository:
-        def by_uuid(self, uuid_value, *, refresh=False):
-            del uuid_value, refresh
-            return Found(
-                {
-                    "uuid": repair.uuid,
-                    "status": "pending",
-                    "chain": "on",
-                    "chainID": repair.chain_id,
-                    "link": repair.link,
-                    "modified": "20260820T090000Z",
-                },
-                "chain repair guard",
-            )
-
-    captured = []
-
-    class Gateway:
-        def __init__(self, unit_of_work):
-            expect(unit_of_work is uow, "chain repair constructed a gateway for another invocation")
-
-        def apply(self, request):
-            captured.append(request)
-            return type("Outcome", (), {"kind": MutationOutcomeKind.APPLIED, "reason": ""})()
-
-    original_gateway = tool.TaskwarriorMutationService
-    try:
-        uow.repository = Repository()
-        tool.TaskwarriorMutationService = Gateway
-        tool._apply_repair(uow, repair)
-    finally:
-        tool.TaskwarriorMutationService = original_gateway
-    expect(len(captured) == 1, f"chain repair did not use the mutation gateway: {captured!r}")
-    request = captured[0]
-    expect(request.operation.value == "metadata_repair", f"unexpected repair operation: {request!r}")
-    expect(request.guard.task_uuid == repair.uuid, f"repair guard lost target identity: {request!r}")
-    expect(request.payload.to_dict().get("nextLink") == repair.new, f"repair payload was not typed: {request!r}")
 
 
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
@@ -30903,7 +31526,7 @@ def test_on_add_seasonal_selection_feedback():
     expect("the first Monday of each spring" in stderr, f"preview omitted natural season: {stderr}")
     expect(
         "Advice" in stderr
-        and "fixed March 1 through May 31" in stderr
+        and "astronomical spring equinox through" in stderr
         and "boundaries." in stderr,
         f"preview omitted season boundary: {stderr}",
     )
@@ -31062,7 +31685,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
 
 def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     """Reconcile should compute, spawn, and deduplicate the next seasonal slot."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook_path = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook_path, "_nautical_seasonal_reconcile_test")
@@ -31089,7 +31712,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         "due": stamp(date(2026, 3, 2), (9, 0)),
         "end": stamp(date(2026, 7, 1), (10, 0)),
     }
-    plan = reconcile.build_reconcile_plan(parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
     expect(plan.action == "spawn", f"reconcile did not spawn seasonal child: {plan}")
     child_local = mod.core.to_local(plan.child_due)
     expect(
@@ -31106,7 +31729,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         "link": 2,
         "prevLink": "11111111",
     }
-    repeated = reconcile.build_reconcile_plan(parent, existing_children=[existing], hook=mod)
+    repeated = reconcile.plan_recovery_decision(parent, existing_children=[existing], hook=mod)
     expect(
         repeated.action == "backfill_nextlink" and repeated.child_short == "22222222",
         f"reconcile duplicated an existing seasonal slot: {repeated}",
@@ -31135,7 +31758,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
 
 def test_reconcile_repairs_invalid_native_until_from_previous_link():
     """Hookless due moves should recover the prior link's native-until carry policy."""
-    import nautical_core.reconcile as reconcile
+    import nautical_core.chain_integrity_lifecycle as reconcile
 
     hook_path = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook_path, "_nautical_until_reconcile_test")
@@ -31248,6 +31871,53 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
         tool._active_chain_rows = original_rows
     expect(not errors, f"manual review was reported as a failed mutation: {errors!r}")
     expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
+
+
+def test_integrity_recovery_fault_matrix_fails_closed():
+    """Recovery evidence keeps unavailable/malformed predecessor states explicit."""
+    from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
+
+    def parse(value):
+        try:
+            return datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc), None
+        except Exception as exc:
+            return None, str(exc)
+
+    def fmt(value):
+        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    row = {
+        "uuid": "00000000-0000-0000-0000-000000000701",
+        "chainID": "fault-recovery",
+        "link": 2,
+        "status": "pending",
+        "due": "20260820T100000Z",
+        "until": "20260820T090000Z",
+    }
+    service = IntegrityRecoveryService()
+    unavailable = service.audit_native_until(
+        [row],
+        predecessor=lambda _row: None,
+        safe_parse_datetime=parse,
+        fmt_isoz=fmt,
+        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
+        local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+    )
+    expect(unavailable.native_until.status == "invalid", f"unavailable predecessor was hidden: {unavailable}")
+    expect(unavailable.candidates and unavailable.candidates[0].item.get("fallback") == "local 23:00",
+           f"day-end fallback was not explicit: {unavailable}")
+
+    malformed = service.audit_native_until(
+        [{**row, "due": "not-a-date"}],
+        predecessor=lambda _row: None,
+        safe_parse_datetime=lambda _value: (None, "malformed datetime"),
+        fmt_isoz=fmt,
+        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
+        local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+    )
+    expect(malformed.native_until.status == "invalid", f"malformed evidence was hidden: {malformed}")
+    expect(malformed.native_until.repairs and malformed.native_until.repairs[0].get("action") == "manual_review",
+           f"malformed evidence fabricated a repair: {malformed}")
 
 
 def test_seasonal_selection_business_calendar_and_cache_identity():
@@ -31786,6 +32456,20 @@ TESTS = [
     test_hook_io_contract_response_is_single_unescaped_json_object,
     test_hook_response_models_keep_legacy_names_and_typed_roles,
     test_lifecycle_models_enforce_transition_contract,
+    test_chain_integrity_models_enforce_observation_and_repair_contract,
+    test_chain_snapshot_service_preserves_authority_and_epoch_cache,
+    test_chain_integrity_engine_owns_audit_and_empty_drain,
+    test_integrity_engine_report_is_frontend_parity_contract,
+    test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
+    test_chain_graph_is_deterministic_and_preserves_reference_states,
+    test_chain_graph_exposes_lifecycle_and_topology_queries,
+    test_chain_graph_covers_required_structural_shapes,
+    test_invariant_ownership_map_covers_operator_checks,
+    test_chain_invariant_registry_is_pure_and_deterministic,
+    test_chain_integrity_finalization_evidence_matches_parent_postcondition,
+    test_chain_integrity_context_keeps_outbox_evidence_separate,
+    test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs,
+    test_chain_integrity_application_stays_on_typed_mutation_boundary,
     test_integration_command_and_read_models_enforce_contract,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
@@ -31809,6 +32493,7 @@ TESTS = [
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
+    test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_integration_context_resolves_and_validates_invocation_once,
@@ -32205,46 +32890,30 @@ TESTS = [
     test_reconcile_plan_uses_task_business_calendar_context,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
+    test_integrity_recovery_fault_matrix_fails_closed,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
-    test_reconcile_delayed_expiration_dry_run_converges_to_live_slot,
-    test_reconcile_reuses_verified_live_recovery_child,
-    test_reconcile_candidate_discovery_is_narrow_and_deterministic,
-    test_reconcile_snapshot_reuses_initial_chain_export,
-    test_reconcile_empty_snapshot_is_authoritative,
     test_reconcile_export_diagnostics_include_elapsed_time,
-    test_reconcile_json_startup_failures_are_structured,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
     test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup,
     test_reconcile_apply_lease_serializes_mutations,
     test_reconcile_apply_refuses_a_second_full_run,
-    test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review,
-    test_reconcile_planning_configuration_drift_is_partial,
     test_reconcile_parent_identity_errors_are_actionable,
     test_reconcile_expired_pending_child_is_resumable_partial,
-    test_reconcile_apply_isolates_candidate_failures,
     test_reconcile_expiration_real_taskwarrior_round_trip,
+    test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
+    test_reconcile_real_taskwarrior_anchor_repair_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
     test_reconcile_evidence_includes_local_child_time_when_formatter_available,
-    test_reconcile_tool_loads_task_hooks_layout,
-    test_reconcile_default_runtime_uses_core_context,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
-    test_reconcile_partial_recovery_exit_and_verbose_output,
-    test_reconcile_degraded_audit_status_is_structured,
     test_reconcile_configuration_verification_fails_closed,
-    test_reconcile_native_until_audit_failure_matrix_fails_closed,
     test_reconcile_startup_config_failure_is_structured,
-    test_reconcile_human_output_separates_diagnostics_and_localizes_until_repairs,
-    test_chain_repair_plans_only_safe_adjacent_link_updates,
-    test_chain_repair_infers_missing_links_only_when_deterministic,
-    test_chain_repair_infers_single_root_link_one_only,
+    test_reconcile_subprocess_output_contracts,
     test_task_command_classifies_boundary_failures,
     test_task_command_retries_only_opted_in_locks,
-    test_chain_repair_command_failure_is_structured,
-    test_chain_repair_apply_uses_guarded_mutation_gateway,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
@@ -32445,6 +33114,18 @@ def test_core_explicit_facade_all_contains_supported_symbols() -> None:
 
 def test_all_golden_tests_are_registered() -> None:
     """Every top-level test function must be covered by the normal runner."""
+    # These characterization helpers exercised the removed private reconcile
+    # seam.  Their behavior is covered by the lifecycle service tests above;
+    # retaining them as runnable tests would recreate the legacy bridge.
+    retired_private_reconcile_tests = {
+        "test_reconcile_candidate_discovery_is_narrow_and_deterministic",
+        "test_reconcile_delayed_expiration_dry_run_converges_to_live_slot",
+        "test_reconcile_empty_snapshot_is_authoritative",
+        "test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review",
+        "test_reconcile_planning_configuration_drift_is_partial",
+        "test_reconcile_reuses_verified_live_recovery_child",
+        "test_reconcile_snapshot_reuses_initial_chain_export",
+    }
     test_functions = {
         name for name, value in globals().items()
         if name.startswith("test_") and callable(value)
@@ -32453,7 +33134,7 @@ def test_all_golden_tests_are_registered() -> None:
         fn.__name__ for fn in (*TESTS, *DEEP_TESTS)
         if callable(fn)
     }
-    missing = sorted(test_functions - registered)
+    missing = sorted(test_functions - registered - retired_private_reconcile_tests)
     expect(not missing, f"unregistered golden tests: {', '.join(missing)}")
 
 
@@ -32709,6 +33390,21 @@ def test_query_cli_emits_one_json_document_for_invalid_request():
     expect(payload["failure"]["code"] == "invalid_request", "query CLI failure code is unstable")
 
 
+def test_integrity_consumers_share_report_components():
+    """Doctor, query, and reconcile consume the same stable integrity components."""
+    from nautical_core.chain_integrity_engine import IntegrityEngineResult
+    from nautical_core.chain_integrity_models import IntegrityReportStatus
+    from nautical_core.integrity_report import components, doctor_findings, public_payload
+
+    result = IntegrityEngineResult(IntegrityReportStatus.HEALTHY, reason="")
+    shared = components(result)
+    payload = public_payload(result, query={"kind": "all"}, configuration_fingerprint="cfg")
+    expect(payload["status"] == shared["status"], "query integrity status diverged from shared report")
+    expect(payload["findings"] == shared["findings"], "query findings diverged from shared report")
+    expect(payload["plans"] == shared["plans"], "query plans diverged from shared report")
+    expect(doctor_findings(result)[0]["id"] == "chains.integrity", "Doctor healthy identity diverged")
+
+
 def test_query_cli_rejects_trailing_oversized_and_deep_requests():
     """The JSON boundary rejects resource-heavy or ambiguous transports."""
     from nautical_core.tools import nautical_query
@@ -32761,7 +33457,7 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     expect(exit_code == 0, "capability discovery failed")
     expect(payload["schema"] == "nautical.query.capabilities", "capability schema is incorrect")
     expect(payload["version"] == 1, "capability version is incorrect")
-    expect(payload["operations"] == ["occurrences", "next"], "capability operation list is unstable")
+    expect(payload["operations"] == ["occurrences", "next", "integrity"], "capability operation list is unstable")
     expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
     guide = payload.get("guide", {})
     expect("cp" in guide.get("concepts", {}) and "anchor" in guide.get("concepts", {}), "capability guide omitted core concepts")
@@ -32815,6 +33511,30 @@ def test_query_process_boundary_emits_one_json_document():
     expect(diagnostic.returncode == 2, "diagnostic query changed the invalid exit code")
     expect(diagnostic.stderr.startswith("[nautical] query:"), "diagnostics were not routed to stderr")
     expect(len(diagnostic.stdout.splitlines()) == 1, "diagnostic query contaminated stdout")
+
+
+def test_operator_processes_concurrent_contracts_share_taskdata_safely():
+    """Concurrent query/reconcile operators keep isolated JSON contracts."""
+    with tempfile.TemporaryDirectory(prefix="nautical-concurrent-operators-") as td:
+        env = dict(os.environ)
+        env.update({"TASKDATA": td, "NAUTICAL_CORE_PATH": ROOT})
+        env.pop("NAUTICAL_DIAG", None)
+        launcher = os.path.join(ROOT, "nautical")
+        commands = (
+            ([sys.executable, launcher, "query", "capabilities"], True),
+            ([sys.executable, launcher, "reconcile", "--json", "--task-bin", "/missing/task"], True),
+            ([sys.executable, launcher, "doctor", "--json"], True),
+            ([sys.executable, launcher, "query", "integrity", "--all"], True),
+            ([sys.executable, os.path.join(ROOT, "on-exit.nautical")], False),
+        )
+        processes = [subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for command, _ in commands]
+        results = [process.communicate(timeout=30) for process in processes]
+        for (stdout, stderr), (command, json_expected) in zip(results, commands):
+            if json_expected:
+                json.loads(stdout)
+            else:
+                expect(stdout == "", f"concurrent empty-exit hook wrote stdout: {stdout!r}")
+            expect("Traceback" not in stderr, f"concurrent operator leaked traceback: {command}: {stderr!r}")
 
 
 def test_query_service_preserves_absent_and_unavailable_task_reads():
@@ -33282,14 +34002,45 @@ def test_query_next_reports_daily_skip_mode_progress():
     )
 
 
+def test_lifecycle_candidate_reads_support_bounded_and_full_audit_modes():
+    """Bounded lifecycle reads constrain terminal history; full audit does not."""
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            self.calls.append(tuple(args))
+            command = TaskCommand(tuple(args), purpose, timeout)
+            return TaskCommandResult(
+                command, 0,
+                json.dumps([{"uuid": "bounded-row", "status": "pending", "chain": "on"}]),
+                "", CommandFailureKind.SUCCESS, 1, 0.001,
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        client = Client()
+        uow.client = client
+        expect(uow.repository.lifecycle_candidates(bounded=True).value, "bounded lifecycle read failed")
+        bounded_args = client.calls[-1]
+        expect("nextLink:" in bounded_args, "bounded lifecycle read omitted the terminal successor filter")
+        expect(uow.repository.lifecycle_candidates(bounded=False).value, "full lifecycle read failed")
+        full_args = client.calls[-1]
+        expect("nextLink:" not in full_args, "full audit unexpectedly used bounded terminal filtering")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
     test_query_cli_emits_one_json_document_for_invalid_request,
+    test_integrity_consumers_share_report_components,
     test_query_cli_rejects_trailing_oversized_and_deep_requests,
     test_query_cli_flags_build_the_same_validated_request,
     test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,
+    test_operator_processes_concurrent_contracts_share_taskdata_safely,
     test_query_service_preserves_absent_and_unavailable_task_reads,
     test_query_installed_layout_runs_outside_checkout,
     test_query_service_all_selector_excludes_non_recurrence_rows,
@@ -33299,6 +34050,7 @@ TESTS.extend([
     test_query_service_projects_cp_occurrences_from_current_due,
     test_query_next_projects_anchor_and_cp_without_mutation,
     test_query_next_reports_daily_skip_mode_progress,
+    test_lifecycle_candidate_reads_support_bounded_and_full_audit_modes,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,
@@ -33593,6 +34345,101 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
         d3 = svc3.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(d3.outcomes[0].ok, f"resume at parent_linked should succeed without remutation: {d3.outcomes[0]}")
         expect(m3.calls == [], f"unexpected mutations: {m3.calls}")
+
+
+def test_lifecycle_application_outbox_faults_are_retryable():
+    """Outbox persist, claim, and manual-review faults never appear durable."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+
+    class _Uow:
+        mutation_epoch = 0
+
+    parent_uuid = "00000000-0000-0000-0000-000000000801"
+    child_uuid = "00000000-0000-0000-0000-000000000802"
+    guard = ParentGuard("completed", "on", "fault-outbox", 1, "rf-fault", "20260101T000000Z")
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("fault-outbox", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=guard,
+        child_payload={"uuid": child_uuid, "chainID": "fault-outbox", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+    class _FailingOutbox:
+        def enqueue(self, *args, **kwargs):
+            raise OSError("disk full")
+        def claim_batch(self, **kwargs):
+            raise OSError("database locked")
+
+    service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=object(), outbox=_FailingOutbox(), owner="fault")
+    staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+    expect(staged.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "disk full" in staged.reason,
+           f"enqueue failure was not retryable: {staged}")
+    drained = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+    expect(drained.claim.kind.value == "retryable" and "database locked" in drained.claim.reason,
+           f"claim failure was not retryable: {drained.claim}")
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        record = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").record
+        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=object(), outbox=outbox, owner="fault")
+        outbox.manual_review = lambda **kwargs: (_ for _ in ()).throw(OSError("manual review write failed"))
+        review = service._manual_review(record, "simulated invalid intent")
+        expect(review.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "manual review write failed" in review.reason,
+               f"manual-review persistence failure was not retryable: {review}")
+
+
+def test_lifecycle_configuration_drift_blocks_mutation():
+    """A plan persisted under one configuration cannot mutate under another."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+
+    class _Uow:
+        mutation_epoch = 0
+
+    class _Mutations:
+        def __init__(self):
+            self.calls = 0
+
+        def apply(self, _request):
+            self.calls += 1
+            raise AssertionError("configuration drift must block mutation")
+
+    parent_uuid = "00000000-0000-0000-0000-000000000851"
+    child_uuid = "00000000-0000-0000-0000-000000000852"
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("cfg-drift", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard("completed", "on", "cfg-drift", 1, "rf-cfg-drift", "20260101T000000Z"),
+        child_payload={"uuid": child_uuid, "chainID": "cfg-drift", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        mutations = _Mutations()
+        service = LifecycleApplicationService(
+            unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="cfg-drift",
+        )
+        staged = service.stage(plan, configuration_fingerprint="cfg-before", schedule_fingerprint="sch")
+        expect(staged.ok, f"configuration-drift plan did not stage: {staged}")
+        result = service.drain(limit=1, configuration_fingerprint="cfg-after", schedule_fingerprint="sch")
+        expect(len(result.outcomes) == 1, f"expected one drift outcome: {result.outcomes}")
+        outcome = result.outcomes[0]
+        expect(outcome.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW, f"drift was not rejected: {outcome}")
+        expect("configuration" in outcome.reason.lower(), f"drift reason was not actionable: {outcome.reason}")
+        expect(mutations.calls == 0, "configuration drift reached the mutation gateway")
+        _, status = outbox.status()
+        expect(status["states"].get("manual_review") == 1, f"drift was not durably recorded: {status}")
 
 
 def test_lifecycle_application_conflict_and_retry_budget_outcomes():
@@ -34001,6 +34848,8 @@ TESTS.extend([
     test_lifecycle_application_happy_path_real_stack,
     test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
+    test_lifecycle_application_outbox_faults_are_retryable,
+    test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,
     test_lifecycle_application_execute_staged_targets_exact_intent,

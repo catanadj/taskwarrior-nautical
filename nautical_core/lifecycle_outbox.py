@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import Enum
 import json
+import hashlib
 import os
 from pathlib import Path
 import sqlite3
@@ -21,7 +22,8 @@ import uuid
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleContractError, LifecyclePlan
 
 
-OUTBOX_SCHEMA_VERSION = 1
+OUTBOX_SCHEMA_VERSION = 2
+OUTBOX_LEGACY_SCHEMA_VERSION = 1
 OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS = 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
@@ -295,6 +297,7 @@ class LifecycleOutboxRepository:
         self.path = lifecycle_outbox_path(self.taskdata)
         self.connect_timeout = max(0.1, float(connect_timeout))
         self._clock = clock
+        self._schema_identity: tuple[int, int, int] | None = None
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -314,6 +317,21 @@ class LifecycleOutboxRepository:
                 os.chmod(path, 0o600)
 
     def open(self) -> OutboxResult:
+        if self._schema_identity is not None:
+            probe: sqlite3.Connection | None = None
+            try:
+                stat = self.path.stat()
+                identity = (int(stat.st_dev), int(stat.st_ino), int(stat.st_mtime_ns))
+                if identity == self._schema_identity:
+                    probe = self._connect()
+                    version = int(probe.execute("PRAGMA user_version").fetchone()[0] or 0)
+                    if version == OUTBOX_SCHEMA_VERSION:
+                        return OutboxResult(OutboxResultKind.APPLIED)
+            except Exception:
+                self._schema_identity = None
+            finally:
+                if probe is not None:
+                    probe.close()
         last: Exception | None = None
         for attempt in range(_INIT_RETRIES):
             conn: sqlite3.Connection | None = None
@@ -321,6 +339,8 @@ class LifecycleOutboxRepository:
                 conn = self._connect()
                 self._initialize(conn)
                 self._secure_state_files()
+                stat = self.path.stat()
+                self._schema_identity = (int(stat.st_dev), int(stat.st_ino), int(stat.st_mtime_ns))
                 return OutboxResult(OutboxResultKind.APPLIED)
             except sqlite3.OperationalError as exc:
                 last = exc
@@ -348,6 +368,16 @@ class LifecycleOutboxRepository:
                     # WAL negotiation on every short-lived hook process.
                     LifecycleOutboxRepository._validate_schema(conn)
                     return
+                if version == OUTBOX_LEGACY_SCHEMA_VERSION:
+                    with _transaction(conn):
+                        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
+                        if "work_kind" not in columns:
+                            conn.execute(
+                                "ALTER TABLE lifecycle_outbox ADD COLUMN work_kind TEXT NOT NULL DEFAULT 'lifecycle'"
+                            )
+                        conn.execute(f"PRAGMA user_version={OUTBOX_SCHEMA_VERSION}")
+                    LifecycleOutboxRepository._validate_schema(conn)
+                    return
                 if version != 0:
                     raise LifecycleOutboxError(f"unsupported outbox schema v{version}")
 
@@ -360,6 +390,7 @@ class LifecycleOutboxRepository:
                         """
                         CREATE TABLE IF NOT EXISTS lifecycle_outbox (
                             intent_id TEXT PRIMARY KEY,
+                            work_kind TEXT NOT NULL DEFAULT 'lifecycle',
                             plan_json TEXT NOT NULL,
                             plan_fingerprint TEXT NOT NULL,
                             parent_guard_json TEXT NOT NULL,
@@ -402,7 +433,7 @@ class LifecycleOutboxRepository:
     def _validate_schema(conn: sqlite3.Connection) -> None:
         columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(lifecycle_outbox)")}
         required = {
-            "intent_id", "plan_json", "plan_fingerprint", "parent_guard_json",
+            "intent_id", "work_kind", "plan_json", "plan_fingerprint", "parent_guard_json",
             "configuration_fingerprint", "schedule_fingerprint", "lifecycle_stage",
             "processing_state", "lease_owner", "lease_expires_at", "attempts",
             "failure_json", "created_at", "updated_at", "acknowledged_at",
@@ -431,6 +462,9 @@ class LifecycleOutboxRepository:
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
+        work_kind = str(row["work_kind"] or "lifecycle")
+        if work_kind != "lifecycle":
+            raise LifecycleOutboxError(f"unsupported outbox work kind for lifecycle reader: {work_kind}")
         plan = _decode_plan(row["plan_json"])
         intent_id = str(row["intent_id"])
         if intent_id != plan.identity.idempotency_key:
@@ -615,6 +649,53 @@ class LifecycleOutboxRepository:
 
         return self._with_connection(operation)
 
+    def enqueue_integrity(self, envelope: Any) -> OutboxResult:
+        """Persist an integrity envelope in the shared outbox table.
+
+        Lifecycle methods deliberately do not decode or claim this work kind;
+        the integrity executor owns its later dispatch path.
+        """
+        try:
+            from .integrity_outbox_envelope import IntegrityOutboxEnvelope, OutboxWorkKind
+
+            if not isinstance(envelope, IntegrityOutboxEnvelope):
+                return OutboxResult(OutboxResultKind.REJECTED, reason="integrity enqueue requires an integrity envelope")
+            encoded = envelope.to_json()
+            intent_id = envelope.intent_id
+            fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            config = envelope.configuration_fingerprint
+            schedule = envelope.schedule_fingerprint
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"invalid integrity envelope: {exc}")
+        now = self._clock()
+
+        def operation(conn: sqlite3.Connection) -> OutboxResult:
+            with _transaction(conn):
+                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                if row is not None:
+                    if str(row["work_kind"] or "lifecycle") != OutboxWorkKind.INTEGRITY.value:
+                        return OutboxResult(OutboxResultKind.CONFLICT, reason="intent ID belongs to another outbox work kind")
+                    if str(row["plan_fingerprint"] or "") == fingerprint:
+                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED)
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="integrity intent payload differs")
+                conn.execute(
+                    """
+                    INSERT INTO lifecycle_outbox (
+                        intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json,
+                        configuration_fingerprint, schedule_fingerprint,
+                        lifecycle_stage, processing_state, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        intent_id, OutboxWorkKind.INTEGRITY.value, encoded, fingerprint, "{}",
+                        config, schedule, ExecutionStage.PLANNED.value,
+                        OutboxProcessingState.READY.value, now, now,
+                    ),
+                )
+            return OutboxResult(OutboxResultKind.APPLIED)
+
+        return self._with_connection(operation)
+
     def claim_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
@@ -634,8 +715,8 @@ class LifecycleOutboxRepository:
                 )
                 candidates = conn.execute(
                     "SELECT intent_id FROM lifecycle_outbox WHERE processing_state IN (?, ?) "
-                    "ORDER BY created_at, intent_id LIMIT ?",
-                    (*_ACTIVE_STATES, int(limit)),
+                    "AND work_kind=? ORDER BY created_at, intent_id LIMIT ?",
+                    (*_ACTIVE_STATES, "lifecycle", int(limit)),
                 ).fetchall()
                 records: list[LifecycleOutboxRecord] = []
                 for raw in candidates:
@@ -685,6 +766,129 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def claim_integrity_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[Any, ...]]:
+        """Claim integrity work without exposing it to lifecycle executors."""
+        from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+
+        owner = str(owner or "").strip()
+        if not owner or lease_seconds <= 0 or limit <= 0:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and limit"), ()
+        now = self._clock()
+        expires = now + float(lease_seconds)
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            self._secure_state_files()
+            with _transaction(conn):
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
+                    "WHERE work_kind=? AND processing_state=? AND lease_expires_at <= ?",
+                    (OutboxProcessingState.RETRY.value, now, "integrity", OutboxProcessingState.CLAIMED.value, now),
+                )
+                rows = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE work_kind=? AND processing_state IN (?, ?) "
+                    "ORDER BY created_at, intent_id LIMIT ?",
+                    ("integrity", *_ACTIVE_STATES, int(limit)),
+                ).fetchall()
+                records: list[Any] = []
+                for row in rows:
+                    intent_id = str(row["intent_id"])
+                    try:
+                        envelope = IntegrityOutboxEnvelope.from_dict(json.loads(str(row["plan_json"] or "")))
+                        if hashlib.sha256(envelope.to_json().encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
+                            raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
+                    except Exception as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_integrity_row", str(exc)))
+                        continue
+                    conn.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
+                        "attempts=attempts+1, failure_json='', updated_at=? WHERE intent_id=? "
+                        "AND work_kind=? AND processing_state IN (?, ?)",
+                        (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, "integrity", *_ACTIVE_STATES),
+                    )
+                    records.append(IntegrityOutboxRecord(
+                        envelope, OutboxProcessingState.CLAIMED, ExecutionStage.PLANNED,
+                        owner, expires, int(row["attempts"] or 0) + 1,
+                    ))
+                return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def _integrity_transition(
+        self,
+        *,
+        intent_id: str,
+        owner: str,
+        state: OutboxProcessingState,
+        failure: OutboxFailure | None = None,
+    ) -> OutboxResult:
+        intent_id = str(intent_id or "").strip()
+        owner = str(owner or "").strip()
+        if not intent_id or not owner:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="integrity transition requires intent and owner")
+        if state not in {OutboxProcessingState.RETRY, OutboxProcessingState.MANUAL_REVIEW, OutboxProcessingState.ACKNOWLEDGED}:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="invalid integrity transition state")
+        if state is OutboxProcessingState.MANUAL_REVIEW and failure is None:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="manual review requires failure evidence")
+        now = self._clock()
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            with _transaction(conn):
+                row = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
+                    (intent_id, "integrity"),
+                ).fetchone()
+                if row is None:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="no such integrity intent")
+                current = str(row["processing_state"] or "")
+                if current == OutboxProcessingState.ACKNOWLEDGED.value and state is OutboxProcessingState.ACKNOWLEDGED:
+                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED)
+                if current != OutboxProcessingState.CLAIMED.value or str(row["lease_owner"] or "") != owner:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="integrity intent is not owned by caller")
+                encoded_failure = "" if failure is None else failure.to_json()
+                acknowledged_at = now if state is OutboxProcessingState.ACKNOWLEDGED else 0
+                stage = ExecutionStage.FINALIZED.value if state in {
+                    OutboxProcessingState.MANUAL_REVIEW, OutboxProcessingState.ACKNOWLEDGED,
+                } else ExecutionStage.PLANNED.value
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lifecycle_stage=?, lease_owner='', "
+                    "lease_expires_at=0, failure_json=?, acknowledged_at=?, updated_at=? "
+                    "WHERE intent_id=? AND work_kind=? AND processing_state=? AND lease_owner=?",
+                    (state.value, stage, encoded_failure, acknowledged_at, now, intent_id, "integrity",
+                     OutboxProcessingState.CLAIMED.value, owner),
+                )
+                return OutboxResult(OutboxResultKind.APPLIED)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def acknowledge_integrity(self, *, intent_id: str, owner: str) -> OutboxResult:
+        return self._integrity_transition(
+            intent_id=intent_id, owner=owner, state=OutboxProcessingState.ACKNOWLEDGED,
+        )
+
+    def release_integrity_retry(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
+        return self._integrity_transition(
+            intent_id=intent_id, owner=owner, state=OutboxProcessingState.RETRY, failure=failure,
+        )
+
+    def manual_review_integrity(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
+        return self._integrity_transition(
+            intent_id=intent_id, owner=owner, state=OutboxProcessingState.MANUAL_REVIEW, failure=failure,
+        )
+
     def claim_intent(self, *, owner: str, lease_seconds: float, intent_id: str) -> OutboxResult:
         """Claim one specific intent by id, for a caller that must execute
         exactly the record it just staged (e.g. reconcile, which holds a
@@ -709,7 +913,10 @@ class LifecycleOutboxRepository:
                     "WHERE processing_state=? AND lease_expires_at <= ?",
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
                 )
-                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
+                    (intent_id, "lifecycle"),
+                ).fetchone()
                 if row is None:
                     return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
                 current_state = str(row["processing_state"])
@@ -1040,6 +1247,65 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), empty
         except Exception as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), empty
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def snapshot_records(self) -> tuple[OutboxResult, tuple[Any, ...]]:
+        """Read every validated intent for one immutable integrity snapshot.
+
+        This is deliberately a repository operation: callers do not inspect
+        SQLite rows or reconstruct lifecycle plans themselves.  A poison row
+        makes the complete snapshot rejected rather than silently omitted.
+        """
+        if not self.path.exists():
+            return OutboxResult(OutboxResultKind.APPLIED), ()
+        conn: sqlite3.Connection | None = None
+        try:
+            conn = sqlite3.connect(
+                f"file:{self.path.resolve()}?mode=ro",
+                uri=True,
+                timeout=self.connect_timeout,
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+            if version != OUTBOX_SCHEMA_VERSION:
+                raise LifecycleOutboxError(
+                    f"outbox schema v{version} is incompatible with v{OUTBOX_SCHEMA_VERSION}"
+                )
+            self._validate_schema(conn)
+            from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
+
+            records: list[Any] = []
+            for row in conn.execute("SELECT * FROM lifecycle_outbox ORDER BY intent_id ASC"):
+                try:
+                    if str(row["work_kind"] or "lifecycle") == "integrity":
+                        encoded = str(row["plan_json"] or "")
+                        envelope = IntegrityOutboxEnvelope.from_dict(json.loads(encoded))
+                        if hashlib.sha256(encoded.encode("utf-8")).hexdigest() != str(row["plan_fingerprint"] or ""):
+                            raise LifecycleOutboxError("integrity envelope fingerprint mismatch")
+                        records.append(IntegrityOutboxRecord(
+                            envelope,
+                            OutboxProcessingState(str(row["processing_state"] or "")),
+                            ExecutionStage(str(row["lifecycle_stage"] or "")),
+                            str(row["lease_owner"] or ""),
+                            float(row["lease_expires_at"] or 0.0),
+                            int(row["attempts"] or 0),
+                        ))
+                    else:
+                        records.append(self._from_row(row))
+                except LifecycleOutboxError as exc:
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {exc}"), ()
+                except Exception as exc:
+                    return OutboxResult(OutboxResultKind.REJECTED, reason=f"poison outbox row: {type(exc).__name__}: {exc}"), ()
+            return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
+        except sqlite3.OperationalError as exc:
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
+        except LifecycleOutboxError as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), ()
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), ()
         finally:
             if conn is not None:
                 conn.close()

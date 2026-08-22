@@ -368,6 +368,8 @@ def _parent_guard(snapshot: TaskSnapshot) -> ParentGuard:
 def terminal_plan_for_snapshot(
     snapshot: TaskSnapshot,
     event: LifecycleEvent,
+    *,
+    terminal_kind: str | None = None,
 ) -> LifecyclePlan:
     """Build the shared terminal contract used by hooks and reconcile."""
     try:
@@ -413,6 +415,7 @@ def terminal_plan_for_snapshot(
         parent_guard=guard,
         parent_patch={"chain": "off"},
         expected_postconditions=postconditions,
+        terminal_kind=terminal_kind,
     )
 
 

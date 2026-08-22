@@ -302,6 +302,83 @@ def _check_removed_ownership(root: Path) -> list[dict]:
                 "ok": False,
                 "message": f"{type(exc).__name__}: {exc}",
             })
+
+    # Keep operator fronts as composition/presentation layers.  Importing a
+    # hook implementation here would recreate a second lifecycle owner and
+    # make staged deployments depend on private hook internals.
+    forbidden_imports = frozenset(
+        str(name) for name in getattr(manifest, "OPERATOR_FORBIDDEN_HOOK_IMPORTS", ())
+    )
+    for relative in (
+        "nautical_core/tools/nautical_reconcile.py",
+        "nautical_core/tools/nautical_doctor.py",
+    ):
+        path = root / relative
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            imports: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imports.update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imports.add(node.module)
+            violations = sorted(
+                name for name in imports
+                if name in forbidden_imports or any(name.startswith(f"{prefix}.") for prefix in forbidden_imports)
+            )
+            results.append({
+                "kind": "ownership",
+                "name": f"operator-hook-imports:{relative}",
+                "ok": not violations,
+                "message": "absent" if not violations else f"operator imports hook implementation: {', '.join(violations)}",
+            })
+        except Exception as exc:
+            results.append({
+                "kind": "ownership",
+                "name": f"operator-hook-imports:{relative}",
+                "ok": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+
+    pure_modules = tuple(getattr(manifest, "PURE_INTEGRITY_MODULES", ()))
+    forbidden_pure_tokens = ("hooks", "hook_runtime", "taskwarrior", "sqlite", "rich", "tools")
+    for relative in pure_modules:
+        path = root / str(relative)
+        if not path.is_file():
+            results.append({
+                "kind": "ownership",
+                "name": f"pure-integrity:{relative}",
+                "ok": False,
+                "message": "declared pure integrity module is missing",
+            })
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            pure_imports: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    pure_imports.update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    pure_imports.add(node.module)
+            violations = sorted(
+                name for name in pure_imports
+                if any(token in name.casefold() for token in forbidden_pure_tokens)
+            )
+            results.append({
+                "kind": "ownership",
+                "name": f"pure-integrity:{relative}",
+                "ok": not violations,
+                "message": "dependency-free" if not violations else f"forbidden dependency: {', '.join(violations)}",
+            })
+        except Exception as exc:
+            results.append({
+                "kind": "ownership",
+                "name": f"pure-integrity:{relative}",
+                "ok": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            })
     return results
 
 

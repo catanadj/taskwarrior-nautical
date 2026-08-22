@@ -59,7 +59,6 @@ _IMPORT_MS = None
 _MAX_JSON_BYTES = 10 * 1024 * 1024
 HOOK_IMPL_API = 1
 NAUTICAL_HOOK_VERSION = "updateG-20260328"
-NAUTICAL_RECONCILE_PROTOCOL = 2
 
 TW_DIR = _TW_DIR_BOOT
 
@@ -495,8 +494,6 @@ _MODIFY_TIMELINE = None
 _MODIFY_TIMELINE_LOAD_FAILED = False
 _MODIFY_EXPIRATION = None
 _MODIFY_EXPIRATION_LOAD_FAILED = False
-_RECONCILE = None
-_RECONCILE_LOAD_FAILED = False
 _HOOK_RUNTIME = None
 _HOOK_RUNTIME_LOAD_FAILED = False
 _INTEGRATION_CONTEXT_MODULE = None
@@ -602,6 +599,12 @@ _MODULE_SPECS = {
         "lifecycle_planner.py",
         "nautical_core.lifecycle_planner",
     ),
+    "chain_integrity_lifecycle": (
+        "_CHAIN_INTEGRITY_LIFECYCLE",
+        "_CHAIN_INTEGRITY_LIFECYCLE_LOAD_FAILED",
+        "chain_integrity_lifecycle.py",
+        "nautical_core.chain_integrity_lifecycle",
+    ),
     "lifecycle_application": (
         "_LIFECYCLE_APPLICATION",
         "_LIFECYCLE_APPLICATION_LOAD_FAILED",
@@ -667,12 +670,6 @@ _MODULE_SPECS = {
         "_PANEL_DIAGNOSTICS_LOAD_FAILED",
         "panel_diagnostics.py",
         "nautical_core.panel_diagnostics",
-    ),
-    "reconcile": (
-        "_RECONCILE",
-        "_RECONCILE_LOAD_FAILED",
-        "reconcile.py",
-        "nautical_core.reconcile",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -3218,7 +3215,7 @@ def _completion_compute_next_and_limits(
         generation=_chain_generation_service(),
         scheduler_fingerprint=fingerprint,
         compare_datetimes=_compare_datetimes,
-        invalid_relative_carry_reason=_module("reconcile").invalid_relative_carry_reason,
+        invalid_relative_carry_reason=_module("chain_integrity_lifecycle").invalid_relative_carry_reason,
         lifecycle_planner=lifecycle_planner,
         lifecycle_models=lifecycle_models,
         modify_models=models,
@@ -3316,7 +3313,7 @@ def _expiration_services():
     generation = _chain_generation_service()
     return modify_expiration.ExpirationServices(
         core=core,
-        reconcile=_module("reconcile"),
+        reconcile=_module("chain_integrity_lifecycle"),
         safe_parse_datetime=_safe_parse_datetime,
         compute_anchor_child_due=generation.compute_anchor_child_due,
         compute_cp_child_due=generation.compute_cp_child_due,

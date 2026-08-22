@@ -27,7 +27,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import astronomy, chain_repair, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime, reconcile  # noqa: E402
+from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
+from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
@@ -39,6 +40,7 @@ from nautical_core.integration_context import (  # noqa: E402
     ValidatedNauticalConfiguration,
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
+from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -128,16 +130,14 @@ def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]
     return proc.ok, proc.stdout.strip()
 
 
-def _task_export(repository: TaskReadRepository) -> tuple[bool, list[dict[str, Any]], str]:
-    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    read = repository.broad_snapshot(
-        identity="doctor-chain-inspection",
-        filters=(),
-        statuses=ALL_TASK_STATUSES,
-        complete_chain_history=True,
-    )
+def _task_export(unit_of_work: TaskwarriorUnitOfWork) -> tuple[bool, list[dict[str, Any]], str]:
+    unit_of_work.repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    read = ChainSnapshotService(
+        unit_of_work,
+        configuration_fingerprint=unit_of_work.context.configuration.fingerprint,
+    ).collect(IntegritySnapshotRequest.candidates(complete_chain_history=True))
     if isinstance(read, Found):
-        return True, [dict(row) for row in read.value.rows], ""
+        return True, [node.to_dict() for node in read.value.rows], ""
     if isinstance(read, Absent):
         return True, [], ""
     if isinstance(read, Unavailable):
@@ -151,10 +151,12 @@ def _diagnostic_read_uow(
     env: dict[str, str],
 ) -> TaskwarriorUnitOfWork:
     """Read Taskwarrior state without claiming valid scheduling configuration."""
+    diagnostic_env = dict(env)
+    diagnostic_env["TASKDATA"] = str(taskdata.resolve())
     context = IntegrationContext(
         taskdata.resolve(),
         "doctor-recovery",
-        (str(task_bin), f"rc.data.location={taskdata.resolve()}"),
+        (str(task_bin),),
         ValidatedNauticalConfiguration("doctor", "unavailable", "unavailable", "UTC", ()),
         timezone.utc,
         SilentDiagnostics(),
@@ -163,7 +165,7 @@ def _diagnostic_read_uow(
         256,
         IntegrationAccess.READ_ONLY,
     )
-    return TaskwarriorUnitOfWork.create(context, env=env)
+    return TaskwarriorUnitOfWork.create(context, env=diagnostic_env)
 
 
 def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> Path:
@@ -246,12 +248,24 @@ def _check_runtime(
     taskdata: Path,
 ) -> Path:
     proc = unit_of_work.client.execute(
-        ["--version"],
+        [],
         purpose="doctor Taskwarrior query",
         timeout=30.0,
         attempts=2,
         retry_delay=0.1,
     )
+    # Real Taskwarrior accepts the neutral invocation even with an explicit
+    # data-location override. Keep a narrow fallback for minimal test/tool
+    # shims that only implement the historical version probe.
+    if not proc.ok:
+        version_probe = unit_of_work.client.execute(
+            ["--version"],
+            purpose="doctor Taskwarrior version fallback",
+            timeout=30.0,
+            attempts=1,
+        )
+        if version_probe.ok:
+            proc = version_probe
     if not proc.ok:
         _finding(
             findings,
@@ -269,7 +283,7 @@ def _check_runtime(
             findings,
             "taskwarrior.version",
             "ok",
-            f"Taskwarrior {(proc.stdout or '').strip() or 'version detected'}.",
+            "Taskwarrior command is available.",
         )
 
     if not taskdata.exists():
@@ -628,6 +642,8 @@ def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
         from nautical_core.astronomical_seasons import seasonal_events_utc
 
         events = seasonal_events_utc(date.today().year)
+        if ZONEINFO_FACTORY is None:
+            raise RuntimeError("zoneinfo support is unavailable")
         local_events = {
             name: event.astimezone(ZONEINFO_FACTORY(timezone_name)).date().isoformat()
             for name, event in events.items()
@@ -972,11 +988,6 @@ def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) 
     return sorted(set(paths))
 
 
-def _short_uuid(value: object) -> str:
-    raw = str(value or "").strip().lower()
-    return raw.split("-")[0] if "-" in raw else raw[:8]
-
-
 def _task_detail(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "uuid": str(row.get("uuid") or ""),
@@ -987,26 +998,15 @@ def _task_detail(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _chain_repair_detail(repair: chain_repair.LinkRepair) -> dict[str, Any]:
-    return {
-        "task": repair.short,
-        "chainID": repair.chain_id,
-        "link": repair.link,
-        "field": repair.field,
-        "old": repair.old,
-        "new": repair.new,
-    }
-
-
 def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, Any]) -> list[dict[str, Any]]:
     chain_id = str(parent.get("chainID") or "").strip()
-    next_link = reconcile.int_or_default(parent.get("link"), 1) + 1
+    next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
     include_deleted = str(parent.get("status") or "").strip() == "deleted"
     return [
         row
         for row in rows
         if str(row.get("chainID") or "").strip() == chain_id
-        and reconcile.int_or_default(row.get("link"), -1) == next_link
+        and lifecycle.int_or_default(row.get("link"), -1) == next_link
         and (include_deleted or str(row.get("status") or "").strip() != "deleted")
     ]
 
@@ -1029,15 +1029,16 @@ def _check_reconcile_plans(
     findings: list[dict[str, Any]],
     *,
     rows: list[dict[str, Any]],
+    unit_of_work: TaskwarriorUnitOfWork | None = None,
 ) -> None:
-    completion_candidates = [row for row in rows if reconcile.is_orphan_completion_candidate(row)]
-    deleted_candidates = [row for row in rows if reconcile.is_orphan_deleted_chain_candidate(row)]
+    completion_candidates = [row for row in rows if lifecycle.is_orphan_completion_candidate(row)]
+    deleted_candidates = [row for row in rows if lifecycle.is_orphan_deleted_chain_candidate(row)]
     if not completion_candidates and not deleted_candidates:
         return
 
     hook = None
     generation = None
-    plans: list[reconcile.ReconcilePlan] = []
+    plans: list[lifecycle.LifecycleRecoveryDecision] = []
     delayed_expiration_candidates: list[dict[str, Any]] = []
     unavailable = ""
     try:
@@ -1053,9 +1054,18 @@ def _check_reconcile_plans(
         unavailable = str(exc)
     candidates = [*completion_candidates, *deleted_candidates]
     if not unavailable:
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+
+        configuration = unit_of_work.context.configuration if unit_of_work is not None else None
+        integrity_engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint=configuration.fingerprint if configuration is not None else "doctor",
+            schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "doctor",
+        )
         for parent in candidates:
             existing_children = _existing_reconcile_children(rows, parent)
-            plan = reconcile.build_reconcile_plan(
+            # Recovery planning belongs to the integrity engine.  Doctor only
+            # supplies the current snapshot evidence and formats the result.
+            plan = integrity_engine.plan_recovery(
                 parent,
                 existing_children=existing_children,
                 hook=hook,
@@ -1126,7 +1136,7 @@ def _check_reconcile_plans(
             "plans": [
                 {
                     "action": plan.action,
-                    **reconcile.describe_plan(plan, fmt_dt_local=fmt_dt_local),
+                    **lifecycle.describe_plan(plan, fmt_dt_local=fmt_dt_local),
                 }
                 for plan in plans[:10]
             ],
@@ -1137,14 +1147,14 @@ def _check_reconcile_plans(
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
-    repository: TaskReadRepository | None,
+    unit_of_work: TaskwarriorUnitOfWork | None,
 ) -> dict[str, int]:
-    if repository is None:
+    if unit_of_work is None:
         ok = False
         rows: list[dict[str, Any]] = []
         err = "validated integration context is unavailable"
     else:
-        ok, rows, err = _task_export(repository)
+        ok, rows, err = _task_export(unit_of_work)
     if not ok:
         _finding(
             findings,
@@ -1155,144 +1165,32 @@ def _check_chains(
         )
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
 
-    repairs, repair_issues = chain_repair.plan_chain_link_repairs(rows)
-    if repairs:
-        _finding(
-            findings,
-            "chains.repair_available",
-            "warn",
-            f"{len(repairs)} safe chain repair(s) are available.",
-            fix="Run nautical chain-repair --apply after reviewing the dry-run output.",
-            details={"repairs": [_chain_repair_detail(repair) for repair in repairs[:10]]},
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.integrity_report import doctor_findings
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    configuration = unit_of_work.context.configuration if unit_of_work is not None else None
+    integrity = None
+    if unit_of_work is not None and configuration is not None:
+        integrity = ChainIntegrityEngine(
+            ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint),
+            configuration_fingerprint=configuration.fingerprint,
+            schedule_fingerprint=configuration.scheduler_fingerprint,
+        ).audit(
+            IntegritySnapshotRequest.candidates(complete_chain_history=True),
+            outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
+            mutation_epoch=unit_of_work.mutation_epoch,
         )
-    if repair_issues:
-        reason_counts: dict[str, int] = defaultdict(int)
-        for issue in repair_issues:
-            for task in issue.tasks:
-                reason = str(task.get("reason") or issue.message or issue.kind).strip()
-                reason_counts[reason] += 1
-        _finding(
-            findings,
-            "chains.repair_review",
-            "warn",
-            f"{len(repair_issues)} chain repair issue(s) need review.",
-            fix="Run nautical chain-repair and inspect the 'why:' lines.",
-            details={
-                "reasons": dict(sorted(reason_counts.items())),
-                "issues": [
-                    {
-                        "kind": issue.kind,
-                        "chainID": issue.chain_id,
-                        "message": issue.message,
-                        "tasks": issue.tasks[:5],
-                    }
-                    for issue in repair_issues[:10]
-                ],
-            },
-        )
-    _check_reconcile_plans(findings, rows=rows)
+    if integrity is not None:
+        findings.extend(doctor_findings(integrity))
+    _check_reconcile_plans(findings, rows=rows, unit_of_work=unit_of_work)
 
     nautical = [
-        row
-        for row in rows
+        row for row in rows
         if any(str(row.get(field) or "").strip() for field in RECURRENCE_FIELDS)
         or str(row.get("chainID") or "").strip()
     ]
-    by_short: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        short = _short_uuid(row.get("uuid"))
-        if short:
-            by_short[short].append(row)
-
-    missing_chain = [row for row in nautical if any(row.get(field) for field in RECURRENCE_FIELDS) and not row.get("chainID")]
-    if missing_chain:
-        _finding(
-            findings,
-            "chains.missing_chainid",
-            "error",
-            f"{len(missing_chain)} Nautical task(s) are missing chainID.",
-            fix="Run dev_tools/nautical_backfill_chainid.py, review its output, then retry.",
-            details={"tasks": [_task_detail(row) for row in missing_chain[:10]]},
-        )
-
-    slots: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
-    for row in nautical:
-        if str(row.get("status") or "").lower() == "deleted":
-            continue
-        chain_id = str(row.get("chainID") or "").strip()
-        try:
-            link_no = int(row.get("link"))
-        except Exception:
-            continue
-        if chain_id:
-            slots[(chain_id, link_no)].append(row)
-    duplicates = {slot: members for slot, members in slots.items() if len(members) > 1}
-    if duplicates:
-        sample = [
-            {
-                "chainID": chain_id,
-                "link": link,
-                "tasks": [_task_detail(row) for row in members],
-            }
-            for (chain_id, link), members in list(duplicates.items())[:10]
-        ]
-        _finding(
-            findings,
-            "chains.duplicate_slots",
-            "error",
-            f"{len(duplicates)} duplicate chain slot(s) were found.",
-            fix="Inspect the duplicate tasks before deleting or merging anything.",
-            details={"slots": sample},
-        )
-
-    dangling: list[dict[str, Any]] = []
-    nonreciprocal: list[dict[str, Any]] = []
-    for row in nautical:
-        uuid = str(row.get("uuid") or "")
-        current_short = _short_uuid(uuid)
-        for field, reciprocal in (("prevLink", "nextLink"), ("nextLink", "prevLink")):
-            token = _short_uuid(row.get(field))
-            if not token:
-                continue
-            matches = by_short.get(token, [])
-            if len(matches) != 1:
-                dangling.append(
-                    {
-                        "task": _task_detail(row),
-                        "field": field,
-                        "target": token,
-                        "matches": len(matches),
-                    }
-                )
-                continue
-            target = matches[0]
-            if _short_uuid(target.get(reciprocal)) != current_short:
-                nonreciprocal.append(
-                    {
-                        "task": _task_detail(row),
-                        "field": field,
-                        "target": _task_detail(target),
-                        "expected_reciprocal": reciprocal,
-                    }
-                )
-    if dangling:
-        _finding(
-            findings,
-            "chains.dangling_links",
-            "warn",
-            f"{len(dangling)} unresolved chain link(s) were found.",
-            details={"links": dangling[:10]},
-        )
-    if nonreciprocal:
-        _finding(
-            findings,
-            "chains.nonreciprocal_links",
-            "warn",
-            f"{len(nonreciprocal)} non-reciprocal chain link(s) were found.",
-            details={"links": nonreciprocal[:10]},
-        )
-    if not any(item["id"].startswith("chains.") and item["severity"] != "ok" for item in findings):
-        _finding(findings, "chains.integrity", "ok", f"Chain integrity is clean across {len(nautical)} Nautical task(s).")
 
     return {
         "tasks": len(rows),
@@ -1308,7 +1206,7 @@ def _overall_status(findings: list[dict[str, Any]]) -> str:
 
 def _format_task(task: dict[str, Any]) -> str:
     uuid = str(task.get("uuid") or "")
-    short = _short_uuid(uuid) or "unknown"
+    short = lifecycle.short_uuid(uuid) or "unknown"
     description = str(task.get("description") or "").strip() or "(no description)"
     parts = [f"{short} {description}"]
     chain_id = str(task.get("chainID") or "").strip()
@@ -1542,7 +1440,7 @@ def main() -> int:
     obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
     counts = _check_chains(
         findings,
-        repository=unit_of_work.repository if unit_of_work is not None else None,
+        unit_of_work=unit_of_work,
     )
 
     status = _overall_status(findings)

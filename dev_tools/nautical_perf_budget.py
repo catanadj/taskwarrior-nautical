@@ -699,6 +699,16 @@ def _measure_hook_fast_path(
     fast_env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
     full_env = dict(base_env)
     full_env["NAUTICAL_BENCH_FORCE_FULL"] = "1"
+    # Full on-exit execution can create durable outbox state.  Keep the two
+    # measurements isolated so a forced-full sample cannot invalidate later
+    # fast-path probes in the same case.
+    taskdata = str(base_env.get("TASKDATA") or "").strip()
+    if taskdata:
+        root = Path(taskdata).parent
+        fast_env["TASKDATA"] = str(root / f"{Path(taskdata).name}-{name}-fast")
+        full_env["TASKDATA"] = str(root / f"{Path(taskdata).name}-{name}-full")
+        Path(fast_env["TASKDATA"]).mkdir(parents=True, exist_ok=True)
+        Path(full_env["TASKDATA"]).mkdir(parents=True, exist_ok=True)
 
     _run_hook_timed(hook_path, input_text=input_text, env=fast_env, expected_task=expected_task)
     _run_hook_timed(hook_path, input_text=input_text, env=full_env, expected_task=expected_task)
@@ -855,7 +865,6 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         )
         exit_data = temp_root / "exit-data"
         exit_data.mkdir()
-        _init_empty_outbox(exit_data)
         cases.append(("hook_empty_exit", ROOT / "on-exit.nautical", "", None, exit_data))
 
         results = {}
@@ -880,7 +889,6 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
             release_id="perf-managed",
             smoke=False,
         )
-        _init_empty_outbox(managed_data)
         managed_env = dict(base_env)
         managed_env["TASKDATA"] = str(managed_data)
         for name, source_hook, input_text, expected_task, _taskdata in cases:
@@ -1195,11 +1203,17 @@ def _import_workflow_rows(rows: Sequence[dict], *, env: dict[str, str]) -> None:
         raise RuntimeError(f"workflow parent fixture import failed: {(proc.stderr or proc.stdout or '').strip()}")
 
 
-def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
+def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[str, dict]:
     """Exercise completion, queue-drain, and reconcile paths in isolation."""
     workflow_cfg = cfg.get("workflow_perf")
     if not isinstance(workflow_cfg, dict) or not workflow_cfg.get("enabled", True):
         return {}
+    workflow_cfg = dict(workflow_cfg)
+    budgets_override = workflow_cfg.get("slow_device_budgets_seconds") if slow_device else None
+    if isinstance(budgets_override, dict):
+        budgets = dict(workflow_cfg.get("budgets_seconds") or {})
+        budgets.update(budgets_override)
+        workflow_cfg["budgets_seconds"] = budgets
     repeats = max(1, int(workflow_cfg.get("repeats", 3)))
     budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
     with tempfile.TemporaryDirectory(prefix="nautical-workflow-perf-") as td:
@@ -1297,6 +1311,47 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         )
         results: dict[str, dict] = {}
 
+        # Scale the pure graph/invariant stage independently from Taskwarrior.
+        # This keeps the fixture useful on slow devices without turning a
+        # subprocess benchmark into an unbounded database import.
+        from nautical_core.chain_graph import ChainGraph
+        from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+        from nautical_core.chain_invariants import evaluate_invariants
+
+        scale_counts = tuple(int(item) for item in workflow_cfg.get("integrity_scale_counts", (100, 1000, 10000)))
+        for scale_count in scale_counts:
+            if scale_count <= 0:
+                continue
+            started = time.perf_counter()
+            rows = tuple(
+                ChainNode.from_mapping({
+                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/integrity-scale/{scale_count}/{index}")),
+                    "status": "pending",
+                    "description": f"Integrity scale {index}",
+                    "chain": "on",
+                    "chainID": f"integrity-scale-{index}",
+                    "link": 1,
+                    "cp": "P1D",
+                    "due": "20260101T090000Z",
+                })
+                for index in range(scale_count)
+            )
+            snapshot = ChainSnapshot(
+                f"integrity-scale-{scale_count}",
+                SnapshotCoverage.COMPLETE,
+                "perf.synthetic",
+                rows,
+                complete_chain_history=True,
+            )
+            findings = evaluate_invariants(ChainGraph.from_snapshot(snapshot))
+            if findings:
+                raise RuntimeError(f"integrity scale fixture produced findings at {scale_count} chains")
+            results[f"integrity_scale_{scale_count}"] = _measure_workflow(
+                f"integrity_scale_{scale_count}",
+                [time.perf_counter() - started],
+                float(budgets.get(f"integrity_scale_{scale_count}", 0.0)),
+            )
+
         ordinary_samples = []
         for sample_index in range(repeats):
             old = _completion_fixture("cp", sample_index, nonfinal=True, mode="ordinary")
@@ -1352,7 +1407,10 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             )
             staged = _workflow_outbox_pending(taskdata)
             if not isinstance(result, dict) or result.get("chain") != "on" or len(staged) != 1:
-                raise RuntimeError("workflow_expiration_recovery did not stage exactly one successor")
+                raise RuntimeError(
+                    "workflow_expiration_recovery did not stage exactly one successor: "
+                    f"result={result!r}; staged={staged!r}; stderr={_stderr.strip()!r}"
+                )
             expiration_samples.append(elapsed)
         results["workflow_expiration_recovery"] = _measure_workflow(
             "workflow_expiration_recovery",
@@ -1716,10 +1774,351 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=reconcile_env, timeout=30.0)
             if proc.returncode != 0:
                 raise RuntimeError(f"reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
-            json.loads(proc.stdout or "{}")
+            report = json.loads(proc.stdout or "{}")
+            if (
+                not isinstance(report, dict)
+                or not 1 <= int(report.get("export_calls", 0)) <= 2
+                or not 1 <= int(report.get("export_rows", 0)) <= history_rows
+                or float(report.get("integrity_seconds", -1.0)) < 0.0
+                or float(report.get("integrity_application_seconds", -1.0)) < 0.0
+                or int(report.get("task_command_calls", -1)) < 1
+                or int(report.get("task_command_attempts", -1)) < int(report.get("task_command_calls", 0))
+                or bool(report.get("task_command_budget_exceeded", True))
+            ):
+                raise RuntimeError(f"healthy reconcile workflow bounded snapshot budget failed: {report!r}")
             reconcile_samples.append(time.perf_counter() - started)
         results["workflow_reconcile"] = _measure_workflow(
             "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
+        )
+
+        # Keep an empty audit as a first-class workload.  This catches startup,
+        # snapshot, and report overhead without accidentally measuring stale
+        # queue cleanup or a failed Taskwarrior export.
+        empty_data = root / "reconcile-empty"
+        empty_data.mkdir()
+        empty_env = dict(base_env, TASKDATA=str(empty_data))
+        empty_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=empty_env, timeout=30.0)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"empty reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("empty reconcile workflow returned invalid JSON") from exc
+            if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
+                raise RuntimeError("empty reconcile workflow returned an invalid report")
+            if int(report.get("export_calls", 0)) > 2:
+                raise RuntimeError("empty reconcile workflow exceeded its bounded snapshot budget")
+            if float(report.get("integrity_seconds", -1.0)) < 0.0:
+                raise RuntimeError("empty reconcile workflow omitted integrity timing")
+            empty_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_empty"] = _measure_workflow(
+            "workflow_reconcile_empty",
+            empty_samples,
+            float(budgets.get("workflow_reconcile_empty", budgets.get("workflow_reconcile", 3.0))),
+        )
+
+        # Candidate-heavy audits must prove that the benchmark contains
+        # actionable integrity evidence.  A zero-candidate run would only
+        # measure the healthy path again.
+        candidate_data = root / "reconcile-candidates"
+        candidate_data.mkdir()
+        candidate_env = dict(base_env, TASKDATA=str(candidate_data))
+        candidate_count = max(1, int(workflow_cfg.get("reconcile_candidate_chains", 32)))
+        candidate_tasks = [
+            {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-candidate/{index}")),
+                "status": "completed",
+                "description": f"Reconcile candidate benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": f"reconcile-candidate-{index}",
+                "link": 1,
+                "due": "20260101T090000Z",
+            }
+            for index in range(candidate_count)
+        ]
+        candidate_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in candidate_tasks),
+            text=True,
+            capture_output=True,
+            env=candidate_env,
+            timeout=30.0,
+        )
+        if candidate_import.returncode != 0:
+            raise RuntimeError(
+                "reconcile candidate fixture import failed: "
+                f"{(candidate_import.stderr or candidate_import.stdout or '').strip()}"
+            )
+        candidate_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=candidate_env, timeout=30.0)
+            if proc.returncode not in (0, 1, 2):
+                raise RuntimeError(
+                    f"candidate reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("candidate reconcile workflow returned invalid JSON") from exc
+            summary = report if isinstance(report, dict) else {}
+            if int(summary.get("candidates", 0)) <= 0 and not summary.get("plans"):
+                raise RuntimeError("candidate reconcile workflow produced no integrity candidates or plans")
+            candidate_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_candidates"] = _measure_workflow(
+            "workflow_reconcile_candidates",
+            candidate_samples,
+            float(budgets.get("workflow_reconcile_candidates", budgets.get("workflow_reconcile", 3.0))),
+        )
+
+        candidate_apply_data = root / "reconcile-candidates-apply"
+        candidate_apply_data.mkdir()
+        candidate_apply_env = dict(base_env, TASKDATA=str(candidate_apply_data))
+        candidate_apply_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in candidate_tasks),
+            text=True,
+            capture_output=True,
+            env=candidate_apply_env,
+            timeout=30.0,
+        )
+        if candidate_apply_import.returncode != 0:
+            raise RuntimeError(
+                "candidate apply fixture import failed: "
+                f"{(candidate_apply_import.stderr or candidate_apply_import.stdout or '').strip()}"
+            )
+        apply_started = time.perf_counter()
+        apply_proc = subprocess.run(
+            [*reconcile_cmd, "--apply"],
+            text=True,
+            capture_output=True,
+            env=candidate_apply_env,
+            timeout=60.0,
+        )
+        if apply_proc.returncode != 0:
+            raise RuntimeError(
+                "candidate reconcile apply failed: "
+                f"{(apply_proc.stderr or apply_proc.stdout or '').strip()}"
+            )
+        try:
+            apply_report = json.loads(apply_proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("candidate reconcile apply returned invalid JSON") from exc
+        if int(apply_report.get("spawn", 0)) <= 0 or not apply_report.get("applied"):
+            raise RuntimeError("candidate reconcile apply did not create guarded successors")
+        results["workflow_reconcile_candidates_apply"] = _measure_workflow(
+            "workflow_reconcile_candidates_apply",
+            [time.perf_counter() - apply_started],
+            float(budgets.get("workflow_reconcile_candidates_apply", 12.0)),
+        )
+
+        long_data = root / "reconcile-long-history"
+        long_data.mkdir()
+        long_env = dict(base_env, TASKDATA=str(long_data))
+        long_count = max(history_rows, int(workflow_cfg.get("reconcile_long_history_rows", 2048)))
+        long_tasks = []
+        for link in range(1, long_count + 1):
+            task = {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-long/{link}")),
+                "status": "completed",
+                "description": f"Long reconcile benchmark {link}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": "reconcile-long-chain",
+                "link": link,
+                "due": f"202601{min(link, 28):02d}T090000Z",
+            }
+            if link > 1:
+                task["prevLink"] = long_tasks[-1]["uuid"][:8]
+            if link < long_count:
+                task["nextLink"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-long/{link + 1}"))[:8]
+            long_tasks.append(task)
+        long_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in long_tasks),
+            text=True,
+            capture_output=True,
+            env=long_env,
+            timeout=60.0,
+        )
+        if long_import.returncode != 0:
+            raise RuntimeError(
+                "long reconcile fixture import failed: "
+                f"{(long_import.stderr or long_import.stdout or '').strip()}"
+            )
+        long_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=long_env, timeout=60.0)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"long reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("long reconcile workflow returned invalid JSON") from exc
+            if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
+                raise RuntimeError("long reconcile workflow returned an invalid report")
+            if (
+                not 1 <= int(report.get("export_calls", 0)) <= 2
+                or not 1 <= int(report.get("export_rows", 0)) <= long_count
+                or float(report.get("integrity_seconds", -1.0)) < 0.0
+            ):
+                raise RuntimeError("long reconcile workflow exceeded its single-snapshot row budget")
+            long_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_long_history"] = _measure_workflow(
+            "workflow_reconcile_long_history",
+            long_samples,
+            float(budgets.get("workflow_reconcile_long_history", budgets.get("workflow_reconcile", 3.0))),
+        )
+
+        corrupt_data = root / "reconcile-corrupted"
+        corrupt_data.mkdir()
+        corrupt_env = dict(base_env, TASKDATA=str(corrupt_data))
+        corrupt_tasks = []
+        corrupt_count = max(1, int(workflow_cfg.get("reconcile_corrupted_chains", 16)))
+        for index in range(corrupt_count):
+            chain_id = f"reconcile-corrupt-{index}"
+            first_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-corrupt/{index}/first"))
+            second_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-corrupt/{index}/second"))
+            common = {
+                "status": "pending",
+                "description": f"Corrupted reconcile benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": chain_id,
+                "link": 1,
+                "due": "20260101T090000Z",
+            }
+            corrupt_tasks.extend([
+                dict(common, uuid=first_uuid, nextLink=second_uuid[:8]),
+                dict(common, uuid=second_uuid, prevLink=first_uuid[:8]),
+            ])
+        corrupt_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in corrupt_tasks),
+            text=True,
+            capture_output=True,
+            env=corrupt_env,
+            timeout=30.0,
+        )
+        if corrupt_import.returncode != 0:
+            raise RuntimeError(
+                "corrupted reconcile fixture import failed: "
+                f"{(corrupt_import.stderr or corrupt_import.stdout or '').strip()}"
+            )
+        corrupt_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=corrupt_env, timeout=30.0)
+            if proc.returncode not in (0, 1, 2):
+                raise RuntimeError(
+                    f"corrupted reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"
+                )
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("corrupted reconcile workflow returned invalid JSON") from exc
+            audit = report.get("integrity_audit") if isinstance(report, dict) else None
+            if not isinstance(audit, dict) or not audit.get("findings"):
+                raise RuntimeError("corrupted reconcile workflow hid its integrity findings")
+            corrupt_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_corrupted"] = _measure_workflow(
+            "workflow_reconcile_corrupted",
+            corrupt_samples,
+            float(budgets.get("workflow_reconcile_corrupted", budgets.get("workflow_reconcile", 3.0))),
+        )
+
+        mixed_data = root / "reconcile-mixed"
+        mixed_data.mkdir()
+        mixed_env = dict(base_env, TASKDATA=str(mixed_data))
+        mixed_tasks = []
+        mixed_healthy_count = max(2, int(workflow_cfg.get("reconcile_mixed_healthy_rows", 8)))
+        healthy_rows = []
+        for link in range(1, mixed_healthy_count + 1):
+            row = {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/healthy/{link}")),
+                "status": "completed",
+                "description": f"Mixed healthy benchmark {link}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": "reconcile-mixed-healthy",
+                "link": link,
+                "due": "20260101T090000Z",
+            }
+            if healthy_rows:
+                row["prevLink"] = healthy_rows[-1]["uuid"][:8]
+            healthy_rows.append(row)
+        for index, row in enumerate(healthy_rows):
+            if index + 1 < len(healthy_rows):
+                row["nextLink"] = healthy_rows[index + 1]["uuid"][:8]
+        mixed_tasks.extend(healthy_rows)
+        for index in range(max(1, int(workflow_cfg.get("reconcile_mixed_candidates", 8)))):
+            mixed_tasks.append({
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/candidate/{index}")),
+                "status": "completed",
+                "description": f"Mixed candidate benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": f"reconcile-mixed-candidate-{index}",
+                "link": 1,
+                "due": "20260101T090000Z",
+            })
+        for index in range(max(1, int(workflow_cfg.get("reconcile_mixed_corrupted", 4)))):
+            chain_id = f"reconcile-mixed-corrupt-{index}"
+            first_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/corrupt/{index}/first"))
+            second_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-mixed/corrupt/{index}/second"))
+            common = {
+                "status": "pending",
+                "description": f"Mixed corrupted benchmark {index}",
+                "cp": "P1D",
+                "chain": "on",
+                "chainID": chain_id,
+                "link": 1,
+                "due": "20260101T090000Z",
+            }
+            mixed_tasks.extend([
+                dict(common, uuid=first_uuid, nextLink=second_uuid[:8]),
+                dict(common, uuid=second_uuid, prevLink=first_uuid[:8]),
+            ])
+        mixed_import = subprocess.run(
+            ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in mixed_tasks),
+            text=True,
+            capture_output=True,
+            env=mixed_env,
+            timeout=30.0,
+        )
+        if mixed_import.returncode != 0:
+            raise RuntimeError(
+                "mixed reconcile fixture import failed: "
+                f"{(mixed_import.stderr or mixed_import.stdout or '').strip()}"
+            )
+        mixed_samples = []
+        for _ in range(repeats):
+            started = time.perf_counter()
+            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=mixed_env, timeout=30.0)
+            if proc.returncode not in (0, 1, 2):
+                raise RuntimeError(f"mixed reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
+            try:
+                report = json.loads(proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("mixed reconcile workflow returned invalid JSON") from exc
+            audit = report.get("integrity_audit") if isinstance(report, dict) else None
+            if not isinstance(audit, dict) or not audit.get("findings") or int(report.get("candidates", 0)) <= 0:
+                raise RuntimeError("mixed reconcile workflow did not preserve both candidate and integrity evidence")
+            mixed_samples.append(time.perf_counter() - started)
+        results["workflow_reconcile_mixed"] = _measure_workflow(
+            "workflow_reconcile_mixed",
+            mixed_samples,
+            float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
         )
         return results
 
@@ -1965,7 +2364,7 @@ def main() -> int:
         if args.enforce and not result["pass"]:
             failures.append(name)
 
-    workflow_results = _bench_expensive_workflows(cfg)
+    workflow_results = _bench_expensive_workflows(cfg, slow_device=args.slow_device)
     for name, result in workflow_results.items():
         results[name] = result
         if args.enforce and not result["pass"]:

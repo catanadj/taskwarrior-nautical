@@ -1717,7 +1717,11 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
             if proc.returncode != 0:
                 raise RuntimeError(f"reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}")
             report = json.loads(proc.stdout or "{}")
-            if not isinstance(report, dict) or int(report.get("export_calls", 0)) != 1:
+            if (
+                not isinstance(report, dict)
+                or int(report.get("export_calls", 0)) != 1
+                or int(report.get("export_rows", 0)) != history_rows
+            ):
                 raise RuntimeError("healthy reconcile workflow did not use exactly one broad snapshot")
             reconcile_samples.append(time.perf_counter() - started)
         results["workflow_reconcile"] = _measure_workflow(
@@ -1856,6 +1860,8 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
                 raise RuntimeError("long reconcile workflow returned invalid JSON") from exc
             if not isinstance(report, dict) or report.get("schema") != "nautical.reconcile":
                 raise RuntimeError("long reconcile workflow returned an invalid report")
+            if int(report.get("export_calls", 0)) != 1 or int(report.get("export_rows", 0)) != long_count:
+                raise RuntimeError("long reconcile workflow exceeded its single-snapshot row budget")
             long_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_long_history"] = _measure_workflow(
             "workflow_reconcile_long_history",

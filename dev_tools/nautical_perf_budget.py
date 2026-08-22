@@ -699,6 +699,16 @@ def _measure_hook_fast_path(
     fast_env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
     full_env = dict(base_env)
     full_env["NAUTICAL_BENCH_FORCE_FULL"] = "1"
+    # Full on-exit execution can create durable outbox state.  Keep the two
+    # measurements isolated so a forced-full sample cannot invalidate later
+    # fast-path probes in the same case.
+    taskdata = str(base_env.get("TASKDATA") or "").strip()
+    if taskdata:
+        root = Path(taskdata).parent
+        fast_env["TASKDATA"] = str(root / f"{Path(taskdata).name}-{name}-fast")
+        full_env["TASKDATA"] = str(root / f"{Path(taskdata).name}-{name}-full")
+        Path(fast_env["TASKDATA"]).mkdir(parents=True, exist_ok=True)
+        Path(full_env["TASKDATA"]).mkdir(parents=True, exist_ok=True)
 
     _run_hook_timed(hook_path, input_text=input_text, env=fast_env, expected_task=expected_task)
     _run_hook_timed(hook_path, input_text=input_text, env=full_env, expected_task=expected_task)
@@ -855,7 +865,6 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
         )
         exit_data = temp_root / "exit-data"
         exit_data.mkdir()
-        _init_empty_outbox(exit_data)
         cases.append(("hook_empty_exit", ROOT / "on-exit.nautical", "", None, exit_data))
 
         results = {}
@@ -880,7 +889,6 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
             release_id="perf-managed",
             smoke=False,
         )
-        _init_empty_outbox(managed_data)
         managed_env = dict(base_env)
         managed_env["TASKDATA"] = str(managed_data)
         for name, source_hook, input_text, expected_task, _taskdata in cases:

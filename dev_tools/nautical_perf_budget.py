@@ -1297,6 +1297,47 @@ def _bench_expensive_workflows(cfg: dict) -> dict[str, dict]:
         )
         results: dict[str, dict] = {}
 
+        # Scale the pure graph/invariant stage independently from Taskwarrior.
+        # This keeps the fixture useful on slow devices without turning a
+        # subprocess benchmark into an unbounded database import.
+        from nautical_core.chain_graph import ChainGraph
+        from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+        from nautical_core.chain_invariants import evaluate_invariants
+
+        scale_counts = tuple(int(item) for item in workflow_cfg.get("integrity_scale_counts", (100, 1000, 10000)))
+        for scale_count in scale_counts:
+            if scale_count <= 0:
+                continue
+            started = time.perf_counter()
+            rows = tuple(
+                ChainNode.from_mapping({
+                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/integrity-scale/{scale_count}/{index}")),
+                    "status": "pending",
+                    "description": f"Integrity scale {index}",
+                    "chain": "on",
+                    "chainID": f"integrity-scale-{index}",
+                    "link": 1,
+                    "cp": "P1D",
+                    "due": "20260101T090000Z",
+                })
+                for index in range(scale_count)
+            )
+            snapshot = ChainSnapshot(
+                f"integrity-scale-{scale_count}",
+                SnapshotCoverage.COMPLETE,
+                "perf.synthetic",
+                rows,
+                complete_chain_history=True,
+            )
+            findings = evaluate_invariants(ChainGraph.from_snapshot(snapshot))
+            if findings:
+                raise RuntimeError(f"integrity scale fixture produced findings at {scale_count} chains")
+            results[f"integrity_scale_{scale_count}"] = _measure_workflow(
+                f"integrity_scale_{scale_count}",
+                [time.perf_counter() - started],
+                float(budgets.get(f"integrity_scale_{scale_count}", 0.0)),
+            )
+
         ordinary_samples = []
         for sample_index in range(repeats):
             old = _completion_fixture("cp", sample_index, nonfinal=True, mode="ordinary")

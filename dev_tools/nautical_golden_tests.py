@@ -34120,6 +34120,35 @@ def test_query_next_reports_daily_skip_mode_progress():
     )
 
 
+def test_lifecycle_candidate_reads_support_bounded_and_full_audit_modes():
+    """Bounded lifecycle reads constrain terminal history; full audit does not."""
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            self.calls.append(tuple(args))
+            command = TaskCommand(tuple(args), purpose, timeout)
+            return TaskCommandResult(
+                command, 0,
+                json.dumps([{"uuid": "bounded-row", "status": "pending", "chain": "on"}]),
+                "", CommandFailureKind.SUCCESS, 1, 0.001,
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        client = Client()
+        uow.client = client
+        expect(uow.repository.lifecycle_candidates(bounded=True).value, "bounded lifecycle read failed")
+        bounded_args = client.calls[-1]
+        expect("nextLink:" in bounded_args, "bounded lifecycle read omitted the terminal successor filter")
+        expect(uow.repository.lifecycle_candidates(bounded=False).value, "full lifecycle read failed")
+        full_args = client.calls[-1]
+        expect("nextLink:" not in full_args, "full audit unexpectedly used bounded terminal filtering")
+
+
 TESTS.extend([
     test_query_contract_models_round_trip_and_reject_invalid,
     test_occurrence_query_service_projects_schedule_read_only,
@@ -34138,6 +34167,7 @@ TESTS.extend([
     test_query_service_projects_cp_occurrences_from_current_due,
     test_query_next_projects_anchor_and_cp_without_mutation,
     test_query_next_reports_daily_skip_mode_progress,
+    test_lifecycle_candidate_reads_support_bounded_and_full_audit_modes,
     test_anchor_file_spec_rejects_unpadded_times,
     test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,

@@ -662,6 +662,8 @@ class TaskReadRepository:
                 detail="lifecycle candidate scope must be one Taskwarrior filter token",
             )
         identity = "chain:on" if not scope_filter else f"chain:on {scope_filter}"
+        if bounded:
+            identity = f"{identity}|bounded"
         scope = TaskSnapshotScope(TaskQueryKind.LIFECYCLE_CANDIDATES, identity, tuple(statuses))
         if bounded:
             # Keep active work and only terminal rows that can still require a

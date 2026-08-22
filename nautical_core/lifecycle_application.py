@@ -373,11 +373,18 @@ class LifecycleApplicationService:
         reason = _validate_spawn_plan(plan)
         if reason:
             return LifecycleApplicationOutcome(LifecycleApplicationOutcomeKind.MANUAL_REVIEW, plan.identity, reason=reason)
-        result = self._outbox.enqueue(
-            plan,
-            configuration_fingerprint=str(configuration_fingerprint or "").strip(),
-            schedule_fingerprint=str(schedule_fingerprint or "").strip(),
-        )
+        try:
+            result = self._outbox.enqueue(
+                plan,
+                configuration_fingerprint=str(configuration_fingerprint or "").strip(),
+                schedule_fingerprint=str(schedule_fingerprint or "").strip(),
+            )
+        except Exception as exc:
+            return LifecycleApplicationOutcome(
+                LifecycleApplicationOutcomeKind.RETRYABLE,
+                plan.identity,
+                reason=f"outbox persistence failed: {str(exc).strip() or type(exc).__name__}",
+            )
         return _from_outbox_result(
             result,
             plan.identity,
@@ -402,9 +409,16 @@ class LifecycleApplicationService:
         durable and eligible for the next drain.
         """
         self._require_execution_deps()
-        claim, records = self._outbox.claim_batch(
-            owner=self._owner, lease_seconds=self._lease_seconds, limit=max(1, int(limit))
-        )
+        try:
+            claim, records = self._outbox.claim_batch(
+                owner=self._owner, lease_seconds=self._lease_seconds, limit=max(1, int(limit))
+            )
+        except Exception as exc:
+            claim = OutboxResult(
+                OutboxResultKind.RETRYABLE,
+                reason=f"outbox claim failed: {str(exc).strip() or type(exc).__name__}",
+            )
+            return DrainResult(claim=claim, outcomes=())
         if not records:
             return DrainResult(claim=claim, outcomes=())
         config = str(configuration_fingerprint or "").strip()
@@ -870,11 +884,22 @@ class LifecycleApplicationService:
         *,
         failure: OutboxFailure | None = None,
     ) -> LifecycleApplicationOutcome:
-        persisted = self._outbox.manual_review(
-            intent_id=record.intent_id,
-            owner=self._owner,
-            failure=failure or OutboxFailure("invalid_intent", reason),
-        )
+        try:
+            persisted = self._outbox.manual_review(
+                intent_id=record.intent_id,
+                owner=self._owner,
+                failure=failure or OutboxFailure("invalid_intent", reason),
+            )
+        except Exception as exc:
+            return LifecycleApplicationOutcome(
+                LifecycleApplicationOutcomeKind.RETRYABLE,
+                record.plan.identity,
+                reason=(
+                    "manual-review persistence failed: "
+                    f"{str(exc).strip() or type(exc).__name__}; {reason}"
+                ),
+                intent_id=record.intent_id,
+            )
         if not persisted.ok:
             persistence_reason = persisted.reason or persisted.kind.value
             return LifecycleApplicationOutcome(

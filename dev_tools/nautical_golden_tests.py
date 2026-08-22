@@ -34190,6 +34190,53 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
         expect(m3.calls == [], f"unexpected mutations: {m3.calls}")
 
 
+def test_lifecycle_application_outbox_faults_are_retryable():
+    """Outbox persist, claim, and manual-review faults never appear durable."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+
+    class _Uow:
+        mutation_epoch = 0
+
+    parent_uuid = "00000000-0000-0000-0000-000000000801"
+    child_uuid = "00000000-0000-0000-0000-000000000802"
+    guard = ParentGuard("completed", "on", "fault-outbox", 1, "rf-fault", "20260101T000000Z")
+    plan = LifecyclePlan.from_mappings(
+        identity=LifecycleIdentity("fault-outbox", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=guard,
+        child_payload={"uuid": child_uuid, "chainID": "fault-outbox", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+    class _FailingOutbox:
+        def enqueue(self, *args, **kwargs):
+            raise OSError("disk full")
+        def claim_batch(self, **kwargs):
+            raise OSError("database locked")
+
+    service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=object(), outbox=_FailingOutbox(), owner="fault")
+    staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+    expect(staged.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "disk full" in staged.reason,
+           f"enqueue failure was not retryable: {staged}")
+    drained = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+    expect(drained.claim.kind.value == "retryable" and "database locked" in drained.claim.reason,
+           f"claim failure was not retryable: {drained.claim}")
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        record = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").record
+        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=object(), outbox=outbox, owner="fault")
+        outbox.manual_review = lambda **kwargs: (_ for _ in ()).throw(OSError("manual review write failed"))
+        review = service._manual_review(record, "simulated invalid intent")
+        expect(review.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "manual review write failed" in review.reason,
+               f"manual-review persistence failure was not retryable: {review}")
+
+
 def test_lifecycle_application_conflict_and_retry_budget_outcomes():
     """Conflicts surface as manual_review; retryable failures that exhaust the
     budget quarantine the intent rather than looping."""
@@ -34596,6 +34643,7 @@ TESTS.extend([
     test_lifecycle_application_happy_path_real_stack,
     test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
+    test_lifecycle_application_outbox_faults_are_retryable,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,
     test_lifecycle_application_execute_staged_targets_exact_intent,

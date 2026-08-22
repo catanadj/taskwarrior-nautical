@@ -504,75 +504,27 @@ def _native_until_repairs(
     )
     if not apply:
         return list(recovery_audit.native_until.repairs), list(recovery_audit.native_until.errors)
-    repairs: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for row in rows:
-        reason = lifecycle.invalid_native_until_reason(row, safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value))
-        if not reason:
-            continue
+    repairs = [dict(item) for item in recovery_audit.native_until.repairs]
+    errors = list(recovery_audit.native_until.errors)
+    repair_items = {
+        (str(item.get("chainID") or "").strip(), lifecycle.int_or_default(item.get("link"), 0)): item
+        for item in repairs
+        if item.get("action") == "repair_until"
+    }
+    for candidate in recovery_audit.candidates:
+        row = candidate.row
+        previous = candidate.previous
         chain_id = str(row.get("chainID") or "").strip()
         link = lifecycle.int_or_default(row.get("link"), 0)
-        previous = by_chain_link.get((chain_id, link - 1))
-        if previous is None:
-            # Historical predecessors are deliberately outside the active
-            # snapshot; fetch only the predecessor needed by this invalid row.
-            previous = _fresh_native_until_previous(row)
-        item = {
-            "task": lifecycle.short_uuid(row.get("uuid")),
-            "chainID": chain_id,
-            "link": link,
-            "target": row.get("due") or row.get("scheduled"),
-            "until": row.get("until"),
-            "reason": reason,
-        }
-        repaired: str | None = None
-        repair_error: str | None = None
-        if previous is None:
-            repair_error = "previous link is unavailable"
-        else:
-            previous_reason = lifecycle.invalid_native_until_reason(
-                previous,
-                safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-            )
-            if previous_reason:
-                repair_error = f"previous link is invalid: {previous_reason}"
-            else:
-                kind = lifecycle.recurrence_kind(row)
-                core = _runtime_core(hook)
-                repaired, repair_error = lifecycle.repair_native_until_from_previous(
-                    previous,
-                    row,
-                    kind=kind,
-                    safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-                    fmt_isoz=core.fmt_isoz,
-                    utc_to_local_naive=core.utc_to_local_naive,
-                    local_naive_to_utc=core.local_naive_to_utc,
-                )
-        if repair_error or not repaired:
-            core = _runtime_core(hook)
-            fallback, fallback_error = lifecycle.fallback_native_until_at_day_end(
-                row,
-                    safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-                fmt_isoz=core.fmt_isoz,
-                utc_to_local_naive=core.utc_to_local_naive,
-                local_naive_to_utc=core.local_naive_to_utc,
-            )
-            if fallback_error or not fallback:
-                item["action"] = "manual_review"
-                item["repair_error"] = fallback_error or repair_error or "could not calculate repaired until"
-                repairs.append(item)
-                continue
-            repaired = fallback
-            item["fallback"] = "local 23:00"
-            item["reason"] = repair_error or item["reason"]
-        item["action"] = "repair_until"
-        item["new_until"] = repaired
+        item = repair_items.get((chain_id, link))
+        if item is None:
+            continue
+        repaired = str(item.get("new_until") or "").strip()
         if apply:
             if taskdata is None:
                 item["action"] = "repair_error"
                 item["repair_error"] = "Taskwarrior data location is unavailable for native-until locking"
                 errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
-                repairs.append(item)
                 continue
             with _reconcile_mutation_lock(taskdata, lease_held=lease_held) as reconcile_acquired:
                 if not reconcile_acquired:
@@ -605,7 +557,6 @@ def _native_until_repairs(
                                     item["repair_error"] = drift_reason
                                     item["configuration_drift"] = True
                                     item["configuration_status"] = configuration_status
-                                    repairs.append(item)
                                     return repairs, errors
                                 try:
                                     _modify_native_until(task_bin, fresh, repaired)
@@ -624,7 +575,6 @@ def _native_until_repairs(
                                     item["repair_error"] = str(exc).strip() or type(exc).__name__
                 if item.get("action") == "repair_error":
                     errors.append(f"{item['task']} chain {chain_id} link {link}: {item['repair_error']}")
-        repairs.append(item)
     return repairs, errors
 
 

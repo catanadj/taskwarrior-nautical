@@ -126,6 +126,50 @@ class ChainGraph:
     def status_nodes(self, status: str) -> tuple[ChainNode, ...]:
         return self.by_status.get(str(status or "").strip().lower(), ())
 
+    def lifecycle_nodes(self, intent: str) -> tuple[ChainNode, ...]:
+        """Return nodes with the requested semantic lifecycle intent."""
+        token = str(intent or "").strip().lower()
+        return tuple(node for node in self.nodes if node.lifecycle_intent.value == token)
+
+    def roots(self, chain_id: str = "") -> tuple[ChainNode, ...]:
+        """Return chain roots whose predecessor is explicitly absent."""
+        nodes = self.chain_nodes(chain_id) if str(chain_id or "").strip() else self.nodes
+        return tuple(
+            node for node in nodes
+            if not str(node.field("prevLink", "") or "").strip()
+        )
+
+    def tips(self, chain_id: str = "") -> tuple[ChainNode, ...]:
+        """Return chain tips whose successor is explicitly absent."""
+        nodes = self.chain_nodes(chain_id) if str(chain_id or "").strip() else self.nodes
+        return tuple(
+            node for node in nodes
+            if not str(node.field("nextLink", "") or "").strip()
+        )
+
+    def orphan_candidates(self) -> tuple[ChainNode, ...]:
+        """Return nodes with an unresolved non-empty edge reference."""
+        return tuple(
+            node for node in self.nodes
+            if any(
+                self.reference(node.task_uuid, field).state in {
+                    ReferenceState.OUTSIDE_COVERAGE,
+                    ReferenceState.AMBIGUOUS,
+                    ReferenceState.UNAVAILABLE,
+                }
+                for field in ("prevLink", "nextLink")
+            )
+        )
+
+    def referenced_children(self) -> tuple[ChainNode, ...]:
+        """Return resolved successor targets, de-duplicated deterministically."""
+        uuids = {
+            reference.target_uuid
+            for reference in self.references.values()
+            if reference.field == "nextLink" and reference.state is ReferenceState.RESOLVED
+        }
+        return tuple(node for node in self.nodes if node.task_uuid in uuids)
+
     def reference(self, task_uuid: str, field: str) -> ChainReference:
         normalized_field = str(field or "").strip()
         if normalized_field not in {"prevLink", "nextLink"}:

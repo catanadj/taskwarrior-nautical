@@ -38,6 +38,17 @@ class ReferenceState(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+class LifecycleIntent(str, Enum):
+    """Semantic lifecycle intent, independent of Taskwarrior status."""
+
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    DELETED = "deleted"
+    DISABLED = "disabled"
+    TERMINAL = "terminal"
+    UNKNOWN = "unknown"
+
+
 class FindingStatus(str, Enum):
     """Operational state of one integrity finding."""
 
@@ -172,6 +183,28 @@ class ChainNode:
     @property
     def has_complete_identity(self) -> bool:
         return bool(self.chain_id and self.link is not None)
+
+    @property
+    def lifecycle_intent(self) -> LifecycleIntent:
+        """Classify lifecycle intent from explicit chain fields and status.
+
+        ``status`` alone cannot distinguish a deliberately disabled chain from
+        a completed occurrence, so chain state is considered first.
+        """
+        chain = str(self.field("chain", "on") or "on").strip().lower()
+        if chain in {"off", "0", "false", "no"}:
+            return LifecycleIntent.DISABLED
+        terminal = str(self.field("terminal", "") or "").strip().lower()
+        if terminal in {"chain_max", "chain_until", "date_limit", "search_limit"}:
+            return LifecycleIntent.TERMINAL
+        status = self.status.lower()
+        if status == "completed":
+            return LifecycleIntent.COMPLETED
+        if status == "deleted":
+            return LifecycleIntent.DELETED
+        if status in {"pending", "waiting", "recurring", "blocked", "uda"}:
+            return LifecycleIntent.ACTIVE
+        return LifecycleIntent.UNKNOWN
 
     def field(self, name: str, default: object = None) -> object:
         for key, value in self.fields:

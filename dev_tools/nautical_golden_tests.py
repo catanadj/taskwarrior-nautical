@@ -1625,6 +1625,37 @@ def test_chain_graph_is_deterministic_and_preserves_reference_states():
     )
 
 
+def test_chain_graph_exposes_lifecycle_and_topology_queries():
+    """Graph consumers use semantic lifecycle and topology views."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, LifecycleIntent, SnapshotCoverage
+
+    rows = (
+        {
+            "uuid": "aaaaaaaa-0000-0000-0000-000000000914", "status": "pending",
+            "chainID": "query-chain", "link": 1, "nextLink": "bbbbbbbb",
+            "chain": "on",
+        },
+        {
+            "uuid": "bbbbbbbb-0000-0000-0000-000000000915", "status": "completed",
+            "chainID": "query-chain", "link": 2, "prevLink": "aaaaaaaa-0000-0000-0000-000000000914",
+            "chain": "on",
+        },
+        {
+            "uuid": "cccccccc-0000-0000-0000-000000000916", "status": "pending",
+            "chainID": "other-chain", "link": 1, "chain": "off",
+        },
+    )
+    graph = ChainGraph.from_snapshot(ChainSnapshot(
+        "graph-queries", SnapshotCoverage.CHAIN, "test",
+        tuple(ChainNode.from_mapping(row) for row in rows),
+    ))
+    expect(graph.lifecycle_nodes(LifecycleIntent.COMPLETED.value)[0].task_uuid.startswith("bbbb"), "completed view failed")
+    expect(len(graph.roots("query-chain")) == 1 and len(graph.tips("query-chain")) == 1, "root/tip query failed")
+    expect(graph.referenced_children()[0].task_uuid.startswith("bbbb"), "referenced child query failed")
+    expect(graph.lifecycle_nodes(LifecycleIntent.DISABLED.value)[0].task_uuid.startswith("cccc"), "disabled intent failed")
+
+
 def test_chain_invariant_registry_is_pure_and_deterministic():
     """Identity, slot, and edge rules produce stable typed findings."""
     from nautical_core.chain_graph import ChainGraph
@@ -32680,6 +32711,7 @@ TESTS = [
     test_chain_integrity_engine_owns_audit_and_empty_drain,
     test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
+    test_chain_graph_exposes_lifecycle_and_topology_queries,
     test_chain_invariant_registry_is_pure_and_deterministic,
     test_chain_integrity_finalization_evidence_matches_parent_postcondition,
     test_chain_integrity_context_keeps_outbox_evidence_separate,

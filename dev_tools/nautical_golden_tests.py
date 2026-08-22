@@ -1495,6 +1495,36 @@ def test_chain_integrity_engine_owns_audit_and_empty_drain():
         expect(not applied.applications, "empty engine apply produced mutation results")
 
 
+def test_integrity_engine_report_is_frontend_parity_contract():
+    """All front ends can serialize the same immutable audit findings."""
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.integration_models import Found
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    node = ChainNode.from_mapping({
+        "uuid": "aaaaaaaa-0000-0000-0000-000000000936",
+        "status": "pending", "chainID": "parity-chain", "link": 1,
+        "chain": "on", "anchor": "w:mon",
+    })
+
+    class Provider:
+        def collect(self, _request):
+            return Found(ChainSnapshot("parity-snapshot", SnapshotCoverage.CHAIN, "test", (node,)), "test")
+
+    with tempfile.TemporaryDirectory() as td:
+        outbox = LifecycleOutboxRepository(Path(td))
+        expect(outbox.open().ok, "parity outbox did not open")
+        engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-parity")
+        first = engine.audit(IntegritySnapshotRequest.chain("parity-chain"), outbox_repository=outbox)
+        second = engine.audit_snapshot(first.snapshot, outbox_repository=outbox)
+        expect(
+            tuple(item.to_dict() for item in first.findings) == tuple(item.to_dict() for item in second.findings),
+            "front ends did not receive identical findings for one snapshot",
+        )
+
+
 def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():
     """Unresolved candidate edges trigger bounded chain reads, not broad history exports."""
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine
@@ -32766,6 +32796,7 @@ TESTS = [
     test_chain_integrity_models_enforce_observation_and_repair_contract,
     test_chain_snapshot_service_preserves_authority_and_epoch_cache,
     test_chain_integrity_engine_owns_audit_and_empty_drain,
+    test_integrity_engine_report_is_frontend_parity_contract,
     test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
     test_chain_graph_is_deterministic_and_preserves_reference_states,
     test_chain_graph_exposes_lifecycle_and_topology_queries,

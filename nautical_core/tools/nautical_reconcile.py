@@ -1044,18 +1044,23 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
     if _UNIT_OF_WORK is None:
         raise RuntimeError("integrity audit requires an integration unit of work")
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     configuration = _UNIT_OF_WORK.context.configuration
-    snapshot = ChainSnapshot(
-        "reconcile-lifecycle-" + str(_UNIT_OF_WORK.mutation_epoch),
-        SnapshotCoverage.CHAIN,
-        "lifecycle.lifecycle_candidates",
-        tuple(ChainNode.from_mapping(row) for row in rows),
-        configuration.fingerprint,
-        True,
+    snapshot_result = ChainSnapshotService(
+        _UNIT_OF_WORK,
+        configuration_fingerprint=configuration.fingerprint,
+    ).from_rows(
+        IntegritySnapshotRequest.candidates(complete_chain_history=True),
+        rows,
+        source="lifecycle.lifecycle_candidates",
+        coverage=SnapshotCoverage.CHAIN,
     )
+    if not isinstance(snapshot_result, ChainSnapshot):
+        raise RuntimeError(f"reconcile lifecycle snapshot rejected: {snapshot_result.reason}")
+    snapshot = snapshot_result
 
     class _NoopProvider:
         def collect(self, _request: Any) -> Any:

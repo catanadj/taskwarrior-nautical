@@ -153,21 +153,43 @@ class ChainSnapshotService:
         validation_error = self._validate_rows(request, read.value)
         if validation_error:
             return Unavailable(self._query(request), self._invalid_response(read.value, validation_error))
+        snapshot = self.from_rows(request, read.value.rows, source="taskwarrior.authoritative_export")
+        if isinstance(snapshot, Unavailable):
+            return Unavailable(self._query(request), self._invalid_response(read.value, snapshot.reason))
+        self._normalized[cache_key] = snapshot
+        return Found(snapshot, self._query(request))
+
+    def from_rows(
+        self,
+        request: IntegritySnapshotRequest,
+        rows: Sequence[dict[str, object]],
+        *,
+        source: str,
+        coverage: SnapshotCoverage | None = None,
+    ) -> ChainSnapshot | Unavailable:
+        """Build a validated snapshot from already-authoritative rows."""
+        raw_rows = tuple(dict(row) for row in rows)
+        invalid = self._validate_mapping_rows(request, raw_rows)
+        if invalid:
+            return Unavailable(self._query(request), FailureEvidence(
+                TaskCommand(("task", "export"), "chain snapshot rows", 0.0),
+                CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.0, False, invalid,
+            ))
         try:
-            rows = tuple(ChainNode.from_mapping(row) for row in read.value.rows)
+            normalized = tuple(ChainNode.from_mapping(row) for row in raw_rows)
         except (TypeError, ValueError) as exc:
-            return Unavailable(self._query(request), self._invalid_response(read.value, str(exc)))
-        raw_rows = tuple(dict(row) for row in read.value.rows)
-        snapshot = ChainSnapshot(
+            return Unavailable(self._query(request), FailureEvidence(
+                TaskCommand(("task", "export"), "chain snapshot rows", 0.0),
+                CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.0, False, str(exc),
+            ))
+        return ChainSnapshot(
             _snapshot_id(request, raw_rows, self._configuration_fingerprint),
-            SnapshotCoverage.CHAIN if request.kind is IntegritySnapshotKind.CHAIN else SnapshotCoverage.CANDIDATES,
-            "taskwarrior.authoritative_export",
-            rows,
+            coverage or (SnapshotCoverage.CHAIN if request.kind is IntegritySnapshotKind.CHAIN else SnapshotCoverage.CANDIDATES),
+            source,
+            normalized,
             self._configuration_fingerprint,
             request.complete_chain_history,
         )
-        self._normalized[cache_key] = snapshot
-        return Found(snapshot, self._query(request))
 
     @staticmethod
     def _validate_rows(
@@ -203,6 +225,17 @@ class ChainSnapshotService:
                         f"{chain_id or '<empty>'}, expected {request.chain_id}"
                     )
         return ""
+
+    @classmethod
+    def _validate_mapping_rows(
+        cls,
+        request: IntegritySnapshotRequest,
+        rows: Sequence[dict[str, object]],
+    ) -> str:
+        class _Rows:
+            def __init__(self, values: Sequence[dict[str, object]]) -> None:
+                self.rows = tuple(values)
+        return cls._validate_rows(request, _Rows(rows))
 
     def _read(self, request: IntegritySnapshotRequest) -> TaskRead[AuthoritativeTaskSnapshot]:
         if request.kind is IntegritySnapshotKind.CHAIN:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import hook_support
+from .task_models import TaskPayload
 
 
 def task_text(args, *, run_task, task_cmd_prefix, env=None, timeout: float = 3.0, retries: int = 2, diag=None) -> str:
@@ -26,7 +27,7 @@ def tw_get(ref: str, *, task_text) -> str:
 
 
 def chain_root_and_age(
-    task: dict,
+    task: TaskPayload,
     now_utc,
     *,
     root_uuid_from,
@@ -51,7 +52,7 @@ def chain_root_and_age(
         return "—", None
 
 
-def format_root_and_age(task: dict, now_utc, *, chain_root_and_age) -> str:
+def format_root_and_age(task: TaskPayload, now_utc, *, chain_root_and_age) -> str:
     root_short, age_days = chain_root_and_age(task, now_utc)
     if not root_short or root_short == "—":
         return "—"

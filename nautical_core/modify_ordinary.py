@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .task_changes import TaskTransition
+from .task_models import TaskPayload
 
 
 class RecurrenceActivationError(RuntimeError):
@@ -45,8 +46,8 @@ class OrdinaryModifyServices:
 
 
 def handle_non_completion_modify(
-    old: dict,
-    new: dict,
+    old: TaskPayload,
+    new: TaskPayload,
     *,
     services: OrdinaryModifyServices,
     lifecycle: Any,

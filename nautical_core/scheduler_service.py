@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
 from .evaluation_session import EvaluationSession
 from .occurrence_outcomes import (
@@ -22,7 +22,6 @@ from .scheduler_models import OccurrenceSearchExhausted
 from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
 from .task_models import TaskObservation
-from .task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)
@@ -31,18 +30,6 @@ class SchedulerService:
 
     session: EvaluationSession
     trace: SchedulerTrace | None = None
-
-    @classmethod
-    def from_task(
-        cls,
-        task: Mapping[str, Any],
-        *,
-        context: RecurrenceContext | None = None,
-        trace: SchedulerTrace | None = None,
-    ) -> "SchedulerService":
-        trace = trace or SchedulerTrace.from_env()
-        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="scheduler service")
-        return cls(EvaluationSession.from_observation(observation, context=context), trace)
 
     @classmethod
     def from_observation(

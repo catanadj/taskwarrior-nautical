@@ -1011,7 +1011,7 @@ def _lifecycle_plan_with_resolved_child_uuid(
     existing = _find_positional_child(lifecycle_plan)
     resolved_uuid = str(existing.field("uuid").value.value or "").strip() if existing is not None else ""
     if not resolved_uuid:
-        resolved_uuid = _stable_child_uuid(hook, _decision_parent_values(recon_plan.parent), child)
+        resolved_uuid = _stable_child_uuid(hook, recon_plan.parent.to_mapping(), child)
     if not resolved_uuid or resolved_uuid == str(child.get("uuid") or "").strip():
         return recon_plan
     child["uuid"] = resolved_uuid
@@ -1081,7 +1081,7 @@ def _execute_reconcile_lifecycle_plan(
         schedule_fingerprint=configuration.scheduler_fingerprint,
         resolve_plan=lambda candidate: _lifecycle_plan_with_resolved_child_uuid(candidate, hook),
         verify_child=lambda parent, short, strict_uuid: _verify_applied_child(
-            task_bin, _decision_parent_values(parent), short, hook=hook, strict_uuid=strict_uuid,
+            task_bin, parent.to_mapping(), short, hook=hook, strict_uuid=strict_uuid,
         ),
         verified_children=verified_children,
         strict_uuid=strict_uuid,
@@ -1098,7 +1098,7 @@ def _execute_reconcile_lifecycle_plan(
 
 def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> LifecyclePlan:
     """Create the typed terminal plan for a reconcile final/manual decision."""
-    parent = _decision_parent_values(plan.parent)
+    parent = plan.parent.to_mapping()
     if plan.action == "manual_stop":
         event = LifecycleEvent.MANUAL_DELETE
     elif str(parent.get("status") or "").strip().lower() == "deleted":
@@ -1311,7 +1311,7 @@ def _virtual_expired_child(
         f"{lifecycle.int_or_default(child.get('link'), plan.next_link)}"
     )
     child.pop("nextLink", None)
-    validation_error = _validate_recovery_child(_decision_parent_values(plan.parent), child)
+    validation_error = _validate_recovery_child(plan.parent.to_mapping(), child)
     if validation_error:
         return None, validation_error
     return child, ""
@@ -1378,10 +1378,6 @@ def _fmt_parent(parent: dict[str, Any]) -> str:
     return f"{uuid} chain {chain_id} link {link}" + (f" · {desc}" if desc else "")
 
 
-def _decision_parent_values(parent: Any) -> dict[str, Any]:
-    return parent.to_mapping() if isinstance(parent, TaskObservation) else dict(parent)
-
-
 def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
     for key in keys:
         value = evidence.get(key)
@@ -1434,7 +1430,7 @@ def _print_plan(
     *,
     applied_short: str = "",
 ) -> None:
-    parent = _fmt_parent(_decision_parent_values(plan.parent))
+    parent = _fmt_parent(plan.parent.to_mapping())
     if evidence is None:
         evidence = lifecycle.describe_plan(plan)
     if plan.action == "spawn":
@@ -1470,7 +1466,7 @@ def _print_recovery_group(
     last, evidence, applied_short = items[-1]
     hops = sum(1 for plan, _evidence, _applied in items if plan.action in {"spawn", "backfill_nextlink"})
     noun = "occurrence" if hops == 1 else "occurrences"
-    print(_style(f"recover: {_fmt_parent(_decision_parent_values(first.parent))} -> advanced {hops} {noun}", "cyan"))
+    print(_style(f"recover: {_fmt_parent(first.parent.to_mapping())} -> advanced {hops} {noun}", "cyan"))
     if last.action in {"error", "partial", "legitimate_final", "manual_stop", "stale"}:
         result = "terminal" if lifecycle.is_terminal_plan(last) else last.action.replace("_", " ")
         print(_style(f"  result: {result} ({last.reason})", _action_style(last.action)))
@@ -1763,7 +1759,7 @@ def main(
                 )
         rendered: list[tuple[lifecycle.LifecycleRecoveryDecision, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
-            plan_parent = _decision_parent_values(plan.parent)
+            plan_parent = plan.parent.to_mapping()
             processed_slots.add(
                 (
                     str(plan_parent.get("chainID") or "").strip(),
@@ -1794,7 +1790,7 @@ def main(
     expiration_hops = sum(
         1
         for plan in plans
-        if str(_decision_parent_values(plan.parent).get("status") or "").strip() == "deleted"
+        if str(plan.parent.to_mapping().get("status") or "").strip() == "deleted"
         and plan.action in {"spawn", "backfill_nextlink"}
     )
     recovered_chains = sum(
@@ -1803,7 +1799,7 @@ def main(
         if sum(
             1
             for plan, _applied in outcomes
-            if str(_decision_parent_values(plan.parent).get("status") or "").strip() == "deleted"
+        if str(plan.parent.to_mapping().get("status") or "").strip() == "deleted"
             and plan.action in {"spawn", "backfill_nextlink"}
         )
         > 1

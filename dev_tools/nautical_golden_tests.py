@@ -29462,7 +29462,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_plan_test")
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "00000000-0000-4000-8000-00000000050c",
         "status": "deleted",
         "description": "expired occurrence",
         "cp": "7d",
@@ -29474,7 +29474,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         "end": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 27), (0, 0))),
     }
     deleted_child = {
-        "uuid": "22222222-0000-0000-0000-000000000002",
+        "uuid": "00000000-0000-4000-8000-00000000050d",
         "status": "deleted",
         "chainID": "11111111",
         "link": 2,
@@ -29731,7 +29731,7 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         child_due = fixture_due + timedelta(days=7)
         child_until = fixture_until + timedelta(days=7)
         parent = {
-            "uuid": "11111111-0000-0000-0000-000000000001",
+            "uuid": "00000000-0000-4000-8000-00000000050b",
             "status": "deleted",
             "description": "Take the trash out",
             "entry": (fixture_due - timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ"),

@@ -344,7 +344,7 @@ class OccurrenceQueryService:
             tuple(records),
         )
 
-    def _query_task(self, task: Mapping[str, Any], request: OccurrenceQueryRequest) -> TaskOccurrenceResult:
+    def _query_task(self, task: TaskRow, request: OccurrenceQueryRequest) -> TaskOccurrenceResult:
         if isinstance(task, Mapping) and task.get("_query_absent"):
             return TaskOccurrenceResult(
                 task=None,

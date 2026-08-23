@@ -554,13 +554,13 @@ def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequ
     return "Preserve wall clock (period is multiple of 24h)"
 
 
-def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) -> str:
+def _pretty_basis_anchor(meta: dict, task, *, fmt_dt_local) -> str:
     mode = (meta.get("mode") or "skip").lower()
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)
     target_field = "scheduled" if meta.get("target_field") == "scheduled" else "due"
-    typed_due = task.timestamp("due") or task.timestamp("scheduled") if hasattr(task, "timestamp") else None
-    due0 = typed_due.value if typed_due is not None else parse_dt_any(task.get("due") or task.get("scheduled"))
+    typed_due = task.timestamp("due") or task.timestamp("scheduled")
+    due0 = typed_due.value if typed_due is not None else None
     due_s = fmt_dt_local(due0) if due0 else f"(no {target_field})"
     if mode == "skip":
         return "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)"
@@ -766,14 +766,9 @@ def _lifecycle_result_label(lifecycle_result) -> str:
     }.get(state, state.replace("_", " ").title() if state else "")
 
 
-def _child_expiration(core, child: dict):
-    try:
-        typed_until = child.timestamp("until") if hasattr(child, "timestamp") else None
-        if typed_until is not None:
-            return typed_until.value
-        return core.parse_dt_any(child.get("until"))
-    except Exception:
-        return None
+def _child_expiration(child):
+    typed_until = child.timestamp("until")
+    return typed_until.value if typed_until is not None else None
 
 
 def _append_next_expiration_row(
@@ -784,7 +779,7 @@ def _append_next_expiration_row(
     core,
     target_field: str = "due",
 ) -> None:
-    expires = _child_expiration(core, child)
+    expires = _child_expiration(child)
     if expires is None:
         return
     try:
@@ -997,7 +992,7 @@ def render_anchor_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="anchor",
             minimal=(mode == "minimal"),
         )
@@ -1018,7 +1013,7 @@ def render_anchor_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="anchor",
             minimal=False,
         )
@@ -1035,7 +1030,7 @@ def render_anchor_completion_feedback(
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
                 child_due=feedback.child_due,
-                child_expires=_child_expiration(core, feedback.child),
+                child_expires=_child_expiration(feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
                 lifecycle_result=feedback.lifecycle_result,
@@ -1079,7 +1074,7 @@ def render_anchor_completion_feedback(
         fb.append(("Natural", _anchor_feedback_natural(core, feedback.new, feedback.dnf)))
     elif anchor_label == "Anchor file":
         fb.append(("Natural", f"Dates from {expr_str.split('@', 1)[0]}"))
-    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
+    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, fmt_dt_local=core.fmt_dt_local)
     if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
         fb.append(("Basis", basis_text))
     fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
@@ -1172,7 +1167,7 @@ def render_cp_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="cp",
             minimal=(mode == "minimal"),
         )
@@ -1193,7 +1188,7 @@ def render_cp_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="cp",
             minimal=False,
         )
@@ -1210,7 +1205,7 @@ def render_cp_completion_feedback(
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
                 child_due=feedback.child_due,
-                child_expires=_child_expiration(core, feedback.child),
+                child_expires=_child_expiration(feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
                 lifecycle_result=feedback.lifecycle_result,

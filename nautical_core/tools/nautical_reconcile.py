@@ -415,15 +415,15 @@ def _active_chain_rows(
     )
 
 
-def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -> str | None:
+def _native_until_guard_error(expected: TaskObservation, fresh: TaskObservation) -> str | None:
     """Detect target or recurrence changes made after the audit export."""
     fields = (
         "uuid", "status", "chain", "chainID", "link", "due", "scheduled", "until",
         "anchor", "anchor_file", "cp", "chainMax", "chainUntil",
     )
     for field in fields:
-        left = expected.get(field)
-        right = fresh.get(field)
+        left = _observation_text(expected, field)
+        right = _observation_text(fresh, field)
         if field == "link":
             left = lifecycle.int_or_default(left, 0)
             right = lifecycle.int_or_default(right, 0)
@@ -528,7 +528,7 @@ def _native_until_repairs(
     return repairs, errors
 
 
-def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> None:
+def _modify_native_until(task_bin: str, row: TaskObservation, new_until: str) -> None:
     del task_bin
     if _UNIT_OF_WORK is None:
         raise RuntimeError("native until repair requires an integration unit of work")
@@ -542,9 +542,9 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
         raise RuntimeError(outcome.reason or outcome.kind.value)
 
 
-def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bool:
+def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> bool:
     """Compare native-until timestamps by instant, tolerating Taskwarrior formatting."""
-    actual = str(fresh.get("until") or "").strip()
+    actual = _observation_text(fresh, "until")
     if actual == str(expected or "").strip():
         return True
     try:

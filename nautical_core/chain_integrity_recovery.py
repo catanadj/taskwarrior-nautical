@@ -61,17 +61,17 @@ class IntegrityRecoveryService:
 
     @staticmethod
     def native_until_request(
-        row: dict[str, Any],
+        row: TaskObservation,
         new_until: str,
         *,
         mutation_epoch: int,
     ) -> MutationRequest:
         """Build the guarded native-until mutation without Taskwarrior I/O."""
-        uuid = str(row.get("uuid") or "").strip()
-        chain_id = str(row.get("chainID") or "").strip()
-        link = lifecycle.int_or_default(row.get("link"), 0)
-        modified = str(row.get("modified") or "").strip()
-        expected_until = str(row.get("until") or "").strip()
+        uuid = str(_observation_value(row, "uuid") or "").strip()
+        chain_id = str(_observation_value(row, "chainID") or "").strip()
+        link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
+        modified = str(_observation_value(row, "modified") or "").strip()
+        expected_until = str(_observation_value(row, "until") or "").strip()
         if not uuid or not chain_id or link <= 0 or not modified or not expected_until:
             raise ValueError("native until repair lacks task identity")
         guard = MutationGuard(
@@ -79,10 +79,10 @@ class IntegrityRecoveryService:
             status=str(row.get("status") or ""),
             chain_id=chain_id,
             link=link,
-            recurrence_identity=recurrence_fingerprint(row),
+            recurrence_identity=recurrence_fingerprint(row.to_mapping()),
             timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
             expected_mutation_epoch=mutation_epoch,
-            chain=str(row.get("chain") or "on"),
+            chain=str(_observation_value(row, "chain") or "on"),
         )
         return MutationRequest(
             MutationOperation.NATIVE_UNTIL_REPAIR,

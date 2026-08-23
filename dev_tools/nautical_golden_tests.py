@@ -3322,6 +3322,14 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         metadata_request.payload.to_dict()["nextLink"] == child_uuid[:8],
         "metadata patch lost its update",
     )
+    carry_request = MutationRequest.ordinary_carry(
+        guard,
+        TaskPatch.ordinary_carry(TaskUUID(parent_uuid), scheduled="20260814T090000Z"),
+    )
+    expect(
+        carry_request.payload.to_dict()["scheduled"] == "20260814T090000Z",
+        "ordinary-carry patch lost its update",
+    )
 
     named = (
         MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),

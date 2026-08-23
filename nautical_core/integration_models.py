@@ -692,6 +692,25 @@ class MutationRequest:
             MetadataRepairPayload.from_mapping(guard.task_uuid, values),
         )
 
+    @classmethod
+    def ordinary_carry(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a metadata-gateway request from an ordinary-carry patch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("ordinary carry requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.ORDINARY_CARRY:
+            raise IntegrationContractError("ordinary carry requires an ORDINARY_CARRY TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("ordinary-carry patch target differs from guard")
+        values = dict(patch.set_values())
+        values.update({field: None for field in patch.clear_fields()})
+        return cls(
+            MutationOperation.METADATA_REPAIR,
+            guard,
+            MetadataRepairPayload.from_mapping(guard.task_uuid, values),
+        )
+
     def __post_init__(self) -> None:
         try:
             operation = MutationOperation(self.operation)

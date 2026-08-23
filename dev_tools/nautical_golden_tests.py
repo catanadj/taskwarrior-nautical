@@ -140,6 +140,15 @@ def _typed_command_result(cmd, ok: bool, stdout: str = "", stderr: str = ""):
     )
 
 
+def _task_observations(rows):
+    """Decode fixture rows through the same boundary as Taskwarrior exports."""
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    return tuple(
+        DEFAULT_TASK_CODEC.decode_row(row, source_query="golden fixture")
+        for row in rows
+    )
+
+
 def _found_task(row):
     from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
     return Found(row, "isolated test read")
@@ -1379,7 +1388,7 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
         {"uuid": "00000000-0000-0000-0000-000000000901", "status": "pending", "chainID": "snap-chain", "link": 1},
         {"uuid": "00000000-0000-0000-0000-000000000902", "status": "completed", "chainID": "snap-chain", "link": 2},
     )
-    authoritative = AuthoritativeTaskSnapshot(scope, rows, result)
+    authoritative = AuthoritativeTaskSnapshot(scope, _task_observations(rows), result)
 
     class Repository:
         calls = 0
@@ -1420,12 +1429,12 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     failed = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
     expect(isinstance(failed, Unavailable), "unavailable export was converted to an empty snapshot")
 
-    malformed = AuthoritativeTaskSnapshot(scope, ({"status": "pending"},), result)
+    malformed = AuthoritativeTaskSnapshot(scope, _task_observations(({"status": "pending"},)), result)
     unit.repository.response = Found(malformed, "broad:chain:on")
     invalid = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
     expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
 
-    truncated = AuthoritativeTaskSnapshot(scope, rows, result, truncated=True)
+    truncated = AuthoritativeTaskSnapshot(scope, _task_observations(rows), result, truncated=True)
     unit.repository.response = Found(truncated, "broad:chain:on")
     truncated_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
     expect(isinstance(truncated_read, Unavailable), "truncated export was treated as authoritative")
@@ -1434,7 +1443,7 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
         rows[0],
         {**rows[0], "status": "completed", "link": 2},
     )
-    duplicate = AuthoritativeTaskSnapshot(scope, duplicate_rows, result)
+    duplicate = AuthoritativeTaskSnapshot(scope, _task_observations(duplicate_rows), result)
     unit.repository.response = Found(duplicate, "broad:chain:on")
     duplicate_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
     expect(isinstance(duplicate_read, Unavailable), "duplicate full UUID reached the integrity graph")
@@ -1442,7 +1451,7 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
 
     wrong_chain = AuthoritativeTaskSnapshot(
         scope,
-        ({**rows[0], "chainID": "other-chain"},),
+        _task_observations(({**rows[0], "chainID": "other-chain"},)),
         result,
     )
     unit.repository.response = Found(wrong_chain, "broad:chain:on")
@@ -1450,7 +1459,9 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     expect(isinstance(wrong_chain_read, Unavailable), "narrow chain scope accepted a mismatched row")
 
     unit.repository.response = Found(authoritative, "broad:uuid")
-    uuid_read = service.collect(IntegritySnapshotRequest.uuid(rows[0]["uuid"], refresh=True))
+    uuid_read = service.collect(
+        IntegritySnapshotRequest.uuid(rows[0]["uuid"], refresh=True)
+    )
     expect(isinstance(uuid_read, Found), "UUID integrity scope was not collected")
     expect(unit.repository.calls == 9, "UUID scope did not use the shared snapshot provider")
 
@@ -2738,7 +2749,7 @@ def test_task_read_snapshot_preserves_scope_and_builds_indexes():
         "link": 3,
         "status": "waiting",
     }
-    snapshot = AuthoritativeTaskSnapshot(scope, (source, sibling), result)
+    snapshot = AuthoritativeTaskSnapshot(scope, _task_observations((source, sibling)), result)
 
     expect(scope.statuses == ("pending", "waiting"), f"scope statuses were not normalized: {scope}")
     expect(not scope.complete_chain_history, "filtered snapshot claimed complete history")
@@ -2747,9 +2758,12 @@ def test_task_read_snapshot_preserves_scope_and_builds_indexes():
     expect(snapshot.chain_rows("chain-a") == snapshot.rows, "chain index missed rows")
     expect(snapshot.slot_rows("chain-a", 3) == (snapshot.rows[1],), "slot index missed row")
     source["status"] = "deleted"
-    expect(snapshot.rows[0]["status"] == "pending", "snapshot retained mutable caller state")
+    expect(
+        snapshot.rows[0].field("status").value.value == "pending",
+        "snapshot retained mutable caller state",
+    )
     try:
-        snapshot.rows[0]["status"] = "completed"
+        snapshot.rows[0].fields["status"] = snapshot.rows[0].field("status")  # type: ignore[index]
     except TypeError:
         pass
     else:
@@ -2771,7 +2785,7 @@ def test_task_read_snapshot_retains_ambiguous_indexes():
     )
     snapshot = AuthoritativeTaskSnapshot(
         TaskSnapshotScope(TaskQueryKind.CHAIN, "chain-a", ("pending",), complete_chain_history=True),
-        rows,
+        _task_observations(rows),
         result,
     )
     expect(len(snapshot.uuid_matches("aaaaaaaa")) == 2, "ambiguous short UUID was collapsed")

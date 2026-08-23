@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Mapping, TypeAlias
+
+if TYPE_CHECKING:
+    from .task_models import TaskObservation
 
 
 class IntegrityContractError(ValueError):
@@ -178,6 +181,41 @@ class ChainNode:
             link,
             str(row.get("status", "") or ""),
             _freeze_pairs(row),
+        )
+
+    @classmethod
+    def from_observation(cls, observation: "TaskObservation") -> "ChainNode":
+        """Build a graph node directly from an authoritative observation."""
+        from .task_models import FieldPresence, TaskObservation
+
+        if not isinstance(observation, TaskObservation):
+            raise IntegrityContractError("chain node requires a TaskObservation")
+
+        def value(name: str) -> object:
+            state = observation.field(name)
+            if state.presence is FieldPresence.ABSENT:
+                return None
+            typed = state.value
+            return getattr(typed, "value", typed)
+
+        fields: dict[str, object] = {}
+        for name, state in observation.fields.items():
+            if state.presence is not FieldPresence.ABSENT:
+                fields[name] = state.raw_value()
+        fields.update(observation.to_mapping())
+        raw_link = value("link")
+        if isinstance(raw_link, int) and not isinstance(raw_link, bool):
+            link: int | None = raw_link
+        elif raw_link in (None, ""):
+            link = None
+        else:
+            link = None
+        return cls(
+            str(value("uuid") or ""),
+            str(value("chainID") or ""),
+            link,
+            str(value("status") or ""),
+            _freeze_pairs(fields),
         )
 
     @property

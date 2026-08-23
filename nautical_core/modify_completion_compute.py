@@ -579,7 +579,7 @@ def attach_lifecycle_plan(
                 else None
             ),
             carry_validator=lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
-                snapshot.to_dict(),
+                snapshot.observation,
                 dict(candidate_child),
                 child_field=str(computed.meta.get("target_field") or "due"),
                 generation=generation,

@@ -121,6 +121,19 @@ def completion_existing_next_or_fail(
         existing_next = existing_next.value
     if not existing_next:
         return True
+    if hasattr(existing_next, "to_mapping"):
+        existing_next = existing_next.to_mapping()
+    if not isinstance(existing_next, dict):
+        panel(
+            "⚠ Chain lookup unavailable",
+            [
+                ("Reason", "The existing next-link record has an unsupported typed shape."),
+                ("Action", "Retry completion or run nautical reconcile before spawning."),
+            ],
+            kind="warning",
+        )
+        print_task(new)
+        return False
     ex_uuid = (existing_next.get("uuid") or "").strip()
     ex_short = short(ex_uuid)
     ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()

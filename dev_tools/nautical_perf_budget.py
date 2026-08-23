@@ -1023,6 +1023,14 @@ def _stage_workflow_plans(
 def _bind_workflow_plans_to_parents(plans: list, rows: list[dict]) -> list:
     """Bind benchmark plans to the guards Taskwarrior assigned on import."""
     from nautical_core.lifecycle_models import LifecyclePlan, ParentGuard, recurrence_fingerprint
+    from nautical_core.task_models import NauticalTask, TaskDraft
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+    def draft_for(row: dict) -> TaskDraft:
+        task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(row, source_query="perf:workflow-plan")
+        )
+        return TaskDraft.from_task(task)
 
     by_uuid = {str(row.get("uuid") or "").strip(): row for row in rows if isinstance(row, dict)}
     bound = []
@@ -1039,11 +1047,11 @@ def _bind_workflow_plans_to_parents(plans: list, rows: list[dict]) -> list:
             modified=str(parent.get("modified") or ""),
         )
         bound.append(
-            LifecyclePlan.from_mappings(
+            LifecyclePlan.from_draft(
                 identity=plan.identity,
                 action=plan.action,
                 parent_guard=guard,
-                child_payload=plan.child_dict(),
+                draft=draft_for(plan.child_dict()),
                 parent_patch=plan.parent_patch_dict(),
                 expected_postconditions=plan.expected_postconditions,
                 max_attempts=plan.max_attempts,
@@ -1063,6 +1071,8 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
         LifecyclePlan,
         ParentGuard,
     )
+    from nautical_core.task_models import NauticalTask, TaskDraft
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     parents: list[dict] = []
     plans: list = []
@@ -1094,13 +1104,16 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
             "due": "20260102T090000Z",
         }
         guard = {"status": "completed", "chain": "on", "chainID": chain_id, "link": str(parent_link)}
-        plan = LifecyclePlan.from_mappings(
+        child_task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(child, source_query="perf:workflow-plan")
+        )
+        plan = LifecyclePlan.from_draft(
             identity=LifecycleIdentity(
                 chain_id, parent_uuid, parent_link, child_link, LifecycleEvent.COMPLETE
             ),
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=ParentGuard.from_mapping(guard),
-            child_payload=child,
+            draft=TaskDraft.from_task(child_task),
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
             stage=ExecutionStage.PERSISTED,
@@ -1317,6 +1330,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         from nautical_core.chain_graph import ChainGraph
         from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
         from nautical_core.chain_invariants import evaluate_invariants
+        from nautical_core.task_models import TaskObservation
 
         scale_counts = tuple(int(item) for item in workflow_cfg.get("integrity_scale_counts", (100, 1000, 10000)))
         for scale_count in scale_counts:
@@ -1324,7 +1338,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 continue
             started = time.perf_counter()
             rows = tuple(
-                ChainNode.from_mapping({
+                ChainNode.from_observation(TaskObservation.from_mapping({
                     "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/integrity-scale/{scale_count}/{index}")),
                     "status": "pending",
                     "description": f"Integrity scale {index}",
@@ -1333,7 +1347,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                     "link": 1,
                     "cp": "P1D",
                     "due": "20260101T090000Z",
-                })
+                }, source_query="perf:integrity-scale"))
                 for index in range(scale_count)
             )
             snapshot = ChainSnapshot(

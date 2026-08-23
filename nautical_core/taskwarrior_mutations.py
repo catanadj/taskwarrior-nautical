@@ -689,7 +689,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed parent postcondition snapshot: {exc}"
                 )
                 continue
-            if len(matches) == 1 and _text(matches[0].get("nextLink")).casefold() == request.payload.child_short_uuid.casefold():
+            if len(matches) == 1 and _text(_observed_value(matches[0], "nextLink")).casefold() == request.payload.child_short_uuid.casefold():
                 outcomes[request.guard.task_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.PARENT_LINKED
                 )

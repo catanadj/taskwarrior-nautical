@@ -278,13 +278,6 @@ class CompiledSchedule:
         )
 
     @classmethod
-    def from_task(cls, task: Mapping[str, Any], **kwargs: Any) -> "CompiledSchedule":
-        from .task_codec import DEFAULT_TASK_CODEC
-
-        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="compiled schedule")
-        return cls.from_observation(observation, **kwargs)
-
-    @classmethod
     def from_observation(cls, observation: TaskObservation, **kwargs: Any) -> "CompiledSchedule":
         """Compile one validated Taskwarrior observation without thawing it."""
         return cls.from_spec(RecurrenceSpec.from_observation(observation, **kwargs))

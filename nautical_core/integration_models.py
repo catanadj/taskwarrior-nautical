@@ -627,6 +627,26 @@ class MutationRequest:
             ParentLinkPayload(guard.task_uuid, child_short),
         )
 
+    @classmethod
+    def chain_disable(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a guarded chain-disable request from a typed TaskPatch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("chain disable requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.CHAIN_DISABLE:
+            raise IntegrationContractError("chain disable requires a CHAIN_DISABLE TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("chain-disable patch target differs from guard")
+        values = patch.set_values()
+        if str(values.get("chain") or "").strip().lower() != "off":
+            raise IntegrationContractError("chain-disable patch must set chain=off")
+        return cls(
+            MutationOperation.CHAIN_DISABLE,
+            guard,
+            ChainDisablePayload(guard.task_uuid, expected_chain=guard.chain, target_chain="off"),
+        )
+
     def __post_init__(self) -> None:
         try:
             operation = MutationOperation(self.operation)

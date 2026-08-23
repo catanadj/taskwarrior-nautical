@@ -3282,6 +3282,14 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         link_request.payload.child_short_uuid == child_uuid,
         "typed parent-link patch lost its child identity",
     )
+    disable_request = MutationRequest.chain_disable(
+        guard,
+        TaskPatch.chain_disable(TaskUUID(parent_uuid)),
+    )
+    expect(
+        disable_request.payload.target_chain == "off",
+        "typed chain-disable patch lost its target state",
+    )
 
     named = (
         MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),

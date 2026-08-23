@@ -40,6 +40,7 @@ if str(ROOT) not in sys.path:
 core = importlib.import_module("nautical_core")
 install_runtime = importlib.import_module("nautical_core.install_runtime")
 lifecycle_outbox = importlib.import_module("nautical_core.lifecycle_outbox")
+task_codec = importlib.import_module("nautical_core.task_codec")
 IMPORT_PROFILES: dict[str, int] = {}
 
 
@@ -91,6 +92,54 @@ def _bench_next_after(exprs: list[str], rounds: int) -> float:
         for dnf in dnfs:
             core.next_after_expr(dnf, ref)
     return time.perf_counter() - t0
+
+
+def _bench_task_codec(rounds: int) -> float:
+    """Measure typed task decoding across representative payload sizes.
+
+    The malformed cases are part of the workload so a benchmark cannot pass by
+    silently accepting invalid JSON or turning it into an empty snapshot.
+    """
+    codec = task_codec.DEFAULT_TASK_CODEC
+    base = {
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "description": "codec benchmark",
+        "status": "pending",
+        "chain": "on",
+        "chainID": "codec-perf",
+        "link": 1,
+        "anchor": "w:mon",
+        "due": "20260824T090000Z",
+        "entry": "20260820T090000Z",
+    }
+    large = {
+        **base,
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "annotations": [
+            {"entry": "20260820T090000Z", "description": "x" * 256}
+            for _ in range(64)
+        ],
+        "tags": [f"tag-{index}" for index in range(64)],
+        "depends": [f"00000000-0000-4000-8000-{index:012d}" for index in range(32)],
+        "custom": {
+            "nested": [{"index": index, "value": "v" * 128} for index in range(32)]
+        },
+    }
+    valid_rows = (base, large)
+    malformed_exports = ("{not-json", "[] trailing", '{"uuid":"missing-array"}')
+    started = time.perf_counter()
+    for _ in range(max(1, int(rounds))):
+        for row in valid_rows:
+            observation = codec.decode_row(row, source_query="perf:codec")
+            if observation.field("uuid").presence.value != "value":
+                raise RuntimeError("codec benchmark lost task identity")
+        for text in malformed_exports:
+            try:
+                codec.decode_export(text, source_query="perf:codec")
+            except task_codec.TaskCodecError:
+                continue
+            raise RuntimeError("codec benchmark accepted malformed export")
+    return time.perf_counter() - started
 
 
 def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
@@ -2172,6 +2221,7 @@ def main() -> int:
     parse_rounds = int(workload.get("parse_validate_rounds", 220))
     describe_rounds = int(workload.get("describe_expr_rounds", 220))
     next_after_rounds = int(workload.get("next_after_rounds", 220))
+    codec_rounds = int(workload.get("codec_rounds", 120))
     hints_rounds = int(workload.get("build_hints_rounds", 180))
     hints_cold_rounds = max(1, int(workload.get("build_hints_cold_rounds", 1)))
     hints_warm_rounds = max(1, int(workload.get("build_hints_warm_rounds", hints_rounds)))
@@ -2193,6 +2243,7 @@ def main() -> int:
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
         ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),
+        ("task_codec_decode", lambda: _bench_task_codec(codec_rounds), repeats),
         (
             "build_hints_cold",
             lambda: _bench_build_hints(exprs, hints_cold_rounds, mode="cold"),

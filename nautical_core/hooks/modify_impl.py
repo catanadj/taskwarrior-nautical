@@ -2783,17 +2783,20 @@ def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
     """Show the normal finished-chain summary when an active chain is stopped."""
     if not (old.get("chainID") or new.get("chainID")):
         return
+    modify_models = _module("modify_models")
+    old_view = modify_models.TaskView.from_mapping(old)
+    new_view = modify_models.TaskView.from_mapping(new)
     now_utc = core.now_utc()
     try:
-        _end_chain_summary(old, reason, now_utc, current_task=old)
+        _end_chain_summary(old_view, reason, now_utc, current_task=new_view)
     except Exception as exc:
         _diag(f"removed recurrence chain summary failed: {exc}")
         _panel(
             "⛔ Nautical chain stopped",
             [
                 ("Reason", reason),
-                ("Root", _format_root_and_age(old, now_utc)),
-                ("Task", _short(old.get("uuid")) or "–"),
+                ("Root", _format_root_and_age(old_view, now_utc)),
+                ("Task", _short(old_view.get("uuid")) or "–"),
             ],
             kind="summary",
         )

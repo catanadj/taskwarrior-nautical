@@ -32434,22 +32434,32 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
 
     previous = {
+        "uuid": "00000000-0000-4000-8000-000000003241",
+        "description": "previous",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "until-test",
         "link": 1,
         "due": stamp(date(2026, 7, 20), (9, 0)),
         "until": stamp(date(2026, 7, 20), (23, 0)),
     }
     current = {
+        "uuid": "00000000-0000-4000-8000-000000003242",
+        "description": "current",
+        "status": "pending",
+        "chain": "on",
+        "chainID": "until-test",
         "link": 2,
         "due": stamp(date(2026, 7, 22), (9, 0)),
         "until": stamp(date(2026, 7, 21), (23, 0)),
     }
     expect(
-        reconcile.invalid_native_until_reason(current, safe_parse_datetime=mod._safe_parse_datetime),
+        reconcile.invalid_native_until_reason(_task_observation(current), safe_parse_datetime=mod._safe_parse_datetime),
         "invalid native-until window was not detected",
     )
     repaired, error = reconcile.repair_native_until_from_previous(
-        previous,
-        current,
+        _task_observation(previous),
+        _task_observation(current),
         kind="anchor",
         safe_parse_datetime=mod._safe_parse_datetime,
         fmt_isoz=mod.core.fmt_isoz,
@@ -32458,7 +32468,11 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
     )
     expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
     fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
-        {"due": stamp(date(2026, 7, 23), (9, 0))},
+        _task_observation({
+            "uuid": "00000000-0000-4000-8000-000000003243", "description": "fallback",
+            "status": "pending", "chain": "on", "chainID": "until-test", "link": 3,
+            "due": stamp(date(2026, 7, 23), (9, 0)),
+        }),
         safe_parse_datetime=mod._safe_parse_datetime,
         fmt_isoz=mod.core.fmt_isoz,
         utc_to_local_naive=mod._utc_to_local_naive,
@@ -32469,7 +32483,11 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         f"fallback did not use local 23:00: {fallback}, {fallback_error}",
     )
     late_fallback, late_error = reconcile.fallback_native_until_at_day_end(
-        {"due": stamp(date(2026, 7, 23), (23, 0))},
+        _task_observation({
+            "uuid": "00000000-0000-4000-8000-000000003244", "description": "late fallback",
+            "status": "pending", "chain": "on", "chainID": "until-test", "link": 4,
+            "due": stamp(date(2026, 7, 23), (23, 0)),
+        }),
         safe_parse_datetime=mod._safe_parse_datetime,
         fmt_isoz=mod.core.fmt_isoz,
         utc_to_local_naive=mod._utc_to_local_naive,
@@ -32488,19 +32506,33 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
     actual_dt, actual_parse_error = mod._safe_parse_datetime(compact_expected)
     expected_dt, expected_parse_error = mod._safe_parse_datetime(expected_until)
     expect(
-        tool._native_until_matches({"until": compact_expected}, expected_until, mod),
+        tool._native_until_matches(_task_observation({
+            "uuid": "00000000-0000-4000-8000-000000003245", "description": "verify",
+            "status": "pending", "chain": "on", "chainID": "until-test", "link": 5,
+            "until": compact_expected,
+        }), expected_until, mod),
         f"Taskwarrior's compact UTC timestamp should verify against the fallback instant: "
         f"{actual_dt!r}/{actual_parse_error!r} != {expected_dt!r}/{expected_parse_error!r}",
     )
     expect(
         not tool._native_until_matches(
-            {"until": mod.core.fmt_isoz(expected_dt + timedelta(hours=1))}, expected_until, mod
+            _task_observation({
+                "uuid": "00000000-0000-4000-8000-000000003246", "description": "different",
+                "status": "pending", "chain": "on", "chainID": "until-test", "link": 6,
+                "until": mod.core.fmt_isoz(expected_dt + timedelta(hours=1)),
+            }), expected_until, mod
         ),
         "a different native-until instant must fail verification",
     )
     guard_error = tool._native_until_guard_error(
-        {"uuid": "u1", "chainID": "cid", "link": 2, "due": "old"},
-        {"uuid": "u1", "chainID": "cid", "link": 2, "due": "new"},
+        _task_observation({
+            "uuid": "00000000-0000-4000-8000-000000003247", "description": "guard",
+            "status": "pending", "chain": "on", "chainID": "cid", "link": 2, "due": "20260801T090000Z",
+        }),
+        _task_observation({
+            "uuid": "00000000-0000-4000-8000-000000003247", "description": "guard",
+            "status": "pending", "chain": "on", "chainID": "cid", "link": 2, "due": "20260802T090000Z",
+        }),
     )
     expect(guard_error and "due" in guard_error, f"target drift was not detected: {guard_error!r}")
 
@@ -32553,6 +32585,8 @@ def test_integrity_recovery_fault_matrix_fails_closed():
 
     row = {
         "uuid": "00000000-0000-4000-8000-000000000701",
+        "description": "fault recovery",
+        "chain": "on",
         "chainID": "fault-recovery",
         "link": 2,
         "status": "pending",
@@ -32561,7 +32595,7 @@ def test_integrity_recovery_fault_matrix_fails_closed():
     }
     service = IntegrityRecoveryService()
     unavailable = service.audit_native_until(
-        [row],
+        [_task_observation(row)],
         predecessor=lambda _row: None,
         safe_parse_datetime=parse,
         fmt_isoz=fmt,
@@ -32573,7 +32607,7 @@ def test_integrity_recovery_fault_matrix_fails_closed():
            f"day-end fallback was not explicit: {unavailable}")
 
     malformed = service.audit_native_until(
-        [{**row, "due": "not-a-date"}],
+        [_task_observation({**row, "due": "not-a-date"})],
         predecessor=lambda _row: None,
         safe_parse_datetime=lambda _value: (None, "malformed datetime"),
         fmt_isoz=fmt,

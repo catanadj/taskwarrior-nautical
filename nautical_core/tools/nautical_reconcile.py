@@ -308,7 +308,7 @@ def _observation_text(observation: TaskObservation, field: str) -> str:
     state = observation.field(field)
     if state.presence is FieldPresence.ABSENT:
         return ""
-    value = getattr(state.value, "value", state.value)
+    value = state.raw_value()
     return str(value or "").strip()
 
 

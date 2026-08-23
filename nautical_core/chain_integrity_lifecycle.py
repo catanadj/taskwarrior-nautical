@@ -173,7 +173,7 @@ def _observation_value(task: TaskObservation, field: str) -> object:
     state = task.field(field)
     if state.presence is FieldPresence.ABSENT:
         return None
-    return getattr(state.value, "value", state.value)
+    return state.raw_value()
 
 
 def native_until_target_field(task: TaskObservation) -> str:

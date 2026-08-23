@@ -21,12 +21,20 @@ from .integration_models import (
     NativeUntilRepairPayload,
 )
 from .lifecycle_models import recurrence_fingerprint
+from .task_models import FieldPresence, TaskObservation
+
+
+def _observation_value(row: TaskObservation, name: str) -> object:
+    state = row.field(name)
+    if state.presence is FieldPresence.ABSENT:
+        return None
+    return getattr(state.value, "value", state.value)
 
 
 @dataclass(frozen=True, slots=True)
 class NativeUntilRepairCandidate:
-    row: dict[str, Any]
-    previous: dict[str, Any] | None
+    row: TaskObservation
+    previous: TaskObservation | None
     item: dict[str, Any]
 
 
@@ -83,21 +91,21 @@ class IntegrityRecoveryService:
         )
 
     @staticmethod
-    def candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
+    def candidate_sort_key(row: TaskObservation) -> tuple[str, int, str, str]:
         return (
-            str(row.get("chainID") or "").strip().casefold(),
-            lifecycle.int_or_default(row.get("link"), 0),
-            str(row.get("status") or "").strip().casefold(),
-            str(row.get("uuid") or "").strip().casefold(),
+            str(_observation_value(row, "chainID") or "").strip().casefold(),
+            lifecycle.int_or_default(_observation_value(row, "link"), 0),
+            str(_observation_value(row, "status") or "").strip().casefold(),
+            str(_observation_value(row, "uuid") or "").strip().casefold(),
         )
 
     @staticmethod
-    def ambiguous_candidate_slots(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    def ambiguous_candidate_slots(rows: Iterable[TaskObservation]) -> dict[tuple[str, int], str]:
         grouped: dict[tuple[str, int], set[str]] = {}
         for row in rows:
-            chain_id = str(row.get("chainID") or "").strip()
-            link = lifecycle.int_or_default(row.get("link"), 0)
-            uuid = str(row.get("uuid") or "").strip().lower()
+            chain_id = str(_observation_value(row, "chainID") or "").strip()
+            link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
+            uuid = str(_observation_value(row, "uuid") or "").strip().lower()
             if chain_id and link > 0 and uuid:
                 grouped.setdefault((chain_id, link), set()).add(uuid)
         return {

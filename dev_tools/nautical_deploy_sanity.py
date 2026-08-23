@@ -476,6 +476,53 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
     if typed_violations:
         violations.extend(f"untyped-domain:{item}" for item in typed_violations)
 
+    # Remaining task-shaped mappings are explicit protocol/configuration,
+    # mutation-adapter, presentation, or durable-serialization boundaries.
+    # New domain modules must use TaskPayload/TaskObservation instead.
+    task_mapping_allowlist = {
+        "nautical_core/business_calendar_api.py",
+        "nautical_core/calendar_feedback.py",
+        "nautical_core/chain_generation.py",
+        "nautical_core/common.py",
+        "nautical_core/description_aliases.py",
+        "nautical_core/hook_protocol.py",
+        "nautical_core/hook_results.py",
+        "nautical_core/hooks/add_impl.py",
+        "nautical_core/hooks/modify_impl.py",
+        "nautical_core/lifecycle_models.py",
+        "nautical_core/modify_analytics.py",
+        "nautical_core/modify_chain_summary.py",
+        "nautical_core/modify_completion_compute.py",
+        "nautical_core/modify_completion_preflight.py",
+        "nautical_core/modify_lifecycle.py",
+        "nautical_core/modify_ordinary.py",
+        "nautical_core/modify_protocol.py",
+        "nautical_core/modify_queries.py",
+        "nautical_core/modify_runtime.py",
+        "nautical_core/natural_language.py",
+        "nautical_core/natural_language_api.py",
+        "nautical_core/recurrence_context.py",
+        "nautical_core/task_codec.py",
+        "nautical_core/tools/nautical_doctor.py",
+    }
+    for path in package.rglob("*.py") if package.is_dir() else ():
+        relative = str(path.relative_to(root))
+        if relative in task_mapping_allowlist:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for argument in [*node.args.args, *node.args.kwonlyargs]:
+                if argument.arg not in {"task", "parent", "child", "old", "new"}:
+                    continue
+                annotation = ast.unparse(argument.annotation) if argument.annotation else ""
+                if "dict" in annotation.lower() or "mapping" in annotation.lower():
+                    violations.append(f"mapping-boundary:{relative}:{node.name}:{argument.arg}")
+
     return [{
         "kind": "domain-model",
         "name": "removed-construction-paths",

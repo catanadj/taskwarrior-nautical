@@ -593,6 +593,18 @@ _MODULE_SPECS = {
         "lifecycle_models.py",
         "nautical_core.lifecycle_models",
     ),
+    "task_codec": (
+        "_TASK_CODEC",
+        "_TASK_CODEC_LOAD_FAILED",
+        "task_codec.py",
+        "nautical_core.task_codec",
+    ),
+    "task_models": (
+        "_TASK_MODELS",
+        "_TASK_MODELS_LOAD_FAILED",
+        "task_models.py",
+        "nautical_core.task_models",
+    ),
     "lifecycle_planner": (
         "_LIFECYCLE_PLANNER",
         "_LIFECYCLE_PLANNER_LOAD_FAILED",

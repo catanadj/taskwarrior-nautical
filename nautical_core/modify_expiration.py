@@ -7,6 +7,7 @@ from typing import Any
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import DeletionEvidence, LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
+from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)
@@ -53,8 +54,9 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
 
 def classify_deleted_task(task: dict, *, services: ExpirationServices) -> DeletionEvidence:
     """Return the deletion disposition without turning unavailable evidence into manual stop."""
+    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify deletion classification")
     return services.reconcile.deleted_chain_disposition(
-        task,
+        observation,
         safe_parse_datetime=services.safe_parse_datetime,
     )
 
@@ -115,8 +117,17 @@ def _render_recovery_panel(
 
 def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -> bool:
     reconcile = services.reconcile
+    try:
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            task,
+            source_query="on-modify expiration recovery",
+        )
+    except Exception as exc:
+        services.diag(f"expiration recovery task decode failed: {exc}")
+        render_recovery_warning(task, "The expired task could not be validated for recovery.", services=services)
+        return True
     if not reconcile.is_orphan_expiration_candidate(
-        task,
+        observation,
         safe_parse_datetime=services.safe_parse_datetime,
     ):
         return False
@@ -128,7 +139,7 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
         _compute_cp_child_due=services.compute_cp_child_due,
         _build_child_from_parent=services.build_child_from_parent,
     )
-    plan = reconcile.plan_recovery_decision(task, existing_children=[], hook=plan_hook)
+    plan = reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook)
 
     if plan.action == "legitimate_final":
         apply_terminal_transition(task, LifecycleEvent.EXPIRE)

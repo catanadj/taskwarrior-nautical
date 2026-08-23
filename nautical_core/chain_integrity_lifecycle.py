@@ -377,18 +377,24 @@ def recurrence_kind(task: TaskObservation) -> str:
 
 def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     parent = plan.parent
+    parent_values = parent.to_mapping() if isinstance(parent, TaskObservation) else parent
+    parent_observation = (
+        parent
+        if isinstance(parent, TaskObservation)
+        else DEFAULT_TASK_CODEC.decode_row(parent_values, source_query="lifecycle plan description")
+    )
     if plan.action == "manual_stop":
         trigger = "manual_deletion"
-    elif str(parent.get("status") or "").strip() == "deleted":
+    elif str(parent_values.get("status") or "").strip() == "deleted":
         trigger = "expiration"
     else:
         trigger = "completion"
     evidence: dict[str, Any] = {
-        "parent": short_uuid(parent.get("uuid")),
-        "chainID": str(parent.get("chainID") or ""),
-        "parent_link": int_or_default(parent.get("link"), 0),
+        "parent": short_uuid(parent_values.get("uuid")),
+        "chainID": str(parent_values.get("chainID") or ""),
+        "parent_link": int_or_default(parent_values.get("link"), 0),
         "next_link": plan.next_link,
-        "kind": recurrence_kind(parent),
+        "kind": recurrence_kind(parent_observation),
         "trigger": trigger,
         "reason": plan.reason,
     }

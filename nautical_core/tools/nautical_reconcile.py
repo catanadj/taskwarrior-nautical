@@ -247,7 +247,7 @@ def _repository() -> TaskReadRepository:
 
 def _read_value(read: Any, subject: str) -> Any | None:
     if isinstance(read, Found):
-        return read.value
+        return read.value.to_mapping() if isinstance(read.value, TaskObservation) else read.value
     if isinstance(read, Absent):
         return None
     if isinstance(read, Unavailable):
@@ -581,8 +581,10 @@ def _recovery_existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
     if str(parent.get("status") or "").strip() == "deleted":
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile child lookup")
         evidence = lifecycle.deleted_chain_disposition(
-            parent,
+            observation,
             safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
         )
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
@@ -837,8 +839,13 @@ def _plan_for_parent(
     if configuration_status != "valid":
         raise _ConfigurationDrift(configuration_reason)
     try:
-        return _lifecycle_reconciliation_service().plan(
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        observation = DEFAULT_TASK_CODEC.decode_row(
             parent,
+            source_query="reconcile lifecycle planning",
+        )
+        return _lifecycle_reconciliation_service().plan(
+            observation,
             hook=hook,
             generation=generation or _chain_generation_for_hook(hook),
             safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
@@ -1687,7 +1694,8 @@ def main(
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = IntegrityRecoveryService.ambiguous_candidate_slots(candidates)
 
-    for parent in candidates:
+    for parent_observation in candidates:
+        parent = parent_observation.to_mapping()
         if configuration_status == "valid":
             configuration_status, configuration_drift_reason = _configuration_state(hook)
         if configuration_status != "valid":

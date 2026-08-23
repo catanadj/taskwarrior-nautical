@@ -52,9 +52,15 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
         return False
 
 
-def classify_deleted_task(task: dict, *, services: ExpirationServices) -> DeletionEvidence:
+def classify_deleted_task(
+    task: dict,
+    *,
+    services: ExpirationServices,
+    observation: Any = None,
+) -> DeletionEvidence:
     """Return the deletion disposition without turning unavailable evidence into manual stop."""
-    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify deletion classification")
+    if observation is None:
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify deletion classification")
     return services.reconcile.deleted_chain_disposition(
         observation,
         safe_parse_datetime=services.safe_parse_datetime,
@@ -211,7 +217,11 @@ def handle_deleted_modify(
         return
     expiration = services.expiration
     try:
-        evidence = classify_deleted_task(new, services=expiration)
+        evidence = classify_deleted_task(
+            new,
+            services=expiration,
+            observation=(transition.new if transition is not None else None),
+        )
         disposition = evidence.disposition.value
         disposition_reason = evidence.reason
     except Exception as exc:

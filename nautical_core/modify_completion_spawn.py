@@ -32,7 +32,7 @@ def completion_build_and_spawn_child(
     except Exception as exc:
         if callable(diag):
             diag(f"build child failed: {exc}")
-        reason = str(exc) if isinstance(exc, CarryFieldError) else "Failed to build next link"
+        reason = str(exc) or "Failed to build next link"
         return CompletionSpawnResult(
             child={},
             child_short="",

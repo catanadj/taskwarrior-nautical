@@ -460,7 +460,15 @@ def _plan_recovery_decision_unscoped(
 ) -> LifecycleRecoveryDecision:
     generation = generation or _generation_service(hook)
     observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery")
-    operational_parent = NauticalTask.from_observation(observation)
+    try:
+        operational_parent = NauticalTask.from_observation(observation)
+    except (TypeError, ValueError) as exc:
+        return LifecycleRecoveryDecision(
+            "error",
+            observation,
+            int_or_default(parent.get("link"), 1) + 1,
+            f"parent task validation failed: {exc}",
+        )
     decision_parent = observation
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
@@ -747,7 +755,7 @@ def plan_recovery_decision(
     except Exception as exc:
         return LifecycleRecoveryDecision(
             "error",
-            parent_values,
+            parent,
             next_link,
             f"invalid business calendar: {exc}",
         )

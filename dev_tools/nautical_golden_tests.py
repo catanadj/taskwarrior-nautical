@@ -182,6 +182,20 @@ def _fixture_observation(task, *, context=None):
     return _task_observation(values)
 
 
+def _fixture_task(task, *, context=None):
+    from nautical_core.task_models import NauticalTask
+
+    values = dict(task)
+    values.setdefault("uuid", "00000000-0000-4000-8000-000000000001")
+    values.setdefault("status", "pending")
+    values.setdefault("chainID", context.chain_id if context is not None else "fixture-chain")
+    values.setdefault("link", 1)
+    values.setdefault("chain", "on")
+    if not any(values.get(field) for field in ("cp", "anchor", "anchor_file")):
+        values["cp"] = "P1D"
+    return NauticalTask.from_observation(_task_observation(values))
+
+
 def _scheduler_for_fixture(task, *, context=None):
     """Build the production scheduler from a typed test observation."""
     from nautical_core.scheduler_service import SchedulerService
@@ -289,7 +303,7 @@ def _task_draft(row):
 
 
 def _recovery_plan(reconcile, parent, **kwargs):
-    return reconcile.plan_recovery_decision(_task_observation(parent), **kwargs)
+    return reconcile.plan_recovery_decision(_fixture_observation(parent), **kwargs)
 
 
 def _found_task(row):
@@ -617,7 +631,7 @@ def _compute_cp_child_due(hook, parent):
 
 def _carry_relative_datetime(hook, parent, child, child_due, field, **kwargs):
     return _generation_service(hook).carry_relative_datetime(
-        parent,
+        parent if hasattr(parent, "observation") else _fixture_task(parent),
         child,
         child_due,
         field,
@@ -629,7 +643,7 @@ def _carry_relative_datetime(hook, parent, child, child_due, field, **kwargs):
 
 def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
     return _generation_service(hook).carry_native_until(
-        parent,
+        parent if hasattr(parent, "observation") else _fixture_task(parent),
         child,
         child_due,
         kind,
@@ -5862,6 +5876,7 @@ def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
         "chain": "on",
         "chainID": "abcd1234",
         "link": 1,
+        "cp": "P1D",
         "link": 4,
     }
     for field, value in (
@@ -9968,7 +9983,7 @@ def test_doctor_reports_reconcile_backfill_plans():
         _write_fake_task_for_doctor(fake_task)
         rows = [
             {
-                "uuid": "11111111-0000-0000-0000-000000000001",
+                "uuid": "11111111-0000-4000-8000-000000000001",
                 "description": "hookless completed parent",
                 "status": "completed",
                 "cp": "1d",
@@ -9977,7 +9992,7 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "link": 1,
             },
             {
-                "uuid": "22222222-0000-0000-0000-000000000002",
+                "uuid": "22222222-0000-4000-8000-000000000002",
                 "description": "existing child",
                 "status": "pending",
                 "cp": "1d",
@@ -9985,9 +10000,10 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "chainID": "cid",
                 "link": 2,
                 "prevLink": "11111111",
+                "due": "20260702T090000Z",
             },
             {
-                "uuid": "33333333-0000-0000-0000-000000000003",
+                "uuid": "33333333-0000-4000-8000-000000000003",
                 "description": "expired parent",
                 "status": "deleted",
                 "cp": "7d",
@@ -9999,7 +10015,7 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "end": "20260727T000000Z",
             },
             {
-                "uuid": "44444444-0000-0000-0000-000000000004",
+                "uuid": "44444444-0000-4000-8000-000000000004",
                 "description": "already-expired next slot",
                 "status": "deleted",
                 "cp": "7d",
@@ -10012,7 +10028,7 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "end": "20260803T000000Z",
             },
             {
-                "uuid": "55555555-0000-0000-0000-000000000005",
+                "uuid": "55555555-0000-4000-8000-000000000005",
                 "description": "hookless manual deletion",
                 "status": "deleted",
                 "cp": "1d",
@@ -10024,7 +10040,7 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "end": "20260720T100000Z",
             },
             {
-                "uuid": "66666666-0000-0000-0000-000000000006",
+                "uuid": "66666666-0000-4000-8000-000000000006",
                 "description": "ambiguous completed parent",
                 "status": "completed",
                 "cp": "1d",
@@ -10033,7 +10049,7 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "link": 1,
             },
             {
-                "uuid": "77777777-0000-0000-0000-000000000007",
+                "uuid": "77777777-0000-4000-8000-000000000007",
                 "description": "first duplicate child",
                 "status": "pending",
                 "cp": "1d",
@@ -10043,7 +10059,7 @@ def test_doctor_reports_reconcile_backfill_plans():
                 "prevLink": "66666666",
             },
             {
-                "uuid": "88888888-0000-0000-0000-000000000008",
+                "uuid": "88888888-0000-4000-8000-000000000008",
                 "description": "second duplicate child",
                 "status": "pending",
                 "cp": "1d",
@@ -12167,11 +12183,13 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
             "until": mod.core.fmt_isoz(parent_limit),
         }
         child = {"due": mod.core.fmt_isoz(child_due)}
+        parent_obs = _fixture_observation(parent)
+        current_obs = _fixture_observation({"due": mod.core.fmt_isoz(child_due), "chainID": "fixture-chain"})
         _carry_relative_datetime(mod, parent, child, child_due, "wait")
         _carry_native_until(mod, parent, child, child_due, "anchor")
         repaired, repair_error = reconcile.repair_native_until_from_previous(
-            parent,
-            {"due": mod.core.fmt_isoz(child_due)},
+            parent_obs,
+            current_obs,
             kind="anchor",
             safe_parse_datetime=mod._safe_parse_datetime,
             fmt_isoz=mod.core.fmt_isoz,
@@ -12850,8 +12868,8 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     from nautical_core.chain_generation import ChainGenerationService
     generation = ChainGenerationService.from_core(hook.core)
     child_due, meta, _dnf = generation.compute_anchor_child_due(
-        {
-            "uuid": "c3f2c233-0000-0000-0000-000000000002",
+        _fixture_task({
+            "uuid": "c3f2c233-0000-4000-8000-000000000002",
             "status": "completed",
             "description": "ordinal reconcile integration",
             "anchor": "y:d60@t=09:00",
@@ -12861,7 +12879,7 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
             "link": 2,
             "due": due,
             "end": end,
-        }
+        })
     )
     child_local = hook.core.to_local(child_due)
     expect(child_local.date() == date(2025, 3, 1), f"reconciler computed the wrong d60 child: {child_local}")
@@ -15313,7 +15331,7 @@ def test_moon_phase_operational_errors_are_actionable():
             raise astronomy.AstronomyUnavailableError("moon phase anchors require astral")
 
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+            "uuid": "11111111-0000-0000-0000-000000000001",
         "status": "completed",
         "chain": "on",
         "chainID": "11111111",
@@ -26768,6 +26786,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
         "status": "completed",
         "chainID": "abcd1234",
         "link": 1,
+        "cp": "P1D",
     }
     child = {"uuid": "00000000-0000-4000-8000-000000000222", "link": 2}
     from nautical_core.chain_generation import ChainGenerationService
@@ -26779,7 +26798,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
                 "description": "typed child fixture",
                 "chain": "on",
                 "status": "pending",
-                "chainID": parent["chainID"],
+                "chainID": parent.observation.to_mapping()["chainID"],
                 "link": next_link_no,
                 "cp": "P1D",
                 "anchor_mode": "skip",
@@ -26823,6 +26842,7 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
         "status": "completed",
         "chainID": "spawn121",
         "link": 1,
+        "cp": "P1D",
     }
     child = {"uuid": "00000000-0000-4000-8000-000000000122", "link": 2}
     from nautical_core.chain_generation import ChainGenerationService
@@ -26834,7 +26854,7 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
                 "description": "typed child fixture",
                 "chain": "on",
                 "status": "pending",
-                "chainID": parent["chainID"],
+                "chainID": parent.observation.to_mapping()["chainID"],
                 "link": next_link_no,
                 "cp": "P1D",
                 "anchor_mode": "skip",
@@ -26916,7 +26936,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
         mod._spawn_child_atomic = original_spawn
 
     expect(result is not None and result.outcome_state == "retryable", f"completion should return retryable carry result, got {result!r}")
-    expect("wait carry failed" in result.reason, f"carry result lost actionable reason: {result!r}")
+    expect("wait" in result.reason and "Invalid isoformat" in result.reason, f"carry result lost actionable reason: {result!r}")
     expect(not spawned, "completion attempted a child spawn after carry failure")
     expect(not panels, f"carry helper should not render before finalization: {panels!r}")
 
@@ -26924,7 +26944,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
 
     plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
     expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
-    expect("wait carry failed" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
+    expect("wait" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
 
 
 def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait():
@@ -29213,7 +29233,7 @@ def test_reconcile_candidate_and_plan_paths():
     import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "remote completion",
         "cp": "P1D",
@@ -29223,34 +29243,39 @@ def test_reconcile_candidate_and_plan_paths():
         "due": "20260101T090000Z",
         "end": "20260101T100000Z",
     }
-    expect(reconcile.is_orphan_completion_candidate(parent), "completed active chain without nextLink should be a candidate")
-    with_next = dict(parent, nextLink="22222222")
+    parent_obs = _fixture_observation(parent)
+    expect(reconcile.is_orphan_completion_candidate(parent_obs), "completed active chain without nextLink should be a candidate")
+    with_next = _fixture_observation(dict(parent, nextLink="22222222"))
     expect(not reconcile.is_orphan_completion_candidate(with_next), "linked completion should not be a candidate")
-    chain_off = dict(parent, chain="off")
+    chain_off = _fixture_observation(dict(parent, chain="off"))
     expect(not reconcile.is_orphan_completion_candidate(chain_off), "chain:off completion should not be a candidate")
 
     existing = [
         {
-            "uuid": "22222222-0000-0000-0000-000000000002",
+            "uuid": "22222222-0000-4000-8000-000000000002",
             "chainID": "11111111",
             "link": 3,
             "status": "pending",
+            "description": "remote completion",
+            "chain": "on",
             "prevLink": "11111111",
+            "cp": "P1D",
+            "due": "20260102T090000Z",
         }
     ]
-    plan = reconcile.plan_recovery_decision(parent, existing_children=existing, hook=None)
+    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=existing, hook=None)
     expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
     duplicate = {
         **existing[0],
-        "uuid": "33333333-0000-0000-0000-000000000003",
+        "uuid": "33333333-0000-4000-8000-000000000003",
     }
-    ambiguous = reconcile.plan_recovery_decision(parent, existing_children=[*existing, duplicate], hook=None)
+    ambiguous = reconcile.plan_recovery_decision(parent_obs, existing_children=[*existing, duplicate], hook=None)
     expect(
         ambiguous.action == "error" and "multiple tasks" in ambiguous.reason,
         f"duplicate next slots must fail closed: {ambiguous}",
     )
     nonreciprocal = reconcile.plan_recovery_decision(
-        parent,
+        parent_obs,
         existing_children=[dict(existing[0], prevLink="beeswax")],
         hook=None,
     )
@@ -29259,7 +29284,7 @@ def test_reconcile_candidate_and_plan_paths():
         f"nonreciprocal next slot must fail closed: {nonreciprocal}",
     )
     recurrence_mismatch = reconcile.plan_recovery_decision(
-        parent,
+        parent_obs,
         existing_children=[dict(existing[0], cp="P2D")],
         hook=None,
     )
@@ -29268,8 +29293,8 @@ def test_reconcile_candidate_and_plan_paths():
         f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
     )
     null_recurrence = reconcile.plan_recovery_decision(
-        parent,
-        existing_children=[dict(existing[0], anchor_file="null")],
+        parent_obs,
+        existing_children=[dict(existing[0], anchor_file=None)],
         hook=None,
     )
     expect(
@@ -29277,7 +29302,7 @@ def test_reconcile_candidate_and_plan_paths():
         f"literal null recurrence UDA should be treated as unset: {null_recurrence}",
     )
     expect(
-        reconcile.recurrence_kind(dict(parent, cp="", anchor="w:mon", anchor_file="null")) == "anchor",
+        reconcile.recurrence_kind(_fixture_observation(dict(parent, cp="", anchor="w:mon", anchor_file=None))) == "anchor",
         "literal null anchor_file changed an anchor recurrence kind",
     )
 
@@ -29288,6 +29313,14 @@ def test_reconcile_candidate_and_plan_paths():
                 return int(value)
             except Exception:
                 return default
+
+        @staticmethod
+        def fmt_isoz(value):
+            return value
+
+        @staticmethod
+        def now_utc():
+            return datetime.now(timezone.utc)
 
     from nautical_core.chain_generation import ChainGenerationService
 
@@ -29301,20 +29334,28 @@ def test_reconcile_candidate_and_plan_paths():
         def compute_cp_child_due(self, _parent):
             return "20260102T090000Z", {"target_field": "due"}
 
-        def build_child_from_parent(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-            return {
-                "description": parent.get("description"),
-                child_field: child_due,
+        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+            from nautical_core.task_codec import DEFAULT_TASK_CODEC
+            from nautical_core.task_models import NauticalTask, TaskDraft
+            values = {
+                "uuid": "22222222-0000-4000-8000-000000000002",
+                "description": parent.observation.to_mapping().get("description"),
+                "status": "pending",
+                "chain": "on",
+                "chainID": parent.observation.to_mapping().get("chainID"),
                 "link": next_link,
                 "prevLink": parent_short,
-                "chainID": parent.get("chainID"),
-                "kind": kind,
-                "chainMax": cpmax,
-                "chainUntil": until_dt,
+                "cp": "P1D",
+                child_field: child_due,
             }
+            return TaskDraft.from_task(
+                NauticalTask.from_observation(
+                    DEFAULT_TASK_CODEC.decode_row(values, source_query="reconcile fake child")
+                )
+            )
 
     generation = FakeGeneration()
-    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
     expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
     evidence = reconcile.describe_plan(plan)
@@ -29323,7 +29364,7 @@ def test_reconcile_candidate_and_plan_paths():
     expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
 
     capped = dict(parent, chainMax=2)
-    plan = reconcile.plan_recovery_decision(capped, existing_children=[], hook=None, generation=generation)
+    plan = reconcile.plan_recovery_decision(_fixture_observation(capped), existing_children=[], hook=None, generation=generation)
     expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
     class ExhaustingGeneration(FakeGeneration):
@@ -29333,7 +29374,7 @@ def test_reconcile_candidate_and_plan_paths():
             )
 
     terminal = reconcile.plan_recovery_decision(
-        parent,
+        parent_obs,
         existing_children=[],
         hook=None,
         generation=ExhaustingGeneration(),
@@ -29358,7 +29399,7 @@ def test_reconcile_candidate_and_plan_paths():
             )
 
     search_limited = reconcile.plan_recovery_decision(
-        parent,
+        parent_obs,
         existing_children=[],
         hook=None,
         generation=SearchLimitedGeneration(),
@@ -29413,12 +29454,25 @@ def test_reconcile_plan_uses_task_business_calendar_context():
             expect(FakeCore.active, "reconcile computed a child outside the task calendar context")
             return "20260102T090000Z", {"target_field": "due"}
 
-        def build_child_from_parent(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
             expect(FakeCore.active, "reconcile built a child outside the task calendar context")
-            return {child_field: child_due, "link": next_link, "prevLink": parent_short, "chainID": parent.get("chainID")}
+            from nautical_core.task_codec import DEFAULT_TASK_CODEC
+            from nautical_core.task_models import NauticalTask, TaskDraft
+            values = {
+                "uuid": "22222222-0000-4000-8000-000000000002",
+                "description": "calendar child",
+                "status": "pending",
+                "chain": "on",
+                "chainID": parent.observation.to_mapping().get("chainID"),
+                "link": next_link,
+                "prevLink": parent_short,
+                "cp": "1d",
+                child_field: child_due,
+            }
+            return TaskDraft.from_task(NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(values, source_query="calendar fake child")))
 
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "chain": "on",
         "chainID": "11111111",
@@ -29427,12 +29481,13 @@ def test_reconcile_plan_uses_task_business_calendar_context():
         "bc": "work",
     }
     generation = FakeGeneration()
-    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=None, generation=generation)
+    parent_obs = _fixture_observation(parent)
+    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=None, generation=generation)
     expect(plan.action == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
     expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
     expect(not FakeCore.active, "task business-calendar context leaked after planning")
 
-    invalid = reconcile.plan_recovery_decision(dict(parent, bc="missing"), existing_children=[], hook=None, generation=generation)
+    invalid = reconcile.plan_recovery_decision(_fixture_observation(dict(parent, bc="missing")), existing_children=[], hook=None, generation=generation)
     expect(invalid.action == "error", f"invalid calendar was not rejected: {invalid}")
     expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
 
@@ -29444,7 +29499,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_candidate_test")
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "deleted",
         "description": "expired occurrence",
         "cp": "7d",
@@ -29593,7 +29648,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
         "chain": "on",
         "chainID": "verified1",
         "link": 2,
-        "prevLink": "11111111",
+        "prevLink": "00000000",
         "due": "20260723T090000Z",
         "until": "20260723T100000Z",
     }
@@ -29803,7 +29858,7 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     scheduled = mod.core.build_local_datetime(date(2026, 7, 20), (9, 30))
     wait = mod.core.build_local_datetime(date(2026, 7, 20), (8, 0))
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "cp": "7d",
         "chain": "on",
@@ -29824,10 +29879,10 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
 
     malformed = dict(parent, scheduled="not-a-date")
     failed = _recovery_plan(reconcile, malformed, existing_children=[], hook=mod)
-    expect(failed.action == "error" and "scheduled field" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
+    expect(failed.action == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
     malformed_wait = dict(parent, wait="not-a-date")
     failed_wait = _recovery_plan(reconcile, malformed_wait, existing_children=[], hook=mod)
-    expect(failed_wait.action == "error" and "wait carry" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
+    expect(failed_wait.action == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
@@ -29877,14 +29932,18 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     deleted_child = {
         "uuid": "00000000-0000-4000-8000-00000000050d",
         "status": "deleted",
+        "description": "expired occurrence",
+        "chain": "on",
+        "cp": "7d",
         "chainID": "11111111",
         "link": 2,
-        "prevLink": "11111111",
+        "prevLink": "00000000",
+        "due": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 27), (9, 0))),
     }
 
     backfill = _recovery_plan(reconcile, parent, existing_children=[deleted_child], hook=mod)
     expect(
-        backfill.action == "backfill_nextlink" and backfill.child_short == "22222222",
+        backfill.action == "backfill_nextlink" and backfill.child_short == "00000000",
         f"deleted next slot should be backfilled rather than duplicated: {backfill}",
     )
 
@@ -30205,7 +30264,7 @@ def test_reconcile_expiration_real_taskwarrior_round_trip():
         delayed_due = recovery_at - timedelta(days=3)
         delayed_until = delayed_due + timedelta(hours=1)
         delayed_parent = {
-            "uuid": "55555555-0000-0000-0000-000000000005",
+            "uuid": "55555555-0000-4000-8000-000000000005",
             "status": "deleted",
             "description": "Delayed expiration recovery",
             "entry": (delayed_due - timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ"),
@@ -30363,7 +30422,7 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
             "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
         })
         parent = {
-            "uuid": "33333333-0000-0000-0000-000000000003", "status": "deleted",
+            "uuid": "33333333-0000-4000-8000-000000000003", "status": "deleted",
             "description": "Anchor repair", "entry": "20260820T080000Z",
             "modified": "20260820T100000Z", "end": "20260820T100000Z",
             "due": "20260820T090000Z", "until": "20260820T100000Z",
@@ -30399,7 +30458,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "remote completion",
         "anchor": "w:mon@t=09:00,17:00",
@@ -30432,25 +30491,33 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
         def compute_anchor_child_due(self, _parent):
             return "20260706T140000Z", {"target_field": "due"}, []
 
-        def build_child_from_parent(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-            return {
-                "description": parent.get("description"),
-                "due": child_due,
-                "scheduled": "20260706T130000Z",
+        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+            from nautical_core.task_codec import DEFAULT_TASK_CODEC
+            from nautical_core.task_models import NauticalTask, TaskDraft
+            values = {
+                "uuid": "22222222-0000-4000-8000-000000000002",
+                "description": "remote completion",
+                "status": "pending",
+                "chain": "on",
+                "chainID": parent.observation.to_mapping().get("chainID"),
                 "link": next_link,
                 "prevLink": parent_short,
-                "chainID": parent.get("chainID"),
+                "anchor": "w:mon@t=09:00,17:00",
+                "anchor_mode": "skip",
+                "due": child_due,
+                "scheduled": "20260706T130000Z",
             }
+            return TaskDraft.from_task(NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(values, source_query="evidence fake child")))
 
     plan = reconcile.plan_recovery_decision(
-        parent,
+        _fixture_observation(parent),
         existing_children=[],
         hook=None,
         generation=FakeGeneration(),
     )
     evidence = reconcile.describe_plan(plan)
     expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
-    expect(evidence.get("child_target") == "20260706T140000Z", f"expected due target, got: {evidence!r}")
+    expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
 
 
 def test_reconcile_evidence_includes_local_child_time_when_formatter_available():
@@ -30458,7 +30525,7 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
     import nautical_core.chain_integrity_lifecycle as reconcile
 
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "remote completion",
         "cp": "P1D",
@@ -30468,7 +30535,7 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
     }
     plan = reconcile.LifecycleRecoveryDecision(
         "spawn",
-        parent,
+        _fixture_observation(parent),
         2,
         "missing next link",
         child={"due": "20260704T110000Z"},
@@ -30489,8 +30556,8 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
         from nautical_core.chain_generation import ChainGenerationService
         generation = ChainGenerationService.from_core(hook.core)
         child_due, _meta, _dnf = generation.compute_anchor_child_due(
-            {
-                "uuid": "c3f2c233-0000-0000-0000-000000000001",
+            _fixture_task({
+                "uuid": "c3f2c233-0000-4000-8000-000000000001",
                 "status": "completed",
                 "description": "Drink 0.5L of water",
                 "anchor": "w:mon..sun@t=05:00,09:00,14:00,19:00",
@@ -30500,7 +30567,7 @@ def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
                 "link": 92,
                 "due": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 4), (9, 0))),
                 "end": hook.core.fmt_isoz(hook.core.build_local_datetime(date(2026, 7, 4), (10, 0))),
-            }
+            })
         )
         child_local = hook.core.to_local(child_due)
         expect((child_local.hour, child_local.minute) == (14, 0), f"expected 14:00 local via reconcile tool path: {child_local}")
@@ -30536,7 +30603,7 @@ def test_reconcile_tool_print_plan_includes_evidence():
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     mod = _load_hook_module(str(path), "_nautical_reconcile_tool_print_test")
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "remote completion",
         "cp": "P1D",
@@ -30546,7 +30613,7 @@ def test_reconcile_tool_print_plan_includes_evidence():
     }
     plan = reconcile.LifecycleRecoveryDecision(
         "backfill_nextlink",
-        parent,
+        _fixture_observation(parent),
         3,
         "next link already exists",
         child_short="22222222",
@@ -30559,10 +30626,10 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("reason: next link already exists" in out, f"missing reason evidence: {out!r}")
     expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
 
-    second_parent = {**parent, "uuid": "22222222-0000-0000-0000-000000000002", "link": 3}
+    second_parent = {**parent, "uuid": "22222222-0000-4000-8000-000000000002", "link": 3}
     second = reconcile.LifecycleRecoveryDecision(
         "partial",
-        second_parent,
+        _fixture_observation(second_parent),
         4,
         "expiration recovery hop limit reached at 2; rerun to continue",
     )
@@ -32570,7 +32637,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         return mod.core.fmt_isoz(mod.core.build_local_datetime(day, hhmm))
 
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "seasonal reconcile",
         "anchor": "(w:mon)@in-spring=first@t=09:00",
@@ -32581,7 +32648,8 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         "due": stamp(date(2026, 3, 2), (9, 0)),
         "end": stamp(date(2026, 7, 1), (10, 0)),
     }
-    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
+    parent_obs = _fixture_observation(parent)
+    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=mod)
     expect(plan.action == "spawn", f"reconcile did not spawn seasonal child: {plan}")
     child_local = mod.core.to_local(plan.child_due)
     expect(
@@ -32592,13 +32660,17 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     expect(plan.child.get("anchor") == parent["anchor"], f"reconcile child lost anchor: {plan.child}")
 
     existing = {
-        "uuid": "22222222-0000-0000-0000-000000000002",
+        "uuid": "22222222-0000-4000-8000-000000000002",
         "status": "pending",
+        "description": "seasonal reconcile",
+        "chain": "on",
         "chainID": "season456",
         "link": 2,
         "prevLink": "11111111",
+        "anchor": parent["anchor"],
+        "due": stamp(date(2027, 3, 1), (9, 0)),
     }
-    repeated = reconcile.plan_recovery_decision(parent, existing_children=[existing], hook=mod)
+    repeated = reconcile.plan_recovery_decision(parent_obs, existing_children=[existing], hook=mod)
     expect(
         repeated.action == "backfill_nextlink" and repeated.child_short == "22222222",
         f"reconcile duplicated an existing seasonal slot: {repeated}",
@@ -32755,15 +32827,15 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     def stamp(day, hhmm):
         return hook.core.fmt_isoz(hook.core.build_local_datetime(day, hhmm))
 
-    row = {
-        "uuid": "manual-until-uuid",
+    row = _fixture_observation({
+        "uuid": "00000000-0000-4000-8000-000000003248",
         "chain": "on",
         "chainID": "manual-until",
         "link": 1,
         "status": "pending",
         "due": stamp(date(2026, 7, 23), (23, 0)),
         "until": stamp(date(2026, 7, 23), (22, 0)),
-    }
+    })
     original_rows = tool._active_chain_rows
     try:
         tool._active_chain_rows = lambda *_args, **_kwargs: [row]

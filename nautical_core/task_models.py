@@ -552,8 +552,11 @@ class TaskDraft:
         excluded = {
             "id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink", "nextLink",
             "description", "chain", "anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file",
-            "bc", "chainMax", "chainUntil", "due", "scheduled",
+            "bc", "chainMax", "chainUntil",
         }
+        # Keep the non-target temporal field so relative scheduled/wait carries
+        # survive a due-target child (and vice versa).
+        excluded.add(field)
         values = task.observation.to_mapping()
         return cls(
             identity=task.identity,

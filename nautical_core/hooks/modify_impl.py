@@ -3295,8 +3295,17 @@ def _completion_build_and_spawn_child(
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
     generation = _chain_generation_service()
+    task_codec = _module("task_codec")
+    task_models = _module("task_models")
+
+    def build_child_draft(task: dict, *args, **kwargs):
+        typed_task = task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
+        )
+        return generation.build_child_draft(typed_task, *args, **kwargs)
+
     services = modify_runtime.build_spawn_services(
-        build_child_draft=generation.build_child_draft,
+        build_child_draft=build_child_draft,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         print_task=_print_task,

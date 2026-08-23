@@ -17,6 +17,7 @@ from .scheduler_service import SchedulerService
 from .chain_generation import ChainGenerationService
 from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
 from .task_models import FieldPresence, TaskObservation
+from .task_codec import DEFAULT_TASK_CODEC
 from .query_models import (
     HARD_MAX_FILE_SKIPS,
     HARD_MAX_ITERATIONS,
@@ -367,10 +368,12 @@ class OccurrenceQueryService:
             if identity.recurrence_kind == "cp":
                 return self._query_cp_task(task, identity, request)
             context = self._context_for(task)
-            scheduler = (
-                SchedulerService.from_observation(task, context=context)
-                if isinstance(task, TaskObservation)
-                else SchedulerService.from_task(task, context=context)
+            scheduler = SchedulerService.from_observation(
+                task if isinstance(task, TaskObservation) else DEFAULT_TASK_CODEC.decode_row(
+                    task,
+                    source_query="query occurrence task",
+                ),
+                context=context,
             )
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
@@ -645,10 +648,12 @@ class OccurrenceQueryService:
                     source="cp",
                 )
                 return TaskOccurrenceResult(identity, "found", (record,), chain=chain_metadata, lifecycle=lifecycle_metadata)
-            scheduler = (
-                SchedulerService.from_observation(task, context=context)
-                if isinstance(task, TaskObservation)
-                else SchedulerService.from_task(task, context=context)
+            scheduler = SchedulerService.from_observation(
+                task if isinstance(task, TaskObservation) else DEFAULT_TASK_CODEC.decode_row(
+                    task,
+                    source_query="query occurrence task",
+                ),
+                context=context,
             )
             lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)

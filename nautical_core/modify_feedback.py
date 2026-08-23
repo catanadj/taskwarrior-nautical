@@ -12,7 +12,6 @@ def append_next_wait_sched_rows(
     next_due_utc: datetime,
     *,
     anchor_field: str = "due",
-    parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
     compare_datetimes: Callable[[datetime, datetime], int],
     format_delta: Callable[[timedelta], str],
@@ -486,7 +485,6 @@ def format_line_preview(
     minimal: bool = False,
     core: Any,
     format_local,
-    parse_datetime,
     on_time_delta,
     human_delta,
 ) -> str:

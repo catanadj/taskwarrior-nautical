@@ -449,7 +449,6 @@ def _append_next_wait_sched_rows(
         _module("modify_models").TaskView.from_mapping(nxt),
         nxt_due_utc,
         anchor_field=anchor_field,
-        parse_datetime=_dtparse,
         format_local=core.fmt_dt_local,
         compare_datetimes=_compare_datetimes,
         format_delta=_fmt_td_dd_hhmm,
@@ -1311,7 +1310,6 @@ def _format_line_preview(
         minimal=minimal,
         core=core,
         format_local=_fmtlocal,
-        parse_datetime=_dtparse,
         on_time_delta=_fmt_on_time_delta,
         human_delta=_human_delta,
     )

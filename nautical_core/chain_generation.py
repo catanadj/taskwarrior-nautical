@@ -17,7 +17,7 @@ from typing import Any, Mapping, MutableMapping
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import normalize_recurrence_text
-from .task_models import ChainIdentity, TaskDraft, TaskTimestamp, TaskUUID, NauticalTask
+from .task_models import TaskDraft, NauticalTask
 
 
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
@@ -588,32 +588,7 @@ class ChainGenerationService:
         target = child_task.temporal.due if child_field != "scheduled" else child_task.temporal.scheduled
         if target is None:
             raise ValueError("generated child draft has no recurrence target")
-        excluded_fields = {
-                "id", "uuid", "status", "modified", "end", "chainID", "link",
-                "prevLink", "nextLink", "description", "chain", "anchor", "anchor_file",
-                "anchor_mode", "cp", "omit", "omit_file", "bc", "chainMax", "chainUntil",
-                "due", "scheduled",
-        }
-        serialized = child_observation.to_mapping()
-        copy_fields = {
-            key: value for key, value in serialized.items()
-            if key not in excluded_fields
-        }
-        return TaskDraft(
-            identity=ChainIdentity(
-                TaskUUID(str(child_uuid)),
-                child_task.identity.chain_id,
-                child_task.identity.link,
-                child_task.identity.previous,
-                child_task.identity.next,
-                child_task.identity.state,
-            ),
-            description=child_task.description,
-            recurrence=child_task.recurrence,
-            target=target,
-            fields=copy_fields,
-            target_field=child_field,
-        )
+        return TaskDraft.from_task(child_task, target_field=child_field)
 
 
 __all__ = (

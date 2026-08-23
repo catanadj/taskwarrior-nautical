@@ -188,6 +188,9 @@ def _mutation_guard(plan: LifecyclePlan, *, mutation_epoch: int) -> MutationGuar
 
 
 def _child_import_payload(plan: LifecyclePlan) -> ChildImportPayload | None:
+    from .task_codec import DEFAULT_TASK_CODEC
+    from .task_models import NauticalTask, TaskDraft
+
     child = plan.child_dict()
     if not child:
         return None
@@ -202,8 +205,12 @@ def _child_import_payload(plan: LifecyclePlan) -> ChildImportPayload | None:
     if "anchor_mode" in child:
         child["anchor_mode"] = normalize_recurrence_text(child.get("anchor_mode")) or "skip"
     try:
-        return ChildImportPayload.from_mapping(child, parent_uuid=plan.identity.parent_uuid)
-    except IntegrationContractError:
+        task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(child, source_query="lifecycle child import")
+        )
+        draft = TaskDraft.from_task(task)
+        return ChildImportPayload.from_draft(draft, parent_uuid=plan.identity.parent_uuid)
+    except (IntegrationContractError, TypeError, ValueError):
         return None
 
 

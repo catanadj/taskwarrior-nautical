@@ -538,6 +538,30 @@ class TaskDraft:
     fields: Mapping[str, FrozenValue] = field(default_factory=dict)
     target_field: str = "due"
 
+    @classmethod
+    def from_task(cls, task: NauticalTask, *, target_field: str | None = None) -> "TaskDraft":
+        """Project a validated task into a complete draft-shaped payload."""
+        if not isinstance(task, NauticalTask):
+            raise TypeError("task draft requires a validated NauticalTask")
+        field = target_field or ("due" if task.temporal.due is not None else "scheduled")
+        target = task.temporal.due if field == "due" else task.temporal.scheduled
+        if target is None:
+            raise ValueError("task draft requires a due or scheduled target")
+        excluded = {
+            "id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink", "nextLink",
+            "description", "chain", "anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file",
+            "bc", "chainMax", "chainUntil", "due", "scheduled",
+        }
+        values = task.observation.to_mapping()
+        return cls(
+            identity=task.identity,
+            description=task.description,
+            recurrence=task.recurrence,
+            target=target,
+            fields={key: value for key, value in values.items() if key not in excluded},
+            target_field=field,
+        )
+
     def __post_init__(self) -> None:
         if not isinstance(self.identity, ChainIdentity):
             raise TypeError("task draft requires chain identity")

@@ -96,6 +96,7 @@ class IntegrityReportStatus(str, Enum):
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
+INTEGRITY_PATCH_SCHEMA_VERSION = 1
 
 
 def _required_text(value: object, field: str) -> str:
@@ -402,6 +403,21 @@ class IntegrityOperation:
         object.__setattr__(self, "depends_on", dependencies)
 
     def to_dict(self) -> dict[str, object]:
+        raw_payload = _thaw(self.payload)
+        payload: object = raw_payload
+        if raw_payload:
+            if not isinstance(raw_payload, dict):
+                raise IntegrityContractError("repair operation payload must be an object")
+            payload = {
+                "schema_version": INTEGRITY_PATCH_SCHEMA_VERSION,
+                "kind": "task_patch",
+                "target": self.target_uuid,
+                "operation": "metadata_repair",
+                "changes": [
+                    {"field": key, "action": "set", "value": value}
+                    for key, value in sorted(raw_payload.items())
+                ],
+            }
         return {
             "operation_id": self.operation_id,
             "kind": self.kind.value,
@@ -410,7 +426,7 @@ class IntegrityOperation:
             "guard": _thaw(self.guard),
             "preconditions": list(self.preconditions),
             "postconditions": list(self.postconditions),
-            "payload": _thaw(self.payload),
+            "payload": payload,
             "depends_on": list(self.depends_on),
         }
 
@@ -418,6 +434,31 @@ class IntegrityOperation:
     def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityOperation":
         if not isinstance(value, Mapping):
             raise IntegrityContractError("integrity operation must be an object")
+        raw_payload = value.get("payload")
+        payload: Mapping[str, object] | None
+        if raw_payload in (None, {}, ()):
+            payload = None
+        else:
+            if not isinstance(raw_payload, Mapping):
+                raise IntegrityContractError("integrity operation payload must be an object")
+            if (
+                raw_payload.get("schema_version") != INTEGRITY_PATCH_SCHEMA_VERSION
+                or raw_payload.get("kind") != "task_patch"
+                or str(raw_payload.get("target") or "") != str(value.get("target_uuid") or "")
+            ):
+                raise IntegrityContractError("integrity operation payload is not a versioned TaskPatch")
+            changes = raw_payload.get("changes")
+            if not isinstance(changes, (list, tuple)):
+                raise IntegrityContractError("integrity TaskPatch changes must be a list")
+            fields: dict[str, object] = {}
+            for change in changes:
+                if not isinstance(change, Mapping) or change.get("action") != "set":
+                    raise IntegrityContractError("integrity TaskPatch changes must be set operations")
+                field = str(change.get("field") or "").strip()
+                if not field or field in fields:
+                    raise IntegrityContractError("integrity TaskPatch contains an invalid or duplicate field")
+                fields[field] = change.get("value")
+            payload = fields
         return cls(
             str(value.get("operation_id") or ""),
             value.get("kind"),
@@ -426,7 +467,7 @@ class IntegrityOperation:
             _freeze_pairs(value.get("guard") if isinstance(value.get("guard"), Mapping) else {}),
             tuple(value.get("preconditions") or ()),
             tuple(value.get("postconditions") or ()),
-            _freeze_pairs(value.get("payload") if isinstance(value.get("payload"), Mapping) else {}),
+            _freeze_pairs(payload),
             tuple(value.get("depends_on") or ()),
         )
 

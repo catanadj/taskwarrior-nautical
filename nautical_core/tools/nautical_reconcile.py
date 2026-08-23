@@ -497,8 +497,11 @@ def _native_until_repairs(
     for candidate in recovery_audit.candidates:
         row = candidate.row
         previous = candidate.previous
-        chain_id = str(row.get("chainID") or "").strip()
-        link = lifecycle.int_or_default(row.get("link"), 0)
+        chain_id = _observation_text(row, "chainID")
+        link = lifecycle.int_or_default(
+            getattr(row.field("link").value, "value", row.field("link").value),
+            0,
+        )
         item = repair_items.get((chain_id, link))
         if item is None:
             continue

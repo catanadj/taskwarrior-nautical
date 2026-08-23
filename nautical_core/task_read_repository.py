@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-import json
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, TypeAlias
 
 from .integration_models import (
@@ -19,12 +18,16 @@ from .integration_models import (
     Unavailable,
 )
 from .taskwarrior_uow import QueryScope, QueryScopeKind
+from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
+from .task_models import FieldPresence, TaskObservation, TaskStatus
 
 if TYPE_CHECKING:
     from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 
-TaskRow: TypeAlias = Mapping[str, Any]
+# Exported rows are domain observations at this boundary.  Raw mappings are
+# accepted only by TaskCodec, never retained by the authoritative repository.
+TaskRow: TypeAlias = TaskObservation
 TaskSlot: TypeAlias = tuple[str, int]
 ALL_TASK_STATUSES = ("completed", "deleted", "pending", "recurring", "waiting")
 ACTIVE_TASK_STATUSES = ("pending", "waiting")
@@ -68,6 +71,18 @@ class TaskSnapshotScope:
         object.__setattr__(self, "identity", identity)
         object.__setattr__(self, "statuses", statuses)
         object.__setattr__(self, "complete_chain_history", bool(self.complete_chain_history))
+
+
+def _field_value(row: TaskObservation, name: str) -> object:
+    state = row.field(name)
+    return state.value if state.presence is FieldPresence.VALUE else None
+
+
+def _field_text(row: TaskObservation, name: str) -> str:
+    value = _field_value(row, name)
+    if isinstance(value, (TaskStatus,)):
+        return value.value
+    return str(getattr(value, "value", value) or "").strip()
 
 
 def _link_number(value: object) -> int | None:
@@ -115,13 +130,13 @@ class AuthoritativeTaskSnapshot:
         chain_index: dict[str, list[TaskRow]] = {}
         slot_index: dict[TaskSlot, list[TaskRow]] = {}
         for raw_row in self.rows:
-            if not isinstance(raw_row, Mapping):
-                raise ValueError("authoritative snapshot contains a non-object row")
-            row: TaskRow = MappingProxyType(dict(raw_row))
+            if not isinstance(raw_row, TaskObservation):
+                raise ValueError("authoritative snapshot contains a non-observation row")
+            row = raw_row
             copied_rows.append(row)
-            uuid_value = str(row.get("uuid") or "").strip().lower()
-            chain_id = str(row.get("chainID") or "").strip()
-            link = _link_number(row.get("link"))
+            uuid_value = _field_text(row, "uuid").lower()
+            chain_id = _field_text(row, "chainID")
+            link = _link_number(_field_value(row, "link"))
             _append_index(uuid_index, uuid_value, row)
             _append_index(short_index, uuid_value[:8], row)
             _append_index(chain_index, chain_id, row)
@@ -141,7 +156,7 @@ class AuthoritativeTaskSnapshot:
             return self.by_uuid.get(identity, ())
         if len(identity) == 8:
             return self.by_short_uuid.get(identity, ())
-        return tuple(row for row in self.rows if str(row.get("uuid") or "").lower().startswith(identity))
+        return tuple(row for row in self.rows if _field_text(row, "uuid").lower().startswith(identity))
 
     def chain_rows(self, chain_id: str) -> tuple[TaskRow, ...]:
         return self.by_chain.get(str(chain_id or "").strip(), ())
@@ -310,32 +325,29 @@ class TaskReadRepository:
                 ),
             )
         try:
-            payload = json.loads(raw)
-        except (TypeError, ValueError) as exc:
-            return self._store(
-                scope,
-                self._failure(
-                    result,
-                    query,
-                    kind=CommandFailureKind.INVALID_RESPONSE,
-                    detail=f"Taskwarrior export returned malformed JSON: {exc}",
-                ),
+            payload = DEFAULT_TASK_CODEC.decode_export(
+                raw,
+                source_query=query,
+                snapshot_id=f"{query}|epoch={self._uow.mutation_epoch}|command={self._command_count}",
+                mutation_epoch=self._uow.mutation_epoch,
+                command_count=self._command_count,
             )
-        if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+        except TaskCodecError as exc:
             return self._store(
                 scope,
                 self._failure(
                     result,
                     query,
                     kind=CommandFailureKind.INVALID_RESPONSE,
-                    detail="Taskwarrior export returned a non-array or non-object row",
+                    detail=f"Taskwarrior export could not be decoded: {exc}",
                 ),
             )
         unexpected_statuses = sorted(
             {
-                str(row.get("status") or "").strip().lower()
+                _field_text(row, "status").lower()
                 for row in payload
-                if str(row.get("status") or "").strip().lower() not in scope.statuses
+                if not row.issues
+                and _field_text(row, "status").lower() not in scope.statuses
             }
         )
         if unexpected_statuses:
@@ -348,7 +360,7 @@ class TaskReadRepository:
                     detail=f"Taskwarrior export returned statuses outside scope: {', '.join(unexpected_statuses)}",
                 ),
             )
-        snapshot = AuthoritativeTaskSnapshot(scope, tuple(payload), result)
+        snapshot = AuthoritativeTaskSnapshot(scope, payload, result)
         self._row_count += len(payload)
         return self._store(scope, Found(snapshot, query))
 
@@ -488,7 +500,7 @@ class TaskReadRepository:
         expected = str(expected_prev_link or "").strip().lower()
         if not expected or not isinstance(read, Found):
             return read
-        actual = str(read.value.get("prevLink") or "").strip().lower()
+        actual = _field_text(read.value, "prevLink").lower()
         if actual == expected:
             return read
         chain = str(chain_id or "").strip()
@@ -614,7 +626,7 @@ class TaskReadRepository:
                     detail=f"chain export returned a different chain for {chain}",
                 )
             return Absent(query, "authoritative snapshot contains no matching chain")
-        if any(str(row.get("chainID") or "").strip() != chain for row in rows):
+        if any(_field_text(row, "chainID") != chain for row in rows):
             return self._failure(
                 snapshot.command_result,
                 query,
@@ -635,7 +647,7 @@ class TaskReadRepository:
         rows = tuple(
             row
             for row in read.value.rows
-            if str(row.get("chain") or "").lower() == "on" and _link_number(row.get("link")) == 1
+            if _field_text(row, "chain").lower() == "on" and _link_number(_field_value(row, "link")) == 1
         )
         if len(rows) != len(read.value.rows):
             return self._failure(
@@ -684,7 +696,7 @@ class TaskReadRepository:
         read = self._export(scope, filters, empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
         if not isinstance(read, Found):
             return read
-        if any(str(row.get("chain") or "").strip().lower() != "on" for row in read.value.rows):
+        if any(_field_text(row, "chain").lower() != "on" for row in read.value.rows):
             return self._failure(
                 read.value.command_result,
                 self._query_name(scope),

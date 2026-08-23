@@ -306,6 +306,11 @@ def _task_draft(row):
 
 
 def _recovery_plan(reconcile, parent, **kwargs):
+    if "existing_children" in kwargs:
+        kwargs["existing_children"] = [
+            _fixture_observation(child)
+            for child in kwargs["existing_children"]
+        ]
     return reconcile.plan_recovery_decision(_fixture_observation(parent), **kwargs)
 
 
@@ -29434,8 +29439,7 @@ def test_reconcile_candidate_and_plan_paths():
     chain_off = _fixture_observation(dict(parent, chain="off"))
     expect(not reconcile.is_orphan_completion_candidate(chain_off), "chain:off completion should not be a candidate")
 
-    existing = [
-        {
+    existing_row = {
             "uuid": "22222222-0000-4000-8000-000000000002",
             "chainID": "11111111",
             "link": 3,
@@ -29446,21 +29450,21 @@ def test_reconcile_candidate_and_plan_paths():
             "cp": "P1D",
             "due": "20260102T090000Z",
         }
-    ]
+    existing = [_fixture_observation(existing_row)]
     plan = reconcile.plan_recovery_decision(parent_obs, existing_children=existing, hook=None)
     expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
     duplicate = {
-        **existing[0],
+        **existing_row,
         "uuid": "33333333-0000-4000-8000-000000000003",
     }
-    ambiguous = reconcile.plan_recovery_decision(parent_obs, existing_children=[*existing, duplicate], hook=None)
+    ambiguous = reconcile.plan_recovery_decision(parent_obs, existing_children=[*existing, _fixture_observation(duplicate)], hook=None)
     expect(
         ambiguous.action == "error" and "multiple tasks" in ambiguous.reason,
         f"duplicate next slots must fail closed: {ambiguous}",
     )
     nonreciprocal = reconcile.plan_recovery_decision(
         parent_obs,
-        existing_children=[dict(existing[0], prevLink="beeswax")],
+        existing_children=[_fixture_observation(dict(existing_row, prevLink="beeswax"))],
         hook=None,
     )
     expect(
@@ -29469,7 +29473,7 @@ def test_reconcile_candidate_and_plan_paths():
     )
     recurrence_mismatch = reconcile.plan_recovery_decision(
         parent_obs,
-        existing_children=[dict(existing[0], cp="P2D")],
+        existing_children=[_fixture_observation(dict(existing_row, cp="P2D"))],
         hook=None,
     )
     expect(
@@ -29478,7 +29482,7 @@ def test_reconcile_candidate_and_plan_paths():
     )
     null_recurrence = reconcile.plan_recovery_decision(
         parent_obs,
-        existing_children=[dict(existing[0], anchor_file=None)],
+        existing_children=[_fixture_observation(dict(existing_row, anchor_file=None))],
         hook=None,
     )
     expect(
@@ -32863,7 +32867,11 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         "anchor": parent["anchor"],
         "due": stamp(date(2027, 3, 1), (9, 0)),
     }
-    repeated = reconcile.plan_recovery_decision(parent_obs, existing_children=[existing], hook=mod)
+    repeated = reconcile.plan_recovery_decision(
+        parent_obs,
+        existing_children=[_fixture_observation(existing)],
+        hook=mod,
+    )
     expect(
         repeated.action == "backfill_nextlink" and repeated.child_short == "22222222",
         f"reconcile duplicated an existing seasonal slot: {repeated}",

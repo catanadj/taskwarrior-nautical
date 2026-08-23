@@ -603,21 +603,6 @@ def _recovery_existing_children(parent: TaskPayload) -> tuple[TaskObservation, .
     ).existing_children(parent_observation)
 
 
-def _existing_children_for_plan(task_bin: str, parent: TaskPayload, hook: Any) -> list[dict[str, Any]]:
-    if str(parent.get("status") or "").strip() == "deleted":
-        from nautical_core.task_codec import DEFAULT_TASK_CODEC
-        observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile child lookup")
-        evidence = lifecycle.deleted_chain_disposition(
-            observation,
-            safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-        )
-        if evidence.disposition is not DeletionDisposition.EXPIRATION:
-            return []
-    # The lifecycle planner still accepts serialized rows; keep this conversion
-    # at that explicit boundary rather than in the repository/recovery service.
-    return [row.to_mapping() for row in _recovery_existing_children(parent)]
-
-
 def _expiration_hop_limit(value: str) -> int:
     try:
         parsed = int(value)
@@ -762,10 +747,13 @@ def _verify_applied_child(
             f"post-apply verification found parent nextLink {shown}; expected {child_short}"
         )
     observations = _recovery_existing_children(fresh_parent)
-    rows = [row.to_mapping() for row in observations]
-    resolved, child_error = lifecycle.resolve_existing_child(
+    parent_observation = DEFAULT_TASK_CODEC.decode_row(
         fresh_parent,
-        rows,
+        source_query="reconcile post-apply parent verification",
+    )
+    resolved, child_error = lifecycle.resolve_existing_child(
+        parent_observation,
+        observations,
         include_deleted=True,
     )
     if child_error:
@@ -1243,9 +1231,17 @@ def _recovery_manual_review(parent: TaskPayload, reason: str) -> lifecycle.Lifec
 
 
 def _validate_recovery_child(parent: TaskPayload, child: TaskPayload) -> str:
-    _child_short, child_error = lifecycle.resolve_existing_child(
+    parent_observation = DEFAULT_TASK_CODEC.decode_row(
         parent,
-        [child],
+        source_query="reconcile recovery parent verification",
+    )
+    child_observation = DEFAULT_TASK_CODEC.decode_row(
+        child,
+        source_query="reconcile recovery child verification",
+    )
+    _child_short, child_error = lifecycle.resolve_existing_child(
+        parent_observation,
+        [child_observation],
         include_deleted=True,
     )
     return child_error

@@ -295,7 +295,7 @@ def render_recurrence_updated_panel(
 
 
 def recurrence_enabled_rows(
-    task: dict[str, Any],
+    task: Mapping[str, Any],
     source: str,
     *,
     describe_anchor: Callable[[str], str],

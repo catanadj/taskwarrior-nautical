@@ -444,9 +444,12 @@ def _panel(title, rows, kind: str = "info", task: dict | None = None):
             return
     themes = core.panel_themes()
     if task is not None and core.CHAIN_COLOR_PER_CHAIN and kind in {"preview_anchor", "preview_cp"}:
+        # Presentation consumes an immutable view; the mutable task remains
+        # owned by the on-add mutation/serialization boundary.
+        task_view = _module("modify_models").TaskView.from_mapping(task)
         theme = dict(themes[kind])
         colour_kind = "cp" if kind == "preview_cp" else "anchor"
-        colour = core.chain_colour_root(colour_kind, str(task.get("chainID") or ""))
+        colour = core.chain_colour_root(colour_kind, str(task_view.get("chainID") or ""))
         theme["border"] = colour
         theme["title"] = colour
         themes[kind] = theme

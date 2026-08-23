@@ -2603,7 +2603,7 @@ def _render_cp_completion_feedback(
     )
 
 
-def _render_lifecycle_result(result, task: dict) -> None:
+def _render_lifecycle_result(result, task) -> None:
     """Render one finalized non-success outcome without deciding its state."""
     state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
     title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
@@ -2733,8 +2733,9 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
 
 
 def _first_recurrence_target(new: dict, source: str):
+    task_view = _module("modify_models").TaskView.from_mapping(new)
     return _module("modify_completion_compute").first_recurrence_target(
-        new,
+        task_view,
         source,
         parse_datetime=core.parse_dt_any,
         format_datetime=core.fmt_isoz,
@@ -2743,8 +2744,9 @@ def _first_recurrence_target(new: dict, source: str):
 
 
 def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
+    task_view = _module("modify_models").TaskView.from_mapping(new)
     return _module("modify_feedback").recurrence_enabled_rows(
-        new,
+        task_view,
         source,
         describe_anchor=core.describe_anchor_expr,
         parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,

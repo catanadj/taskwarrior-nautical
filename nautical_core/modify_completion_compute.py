@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from nautical_core.modify_models import (
     CapFromUntilAnchorCallback,
@@ -484,7 +484,7 @@ def estimate_anchor_final_by_max(
 
 
 def first_recurrence_target(
-    task: dict[str, Any],
+    task: Mapping[str, Any],
     source: str,
     *,
     parse_datetime: Any,

@@ -127,7 +127,7 @@ def _completion_diagnostic(
 def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: dict[str, Any]) -> None:
     """Keep presentation failures from suppressing the task response."""
     try:
-        services.render_lifecycle_result(result, task)
+        services.render_lifecycle_result(result, TaskView.from_mapping(task))
     except Exception:
         pass
 

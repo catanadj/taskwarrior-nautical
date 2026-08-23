@@ -435,16 +435,16 @@ def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -
     return None
 
 
-def _fresh_native_until_previous(row: dict[str, Any]) -> dict[str, Any] | None:
-    chain_id = str(row.get("chainID") or "").strip()
-    link = lifecycle.int_or_default(row.get("link"), 0)
+def _fresh_native_until_previous(row: TaskObservation) -> TaskObservation | None:
+    chain_id = _observation_text(row, "chainID")
+    link = lifecycle.int_or_default(getattr(row.field("link").value, "value", row.field("link").value), 0)
     if not chain_id or link <= 1:
         return None
     value = _read_value(
         _repository().predecessor_slot(chain_id, link - 1, refresh=True),
         f"predecessor {chain_id}:{link - 1}",
     )
-    return dict(value) if value is not None else None
+    return value
 
 
 def _native_until_repairs(

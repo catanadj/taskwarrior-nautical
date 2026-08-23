@@ -27,6 +27,7 @@ from nautical_core.lifecycle_planner import (
     plan_expiration_successor,
     plan_candidate_successor,
 )
+from nautical_core.task_models import FieldPresence, TaskObservation
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
 
@@ -165,9 +166,16 @@ def compute_expiration_child_due(
     return candidate.child_due, dict(candidate.metadata)
 
 
-def native_until_target_field(task: dict[str, Any]) -> str:
+def _observation_value(task: TaskObservation, field: str) -> object:
+    state = task.field(field)
+    if state.presence is FieldPresence.ABSENT:
+        return None
+    return getattr(state.value, "value", state.value)
+
+
+def native_until_target_field(task: TaskObservation) -> str:
     """Return the recurrence target field used by a task."""
-    return "due" if task.get("due") else "scheduled"
+    return "due" if _observation_value(task, "due") else "scheduled"
 
 
 def invalid_relative_carry_reason(
@@ -210,14 +218,14 @@ def invalid_relative_carry_reason(
 
 
 def invalid_native_until_reason(
-    task: dict[str, Any],
+    task: TaskObservation,
     *,
     safe_parse_datetime: Any,
 ) -> str | None:
     """Describe an invalid native expiration window, if one is present."""
-    until_raw = task.get("until")
+    until_raw = _observation_value(task, "until")
     target_field = native_until_target_field(task)
-    target_raw = task.get(target_field)
+    target_raw = _observation_value(task, target_field)
     if not until_raw or not target_raw:
         return None
     until_dt, until_err = safe_parse_datetime(until_raw)
@@ -230,8 +238,8 @@ def invalid_native_until_reason(
 
 
 def repair_native_until_from_previous(
-    previous: dict[str, Any],
-    current: dict[str, Any],
+    previous: TaskObservation,
+    current: TaskObservation,
     *,
     kind: str,
     safe_parse_datetime: Any,
@@ -242,9 +250,9 @@ def repair_native_until_from_previous(
     """Carry the previous link's native expiration policy onto the current target."""
     parent_field = native_until_target_field(previous)
     child_field = native_until_target_field(current)
-    parent_target, parent_target_err = safe_parse_datetime(previous.get(parent_field))
-    parent_until, parent_until_err = safe_parse_datetime(previous.get("until"))
-    child_target, child_target_err = safe_parse_datetime(current.get(child_field))
+    parent_target, parent_target_err = safe_parse_datetime(_observation_value(previous, parent_field))
+    parent_until, parent_until_err = safe_parse_datetime(_observation_value(previous, "until"))
+    child_target, child_target_err = safe_parse_datetime(_observation_value(current, child_field))
     if parent_target_err or parent_until_err or child_target_err:
         return None, "previous link lacks parseable target/until state"
     if not all((parent_target, parent_until, child_target)):
@@ -264,7 +272,7 @@ def repair_native_until_from_previous(
 
 
 def fallback_native_until_at_day_end(
-    current: dict[str, Any],
+    current: TaskObservation,
     *,
     safe_parse_datetime: Any,
     fmt_isoz: Any,
@@ -273,7 +281,7 @@ def fallback_native_until_at_day_end(
 ) -> tuple[str | None, str | None]:
     """Use local 23:00 when a prior link cannot provide an expiration policy."""
     target_field = native_until_target_field(current)
-    target, target_err = safe_parse_datetime(current.get(target_field))
+    target, target_err = safe_parse_datetime(_observation_value(current, target_field))
     if target_err or target is None:
         return None, f"cannot infer native until without a parseable {target_field}"
     try:
@@ -350,18 +358,14 @@ def resolve_existing_child(
     return short_uuid(child_uuid), ""
 
 
-def recurrence_kind(task: dict[str, Any]) -> str:
-    try:
-        evaluator = SchedulerService.from_task(task).session.evaluator
-    except ValueError:
-        # Preserve useful classification for incomplete legacy rows; the
-        # reconciler reports their missing identity separately.
-        if normalize_recurrence_text(task.get("anchor")):
-            return "anchor"
-        if normalize_recurrence_text(task.get("anchor_file")):
-            return "anchor_file"
-        return "cp"
-    return evaluator.kind or "cp"
+def recurrence_kind(task: TaskObservation) -> str:
+    # Recovery only needs the recurrence family to carry native-until policy;
+    # full schedule compilation belongs to the scheduler service.
+    if normalize_recurrence_text(_observation_value(task, "anchor")):
+        return "anchor"
+    if normalize_recurrence_text(_observation_value(task, "anchor_file")):
+        return "anchor_file"
+    return "cp"
 
 
 def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) -> dict[str, Any]:

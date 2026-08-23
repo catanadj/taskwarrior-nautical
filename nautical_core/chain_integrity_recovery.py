@@ -119,17 +119,20 @@ class IntegrityRecoveryService:
 
     def audit_native_until(
         self,
-        rows: Iterable[dict[str, Any]],
+        rows: Iterable[TaskObservation],
         *,
-        predecessor: Callable[[dict[str, Any]], dict[str, Any] | None],
+        predecessor: Callable[[TaskObservation], TaskObservation | None],
         safe_parse_datetime: Callable[[Any], tuple[Any, str | None]],
         fmt_isoz: Callable[[Any], str],
         utc_to_local_naive: Callable[[Any], Any],
         local_naive_to_utc: Callable[[Any], Any],
     ) -> RecoveryAudit:
-        materialized = tuple(dict(row) for row in rows)
+        materialized = tuple(rows)
         by_chain_link = {
-            (str(row.get("chainID") or "").strip(), lifecycle.int_or_default(row.get("link"), 0)): row
+            (
+                str(_observation_value(row, "chainID") or "").strip(),
+                lifecycle.int_or_default(_observation_value(row, "link"), 0),
+            ): row
             for row in materialized
         }
         repairs: list[dict[str, Any]] = []
@@ -139,15 +142,15 @@ class IntegrityRecoveryService:
             reason = lifecycle.invalid_native_until_reason(row, safe_parse_datetime=safe_parse_datetime)
             if not reason:
                 continue
-            chain_id = str(row.get("chainID") or "").strip()
-            link = lifecycle.int_or_default(row.get("link"), 0)
+            chain_id = str(_observation_value(row, "chainID") or "").strip()
+            link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
             previous = by_chain_link.get((chain_id, link - 1)) or predecessor(row)
             item: dict[str, Any] = {
-                "task": lifecycle.short_uuid(row.get("uuid")),
+                "task": lifecycle.short_uuid(_observation_value(row, "uuid")),
                 "chainID": chain_id,
                 "link": link,
-                "target": row.get("due") or row.get("scheduled"),
-                "until": row.get("until"),
+                "target": _observation_value(row, "due") or _observation_value(row, "scheduled"),
+                "until": _observation_value(row, "until"),
                 "reason": reason,
             }
             repaired: str | None = None
@@ -189,7 +192,7 @@ class IntegrityRecoveryService:
             item["action"] = "repair_until"
             item["new_until"] = repaired
             repairs.append(item)
-            candidates.append(NativeUntilRepairCandidate(dict(row), dict(previous) if previous else None, item))
+            candidates.append(NativeUntilRepairCandidate(row, previous, item))
         for item in repairs:
             if item.get("action") == "repair_error":
                 errors.append(

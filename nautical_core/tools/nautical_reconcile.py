@@ -963,7 +963,7 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
     )
 
 
-def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | None:
+def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:
     """Find a task already occupying this exact chain position, by uuid or
     by (chainID, link, prevLink) match, regardless of whether it carries the
     deterministic stable UUID. Preserves duplicate-avoidance for chains that
@@ -972,15 +972,20 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | No
     child = lifecycle_plan.child_dict()
     child_uuid = str(child.get("uuid") or "").strip().lower()
     rows = _recovery_existing_children({"chainID": lifecycle_plan.identity.chain_id, "link": lifecycle_plan.identity.source_link})
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     parent_short = str(lifecycle_plan.identity.parent_uuid or "").strip().lower()[:8]
-    for row in rows:
-        row_uuid = str(row.get("uuid") or "").strip().lower()
+    for raw_row in rows:
+        row = DEFAULT_TASK_CODEC.decode_row(raw_row, source_query="reconcile positional child")
+        def value(name: str) -> object:
+            state = row.field(name)
+            return getattr(state.value, "value", state.value)
+        row_uuid = str(value("uuid") or "").strip().lower()
         if child_uuid and row_uuid == child_uuid:
             return row
         if (
-            str(row.get("chainID") or "").strip() == lifecycle_plan.identity.chain_id
-            and lifecycle.int_or_default(row.get("link"), None) == lifecycle_plan.identity.target_link
-            and str(row.get("prevLink") or "").strip().lower() == parent_short
+            str(value("chainID") or "").strip() == lifecycle_plan.identity.chain_id
+            and lifecycle.int_or_default(value("link"), None) == lifecycle_plan.identity.target_link
+            and str(value("prevLink") or "").strip().lower() == parent_short
         ):
             return row
     return None
@@ -1004,7 +1009,7 @@ def _lifecycle_plan_with_resolved_child_uuid(
         return recon_plan
     child = lifecycle_plan.child_dict()
     existing = _find_positional_child(lifecycle_plan)
-    resolved_uuid = str(existing.get("uuid") or "").strip() if existing is not None else ""
+    resolved_uuid = str(existing.field("uuid").value.value or "").strip() if existing is not None else ""
     if not resolved_uuid:
         resolved_uuid = _stable_child_uuid(hook, _decision_parent_values(recon_plan.parent), child)
     if not resolved_uuid or resolved_uuid == str(child.get("uuid") or "").strip():

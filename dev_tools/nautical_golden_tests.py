@@ -3234,8 +3234,8 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         ParentLinkPayload,
     )
 
-    parent_uuid = "00000000-0000-0000-0000-000000000922"
-    child_uuid = "00000000-0000-0000-0000-000000000923"
+    parent_uuid = "00000000-0000-4000-8000-000000000922"
+    child_uuid = "00000000-0000-4000-8000-000000000923"
     guard = MutationGuard(
         parent_uuid,
         "completed",
@@ -3251,6 +3251,10 @@ def test_integration_mutation_requests_use_named_typed_payloads():
             "chainID": "chain-requests",
             "link": 8,
             "prevLink": parent_uuid[:8],
+            "status": "pending",
+            "chain": "on",
+            "cp": "1d",
+            "due": "20260824T090000Z",
             "description": "typed child",
         },
         parent_uuid=parent_uuid,
@@ -3258,6 +3262,13 @@ def test_integration_mutation_requests_use_named_typed_payloads():
     request = MutationRequest(MutationOperation.CHILD_IMPORT, guard, child)
     expect(request.payload.child_uuid == child_uuid, "child identity was not retained")
     expect(request.payload.to_dict()["description"] == "typed child", "child payload was not retained")
+
+    draft = _task_draft(child.to_dict())
+    draft_request = MutationRequest.child_import(guard, draft)
+    expect(
+        draft_request.payload.child_uuid == child_uuid,
+        "typed child draft request lost its identity",
+    )
 
     named = (
         MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),

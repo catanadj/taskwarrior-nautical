@@ -2920,8 +2920,39 @@ def test_task_read_repository_mutation_epoch_prevents_stale_reuse():
         expect(client.calls == 1, "repeated read did not reuse authoritative data")
         uow.record_mutation()
         fresh = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
-        expect(isinstance(fresh, Found) and fresh.value["modified"] == "2", "post-mutation read stayed stale")
+        expect(
+            isinstance(fresh, Found)
+            and fresh.value.field("modified").raw_value() == "2",
+            "post-mutation read stayed stale",
+        )
         expect(client.calls == 2, "post-mutation read did not refresh")
+
+
+def test_task_read_repository_preserves_found_malformed_observation():
+    """A valid row with a malformed field remains found with decode evidence."""
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult, Found
+
+    class Client:
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            command = TaskCommand(("task", *args), purpose, timeout)
+            row = {
+                "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
+                "status": "pending",
+                "link": "not-an-integer",
+            }
+            return TaskCommandResult(
+                command, 0, json.dumps([row]), "", CommandFailureKind.SUCCESS, 1, 0.001
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        uow.client = Client()
+        read = uow.repository.by_uuid(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            statuses=("pending",),
+        )
+        expect(isinstance(read, Found), f"malformed found row was not preserved: {read}")
+        expect(read.value.issues and read.value.field("link").raw_value() == "not-an-integer", "decode evidence was lost")
 
 
 def test_task_read_repository_exposes_all_domain_reads():
@@ -32780,6 +32811,7 @@ TESTS = [
     test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly,
     test_task_read_repository_fails_closed_on_untrusted_output,
     test_task_read_repository_mutation_epoch_prevents_stale_reuse,
+    test_task_read_repository_preserves_found_malformed_observation,
     test_task_read_repository_exposes_all_domain_reads,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_mutation_requests_use_named_typed_payloads,

@@ -9795,24 +9795,27 @@ def test_doctor_reports_chain_repair_plan_findings():
         _write_fake_task_for_doctor(fake_task)
         rows = [
             {
-                "uuid": "11111111-0000-0000-0000-000000000001",
+                "uuid": "11111111-0000-4000-8000-000000000001",
                 "status": "completed",
                 "cp": "1d",
+                "chain": "on",
                 "chainID": "safe",
                 "link": 1,
             },
             {
-                "uuid": "22222222-0000-0000-0000-000000000002",
+                "uuid": "22222222-0000-4000-8000-000000000002",
                 "status": "pending",
                 "cp": "1d",
+                "chain": "on",
                 "chainID": "safe",
                 "link": 2,
                 "prevLink": "wrong",
             },
             {
-                "uuid": "33333333-0000-0000-0000-000000000003",
+                "uuid": "33333333-0000-4000-8000-000000000003",
                 "status": "pending",
                 "cp": "1d",
+                "chain": "on",
                 "chainID": "review",
                 "prevLink": "missing1",
             },

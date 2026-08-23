@@ -150,16 +150,6 @@ def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime
     return evidence.disposition is DeletionDisposition.EXPIRATION
 
 
-def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
-    """Return a computation-only parent that advances from due/scheduled, not deletion time."""
-    target = parent.get("due") or parent.get("scheduled")
-    if not str(target or "").strip():
-        raise ValueError("expired recurrence has no due or scheduled timestamp")
-    calculation_parent = dict(parent)
-    calculation_parent["end"] = target
-    return calculation_parent
-
-
 def compute_expiration_child_due(
     parent: dict[str, Any], *, hook: Any = None, generation: ChainGenerationService | None = None
 ) -> tuple[Any, dict[str, Any]]:

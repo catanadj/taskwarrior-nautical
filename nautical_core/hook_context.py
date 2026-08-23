@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .integration_context import IntegrationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
+from .task_models import TaskObservation
 
 
 @dataclass(slots=True)
@@ -23,6 +24,7 @@ class HookRuntimeContext:
 class OnAddRequest:
     runtime: HookRuntimeContext
     task: dict[str, Any]
+    observation: TaskObservation | None = None
     prof: Any | None = None
 
 
@@ -41,6 +43,7 @@ class OnExitRequest:
 @dataclass(slots=True)
 class OnAddContext:
     task: dict[str, Any]
+    observation: TaskObservation | None
     now_utc: datetime
     now_local: datetime
     cp_str: str
@@ -88,6 +91,7 @@ def build_on_add_context(
         [dict[str, Any], datetime],
         tuple[bool, str, datetime, str | None, Any, tuple[int, int]],
     ],
+    observation: TaskObservation | None = None,
 ) -> OnAddContext:
     cp_str = (task.get('cp') or '').strip()
     anchor_str = (task.get('anchor') or '').strip()
@@ -118,6 +122,7 @@ def build_on_add_context(
         ) = due_context_on_add(task, now_utc)
     return OnAddContext(
         task=task,
+        observation=observation,
         now_utc=now_utc,
         now_local=now_local,
         cp_str=cp_str,
@@ -135,8 +140,10 @@ def build_on_add_context(
     )
 
 
-def build_on_add_request(*, runtime: HookRuntimeContext, task: dict[str, Any], prof=None) -> OnAddRequest:
-    return OnAddRequest(runtime=runtime, task=task, prof=prof)
+def build_on_add_request(
+    *, runtime: HookRuntimeContext, task: dict[str, Any], observation: TaskObservation | None = None, prof=None,
+) -> OnAddRequest:
+    return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 
 
 def build_on_modify_request(*, runtime: HookRuntimeContext, old: dict[str, Any], new: dict[str, Any]) -> OnModifyRequest:

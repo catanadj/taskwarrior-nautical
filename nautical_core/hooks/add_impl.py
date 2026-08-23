@@ -555,6 +555,7 @@ def _error_and_exit(msg_tuples):
 
 _RAW_INPUT_TEXT = ""
 _PARSED_TASK = None
+_PARSED_OBSERVATION = None
 
 def _panic_passthrough() -> None:
     """Emit a valid fallback JSON task on unexpected errors."""
@@ -1675,13 +1676,14 @@ def _build_profiler():
 
 
 def _read_on_add_task(prof) -> dict:
-    global _RAW_INPUT_TEXT, _PARSED_TASK
+    global _RAW_INPUT_TEXT, _PARSED_TASK, _PARSED_OBSERVATION
     if _EARLY_PROTOCOL_RESULT is not None:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
         if not _EARLY_PROTOCOL_RESULT.valid:
             _fail_and_exit("Invalid input", _EARLY_PROTOCOL_RESULT.error)
         request = getattr(_EARLY_PROTOCOL_RESULT, "request", None)
         task = getattr(request, "task", None) or _EARLY_PROTOCOL_RESULT.task
+        _PARSED_OBSERVATION = getattr(_EARLY_PROTOCOL_RESULT, "observation", None)
         if not isinstance(task, dict):
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
         _PARSED_TASK = task
@@ -1708,10 +1710,12 @@ def _read_on_add_task(prof) -> dict:
         try:
             with prof.section("parse:json"):
                 codec = _module("task_codec")
-                task = codec.DEFAULT_TASK_CODEC.decode_object(
+                observation = codec.DEFAULT_TASK_CODEC.decode_object(
                     raw,
                     source_query="hook:on-add",
-                ).to_mapping()
+                )
+                task = observation.to_mapping()
+                _PARSED_OBSERVATION = observation
         except Exception:
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     if not isinstance(task, dict):
@@ -1737,7 +1741,14 @@ def _build_hook_runtime_context():
     )
 
 
-def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *, prof=None):
+def _build_on_add_context(
+    task: dict,
+    now_utc: datetime,
+    now_local: datetime,
+    *,
+    observation=None,
+    prof=None,
+):
     hook_context = _module("hook_context")
     _t_conf = time.perf_counter()
     try:
@@ -1749,6 +1760,7 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
             kind_and_defaults_on_add=_kind_and_defaults_on_add,
             validate_chain_limits_on_add=_validate_chain_limits_on_add,
             due_context_on_add=_due_context_on_add,
+            observation=observation,
         )
         omit_expr = _strip_quotes((task.get("omit") or "").strip())
         if omit_expr:
@@ -1843,8 +1855,8 @@ class _OnAddServices:
     def fail_and_exit(self, title: str, message: str):
         _fail_and_exit(title, message)
 
-    def build_context(self, task, now_utc, now_local, *, prof):
-        return _build_on_add_context(task, now_utc, now_local, prof=prof)
+    def build_context(self, task, now_utc, now_local, *, observation=None, prof):
+        return _build_on_add_context(task, now_utc, now_local, observation=observation, prof=prof)
 
     def stamp_chain_id(self, task):
         _stamp_chain_id_on_add(task)
@@ -1991,7 +2003,12 @@ def main():
     hook_context = _module("hook_context")
     hook_engine = _module("hook_engine")
     runtime = _build_hook_runtime_context()
-    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
+    request = hook_context.build_on_add_request(
+        runtime=runtime,
+        task=task,
+        observation=_PARSED_OBSERVATION,
+        prof=prof,
+    )
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,

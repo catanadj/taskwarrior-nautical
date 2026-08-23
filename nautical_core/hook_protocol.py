@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
+
+if TYPE_CHECKING:
+    from .task_models import TaskObservation
 
 try:
     from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
@@ -78,7 +81,7 @@ class ProtocolFailure:
 
 class HookProtocolResult:
     __slots__ = (
-        "event", "raw_bytes", "raw_text", "old", "new", "is_nautical",
+        "event", "raw_bytes", "raw_text", "old", "new", "observation", "is_nautical",
         "error", "error_kind", "request", "failure",
     )
 
@@ -90,6 +93,7 @@ class HookProtocolResult:
         raw_text: str,
         old: dict | None = None,
         new: dict | None = None,
+        observation: TaskObservation | None = None,
         is_nautical: bool = False,
         error: str = "",
         error_kind: str = "",
@@ -101,6 +105,7 @@ class HookProtocolResult:
         self.raw_text = raw_text
         self.old = old
         self.new = new
+        self.observation = observation
         self.is_nautical = bool(is_nautical)
         self.error = str(error or "")
         self.error_kind = str(error_kind or "")
@@ -207,6 +212,7 @@ def probe_on_add(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> HookPr
         raw_bytes=raw_bytes,
         raw_text=raw_text,
         new=task,
+        observation=observation,
         is_nautical=task_has_add_nautical_fields(task),
     )
 

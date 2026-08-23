@@ -280,7 +280,7 @@ class OccurrenceQueryService:
 
     def _query_cp_task(
         self,
-        task: Mapping[str, Any],
+        task: TaskRow,
         identity: TaskIdentity,
         request: OccurrenceQueryRequest,
     ) -> TaskOccurrenceResult:
@@ -293,7 +293,7 @@ class OccurrenceQueryService:
             _boundary_local(request.end.value, request.end.date_only, self._timezone, end=True)
             if request.end is not None else None
         )
-        chain_until = task.get("chainUntil")
+        chain_until = _task_value(task, "chainUntil")
         if chain_until:
             parser = getattr(self._core, "parse_dt_any", None)
             if not callable(parser):
@@ -305,8 +305,8 @@ class OccurrenceQueryService:
             end = until_local if end is None else min(end, until_local)
         if end is not None and end < start:
             return TaskOccurrenceResult(identity, "empty")
-        link = _link_value(task.get("link")) or 1
-        chain_max = task.get("chainMax")
+        link = _link_value(_task_value(task, "link")) or 1
+        chain_max = _task_value(task, "chainMax")
         max_link = None if chain_max in (None, "") else int(float(str(chain_max)))
         limit = request.count or request.max_occurrences
         current = reference
@@ -328,7 +328,7 @@ class OccurrenceQueryService:
                 break
             if max_link is not None and link >= max_link:
                 break
-            parent = dict(task)
+            parent = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
             stamp = self._core.fmt_isoz(current.astimezone(timezone.utc))
             parent["end"] = stamp
             parent["due"] = stamp
@@ -349,10 +349,10 @@ class OccurrenceQueryService:
             return TaskOccurrenceResult(
                 task=None,
                 status="absent",
-                failure=_failure("task_absent", "Taskwarrior returned no task for the requested UUID", task_uuid=str(task.get("uuid") or "")),
+                failure=_failure("task_absent", "Taskwarrior returned no task for the requested UUID", task_uuid=str(_task_value(task, "uuid") or "")),
             )
         if isinstance(task, Mapping) and task.get("_query_ambiguous"):
-            uuid_value = str(task.get("uuid") or "")
+            uuid_value = str(_task_value(task, "uuid") or "")
             return TaskOccurrenceResult(
                 task=None,
                 status="invalid",
@@ -365,8 +365,7 @@ class OccurrenceQueryService:
         try:
             identity = _task_identity(task)
             if identity.recurrence_kind == "cp":
-                cp_task = task.to_mapping() if isinstance(task, TaskObservation) else task
-                return self._query_cp_task(cp_task, identity, request)
+                return self._query_cp_task(task, identity, request)
             context = self._context_for(task)
             scheduler = (
                 SchedulerService.from_observation(task, context=context)

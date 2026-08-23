@@ -26591,8 +26591,18 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     from nautical_core.chain_generation import ChainGenerationService
 
     class StubGeneration(ChainGenerationService):
-        def build_child_from_parent(self, *_args, **_kwargs):
-            return dict(child)
+        def build_child_draft(self, parent, child_due, child_field, next_link_no, *_args, **_kwargs):
+            return _task_draft({
+                **child,
+                "description": "typed child fixture",
+                "chain": "on",
+                "status": "pending",
+                "chainID": parent["chainID"],
+                "link": next_link_no,
+                "cp": "P1D",
+                "anchor_mode": "skip",
+                child_field: child_due,
+            })
 
     original_generation = mod._chain_generation_service
     mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
@@ -26611,7 +26621,8 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     finally:
         mod._chain_generation_service = original_generation
     expect(bool(out), f"expected spawn result, got {out}")
-    expect(out.child == child, f"unexpected child payload: {out}")
+    expect(out.child.get("uuid") == child["uuid"], f"unexpected child payload: {out}")
+    expect(out.child.get("link") == 2, f"typed child lost link: {out}")
     expect(out.child_short == "beeswax", f"unexpected child short: {out}")
     expect(out.verified is True and out.deferred_spawn is False, f"unexpected verification state: {out}")
     expect(out.spawn_intent_id == "si_test", f"unexpected spawn intent id: {out}")
@@ -26635,8 +26646,18 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
     from nautical_core.chain_generation import ChainGenerationService
 
     class StubGeneration(ChainGenerationService):
-        def build_child_from_parent(self, *_args, **_kwargs):
-            return dict(child)
+        def build_child_draft(self, parent, child_due, child_field, next_link_no, *_args, **_kwargs):
+            return _task_draft({
+                **child,
+                "description": "typed child fixture",
+                "chain": "on",
+                "status": "pending",
+                "chainID": parent["chainID"],
+                "link": next_link_no,
+                "cp": "P1D",
+                "anchor_mode": "skip",
+                child_field: child_due,
+            })
 
     original_generation = mod._chain_generation_service
     original_spawn = mod._spawn_child_atomic

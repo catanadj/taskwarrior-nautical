@@ -25,7 +25,7 @@ from .lifecycle_models import (
 )
 from .task_codec import TaskCodec
 from .task_codec import DEFAULT_TASK_CODEC
-from .task_models import NauticalTask, TaskDraft
+from .task_models import NauticalTask, TaskDraft, TaskPayload
 
 
 class LifecyclePlanningError(RuntimeError):
@@ -123,7 +123,7 @@ class CarryValidator(Protocol):
     def __call__(
         self,
         snapshot: TaskSnapshot,
-        child: Mapping[str, Any],
+        child: TaskPayload,
         candidate: RecurrenceCandidate,
     ) -> str | None: ...
 

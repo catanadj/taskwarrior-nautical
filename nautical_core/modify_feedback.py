@@ -556,7 +556,7 @@ def _pretty_basis_cp(task: TaskPayload, meta: dict, *, parse_cp_duration, parse_
     return "Preserve wall clock (period is multiple of 24h)"
 
 
-def _pretty_basis_anchor(meta: Mapping[str, Any], task: Mapping[str, Any], *, fmt_dt_local) -> str:
+def _pretty_basis_anchor(meta: Mapping[str, Any], task: TaskPayload, *, fmt_dt_local) -> str:
     mode = (meta.get("mode") or "skip").lower()
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)

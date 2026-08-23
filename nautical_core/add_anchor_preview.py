@@ -9,8 +9,9 @@ from . import calendar_feedback, panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
+from .task_models import TaskPayload
 
-def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
+def _preview_seed_base(task: TaskPayload, fallback_chain_id: str) -> str:
     """Resolve the stable preview identity at the raw-input boundary."""
     return str(task.get("chainID") or fallback_chain_id).strip()
 
@@ -20,7 +21,7 @@ def _anchor_file_natural_text(expr: str) -> str:
     return f"Dates from {file_name}" if file_name else ""
 
 
-def _anchor_omit_natural_text(task: dict[str, Any], *, core: Any) -> str:
+def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
     omit_raw = str(task.get('omit') or '').strip()
     omit_file = str(task.get('omit_file') or '').strip()
     parts: list[str] = []
@@ -43,7 +44,7 @@ def _anchor_omit_natural_text(task: dict[str, Any], *, core: Any) -> str:
     return ' and '.join(part for part in parts if part)
 
 
-def _anchor_preview_natural_text(task: dict[str, Any], dnf, anchor_file_str: str, *, core: Any) -> str:
+def _anchor_preview_natural_text(task: TaskPayload, dnf, anchor_file_str: str, *, core: Any) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_text = _anchor_omit_natural_text(task, core=core)
     if omit_text and (task.get('anchor_mode') or 'skip').lower() == 'skip':
@@ -59,7 +60,7 @@ def _anchor_preview_natural_text(task: dict[str, Any], dnf, anchor_file_str: str
 
 
 def anchor_preview_prepare_dnf(
-    task: dict[str, Any],
+    task: TaskPayload,
     anchor_str: str,
     due_dt: datetime,
     rows: list[tuple[str, str]],
@@ -108,7 +109,7 @@ def anchor_preview_prepare_dnf(
 
 
 def anchor_preview_prepare_omit_dnf(
-    task: dict[str, Any],
+    task: TaskPayload,
     rows: list[tuple[str, str]],
     *,
     core: Any,
@@ -168,7 +169,7 @@ def anchor_preview_prepare_omit_dnf(
 
 
 def anchor_preview_seed_context(
-    task: dict[str, Any],
+    task: TaskPayload,
     due_day: Any,
     now_local: datetime,
     user_provided_due: bool,
@@ -182,7 +183,7 @@ def anchor_preview_seed_context(
 
 
 def anchor_preview_first_due(
-    task: dict[str, Any],
+    task: TaskPayload,
     dnf,
     omit_dnf,
     *,
@@ -367,7 +368,7 @@ def _anchor_file_occurrences_local(
     return deduplicated
 
 
-def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any) -> str:
+def _preview_omit_label(task: TaskPayload, item_local: datetime, *, core: Any) -> str:
     omit_file = str(task.get("omit_file") or "").strip()
     if not omit_file:
         return "omitted"
@@ -391,7 +392,7 @@ def _preview_occurrence_lines(
     first_due_local_dt: datetime,
     preview_limit: int,
     core: Any,
-    task: dict[str, Any],
+    task: TaskPayload,
 ) -> list[str]:
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     out: list[str] = []
@@ -766,7 +767,7 @@ def _collect_events_with_provider(
 
 def handle_anchor_file_preview_on_add(
     *,
-    task: dict[str, Any],
+    task: TaskPayload,
     anchor_file_str: str,
     ch: str,
     now_utc: datetime,
@@ -1030,7 +1031,7 @@ def _initial_occurrence_limit(preview_hard_cap: int, compact_presentation: bool)
 
 def handle_anchor_preview_on_add(
     *,
-    task: dict[str, Any],
+    task: TaskPayload,
     anchor_str: str,
     anchor_file_str: str = "",
     ch: str,

@@ -191,8 +191,8 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
 
 
 def handle_deleted_modify(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     *,
     services: DeletedModifyServices,
     transition: Any = None,

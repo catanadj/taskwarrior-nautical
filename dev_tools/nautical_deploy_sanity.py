@@ -440,6 +440,42 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
     if direct_json_violations:
         violations.extend(f"direct-json:{path}" for path in direct_json_violations)
 
+    typed_domain_modules = {
+        "nautical_core/add_anchor_preview.py",
+        "nautical_core/lifecycle_planner.py",
+        "nautical_core/chain_integrity_lifecycle.py",
+        "nautical_core/lifecycle_reconciliation.py",
+        "nautical_core/hook_engine.py",
+        "nautical_core/modify_validation.py",
+        "nautical_core/modify_feedback.py",
+        "nautical_core/modify_expiration.py",
+        "nautical_core/modify_timeline.py",
+        "nautical_core/query_service.py",
+        "nautical_core/modify_completion_flow.py",
+    }
+    typed_violations: list[str] = []
+    for relative in sorted(typed_domain_modules):
+        path = root / relative
+        if not path.is_file():
+            typed_violations.append(f"missing:{relative}")
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError) as exc:
+            typed_violations.append(f"invalid:{relative}:{type(exc).__name__}")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for argument in [*node.args.args, *node.args.kwonlyargs]:
+                if argument.arg not in {"task", "parent", "child", "old", "new"}:
+                    continue
+                annotation = ast.unparse(argument.annotation) if argument.annotation else ""
+                if "dict" in annotation.lower() or "mapping" in annotation.lower():
+                    typed_violations.append(f"{relative}:{node.name}:{argument.arg}:{annotation}")
+    if typed_violations:
+        violations.extend(f"untyped-domain:{item}" for item in typed_violations)
+
     return [{
         "kind": "domain-model",
         "name": "removed-construction-paths",

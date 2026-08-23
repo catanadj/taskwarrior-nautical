@@ -11,7 +11,6 @@ from .task_models import (
     ChainID,
     ChainState,
     FieldPresence,
-    NauticalTask,
     ShortUUIDRef,
     TaskDraft,
     TaskLink,

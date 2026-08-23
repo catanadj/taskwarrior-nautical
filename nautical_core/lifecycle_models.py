@@ -305,23 +305,6 @@ class ParentGuard:
         object.__setattr__(self, "recurrence_fingerprint", str(self.recurrence_fingerprint or "").strip())
         object.__setattr__(self, "modified", str(self.modified or "").strip())
 
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "ParentGuard":
-        if not isinstance(value, Mapping):
-            raise LifecycleContractError("parent guard must be an object")
-        try:
-            link = int(value["link"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise LifecycleContractError("parent guard requires an integer link") from exc
-        return cls(
-            status=str(value.get("status", "")),
-            chain=str(value.get("chain", "")),
-            chain_id=str(value.get("chainID", value.get("chain_id", ""))),
-            link=link,
-            recurrence_fingerprint=str(value.get("recurrence_fingerprint", "")),
-            modified=str(value.get("modified", "")),
-        )
-
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "status": self.status,
@@ -389,19 +372,6 @@ class LifecycleIdentity:
         object.__setattr__(self, "chain_id", chain_id)
         object.__setattr__(self, "parent_uuid", parent_uuid)
         object.__setattr__(self, "event", event)
-
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "LifecycleIdentity":
-        if not isinstance(value, Mapping):
-            raise LifecycleContractError("lifecycle identity must be an object")
-        target = value.get("target_link", value.get("targetLink"))
-        return cls(
-            chain_id=str(value.get("chainID", value.get("chain_id", ""))),
-            parent_uuid=str(value.get("parent_uuid", value.get("parentUUID", ""))),
-            source_link=int(value.get("source_link", value.get("sourceLink"))),
-            target_link=None if target in (None, "") else int(target),
-            event=LifecycleEvent(value.get("event")),
-        )
 
     @property
     def key(self) -> str:
@@ -580,8 +550,26 @@ class LifecyclePlan:
             stage = ExecutionStage(value.get("stage", ExecutionStage.PLANNED.value))
             action = LifecycleAction(value.get("action"))
             max_attempts = int(value.get("max_attempts", 3))
-            identity = LifecycleIdentity.from_mapping(value.get("identity") or {})
-            parent_guard = ParentGuard.from_mapping(value.get("parent_guard") or {})
+            identity_value = value.get("identity") or {}
+            guard_value = value.get("parent_guard") or {}
+            if not isinstance(identity_value, Mapping) or not isinstance(guard_value, Mapping):
+                raise LifecycleContractError("lifecycle identity and parent guard must be objects")
+            target = identity_value.get("target_link", identity_value.get("targetLink"))
+            identity = LifecycleIdentity(
+                chain_id=str(identity_value.get("chainID", identity_value.get("chain_id", ""))),
+                parent_uuid=str(identity_value.get("parent_uuid", identity_value.get("parentUUID", ""))),
+                source_link=int(identity_value.get("source_link", identity_value.get("sourceLink"))),
+                target_link=None if target in (None, "") else int(target),
+                event=LifecycleEvent(identity_value.get("event")),
+            )
+            parent_guard = ParentGuard(
+                status=str(guard_value.get("status", "")),
+                chain=str(guard_value.get("chain", "")),
+                chain_id=str(guard_value.get("chainID", guard_value.get("chain_id", ""))),
+                link=int(guard_value["link"]),
+                recurrence_fingerprint=str(guard_value.get("recurrence_fingerprint", "")),
+                modified=str(guard_value.get("modified", "")),
+            )
         except (TypeError, ValueError, KeyError) as exc:
             raise LifecycleContractError("invalid lifecycle plan fields") from exc
         if draft is not None:

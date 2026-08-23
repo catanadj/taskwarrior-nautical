@@ -15,7 +15,6 @@ from typing import Any, Mapping, NoReturn
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .task_models import TaskObservation
-from .task_codec import DEFAULT_TASK_CODEC
 from .scheduler_cursor import OccurrenceCursor
 from .occurrence_outcomes import (
     ExhaustedOccurrence,
@@ -147,32 +146,6 @@ class RecurrenceEvaluator:
 
     spec: RecurrenceSpec
     _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
-
-    @classmethod
-    def from_task(
-        cls,
-        task: Mapping[str, Any],
-        *,
-        context: RecurrenceContext | None = None,
-        fallback_chain_id: str | None = None,
-        timezone: Any | None = None,
-        business_calendar: Any | None = None,
-        astronomy_config: Mapping[str, Any] | None = None,
-        anchor_file_dir: str = "",
-        namespace: str = "nautical",
-    ) -> "RecurrenceEvaluator":
-        """Build an evaluator from a task without performing any I/O."""
-        recurrence_context = context or RecurrenceContext.from_task(
-            task,
-            fallback_chain_id=fallback_chain_id,
-            timezone=timezone,
-            business_calendar=business_calendar,
-            astronomy_config=astronomy_config,
-            anchor_file_dir=anchor_file_dir,
-            namespace=namespace,
-        )
-        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="recurrence evaluator")
-        return cls.from_observation(observation, context=recurrence_context)
 
     @classmethod
     def from_spec(cls, spec: RecurrenceSpec) -> "RecurrenceEvaluator":

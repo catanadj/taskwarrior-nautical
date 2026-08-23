@@ -23,6 +23,7 @@ class EvaluationSession:
 
     compiled: CompiledSchedule
     max_cache_entries: int = 32
+    task: NauticalTask | None = None
     _evaluator: RecurrenceEvaluator = field(init=False, repr=False)
     _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
 
@@ -32,6 +33,8 @@ class EvaluationSession:
         if self.max_cache_entries <= 0:
             raise ValueError("evaluation session cache capacity must be positive")
         self._evaluator = RecurrenceEvaluator.from_compiled(self.compiled)
+        if self.task is not None and not isinstance(self.task, NauticalTask):
+            raise TypeError("evaluation session task must be a validated NauticalTask")
 
     @classmethod
     def from_spec(cls, spec: RecurrenceSpec, *, max_cache_entries: int = 32) -> "EvaluationSession":
@@ -47,8 +50,9 @@ class EvaluationSession:
     ) -> "EvaluationSession":
         if not isinstance(task, NauticalTask):
             raise TypeError("evaluation session requires a validated NauticalTask")
-        return cls.from_spec(
-            RecurrenceSpec.from_task(task, context=context),
+        return cls(
+            CompiledSchedule.from_spec(RecurrenceSpec.from_task(task, context=context)),
+            task=task,
             max_cache_entries=max_cache_entries,
         )
 
@@ -60,10 +64,8 @@ class EvaluationSession:
         context: RecurrenceContext | None = None,
         max_cache_entries: int = 32,
     ) -> "EvaluationSession":
-        return cls.from_spec(
-            RecurrenceSpec.from_observation(observation, context=context),
-            max_cache_entries=max_cache_entries,
-        )
+        task = NauticalTask.from_observation(observation)
+        return cls.from_task(task, context=context, max_cache_entries=max_cache_entries)
 
     @property
     def evaluator(self) -> RecurrenceEvaluator:

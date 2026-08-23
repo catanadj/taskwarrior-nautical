@@ -298,13 +298,13 @@ def fallback_native_until_at_day_end(
         return None, "cannot infer native until at local 23:00"
 
 
-def _child_recurrence_mismatch(parent: TaskPayload, child: TaskPayload) -> str:
+def _child_recurrence_mismatch(parent: TaskObservation, child: TaskObservation) -> str:
     """Return a mismatch when a candidate child carries a different recurrence."""
-    if not any(_recurrence_field_text(child.get(field)) for field in RECURRENCE_FIELDS):
+    if not any(_recurrence_field_text(_observation_value(child, field)) for field in RECURRENCE_FIELDS):
         return ""
     for field in RECURRENCE_FIELDS:
-        parent_value = _recurrence_field_text(parent.get(field))
-        child_value = _recurrence_field_text(child.get(field))
+        parent_value = _recurrence_field_text(_observation_value(parent, field))
+        child_value = _recurrence_field_text(_observation_value(child, field))
         if child_value and child_value != parent_value:
             expected = parent_value or "<empty>"
             actual = child_value or "<empty>"
@@ -354,7 +354,7 @@ def resolve_existing_child(
             f"next slot #{next_link} child {short_uuid(child_uuid)} has "
             f"prevLink {shown}; expected {parent_short}",
         )
-    recurrence_error = _child_recurrence_mismatch(parent.to_mapping(), child.to_mapping())
+    recurrence_error = _child_recurrence_mismatch(parent, child)
     if recurrence_error:
         return (
             "",

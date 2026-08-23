@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .recurrence_context import RecurrenceContext
-from .task_models import FieldPresence, TaskObservation
+from .task_models import FieldPresence, NauticalTask, TaskObservation
 
 
 def normalize_recurrence_text(value: Any) -> str:
@@ -72,6 +72,9 @@ class RecurrenceSpec:
         """Build a recurrence specification without thawing a task mapping."""
         if not isinstance(observation, TaskObservation):
             raise TypeError("recurrence specification requires a TaskObservation")
+        # Scheduling is an operational path: reject incomplete identity,
+        # status, temporal, or recurrence observations before compilation.
+        NauticalTask.from_observation(observation)
 
         def value(name: str) -> object:
             state = observation.field(name)

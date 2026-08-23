@@ -23640,8 +23640,10 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
     expect(spec.anchor_mode == "all" and spec.kind == "anchor" and spec.enabled, f"spec kind was incorrect: {spec!r}")
     observation = DEFAULT_TASK_CODEC.decode_row(
         {
-            "uuid": "spec-observation",
+            "uuid": "00000000-0000-4000-8000-000000000501",
             "chainID": "spec-observation-chain",
+            "link": 1,
+            "status": "pending",
             "anchor": " w:mon ",
             "anchor_mode": "ALL",
             "chainMax": "4",
@@ -23882,8 +23884,10 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
     typed_service = SchedulerService.from_observation(
         DEFAULT_TASK_CODEC.decode_row(
             {
-                "uuid": "service-observation",
+                "uuid": "00000000-0000-4000-8000-000000000502",
                 "chainID": "service-observation-chain",
+                "link": 1,
+                "status": "pending",
                 "anchor": "w:mon@t=09:00",
             },
             source_query="test:scheduler-service",

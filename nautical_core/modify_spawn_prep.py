@@ -138,7 +138,10 @@ def prepare_spawn_child_payload(
     now_utc,
     strip_none_and_cast,
     normalise_datetime_fields,
-) -> tuple[dict, str, str]:
+) -> tuple[object, str, str]:
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask, TaskDraft
+
     parent_chain_id = str((parent_task or {}).get("chainID") or "").strip()
     child_chain_id = str(child_task.get("chainID") or "").strip()
     if parent_task is not None and not parent_chain_id:
@@ -160,5 +163,7 @@ def prepare_spawn_child_payload(
     child_short = child_uuid[:8]
     child_obj = strip_none_and_cast(child_obj)
     normalise_datetime_fields(child_obj)
-    return child_obj, child_uuid, child_short
-
+    child_task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(child_obj, source_query="hook child import")
+    )
+    return TaskDraft.from_task(child_task), child_uuid, child_short

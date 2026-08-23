@@ -21,8 +21,10 @@ def append_next_wait_sched_rows(
     if not (isinstance(next_due_utc, datetime) and next_due_utc):
         return
 
-    scheduled = parse_datetime(next_task.get("scheduled"))
-    wait = parse_datetime(next_task.get("wait"))
+    scheduled_value = next_task.timestamp("scheduled")
+    wait_value = next_task.timestamp("wait")
+    scheduled = scheduled_value.value if scheduled_value is not None else None
+    wait = wait_value.value if wait_value is not None else None
     anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
     for field, label, value in (
         ("scheduled", "Scheduled", scheduled),
@@ -494,8 +496,10 @@ def format_line_preview(
     lead = f"#{link_no} ✓"
     if minimal:
         return " ".join((lead, f"next {next_glyph}", due_local)).strip()
-    cur_due = parse_datetime(task.get("due"))
-    cur_end = parse_datetime(task.get("end"))
+    due_value = task.timestamp("due")
+    end_value = task.timestamp("end")
+    cur_due = due_value.value if due_value is not None else None
+    cur_end = end_value.value if end_value is not None else None
     delta_text = core.strip_rich_markup(on_time_delta(cur_due, cur_end) or "").strip()
     if delta_text.startswith("(") and delta_text.endswith(")"):
         delta_text = delta_text[1:-1].strip()

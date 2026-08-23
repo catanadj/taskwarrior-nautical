@@ -446,7 +446,7 @@ def _append_next_wait_sched_rows(
     """Compatibility adapter for wait/scheduled feedback presentation."""
     _module("modify_feedback").append_next_wait_sched_rows(
         fb,
-        nxt,
+        _module("modify_models").TaskView.from_mapping(nxt),
         nxt_due_utc,
         anchor_field=anchor_field,
         parse_datetime=_dtparse,
@@ -1295,6 +1295,7 @@ def _format_line_preview(
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
+    task = _module("modify_models").TaskView.from_mapping(task)
     return _module("modify_feedback").format_line_preview(
         link_no,
         task,

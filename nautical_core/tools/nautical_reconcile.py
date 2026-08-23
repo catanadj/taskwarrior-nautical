@@ -493,7 +493,9 @@ def _native_until_repairs(
                 taskdata=taskdata,
                 lease_held=lease_held,
                 mutation_lock=lambda data, held: _reconcile_mutation_lock(data, lease_held=held),
-                parent_lock=_parent_apply_lock,
+                # The recovery service supplies the parent UUID to this
+                # callback; bind the invocation's Taskdata once here.
+                parent_lock=lambda parent_uuid: _parent_apply_lock(taskdata, parent_uuid),
                 refresh_parent=_fresh_parent,
                 refresh_previous=_fresh_native_until_previous,
                 guard_error=lambda expected, fresh, fresh_previous: (

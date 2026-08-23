@@ -408,24 +408,25 @@ class LifecycleReconciliationService:
                 break
             expiration_hops += 1
             child_short = applied_short or plan.child_short
+            plan_parent = plan.parent.to_mapping()
             try:
-                child = operations.next_child(plan.parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
+                child = operations.next_child(plan_parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
                 if child is None:
                     child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
                     if child_error:
-                        outcomes.append((operations.recovery_error(plan.parent, child_error), ""))
+                        outcomes.append((operations.recovery_error(plan_parent, child_error), ""))
                         break
                     if child is None:
                         terminal_error = operations.terminal_error(dict(plan.child or {}), recovery_at)
                         if terminal_error:
-                            outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
+                            outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                         break
             except Exception as exc:
-                outcomes.append((operations.recovery_from_exception(plan.parent, exc), ""))
+                outcomes.append((operations.recovery_from_exception(plan_parent, exc), ""))
                 break
             terminal_error = operations.terminal_error(child, recovery_at)
             if terminal_error:
-                outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
+                outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                 break
             if not operations.is_orphan_deleted(child):
                 break

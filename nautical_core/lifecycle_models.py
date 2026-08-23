@@ -38,7 +38,7 @@ class LifecycleRecoveryDecision:
     """Typed successor/expiration decision consumed by reconcile and UI."""
 
     action: str
-    parent: dict[str, Any]
+    parent: TaskObservation
     next_link: int
     reason: str
     child: dict[str, Any] | None = None
@@ -46,6 +46,10 @@ class LifecycleRecoveryDecision:
     child_due: Any = None
     terminal_kind: str | None = None
     lifecycle_plan: "LifecyclePlan | None" = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.parent, TaskObservation):
+            raise TypeError("lifecycle recovery decision requires a TaskObservation parent")
 
 
 class LifecycleAction(str, Enum):

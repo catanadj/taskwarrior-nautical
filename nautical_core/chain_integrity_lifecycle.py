@@ -464,6 +464,7 @@ def _plan_recovery_decision_unscoped(
     generation = generation or _generation_service(hook)
     observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery")
     operational_parent = NauticalTask.from_observation(observation)
+    decision_parent = observation
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
@@ -473,11 +474,11 @@ def _plan_recovery_decision_unscoped(
             safe_parse_datetime=generation.safe_parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
-            return LifecycleRecoveryDecision("manual_stop", parent, next_link, evidence.reason)
+            return LifecycleRecoveryDecision("manual_stop", decision_parent, next_link, evidence.reason)
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 evidence.reason or "deleted task has no reliable native-until expiration evidence",
             )
@@ -488,7 +489,7 @@ def _plan_recovery_decision_unscoped(
         include_deleted=is_expiration,
     )
     if child_error:
-        return LifecycleRecoveryDecision("error", parent, next_link, child_error)
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, child_error)
     if child_short:
         existing_child = next(
             (
@@ -501,7 +502,7 @@ def _plan_recovery_decision_unscoped(
         if not isinstance(existing_child, dict):
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 "existing successor identity could not be loaded",
                 child_short=child_short,
@@ -533,14 +534,14 @@ def _plan_recovery_decision_unscoped(
         except Exception as exc:
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
                 child_short=child_short,
             )
         return LifecycleRecoveryDecision(
             "backfill_nextlink",
-            parent,
+            decision_parent,
             next_link,
             "next link already exists",
             child_short=child_short,
@@ -563,11 +564,11 @@ def _plan_recovery_decision_unscoped(
         until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
         cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
-        return LifecycleRecoveryDecision("error", parent, next_link, f"invalid chainUntil: {until_err}")
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, f"invalid chainUntil: {until_err}")
 
     if cpmax and next_link > cpmax:
         return LifecycleRecoveryDecision(
-            "legitimate_final", parent, next_link, "reached chainMax", terminal_kind="chain_max",
+            "legitimate_final", decision_parent, next_link, "reached chainMax", terminal_kind="chain_max",
         )
 
     try:
@@ -586,18 +587,18 @@ def _plan_recovery_decision_unscoped(
         if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
             return LifecycleRecoveryDecision(
                 "legitimate_final",
-                parent,
+                decision_parent,
                 next_link,
                 occurrence_exhaustion_message(exc),
                 terminal_kind=exc.kind,
             )
-        return LifecycleRecoveryDecision("error", parent, next_link, scheduling_error_message(exc))
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, scheduling_error_message(exc))
 
     if not child_due:
-        return LifecycleRecoveryDecision("error", parent, next_link, "could not compute next recurrence timestamp")
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, "could not compute next recurrence timestamp")
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         return LifecycleRecoveryDecision(
-            "legitimate_final", parent, next_link, "reached chainUntil",
+            "legitimate_final", decision_parent, next_link, "reached chainUntil",
             child_due=child_due, terminal_kind="chain_until",
         )
 
@@ -644,7 +645,7 @@ def _plan_recovery_decision_unscoped(
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return LifecycleRecoveryDecision(
                 "legitimate_final",
-                parent,
+                decision_parent,
                 next_link,
                 "reached lifecycle successor limit",
                 child_due=child_due,
@@ -673,9 +674,9 @@ def _plan_recovery_decision_unscoped(
                     generation=generation,
                 )
             except Exception as fallback_exc:
-                return LifecycleRecoveryDecision("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
+                return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
-            return LifecycleRecoveryDecision("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
+            return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
     if lifecycle_plan is None:
         try:
             guard = ParentGuard(
@@ -704,7 +705,7 @@ def _plan_recovery_decision_unscoped(
         except Exception as exc:
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 f"failed to build lifecycle plan: {scheduling_error_message(exc)}",
                 child_due=child_due,
@@ -712,7 +713,7 @@ def _plan_recovery_decision_unscoped(
     reason = "expired link missing next link" if is_expiration else "missing next link"
     return LifecycleRecoveryDecision(
         "spawn",
-        parent,
+        decision_parent,
         next_link,
         reason,
         child=child,

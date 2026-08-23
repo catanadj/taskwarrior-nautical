@@ -2886,7 +2886,8 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
     )
 
 
-def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
+def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
+    del transition  # consumed by the typed adapter; field migration follows per lifecycle path
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
@@ -3301,7 +3302,8 @@ def _completion_build_and_spawn_child(
     )
 
 
-def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
+def _handle_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> "CompletionLifecycleResult | None":
+    del transition  # consumed by the typed adapter; completion flow migration follows next
     # Completion preflight and feedback must share the invocation's
     # authoritative repository, just like ordinary and deleted edits.
     _modify_runtime_state().task_repository = unit_of_work.repository
@@ -3404,7 +3406,8 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
     return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
 
 
-def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
+def _handle_deleted_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
+    del transition  # consumed by the typed adapter; deletion flow migration follows next
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = _module("modify_expiration", required=False)
     if modify_expiration is None:
@@ -3430,6 +3433,8 @@ class _OnModifyServices:
     def __init__(self, result_cls):
         self._result_cls = result_cls
 
+    typed_transition_handlers = True
+
     def result(self, task, *, sanitize: bool):
         return self._result_cls(task=task, sanitize=sanitize)
 
@@ -3448,14 +3453,14 @@ class _OnModifyServices:
     def is_non_completion(self, old, new):
         return _is_non_completion_modify(old, new)
 
-    def handle_non_completion(self, old, new, unit_of_work):
-        _handle_non_completion_modify(old, new, unit_of_work)
+    def handle_non_completion(self, old, new, unit_of_work, transition=None):
+        _handle_non_completion_modify(old, new, unit_of_work, transition=transition)
 
-    def handle_completion(self, old, new, unit_of_work):
-        return _handle_completion_modify(old, new, unit_of_work)
+    def handle_completion(self, old, new, unit_of_work, transition=None):
+        return _handle_completion_modify(old, new, unit_of_work, transition=transition)
 
-    def handle_deleted(self, old, new, unit_of_work):
-        _handle_deleted_modify(old, new, unit_of_work)
+    def handle_deleted(self, old, new, unit_of_work, transition=None):
+        _handle_deleted_modify(old, new, unit_of_work, transition=transition)
 
 
 def main():

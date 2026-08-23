@@ -116,6 +116,14 @@ def handle_on_modify(
         is_non_completion_modify=services.is_non_completion,
         transition=getattr(request, "transition", None),
     )
+    typed_handlers = bool(getattr(services, "typed_transition_handlers", False))
+    transition = getattr(request, "transition", None)
+
+    def invoke(handler_name, *args):
+        handler = getattr(services, handler_name)
+        if typed_handlers and transition is not None:
+            return handler(*args, transition)
+        return handler(*args)
 
     if route.is_deleted and route.has_nautical_fields:
         try:
@@ -123,7 +131,7 @@ def handle_on_modify(
         except Exception as exc:
             services.diag(f'core load failed: {exc}')
             services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-        services.handle_deleted(old, new, request.runtime.uow)
+        invoke("handle_deleted", old, new, request.runtime.uow)
         return services.result(task=new, sanitize=False)
 
     if route.is_deleted:
@@ -139,10 +147,10 @@ def handle_on_modify(
         services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
 
     if route.is_non_completion:
-        services.handle_non_completion(old, new, request.runtime.uow)
+        invoke("handle_non_completion", old, new, request.runtime.uow)
         return None
 
-    lifecycle_result = services.handle_completion(old, new, request.runtime.uow)
+    lifecycle_result = invoke("handle_completion", old, new, request.runtime.uow)
     try:
         request.runtime.lifecycle_result = lifecycle_result
     except Exception:

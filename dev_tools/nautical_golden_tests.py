@@ -187,14 +187,18 @@ def _scheduler_for_fixture(task, *, context=None):
     return SchedulerService.from_observation(_fixture_observation(task, context=context), context=context)
 
 
-def _evaluator_for_fixture(task, *, context=None, timezone_value=None):
+def _evaluator_for_fixture(task, *, context=None, timezone_value=None, timezone=None, **context_kwargs):
     """Build the production evaluator from a typed test observation."""
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
     if context is None:
         from nautical_core.recurrence_context import RecurrenceContext
         from datetime import timezone as _timezone
         chain_id = str(dict(task).get("chainID") or "")
-        context = RecurrenceContext(chain_id=chain_id, timezone=timezone_value or _timezone.utc)
+        context = RecurrenceContext(
+            chain_id=chain_id,
+            timezone=timezone_value or timezone or _timezone.utc,
+            **context_kwargs,
+        )
     return RecurrenceEvaluator.from_observation(_fixture_observation(task, context=context), context=context)
 
 
@@ -15773,7 +15777,7 @@ def test_random_weekday_explicit_or_keeps_separate_draws():
     from nautical_core.scheduler_service import SchedulerService
 
     zone = ZoneInfo("UTC")
-    service = SchedulerService.from_task(
+    service = _scheduler_for_fixture(
         {"chainID": "explicit-random-weekday-or", "anchor": expr},
         context=RecurrenceContext(chain_id="explicit-random-weekday-or", timezone=zone),
     )
@@ -17365,14 +17369,14 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
     ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
     panels = []
     service_cls = importlib.import_module("nautical_core.scheduler_service").SchedulerService
-    original_from_task = service_cls.__dict__["from_task"]
+    original_from_observation = service_cls.__dict__["from_observation"]
     original_next = mod._anchor_next_occurrence_after_local_dt
 
-    def fail_from_task(cls, *args, **kwargs):
+    def fail_from_observation(cls, *args, **kwargs):
         raise RuntimeError("astronomy profile is unavailable")
 
     try:
-        service_cls.from_task = classmethod(fail_from_task)
+        service_cls.from_observation = classmethod(fail_from_observation)
         mod._anchor_next_occurrence_after_local_dt = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("legacy scheduler fallback was called")
         )
@@ -17387,7 +17391,7 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
         else:
             raise AssertionError("evaluator initialization failure was accepted")
     finally:
-        service_cls.from_task = original_from_task
+        service_cls.from_observation = original_from_observation
         mod._anchor_next_occurrence_after_local_dt = original_next
 
     expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing evaluator error panel: {panels!r}")
@@ -21851,7 +21855,7 @@ def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
                     )
             return None
 
-    evaluator = RecurrenceEvaluator.from_task(
+    evaluator = _evaluator_for_fixture(
         {"anchor_file": "fold.csv", "anchor_mode": "all", "chainID": "dst-fold"},
         timezone=zone,
     )
@@ -24158,7 +24162,7 @@ def test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states():
     from nautical_core.scheduler_cursor import OccurrenceCursor
 
     zone = ZoneInfo("Europe/Sofia")
-    evaluator = RecurrenceEvaluator.from_task(
+    evaluator = _evaluator_for_fixture(
         {"chainID": "outcome-chain", "anchor": "w:mon@t=09:00"},
         context=RecurrenceContext(chain_id="outcome-chain", timezone=zone),
     )
@@ -24250,7 +24254,7 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
     from nautical_core.scheduler_service import SchedulerService
 
     zone = ZoneInfo("Europe/Sofia")
-    service = SchedulerService.from_task(
+    service = _scheduler_for_fixture(
         {"chainID": "service-chain", "anchor": "w:mon@t=09:00"},
         context=RecurrenceContext(chain_id="service-chain", timezone=zone),
     )
@@ -24309,7 +24313,7 @@ def test_scheduler_parity_harness_compares_legacy_callback_only_in_tests():
     from nautical_core.scheduler_service import SchedulerService
 
     zone = ZoneInfo("Europe/Sofia")
-    service = SchedulerService.from_task(
+    service = _scheduler_for_fixture(
         {"chainID": "parity-chain", "anchor": "w:mon@t=09:00"},
         context=RecurrenceContext(chain_id="parity-chain", timezone=zone),
     )
@@ -24344,7 +24348,7 @@ def test_scheduler_parity_matrix_covers_context_sensitive_rules():
         if omit:
             task["omit"] = omit
         context = RecurrenceContext(chain_id=task["chainID"], timezone=zone)
-        service = SchedulerService.from_task(task, context=context)
+        service = _scheduler_for_fixture(task, context=context)
         cursor = OccurrenceCursor.strict_after(
             datetime.fromisoformat(stamp).replace(tzinfo=zone), timezone=zone
         )
@@ -24380,7 +24384,7 @@ def test_scheduler_cross_path_conformance_matrix():
     for name, task, stamp, limit in cases:
         task = dict(task, chainID=f"conformance-{name}")
         context = RecurrenceContext(chain_id=task["chainID"], timezone=zone)
-        service = SchedulerService.from_task(task, context=context)
+        service = _scheduler_for_fixture(task, context=context)
         cursor = OccurrenceCursor.strict_after(
             datetime.fromisoformat(stamp).replace(tzinfo=zone), timezone=zone
         )
@@ -24417,7 +24421,7 @@ def test_scheduler_cross_path_conformance_matrix():
             chain_id=task["chainID"], timezone=zone,
             astronomy_config=core.ASTRONOMY_CONFIG,
         )
-        service = SchedulerService.from_task(task, context=context)
+        service = _scheduler_for_fixture(task, context=context)
         cursor = OccurrenceCursor.strict_after(
             datetime(2026, 6, 1, 9, tzinfo=zone), timezone=zone
         )
@@ -24427,7 +24431,7 @@ def test_scheduler_cross_path_conformance_matrix():
         Path(td, "calendar.csv").write_text("date,description\n2026-08-03,first\n2026-08-10,second\n", encoding="utf-8")
         task = {"anchor_file": "calendar.csv@t=09:00", "chainID": "conformance-file"}
         context = RecurrenceContext(chain_id=task["chainID"], timezone=zone, anchor_file_dir=td)
-        service = SchedulerService.from_task(task, context=context)
+        service = _scheduler_for_fixture(task, context=context)
         cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, 9, tzinfo=zone), timezone=zone)
         first = service.next(cursor)
         ranged = service.collect_request(OccurrenceRangeRequest(cursor, limit=2))
@@ -24510,7 +24514,7 @@ def test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic():
         chain_id = f"generated-matrix-{index}"
         task = {"anchor": anchor, "chainID": chain_id}
         context = RecurrenceContext(chain_id=chain_id, timezone=zone)
-        service = SchedulerService.from_task(task, context=context)
+        service = _scheduler_for_fixture(task, context=context)
         cursor = OccurrenceCursor.strict_after(
             datetime(2026, 1, 1, 0, 0, tzinfo=zone), timezone=zone,
         )
@@ -24554,7 +24558,7 @@ def test_scheduler_conformance_isolated_under_shuffled_session_order():
     cursor = OccurrenceCursor.strict_after(datetime(2026, 1, 1, tzinfo=zone), timezone=zone)
 
     def collect(anchor: str, chain_id: str) -> tuple[datetime | None, ...]:
-        service = SchedulerService.from_task(
+        service = _scheduler_for_fixture(
             {"anchor": anchor, "chainID": chain_id},
             context=RecurrenceContext(chain_id=chain_id, timezone=zone),
         )
@@ -24579,7 +24583,7 @@ def test_occurrence_range_request_validates_context_bounds_and_policy():
 
     zone = ZoneInfo("Europe/Sofia")
     task = {"chainID": "range-contract", "anchor": "w:mon@t=09:00"}
-    service = SchedulerService.from_task(task, context=RecurrenceContext(chain_id="range-contract", timezone=zone))
+    service = _scheduler_for_fixture(task, context=RecurrenceContext(chain_id="range-contract", timezone=zone))
     cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, tzinfo=zone), timezone=zone)
     request = OccurrenceRangeRequest(
         cursor,
@@ -24613,7 +24617,7 @@ def test_occurrence_range_request_exposes_omission_provenance():
 
     zone = ZoneInfo("Europe/Sofia")
     task = {"chainID": "omission-contract", "anchor": "w:mon", "omit": "w:mon"}
-    service = SchedulerService.from_task(
+    service = _scheduler_for_fixture(
         task,
         context=RecurrenceContext(chain_id="omission-contract", timezone=zone),
     )
@@ -24723,7 +24727,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         timezone=ZoneInfo("America/New_York"),
         anchor_file_dir="/tmp/evaluator-anchor-files",
     )
-    evaluator = RecurrenceEvaluator.from_task(task, context=context)
+    evaluator = _evaluator_for_fixture(task, context=context)
     expect(evaluator.chain_id == "evaluator-chain", "evaluator lost chain identity")
     expect(evaluator.seed_base == "evaluator-chain", "evaluator seed identity changed")
     expect(evaluator.kind == "anchor" and evaluator.enabled, "evaluator kind was not normalized")
@@ -24742,7 +24746,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         "evaluator local-naive conversion disagreed with its timezone",
     )
 
-    parsed = RecurrenceEvaluator.from_task(
+    parsed = _evaluator_for_fixture(
         {
             "chainID": "parsed-chain",
             "anchor": "w:mon@t=02:30",
@@ -24777,7 +24781,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         parsed.limits.chain_until == datetime(2025, 12, 31, 23, 0, tzinfo=timezone.utc),
         "chainUntil limit was not parsed as UTC",
     )
-    cp_evaluator = RecurrenceEvaluator.from_task(
+    cp_evaluator = _evaluator_for_fixture(
         {"chainID": "cp-chain", "cp": "1d,rand(2d..3d)"}
     )
     cp_tokens = cp_evaluator.cp_tokens
@@ -24803,7 +24807,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         == datetime(2025, 1, 2, tzinfo=timezone.utc),
         "CP due-date projection changed",
     )
-    file_evaluator = RecurrenceEvaluator.from_task(
+    file_evaluator = _evaluator_for_fixture(
         {"chainID": "file-chain", "anchor_file": "events.csv"}
     )
     expect(
@@ -24843,7 +24847,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         "evaluator did not expose a merged typed occurrence stream",
     )
 
-    event_evaluator = RecurrenceEvaluator.from_task(
+    event_evaluator = _evaluator_for_fixture(
         {"chainID": "event-chain", "anchor": "w:mon..tue", "omit": "w:mon"},
         timezone=timezone.utc,
     )
@@ -24880,7 +24884,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         f"bounded event stream did not retain omitted events while counting included ones: {ranged_events!r}",
     )
 
-    mode_evaluator = RecurrenceEvaluator.from_task(
+    mode_evaluator = _evaluator_for_fixture(
         {"chainID": "mode-chain", "anchor": "w:mon"},
         timezone=timezone.utc,
     )
@@ -24920,7 +24924,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     else:
         raise AssertionError("evaluator silently truncated an iteration-bounded range")
 
-    limited = RecurrenceEvaluator.from_task(
+    limited = _evaluator_for_fixture(
         {
             "chainID": "limited-chain",
             "anchor": "w:mon",
@@ -24932,7 +24936,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     expect(not limited.limits_allow(datetime(2025, 1, 11), 2), "chainUntil limit was ignored by evaluator")
     expect(not limited.limits_allow(datetime(2025, 1, 9), 3), "chainMax limit was ignored by evaluator")
 
-    astronomy_evaluator = RecurrenceEvaluator.from_task(
+    astronomy_evaluator = _evaluator_for_fixture(
         {"chainID": "astronomy-chain", "anchor": "moon:full"}
     )
     try:
@@ -24952,7 +24956,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         day.year, day.month, day.day, 6, 30, tzinfo=timezone.utc
     )
     try:
-        astronomical_time = RecurrenceEvaluator.from_task(
+        astronomical_time = _evaluator_for_fixture(
             {
                 "chainID": "evaluator-astronomy-time",
                 "anchor": "w:mon@t=sunrise",
@@ -24997,7 +25001,7 @@ def test_recurrence_evaluator_events_between_preserves_terminal_evidence():
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
     from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
-    evaluator = RecurrenceEvaluator.from_task(
+    evaluator = _evaluator_for_fixture(
         {"chainID": "terminal-events", "anchor": "w:mon"},
         timezone=timezone.utc,
     )
@@ -25105,6 +25109,8 @@ def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
     task = {
         "uuid": "00000000-0000-4000-8000-000000000111",
         "chainID": "session-chain",
+        "status": "pending",
+        "link": 1,
         "anchor": "w:mon@t=09:00",
         "anchor_mode": "skip",
         "due": "20250106T090000Z",
@@ -25137,7 +25143,7 @@ def test_recurrence_evaluator_loads_omit_file_without_text_rule():
         proxy.OMIT_FILE_DIR = td
         RecurrenceEvaluator._core_module = staticmethod(lambda: core)
         try:
-            evaluator = RecurrenceEvaluator.from_task(
+            evaluator = _evaluator_for_fixture(
                 {
                     "chainID": "omit-file-only",
                     "anchor": "w:mon",
@@ -25175,7 +25181,7 @@ def test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once():
         RecurrenceEvaluator._core_module = staticmethod(lambda: core)
         omit_files.load_omit_file_data = counted_loader
         try:
-            evaluator = RecurrenceEvaluator.from_task(
+            evaluator = _evaluator_for_fixture(
                 {
                     "chainID": "omit-file-combined",
                     "anchor": "w:mon",
@@ -25236,7 +25242,7 @@ def test_recurrence_evaluator_shadow_parity_time_matrix():
             "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
         }
         hook_due, hook_meta, _dnf = _compute_anchor_child_due(mod, parent)
-        evaluator = RecurrenceEvaluator.from_task(
+        evaluator = _evaluator_for_fixture(
             parent,
             timezone=mod.core._LOCAL_TZ,
         )
@@ -25278,7 +25284,7 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
             "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
         }
         hook_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
-        evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
+        evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
         result = evaluator.select_mode(
             "skip",
             due_local=due_local,
@@ -25323,7 +25329,7 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
 
     with mod.core.use_business_calendar(policy):
         hook_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
-    evaluator = RecurrenceEvaluator.from_task(
+    evaluator = _evaluator_for_fixture(
         parent,
         timezone=mod.core._LOCAL_TZ,
         business_calendar=policy,
@@ -26128,7 +26134,7 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
 
             from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
-            evaluator = RecurrenceEvaluator.from_task(
+            evaluator = _evaluator_for_fixture(
                 parent,
                 timezone=mod.core._LOCAL_TZ,
                 anchor_file_dir=str(anchor_dir),
@@ -26256,7 +26262,7 @@ def test_on_modify_compute_anchor_child_due_from_combined_anchor_sources():
 
             from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
-            evaluator = RecurrenceEvaluator.from_task(
+            evaluator = _evaluator_for_fixture(
                 parent,
                 timezone=mod.core._LOCAL_TZ,
                 anchor_file_dir=str(anchor_dir),
@@ -26598,7 +26604,7 @@ def test_on_modify_compute_anchor_child_due_skips_omit_date():
     expect(meta.get("target_field") == "due", f"expected due target field: {meta}")
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
-    evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
+    evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
     result = evaluator.select_mode(
         "skip",
         due_local=mod.core.to_local(mod.core.parse_dt_any(parent["due"])),
@@ -32417,7 +32423,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
 
         from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
-        evaluator = RecurrenceEvaluator.from_task(
+        evaluator = _evaluator_for_fixture(
             common,
             timezone=mod.core._LOCAL_TZ,
         )
@@ -34180,7 +34186,7 @@ def test_occurrence_query_service_projects_schedule_read_only():
         astronomy_config=core.ASTRONOMY_CONFIG,
         anchor_file_dir=core.ANCHOR_FILE_DIR,
     )
-    direct = SchedulerService.from_task(task, context=direct_context).collect_request(
+    direct = _scheduler_for_fixture(task, context=direct_context).collect_request(
         OccurrenceRangeRequest(
             OccurrenceCursor(
                 datetime(2026, 8, 24, tzinfo=uow.context.local_timezone),

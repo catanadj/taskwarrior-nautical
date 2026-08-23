@@ -210,6 +210,12 @@ _MODULE_SPECS = {
         "panel_diagnostics.py",
         "nautical_core.panel_diagnostics",
     ),
+    "modify_models": (
+        "_MODIFY_MODELS",
+        "_MODIFY_MODELS_LOAD_FAILED",
+        "modify_models.py",
+        "nautical_core.modify_models",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",

@@ -502,6 +502,22 @@ def _find_hook_file(name: str) -> str:
         f"Hook script '{name}' not found. Expected at '{candidates[0]}' or '{candidates[1]}'."
     )
 
+
+def _canonical_hook_fixture(task_obj: dict) -> dict:
+    """Fill only structural defaults required by typed Nautical hook inputs."""
+    values = dict(task_obj)
+    recurrence_fields = {"anchor", "anchor_file", "cp", "chain", "chainID", "link"}
+    if not recurrence_fields.intersection(values):
+        return values
+    uuid_value = str(values.get("uuid") or "")
+    if len(uuid_value) != 36 or uuid_value.count("-") != 4:
+        values["uuid"] = "00000000-0000-4000-8000-000000000001"
+    values.setdefault("status", "pending")
+    values.setdefault("link", 1)
+    values.setdefault("chainID", "fixture-chain")
+    values.setdefault("chain", "on")
+    return values
+
 def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, timeout_s: float = 8.0):
     _force_tz_utc()
     env = os.environ.copy()
@@ -512,7 +528,7 @@ def _run_hook_script(path: str, task_obj: dict, env_extra: dict | None = None, t
         env.update({k: str(v) for k, v in env_extra.items()})
     p = subprocess.run(
         [sys.executable, path],
-        input=json.dumps(task_obj),
+        input=json.dumps(_canonical_hook_fixture(task_obj)),
         text=True,
         capture_output=True,
         env=env,

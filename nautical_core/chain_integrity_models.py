@@ -448,6 +448,15 @@ class IntegrityOperation:
             "depends_on": list(self.depends_on),
         }
 
+    def task_patch(self):
+        """Materialize a repair payload as the canonical typed TaskPatch."""
+        from .task_changes import TaskPatch
+        from .task_models import TaskUUID
+
+        if self.kind not in {RepairOperationKind.METADATA_REPAIR, RepairOperationKind.LINK_REPAIR}:
+            raise IntegrityContractError("repair operation does not carry a task patch")
+        return TaskPatch.metadata_repair(TaskUUID(self.target_uuid), **dict(_thaw(self.payload)))
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityOperation":
         if not isinstance(value, Mapping):

@@ -2398,6 +2398,49 @@ def test_nautical_task_projection_validates_operations_without_losing_observatio
     expect(isinstance(rejected_reference, InvalidTask), "completion without a temporal reference was accepted")
 
 
+def test_task_codec_is_strict_lossless_and_contract_specific():
+    """The codec rejects malformed exports and keeps Taskwarrior, hook, query, and diagnostic JSON separate."""
+    from nautical_core.task_codec import TASK_OBSERVATION_SCHEMA, TaskCodec, TaskCodecError
+
+    codec = TaskCodec()
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "status": "pending",
+        "chainID": "codec-chain",
+        "link": 3.0,
+        "anchor": "w:mon",
+        "description": "Répéter 🌊",
+        "tags": ["one", "two"],
+    }
+    observation = codec.decode_export(
+        json.dumps([row], ensure_ascii=False), source_query="chain:codec-chain", snapshot_id="codec-snap"
+    )[0]
+    expect(json.loads(codec.encode_task_import(observation))["description"] == "Répéter 🌊",
+           "Taskwarrior import encoding escaped or changed Unicode")
+    hook_json = codec.encode_hook_stdout(observation.to_mapping())
+    expect("Répéter 🌊" in hook_json and json.loads(hook_json)["uuid"] == row["uuid"],
+           "hook encoding changed the plain task object")
+    query_json = codec.encode_query_json({"schema": "nautical.query.test", "value": "🌊"})
+    expect(json.loads(query_json)["schema"] == "nautical.query.test", "query encoding changed its public shape")
+    diagnostic = json.loads(codec.encode_diagnostic(observation))
+    expect(diagnostic["schema"] == TASK_OBSERVATION_SCHEMA and diagnostic["version"] == 1,
+           "diagnostic encoding did not include its versioned schema")
+
+    invalid_exports = ("", "{}", "[1]", '[{"link": NaN}]')
+    for invalid in invalid_exports:
+        try:
+            codec.decode_export(invalid, source_query="invalid")
+        except TaskCodecError:
+            continue
+        raise AssertionError(f"malformed export was accepted: {invalid!r}")
+    try:
+        codec.encode_hook_stdout({"bad": object()})
+    except TaskCodecError:
+        pass
+    else:
+        raise AssertionError("unsupported serializer value was stringified")
+
+
 def test_taskwarrior_client_preserves_evidence_and_redacts_observation():
     """The process boundary preserves evidence without observing command contents."""
     from nautical_core.integration_models import CommandFailureKind
@@ -32661,6 +32704,7 @@ TESTS = [
     test_integration_command_and_read_models_enforce_contract,
     test_task_observation_contract_is_lossless_and_immutable,
     test_nautical_task_projection_validates_operations_without_losing_observation,
+    test_task_codec_is_strict_lossless_and_contract_specific,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
     test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,

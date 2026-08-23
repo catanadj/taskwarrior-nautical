@@ -54,6 +54,8 @@ def _freeze(value: Any) -> FrozenValue:
         return tuple(_freeze(item) for item in value)
     if isinstance(value, (set, frozenset)):
         return tuple(sorted((_freeze(item) for item in value), key=repr))
+    if isinstance(value, float) and not math.isfinite(value):
+        raise TypeError("non-finite task field value")
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     raise TypeError(f"unsupported task field value: {type(value).__name__}")

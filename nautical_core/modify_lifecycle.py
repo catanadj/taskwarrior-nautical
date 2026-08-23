@@ -90,12 +90,14 @@ def apply_terminal_transition(task: dict[str, Any], event: Any) -> bool:
     """Validate one terminal event, then apply its idempotent chain patch."""
     from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
     from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     try:
         normalized = LifecycleEvent(event)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"unsupported terminal lifecycle event: {event!r}") from exc
-    terminal_plan_for_snapshot(TaskSnapshot.from_mapping(task), normalized)
+    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify lifecycle")
+    terminal_plan_for_snapshot(TaskSnapshot.from_observation(observation), normalized)
     return ensure_terminal_chain_off(task)
 
 

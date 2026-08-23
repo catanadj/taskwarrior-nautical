@@ -15,6 +15,8 @@ import json
 import re
 from typing import Any, Callable, Iterable, Mapping, TypeAlias
 
+from .task_models import FieldPresence, TaskObservation
+
 
 class LifecycleContractError(ValueError):
     """Raised when a lifecycle model violates a transition invariant."""
@@ -317,22 +319,22 @@ class ParentGuard:
 class TaskSnapshot:
     """Immutable Taskwarrior row supplied to lifecycle planning."""
 
-    fields: FrozenPairs
+    observation: TaskObservation
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "TaskSnapshot":
-        if not isinstance(value, Mapping):
-            raise LifecycleContractError("task snapshot must be an object")
-        return cls(_freeze_pairs(value))
+    def from_observation(cls, value: TaskObservation) -> "TaskSnapshot":
+        if not isinstance(value, TaskObservation):
+            raise LifecycleContractError("task snapshot requires a TaskObservation")
+        return cls(value)
 
     def get(self, key: str, default: Any = None) -> Any:
-        for field, value in self.fields:
-            if field == key:
-                return _thaw(value)
-        return default
+        state = self.observation.field(key)
+        if state.presence is FieldPresence.ABSENT:
+            return default
+        return state.raw_value()
 
     def to_dict(self) -> dict[str, Any]:
-        return {key: _thaw(value) for key, value in self.fields}
+        return self.observation.to_mapping()
 
 
 @dataclass(frozen=True, slots=True)

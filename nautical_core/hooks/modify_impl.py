@@ -2791,8 +2791,11 @@ def _ensure_terminal_chain_off(task: dict, event: str | None = None) -> bool:
     if event:
         lifecycle_models = _module("lifecycle_models")
         lifecycle_planner = _module("lifecycle_planner")
+        task_codec = _module("task_codec")
         lifecycle_planner.terminal_plan_for_snapshot(
-            lifecycle_models.TaskSnapshot.from_mapping(task),
+            lifecycle_models.TaskSnapshot.from_observation(
+                task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify terminal")
+            ),
             lifecycle_models.LifecycleEvent(event),
         )
     return _module("modify_lifecycle").ensure_terminal_chain_off(task)

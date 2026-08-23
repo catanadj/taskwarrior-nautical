@@ -31,6 +31,7 @@ from nautical_core.scheduler_models import (
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
+from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
 def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
@@ -555,7 +556,9 @@ def attach_lifecycle_plan(
             until=computed.until_dt,
         )
         plan = lifecycle_planner.plan_candidate_successor(
-            lifecycle_models.TaskSnapshot.from_mapping(new),
+            lifecycle_models.TaskSnapshot.from_observation(
+                DEFAULT_TASK_CODEC.decode_row(new, source_query="modify completion")
+            ),
             lifecycle_models.LifecycleEvent.COMPLETE,
             candidate,
             generation=generation,

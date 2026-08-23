@@ -28,6 +28,7 @@ from nautical_core.lifecycle_planner import (
     plan_candidate_successor,
 )
 from nautical_core.task_models import FieldPresence, TaskObservation
+from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
 
@@ -162,7 +163,10 @@ def compute_expiration_child_due(
 ) -> tuple[Any, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
-    candidate = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+    candidate = expiration_candidate(
+        TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile expiration")),
+        generation=generation,
+    )
     return candidate.child_due, dict(candidate.metadata)
 
 
@@ -555,7 +559,10 @@ def _plan_recovery_decision_unscoped(
 
     try:
         if is_expiration:
-            expiration = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+            expiration = expiration_candidate(
+                TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile expiration")),
+                generation=generation,
+            )
             child_due = expiration.child_due
             meta = dict(expiration.metadata)
         elif kind in {"anchor", "anchor_file"}:
@@ -609,10 +616,13 @@ def _plan_recovery_decision_unscoped(
             ),
         }
         lifecycle_plan = (
-            plan_expiration_successor(TaskSnapshot.from_mapping(parent), **planner_kwargs)
+            plan_expiration_successor(
+                TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile expiration")),
+                **planner_kwargs,
+            )
             if is_expiration
             else plan_candidate_successor(
-                TaskSnapshot.from_mapping(parent),
+                TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile successor")),
                 LifecycleEvent.COMPLETE,
                 candidate,
                 **planner_kwargs,

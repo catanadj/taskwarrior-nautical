@@ -1792,16 +1792,8 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
 # ------------------------------------------------------------------------------
 
 def _recurrence_seed_base(task: dict) -> str:
-    """Resolve the task recurrence identity once for preview-like paths."""
-    # This helper is also used by isolated preview/test paths that do not pass
-    # through ``run_hook`` first.  Ensure the lazy core binding exists before
-    # resolving the shared recurrence context.
-    _load_core()
-    context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-        task,
-        fallback_chain_id="preview",
-    )
-    return context.seed_base
+    """Resolve the task recurrence identity at the hook input boundary."""
+    return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
 def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     """Normalize various core representations of @t into a sorted list of (hh, mm)."""

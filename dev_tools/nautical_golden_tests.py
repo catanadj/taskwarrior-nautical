@@ -2492,6 +2492,27 @@ def test_nautical_task_projection_validates_operations_without_losing_observatio
     expect(isinstance(rejected_reference, InvalidTask), "completion without a temporal reference was accepted")
 
 
+def test_task_view_exposes_typed_temporal_presence():
+    """Presentation views retain typed timestamps and absent/null distinctions."""
+    from nautical_core.modify_models import TaskView
+
+    base = {
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "status": "pending",
+        "chainID": "view-chain",
+        "link": 1,
+        "anchor": "w:mon",
+        "due": "20260824T090000Z",
+    }
+    view = TaskView.from_mapping(base)
+    expect(view.timestamp("due") is not None, "typed due timestamp was not exposed")
+    expect(view.timestamp("scheduled") is None, "absent scheduled timestamp was not normalized")
+    null_view = TaskView.from_mapping({**base, "due": None})
+    expect(null_view.temporal.presence["due"].value == "null", "explicit null presence was lost")
+    malformed_view = TaskView.from_mapping({**base, "due": "not-a-date"})
+    expect(malformed_view.timestamp("due") is None, "malformed timestamp was treated as valid")
+
+
 def test_task_codec_is_strict_lossless_and_contract_specific():
     """The codec rejects malformed exports and keeps Taskwarrior, hook, query, and diagnostic JSON separate."""
     from nautical_core.task_codec import TASK_OBSERVATION_SCHEMA, TaskCodec, TaskCodecError
@@ -33192,6 +33213,7 @@ TESTS = [
     test_chain_integrity_application_stays_on_typed_mutation_boundary,
     test_integration_command_and_read_models_enforce_contract,
     test_task_observation_contract_is_lossless_and_immutable,
+    test_task_view_exposes_typed_temporal_presence,
     test_nautical_task_projection_validates_operations_without_losing_observation,
     test_task_codec_is_strict_lossless_and_contract_specific,
     test_task_codec_decodes_hook_framing_once,

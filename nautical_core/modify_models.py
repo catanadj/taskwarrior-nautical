@@ -5,6 +5,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Protocol, TypeAlias
 
+from .task_models import TaskDraft
+
 
 # Hook implementations are intentionally assembled at runtime, but the
 # orchestration boundary still needs to distinguish injected callables from
@@ -256,7 +258,7 @@ BuildChildDraftCallback: TypeAlias = Callable[
     [TaskRow, Any, str, int, str, str, int, Any], Any
 ]
 SpawnChildCallback: TypeAlias = Callable[
-    [TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
+    [TaskDraft | TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
 ]
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]

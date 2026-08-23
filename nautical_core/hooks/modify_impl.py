@@ -1382,10 +1382,12 @@ def _lifecycle_spawn_identity(parent: dict, child: dict):
 
 
 def _spawn_child_atomic(
-    child_task: dict,
+    child_task,
     parent_task_with_nextlink: dict,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     modify_spawn = _module("modify_spawn")
+    if hasattr(child_task, "to_mapping"):
+        child_task = child_task.to_mapping()
     return modify_spawn.spawn_child_atomic(
         child_task,
         parent_task_with_nextlink,

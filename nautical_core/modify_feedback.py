@@ -5,10 +5,13 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
+from .task_models import TaskPayload
+from .modify_models import TaskView
+
 
 def append_next_wait_sched_rows(
     rows: list[tuple[str, str]],
-    next_task: dict[str, Any],
+    next_task: TaskView,
     next_due_utc: datetime,
     *,
     anchor_field: str = "due",
@@ -88,7 +91,7 @@ def render_cp_schedule_adjusted_panel(
 
 
 def render_explicit_timing_order_warning(
-    new: Mapping[str, Any],
+    new: TaskPayload,
     changed_fields: tuple[str, ...],
     *,
     format_offset: Callable[[timedelta], str],
@@ -211,7 +214,7 @@ def _recurrence_update_panel_rows(
 
 def render_recurrence_updated_panel(
     changes: list[tuple[str, str, str]],
-    new: Mapping[str, Any],
+    new: TaskPayload,
     *,
     parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
@@ -295,7 +298,7 @@ def render_recurrence_updated_panel(
 
 
 def recurrence_enabled_rows(
-    task: Mapping[str, Any],
+    task: TaskPayload,
     source: str,
     *,
     describe_anchor: Callable[[str], str],
@@ -465,7 +468,7 @@ def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
 
 def format_line_preview(
     link_no: int,
-    task: dict,
+    task: TaskPayload,
     child_due_utc: Any,
     child_short: str,
     now_utc: Any,
@@ -520,7 +523,7 @@ def format_line_preview(
     return line.strip()
 
 
-def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
+def _pretty_basis_cp(task: TaskPayload, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
     if callable(cp_sequence_interval_for_link):
         td = cp_sequence_interval_for_link(
             task.get("cp") or "",
@@ -572,7 +575,7 @@ def _pretty_basis_anchor(meta: Mapping[str, Any], task: Mapping[str, Any], *, fm
     return "ALL — Next anchor after completion"
 
 
-def _anchor_summary(task: dict) -> tuple[str, str]:
+def _anchor_summary(task: TaskPayload) -> tuple[str, str]:
     anchor_expr = str(task.get("anchor") or "").strip()
     anchor_file = str(task.get("anchor_file") or "").strip()
     if anchor_expr and anchor_file:
@@ -602,7 +605,7 @@ def _omit_pattern_row(core, expr: str) -> tuple[str, str]:
     return "Omit", expr
 
 
-def _anchor_mode_tag(new: dict) -> str:
+def _anchor_mode_tag(new: TaskPayload) -> str:
     return {
         "skip": "[cyan]SKIP[/]",
         "all": "[yellow]ALL[/]",
@@ -610,7 +613,7 @@ def _anchor_mode_tag(new: dict) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
-def _anchor_feedback_natural(core, task: dict, dnf) -> str:
+def _anchor_feedback_natural(core, task: TaskPayload, dnf) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_raw, omit_natural, _omit_warns, omit_file = _anchor_omit_summary(core, task)
     omit_parts = []
@@ -627,7 +630,7 @@ def _anchor_feedback_natural(core, task: dict, dnf) -> str:
     return natural
 
 
-def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list[str], str | None]:
+def _anchor_omit_summary(core, task: TaskPayload) -> tuple[str | None, str | None, list[str], str | None]:
     omit_raw = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip() or None
     if not omit_raw:
@@ -721,7 +724,7 @@ def _append_final_rows(
     fb.append(("Last occurrence", f"{fmt_dt_local(last)}  ({human_delta(now_utc, last, True)})"))
 
 
-def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: dict, until_dt, *, core) -> None:
+def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: TaskPayload, until_dt, *, core) -> None:
     chain_max = core.coerce_int(task.get("chainMax"), 0)
     if chain_max:
         fb.append(("Chain cap", f"#{chain_max}"))
@@ -772,7 +775,7 @@ def _child_expiration(child):
 
 def _append_next_expiration_row(
     fb: list[tuple[str, object]],
-    child: Mapping[str, Any],
+    child: TaskPayload,
     child_due,
     *,
     core,
@@ -1314,8 +1317,8 @@ def render_cp_completion_feedback(
 
 def orchestrate_anchor_completion_feedback(
     *,
-    new: Mapping[str, Any],
-    child: Mapping[str, Any],
+    new: TaskPayload,
+    child: TaskPayload,
     child_due,
     child_short: str,
     next_no: int,
@@ -1390,8 +1393,8 @@ def orchestrate_anchor_completion_feedback(
 
 def orchestrate_cp_completion_feedback(
     *,
-    new: Mapping[str, Any],
-    child: Mapping[str, Any],
+    new: TaskPayload,
+    child: TaskPayload,
     child_due,
     child_short: str,
     next_no: int,

@@ -4072,9 +4072,14 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         child_uuid = f"10000000-0000-0000-0000-{link:012d}"
         child_payload = {
             "uuid": child_uuid,
+            "description": child_description or "outbox child",
+            "status": "pending",
+            "chain": "on",
             "chainID": "outbox-chain",
             "link": link + 1,
             "prevLink": parent_uuid[:8],
+            "cp": "1d",
+            "due": "20260824T090000Z",
             "numeric_metadata": {"slot": link + 1},
         }
         if legacy_null_anchor_file:
@@ -4086,11 +4091,11 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
             child_payload["entry"] = child_entry
         if child_description:
             child_payload["description"] = child_description
-        return LifecyclePlan.from_mappings(
+        return LifecyclePlan.from_draft(
             identity=LifecycleIdentity("outbox-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=ParentGuard("completed", "on", "outbox-chain", link, "rf1-test"),
-            child_payload=child_payload,
+            draft=_task_draft(child_payload),
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
@@ -34810,17 +34815,19 @@ def test_lifecycle_application_happy_path_real_stack():
         )
         guard = ParentGuard("completed", "on", "chain-s12", 1, _rfp(parent), "20260101T000000Z")
         identity = LifecycleIdentity("chain-s12", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        plan = LifecyclePlan.from_mappings(
+        plan = LifecyclePlan.from_draft(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={
+            draft=_task_draft({
                 "uuid": child_uuid,
+                "description": "child",
                 "chainID": "chain-s12",
                 "link": 2,
                 "prevLink": parent_uuid[:8],
                 "status": "pending",
                 "chain": "on",
                 "cp": "1d",
-            },
+                "due": "20260824T090000Z",
+            }),
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )

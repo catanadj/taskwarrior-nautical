@@ -131,6 +131,13 @@ def classify_modify_route(
     is_deleted = str(status or "").lower() == "deleted"
     has_nautical_fields = task_has_nautical_fields(old) or task_has_nautical_fields(new)
     if transition is not None:
+        def observation_has_fields(observation: Any) -> bool:
+            return any(
+                bool(str(observation.field(field).raw_value() or "").strip())
+                for field in RECURRENCE_SETTING_FIELDS + ("chainID", "nextLink", "prevLink", "link")
+            )
+
+        has_nautical_fields = observation_has_fields(transition.old) or observation_has_fields(transition.new)
         old_status = str(transition.old.field("status").raw_value() or "").strip().lower()
         new_status = str(transition.new.field("status").raw_value() or "").strip().lower()
         is_non_completion = bool(

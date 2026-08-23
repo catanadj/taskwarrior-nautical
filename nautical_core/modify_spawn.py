@@ -49,18 +49,18 @@ def spawn_child_atomic(
         parent_task_with_nextlink,
         parse_datetime=services.parse_datetime,
     )
-    parent_guard = {
-        "status": parent_task_with_nextlink.get("status") or "",
-        "chain": parent_task_with_nextlink.get("chain") or "",
-        "chainID": parent_task_with_nextlink.get("chainID") or "",
-        "link": parent_task_with_nextlink.get("link") or "",
-        "modified": parent_task_with_nextlink.get("modified") or "",
-        "recurrence_fingerprint": recurrence_guard,
-    }
+    parent_guard = lifecycle_models.ParentGuard(
+        status=str(parent_task_with_nextlink.get("status") or ""),
+        chain=str(parent_task_with_nextlink.get("chain") or ""),
+        chain_id=str(parent_task_with_nextlink.get("chainID") or ""),
+        link=int(parent_task_with_nextlink.get("link") or 0),
+        modified=str(parent_task_with_nextlink.get("modified") or ""),
+        recurrence_fingerprint=recurrence_guard,
+    )
     lifecycle_plan = lifecycle_models.LifecyclePlan.from_draft(
         identity=lifecycle_identity,
         action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
-        parent_guard=lifecycle_models.ParentGuard.from_mapping(parent_guard),
+        parent_guard=parent_guard,
         draft=child_draft,
         parent_patch={"nextLink": child_short},
         expected_postconditions=("child_present", "parent_linked", "verified"),

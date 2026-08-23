@@ -24,17 +24,20 @@ from .lifecycle_models import (
     recurrence_fingerprint,
 )
 from .recurrence_spec import normalize_recurrence_text
+from .task_codec import DEFAULT_TASK_CODEC
+from .task_models import NauticalTask
 
 
 class LifecyclePlanningError(RuntimeError):
     """Raised when a lifecycle plan cannot be constructed safely."""
 
 
-def _recurrence_kind(task: Mapping[str, Any]) -> str:
+def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
-    if normalize_recurrence_text(task.get("cp")):
+    get = task.get if isinstance(task, TaskSnapshot) else task.observation.to_mapping().get
+    if normalize_recurrence_text(get("cp")):
         return "cp"
-    if normalize_recurrence_text(task.get("anchor_file")):
+    if normalize_recurrence_text(get("anchor_file")):
         return "anchor_file"
     return "anchor"
 
@@ -147,7 +150,7 @@ class ChainGenerationPlanningService:
         next_link: int,
     ) -> RecurrenceCandidate | None:
         del event, next_link
-        parent = snapshot.to_dict()
+        parent = NauticalTask.from_observation(snapshot.observation)
         if kind == "cp":
             child_due, metadata = self.generation.compute_cp_child_due(parent)
             dnf = None
@@ -157,7 +160,7 @@ class ChainGenerationPlanningService:
             return None
         meta = dict(metadata or {})
         until = None
-        raw_until = parent.get("chainUntil")
+        raw_until = parent.observation.to_mapping().get("chainUntil")
         if raw_until:
             until, error = self.generation.safe_parse_datetime(raw_until)
             if error or until is None:
@@ -177,12 +180,13 @@ class ChainGenerationPlanningService:
         next_link: int,
     ) -> Mapping[str, Any] | None:
         del event
-        parent = snapshot.to_dict()
+        parent = NauticalTask.from_observation(snapshot.observation)
         metadata = dict(candidate.metadata)
         child_field = str(metadata.get("target_field") or "due")
+        values = parent.observation.to_mapping()
         kind = _recurrence_kind(parent)
-        cpmax = self.generation.core.coerce_int(parent.get("chainMax"), 0)
-        parent_short = str(parent.get("uuid") or "").strip()[:8]
+        cpmax = self.generation.core.coerce_int(values.get("chainMax"), 0)
+        parent_short = str(values.get("uuid") or "").strip()[:8]
         return self.generation.build_child_from_parent(
             parent,
             candidate.child_due,
@@ -260,11 +264,20 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
         raise LifecyclePlanningError("expired recurrence has no due or scheduled timestamp")
     calculation_parent = dict(parent)
     calculation_parent["end"] = target
-    kind = _recurrence_kind(parent)
+    kind = (
+        "cp" if normalize_recurrence_text(parent.get("cp"))
+        else "anchor_file" if normalize_recurrence_text(parent.get("anchor_file"))
+        else "anchor"
+    )
+    calculation_observation = DEFAULT_TASK_CODEC.decode_row(
+        calculation_parent,
+        source_query="lifecycle expiration calculation",
+    )
+    calculation_task = NauticalTask.from_observation(calculation_observation)
     if kind in {"anchor", "anchor_file"}:
-        child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_parent)
+        child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_task)
     else:
-        child_due, metadata = generation.compute_cp_child_due(calculation_parent)
+        child_due, metadata = generation.compute_cp_child_due(calculation_task)
         dnf = None
     result_metadata = dict(metadata or {})
     result_metadata["basis"] = f"{target_field} recurrence target (expired)"

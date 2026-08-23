@@ -11,13 +11,8 @@ from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_m
 from .timeutil import compare_datetimes
 
 def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
-    """Resolve the stable preview identity through the shared context model."""
-    from .recurrence_context import RecurrenceContext
-
-    return RecurrenceContext.from_task(
-        task,
-        fallback_chain_id=fallback_chain_id,
-    ).seed_base
+    """Resolve the stable preview identity at the raw-input boundary."""
+    return str(task.get("chainID") or fallback_chain_id).strip()
 
 
 def _anchor_file_natural_text(expr: str) -> str:

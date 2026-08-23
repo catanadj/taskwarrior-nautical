@@ -24351,6 +24351,7 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
     from nautical_core.recurrence_context import RecurrenceContext
     from nautical_core.scheduler_cursor import OccurrenceCursor
     from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.task_models import NauticalTask
 
     zone = ZoneInfo("Europe/Sofia")
     service = _scheduler_for_fixture(
@@ -24372,6 +24373,23 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
         context=RecurrenceContext(chain_id="service-observation-chain", timezone=zone),
     )
     expect(typed_service.fingerprint, "typed scheduler service did not compile an observation")
+    typed_task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000515",
+                "chainID": "service-task-chain",
+                "link": 1,
+                "status": "pending",
+                "anchor": "w:mon@t=09:00",
+            },
+            source_query="test:scheduler-service-task",
+        )
+    )
+    direct_service = SchedulerService.from_task(
+        typed_task,
+        context=RecurrenceContext(chain_id="service-task-chain", timezone=zone),
+    )
+    expect(direct_service.fingerprint, "typed scheduler service did not accept NauticalTask")
     cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
     expect(isinstance(service.next(cursor), FoundOccurrence), "service next did not return typed occurrence")
     collected = service.collect(cursor, limit=2)

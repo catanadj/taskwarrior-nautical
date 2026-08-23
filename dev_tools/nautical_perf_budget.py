@@ -1112,7 +1112,7 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
                 chain_id, parent_uuid, parent_link, child_link, LifecycleEvent.COMPLETE
             ),
             action=LifecycleAction.SPAWN_CHILD,
-            parent_guard=ParentGuard.from_mapping(guard),
+            parent_guard=ParentGuard("completed", "on", chain_id, parent_link),
             draft=TaskDraft.from_task(child_task),
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),

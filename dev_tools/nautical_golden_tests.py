@@ -159,6 +159,42 @@ def _task_observation(row):
     return _task_observations((row,))[0]
 
 
+def _plan_from_values(**kwargs):
+    """Construct lifecycle plans in tests without the removed mapping API."""
+    from nautical_core.lifecycle_models import LifecyclePlan, _freeze_pairs
+
+    child_payload = kwargs.pop("child_payload", None)
+    parent_patch = kwargs.pop("parent_patch", None)
+    return LifecyclePlan(
+        **kwargs,
+        child_payload=_freeze_pairs(child_payload),
+        parent_patch=_freeze_pairs(parent_patch),
+    )
+
+
+def _child_payload_from_values(payload, *, parent_uuid):
+    """Build child imports through the typed payload constructor."""
+    from nautical_core.integration_models import ChildImportPayload
+    from nautical_core.integration_models import _coerce_payload_link, _freeze_pairs
+
+    target_link = _coerce_payload_link(payload.get("link"))
+    if target_link is None:
+        raise ValueError("test child payload requires an integer link")
+    return ChildImportPayload(
+        parent_uuid,
+        str(payload.get("uuid") or ""),
+        str(payload.get("chainID") or ""),
+        target_link,
+        _freeze_pairs(payload),
+    )
+
+
+def _metadata_payload_from_values(task_uuid, updates, *, expected=None):
+    from nautical_core.integration_models import MetadataRepairPayload, _freeze_pairs
+
+    return MetadataRepairPayload(task_uuid, _freeze_pairs(updates), _freeze_pairs(expected or {}))
+
+
 def _chain_node(row):
     """Build an integrity node through the same observation boundary as production."""
     from nautical_core.chain_integrity_models import ChainNode
@@ -1239,15 +1275,7 @@ def test_lifecycle_models_enforce_transition_contract():
     )
     from nautical_core.lifecycle_outbox import OutboxProcessingState
 
-    guard = ParentGuard.from_mapping(
-        {
-            "status": "pending",
-            "chain": "on",
-            "chainID": "chain-1",
-            "link": 4,
-            "recurrence_fingerprint": "fp-1",
-        }
-    )
+    guard = ParentGuard("pending", "on", "chain-1", 4, "fp-1")
     identity = LifecycleIdentity("chain-1", "parent-uuid", 4, 5, LifecycleEvent.COMPLETE)
     plan = LifecyclePlan.from_draft(
         identity=identity,
@@ -2026,14 +2054,8 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
 
     parent_uuid = "11111111-0000-0000-0000-000000000927"
     identity = LifecycleIdentity("final-chain", parent_uuid, 2, None, LifecycleEvent.CHAIN_UNTIL)
-    guard = ParentGuard.from_mapping({
-        "status": "completed",
-        "chain": "on",
-        "chainID": "final-chain",
-        "link": 2,
-        "recurrence_fingerprint": "fp-final",
-    })
-    plan = LifecyclePlan.from_mappings(
+    guard = ParentGuard("completed", "on", "final-chain", 2, "fp-final")
+    plan = _plan_from_values(
         identity=identity,
         action=LifecycleAction.FINALIZE_CHAIN,
         parent_guard=guard,
@@ -3272,7 +3294,7 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),),
         0,
     )
-    child = ChildImportPayload.from_mapping(
+    child = _child_payload_from_values(
         {
             "uuid": child_uuid,
             "chainID": "chain-requests",
@@ -3378,12 +3400,12 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         MutationRequest(
             MutationOperation.METADATA_REPAIR,
             guard,
-            MetadataRepairPayload.from_mapping(parent_uuid, {"nextLink": child_uuid[:8]}),
+            _metadata_payload_from_values(parent_uuid, {"nextLink": child_uuid[:8]}),
         ),
     )
     expect(len(named) == 4, "named mutation payloads were not constructible")
     invalid = (
-        lambda: ChildImportPayload.from_mapping(
+        lambda: _child_payload_from_values(
             {"uuid": "short", "chainID": "chain-requests", "link": 8, "prevLink": parent_uuid[:8]},
             parent_uuid=parent_uuid,
         ),
@@ -3391,7 +3413,7 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         lambda: MutationRequest(
             MutationOperation.CHILD_IMPORT,
             guard,
-            ChildImportPayload.from_mapping(
+_child_payload_from_values(
                 {
                     "uuid": child_uuid,
                     "chainID": "other-chain",
@@ -3404,7 +3426,7 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         lambda: MutationRequest(
             MutationOperation.CHILD_IMPORT,
             guard,
-            ChildImportPayload.from_mapping(
+            _child_payload_from_values(
                 {
                     "uuid": child_uuid,
                     "chainID": "chain-requests",
@@ -3560,7 +3582,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     expect(not uow.client.calls, "changed completion state reached the mutation command")
     parent["status"] = "completed"
 
-    child = ChildImportPayload.from_mapping(
+    child = _child_payload_from_values(
         {
             "uuid": child_uuid,
             "chainID": "chain-service",
@@ -3641,7 +3663,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     metadata = service.apply(
         request(
             MutationOperation.METADATA_REPAIR,
-            MetadataRepairPayload.from_mapping(parent_uuid, {"chainMax": "5"}, expected={"chainMax": ""}),
+            _metadata_payload_from_values(parent_uuid, {"chainMax": "5"}, expected={"chainMax": ""}),
             5,
             chain="off",
         )
@@ -3757,7 +3779,7 @@ def test_child_import_rejects_incomplete_existing_rows():
         mutate(child)
         uow = Uow({parent_uuid: dict(parent), child_uuid: child})
         service = TaskwarriorMutationService(uow)
-        payload = ChildImportPayload.from_mapping(payload_map, parent_uuid=parent_uuid)
+        payload = _child_payload_from_values(payload_map, parent_uuid=parent_uuid)
         guard = MutationGuard(
             parent_uuid,
             "completed",
@@ -3777,7 +3799,7 @@ def test_child_import_rejects_incomplete_existing_rows():
     expired_payload_map = dict(payload_map, status="deleted", until="20200101T000000Z")
     expired_child = dict(expired_payload_map)
     expired_uow = Uow({parent_uuid: dict(parent), child_uuid: expired_child})
-    expired_payload = ChildImportPayload.from_mapping(expired_payload_map, parent_uuid=parent_uuid)
+    expired_payload = _child_payload_from_values(expired_payload_map, parent_uuid=parent_uuid)
     expired_outcome = TaskwarriorMutationService(expired_uow).apply(
         MutationRequest(MutationOperation.CHILD_IMPORT, guard, expired_payload)
     )
@@ -3789,7 +3811,7 @@ def test_child_import_rejects_incomplete_existing_rows():
     future_payload_map = dict(payload_map, status="deleted", until="29990101T000000Z")
     future_child = dict(future_payload_map)
     future_uow = Uow({parent_uuid: dict(parent), child_uuid: future_child})
-    future_payload = ChildImportPayload.from_mapping(future_payload_map, parent_uuid=parent_uuid)
+    future_payload = _child_payload_from_values(future_payload_map, parent_uuid=parent_uuid)
     future_outcome = TaskwarriorMutationService(future_uow).apply(
         MutationRequest(MutationOperation.CHILD_IMPORT, guard, future_payload)
     )
@@ -3800,7 +3822,7 @@ def test_child_import_rejects_incomplete_existing_rows():
 
     existing_uow = Uow({parent_uuid: dict(parent), child_uuid: dict(payload_map)})
     existing_outcome = TaskwarriorMutationService(existing_uow).apply(
-        MutationRequest(MutationOperation.CHILD_IMPORT, guard, ChildImportPayload.from_mapping(payload_map, parent_uuid=parent_uuid))
+        MutationRequest(MutationOperation.CHILD_IMPORT, guard, _child_payload_from_values(payload_map, parent_uuid=parent_uuid))
     )
     expect(
         existing_outcome.kind is MutationOutcomeKind.ALREADY_APPLIED,
@@ -3836,7 +3858,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
         "chain": "on",
         "cp": "1d",
     }
-    payload = ChildImportPayload.from_mapping(child, parent_uuid=parent_uuid)
+    payload = _child_payload_from_values(child, parent_uuid=parent_uuid)
 
     class Snapshot:
         def uuid_matches(self, uuid_value):
@@ -3915,7 +3937,7 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
         "modified": "20260813T120000Z",
         "cp": "1d",
     }
-    child = ChildImportPayload.from_mapping(
+    child = _child_payload_from_values(
         {
             "uuid": child_uuid,
             "chainID": "batch-fail-closed",
@@ -3928,7 +3950,7 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
         parent_uuid=parent_uuid,
     )
     from nautical_core.taskwarrior_mutations import _child_import_matches
-    null_child = ChildImportPayload.from_mapping(
+    null_child = _child_payload_from_values(
         {
             "uuid": child_uuid,
             "chainID": "batch-fail-closed",
@@ -23869,12 +23891,10 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
     except ValueError as exc:
         expect("Conflicting recurrence identities" in str(exc), f"unexpected identity mismatch error: {exc}")
     try:
-        RecurrenceContext.from_task({"uuid": "missing-chain-id"})
-        expect(False, "recurrence context accepted a task without chainID")
+        RecurrenceContext(chain_id="")
+        expect(False, "recurrence context accepted an empty chainID")
     except ValueError as exc:
         expect("chain ID" in str(exc), f"unexpected missing-chain-id error: {exc}")
-    fallback = RecurrenceContext.from_task({"uuid": "preview-uuid"}, fallback_chain_id="preview")
-    expect(fallback.chain_id == "preview", "explicit preview fallback did not set context identity")
 
 
 def test_recurrence_spec_normalizes_task_fields_and_context():
@@ -35173,7 +35193,7 @@ def test_lifecycle_application_outbox_faults_are_retryable():
     parent_uuid = "00000000-0000-4000-8000-000000000801"
     child_uuid = "00000000-0000-4000-8000-000000000802"
     guard = ParentGuard("completed", "on", "fault-outbox", 1, "rf-fault", "20260101T000000Z")
-    plan = LifecyclePlan.from_mappings(
+    plan = _plan_from_values(
         identity=LifecycleIdentity("fault-outbox", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
         action=LifecycleAction.SPAWN_CHILD,
         parent_guard=guard,
@@ -35227,7 +35247,7 @@ def test_lifecycle_configuration_drift_blocks_mutation():
 
     parent_uuid = "00000000-0000-4000-8000-000000000851"
     child_uuid = "00000000-0000-4000-8000-000000000852"
-    plan = LifecyclePlan.from_mappings(
+    plan = _plan_from_values(
         identity=LifecycleIdentity("cfg-drift", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
         action=LifecycleAction.SPAWN_CHILD,
         parent_guard=ParentGuard("completed", "on", "cfg-drift", 1, "rf-cfg-drift", "20260101T000000Z"),
@@ -35289,7 +35309,7 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
     def _plan(parent_uuid, child_uuid, max_attempts=3):
         guard = ParentGuard("completed", "on", "chain-s12c", 1, "rf1-s12c", "20260101T000000Z")
         identity = LifecycleIdentity("chain-s12c", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return LifecyclePlan.from_mappings(
+        return _plan_from_values(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
             child_payload={"uuid": child_uuid, "chainID": "chain-s12c", "link": 2, "prevLink": parent_uuid[:8]},
             parent_patch={"nextLink": child_uuid[:8]},
@@ -35358,7 +35378,7 @@ def test_lifecycle_application_renews_batch_leases_before_mutation():
     def make_plan(parent_uuid, child_uuid, chain_id):
         guard = ParentGuard("completed", "on", chain_id, 1, f"rf-{chain_id}", "20260101T000000Z")
         identity = LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return LifecyclePlan.from_mappings(
+        return _plan_from_values(
             identity=identity,
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=guard,
@@ -35437,7 +35457,7 @@ def test_lifecycle_application_idempotency_and_duplicate_staging():
 
     guard = ParentGuard("completed", "on", "chain-s12d", 1, "rf1-s12d", "20260101T000000Z")
     identity = LifecycleIdentity("chain-s12d", "00000000-0000-4000-8000-000000000401", 1, 2, LifecycleEvent.COMPLETE)
-    plan = LifecyclePlan.from_mappings(
+    plan = _plan_from_values(
         identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
         child_payload={"uuid": "00000000-0000-4000-8000-000000000402", "chainID": "chain-s12d", "link": 2, "prevLink": "00000000"},
         parent_patch={"nextLink": "00000000"},
@@ -35496,7 +35516,7 @@ def test_lifecycle_application_execute_staged_targets_exact_intent():
     def _plan(parent_uuid, child_uuid, chain_id):
         guard = ParentGuard("completed", "on", chain_id, 1, f"rf1-{chain_id}", "20260101T000000Z")
         identity = LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return LifecyclePlan.from_mappings(
+        return _plan_from_values(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
             child_payload={"uuid": child_uuid, "chainID": chain_id, "link": 2, "prevLink": parent_uuid[:8]},
             parent_patch={"nextLink": child_uuid[:8]},
@@ -35542,7 +35562,7 @@ def test_lifecycle_application_staging_only_service_rejects_execution():
 
         guard = ParentGuard("completed", "on", "chain-s12e", 1, "rf1-s12e", "20260101T000000Z")
         identity = LifecycleIdentity("chain-s12e", "00000000-0000-4000-8000-000000000601", 1, 2, LifecycleEvent.COMPLETE)
-        plan = LifecyclePlan.from_mappings(
+        plan = _plan_from_values(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
             child_payload={"uuid": "00000000-0000-4000-8000-000000000602", "chainID": "chain-s12e", "link": 2, "prevLink": "00000000"},
             parent_patch={"nextLink": "00000000"},
@@ -35614,7 +35634,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
             target_link=int(parent["link"]) + 1,
             event=LifecycleEvent.COMPLETE,
         )
-        plan = LifecyclePlan.from_mappings(
+        plan = _plan_from_values(
             identity=identity,
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=guard,

@@ -347,7 +347,8 @@ class TaskReadRepository:
             {
                 _field_text(row, "status").lower()
                 for row in payload
-                if not row.issues
+                if row.field("status").presence is FieldPresence.VALUE
+                and not row.issues
                 and _field_text(row, "status").lower() not in scope.statuses
             }
         )

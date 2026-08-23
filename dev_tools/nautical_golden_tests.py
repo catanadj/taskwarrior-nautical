@@ -2961,6 +2961,29 @@ def test_task_read_repository_preserves_found_malformed_observation():
         expect(read.value.issues and read.value.field("link").raw_value() == "not-an-integer", "decode evidence was lost")
 
 
+def test_task_read_repository_preserves_missing_status_as_malformed_found():
+    """Missing status is malformed task data, not an out-of-scope export."""
+    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
+
+    class Client:
+        def execute(self, args, *, purpose, timeout, **_kwargs):
+            command = TaskCommand(("task", *args), purpose, timeout)
+            row = {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "chainID": "chain-a"}
+            return TaskCommandResult(
+                command, 0, json.dumps([row]), "", CommandFailureKind.SUCCESS, 1, 0.001
+            )
+
+    with tempfile.TemporaryDirectory() as td:
+        uow = _test_operator_uow(td)
+        uow.client = Client()
+        read = uow.repository.by_uuid(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            statuses=("pending",),
+        )
+        expect(isinstance(read, Found), f"missing status became unavailable: {read}")
+        expect(read.value.field("status").presence.value == "absent", "missing status was not retained")
+
+
 def test_task_read_repository_exposes_all_domain_reads():
     """Chain, root, and lifecycle reads share the same typed repository contract."""
     from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
@@ -32818,6 +32841,7 @@ TESTS = [
     test_task_read_repository_fails_closed_on_untrusted_output,
     test_task_read_repository_mutation_epoch_prevents_stale_reuse,
     test_task_read_repository_preserves_found_malformed_observation,
+    test_task_read_repository_preserves_missing_status_as_malformed_found,
     test_task_read_repository_exposes_all_domain_reads,
     test_integration_mutation_models_enforce_guards_and_postconditions,
     test_integration_mutation_requests_use_named_typed_payloads,

@@ -252,10 +252,22 @@ class ChainNode:
         return LifecycleIntent.UNKNOWN
 
     def field(self, name: str, default: object = None) -> object:
+        state = self.field_state(name)
+        if state is not None:
+            from .task_models import FieldPresence
+            if state.presence is not FieldPresence.ABSENT:
+                return state.value
+            return default
         for key, value in self.fields:
             if key == name:
                 return _thaw(value)
         return default
+
+    def field_state(self, name: str) -> object | None:
+        """Return the source observation's typed field state when available."""
+        if self.observation is not None:
+            return self.observation.field(name)
+        return None
 
     def to_dict(self) -> dict[str, object]:
         value = {key: _thaw(item) for key, item in self.fields}

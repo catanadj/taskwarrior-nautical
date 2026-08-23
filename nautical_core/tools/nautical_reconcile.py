@@ -447,6 +447,16 @@ def _fresh_native_until_previous(row: TaskObservation) -> TaskObservation | None
     return value
 
 
+def _fresh_native_until_parent(row: TaskObservation) -> TaskObservation | None:
+    uuid_value = _observation_text(row, "uuid")
+    if not uuid_value:
+        raise RuntimeError("native-until target has no UUID")
+    return _read_value(
+        _repository().verification(uuid_value),
+        f"native-until parent {uuid_value}",
+    )
+
+
 def _native_until_repairs(
     task_bin: str,
     hook: Any,
@@ -505,7 +515,7 @@ def _native_until_repairs(
                 # The recovery service supplies the parent UUID to this
                 # callback; bind the invocation's Taskdata once here.
                 parent_lock=lambda parent_uuid: _parent_apply_lock(taskdata, parent_uuid),
-                refresh_parent=_fresh_parent,
+                refresh_parent=_fresh_native_until_parent,
                 refresh_previous=_fresh_native_until_previous,
                 guard_error=lambda expected, fresh, fresh_previous: (
                     _native_until_guard_error(expected, fresh)

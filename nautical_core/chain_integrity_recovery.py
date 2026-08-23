@@ -203,8 +203,8 @@ class IntegrityRecoveryService:
 
     def apply_native_until_candidate(
         self,
-        row: dict[str, Any],
-        previous: dict[str, Any] | None,
+        row: TaskObservation,
+        previous: TaskObservation | None,
         item: dict[str, Any],
         *,
         repaired: str,
@@ -212,12 +212,12 @@ class IntegrityRecoveryService:
         lease_held: bool,
         mutation_lock: Callable[[Any, bool], Any],
         parent_lock: Callable[[str], Any],
-        refresh_parent: Callable[[dict[str, Any]], dict[str, Any] | None],
-        refresh_previous: Callable[[dict[str, Any]], dict[str, Any] | None],
-        guard_error: Callable[[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None], str | None],
+        refresh_parent: Callable[[TaskObservation], TaskObservation | None],
+        refresh_previous: Callable[[TaskObservation], TaskObservation | None],
+        guard_error: Callable[[TaskObservation, TaskObservation | None, TaskObservation | None], str | None],
         configuration: Callable[[], tuple[str, str]],
-        mutate: Callable[[dict[str, Any], str], None],
-        verify: Callable[[dict[str, Any] | None, str], bool],
+        mutate: Callable[[TaskObservation, str], None],
+        verify: Callable[[TaskObservation | None, str], bool],
         on_lock_busy: Callable[[str], None],
     ) -> str | None:
         """Apply one candidate with ordered locks and fail-closed guards."""
@@ -231,7 +231,7 @@ class IntegrityRecoveryService:
                 item["action"] = "repair_error"
                 item["repair_error"] = "another reconcile apply is already running"
             else:
-                with parent_lock(str(row.get("uuid") or "")) as acquired:
+                with parent_lock(str(_observation_value(row, "uuid") or "")) as acquired:
                     if not acquired:
                         on_lock_busy("parent")
                         item["action"] = "repair_error"
@@ -257,7 +257,7 @@ class IntegrityRecoveryService:
                                 mutate(fresh, repaired)
                                 verified = refresh_parent(fresh)
                                 if not verify(verified, repaired):
-                                    actual = str((verified or {}).get("until") or "<missing>")
+                                    actual = str(_observation_value(verified, "until") if verified else "<missing>")
                                     item["action"] = "repair_error"
                                     item["repair_error"] = (
                                         f"native until repair verification failed (expected {repaired}; found {actual})"

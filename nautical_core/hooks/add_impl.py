@@ -573,10 +573,11 @@ def _panic_passthrough() -> None:
 
 
 
-# Local ISO string back to Taskwarrior (lets default-due adjusters run)
+# Canonical timezone-aware local ISO string back to Taskwarrior.  Typed
+# recurrence validation requires an explicit timezone once preview assigns a
+# target, while retaining the user's configured wall-clock time.
 def _fmt_local_for_task(dt_utc):
-    dl = core.to_local(dt_utc)
-    return dl.strftime("%Y-%m-%dT%H:%M:%S")
+    return core.to_local(dt_utc).isoformat(timespec="seconds")
 
 
 # ------------------------------------------------------------------------------

@@ -510,11 +510,13 @@ def _canonical_hook_fixture(task_obj: dict) -> dict:
     if not recurrence_fields.intersection(values):
         return values
     uuid_value = str(values.get("uuid") or "")
-    if len(uuid_value) != 36 or uuid_value.count("-") != 4:
+    generated_identity = len(uuid_value) != 36 or uuid_value.count("-") != 4
+    if generated_identity:
         values["uuid"] = "00000000-0000-4000-8000-000000000001"
     values.setdefault("status", "pending")
     values.setdefault("link", 1)
-    values.setdefault("chainID", "fixture-chain")
+    if generated_identity:
+        values.setdefault("chainID", "fixture-chain")
     values.setdefault("chain", "on")
     return values
 
@@ -26073,7 +26075,12 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
         mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
         try:
             task = {
+                "uuid": "00000000-0000-4000-8000-000000000701",
                 "description": "anchor file preview",
+                "status": "pending",
+                "chain": "on",
+                "chainID": "fixture-anchor-file",
+                "link": 1,
                 "anchor_file": "calendar.csv@nbd@t=12:00",
                 "entry": "2026-04-12T09:00:00Z",
                 "due": "2026-04-12T09:00:00Z",
@@ -26096,7 +26103,7 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
                 mod._emit_task_json = saved_emit
 
             due_val = captured.get("task", {}).get("due") or task.get("due")
-            expect(due_val == "2026-04-27T12:00:00", f"unexpected auto-assigned due for anchor_file preview: {due_val!r}")
+            expect(str(due_val).startswith("2026-04-27T12:00:00"), f"unexpected auto-assigned due for anchor_file preview: {due_val!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 
@@ -26112,7 +26119,12 @@ def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
         mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
         try:
             task = {
+                "uuid": "00000000-0000-4000-8000-000000000702",
                 "description": "combined preview",
+                "status": "pending",
+                "chain": "on",
+                "chainID": "fixture-anchor-union",
+                "link": 1,
                 "anchor": "w:fri@t=09:00",
                 "anchor_file": "calendar.csv@t=12:00",
                 "entry": "2026-04-12T09:00:00Z",
@@ -26132,7 +26144,7 @@ def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
                 mod._panel = saved_panel
                 mod._emit_task_json = saved_emit
             due_val = captured.get("task", {}).get("due") or task.get("due")
-            expect(due_val == "2026-04-14T12:00:00", f"unexpected merged due preview: {due_val!r}")
+            expect(str(due_val).startswith("2026-04-14T12:00:00"), f"unexpected merged due preview: {due_val!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
 

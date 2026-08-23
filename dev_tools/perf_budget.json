@@ -54,7 +54,7 @@
     "task_snapshot_reuse": 0.5,
     "task_immutability": 0.1,
     "task_resource_limits": 0.1,
-    "task_snapshot_memory": 3.0,
+    "task_snapshot_memory": 0.0,
     "build_hints_cold": 8.0,
     "build_hints_warm": 0.15,
     "cache_key_hot": 0.08,

@@ -185,6 +185,14 @@ def main() -> int:
     except Exception as exc:
         _diagnose(f"startup failure: {type(exc).__name__}: {exc}")
         _emit_fallback(protocol, probe)
+        if (
+            probe is not None
+            and probe.valid
+            and not probe.is_nautical
+            and not _description_alias_hint(probe.new)
+            and not _full_path_requested()
+        ):
+            return 0
         return 1
 
 

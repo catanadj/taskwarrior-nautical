@@ -142,6 +142,53 @@ def _bench_task_codec(rounds: int) -> float:
     return time.perf_counter() - started
 
 
+def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
+    """Measure indexed reuse after one decode of a broad task snapshot."""
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+    from nautical_core.task_read_repository import AuthoritativeTaskSnapshot, TaskQueryKind, TaskSnapshotScope
+
+    rows = [
+        {
+            "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/snapshot/{index}")),
+            "description": f"snapshot row {index}",
+            "status": "pending",
+            "chain": "on",
+            "chainID": f"snapshot-chain-{index // 10}",
+            "link": (index % 10) + 1,
+            "anchor": "w:mon",
+            "due": "20260824T090000Z",
+        }
+        for index in range(max(1, int(row_count)))
+    ]
+    observations = tuple(
+        task_codec.DEFAULT_TASK_CODEC.decode_row(row, source_query="perf:snapshot")
+        for row in rows
+    )
+    command = TaskCommand(("task", "export"), "perf snapshot", 1.0)
+    result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.0)
+    scope = TaskSnapshotScope(TaskQueryKind.BROAD, "perf-snapshot", ("pending",))
+    snapshot = AuthoritativeTaskSnapshot(scope, observations, result)
+    started = time.perf_counter()
+    for _ in range(max(1, int(rounds))):
+        for index in range(0, len(observations), max(1, len(observations) // 20)):
+            row = observations[index]
+            uuid_value = row.field("uuid").value
+            chain_value = row.field("chainID").value
+            link_value = row.field("link").value
+            if not snapshot.uuid_matches(str(getattr(uuid_value, "value", uuid_value))):
+                raise RuntimeError("snapshot UUID index lost a decoded row")
+            if not snapshot.chain_rows(str(getattr(chain_value, "value", chain_value))):
+                raise RuntimeError("snapshot chain index lost a decoded row")
+            if not snapshot.slot_rows(
+                str(getattr(chain_value, "value", chain_value)),
+                int(getattr(link_value, "value", link_value)),
+            ):
+                raise RuntimeError("snapshot slot index lost a decoded row")
+    if any(snapshot.uuid_matches(str(getattr(row.field("uuid").value, "value", "")))[0] is not row for row in observations):
+        raise RuntimeError("snapshot indexes did not reuse immutable observations")
+    return time.perf_counter() - started
+
+
 def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
     """Measure hint construction with an explicit persistent-cache state."""
     with _perf_cache_context():
@@ -2222,6 +2269,8 @@ def main() -> int:
     describe_rounds = int(workload.get("describe_expr_rounds", 220))
     next_after_rounds = int(workload.get("next_after_rounds", 220))
     codec_rounds = int(workload.get("codec_rounds", 120))
+    snapshot_reuse_rounds = int(workload.get("snapshot_reuse_rounds", 3))
+    snapshot_reuse_rows = int(workload.get("snapshot_reuse_rows", 1000))
     hints_rounds = int(workload.get("build_hints_rounds", 180))
     hints_cold_rounds = max(1, int(workload.get("build_hints_cold_rounds", 1)))
     hints_warm_rounds = max(1, int(workload.get("build_hints_warm_rounds", hints_rounds)))
@@ -2244,6 +2293,11 @@ def main() -> int:
         ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),
         ("task_codec_decode", lambda: _bench_task_codec(codec_rounds), repeats),
+        (
+            "task_snapshot_reuse",
+            lambda: _bench_task_snapshot_reuse(snapshot_reuse_rounds, snapshot_reuse_rows),
+            repeats,
+        ),
         (
             "build_hints_cold",
             lambda: _bench_build_hints(exprs, hints_cold_rounds, mode="cold"),

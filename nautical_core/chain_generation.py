@@ -15,6 +15,7 @@ from typing import Any, Mapping, MutableMapping
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import normalize_recurrence_text
+from .task_models import NauticalTask
 
 
 _RESERVED_DROP = frozenset(
@@ -159,37 +160,39 @@ class ChainGenerationService:
         return parsed, None
 
     @staticmethod
-    def _require_chain_id(task: Mapping[str, Any]) -> str:
-        chain_id = str(task.get("chainID") or "").strip()
+    def _require_chain_id(task: NauticalTask) -> str:
+        if not isinstance(task, NauticalTask):
+            raise TypeError("chain generation requires a validated NauticalTask")
+        chain_id = task.identity.chain_id.value
         if not chain_id:
             raise ChainIdentityError()
         return chain_id
 
-    def _task_scheduler(self, task: Mapping[str, Any]) -> SchedulerService:
+    def _task_scheduler(self, task: NauticalTask) -> SchedulerService:
         identity = self._require_chain_id(task)
+        values = task.observation.to_mapping()
         key = (
             identity,
-            str(task.get("modified") or ""),
-            str(task.get("anchor") or ""),
-            str(task.get("anchor_file") or ""),
-            str(task.get("omit") or ""),
-            str(task.get("omit_file") or ""),
-            str(task.get("anchor_mode") or ""),
-            str(task.get("chainUntil") or ""),
-            str(task.get("bc") or ""),
+            str(values.get("modified") or ""),
+            str(values.get("anchor") or ""),
+            str(values.get("anchor_file") or ""),
+            str(values.get("omit") or ""),
+            str(values.get("omit_file") or ""),
+            str(values.get("anchor_mode") or ""),
+            str(values.get("chainUntil") or ""),
+            str(values.get("bc") or ""),
         )
         cached = self._evaluator_cache.get(key)
         if cached is not None:
             return cached
-        context = RecurrenceContext.from_task(
-            task,
-            fallback_chain_id=identity,
+        context = RecurrenceContext.from_observation(
+            task.observation,
             timezone=getattr(self.core, "_LOCAL_TZ", None),
-            business_calendar=self.core.business_calendar_for_task(task),
+            business_calendar=self.core.business_calendar_for_task(values),
             astronomy_config=getattr(self.core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(self.core, "ANCHOR_FILE_DIR", ""),
         )
-        service = SchedulerService.from_task(task, context=context)
+        service = SchedulerService.from_observation(task.observation, context=context)
         self._evaluator_cache[key] = service
         return service
 
@@ -215,11 +218,14 @@ class ChainGenerationService:
         due_local = self._local(anchor_dt) if anchor_dt else end_local
         return end_local, due_local, due_dt
 
-    def compute_cp_child_due(self, parent: dict[str, Any]) -> CpChildDueResult:
+    def compute_cp_child_due(self, parent: NauticalTask) -> CpChildDueResult:
+        self._require_chain_id(parent)
+        parent_values = parent.observation.to_mapping()
+        parent = parent_values
         duration = str(parent.get("cp") or "").strip()
         if not duration:
             return None, None
-        chain_id = self._require_chain_id(parent)
+        chain_id = str(parent_values.get("chainID") or "").strip()
         tokens = self.core.parse_cp_sequence_tokens(duration)
         if not tokens:
             reason = self.core.cp_sequence_parse_error(duration) or (
@@ -272,13 +278,15 @@ class ChainGenerationService:
             meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
         return candidate, meta
 
-    def compute_anchor_child_due(self, parent: dict[str, Any]) -> AnchorChildDueResult:
+    def compute_anchor_child_due(self, parent: NauticalTask) -> AnchorChildDueResult:
+        task = parent
+        self._require_chain_id(task)
+        parent = task.observation.to_mapping()
         expression = normalize_recurrence_text(parent.get("anchor"))
         anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
         if not expression and not anchor_file:
             return None, None, None
-        self._require_chain_id(parent)
-        scheduler = self._task_scheduler(parent)
+        scheduler = self._task_scheduler(task)
         evaluator = scheduler.session.evaluator
         end_local, due_local, due_dt = self._anchor_parent_local_times(parent)
         if end_local is None or due_local is None:
@@ -454,7 +462,7 @@ class ChainGenerationService:
 
     def build_child_from_parent(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child_due_utc: datetime,
         child_field: str,
         next_link_no: int,
@@ -464,6 +472,7 @@ class ChainGenerationService:
         until_dt: Any,
     ) -> dict[str, Any]:
         parent_chain = self._require_chain_id(parent)
+        parent = parent.observation.to_mapping()
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()

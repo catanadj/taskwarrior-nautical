@@ -7,7 +7,7 @@ validation and integrity tooling can make that decision with complete evidence.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 import hashlib
@@ -237,7 +237,7 @@ def _known_value(field: str, raw: Any) -> tuple[FrozenValue, DecodeIssue | None]
         if field == "uuid":
             return TaskUUID(text), None
         if field in {"prevLink", "nextLink"}:
-            return ShortUUIDRef(text), None
+            return (TaskUUID(text) if _UUID_RE.fullmatch(text) else ShortUUIDRef(text)), None
         if field == "chainID":
             return ChainID(text), None
         if field == "link":
@@ -247,13 +247,18 @@ def _known_value(field: str, raw: Any) -> tuple[FrozenValue, DecodeIssue | None]
             if not math.isfinite(number) or number <= 0 or not number.is_integer():
                 raise ValueError("link must be a positive integer")
             return TaskLink(int(number)), None
-        if field in {"due", "scheduled", "wait", "until", "entry", "modified", "end"}:
+        if field == "chainMax":
+            number = float(raw)
+            if not math.isfinite(number) or number <= 0 or not number.is_integer():
+                raise ValueError("chainMax must be a positive integer")
+            return int(number), None
+        if field in {"due", "scheduled", "wait", "until", "entry", "modified", "end", "chainUntil"}:
             return _timestamp(raw), None
         if field == "status":
             value = text.lower()
             issue = None if value in _KNOWN_STATUSES else DecodeIssue(field, "unknown_status", f"unknown Taskwarrior status: {text}", IssueSeverity.WARNING, _freeze(raw))
             return (TaskStatus(value) if issue is None else value), issue
-        if field in {"chain", "anchor", "anchor_file", "anchor_mode", "cp", "chainMax", "chainUntil", "omit", "omit_file", "bc"}:
+        if field in {"chain", "anchor", "anchor_file", "anchor_mode", "cp", "chainUntil", "omit", "omit_file", "bc", "description", "project"}:
             return text, None
     except (TypeError, ValueError) as exc:
         return _freeze(raw), DecodeIssue(field, "invalid_value", str(exc), IssueSeverity.ERROR, _freeze(raw))
@@ -264,7 +269,7 @@ _KNOWN_FIELDS = frozenset(
     {
         "uuid", "status", "chainID", "link", "prevLink", "nextLink", "due", "scheduled", "wait", "until",
         "entry", "modified", "end", "chain", "anchor", "anchor_file", "anchor_mode", "cp", "chainMax",
-        "chainUntil", "omit", "omit_file", "bc",
+        "chainUntil", "omit", "omit_file", "bc", "description", "project",
     }
 )
 
@@ -365,18 +370,212 @@ class TaskObservation:
             and self.provenance == other.provenance
         )
 
+class RecurrenceKind(str, Enum):
+    CP = "cp"
+    ANCHOR = "anchor"
+
+
+class ChainState(str, Enum):
+    ENABLED = "on"
+    DISABLED = "off"
+
+
+class TaskOperation(str, Enum):
+    SCHEDULE = "schedule"
+    COMPLETION = "completion"
+    EXPIRATION = "expiration"
+    DELETION = "deletion"
+    REPAIR = "repair"
+    QUERY = "query"
+
+
+@dataclass(frozen=True, slots=True)
+class ChainIdentity:
+    task_uuid: TaskUUID
+    chain_id: ChainID
+    link: TaskLink
+    previous: TaskUUID | ShortUUIDRef | None = None
+    next: TaskUUID | ShortUUIDRef | None = None
+    state: ChainState = ChainState.ENABLED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.task_uuid, TaskUUID):
+            raise TypeError("chain identity requires a full task UUID")
+        if not isinstance(self.chain_id, ChainID) or not isinstance(self.link, TaskLink):
+            raise TypeError("chain identity requires typed chainID and link")
+        object.__setattr__(self, "state", ChainState(self.state))
+        for name in ("previous", "next"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, (TaskUUID, ShortUUIDRef)):
+                raise TypeError(f"chain identity {name} reference is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalState:
+    due: TaskTimestamp | None = None
+    scheduled: TaskTimestamp | None = None
+    wait: TaskTimestamp | None = None
+    until: TaskTimestamp | None = None
+    entry: TaskTimestamp | None = None
+    modified: TaskTimestamp | None = None
+    end: TaskTimestamp | None = None
+    presence: Mapping[str, FieldPresence] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        values = (self.due, self.scheduled, self.wait, self.until, self.entry, self.modified, self.end)
+        if any(value is not None and not isinstance(value, TaskTimestamp) for value in values):
+            raise TypeError("temporal state values must be typed timestamps")
+        object.__setattr__(self, "presence", MappingProxyType(dict(self.presence)))
+
+    def reference(self) -> TaskTimestamp | None:
+        return self.due or self.scheduled
+
+
+@dataclass(frozen=True, slots=True)
+class RecurrenceState:
+    kind: RecurrenceKind
+    spec: Any
+    anchor_mode: str
+    chain_max: int | None
+    chain_until: TaskTimestamp | None
+    business_calendar: str = ""
+    omit: str = ""
+    omit_file: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", RecurrenceKind(self.kind))
+        mode = str(self.anchor_mode).strip().lower()
+        if mode not in {"skip", "all", "flex"}:
+            raise ValueError("anchor_mode must be skip, all, or flex")
+        object.__setattr__(self, "anchor_mode", mode)
+        if self.chain_max is not None and (isinstance(self.chain_max, bool) or self.chain_max <= 0):
+            raise ValueError("chainMax must be positive")
+        if self.chain_until is not None and not isinstance(self.chain_until, TaskTimestamp):
+            raise TypeError("chainUntil must be a typed timestamp")
+
+
+@dataclass(frozen=True, slots=True)
+class NauticalTask:
+    observation: TaskObservation
+    identity: ChainIdentity
+    status: TaskStatus
+    temporal: TemporalState
+    recurrence: RecurrenceState
+    description: str = ""
+
+    @classmethod
+    def from_observation(cls, observation: TaskObservation) -> "NauticalTask":
+        if not isinstance(observation, TaskObservation):
+            raise TypeError("NauticalTask requires a TaskObservation")
+        errors = [issue for issue in observation.issues if issue.severity is IssueSeverity.ERROR]
+        uuid = observation.field("uuid").value
+        status = observation.field("status").value
+        chain_id = observation.field("chainID").value
+        link = observation.field("link").value
+        if not isinstance(uuid, TaskUUID):
+            errors.append(DecodeIssue("uuid", "missing_or_invalid", "a full UUID is required"))
+        if not isinstance(status, TaskStatus):
+            errors.append(DecodeIssue("status", "missing_or_invalid", "a recognized status is required"))
+        if not isinstance(chain_id, ChainID):
+            errors.append(DecodeIssue("chainID", "missing_or_invalid", "a chainID is required"))
+        if not isinstance(link, TaskLink):
+            errors.append(DecodeIssue("link", "missing_or_invalid", "a positive link is required"))
+        if errors:
+            raise ValueError("; ".join(f"{issue.field}: {issue.message}" for issue in errors))
+        state = ChainState.ENABLED if str(observation.field("chain").value or "on").lower() == "on" else ChainState.DISABLED
+        identity = ChainIdentity(uuid, chain_id, link, observation.field("prevLink").value, observation.field("nextLink").value, state)
+        temporal_values: dict[str, TaskTimestamp | None] = {}
+        presence: dict[str, FieldPresence] = {}
+        for name in ("due", "scheduled", "wait", "until", "entry", "modified", "end"):
+            field = observation.field(name)
+            presence[name] = field.presence
+            temporal_values[name] = field.value if isinstance(field.value, TaskTimestamp) else None
+        temporal = TemporalState(**temporal_values, presence=presence)
+        anchor = observation.field("anchor").value
+        anchor_file = observation.field("anchor_file").value
+        cp = observation.field("cp").value
+        if bool(cp) and (bool(anchor) or bool(anchor_file)):
+            raise ValueError("recurrence cannot contain both cp and anchor fields")
+        if not cp and not anchor and not anchor_file:
+            raise ValueError("recurrence requires cp, anchor, or anchor_file")
+        kind = RecurrenceKind.CP if cp else RecurrenceKind.ANCHOR
+        mode = observation.field("anchor_mode").value or "skip"
+        chain_max = observation.field("chainMax").value
+        if chain_max is not None and not isinstance(chain_max, int):
+            raise ValueError("chainMax is malformed")
+        chain_until = observation.field("chainUntil").value
+        from .recurrence_context import RecurrenceContext
+        from .recurrence_spec import RecurrenceSpec
+
+        spec = RecurrenceSpec(
+            context=RecurrenceContext(chain_id=chain_id.value),
+            anchor=str(anchor or ""), anchor_file=str(anchor_file or ""),
+            omit=str(observation.field("omit").value or ""),
+            omit_file=str(observation.field("omit_file").value or ""), cp=str(cp or ""),
+            anchor_mode=str(mode), chain_max=chain_max,
+            chain_until=chain_until.value.isoformat().replace("+00:00", "Z") if isinstance(chain_until, TaskTimestamp) else "",
+        )
+        recurrence = RecurrenceState(
+            kind, spec, str(mode), chain_max,
+            chain_until if isinstance(chain_until, TaskTimestamp) else None,
+            str(observation.field("bc").value or ""),
+            str(observation.field("omit").value or ""),
+            str(observation.field("omit_file").value or ""),
+        )
+        return cls(observation, identity, status, temporal, recurrence, str(observation.field("description").value or ""))
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedTask:
+    operation: TaskOperation
+    task: NauticalTask
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidTask:
+    operation: TaskOperation
+    observation: TaskObservation
+    issues: tuple[DecodeIssue, ...]
+
+
+TaskValidation = ValidatedTask | InvalidTask
+
+
+def validate_task(observation: TaskObservation, operation: TaskOperation) -> TaskValidation:
+    """Validate one observation for an operation without hiding its evidence."""
+    operation = TaskOperation(operation)
+    try:
+        task = NauticalTask.from_observation(observation)
+    except (TypeError, ValueError) as exc:
+        return InvalidTask(operation, observation, (DecodeIssue("task", f"invalid_for_{operation.value}", str(exc)),))
+    if operation in {TaskOperation.SCHEDULE, TaskOperation.COMPLETION} and task.temporal.reference() is None:
+        issue = DecodeIssue("due", "missing_reference", f"{operation.value} requires due or scheduled")
+        return InvalidTask(operation, observation, (issue,))
+    return ValidatedTask(operation, task)
+
 
 __all__ = (
+    "ChainIdentity",
+    "ChainState",
     "ChainID",
     "DecodeIssue",
     "FieldPresence",
     "FieldState",
     "IssueSeverity",
+    "InvalidTask",
+    "NauticalTask",
     "ObservationProvenance",
+    "RecurrenceKind",
+    "RecurrenceState",
     "ShortUUIDRef",
     "TaskStatus",
     "TaskLink",
     "TaskObservation",
+    "TaskOperation",
     "TaskTimestamp",
     "TaskUUID",
+    "TaskValidation",
+    "TemporalState",
+    "ValidatedTask",
+    "validate_task",
 )

@@ -2360,6 +2360,44 @@ def test_task_observation_contract_is_lossless_and_immutable():
     )
 
 
+def test_nautical_task_projection_validates_operations_without_losing_observation():
+    """Operational validation is strict while malformed source evidence remains inspectable."""
+    from nautical_core.task_models import InvalidTask, TaskOperation, TaskStatus, ValidatedTask, TaskObservation, validate_task
+
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "status": "pending",
+        "chain": "on",
+        "chainID": "chain-2",
+        "link": 2.0,
+        "anchor": "w:mon",
+        "anchor_mode": "skip",
+        "due": "20260824T090000Z",
+        "until": None,
+        "description": "typed task",
+    }
+    observation = TaskObservation.from_mapping(row, source_query="chain:chain-2", snapshot_id="snap-2")
+    result = validate_task(observation, TaskOperation.SCHEDULE)
+    expect(isinstance(result, ValidatedTask), f"valid Nautical task was rejected: {result!r}")
+    expect(result.task.status is TaskStatus.PENDING, "typed status was not retained")
+    expect(result.task.recurrence.kind.value == "anchor", "recurrence kind was not classified")
+    expect(result.task.temporal.presence["until"].value == "null", "temporal null state was lost")
+
+    malformed = TaskObservation.from_mapping(
+        {"uuid": "bad", "status": "pending", "chain": "on", "anchor": "w:mon"},
+        source_query="uuid:bad",
+    )
+    rejected = validate_task(malformed, TaskOperation.QUERY)
+    expect(isinstance(rejected, InvalidTask), "incomplete chain identity was accepted operationally")
+    expect(rejected.observation is malformed and rejected.issues, "invalid result lost source evidence")
+
+    missing_reference = TaskObservation.from_mapping(
+        {**row, "due": None, "scheduled": None}, source_query="chain:chain-2", snapshot_id="snap-3"
+    )
+    rejected_reference = validate_task(missing_reference, TaskOperation.COMPLETION)
+    expect(isinstance(rejected_reference, InvalidTask), "completion without a temporal reference was accepted")
+
+
 def test_taskwarrior_client_preserves_evidence_and_redacts_observation():
     """The process boundary preserves evidence without observing command contents."""
     from nautical_core.integration_models import CommandFailureKind
@@ -32622,6 +32660,7 @@ TESTS = [
     test_chain_integrity_application_stays_on_typed_mutation_boundary,
     test_integration_command_and_read_models_enforce_contract,
     test_task_observation_contract_is_lossless_and_immutable,
+    test_nautical_task_projection_validates_operations_without_losing_observation,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
     test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,

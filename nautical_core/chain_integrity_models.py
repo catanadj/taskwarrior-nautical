@@ -150,6 +150,7 @@ class ChainNode:
     link: int | None
     status: str
     fields: FrozenPairs = ()
+    observation: "TaskObservation | None" = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "task UUID"))
@@ -157,6 +158,10 @@ class ChainNode:
         if self.link is not None and (isinstance(self.link, bool) or not isinstance(self.link, int) or self.link <= 0):
             raise IntegrityContractError("node link must be a positive integer or None")
         object.__setattr__(self, "status", _required_text(self.status, "task status").lower())
+        if self.observation is not None:
+            from .task_models import TaskObservation
+            if not isinstance(self.observation, TaskObservation):
+                raise IntegrityContractError("chain node observation must be a TaskObservation")
         fields = tuple(self.fields)
         if any(not isinstance(item, tuple) or len(item) != 2 or not isinstance(item[0], str) for item in fields):
             raise IntegrityContractError("node fields must be frozen key/value pairs")
@@ -217,6 +222,7 @@ class ChainNode:
             link,
             str(value("status") or ""),
             _freeze_pairs(fields),
+            observation,
         )
 
     @property

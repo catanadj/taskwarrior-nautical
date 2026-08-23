@@ -24581,6 +24581,103 @@ def test_scheduler_cross_path_conformance_matrix():
         expect(_occurrence_signature(first.occurrence) == _occurrence_signature(ranged.occurrences[0]), "file next/range diverged")
 
 
+def test_domain_scheduler_parity_across_operational_consumers():
+    """Typed scheduling agrees across direct, query, Navigator, and reconcile paths."""
+    from datetime import datetime, timezone as dt_timezone
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+
+    from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_models import Found
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+    from nautical_core.recurrence_context import RecurrenceContext
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask
+    from nautical_core.occurrence_outcomes import FoundOccurrence
+
+    zone = ZoneInfo("Europe/Sofia")
+    task = {
+        "uuid": "00000000-0000-4000-8000-000000000721",
+        "description": "domain parity task",
+        "status": "completed",
+        "chain": "on",
+        "chainID": "domain-parity-consumers",
+        "link": 7,
+        "anchor": "w:mon@t=09:00",
+        "anchor_mode": "skip",
+        "due": "20260817T060000Z",
+        "end": "20260817T060000Z",
+    }
+    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="domain parity")
+    typed_task = NauticalTask.from_observation(observation)
+    context = RecurrenceContext(chain_id=typed_task.identity.chain_id, timezone=zone)
+    scheduler = SchedulerService.from_task(typed_task, context=context)
+    cursor = OccurrenceCursor.strict_after(
+        datetime(2026, 8, 17, 9, tzinfo=zone), timezone=zone,
+    )
+    direct = scheduler.next(cursor)
+    expect(isinstance(direct, FoundOccurrence), f"direct scheduler did not find parity occurrence: {direct!r}")
+    expected_local = direct.occurrence.local_datetime
+    expect(expected_local is not None, "direct parity occurrence has no local timestamp")
+
+    class _Repository:
+        def by_uuid(self, value, **kwargs):
+            del kwargs
+            return Found(task, f"uuid:{value}")
+
+    uow = SimpleNamespace(
+        context=SimpleNamespace(
+            access=IntegrationAccess.READ_ONLY,
+            local_timezone=zone,
+            configuration=SimpleNamespace(fingerprint="domain-parity"),
+        ),
+        repository=_Repository(),
+    )
+    query_request = OccurrenceQueryRequest.from_mapping(
+        {
+            "selector": {"uuids": [task["uuid"]]},
+            "from": "2026-08-24",
+            "to": "2026-08-24",
+        }
+    )
+    query_result = OccurrenceQueryService(uow, core=core).query(query_request).results[0]
+    expect(query_result.status == "found", f"query parity returned {query_result.status}")
+    expect(query_result.occurrences, "query parity returned no occurrence")
+    expect(query_result.occurrences[0].local == expected_local, "query occurrence diverged from direct scheduler")
+
+    module_name = "_nautical_navigator_domain_parity_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    loader.exec_module(navigator)
+    old_zone = navigator.LOCAL_ZONE
+    navigator.LOCAL_ZONE = zone
+    try:
+        projected = navigator.TaskAnalyzer()._project_anchor_dates(
+            task, limit=1, start_from_date=date(2026, 8, 17),
+        )
+    finally:
+        navigator.LOCAL_ZONE = old_zone
+    expect(projected and projected[0] == expected_local, "Navigator projection diverged from direct scheduler")
+
+    previous_tz_name = getattr(core, "LOCAL_TZ_NAME", "")
+    previous_tz = getattr(core, "_LOCAL_TZ", None)
+    core.LOCAL_TZ_NAME = "Europe/Sofia"
+    core._LOCAL_TZ = zone
+    try:
+        recovery = plan_recovery_decision(observation, existing_children=[], hook=None)
+    finally:
+        core.LOCAL_TZ_NAME = previous_tz_name
+        core._LOCAL_TZ = previous_tz
+    expect(recovery.action == "spawn", f"reconcile parity did not plan a successor: {recovery!r}")
+    expect(recovery.child_due == expected_local.astimezone(dt_timezone.utc), "reconcile target diverged from direct scheduler")
+
+
 def test_scheduler_cross_path_preserves_terminal_evidence():
     """A valid prefix followed by exhaustion stays terminal in every service path."""
     from datetime import datetime
@@ -35176,6 +35273,7 @@ TESTS.extend([
     test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
     test_scheduler_parity_matrix_covers_context_sensitive_rules,
     test_scheduler_cross_path_conformance_matrix,
+    test_domain_scheduler_parity_across_operational_consumers,
     test_scheduler_cross_path_preserves_terminal_evidence,
     test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic,
     test_scheduler_conformance_isolated_under_shuffled_session_order,

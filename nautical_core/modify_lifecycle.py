@@ -103,7 +103,22 @@ def apply_terminal_transition(task: dict[str, Any], event: Any) -> bool:
     return ensure_terminal_chain_off(task)
 
 
-def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+def recurrence_setting_changes(
+    old: dict[str, Any] | None,
+    new: dict[str, Any] | None,
+    *,
+    transition: TaskTransition | None = None,
+) -> list[tuple[str, str, str]]:
+    if transition is not None:
+        return [
+            (
+                field,
+                _norm_field(transition.old.field(field).raw_value()),
+                _norm_field(transition.new.field(field).raw_value()),
+            )
+            for field in RECURRENCE_SETTING_FIELDS
+            if transition.changed(field)
+        ]
     if not isinstance(old, dict) or not isinstance(new, dict):
         return []
     changes: list[tuple[str, str, str]] = []

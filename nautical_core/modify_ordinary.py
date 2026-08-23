@@ -178,7 +178,7 @@ def handle_non_completion_modify(
         services.panel("⚓ Nautical resumed", rows, kind="note")
     else:
         try:
-            changes = lifecycle.recurrence_setting_changes(old, new)
+            changes = lifecycle.recurrence_setting_changes(old, new, transition=transition)
         except Exception:
             changes = []
         services.render_recurrence_updated(changes, new)

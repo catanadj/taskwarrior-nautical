@@ -17467,6 +17467,7 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
     original = (
         mod._anchor_pick_occurrence_local,
         mod._anchor_next_occurrence_after_local_dt,
+        mod._fmt_local_for_task,
         mod._panel,
         mod._emit_task_json,
     )
@@ -17477,6 +17478,7 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
     try:
         mod._anchor_pick_occurrence_local = fail_legacy
         mod._anchor_next_occurrence_after_local_dt = fail_legacy
+        mod._fmt_local_for_task = mod.core.fmt_isoz
         mod._panel = lambda title, rows, **kwargs: captured.update({"title": title, "rows": list(rows)})
         mod._emit_task_json = lambda value, **_kwargs: captured.update({"task": dict(value)})
         mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
@@ -17484,6 +17486,7 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
         (
             mod._anchor_pick_occurrence_local,
             mod._anchor_next_occurrence_after_local_dt,
+            mod._fmt_local_for_task,
             mod._panel,
             mod._emit_task_json,
         ) = original
@@ -24976,11 +24979,10 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     finally:
         astronomy.resolve_event = original_resolve_event
 
-    invalid_mode = _evaluator_for_fixture(
-        {"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"}
-    )
     try:
-        _ = invalid_mode.anchor_mode
+        _evaluator_for_fixture(
+            {"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"}
+        )
     except ValueError as exc:
         expect("anchor_mode" in str(exc), f"invalid mode error was not actionable: {exc}")
     else:

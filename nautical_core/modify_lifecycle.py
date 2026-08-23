@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .task_changes import TaskTransition
+
 RECURRENCE_SETTING_FIELDS = (
     "anchor",
     "anchor_file",
@@ -118,10 +120,15 @@ def classify_modify_route(
     new: dict[str, Any] | None,
     *,
     is_non_completion_modify: Callable[[dict[str, Any], dict[str, Any]], bool],
+    transition: TaskTransition | None = None,
 ) -> ModifyLifecycleRoute:
     old = old if isinstance(old, dict) else {}
     new = new if isinstance(new, dict) else {}
-    is_deleted = (str(new.get("status") or "").lower() == "deleted")
+    if transition is not None:
+        status = transition.new.field("status").raw_value()
+    else:
+        status = new.get("status")
+    is_deleted = str(status or "").lower() == "deleted"
     has_nautical_fields = task_has_nautical_fields(old) or task_has_nautical_fields(new)
     is_non_completion = bool(has_nautical_fields and not is_deleted and is_non_completion_modify(old, new))
     return ModifyLifecycleRoute(

@@ -114,6 +114,7 @@ def handle_on_modify(
         old,
         new,
         is_non_completion_modify=services.is_non_completion,
+        transition=getattr(request, "transition", None),
     )
 
     if route.is_deleted and route.has_nautical_fields:

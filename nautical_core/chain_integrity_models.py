@@ -168,28 +168,6 @@ class ChainNode:
         object.__setattr__(self, "fields", fields)
 
     @classmethod
-    def from_mapping(cls, row: Mapping[str, object]) -> "ChainNode":
-        if not isinstance(row, Mapping):
-            raise IntegrityContractError("chain row must be an object")
-        task_uuid = _required_text(row.get("uuid"), "task UUID")
-        raw_link = row.get("link")
-        link: int | None
-        if raw_link in (None, ""):
-            link = None
-        else:
-            try:
-                link = int(float(str(raw_link).strip()))
-            except (TypeError, ValueError, OverflowError):
-                link = None
-        return cls(
-            task_uuid,
-            str(row.get("chainID", row.get("chain_id", "")) or ""),
-            link,
-            str(row.get("status", "") or ""),
-            _freeze_pairs(row),
-        )
-
-    @classmethod
     def from_observation(cls, observation: "TaskObservation") -> "ChainNode":
         """Build a graph node directly from an authoritative observation."""
         from .task_models import FieldPresence, TaskObservation
@@ -256,7 +234,7 @@ class ChainNode:
         if state is not None:
             from .task_models import FieldPresence
             if state.presence is not FieldPresence.ABSENT:
-                return state.value
+                return getattr(state.value, "value", state.value)
             return default
         for key, value in self.fields:
             if key == name:

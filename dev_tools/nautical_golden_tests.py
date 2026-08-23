@@ -159,6 +159,12 @@ def _task_observation(row):
     return _task_observations((row,))[0]
 
 
+def _chain_node(row):
+    """Build an integrity node through the same observation boundary as production."""
+    from nautical_core.chain_integrity_models import ChainNode
+    return ChainNode.from_observation(_task_observation(row))
+
+
 def _task_draft(row):
     """Build a typed child fixture without using the removed mapping seam."""
     from datetime import datetime
@@ -656,7 +662,7 @@ def test_on_add_fail_and_exit_emits_json():
     """_fail_and_exit should fail-closed without emitting task JSON."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_fail_test")
-    task = {"uuid": "00000000-0000-0000-0000-000000000abc", "description": "fail test"}
+    task = {"uuid": "00000000-0000-4000-8000-000000000abc", "description": "fail test"}
     mod._PARSED_TASK = dict(task)
     mod._RAW_INPUT_TEXT = json.dumps(task, ensure_ascii=False)
     buf = io.StringIO()
@@ -675,7 +681,7 @@ def test_on_add_panic_passthrough_emits_valid_json():
     """on-add panic passthrough should always emit a valid JSON object."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_panic_passthrough_test")
-    mod._PARSED_TASK = {"uuid": "00000000-0000-0000-0000-000000000111", "description": "panic-add"}
+    mod._PARSED_TASK = {"uuid": "00000000-0000-4000-8000-000000000111", "description": "panic-add"}
     mod._RAW_INPUT_TEXT = "{not-json"
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -683,7 +689,7 @@ def test_on_add_panic_passthrough_emits_valid_json():
     out = buf.getvalue().strip()
     obj = json.loads(out or "{}")
     expect(isinstance(obj, dict), f"panic passthrough must emit JSON object, got: {out!r}")
-    expect(obj.get("uuid") == "00000000-0000-0000-0000-000000000111", "parsed task should be preserved")
+    expect(obj.get("uuid") == "00000000-0000-4000-8000-000000000111", "parsed task should be preserved")
 
 
 def test_on_modify_panic_passthrough_uses_latest_task():
@@ -691,8 +697,8 @@ def test_on_modify_panic_passthrough_uses_latest_task():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_panic_passthrough_test")
     mod._PARSED_NEW = None
-    old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
-    new = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "completed"}
+    old = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+    new = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "completed"}
     mod._RAW_INPUT_TEXT = json.dumps(old) + "\n" + json.dumps(new)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -867,7 +873,7 @@ def test_hooks_survive_malformed_numeric_environment():
         env = {name: "not-a-number" for name in malformed_names}
         env.update({"TASKDATA": td, "NAUTICAL_BENCH_FORCE_FULL": "1"})
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000706",
+            "uuid": "00000000-0000-4000-8000-000000000706",
             "status": "pending",
             "description": "Malformed env ăîșț",
         }
@@ -960,7 +966,7 @@ def test_hook_stdout_strict_json_with_diag_on_add():
             "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
         }
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000333",
+            "uuid": "00000000-0000-4000-8000-000000000333",
             "description": "hook test on-add strict stdout",
             "status": "pending",
             "entry": "20250101T000000Z",
@@ -979,7 +985,7 @@ def test_hook_stdout_strict_json_with_diag_on_modify():
             "NAUTICAL_BENCH_FORCE_FULL": "1",
             "NAUTICAL_CONFIG": os.path.join(td, "missing.toml"),
         }
-        raw = json.dumps({"uuid": "00000000-0000-0000-0000-000000000444", "status": "pending"})
+        raw = json.dumps({"uuid": "00000000-0000-4000-8000-000000000444", "status": "pending"})
         p = _run_hook_script_raw(hook, raw, env_extra=env)
         expect(p.returncode == 0, f"on-modify returned {p.returncode}")
         _assert_stdout_json_only(p.stdout)
@@ -989,7 +995,7 @@ def test_hook_stdout_unicode_unescaped_on_add():
     """on-add passthrough stdout should preserve Unicode (ensure_ascii=False)."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000445",
+        "uuid": "00000000-0000-4000-8000-000000000445",
         "status": "pending",
         "description": "Cafe ăîșț ✅",
     }
@@ -1005,7 +1011,7 @@ def test_hook_stdout_unicode_unescaped_on_modify():
     hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps(
         {
-            "uuid": "00000000-0000-0000-0000-000000000446",
+            "uuid": "00000000-0000-4000-8000-000000000446",
             "status": "pending",
             "description": "Cafe ăîșț ✅",
         },
@@ -1051,7 +1057,7 @@ def test_hook_protocol_loads_without_core_package():
 def test_hook_protocol_on_add_classifies_and_validates():
     """The add gate should distinguish plain and Nautical tasks without weakening JSON validation."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_add_test")
-    plain = {"uuid": "00000000-0000-0000-0000-000000000701", "description": "Cafe ăîșț ✅"}
+    plain = {"uuid": "00000000-0000-4000-8000-000000000701", "description": "Cafe ăîșț ✅"}
     result = protocol.probe_on_add(json.dumps(plain, ensure_ascii=False))
     expect(result.valid and result.task == plain, f"plain add probe failed: {result.error!r}")
     expect(not result.is_nautical, f"plain add task classified as Nautical: {result.task!r}")
@@ -1079,7 +1085,7 @@ def test_hook_protocol_on_add_classifies_and_validates():
 def test_hook_protocol_on_modify_accepts_supported_input_forms():
     """The modify gate should accept concatenated, array, and single-task hook payloads."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_modify_forms_test")
-    uuid_str = "00000000-0000-0000-0000-000000000702"
+    uuid_str = "00000000-0000-4000-8000-000000000702"
     old = {"uuid": uuid_str, "status": "pending", "description": "old"}
     new = {"uuid": uuid_str, "status": "pending", "description": "new ăîșț"}
 
@@ -1100,7 +1106,7 @@ def test_hook_protocol_on_modify_accepts_supported_input_forms():
 def test_hook_protocol_on_modify_matches_nautical_route_rules():
     """Modify classification should match modify_lifecycle's recurrence and lineage fields."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_modify_route_test")
-    uuid_str = "00000000-0000-0000-0000-000000000703"
+    uuid_str = "00000000-0000-4000-8000-000000000703"
     base = {"uuid": uuid_str, "status": "pending"}
     for field, value in (
         ("anchor", "w:mon"),
@@ -1124,8 +1130,8 @@ def test_hook_protocol_on_modify_matches_nautical_route_rules():
 def test_hook_protocol_modify_validation_limits_and_emission():
     """The gate should preserve UUID policy, byte limits, strict JSON, and raw Unicode output."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_validation_test")
-    old = {"uuid": "00000000-0000-0000-0000-000000000704", "status": "pending"}
-    different = {"uuid": "00000000-0000-0000-0000-000000000705", "status": "deleted"}
+    old = {"uuid": "00000000-0000-4000-8000-000000000704", "status": "pending"}
+    different = {"uuid": "00000000-0000-4000-8000-000000000705", "status": "deleted"}
     plain_mismatch = protocol.probe_on_modify(json.dumps(old) + json.dumps(different))
     expect(plain_mismatch.valid and not plain_mismatch.is_nautical, "plain UUID mismatch should remain ignorable")
 
@@ -1156,7 +1162,7 @@ def test_hook_io_contract_preserves_unknown_task_fields_and_unicode():
     from nautical_core import hook_protocol
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000901",
+        "uuid": "00000000-0000-4000-8000-000000000901",
         "description": "Répéter 🌊",
         "custom_uda": {"nested": ["значение", 3]},
         "link": 1.0,
@@ -1172,7 +1178,7 @@ def test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks():
     """The supported Taskwarrior modify array form preserves old and new rows."""
     from nautical_core import hook_protocol
 
-    old = {"uuid": "00000000-0000-0000-0000-000000000902", "description": "old", "custom": "keep"}
+    old = {"uuid": "00000000-0000-4000-8000-000000000902", "description": "old", "custom": "keep"}
     new = dict(old, description="new", custom_extra="also-keep")
     result = hook_protocol.probe_on_modify(json.dumps([old, new], ensure_ascii=False))
     expect(result.valid, f"modify array was rejected: {result.error}")
@@ -1184,7 +1190,7 @@ def test_hook_io_contract_rejects_trailing_json_without_partial_success():
     """Trailing bytes must be a protocol error, never silently ignored."""
     from nautical_core import hook_protocol
 
-    task = {"uuid": "00000000-0000-0000-0000-000000000903", "description": "strict"}
+    task = {"uuid": "00000000-0000-4000-8000-000000000903", "description": "strict"}
     result = hook_protocol.probe_on_add(json.dumps(task) + " trailing")
     expect(not result.valid, "trailing on-add content was accepted")
     expect(result.error_kind == "invalid_input", f"unexpected error kind: {result.error_kind!r}")
@@ -1195,7 +1201,7 @@ def test_hook_io_contract_response_is_single_unescaped_json_object():
     """Response serialization must remain one JSON object with readable Unicode."""
     from nautical_core import hook_results
 
-    task = {"uuid": "00000000-0000-0000-0000-000000000904", "description": "Répéter 🌊"}
+    task = {"uuid": "00000000-0000-4000-8000-000000000904", "description": "Répéter 🌊"}
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         hook_results.emit_task_json(task)
@@ -1209,7 +1215,7 @@ def test_hook_response_models_keep_legacy_names_and_typed_roles():
     """Typed response names must coexist with the established hook aliases."""
     from nautical_core import hook_results
 
-    task = {"uuid": "00000000-0000-0000-0000-000000000906"}
+    task = {"uuid": "00000000-0000-4000-8000-000000000906"}
     task_result = hook_results.TaskHookResponse(task)
     exit_result = hook_results.ExitHookResponse(exit_code=3, stats={"errors": 1})
     expect(isinstance(task_result, hook_results.HookJsonResult), "legacy task result alias changed")
@@ -1315,9 +1321,9 @@ def test_chain_integrity_models_enforce_observation_and_repair_contract():
         SnapshotCoverage,
     )
 
-    node = ChainNode.from_mapping(
+    node = _chain_node(
         {
-            "uuid": "00000000-0000-0000-0000-000000000991",
+            "uuid": "00000000-0000-4000-8000-000000000991",
             "status": "pending",
             "link": "7.000000",
             "nextLink": "00000000",
@@ -1327,9 +1333,9 @@ def test_chain_integrity_models_enforce_observation_and_repair_contract():
     expect(not node.has_complete_identity, "missing chainID became a repairable identity")
     expect(node.field("nextLink") == "00000000", "raw row evidence was discarded")
 
-    complete = ChainNode.from_mapping(
+    complete = _chain_node(
         {
-            "uuid": "00000000-0000-0000-0000-000000000992",
+            "uuid": "00000000-0000-4000-8000-000000000992",
             "status": "pending",
             "chainID": "chain-contract",
             "link": 8,
@@ -1452,8 +1458,8 @@ def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
     result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.001)
     scope = TaskSnapshotScope(TaskQueryKind.BROAD, "chain:on", ("completed", "pending"))
     rows = (
-        {"uuid": "00000000-0000-0000-0000-000000000901", "status": "pending", "chainID": "snap-chain", "link": 1},
-        {"uuid": "00000000-0000-0000-0000-000000000902", "status": "completed", "chainID": "snap-chain", "link": 2},
+        {"uuid": "00000000-0000-4000-8000-000000000901", "status": "pending", "chainID": "snap-chain", "link": 1},
+        {"uuid": "00000000-0000-4000-8000-000000000902", "status": "completed", "chainID": "snap-chain", "link": 2},
     )
     authoritative = AuthoritativeTaskSnapshot(scope, _task_observations(rows), result)
 
@@ -1581,7 +1587,7 @@ def test_integrity_engine_report_is_frontend_parity_contract():
     from nautical_core.integration_models import Found
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
-    node = ChainNode.from_mapping({
+    node = _chain_node({
         "uuid": "aaaaaaaa-0000-0000-0000-000000000936",
         "status": "pending", "chainID": "parity-chain", "link": 1,
         "chain": "on", "anchor": "w:mon",
@@ -1621,7 +1627,7 @@ def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():
     )
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
-    parent = ChainNode.from_mapping({
+    parent = _chain_node({
         "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
         "status": "completed",
         "chain": "on",
@@ -1629,7 +1635,7 @@ def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():
         "link": 2,
         "prevLink": "outside0",
     })
-    predecessor = ChainNode.from_mapping({
+    predecessor = _chain_node({
         "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
         "status": "deleted",
         "chain": "on",
@@ -1697,7 +1703,7 @@ def test_chain_graph_is_deterministic_and_preserves_reference_states():
     from nautical_core.chain_graph import ChainGraph
     from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
 
-    first = ChainNode.from_mapping(
+    first = _chain_node(
         {
             "uuid": "aaaaaaaa-0000-0000-0000-000000000911",
             "status": "pending",
@@ -1706,7 +1712,7 @@ def test_chain_graph_is_deterministic_and_preserves_reference_states():
             "nextLink": "bbbbbbbb",
         }
     )
-    second = ChainNode.from_mapping(
+    second = _chain_node(
         {
             "uuid": "bbbbbbbb-0000-0000-0000-000000000912",
             "status": "completed",
@@ -1726,7 +1732,7 @@ def test_chain_graph_is_deterministic_and_preserves_reference_states():
     expect(graph.to_dict() == reordered.to_dict(), "equivalent graphs did not serialize deterministically")
     expect(graph.to_dict()["references"][0]["state"] == "resolved", "serialized reference state was lost")
 
-    missing = ChainNode.from_mapping(
+    missing = _chain_node(
         {
             "uuid": "cccccccc-0000-0000-0000-000000000913",
             "status": "pending",
@@ -1765,7 +1771,7 @@ def test_chain_graph_exposes_lifecycle_and_topology_queries():
     )
     graph = ChainGraph.from_snapshot(ChainSnapshot(
         "graph-queries", SnapshotCoverage.CHAIN, "test",
-        tuple(ChainNode.from_mapping(row) for row in rows),
+        tuple(_chain_node(row) for row in rows),
     ))
     expect(graph.lifecycle_nodes(LifecycleIntent.COMPLETED.value)[0].task_uuid.startswith("bbbb"), "completed view failed")
     expect(len(graph.roots("query-chain")) == 1 and len(graph.tips("query-chain")) == 1, "root/tip query failed")
@@ -1792,14 +1798,14 @@ def test_chain_graph_covers_required_structural_shapes():
     )
     graph = ChainGraph.from_snapshot(ChainSnapshot(
         "graph-shapes", SnapshotCoverage.CANDIDATES, "test",
-        tuple(ChainNode.from_mapping(row) for row in rows),
+        tuple(_chain_node(row) for row in rows),
     ))
     expect(len(graph.slot_nodes("shape", 2)) == 2, "duplicate slot evidence was lost")
     expect(graph.reference(rows[1]["uuid"], "nextLink").state is ReferenceState.RESOLVED, "cycle edge was lost")
     expect(graph.reference(rows[5]["uuid"], "nextLink").state is ReferenceState.OUTSIDE_COVERAGE, "partial edge was hidden")
     expect(len(graph.orphan_candidates()) == 1, "orphan candidate query was not deterministic")
     expect(len(graph.chain_nodes("other")) == 2, "disconnected chain was lost")
-    ambiguous = ChainNode.from_mapping({
+    ambiguous = _chain_node({
         "uuid": "66666666-0000-0000-0000-000000000927", "status": "pending", "chainID": "shape", "link": 4,
         "nextLink": "44444444",
     })
@@ -1850,17 +1856,17 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     from nautical_core.chain_integrity_models import ChainNode
     healthy = ChainGraph.from_snapshot(ChainSnapshot(
         "invariant-healthy", SnapshotCoverage.CHAIN, "test",
-        (ChainNode.from_mapping(second), ChainNode.from_mapping(first)),
+        (_chain_node(second), _chain_node(first)),
     ))
     expect(evaluate_invariants(healthy) == (), "healthy graph produced findings")
 
-    broken = ChainNode.from_mapping({
+    broken = _chain_node({
         "uuid": "cccccccc-0000-0000-0000-000000000923",
         "status": "pending",
         "link": 1,
         "nextLink": "bbbbbbbb",
     })
-    duplicate = ChainNode.from_mapping({
+    duplicate = _chain_node({
         "uuid": "dddddddd-0000-0000-0000-000000000924",
         "status": "pending",
         "chainID": "invariant-chain",
@@ -1868,7 +1874,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     })
     graph = ChainGraph.from_snapshot(ChainSnapshot(
         "invariant-broken", SnapshotCoverage.CANDIDATES, "test",
-        (duplicate, ChainNode.from_mapping(second), broken, ChainNode.from_mapping(first)),
+        (duplicate, _chain_node(second), broken, _chain_node(first)),
     ))
     findings = evaluate_invariants(graph)
     ids = {(finding.invariant_id, finding.reason_code) for finding in findings}
@@ -1879,13 +1885,13 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(findings == evaluate_invariants(graph), "invariant output was not deterministic")
 
     truncated = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-truncated", SnapshotCoverage.TRUNCATED, "test", (ChainNode.from_mapping(first),)
+        "invariant-truncated", SnapshotCoverage.TRUNCATED, "test", (_chain_node(first),)
     ))
     unavailable = evaluate_invariants(truncated)
     expect(unavailable and all(item.status.value == "unavailable" for item in unavailable), "truncation did not fail closed")
 
     temporal = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-temporal", SnapshotCoverage.CHAIN, "test", (ChainNode.from_mapping({
+        "invariant-temporal", SnapshotCoverage.CHAIN, "test", (_chain_node({
             "uuid": "eeeeeeee-0000-0000-0000-000000000925",
             "status": "pending",
             "chainID": "temporal-chain",
@@ -1901,7 +1907,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     expect(("carry.wait_before_due", "wait_after_due") in temporal_ids, "wait ordering was not reported")
 
     terminal = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-terminal", SnapshotCoverage.CANDIDATES, "test", (ChainNode.from_mapping({
+        "invariant-terminal", SnapshotCoverage.CANDIDATES, "test", (_chain_node({
             "uuid": "ffffffff-0000-0000-0000-000000000926",
             "status": "completed",
             "chain": "on",
@@ -1922,7 +1928,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     )
 
     deleted = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-deleted", SnapshotCoverage.CANDIDATES, "test", (ChainNode.from_mapping({
+        "invariant-deleted", SnapshotCoverage.CANDIDATES, "test", (_chain_node({
             "uuid": "abababab-0000-0000-0000-000000000931",
             "status": "deleted",
             "chain": "on",
@@ -1938,7 +1944,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
 
     backward = ChainGraph.from_snapshot(ChainSnapshot(
         "invariant-continuity", SnapshotCoverage.CANDIDATES, "test", (
-            ChainNode.from_mapping({
+            _chain_node({
                 "uuid": "12121212-0000-0000-0000-000000000928",
                 "status": "completed",
                 "chain": "on",
@@ -1950,7 +1956,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
                 "until": "20260822T230000Z",
                 "nextLink": "13131313",
             }),
-            ChainNode.from_mapping({
+            _chain_node({
                 "uuid": "13131313-0000-0000-0000-000000000929",
                 "status": "pending",
                 "chain": "on",
@@ -1984,13 +1990,13 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
 
     exact_until = ChainGraph.from_snapshot(ChainSnapshot(
         "invariant-exact-until", SnapshotCoverage.CANDIDATES, "test", (
-            ChainNode.from_mapping({
+            _chain_node({
                 "uuid": "14141414-0000-0000-0000-000000000930",
                 "status": "completed", "chain": "on", "chainID": "exact-until", "link": 1,
                 "cp": "1d", "due": "20260822T100000Z", "until": "20260822T230001Z",
                 "nextLink": "15151515",
             }),
-            ChainNode.from_mapping({
+            _chain_node({
                 "uuid": "15151515-0000-0000-0000-000000000931",
                 "status": "pending", "chain": "on", "chainID": "exact-until", "link": 2,
                 "cp": "1d", "due": "20260823T100000Z", "until": "20260823T220001Z",
@@ -2043,7 +2049,7 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
         OutboxProcessingState.ACKNOWLEDGED,
         ExecutionStage.FINALIZED,
     )
-    node = ChainNode.from_mapping({
+    node = _chain_node({
         "uuid": parent_uuid,
         "status": "completed",
         "chain": "on",
@@ -2062,7 +2068,7 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
         "stale terminal recurrence evidence was not reported",
     )
 
-    disabled = ChainNode.from_mapping({**node.to_dict(), "chain": "off"})
+    disabled = _chain_node({**node.to_dict(), "chain": "off"})
     disabled_graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-ok", SnapshotCoverage.CHAIN, "test", (disabled,)))
     disabled_findings = evaluate_context(IntegrityContext(
         disabled_graph, OutboxSnapshot.from_records((record,)), "cfg-final",
@@ -2157,12 +2163,12 @@ def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
     from nautical_core.chain_invariants import evaluate_invariants
     from nautical_core.chain_repair_planner import IntegrityRepairPlanner
 
-    source = ChainNode.from_mapping({
+    source = _chain_node({
         "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
         "status": "pending", "chainID": "planner-chain", "link": 1,
         "anchor": "w:mon", "nextLink": "bbbbbbbb",
     })
-    target = ChainNode.from_mapping({
+    target = _chain_node({
         "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
         "status": "pending", "chainID": "planner-chain", "link": 2,
     })
@@ -2183,17 +2189,17 @@ def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
     partial = IntegrityRepairPlanner().plan(partial_context, findings)
     expect(not partial.plans and partial.refusals, "partial evidence produced an automatic plan")
 
-    predecessor = ChainNode.from_mapping({
+    predecessor = _chain_node({
         "uuid": "cccccccc-0000-0000-0000-000000000933",
         "status": "pending", "chainID": "slot-chain", "link": 1,
         "nextLink": "eeeeeeee",
     })
-    missing = ChainNode.from_mapping({
+    missing = _chain_node({
         "uuid": "eeeeeeee-0000-0000-0000-000000000934",
         "status": "pending", "chainID": "slot-chain",
         "prevLink": "cccccccc", "nextLink": "ffffffff",
     })
-    successor = ChainNode.from_mapping({
+    successor = _chain_node({
         "uuid": "ffffffff-0000-0000-0000-000000000935",
         "status": "pending", "chainID": "slot-chain", "link": 3,
         "prevLink": "eeeeeeee",
@@ -2533,8 +2539,8 @@ def test_task_codec_decodes_hook_framing_once():
     """The shared codec owns concatenated and array hook task framing."""
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-    first = {"uuid": "00000000-0000-0000-0000-000000000101", "status": "pending"}
-    second = {"uuid": "00000000-0000-0000-0000-000000000102", "status": "completed"}
+    first = {"uuid": "00000000-0000-4000-8000-000000000101", "status": "pending"}
+    second = {"uuid": "00000000-0000-4000-8000-000000000102", "status": "completed"}
     concatenated = json.dumps(first) + json.dumps(second)
     rows, index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
         concatenated, source_query="golden hook framing"
@@ -3141,7 +3147,7 @@ def test_integration_mutation_models_enforce_guards_and_postconditions():
     command = TaskCommand(("task", "uuid", "modify", "chain:off"), "disable chain", 12.0)
     busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.2, True, "lock active")
     guard = MutationGuard(
-        task_uuid="00000000-0000-0000-0000-000000000921",
+        task_uuid="00000000-0000-4000-8000-000000000921",
         status="pending",
         chain_id="chain-1",
         link=7,
@@ -3424,8 +3430,8 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
-    parent_uuid = "00000000-0000-0000-0000-000000000924"
-    child_uuid = "00000000-0000-0000-0000-000000000925"
+    parent_uuid = "00000000-0000-4000-8000-000000000924"
+    child_uuid = "00000000-0000-4000-8000-000000000925"
     parent = {
         "uuid": parent_uuid,
         "status": "completed",
@@ -3680,8 +3686,8 @@ def test_child_import_rejects_incomplete_existing_rows():
     from nautical_core.lifecycle_models import recurrence_fingerprint
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
-    parent_uuid = "00000000-0000-0000-0000-000000000926"
-    child_uuid = "00000000-0000-0000-0000-000000000927"
+    parent_uuid = "00000000-0000-4000-8000-000000000926"
+    child_uuid = "00000000-0000-4000-8000-000000000927"
     parent = {
         "uuid": parent_uuid,
         "status": "completed",
@@ -3790,8 +3796,8 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
     from nautical_core.lifecycle_models import recurrence_fingerprint
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
-    parent_uuid = "00000000-0000-0000-0000-000000000928"
-    child_uuid = "00000000-0000-0000-0000-000000000929"
+    parent_uuid = "00000000-0000-4000-8000-000000000928"
+    child_uuid = "00000000-0000-4000-8000-000000000929"
     parent = {
         "uuid": parent_uuid,
         "status": "completed",
@@ -3877,8 +3883,8 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
     from nautical_core.lifecycle_models import recurrence_fingerprint
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
-    parent_uuid = "00000000-0000-0000-0000-000000000930"
-    child_uuid = "00000000-0000-0000-0000-000000000931"
+    parent_uuid = "00000000-0000-4000-8000-000000000930"
+    child_uuid = "00000000-0000-4000-8000-000000000931"
     parent = {
         "uuid": parent_uuid,
         "status": "completed",
@@ -5689,7 +5695,7 @@ def test_taskwarrior_document_is_lossless_with_typed_scalar_accessors():
     from nautical_core.taskwarrior_io import TaskDocument
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000905",
+        "uuid": "00000000-0000-4000-8000-000000000905",
         "description": "routine",
         "link": 7.0,
         "chain": "on",
@@ -5723,7 +5729,7 @@ def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
     """Only changes unrelated to Nautical behavior should qualify for thin modify handling."""
     protocol = _load_hook_protocol_module("_nautical_hook_protocol_ordinary_edit_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000707",
+        "uuid": "00000000-0000-4000-8000-000000000707",
         "status": "pending",
         "description": "ordinary edit",
         "project": "home",
@@ -5872,7 +5878,7 @@ def test_plain_hook_fast_paths_do_not_import_core_package():
         env.pop("NAUTICAL_PROFILE", None)
         env.pop("NAUTICAL_BENCH_FORCE_FULL", None)
         plain = {
-            "uuid": "00000000-0000-0000-0000-000000000706",
+            "uuid": "00000000-0000-4000-8000-000000000706",
             "status": "pending",
             "description": "Cafe ăîșț ✅",
         }
@@ -6921,7 +6927,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     lifecycle = mod._module("modify_lifecycle")
 
     plain_old = {
-        "uuid": "00000000-0000-0000-0000-000000000444",
+        "uuid": "00000000-0000-4000-8000-000000000444",
         "description": "plain task",
         "status": "pending",
     }
@@ -6939,7 +6945,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
         expect(bool((new.get("chainID") or "").strip()), f"{case['label']} transition should stamp chainID, got {new!r}")
 
     already_old = {
-        "uuid": "00000000-0000-0000-0000-000000000445",
+        "uuid": "00000000-0000-4000-8000-000000000445",
         "description": "already nautical",
         "status": "pending",
         "anchor": "w:mon",
@@ -6957,7 +6963,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     expect(already_new.get("chain") == "off", f"rejected task should retain chain state, got {already_new!r}")
 
     identity_old = {
-        "uuid": "00000000-0000-0000-0000-000000000446",
+        "uuid": "00000000-0000-4000-8000-000000000446",
         "status": "pending",
         "anchor": "w:mon",
         "chain": "on",
@@ -6973,7 +6979,7 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
         raise AssertionError("manual chainID modification was accepted")
 
     repair_old = {
-        "uuid": "00000000-0000-0000-0000-000000000447",
+        "uuid": "00000000-0000-4000-8000-000000000447",
         "status": "pending",
         "anchor": "w:mon",
         "chain": "on",
@@ -7079,12 +7085,12 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_upgrade_panel_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000446",
+        "uuid": "00000000-0000-4000-8000-000000000446",
         "description": "plain task",
         "status": "pending",
     }
     new = {
-        "uuid": "00000000-0000-0000-0000-000000000446",
+        "uuid": "00000000-0000-4000-8000-000000000446",
         "description": "plain task",
         "status": "pending",
         "anchor": "w:mon",
@@ -7126,7 +7132,7 @@ def test_on_modify_promotes_cp_emits_period_explanation():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_upgrade_panel_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000448",
+        "uuid": "00000000-0000-4000-8000-000000000448",
         "description": "plain task",
         "status": "pending",
     }
@@ -7157,7 +7163,7 @@ def test_on_modify_disables_chain_emits_disabled_panel():
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_disabled_panel_test")
 
     base_old = {
-        "uuid": "00000000-0000-0000-0000-000000000447",
+        "uuid": "00000000-0000-4000-8000-000000000447",
         "description": "nautical task",
         "status": "pending",
         "anchor": "w:mon",
@@ -7234,7 +7240,7 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_chain_resumed_panel_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000451",
+        "uuid": "00000000-0000-4000-8000-000000000451",
         "description": "paused nautical task",
         "status": "pending",
         "anchor": "w:mon",
@@ -7277,7 +7283,7 @@ def test_on_modify_resume_wrapper_preserves_json_and_emits_panel():
     """The thin wrapper must route chain resume through feedback without polluting stdout."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000452",
+        "uuid": "00000000-0000-4000-8000-000000000452",
         "description": "paused nautical task",
         "status": "pending",
         "cp": "1d",
@@ -7304,7 +7310,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_recurrence_update_panel_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000449",
+        "uuid": "00000000-0000-4000-8000-000000000449",
         "description": "nautical task",
         "status": "pending",
         "anchor": "w:mon",
@@ -7387,7 +7393,7 @@ def test_on_modify_native_until_update_explains_carry():
     old_until = mod.core.build_local_datetime(date(2026, 8, 3), (18, 0)).astimezone(timezone.utc)
     new_until = mod.core.build_local_datetime(date(2026, 8, 4), (0, 0)).astimezone(timezone.utc) + timedelta(seconds=1)
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000446",
+        "uuid": "00000000-0000-4000-8000-000000000446",
         "description": "nautical expiration update",
         "status": "pending",
         "cp": "1d",
@@ -7422,7 +7428,7 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_limit_update_panel_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000450",
+        "uuid": "00000000-0000-4000-8000-000000000450",
         "description": "limited nautical task",
         "status": "pending",
         "cp": "1d",
@@ -7493,9 +7499,9 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
         ml.task_has_nautical_fields({"chainID": "abcd1234"}),
         "canonical chainID should still count as Nautical state",
     )
-    old = {"uuid": "00000000-0000-0000-0000-000000000447", "status": "pending"}
+    old = {"uuid": "00000000-0000-4000-8000-000000000447", "status": "pending"}
     new = {
-        "uuid": "00000000-0000-0000-0000-000000000447",
+        "uuid": "00000000-0000-4000-8000-000000000447",
         "status": "pending",
         "anchor_file": "2026.csv",
         "chain": "off",
@@ -7513,7 +7519,7 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
     expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
 
-    disabled_old = {"uuid": "00000000-0000-0000-0000-000000000448", "status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "00000000"}
+    disabled_old = {"uuid": "00000000-0000-4000-8000-000000000448", "status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "00000000"}
     disabled_new = dict(disabled_old)
     disabled_new["chain"] = "off"
     trans = ml.apply_nautical_transition(disabled_old, disabled_new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
@@ -7624,8 +7630,8 @@ def test_on_modify_read_two_array_uuid_mismatch_fails():
     hook = _find_hook_file("on-modify.nautical")
     raw = json.dumps(
         [
-            {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending", "anchor": "w:mon"},
-            {"uuid": "00000000-0000-0000-0000-000000000222", "status": "completed", "anchor": "w:mon"},
+            {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending", "anchor": "w:mon"},
+            {"uuid": "00000000-0000-4000-8000-000000000222", "status": "completed", "anchor": "w:mon"},
         ]
     )
     p = _run_hook_script_raw(hook, raw)
@@ -7654,8 +7660,8 @@ def test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored():
     """on-modify should not fail UUID mismatch for plain Taskwarrior deletes without Nautical fields."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_uuid_mismatch_non_nautical_test")
-    old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
-    new = {"uuid": "00000000-0000-0000-0000-000000000222", "status": "deleted"}
+    old = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
+    new = {"uuid": "00000000-0000-4000-8000-000000000222", "status": "deleted"}
     got_old, got_new = mod._validate_modify_pair(old, new)
     expect(got_old is old and got_new is new, f"expected UUID mismatch to be ignored for non-nautical delete: {(got_old, got_new)!r}")
 
@@ -7706,7 +7712,7 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
         expect(old.get("status") == "pending", f"delete handler should receive old pending task: {old!r}")
         expect(new.get("status") == "deleted", f"delete handler should receive new deleted task: {new!r}")
 
-    plain_new = {"uuid": "00000000-0000-0000-0000-000000000301", "status": "deleted"}
+    plain_new = {"uuid": "00000000-0000-4000-8000-000000000301", "status": "deleted"}
     result = hook_engine.handle_on_modify(
         Request({"uuid": plain_new["uuid"], "status": "pending"}, plain_new),
         _test_modify_engine_services(
@@ -7725,7 +7731,7 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     expect(calls == {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}, f"plain delete should stay cheap: {calls!r}")
 
     nautical_old = {
-        "uuid": "00000000-0000-0000-0000-000000000302",
+        "uuid": "00000000-0000-4000-8000-000000000302",
         "status": "pending",
         "anchor": "w:mon",
         "chainID": "00000000",
@@ -7758,8 +7764,8 @@ def test_hook_engine_retains_completion_lifecycle_result_on_runtime_context():
     lifecycle = CompletionLifecycleResult(state="retryable", reason="planner unavailable")
     runtime = SimpleNamespace(lifecycle_result=None, uow=object())
     request = SimpleNamespace(
-        old={"uuid": "00000000-0000-0000-0000-000000000303", "status": "pending", "chainID": "chain303"},
-        new={"uuid": "00000000-0000-0000-0000-000000000303", "status": "completed", "chainID": "chain303"},
+        old={"uuid": "00000000-0000-4000-8000-000000000303", "status": "pending", "chainID": "chain303"},
+        new={"uuid": "00000000-0000-4000-8000-000000000303", "status": "completed", "chainID": "chain303"},
         runtime=runtime,
     )
     result = hook_engine.handle_on_modify(
@@ -7809,14 +7815,14 @@ def test_end_summary_history_marks_deleted_pending_tail():
     lines = mod._last_n_timeline(
         [
             {
-                "uuid": "00000000-0000-0000-0000-000000000111",
+                "uuid": "00000000-0000-4000-8000-000000000111",
                 "status": "completed",
                 "link": 1,
                 "due": "20260101T000000Z",
                 "end": "20260101T000000Z",
             },
             {
-                "uuid": "00000000-0000-0000-0000-000000000222",
+                "uuid": "00000000-0000-4000-8000-000000000222",
                 "status": "deleted",
                 "link": 2,
                 "due": "20260102T000000Z",
@@ -7838,7 +7844,7 @@ def test_delete_chain_summary_uses_stopped_title():
 
     captured = {}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000222",
+        "uuid": "00000000-0000-4000-8000-000000000222",
         "status": "deleted",
         "chainID": "00000000",
         "link": 2,
@@ -7847,7 +7853,7 @@ def test_delete_chain_summary_uses_stopped_title():
     }
     chain = [
         {
-            "uuid": "00000000-0000-0000-0000-000000000111",
+            "uuid": "00000000-0000-4000-8000-000000000111",
             "status": "completed",
             "chainID": "00000000",
             "link": 1,
@@ -7929,7 +7935,7 @@ def test_on_modify_expiration_delegates_to_extracted_orchestration():
             return True
 
         expiration.handle_expired_deleted_modify = handle
-        task = {"uuid": "00000000-0000-0000-0000-000000000411"}
+        task = {"uuid": "00000000-0000-4000-8000-000000000411"}
         expect(mod._handle_expired_deleted_modify(task), "extracted expiration handler result was lost")
     finally:
         expiration.handle_expired_deleted_modify = original
@@ -7944,7 +7950,7 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_failure_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000416",
+        "uuid": "00000000-0000-4000-8000-000000000416",
         "status": "pending",
         "description": "Recoverable expiration",
         "cp": "7d",
@@ -7979,7 +7985,7 @@ def test_on_modify_expiration_wrapper_preserves_json_stdout():
     """Expiration feedback must stay on stderr while the hook returns one strict task object."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000421",
+        "uuid": "00000000-0000-4000-8000-000000000421",
         "status": "pending",
         "description": "Expiration protocol",
         "cp": "7d",
@@ -8007,7 +8013,7 @@ def test_on_modify_manual_delete_persists_chain_off():
     """The real hook should distinguish an intentional early deletion from expiration."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000422",
+        "uuid": "00000000-0000-4000-8000-000000000422",
         "status": "pending",
         "description": "Manual delete protocol",
         "cp": "7d",
@@ -8035,7 +8041,7 @@ def test_on_modify_invalid_anchor_has_no_stdout():
     """on-modify should keep stdout empty on semantic validation failures."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000611",
+        "uuid": "00000000-0000-4000-8000-000000000611",
         "status": "pending",
         "description": "invalid anchor test",
     }
@@ -11400,7 +11406,7 @@ def test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts():
         config = Path(td) / "nautical.toml"
         config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000114",
+            "uuid": "00000000-0000-4000-8000-000000000114",
             "description": "hook alias test a:w:mon am:all",
             "status": "pending",
             "project": "testing",
@@ -11428,7 +11434,7 @@ def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
         config = Path(td) / "nautical.toml"
         config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
         old = {
-            "uuid": "00000000-0000-0000-0000-000000000115",
+            "uuid": "00000000-0000-4000-8000-000000000115",
             "description": "plain",
             "status": "pending",
         }
@@ -11458,7 +11464,7 @@ def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
         config = Path(td) / "nautical.toml"
         config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
         old = {
-            "uuid": "00000000-0000-0000-0000-000000000116",
+            "uuid": "00000000-0000-4000-8000-000000000116",
             "description": "plain",
             "status": "pending",
             "anchor": "w:mon",
@@ -11483,7 +11489,7 @@ def test_hook_on_add_disabled_uda_aliases_leave_description_untouched():
         config = Path(td) / "nautical.toml"
         config.write_text("enable_uda_aliases = false\ntz = \"UTC\"\n", encoding="utf-8")
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000117",
+            "uuid": "00000000-0000-4000-8000-000000000117",
             "description": "ordinary prose a:book",
             "status": "pending",
             "entry": "20260803T000000Z",
@@ -12065,7 +12071,7 @@ def test_anchor_preview_explains_nonexistent_wall_time_adjustment():
         config = Path(td) / "nautical.toml"
         config.write_text('tz = "Australia/Lord_Howe"\n', encoding="utf-8")
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000141",
+            "uuid": "00000000-0000-4000-8000-000000000141",
             "description": "non-hour DST preview",
             "status": "pending",
             "entry": "20260801T000000Z",
@@ -12619,7 +12625,7 @@ def test_year_ordinals_hooks_modes_calendar_and_timeline():
             encoding="utf-8",
         )
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000781",
+            "uuid": "00000000-0000-4000-8000-000000000781",
             "description": "ordinal calendar integration",
             "status": "pending",
             "entry": "20260101T000000Z",
@@ -13275,7 +13281,7 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
     finite_proc = _run_hook_script(
         _find_hook_file("on-add.nautical"),
         {
-            "uuid": "00000000-0000-0000-0000-000000000901",
+            "uuid": "00000000-0000-4000-8000-000000000901",
             "description": "finite large interval",
             "anchor": "w/500:mon + y:01-01",
             "anchor_mode": "skip",
@@ -13296,7 +13302,7 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
     proc = _run_hook_script(
         hook,
         {
-            "uuid": "00000000-0000-0000-0000-000000000900",
+            "uuid": "00000000-0000-4000-8000-000000000900",
             "description": "large interval hook regression",
             "anchor": "w/200:mon + y:01-01",
             "anchor_mode": "skip",
@@ -14406,7 +14412,7 @@ def test_hook_on_add_uses_and_normalizes_business_calendar():
             encoding='utf-8',
         )
         task = {
-            'uuid': '00000000-0000-0000-0000-000000000121',
+            'uuid': '00000000-0000-4000-8000-000000000121',
             'description': 'weekend business calendar',
             'status': 'pending',
             'entry': '20260714T000000Z',
@@ -14438,7 +14444,7 @@ def test_hook_on_add_reports_business_calendar_displacement_only_when_shifted():
             encoding='utf-8',
         )
         base = {
-            'uuid': '00000000-0000-0000-0000-000000000125',
+            'uuid': '00000000-0000-4000-8000-000000000125',
             'description': 'calendar displacement',
             'status': 'pending',
             'due': '20260420T060000Z',
@@ -14452,7 +14458,7 @@ def test_hook_on_add_reports_business_calendar_displacement_only_when_shifted():
         )
         unchanged = _run_hook_script(
             hook,
-            {**base, 'uuid': '00000000-0000-0000-0000-000000000126', 'anchor': 'y:04-23@nbd@t=09:00'},
+            {**base, 'uuid': '00000000-0000-4000-8000-000000000126', 'anchor': 'y:04-23@nbd@t=09:00'},
             env_extra={'NO_COLOR': '1', 'NAUTICAL_CONFIG': str(config_path)},
         )
 
@@ -14478,7 +14484,7 @@ def test_hook_on_add_rejects_unknown_business_calendar_cleanly():
             encoding='utf-8',
         )
         task = {
-            'uuid': '00000000-0000-0000-0000-000000000122',
+            'uuid': '00000000-0000-4000-8000-000000000122',
             'description': 'unknown business calendar',
             'status': 'pending',
             'anchor': 'w:mon',
@@ -14507,7 +14513,7 @@ def test_hook_on_add_rejects_invalid_timezone_for_nautical_task():
         proc = _run_hook_script(
             hook,
             {
-                "uuid": "00000000-0000-0000-0000-000000000127",
+                "uuid": "00000000-0000-4000-8000-000000000127",
                 "description": "invalid timezone recurrence",
                 "status": "pending",
                 "anchor": "w:mon",
@@ -14647,7 +14653,7 @@ def test_hook_on_modify_rejects_unknown_business_calendar_cleanly():
             encoding='utf-8',
         )
         old = {
-            'uuid': '00000000-0000-0000-0000-000000000123',
+            'uuid': '00000000-0000-4000-8000-000000000123',
             'description': 'change business calendar',
             'status': 'pending',
             'anchor': 'w:mon',
@@ -14676,7 +14682,7 @@ def test_hook_on_modify_rejects_invalid_timezone_for_nautical_task():
         config_path = Path(td) / "config-nautical.toml"
         config_path.write_text('tz = "Invalid/Timezone"\n', encoding="utf-8")
         old = {
-            "uuid": "00000000-0000-0000-0000-000000000128",
+            "uuid": "00000000-0000-4000-8000-000000000128",
             "description": "invalid timezone modify",
             "status": "pending",
             "anchor": "w:mon",
@@ -14699,7 +14705,7 @@ def test_on_modify_spawned_child_preserves_business_calendar():
     mod = _load_hook_module(hook, '_nautical_on_modify_business_calendar_child_test')
     child_due = mod.core.build_local_datetime(date(2026, 7, 18), (9, 0))
     parent = {
-        'uuid': '00000000-0000-0000-0000-000000000124',
+        'uuid': '00000000-0000-4000-8000-000000000124',
         'description': 'weekend chain',
         'status': 'completed',
         'due': mod.core.fmt_isoz(mod.core.build_local_datetime(date(2026, 7, 12), (9, 0))),
@@ -16198,7 +16204,7 @@ def test_hook_on_add_multitime_preview_emits_all_slots():
     env = {"NO_COLOR": "1"}
     expr = "w:wed@t=06:00,12:00,22:00"
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "description": "hook test on-add multitime",
         "status": "pending",
         "project": "testing",
@@ -16225,7 +16231,7 @@ def test_hook_on_add_time_window_preview_emits_bounded_slots():
     """on-add should preview generated window slots without forcing its end bound."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000112",
+        "uuid": "00000000-0000-4000-8000-000000000112",
         "description": "hook test time window",
         "status": "pending",
         "project": "testing",
@@ -16245,7 +16251,7 @@ def test_hook_on_add_overnight_window_keeps_json_and_next_day_preview():
     """The real on-add hook should accept overnight anchors without polluting JSON stdout."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000119",
+        "uuid": "00000000-0000-4000-8000-000000000119",
         "description": "hook overnight window",
         "status": "pending",
         "project": "testing",
@@ -16266,7 +16272,7 @@ def test_hook_on_add_random_time_window_keeps_json_and_preview():
     """The add hook should resolve deterministic random slots without corrupting stdout JSON."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000120",
+        "uuid": "00000000-0000-4000-8000-000000000120",
         "description": "hook random window",
         "status": "pending",
         "project": "testing",
@@ -16290,7 +16296,7 @@ def test_on_modify_time_window_completion_advances_within_same_day():
     local_due = mod.core.build_local_datetime(date(2025, 12, 17), (6, 0))
     local_end = mod.core.build_local_datetime(date(2025, 12, 17), (6, 30))
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000113",
+        "uuid": "00000000-0000-4000-8000-000000000113",
         "description": "window completion",
         "anchor": "w:mon..sun@t=06..18/3h",
         "anchor_mode": "skip",
@@ -16312,7 +16318,7 @@ def test_on_modify_partitioned_window_completion_rolls_to_next_day():
 
     def completed_parent(local_due, local_end):
         return {
-            "uuid": "00000000-0000-0000-0000-000000000115",
+            "uuid": "00000000-0000-4000-8000-000000000115",
             "description": "partitioned completion",
             "anchor": "w:mon..sun@t=04:30..19:30/3",
             "anchor_mode": "skip",
@@ -16338,7 +16344,7 @@ def test_on_modify_overnight_window_completion_uses_next_day_slots():
 
     def parent(local_due, local_end):
         return {
-            "uuid": "00000000-0000-0000-0000-000000000117",
+            "uuid": "00000000-0000-4000-8000-000000000117",
             "description": "overnight completion",
             "anchor": "w:mon@t=22:30..06:30/7",
             "anchor_mode": "skip",
@@ -16384,7 +16390,7 @@ def test_on_modify_random_time_window_completion_reuses_stable_slots():
     first = local_slot(slots[0])
     expected = local_slot(slots[1])
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000121",
+        "uuid": "00000000-0000-4000-8000-000000000121",
         "description": "random completion",
         "anchor": "w:mon@t=rand(06..18/3)",
         "anchor_mode": "skip",
@@ -16405,7 +16411,7 @@ def test_time_window_dst_gap_deduplicates_shifted_local_slot():
         config = Path(td) / "nautical.toml"
         config.write_text('tz = "America/New_York"\n', encoding="utf-8")
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000114",
+            "uuid": "00000000-0000-4000-8000-000000000114",
             "description": "DST window",
             "status": "pending",
             "entry": "20250301T000000Z",
@@ -16430,7 +16436,7 @@ def test_partitioned_time_window_dst_gap_deduplicates_shifted_local_slot():
         config = Path(td) / "nautical.toml"
         config.write_text('tz = "America/New_York"\n', encoding="utf-8")
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000116",
+            "uuid": "00000000-0000-4000-8000-000000000116",
             "description": "DST partitioned window",
             "status": "pending",
             "entry": "20250301T000000Z",
@@ -16455,7 +16461,7 @@ def test_overnight_time_window_dst_fallback_deduplicates_repeated_local_slot():
         config = Path(td) / "nautical.toml"
         config.write_text('tz = "America/New_York"\n', encoding="utf-8")
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000118",
+            "uuid": "00000000-0000-4000-8000-000000000118",
             "description": "DST overnight fallback",
             "status": "pending",
             "entry": "20261020T000000Z",
@@ -16509,7 +16515,7 @@ def test_hook_on_add_live_panel_mode_preserves_captured_protocol():
     """Configured live panels should fall back cleanly when a hook's stderr is captured."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000121",
+        "uuid": "00000000-0000-4000-8000-000000000121",
         "description": "live panel protocol test",
         "status": "pending",
         "entry": "20260101T000000Z",
@@ -16544,7 +16550,7 @@ def test_hook_on_add_counted_random_preview_uses_group_time():
     env = {"NO_COLOR": "1"}
     expr = "(m:2rand + w:mon..fri)@t=09:00"
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000119",
+        "uuid": "00000000-0000-4000-8000-000000000119",
         "description": "hook test counted random",
         "status": "pending",
         "project": "testing",
@@ -16569,7 +16575,7 @@ def test_hook_on_add_accepts_group_date_modifiers():
     """on-add should accept and schedule date modifiers shared by OR branches."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000120",
+        "uuid": "00000000-0000-4000-8000-000000000120",
         "description": "hook test grouped date modifiers",
         "status": "pending",
         "project": "testing",
@@ -16592,7 +16598,7 @@ def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000112",
+        "uuid": "00000000-0000-4000-8000-000000000112",
         "description": "hook test on-add cp scheduled-only",
         "status": "pending",
         "project": "testing",
@@ -16692,7 +16698,7 @@ def test_hook_on_add_anchor_preset_resolves_from_config():
         conf.write_text('[anchor_presets]\npayday = "m:15"\n', encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000118",
+            "uuid": "00000000-0000-4000-8000-000000000118",
             "description": "hook test on-add anchor preset",
             "status": "pending",
             "project": "testing",
@@ -16720,7 +16726,7 @@ def test_hook_on_add_anchor_unknown_preset_fails_cleanly():
         conf.write_text("[anchor_presets]\n", encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000119",
+            "uuid": "00000000-0000-4000-8000-000000000119",
             "description": "hook test on-add unknown anchor preset",
             "status": "pending",
             "project": "testing",
@@ -16745,7 +16751,7 @@ def test_hook_on_add_anchor_composed_preset_resolves_from_config():
         conf.write_text('[anchor_presets]\nworkout = "w:mon,wed,fri"\n', encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000120",
+            "uuid": "00000000-0000-4000-8000-000000000120",
             "description": "hook test on-add composed anchor preset",
             "status": "pending",
             "project": "testing",
@@ -16770,7 +16776,7 @@ def test_hook_on_add_anchor_recursive_preset_fails_cleanly():
         conf.write_text('[anchor_presets]\na = "@b"\nb = "@a"\n', encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000121",
+            "uuid": "00000000-0000-4000-8000-000000000121",
             "description": "hook test on-add recursive anchor preset",
             "status": "pending",
             "project": "testing",
@@ -16798,7 +16804,7 @@ def test_hook_on_add_omit_preset_resolves_from_config():
         conf.write_text('[omit_presets]\napril = "y:apr"\n', encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000122",
+            "uuid": "00000000-0000-4000-8000-000000000122",
             "description": "hook test on-add omit preset",
             "status": "pending",
             "project": "testing",
@@ -16827,7 +16833,7 @@ def test_hook_on_add_omit_unknown_preset_fails_cleanly():
         conf.write_text("[omit_presets]\n", encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000123",
+            "uuid": "00000000-0000-4000-8000-000000000123",
             "description": "hook test on-add unknown omit preset",
             "status": "pending",
             "project": "testing",
@@ -16853,7 +16859,7 @@ def test_hook_on_add_omit_recursive_preset_fails_cleanly():
         conf.write_text('[omit_presets]\na = "@b"\nb = "@a"\n', encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000124",
+            "uuid": "00000000-0000-4000-8000-000000000124",
             "description": "hook test on-add recursive omit preset",
             "status": "pending",
             "project": "testing",
@@ -16882,7 +16888,7 @@ def test_hook_on_add_omit_timed_preset_rejected():
         conf.write_text('[omit_presets]\ntimed = "w:mon@t=09:00"\n', encoding="utf-8")
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000125",
+            "uuid": "00000000-0000-4000-8000-000000000125",
             "description": "hook test on-add timed omit preset",
             "status": "pending",
             "project": "testing",
@@ -16916,7 +16922,7 @@ def test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance():
     ]
     for idx, (cp_value, expected_parts) in enumerate(cases, start=1):
         task = {
-            "uuid": f"00000000-0000-0000-0000-00000000{130 + idx:04d}",
+            "uuid": f"00000000-0000-4000-8000-00000000{130 + idx:04d}",
             "description": f"hook test malformed cp add {idx}",
             "status": "pending",
             "project": "testing",
@@ -16946,7 +16952,7 @@ def test_hook_on_modify_cp_malformed_inputs_fail_with_parser_guidance():
     ]
     for idx, (cp_value, expected_parts) in enumerate(cases, start=1):
         old = {
-            "uuid": f"00000000-0000-0000-0000-00000000{150 + idx:04d}",
+            "uuid": f"00000000-0000-4000-8000-00000000{150 + idx:04d}",
             "description": f"hook test malformed cp modify {idx}",
             "status": "pending",
             "entry": "20260101T000000Z",
@@ -16974,7 +16980,7 @@ def test_hook_on_add_cp_sequence_preview_accepts_string_periods():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000114",
+        "uuid": "00000000-0000-4000-8000-000000000114",
         "description": "hook test on-add cp sequence",
         "status": "pending",
         "project": "testing",
@@ -16999,7 +17005,7 @@ def test_hook_on_add_cp_random_preview_shows_selected_periods():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000115",
+        "uuid": "00000000-0000-4000-8000-000000000115",
         "description": "hook test on-add cp random",
         "status": "pending",
         "project": "testing",
@@ -17054,7 +17060,7 @@ def test_hook_on_add_cp_random_malformed_fails_with_guidance():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000116",
+        "uuid": "00000000-0000-4000-8000-000000000116",
         "description": "hook test on-add malformed cp random",
         "status": "pending",
         "project": "testing",
@@ -17075,7 +17081,7 @@ def test_hook_on_add_cp_jitter_preview_shows_selected_periods():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000117",
+        "uuid": "00000000-0000-4000-8000-000000000117",
         "description": "hook test on-add cp jitter",
         "status": "pending",
         "project": "testing",
@@ -17098,7 +17104,7 @@ def test_hook_on_add_anchor_scheduled_only_preserves_no_due():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000113",
+        "uuid": "00000000-0000-4000-8000-000000000113",
         "description": "hook test on-add anchor scheduled-only",
         "status": "pending",
         "project": "testing",
@@ -17127,7 +17133,7 @@ def test_on_add_native_until_requires_strictly_later_target():
     )
     for index, (target_field, target, until) in enumerate(cases):
         task = {
-            "uuid": f"00000000-0000-0000-0000-00000000012{index}",
+            "uuid": f"00000000-0000-4000-8000-00000000012{index}",
             "description": f"invalid native until {target_field}",
             "status": "pending",
             "entry": "20260720T090000Z",
@@ -17148,7 +17154,7 @@ def test_on_add_native_until_requires_strictly_later_target():
         )
 
     valid = {
-        "uuid": "00000000-0000-0000-0000-000000000129",
+        "uuid": "00000000-0000-4000-8000-000000000129",
         "description": "valid native until window",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17165,7 +17171,7 @@ def test_on_add_native_until_checks_generated_cp_due():
     """The expiration guard should run after CP assigns its automatic first due."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000130",
+        "uuid": "00000000-0000-4000-8000-000000000130",
         "description": "invalid until before generated CP due",
         "status": "pending",
         "entry": "20260801T090000Z",
@@ -17220,10 +17226,10 @@ def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
         "chainMax": 3,
     }
     cases = (
-        dict(base, uuid="00000000-0000-0000-0000-000000000141", description="CP expiry preview", cp="7d"),
+        dict(base, uuid="00000000-0000-4000-8000-000000000141", description="CP expiry preview", cp="7d"),
         dict(
             base,
-            uuid="00000000-0000-0000-0000-000000000142",
+            uuid="00000000-0000-4000-8000-000000000142",
             description="Anchor expiry preview",
             anchor="w:mon",
             anchor_mode="skip",
@@ -17262,7 +17268,7 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
 
     now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000143",
+        "uuid": "00000000-0000-4000-8000-000000000143",
         "description": "evaluator initialization failure",
         "status": "pending",
         "entry": mod.core.fmt_isoz(now_utc),
@@ -17311,7 +17317,7 @@ def test_on_add_preview_reports_scheduler_exhaustion_actionably():
     mod = _load_hook_module(hook, "_nautical_on_add_scheduler_exhaustion_test")
     now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000144",
+        "uuid": "00000000-0000-4000-8000-000000000144",
         "description": "scheduler exhaustion",
         "status": "pending",
         "entry": mod.core.fmt_isoz(now_utc),
@@ -17358,7 +17364,7 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
 
     now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000144",
+        "uuid": "00000000-0000-4000-8000-000000000144",
         "description": "evaluator scheduler preview",
         "status": "pending",
         "entry": mod.core.fmt_isoz(now_utc),
@@ -17407,7 +17413,7 @@ def test_on_add_native_until_checks_generated_anchor_due():
     now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
     first_due = mod.core.build_local_datetime(date(2026, 4, 13), (9, 0)).astimezone(timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000131",
+        "uuid": "00000000-0000-4000-8000-000000000131",
         "description": "invalid until before generated anchor due",
         "status": "pending",
         "entry": mod.core.fmt_isoz(now_utc),
@@ -17439,7 +17445,7 @@ def test_on_add_native_until_guard_ignores_ordinary_tasks():
     """Nautical should not impose its expiration ordering on ordinary Taskwarrior tasks."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000132",
+        "uuid": "00000000-0000-4000-8000-000000000132",
         "description": "ordinary task with independent until",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17459,7 +17465,7 @@ def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
         mod._load_core()
     now_utc = mod.core.build_local_datetime(date(2026, 4, 12), (12, 0)).astimezone(timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000133",
+        "uuid": "00000000-0000-4000-8000-000000000133",
         "description": "chain endpoint before first anchor",
         "status": "pending",
         "entry": mod.core.fmt_isoz(now_utc),
@@ -17492,7 +17498,7 @@ def test_on_add_native_until_rejects_strict_anchor_modes():
     """Native until should be incompatible with all and flex anchor backfill."""
     hook = _find_hook_file("on-add.nautical")
     base = {
-        "uuid": "00000000-0000-0000-0000-000000000137",
+        "uuid": "00000000-0000-4000-8000-000000000137",
         "description": "strict anchor expiration conflict",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17526,7 +17532,7 @@ def test_on_modify_native_until_rejects_invalid_window_changes():
     """Nautical modifications should reject target windows made invalid."""
     hook = _find_hook_file("on-modify.nautical")
     base = {
-        "uuid": "00000000-0000-0000-0000-000000000133",
+        "uuid": "00000000-0000-4000-8000-000000000133",
         "description": "modify native until window",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17559,7 +17565,7 @@ def test_on_modify_native_until_follows_recurrence_target_move():
     """An untouched native until should follow a rescheduled recurrence target."""
     hook = _find_hook_file("on-modify.nautical")
     base = {
-        "uuid": "00000000-0000-0000-0000-000000000133",
+        "uuid": "00000000-0000-4000-8000-000000000133",
         "description": "rescheduled native until window",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17666,7 +17672,7 @@ def test_on_modify_native_until_rejects_uncarryable_anchor_target_move():
     """An anchor edit must not keep a stale absolute until when calendar carry conflicts."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000448",
+        "uuid": "00000000-0000-4000-8000-000000000448",
         "description": "uncarryable anchor expiration",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17696,7 +17702,7 @@ def test_on_modify_completion_reschedule_carries_native_until():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_completion_reschedule_until_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000447",
+        "uuid": "00000000-0000-4000-8000-000000000447",
         "description": "complete rescheduled expiration",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17737,7 +17743,7 @@ def test_on_modify_native_until_accepts_valid_window_change():
     """A modified until that remains after the target should pass through normally."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000134",
+        "uuid": "00000000-0000-4000-8000-000000000134",
         "description": "valid modified native until",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17763,7 +17769,7 @@ def test_on_modify_native_until_validates_recurrence_promotion():
     """Adding Nautical recurrence should validate an existing native until window."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000135",
+        "uuid": "00000000-0000-4000-8000-000000000135",
         "description": "promote invalid native until",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17786,7 +17792,7 @@ def test_on_modify_native_until_validates_simultaneous_completion():
     """Completion should not queue a child from an invalid newly modified window."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000136",
+        "uuid": "00000000-0000-4000-8000-000000000136",
         "description": "complete invalid native until",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17819,7 +17825,7 @@ def test_on_modify_native_until_rejects_strict_anchor_mode_changes():
     """Changing an expiring anchor task to all or flex should be rejected."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000138",
+        "uuid": "00000000-0000-4000-8000-000000000138",
         "description": "modify strict anchor expiration conflict",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17848,7 +17854,7 @@ def test_on_modify_native_until_rejects_legacy_all_completion():
     """Completion should not perpetuate a legacy all-plus-until configuration."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000139",
+        "uuid": "00000000-0000-4000-8000-000000000139",
         "description": "complete strict anchor expiration conflict",
         "status": "pending",
         "entry": "20260720T090000Z",
@@ -17881,7 +17887,7 @@ def test_on_add_due_context_treats_due_matching_entry_as_implicit():
 
     now_utc = mod.core.parse_dt_any("20260412T111500Z")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000113a",
+        "uuid": "00000000-0000-4000-8000-000000000113a",
         "description": "hook test on-add implicit entry due context",
         "status": "pending",
         "entry": "20260412T111500Z",
@@ -17905,7 +17911,7 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
         mod._load_core()
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000113b",
+        "uuid": "00000000-0000-4000-8000-000000000113b",
         "description": "hook test on-add implicit entry due preview",
         "status": "pending",
         "entry": "20260412T111500Z",
@@ -17957,7 +17963,7 @@ def test_hook_on_add_anchor_preview_skips_omit_date():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000114",
+        "uuid": "00000000-0000-4000-8000-000000000114",
         "description": "hook test on-add anchor omit preview",
         "status": "pending",
         "project": "testing",
@@ -17990,7 +17996,7 @@ def test_hook_on_add_anchor_preview_skips_omit_file_date():
         conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000114a",
+            "uuid": "00000000-0000-4000-8000-000000000114a",
             "description": "hook test on-add anchor omit_file preview",
             "status": "pending",
             "project": "testing",
@@ -18028,7 +18034,7 @@ def test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omi
         )
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000114f",
+            "uuid": "00000000-0000-4000-8000-000000000114f",
             "description": "hook test on-add anchor+file omit natural",
             "status": "pending",
             "project": "testing",
@@ -18065,7 +18071,7 @@ def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
         conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000114e",
+            "uuid": "00000000-0000-4000-8000-000000000114e",
             "description": "hook test on-add anchor omit_file modifier preview",
             "status": "pending",
             "project": "testing",
@@ -18087,7 +18093,7 @@ def test_hook_on_add_anchor_preview_marks_omitted_future_slots():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000114g",
+        "uuid": "00000000-0000-4000-8000-000000000114g",
         "description": "hook test on-add omit upcoming",
         "status": "pending",
         "project": "testing",
@@ -18119,7 +18125,7 @@ def test_hook_on_add_anchor_preview_uses_omit_file_description_in_upcoming():
         conf.write_text(f'omit_file_dir = "{omit_dir}"\n', encoding='utf-8')
         env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
         task = {
-            "uuid": "00000000-0000-0000-0000-000000000114h",
+            "uuid": "00000000-0000-4000-8000-000000000114h",
             "description": "hook test on-add omit file upcoming desc",
             "status": "pending",
             "project": "testing",
@@ -18146,7 +18152,7 @@ def test_hook_on_add_anchor_preview_rolled_business_day_uses_timed_slot():
     env = {"NO_COLOR": "1"}
     expr = "y:04-25@nbd@t=12:00,17:00"
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000114b",
+        "uuid": "00000000-0000-4000-8000-000000000114b",
         "description": "hook test on-add rolled timed business day",
         "status": "pending",
         "project": "testing",
@@ -18173,7 +18179,7 @@ def test_hook_on_add_anchor_preview_positive_day_offset_uses_timed_slot():
     env = {"NO_COLOR": "1"}
     expr = "y:04-25@+10d@t=12:00"
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000114c",
+        "uuid": "00000000-0000-4000-8000-000000000114c",
         "description": "hook test on-add positive offset timed anchor",
         "status": "pending",
         "project": "testing",
@@ -18199,7 +18205,7 @@ def test_hook_on_add_anchor_preview_negative_day_offset_uses_timed_slot():
     env = {"NO_COLOR": "1"}
     expr = "y:04-25@-2d@t=12:00"
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000114d",
+        "uuid": "00000000-0000-4000-8000-000000000114d",
         "description": "hook test on-add negative offset timed anchor",
         "status": "pending",
         "project": "testing",
@@ -18224,7 +18230,7 @@ def test_hook_on_add_timed_omit_rejected():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000115",
+        "uuid": "00000000-0000-4000-8000-000000000115",
         "description": "hook test on-add timed omit reject",
         "status": "pending",
         "project": "testing",
@@ -18249,7 +18255,7 @@ def test_hook_on_add_invalid_omit_file_rejected():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000115a",
+        "uuid": "00000000-0000-4000-8000-000000000115a",
         "description": "hook test on-add invalid omit_file",
         "status": "pending",
         "project": "testing",
@@ -18271,7 +18277,7 @@ def test_hook_on_add_anchor_file_time_padding_hint():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000115b",
+        "uuid": "00000000-0000-4000-8000-000000000115b",
         "description": "hook test on-add anchor_file padding hint",
         "status": "pending",
         "project": "testing",
@@ -18292,7 +18298,7 @@ def test_hook_on_add_unsatisfiable_omit_fails_cleanly():
     hook = _find_hook_file("on-add.nautical")
     env = {"NO_COLOR": "1"}
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000116",
+        "uuid": "00000000-0000-4000-8000-000000000116",
         "description": "hook test on-add unsat omit",
         "status": "pending",
         "project": "testing",
@@ -18323,7 +18329,7 @@ def test_hook_on_modify_timeline_multitime_includes_all_slots():
     # Simulate a chain where the next due is at 22:00 on a given day.
     child_due_utc = datetime(2025, 12, 20, 22, 0, tzinfo=timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000222",
+        "uuid": "00000000-0000-4000-8000-000000000222",
         "description": "hook test on-modify multitime",
         "anchor": expr,
         "anchor_mode": "skip",
@@ -18373,7 +18379,7 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     mod._recurrence_evaluator_for_task = _shared_evaluator
     child_due_utc = datetime(2026, 1, 4, 9, 0, tzinfo=timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000224",
+        "uuid": "00000000-0000-4000-8000-000000000224",
         "description": "hook test on-modify cp sequence timeline",
         "cp": "3d,20d,7d",
         "link": 1,
@@ -18413,7 +18419,7 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
     first_td = mod.core.cp_sequence_interval_for_link(cp, 1, chain_id)
     child_due_utc = datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc) + first_td
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000225",
+        "uuid": "00000000-0000-4000-8000-000000000225",
         "description": "hook test on-modify cp random timeline",
         "cp": cp,
         "chainID": chain_id,
@@ -18457,7 +18463,7 @@ def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
     dnf = core.validate_anchor_expr_strict(expr)
     child_due_utc = datetime(2025, 1, 10, 9, 0, tzinfo=timezone.utc)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000333",
+        "uuid": "00000000-0000-4000-8000-000000000333",
         "description": "hook test on-modify omit timeline",
         "anchor": expr,
         "omit": "w:wed",
@@ -18622,7 +18628,7 @@ def test_hook_on_modify_merged_timeline_marks_projection_failures():
             (Path(td) / "2026.csv").write_text("date\n2026-08-10\n", encoding="utf-8")
             mod.core.ANCHOR_FILE_DIR = td
             task = {
-                "uuid": "00000000-0000-0000-0000-000000000558",
+                "uuid": "00000000-0000-4000-8000-000000000558",
                 "description": "merged timeline warning",
                 "anchor": "w:mon",
                 "anchor_file": "2026.csv",
@@ -18675,7 +18681,7 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
         mod.core.OMIT_FILE_DIR = str(omit_dir)
         try:
             task = {
-                "uuid": "00000000-0000-0000-0000-000000000334",
+                "uuid": "00000000-0000-4000-8000-000000000334",
                 "description": "hook test on-modify omit_file label timeline",
                 "anchor": expr,
                 "omit_file": "holidays.csv",
@@ -19061,7 +19067,7 @@ def test_on_modify_build_child_carries_until_across_dst():
         parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0))
         child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
         parent = {
-            "uuid": "00000000-0000-0000-0000-000000000994",
+            "uuid": "00000000-0000-4000-8000-000000000994",
             "status": "completed",
             "due": mod.core.fmt_isoz(parent_due),
             "until": mod.core.fmt_isoz(parent_until),
@@ -19269,7 +19275,7 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
         parent_until = mod.core.build_local_datetime(date(2025, 3, 9), (17, 0)) + timedelta(seconds=1)
         child_due = mod.core.build_local_datetime(date(2025, 3, 15), (9, 0))
         parent = {
-            "uuid": "00000000-0000-0000-0000-000000000997",
+            "uuid": "00000000-0000-4000-8000-000000000997",
             "status": "completed",
             "due": mod.core.fmt_isoz(parent_due),
             "until": mod.core.fmt_isoz(parent_until),
@@ -19315,7 +19321,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
     due = mod.core.build_local_datetime(anchor_day, (9, 0))
     until_1900 = mod.core.build_local_datetime(anchor_day, (19, 0))
     base = {
-        "uuid": "00000000-0000-0000-0000-000000000998",
+        "uuid": "00000000-0000-4000-8000-000000000998",
         "description": "invalid anchor expiration slot",
         "status": "pending",
         "entry": "20300630T080000Z",
@@ -19432,7 +19438,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
     expect("20:00" in _strip_markup(modified_file.stderr), f"missing edited anchor_file slot: {modified_file.stderr!r}")
 
     invalid_parent = {
-        "uuid": "00000000-0000-0000-0000-000000000998",
+        "uuid": "00000000-0000-4000-8000-000000000998",
         "status": "completed",
         "anchor": "w:mon@t=09:00,18:00,20:00",
         "anchor_mode": "skip",
@@ -19467,7 +19473,7 @@ def test_on_modify_build_child_transitions_flex_to_all():
     parent_due = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
     child_due = mod.core.build_local_datetime(date(2026, 8, 10), (9, 0))
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000140",
+        "uuid": "00000000-0000-4000-8000-000000000140",
         "status": "completed",
         "due": mod.core.fmt_isoz(parent_due),
         "anchor": "w:mon",
@@ -19496,7 +19502,7 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
         mod._load_core()
 
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000991",
+        "uuid": "00000000-0000-4000-8000-000000000991",
         "description": "cp due edit",
         "status": "pending",
         "due": "20260710T080000Z",
@@ -19633,7 +19639,7 @@ def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_timing_order_panel_test")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000992",
+        "uuid": "00000000-0000-4000-8000-000000000992",
         "description": "timing hierarchy",
         "status": "pending",
         "due": "20260720T100000Z",
@@ -19681,7 +19687,7 @@ def test_on_modify_timing_warning_wrapper_preserves_json_stdout():
     """Timing warnings must stay on stderr while the thin wrapper returns strict task JSON."""
     hook = _find_hook_file("on-modify.nautical")
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000993",
+        "uuid": "00000000-0000-4000-8000-000000000993",
         "description": "timing warning protocol",
         "status": "pending",
         "due": "20260720T100000Z",
@@ -19730,7 +19736,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
         child_due_utc = mod.core.build_local_datetime(date(2025, 3, 10), (1, 30))
 
         parent = {
-            "uuid": "00000000-0000-0000-0000-000000000999",
+            "uuid": "00000000-0000-4000-8000-000000000999",
             "status": "completed",
             "due": mod.core.fmt_isoz(due_utc),
             "rappel": mod.core.fmt_isoz(rappel_utc),
@@ -19765,7 +19771,7 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
     mod = _load_hook_module(hook, "_nautical_on_modify_stable_child_uuid_test")
 
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "cp": "P1D",
         "chainID": "cid12345",
         "link": 1,
@@ -19814,7 +19820,7 @@ def test_on_modify_link_limit():
     mod._spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
 
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "pending",
         "description": "limit test",
         "anchor": "w:mon",
@@ -19857,7 +19863,7 @@ def test_on_modify_completion_preflight_context_happy_path():
         mode="recent", rows=[], loaded=True
     )
     new = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "completed",
         "cp": "P1D",
         "chainID": "abcd1234",
@@ -20003,7 +20009,7 @@ def test_chain_cap_guards_are_inclusive_at_boundary():
 
     summaries = []
     printed = []
-    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-0000-0000-00000000c001"}
+    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-4000-8000-00000000c001"}
     expect(
         compute.completion_cap_guard_or_stop(
             task,
@@ -20032,7 +20038,7 @@ def test_chain_cap_guards_are_inclusive_at_boundary():
     expect(summaries and "Reached cap #5" in str(summaries[-1]), f"cap stop should explain the boundary: {summaries!r}")
 
     until = now_utc + timedelta(days=2)
-    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-0000-0000-00000000c001"}
+    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-4000-8000-00000000c001"}
     expect(
         compute.completion_until_guard_or_stop(
             task,
@@ -20147,7 +20153,7 @@ def test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor():
     ]
     for idx, (attrs, label) in enumerate(cases, start=1):
         task = {
-            "uuid": f"00000000-0000-0000-0000-00000000{180 + idx:04d}",
+            "uuid": f"00000000-0000-4000-8000-00000000{180 + idx:04d}",
             "description": f"hook test invalid chainMax add {label}",
             "status": "pending",
             "entry": "20260101T000000Z",
@@ -20174,7 +20180,7 @@ def test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor():
     ]
     for idx, (recurrence, invalid_cap, label) in enumerate(cases, start=1):
         old = {
-            "uuid": f"00000000-0000-0000-0000-00000000{200 + idx:04d}",
+            "uuid": f"00000000-0000-4000-8000-00000000{200 + idx:04d}",
             "description": f"hook test invalid chainMax modify {label}",
             "status": "pending",
             "entry": "20260101T000000Z",
@@ -20200,7 +20206,7 @@ def test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change():
     hook = _find_hook_file("on-modify.nautical")
     env = {"NO_COLOR": "1"}
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000220",
+        "uuid": "00000000-0000-4000-8000-000000000220",
         "description": "expired chain",
         "status": "pending",
         "entry": "20260101T000000Z",
@@ -20248,7 +20254,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
 
     def fake_build_and_spawn_child(*_a, **_k):
         return SimpleNamespace(
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_short="beeswax",
             stripped_attrs=[],
             verified=False,
@@ -20299,7 +20305,7 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         now_utc=core.now_utc(),
         need_chain=True,
         chain_snapshot_loaded=True,
-        preloaded_chain=[{"uuid": "00000000-0000-0000-0000-000000000111"}],
+        preloaded_chain=[{"uuid": "00000000-0000-4000-8000-000000000111"}],
         preloaded_chain_by_link=None,
         preloaded_chain_by_short=None,
         chain_id="",
@@ -20489,7 +20495,7 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
     mod._SHOW_TIMELINE_GAPS = False
     mod._CHECK_CHAIN_INTEGRITY = False
 
-    old = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending", "cp": "P1D", "chainID": "abcd1234", "link": 1}
+    old = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending", "cp": "P1D", "chainID": "abcd1234", "link": 1}
     new = dict(old)
     new["status"] = "completed"
 
@@ -23221,7 +23227,7 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
         try:
             analyzer = navigator.TaskAnalyzer()
             task = {
-                "uuid": "00000000-0000-0000-0000-000000000900",
+                "uuid": "00000000-0000-4000-8000-000000000900",
                 "description": "combined navigator anchor",
                 "anchor": "w:fri@t=09:00",
                 "anchor_file": "calendar.csv@t=12:00",
@@ -23267,7 +23273,7 @@ def test_navigator_uses_task_business_calendar_for_anchor_projection():
         navigator.core.configured_business_calendars = lambda: calendars
         analyzer = navigator.TaskAnalyzer()
         task = {
-            'uuid': '00000000-0000-0000-0000-000000000901',
+            'uuid': '00000000-0000-4000-8000-000000000901',
             'description': 'weekend navigator anchor',
             'anchor': 'm:1bd@t=09:00',
             'bc': 'weekend',
@@ -23342,7 +23348,7 @@ def test_navigator_resolves_symbolic_anchor_time_offsets():
         try:
             analyzer = navigator.TaskAnalyzer()
             task = {
-                "uuid": "00000000-0000-0000-0000-000000000902",
+                "uuid": "00000000-0000-4000-8000-000000000902",
                 "description": "symbolic navigator time",
                 "anchor": "w:mon@t=sunset@+45m",
             }
@@ -24932,7 +24938,7 @@ def test_chain_generation_rejects_missing_chain_id():
 
     service = ChainGenerationService.from_core(core)
     base = {
-        "uuid": "00000000-0000-0000-0000-000000000777",
+        "uuid": "00000000-0000-4000-8000-000000000777",
         "link": 1,
         "due": "20250106T090000Z",
         "end": "20250106T100000Z",
@@ -24974,7 +24980,7 @@ def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_evaluator_session_test")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "chainID": "session-chain",
         "anchor": "w:mon@t=09:00",
         "anchor_mode": "skip",
@@ -26197,7 +26203,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
             mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
             try:
                 parent = {
-                    "uuid": "00000000-0000-0000-0000-000000000555",
+                    "uuid": "00000000-0000-4000-8000-000000000555",
                     "description": "shifted anchor_file timeline",
                     "anchor": "y:04-25@t=12:00",
                     "anchor_file": "2026.csv@-1d@t=12:00",
@@ -26251,7 +26257,7 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
             mod.core.ANCHOR_FILE_DIR = str(anchor_dir)
             try:
                 parent = {
-                "uuid": "00000000-0000-0000-0000-000000000556",
+                "uuid": "00000000-0000-4000-8000-000000000556",
                 "description": "shifted anchor_file omit timeline",
                 "anchor": "w:tue,fri | y:05-05",
                 "anchor_file": "2026.csv@-1d@t=12:00,18:00",
@@ -26310,7 +26316,7 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
             mod.core.OMIT_FILE_DIR = str(omit_dir)
             try:
                 parent = {
-                "uuid": "00000000-0000-0000-0000-000000000557",
+                "uuid": "00000000-0000-4000-8000-000000000557",
                 "description": "anchor side omit_file timeline",
                 "anchor": "w:tue,fri | y:05-05",
                 "anchor_file": "2026.csv@-1d@t=12:00,18:00",
@@ -26576,12 +26582,12 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
         mod._load_core()
 
     new = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "completed",
         "chainID": "abcd1234",
         "link": 1,
     }
-    child = {"uuid": "00000000-0000-0000-0000-000000000222", "link": 2}
+    child = {"uuid": "00000000-0000-4000-8000-000000000222", "link": 2}
     from nautical_core.chain_generation import ChainGenerationService
 
     class StubGeneration(ChainGenerationService):
@@ -26620,12 +26626,12 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
         mod._load_core()
 
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000121",
+        "uuid": "00000000-0000-4000-8000-000000000121",
         "status": "completed",
         "chainID": "spawn121",
         "link": 1,
     }
-    child = {"uuid": "00000000-0000-0000-0000-000000000122", "link": 2}
+    child = {"uuid": "00000000-0000-4000-8000-000000000122", "link": 2}
     from nautical_core.chain_generation import ChainGenerationService
 
     class StubGeneration(ChainGenerationService):
@@ -26671,7 +26677,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
         mod._load_core()
 
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000555",
+        "uuid": "00000000-0000-4000-8000-000000000555",
         "status": "completed",
         "due": "20260101T090000Z",
         "end": "20260101T091000Z",
@@ -26726,7 +26732,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         mod._load_core()
 
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000333",
+        "uuid": "00000000-0000-4000-8000-000000000333",
         "status": "completed",
         "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
         "wait": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (7, 0))),
@@ -26784,8 +26790,8 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
         mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
         mod.core.OMIT_PRESETS = {"wed": "w:wed"}
         mod._render_anchor_completion_feedback(
-            new={"anchor": "@payday", "omit": "@wed", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            new={"anchor": "@payday", "omit": "@wed", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=2,
@@ -26854,10 +26860,10 @@ def test_on_modify_reports_business_calendar_displacement():
                     "anchor": "y:04-24@nbd@t=09:00",
                     "anchor_mode": "skip",
                     "bc": "work",
-                    "uuid": "00000000-0000-0000-0000-000000000127",
+                    "uuid": "00000000-0000-4000-8000-000000000127",
                     "chainID": "calendar-chain",
                 },
-                child={"uuid": "00000000-0000-0000-0000-000000000128"},
+                child={"uuid": "00000000-0000-4000-8000-000000000128"},
                 child_due=child_due,
                 child_short="beeswax",
                 next_no=2,
@@ -26910,8 +26916,8 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
         mod.core._LOCAL_TZ = None
         mod.core.PANEL_MODE = "panel"
         mod._render_anchor_completion_feedback(
-            new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=2,
@@ -26961,8 +26967,8 @@ def test_on_modify_render_anchor_file_completion_feedback_wrapper():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_anchor_completion_feedback(
-            new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-0000-0000-000000000333", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000444"},
+            new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000333", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000444"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=2,
@@ -27056,8 +27062,8 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_cp_completion_feedback(
-            new={"cp": "3d,20d,7d", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            new={"cp": "3d,20d,7d", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=2,
@@ -27114,11 +27120,11 @@ def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundarie
                 "cp": "7d",
                 "chainMax": 10,
                 "chainUntil": mod.core.fmt_isoz(chain_end),
-                "uuid": "00000000-0000-0000-0000-000000000143",
+                "uuid": "00000000-0000-4000-8000-000000000143",
                 "chainID": "abcd1234",
             },
             child={
-                "uuid": "00000000-0000-0000-0000-000000000144",
+                "uuid": "00000000-0000-4000-8000-000000000144",
                 "until": mod.core.fmt_isoz(child_expires),
             },
             child_due=child_due,
@@ -27185,8 +27191,8 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_cp_completion_feedback(
-            new={"cp": cp, "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": chain_id},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            new={"cp": cp, "link": 2, "uuid": "00000000-0000-4000-8000-000000000111", "chainID": chain_id},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=3,
@@ -27240,8 +27246,8 @@ def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
     try:
         mod.core.PANEL_MODE = "panel"
         mod._render_cp_completion_feedback(
-            new={"cp": "15d~0d", "link": 2, "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            new={"cp": "15d~0d", "link": 2, "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=3,
@@ -27290,8 +27296,8 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
     try:
         mod.core.PANEL_MODE = "text"
         mod._render_cp_completion_feedback(
-            new={"cp": "P1D", "uuid": "00000000-0000-0000-0000-000000000111", "chainID": "abcd1234"},
-            child={"uuid": "00000000-0000-0000-0000-000000000222"},
+            new={"cp": "P1D", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
+            child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
             child_short="beeswax",
             next_no=2,
@@ -27378,7 +27384,7 @@ def test_on_add_flushes_stdout():
             self.flushed = True
             return super().flush()
 
-    task = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
+    task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
     raw = json.dumps(task)
     stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
     stdout = _FlushIO()
@@ -27405,7 +27411,7 @@ def test_on_add_profiler_lazy_init():
     orig_register = mod.atexit.register
     mod.atexit.register = lambda *_a, **_k: called.update(ok=True)
 
-    task = {"uuid": "00000000-0000-0000-0000-000000000111", "status": "pending"}
+    task = {"uuid": "00000000-0000-4000-8000-000000000111", "status": "pending"}
     raw = json.dumps(task)
     stdin = io.TextIOWrapper(io.BytesIO(raw.encode("utf-8")), encoding="utf-8")
     stdout = io.StringIO()
@@ -28892,7 +28898,7 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
     mod._spawn_child_atomic = _spawn_child_atomic_stub
 
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "pending",
         "description": "reactivated duplicate guard",
         "cp": "P1D",
@@ -28955,7 +28961,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
         if chain_id == "abcd1234" and extra and "link:2" in extra:
             return [
                 {
-                    "uuid": "00000000-0000-0000-0000-000000000222",
+                    "uuid": "00000000-0000-4000-8000-000000000222",
                     "status": "pending",
                     "link": 2,
                     "chainID": "abcd1234",
@@ -28966,7 +28972,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
     mod._lifecycle_read_service().get_chain_export = _get_chain_export_stub
 
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "pending",
         "description": "reactivated duplicate guard via link check",
         "cp": "P1D",
@@ -30480,8 +30486,8 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     now_utc = mod.core.now_utc()
     child_due = now_utc + timedelta(days=1)
     export_calls = {"count": 0}
-    parent_uuid = "00000000-0000-0000-0000-000000000111"
-    child_uuid = "00000000-0000-0000-0000-000000000222"
+    parent_uuid = "00000000-0000-4000-8000-000000000111"
+    child_uuid = "00000000-0000-4000-8000-000000000222"
 
     chain_rows = [
         {
@@ -30671,7 +30677,7 @@ def test_on_modify_cp_completion_spawns_next_link():
     mod._lifecycle_read_service().get_chain_export = lambda *_a, **_k: []
 
     old = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "pending",
         "description": "cp spawn test",
         "cp": "P1D",
@@ -30711,13 +30717,13 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     """_spawn_child_atomic should report queue failure instead of claiming deferred success."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_queue_failure_test")
-    mod._reserve_child_uuid = lambda _env: "00000000-0000-0000-0000-00000000abcd"
+    mod._reserve_child_uuid = lambda _env: "00000000-0000-4000-8000-00000000abcd"
     mod._enqueue_spawn_intent = lambda _entry: (False, "queue lock busy")
 
     child_short, _stripped, verified, deferred, reason, intent = mod._spawn_child_atomic(
         {"description": "x"},
         {
-            "uuid": "00000000-0000-0000-0000-000000000111",
+            "uuid": "00000000-0000-4000-8000-000000000111",
             "chainID": "abcd1234",
             "chain": "on",
             "link": 1,
@@ -31001,7 +31007,7 @@ def test_on_add_position_selection_renders_semantic_advice():
     """The on-add preview should include one advice row without disturbing hook JSON."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000782",
+        "uuid": "00000000-0000-4000-8000-000000000782",
         "description": "positional semantic advice",
         "status": "pending",
         "entry": "20260715T090000Z",
@@ -31310,7 +31316,7 @@ def test_position_selection_on_add_and_modify_completion():
     expr = "(w:tue | w:thu)@in-month=last"
     add_hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000777",
+        "uuid": "00000000-0000-4000-8000-000000000777",
         "description": "positional anchor integration",
         "status": "pending",
         "entry": "20260701T090000Z",
@@ -31357,7 +31363,7 @@ def test_position_selection_modify_timeline_projects_future_dates():
     expr = "(w:tue | w:thu)@in-month=last"
     dnf = core.validate_anchor_expr_strict(expr)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000778",
+        "uuid": "00000000-0000-4000-8000-000000000778",
         "description": "positional timeline",
         "anchor": expr,
         "anchor_mode": "skip",
@@ -31471,7 +31477,7 @@ def test_position_selection_post_modifiers_modify_completion():
     expr = "(w:tue | w:thu)@in-month=last@+2d@t=09:00"
     add_hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000779",
+        "uuid": "00000000-0000-4000-8000-000000000779",
         "description": "post-selection modifier integration",
         "status": "pending",
         "entry": "20260703T090000Z",
@@ -32170,7 +32176,7 @@ def test_on_add_seasonal_selection_feedback():
     """The add preview should show a readable seasonal rule and its fixed boundary."""
     hook = _find_hook_file("on-add.nautical")
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000783",
+        "uuid": "00000000-0000-4000-8000-000000000783",
         "description": "seasonal feedback",
         "status": "pending",
         "entry": "20260723T090000Z",
@@ -32296,7 +32302,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
 
         parent = {
             **common,
-            "uuid": "00000000-0000-0000-0000-000000000784",
+            "uuid": "00000000-0000-4000-8000-000000000784",
             "status": "completed",
             "anchor_mode": "flex",
             "link": 1,
@@ -32546,7 +32552,7 @@ def test_integrity_recovery_fault_matrix_fails_closed():
         return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     row = {
-        "uuid": "00000000-0000-0000-0000-000000000701",
+        "uuid": "00000000-0000-4000-8000-000000000701",
         "chainID": "fault-recovery",
         "link": 2,
         "status": "pending",
@@ -32715,7 +32721,7 @@ def test_position_selection_public_period_scopes_hooks():
     due_token = core.fmt_isoz(local_due)
     end_token = core.fmt_isoz(local_end)
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000780",
+        "uuid": "00000000-0000-4000-8000-000000000780",
         "description": "yearly positional integration",
         "status": "pending",
         "entry": "20260701T090000Z",
@@ -33822,7 +33828,7 @@ def test_query_contract_models_round_trip_and_reject_invalid():
         {
             "version": 1,
             "operation": "occurrences",
-            "selector": {"uuids": ["00000000-0000-0000-0000-000000000001"]},
+            "selector": {"uuids": ["00000000-0000-4000-8000-000000000001"]},
             "from": "2026-08-21",
             "to": "2026-08-22",
             "omission_policy": "report",
@@ -33845,7 +33851,7 @@ def test_query_contract_models_round_trip_and_reject_invalid():
 
     local = datetime(2026, 8, 21, 4, 30, tzinfo=timezone(timedelta(hours=3)))
     identity = TaskIdentity(
-        uuid="00000000-0000-0000-0000-000000000001",
+        uuid="00000000-0000-4000-8000-000000000001",
         chain_id="query-chain",
         link=4,
         description="Morning task \N{SNOWMAN}",
@@ -33949,7 +33955,7 @@ def test_occurrence_query_service_projects_schedule_read_only():
     from nautical_core.scheduler_service import SchedulerService
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000002",
+        "uuid": "00000000-0000-4000-8000-000000000002",
         "chainID": "query-chain",
         "link": 1,
         "description": "Two daily slots",
@@ -34242,7 +34248,7 @@ def test_query_service_preserves_absent_and_unavailable_task_reads():
 
     request = OccurrenceQueryRequest.from_mapping(
         {
-            "selector": {"uuids": ["00000000-0000-0000-0000-000000000003"]},
+            "selector": {"uuids": ["00000000-0000-4000-8000-000000000003"]},
             "from": "2026-08-24",
             "count": 1,
         }
@@ -34303,7 +34309,7 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
     from nautical_core.query_service import OccurrenceQueryService
 
     recurrence = {
-        "uuid": "00000000-0000-0000-0000-000000000004",
+        "uuid": "00000000-0000-4000-8000-000000000004",
         "chainID": "query-all",
         "link": 1,
         "description": "Recurring",
@@ -34312,12 +34318,12 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
         "status": "pending",
     }
     ordinary = {
-        "uuid": "00000000-0000-0000-0000-000000000005",
+        "uuid": "00000000-0000-4000-8000-000000000005",
         "description": "Ordinary task",
         "status": "pending",
     }
     future = {
-        "uuid": "00000000-0000-0000-0000-000000000011",
+        "uuid": "00000000-0000-4000-8000-000000000011",
         "chainID": "query-future",
         "link": 1,
         "description": "Far future",
@@ -34326,7 +34332,7 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
         "status": "pending",
     }
     empty_in_range = {
-        "uuid": "00000000-0000-0000-0000-000000000012",
+        "uuid": "00000000-0000-4000-8000-000000000012",
         "chainID": "query-empty",
         "link": 1,
         "description": "No match in range",
@@ -34411,7 +34417,7 @@ def test_query_service_contains_invalid_task_schedule_errors():
     from nautical_core.query_service import OccurrenceQueryService
 
     broken = {
-        "uuid": "00000000-0000-0000-0000-000000000008",
+        "uuid": "00000000-0000-4000-8000-000000000008",
         "chainID": "query-broken",
         "link": 1,
         "description": "Broken recurrence",
@@ -34449,7 +34455,7 @@ def test_query_service_respects_current_task_reference_bounds():
     from nautical_core.query_service import OccurrenceQueryService
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000009",
+        "uuid": "00000000-0000-4000-8000-000000000009",
         "chainID": "query-reference",
         "link": 4,
         "description": "Future task",
@@ -34493,7 +34499,7 @@ def test_query_service_projects_cp_occurrences_from_current_due():
     from nautical_core.query_service import OccurrenceQueryService
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000010",
+        "uuid": "00000000-0000-4000-8000-000000000010",
         "chainID": "query-cp",
         "link": 4,
         "description": "CP task",
@@ -34539,7 +34545,7 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
     from nautical_core.query_service import OccurrenceQueryService
 
     anchor_task = {
-        "uuid": "00000000-0000-0000-0000-000000000006",
+        "uuid": "00000000-0000-4000-8000-000000000006",
         "chainID": "query-next-anchor",
         "link": 1,
         "description": "Next anchor",
@@ -34548,7 +34554,7 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
         "due": "20260824T013000Z",
     }
     cp_task = {
-        "uuid": "00000000-0000-0000-0000-000000000007",
+        "uuid": "00000000-0000-4000-8000-000000000007",
         "chainID": "query-next-cp",
         "link": 1,
         "description": "Next cp",
@@ -34626,7 +34632,7 @@ def test_query_next_reports_daily_skip_mode_progress():
     from nautical_core.query_service import OccurrenceQueryService
 
     task = {
-        "uuid": "00000000-0000-0000-0000-000000000013",
+        "uuid": "00000000-0000-4000-8000-000000000013",
         "chainID": "query-daily-progress",
         "link": 1,
         "description": "Three daily slots",
@@ -34893,8 +34899,8 @@ def test_lifecycle_application_happy_path_real_stack():
             return self.mutation_epoch
 
     from nautical_core.lifecycle_models import recurrence_fingerprint as _rfp
-    parent_uuid = "00000000-0000-0000-0000-000000000101"
-    child_uuid  = "00000000-0000-0000-0000-000000000102"
+    parent_uuid = "00000000-0000-4000-8000-000000000101"
+    child_uuid  = "00000000-0000-4000-8000-000000000102"
     parent = {"uuid": parent_uuid, "status": "completed", "chain": "on",
               "chainID": "chain-s12", "link": 1, "modified": "20260101T000000Z", "cp": "1d"}
     uow = _Uow({parent_uuid: parent})
@@ -35038,8 +35044,8 @@ def test_lifecycle_application_outbox_faults_are_retryable():
     class _Uow:
         mutation_epoch = 0
 
-    parent_uuid = "00000000-0000-0000-0000-000000000801"
-    child_uuid = "00000000-0000-0000-0000-000000000802"
+    parent_uuid = "00000000-0000-4000-8000-000000000801"
+    child_uuid = "00000000-0000-4000-8000-000000000802"
     guard = ParentGuard("completed", "on", "fault-outbox", 1, "rf-fault", "20260101T000000Z")
     plan = LifecyclePlan.from_mappings(
         identity=LifecycleIdentity("fault-outbox", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
@@ -35093,8 +35099,8 @@ def test_lifecycle_configuration_drift_blocks_mutation():
             self.calls += 1
             raise AssertionError("configuration drift must block mutation")
 
-    parent_uuid = "00000000-0000-0000-0000-000000000851"
-    child_uuid = "00000000-0000-0000-0000-000000000852"
+    parent_uuid = "00000000-0000-4000-8000-000000000851"
+    child_uuid = "00000000-0000-4000-8000-000000000852"
     plan = LifecyclePlan.from_mappings(
         identity=LifecycleIdentity("cfg-drift", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
         action=LifecycleAction.SPAWN_CHILD,
@@ -35170,7 +35176,7 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
         outbox = LifecycleOutboxRepository(Path(td))
         service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=_Scripted([MutationOutcomeKind.CONFLICT]),
                                                outbox=outbox, owner="test")
-        p = _plan("00000000-0000-0000-0000-000000000301", "00000000-0000-0000-0000-000000000302")
+        p = _plan("00000000-0000-4000-8000-000000000301", "00000000-0000-4000-8000-000000000302")
         service.stage(p, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         result = service.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(result.outcomes[0].kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
@@ -35183,7 +35189,7 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
         outbox2 = LifecycleOutboxRepository(Path(td))
         service2 = LifecycleApplicationService(unit_of_work=_Uow(), mutations=_Scripted([MutationOutcomeKind.RETRYABLE]),
                                                 outbox=outbox2, owner="test")
-        p2 = _plan("00000000-0000-0000-0000-000000000303", "00000000-0000-0000-0000-000000000304", max_attempts=1)
+        p2 = _plan("00000000-0000-4000-8000-000000000303", "00000000-0000-4000-8000-000000000304", max_attempts=1)
         service2.stage(p2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         result2 = service2.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(result2.outcomes[0].kind is LifecycleApplicationOutcomeKind.QUARANTINED,
@@ -35253,13 +35259,13 @@ def test_lifecycle_application_renews_batch_leases_before_mutation():
             unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="slow-batch", lease_seconds=1.0
         )
         first = make_plan(
-            "00000000-0000-0000-0000-000000000601",
-            "00000000-0000-0000-0000-000000000602",
+            "00000000-0000-4000-8000-000000000601",
+            "00000000-0000-4000-8000-000000000602",
             "chain-s3a",
         )
         second = make_plan(
-            "00000000-0000-0000-0000-000000000603",
-            "00000000-0000-0000-0000-000000000604",
+            "00000000-0000-4000-8000-000000000603",
+            "00000000-0000-4000-8000-000000000604",
             "chain-s3b",
         )
         service.stage(first, configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -35304,10 +35310,10 @@ def test_lifecycle_application_idempotency_and_duplicate_staging():
         mutation_epoch = 0
 
     guard = ParentGuard("completed", "on", "chain-s12d", 1, "rf1-s12d", "20260101T000000Z")
-    identity = LifecycleIdentity("chain-s12d", "00000000-0000-0000-0000-000000000401", 1, 2, LifecycleEvent.COMPLETE)
+    identity = LifecycleIdentity("chain-s12d", "00000000-0000-4000-8000-000000000401", 1, 2, LifecycleEvent.COMPLETE)
     plan = LifecyclePlan.from_mappings(
         identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-        child_payload={"uuid": "00000000-0000-0000-0000-000000000402", "chainID": "chain-s12d", "link": 2, "prevLink": "00000000"},
+        child_payload={"uuid": "00000000-0000-4000-8000-000000000402", "chainID": "chain-s12d", "link": 2, "prevLink": "00000000"},
         parent_patch={"nextLink": "00000000"},
         expected_postconditions=("child_present", "parent_linked", "verified"),
     )
@@ -35376,8 +35382,8 @@ def test_lifecycle_application_execute_staged_targets_exact_intent():
         mutations = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.APPLIED])
         service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="reconcile")
 
-        other_plan = _plan("00000000-0000-0000-0000-000000000501", "00000000-0000-0000-0000-000000000502", "chain-other-s12")
-        my_plan    = _plan("00000000-0000-0000-0000-000000000503", "00000000-0000-0000-0000-000000000504", "chain-mine-s12")
+        other_plan = _plan("00000000-0000-4000-8000-000000000501", "00000000-0000-4000-8000-000000000502", "chain-other-s12")
+        my_plan    = _plan("00000000-0000-4000-8000-000000000503", "00000000-0000-4000-8000-000000000504", "chain-mine-s12")
 
         service.stage(other_plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         service.stage(my_plan,   configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -35409,10 +35415,10 @@ def test_lifecycle_application_staging_only_service_rejects_execution():
         service = LifecycleApplicationService(outbox=outbox, owner="on-modify")  # no uow/mutations
 
         guard = ParentGuard("completed", "on", "chain-s12e", 1, "rf1-s12e", "20260101T000000Z")
-        identity = LifecycleIdentity("chain-s12e", "00000000-0000-0000-0000-000000000601", 1, 2, LifecycleEvent.COMPLETE)
+        identity = LifecycleIdentity("chain-s12e", "00000000-0000-4000-8000-000000000601", 1, 2, LifecycleEvent.COMPLETE)
         plan = LifecyclePlan.from_mappings(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={"uuid": "00000000-0000-0000-0000-000000000602", "chainID": "chain-s12e", "link": 2, "prevLink": "00000000"},
+            child_payload={"uuid": "00000000-0000-4000-8000-000000000602", "chainID": "chain-s12e", "link": 2, "prevLink": "00000000"},
             parent_patch={"nextLink": "00000000"},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
@@ -35443,7 +35449,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
     mod = _load_hook_module(hook, "_nautical_on_modify_staged_guard_test")
 
     parent = {
-        "uuid": "00000000-0000-0000-0000-000000000111",
+        "uuid": "00000000-0000-4000-8000-000000000111",
         "status": "completed",
         "chain": "on",
         "chainID": "abcd1234",
@@ -35452,7 +35458,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
         "modified": "20260101T000000Z",
         "cp": "1d",
     }
-    child_uuid = "00000000-0000-0000-0000-00000000abcd"
+    child_uuid = "00000000-0000-4000-8000-00000000abcd"
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)

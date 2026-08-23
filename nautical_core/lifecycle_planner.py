@@ -25,7 +25,7 @@ from .lifecycle_models import (
 )
 from .recurrence_spec import normalize_recurrence_text
 from .task_codec import DEFAULT_TASK_CODEC
-from .task_models import NauticalTask
+from .task_models import NauticalTask, TaskDraft
 
 
 class LifecyclePlanningError(RuntimeError):
@@ -112,7 +112,7 @@ class RecurrencePlanningService(Protocol):
         event: LifecycleEvent,
         candidate: RecurrenceCandidate,
         next_link: int,
-    ) -> Mapping[str, Any] | None: ...
+    ) -> TaskDraft | None: ...
 
 
 class SuccessorLimitPolicy(Protocol):
@@ -178,7 +178,7 @@ class ChainGenerationPlanningService:
         event: LifecycleEvent,
         candidate: RecurrenceCandidate,
         next_link: int,
-    ) -> Mapping[str, Any] | None:
+    ) -> TaskDraft | None:
         del event
         parent = NauticalTask.from_observation(snapshot.observation)
         metadata = dict(candidate.metadata)
@@ -187,7 +187,7 @@ class ChainGenerationPlanningService:
         kind = _recurrence_kind(parent)
         cpmax = self.generation.core.coerce_int(values.get("chainMax"), 0)
         parent_short = str(values.get("uuid") or "").strip()[:8]
-        return self.generation.build_child_from_parent(
+        return self.generation.build_child_draft(
             parent,
             candidate.child_due,
             child_field,
@@ -541,13 +541,17 @@ class LifecyclePlanner:
                 ) from exc
         if child is None:
             return terminal_plan_for_snapshot(snapshot, event)
-        if not isinstance(child, Mapping) or child.get("link") in (None, ""):
-            raise LifecyclePlanningError("child builder returned an incomplete successor")
+        if isinstance(child, TaskDraft):
+            child_values = child.to_mapping()
+        else:
+            raise LifecyclePlanningError("recurrence builder returned a non-TaskDraft successor")
+        if child_values.get("link") in (None, ""):
+            raise LifecyclePlanningError("child draft is missing its link")
         if carry_validator is not None:
             try:
                 carry_error = carry_validator(
                     snapshot,
-                    child,
+                    child_values,
                     candidate or RecurrenceCandidate(child_due=None),
                 )
             except Exception as exc:
@@ -556,13 +560,13 @@ class LifecyclePlanner:
                 ) from exc
             if carry_error:
                 raise LifecyclePlanningError(str(carry_error))
-        child_uuid = str(child.get("uuid") or "").strip()
+        child_uuid = str(child_values.get("uuid") or "").strip()
         parent_patch = {"nextLink": child_uuid[:8]} if child_uuid else {}
         return LifecyclePlan.from_mappings(
             identity=identity,
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=guard,
-            child_payload=child,
+            child_payload=child_values,
             parent_patch=parent_patch,
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )

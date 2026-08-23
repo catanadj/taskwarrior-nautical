@@ -184,6 +184,11 @@ def build_child_from_parent(
     recurrence_anchor_field,
     configured_recurrence_uda_fields,
 ) -> dict:
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask
+    parent_task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(parent, source_query="spawn child carry")
+    )
     parent_chain = str(parent.get("chainID") or "").strip()
     if not parent_chain:
         raise SpawnIdentityError()
@@ -222,7 +227,7 @@ def build_child_from_parent(
         child.pop("anchor_mode", None)
 
     carry_relative_datetime(
-        parent,
+        parent_task,
         child,
         child_due_utc,
         "wait",
@@ -231,7 +236,7 @@ def build_child_from_parent(
     )
     if child_field != "scheduled":
         carry_relative_datetime(
-            parent,
+            parent_task,
             child,
             child_due_utc,
             "scheduled",
@@ -239,7 +244,7 @@ def build_child_from_parent(
             child_anchor_field=child_field,
         )
     carry_native_until(
-        parent,
+        parent_task,
         child,
         child_due_utc,
         kind,
@@ -248,7 +253,7 @@ def build_child_from_parent(
     )
     for uda_field in configured_recurrence_uda_fields(parent):
         carry_relative_datetime(
-            parent,
+            parent_task,
             child,
             child_due_utc,
             uda_field,

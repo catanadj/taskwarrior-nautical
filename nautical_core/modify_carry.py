@@ -80,8 +80,13 @@ def preserve_native_until_on_target_change(
                 f"{new_target_field} timestamp is missing or invalid",
             )
         candidate = dict(new)
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.task_models import NauticalTask
+        parent_task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(old, source_query="ordinary-edit native-until carry")
+        )
         generation_service().carry_native_until(
-            old,
+            parent_task,
             candidate,
             new_target,
             kind,

@@ -332,7 +332,7 @@ class ChainGenerationService:
 
     def _carry_relative_datetime(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         field: str,
@@ -340,16 +340,17 @@ class ChainGenerationService:
         parent_anchor_field: str,
         child_anchor_field: str,
     ) -> None:
+        parent_values = parent.observation.to_mapping()
         child.pop(field, None)
-        if not parent.get(field):
+        if not parent_values.get(field):
             return
-        if not parent.get(parent_anchor_field):
+        if not parent_values.get(parent_anchor_field):
             reason = f"parent {parent_anchor_field} is missing"
             self._record_carry_debug(field, {"ok": False, "reason": reason})
             raise CarryFieldError(field, reason)
         try:
-            parent_anchor = self.core.parse_dt_any(parent.get(parent_anchor_field))
-            parent_value = self.core.parse_dt_any(parent.get(field))
+            parent_anchor = self.core.parse_dt_any(parent_values.get(parent_anchor_field))
+            parent_value = self.core.parse_dt_any(parent_values.get(field))
             if not (parent_anchor and parent_value and isinstance(child_due_utc, datetime)):
                 raise ValueError("parent or child recurrence timestamp is not parseable")
             parent_delta = self.core.utc_to_local_naive(parent_value) - self.core.utc_to_local_naive(
@@ -361,8 +362,8 @@ class ChainGenerationService:
                 field,
                 {
                     "ok": True,
-                    "parent_anchor": parent.get(parent_anchor_field),
-                    "parent_val": parent.get(field),
+                    "parent_anchor": parent_values.get(parent_anchor_field),
+                    "parent_val": parent_values.get(field),
                     "child_anchor": child.get(child_anchor_field),
                     "child_val": child.get(field),
                     "delta": str(parent_delta),
@@ -376,7 +377,7 @@ class ChainGenerationService:
 
     def carry_relative_datetime(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         field: str,
@@ -404,7 +405,7 @@ class ChainGenerationService:
 
     def _carry_native_until(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         kind: str,
@@ -412,13 +413,14 @@ class ChainGenerationService:
         parent_anchor_field: str,
         child_anchor_field: str,
     ) -> None:
+        parent_values = parent.observation.to_mapping()
         child.pop("until", None)
-        if not parent.get("until") or not parent.get(parent_anchor_field):
+        if not parent_values.get("until") or not parent_values.get(parent_anchor_field):
             return
         native_until = self.core._import_sibling("native_until")
         try:
-            parent_target = self.core.parse_dt_any(parent.get(parent_anchor_field))
-            parent_until = self.core.parse_dt_any(parent.get("until"))
+            parent_target = self.core.parse_dt_any(parent_values.get(parent_anchor_field))
+            parent_until = self.core.parse_dt_any(parent_values.get("until"))
         except Exception as exc:
             raise native_until.NativeUntilCarryError(
                 native_until.CARRY_INVALID,
@@ -442,7 +444,7 @@ class ChainGenerationService:
 
     def carry_native_until(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         kind: str,
@@ -472,7 +474,8 @@ class ChainGenerationService:
         until_dt: Any,
     ) -> dict[str, Any]:
         parent_chain = self._require_chain_id(parent)
-        parent = parent.observation.to_mapping()
+        parent_task = parent
+        parent = parent_task.observation.to_mapping()
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()
@@ -518,7 +521,7 @@ class ChainGenerationService:
             child.pop("anchor_file", None)
             child.pop("anchor_mode", None)
         self._carry_relative_datetime(
-            parent,
+            parent_task,
             child,
             child_due_utc,
             "wait",
@@ -527,7 +530,7 @@ class ChainGenerationService:
         )
         if child_field != "scheduled":
             self._carry_relative_datetime(
-                parent,
+                parent_task,
                 child,
                 child_due_utc,
                 "scheduled",
@@ -535,7 +538,7 @@ class ChainGenerationService:
                 child_anchor_field=child_field,
             )
         self._carry_native_until(
-            parent,
+            parent_task,
             child,
             child_due_utc,
             kind,
@@ -544,7 +547,7 @@ class ChainGenerationService:
         )
         for field_name in self._configured_recurrence_uda_fields(parent):
             self._carry_relative_datetime(
-                parent,
+                parent_task,
                 child,
                 child_due_utc,
                 field_name,

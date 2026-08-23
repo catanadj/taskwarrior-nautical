@@ -9,9 +9,7 @@ from .timeutil import compare_datetimes
 
 def _timeline_seed_base(task: dict[str, Any]) -> str:
     """Return the stable recurrence identity used by timeline projections."""
-    from .recurrence_context import RecurrenceContext
-
-    return RecurrenceContext.from_task(task, fallback_chain_id="preview").seed_base
+    return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
 
 def _timeline_omit_label(
@@ -138,11 +136,11 @@ def _timeline_future_cp_items(
         from .recurrence_context import RecurrenceContext
         from .task_codec import DEFAULT_TASK_CODEC
 
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify timeline")
         evaluator = SchedulerService.from_observation(
-            DEFAULT_TASK_CODEC.decode_row(task, source_query="modify timeline"),
-            context=RecurrenceContext.from_task(
-                task,
-                fallback_chain_id=task.get("uuid") or "preview",
+            observation,
+            context=RecurrenceContext.from_observation(
+                observation,
                 timezone=getattr(core, "_LOCAL_TZ", None),
                 astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),

@@ -870,30 +870,33 @@ def _integrity_request_factory(operation: Any) -> Any:
         MutationRequest,
     )
     from nautical_core.task_changes import TaskPatch
-    from nautical_core.task_models import TaskUUID
+    from nautical_core.task_models import FieldPresence, TaskObservation, TaskUUID
 
     read = _repository().by_uuid(operation.target_uuid, refresh=True)
     row = _read_value(read, f"integrity target {operation.target_uuid}")
-    if row is None:
+    if not isinstance(row, TaskObservation):
         raise RuntimeError(f"integrity target {operation.target_uuid} is unavailable")
-    row = dict(row)
-    modified = str(row.get("modified") or "").strip()
+    def field_value(name: str) -> object:
+        state = row.field(name)
+        return None if state.presence is FieldPresence.ABSENT else state.raw_value()
+
+    modified = str(field_value("modified") or "").strip()
     if not modified:
         raise RuntimeError("integrity target has no modified timestamp")
-    link = lifecycle.int_or_default(row.get("link"), 0)
+    link = lifecycle.int_or_default(field_value("link"), 0)
     if link < 0:
         raise RuntimeError("integrity target has an invalid link")
     updates = dict(operation.payload)
-    expected = {key: row.get(key) for key in updates}
+    expected = {key: field_value(key) for key in updates}
     guard = MutationGuard(
-        task_uuid=str(row.get("uuid") or operation.target_uuid),
-        status=str(row.get("status") or "pending"),
-        chain_id=str(row.get("chainID") or operation.chain_id),
+        task_uuid=str(field_value("uuid") or operation.target_uuid),
+        status=str(field_value("status") or "pending"),
+        chain_id=str(field_value("chainID") or operation.chain_id),
         link=link,
-        recurrence_identity=recurrence_fingerprint(row),
+        recurrence_identity=recurrence_fingerprint(row.to_mapping()),
         timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
         expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
-        chain=str(row.get("chain") or "on"),
+        chain=str(field_value("chain") or "on"),
     )
     patch = TaskPatch.metadata_repair(TaskUUID(guard.task_uuid), **updates)
     return MutationRequest.metadata_repair(guard, patch, expected=expected)

@@ -17438,14 +17438,14 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
     ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
     panels = []
     service_cls = importlib.import_module("nautical_core.scheduler_service").SchedulerService
-    original_from_observation = service_cls.__dict__["from_observation"]
+    original_from_task = service_cls.__dict__["from_task"]
     original_next = mod._anchor_next_occurrence_after_local_dt
 
-    def fail_from_observation(cls, *args, **kwargs):
+    def fail_from_task(cls, *args, **kwargs):
         raise RuntimeError("astronomy profile is unavailable")
 
     try:
-        service_cls.from_observation = classmethod(fail_from_observation)
+        service_cls.from_task = classmethod(fail_from_task)
         mod._anchor_next_occurrence_after_local_dt = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("legacy scheduler fallback was called")
         )
@@ -17460,7 +17460,7 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
         else:
             raise AssertionError("evaluator initialization failure was accepted")
     finally:
-        service_cls.from_observation = original_from_observation
+        service_cls.from_task = original_from_task
         mod._anchor_next_occurrence_after_local_dt = original_next
 
     expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing evaluator error panel: {panels!r}")

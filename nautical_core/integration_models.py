@@ -555,18 +555,6 @@ class MetadataRepairPayload:
         object.__setattr__(self, "updates", updates)
         object.__setattr__(self, "expected", expected)
 
-    @classmethod
-    def from_mapping(
-        cls,
-        task_uuid: str,
-        updates: dict[str, object],
-        *,
-        expected: dict[str, object] | None = None,
-    ) -> "MetadataRepairPayload":
-        if not isinstance(updates, dict):
-            raise IntegrationContractError("metadata repair updates must be an object")
-        return cls(task_uuid, _freeze_pairs(updates), _freeze_pairs(expected or {}))
-
     def to_dict(self) -> dict[str, object]:
         return {key: _thaw(value) for key, value in self.updates}
 
@@ -690,7 +678,7 @@ class MutationRequest:
         return cls(
             MutationOperation.METADATA_REPAIR,
             guard,
-            MetadataRepairPayload.from_mapping(guard.task_uuid, values, expected=dict(expected or {})),
+            MetadataRepairPayload(guard.task_uuid, _freeze_pairs(values), _freeze_pairs(expected or {})),
         )
 
     @classmethod
@@ -709,7 +697,7 @@ class MutationRequest:
         return cls(
             MutationOperation.METADATA_REPAIR,
             guard,
-            MetadataRepairPayload.from_mapping(guard.task_uuid, values),
+            MetadataRepairPayload(guard.task_uuid, _freeze_pairs(values)),
         )
 
     def __post_init__(self) -> None:

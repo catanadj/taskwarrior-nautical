@@ -236,7 +236,9 @@ def _update_parent_payload(plan: LifecyclePlan) -> MetadataRepairPayload | None:
     if not updates:
         return None
     try:
-        return MetadataRepairPayload.from_mapping(plan.identity.parent_uuid, updates)
+        from .integration_models import _freeze_pairs
+
+        return MetadataRepairPayload(plan.identity.parent_uuid, _freeze_pairs(updates))
     except IntegrationContractError:
         return None
 

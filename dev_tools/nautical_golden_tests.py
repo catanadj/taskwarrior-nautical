@@ -2311,6 +2311,55 @@ def test_integration_command_and_read_models_enforce_contract():
         raise AssertionError("integration command was mutable")
 
 
+def test_task_observation_contract_is_lossless_and_immutable():
+    """Task observations preserve field states while isolating mutable JSON input."""
+    from nautical_core.task_models import FieldPresence, TaskObservation, TaskStatus
+
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "status": "pending",
+        "link": 1,
+        "due": "20260821T090000Z",
+        "description": "héllo",
+        "tags": ["a", "b"],
+        "id": 7,
+        "urgency": 4.2,
+    }
+    observation = TaskObservation.from_mapping(row, source_query="uuid:00000000", snapshot_id="snap-1")
+    row["tags"].append("mutated")
+    expect(observation.field("uuid").presence is FieldPresence.VALUE, "UUID value state was not retained")
+    expect(observation.field("status").value is TaskStatus.PENDING, "status was not decoded to its typed value")
+    expect(observation.field("until").presence is FieldPresence.ABSENT, "absent known fields were not retained")
+    null_observation = TaskObservation.from_mapping({"until": None}, source_query="uuid:00000000")
+    expect(null_observation.field("until").presence is FieldPresence.NULL, "explicit null was not retained")
+    expect(observation.field("missing").presence is FieldPresence.ABSENT, "missing fields must remain absent")
+    expect(observation.to_mapping()["tags"] == ["a", "b"], "arbitrary nested fields were not frozen")
+    expect(
+        "id" not in observation.semantic_fingerprint and "urgency" not in observation.semantic_fingerprint,
+        "presentation fields leaked into the semantic fingerprint",
+    )
+    equivalent = TaskObservation.from_mapping(
+        {
+            **observation.to_mapping(),
+            "link": 1.0,
+            "due": "2026-08-21T09:00:00+00:00",
+            "id": 99,
+            "urgency": 100.0,
+        },
+        source_query="uuid:00000000",
+        snapshot_id="snap-1",
+    )
+    expect(observation == equivalent, "equivalent rows should compare identically")
+    expect(equivalent.field("link").value.value == 1, "integer-valued float links were not normalized")
+    malformed = TaskObservation.from_mapping(
+        {"uuid": "bad", "link": 1.5, "status": "future"}, source_query="broad:all"
+    )
+    expect(
+        {issue.code for issue in malformed.issues} == {"invalid_value", "unknown_status"},
+        f"malformed field evidence was not retained: {malformed.issues!r}",
+    )
+
+
 def test_taskwarrior_client_preserves_evidence_and_redacts_observation():
     """The process boundary preserves evidence without observing command contents."""
     from nautical_core.integration_models import CommandFailureKind
@@ -32572,6 +32621,7 @@ TESTS = [
     test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs,
     test_chain_integrity_application_stays_on_typed_mutation_boundary,
     test_integration_command_and_read_models_enforce_contract,
+    test_task_observation_contract_is_lossless_and_immutable,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
     test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,

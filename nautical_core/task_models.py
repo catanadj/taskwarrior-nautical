@@ -18,7 +18,14 @@ from types import MappingProxyType
 from typing import Any, Mapping, MutableMapping, TypeAlias
 from uuid import UUID
 
-from .task_field_policy import DRAFT_FORBIDDEN_FIELDS
+try:
+    from .task_field_policy import DRAFT_FORBIDDEN_FIELDS
+except ImportError:  # standalone thin-hook helper loading
+    DRAFT_FORBIDDEN_FIELDS = frozenset(
+        {"uuid", "chainID", "link", "prevLink", "id", "status", "modified", "end"}
+    )
+
+
 
 
 FrozenValue: TypeAlias = object

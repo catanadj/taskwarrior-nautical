@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .recurrence_context import RecurrenceContext
+from .task_models import FieldPresence, TaskObservation
 
 
 def normalize_recurrence_text(value: Any) -> str:
@@ -59,6 +60,47 @@ class RecurrenceSpec:
             anchor_mode=normalize_recurrence_text(task.get("anchor_mode") or "skip").lower() or "skip",
             chain_max=normalized_max,
             chain_until=normalize_recurrence_text(task.get("chainUntil")),
+        )
+
+    @classmethod
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "RecurrenceSpec":
+        """Build a recurrence specification without thawing a task mapping."""
+        if not isinstance(observation, TaskObservation):
+            raise TypeError("recurrence specification requires a TaskObservation")
+
+        def value(name: str) -> object:
+            state = observation.field(name)
+            if state.presence is FieldPresence.ABSENT:
+                return None
+            return getattr(state.value, "value", state.value)
+
+        task_chain_id = str(value("chainID") or "").strip()
+        if context is not None and task_chain_id and context.chain_id != task_chain_id:
+            raise ValueError("Conflicting recurrence identities: context.chain_id does not match task.chainID.")
+        recurrence_context = context or RecurrenceContext.from_observation(observation)
+        raw_max = value("chainMax")
+        if raw_max in (None, ""):
+            normalized_max = None
+        else:
+            try:
+                normalized_max = int(raw_max)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("chainMax must be an integer in a recurrence specification.") from exc
+        return cls(
+            context=recurrence_context,
+            anchor=normalize_recurrence_text(value("anchor")),
+            anchor_file=normalize_recurrence_text(value("anchor_file")),
+            omit=normalize_recurrence_text(value("omit")),
+            omit_file=normalize_recurrence_text(value("omit_file")),
+            cp=normalize_recurrence_text(value("cp")),
+            anchor_mode=normalize_recurrence_text(value("anchor_mode") or "skip").lower() or "skip",
+            chain_max=normalized_max,
+            chain_until=normalize_recurrence_text(value("chainUntil")),
         )
 
     @property

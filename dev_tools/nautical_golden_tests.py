@@ -23620,6 +23620,7 @@ def test_random_time_window_flows_through_anchor_parser_and_resolver():
 
 def test_recurrence_spec_normalizes_task_fields_and_context():
     """The typed recurrence view should normalize fields without changing semantics."""
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.recurrence_context import RecurrenceContext
     from nautical_core.recurrence_spec import RecurrenceSpec
 
@@ -23637,6 +23638,23 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
     expect(spec.anchor == "w:mon" and spec.anchor_file == "events.csv", f"spec fields were not normalized: {spec!r}")
     expect(spec.omit == "y:12-25" and spec.chain_max == 4, f"spec limits were not normalized: {spec!r}")
     expect(spec.anchor_mode == "all" and spec.kind == "anchor" and spec.enabled, f"spec kind was incorrect: {spec!r}")
+    observation = DEFAULT_TASK_CODEC.decode_row(
+        {
+            "uuid": "spec-observation",
+            "chainID": "spec-observation-chain",
+            "anchor": " w:mon ",
+            "anchor_mode": "ALL",
+            "chainMax": "4",
+        },
+        source_query="test:recurrence-spec",
+    )
+    typed_spec = RecurrenceSpec.from_observation(observation)
+    expect(
+        typed_spec.context.chain_id == "spec-observation-chain"
+        and typed_spec.anchor == "w:mon"
+        and typed_spec.chain_max == 4,
+        f"typed observation was not converted to a recurrence spec: {typed_spec!r}",
+    )
     null_spec = RecurrenceSpec.from_task({
         "chainID": "spec-null-chain",
         "anchor": "w:mon",
@@ -23860,6 +23878,19 @@ def test_scheduler_service_is_one_typed_occurrence_entry_point():
         {"chainID": "service-chain", "anchor": "w:mon@t=09:00"},
         context=RecurrenceContext(chain_id="service-chain", timezone=zone),
     )
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    typed_service = SchedulerService.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "service-observation",
+                "chainID": "service-observation-chain",
+                "anchor": "w:mon@t=09:00",
+            },
+            source_query="test:scheduler-service",
+        ),
+        context=RecurrenceContext(chain_id="service-observation-chain", timezone=zone),
+    )
+    expect(typed_service.fingerprint, "typed scheduler service did not compile an observation")
     cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
     expect(isinstance(service.next(cursor), FoundOccurrence), "service next did not return typed occurrence")
     collected = service.collect(cursor, limit=2)

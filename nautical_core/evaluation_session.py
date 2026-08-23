@@ -13,6 +13,7 @@ from .occurrence_outcomes import OccurrenceOutcome
 from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
 from .time_projection import ProjectionResult, TimeProjectionService
+from .task_models import TaskObservation
 
 
 @dataclass(slots=True)
@@ -45,6 +46,19 @@ class EvaluationSession:
     ) -> "EvaluationSession":
         spec = RecurrenceSpec.from_task(task, context=context)
         return cls.from_spec(spec, max_cache_entries=max_cache_entries)
+
+    @classmethod
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        *,
+        context: RecurrenceContext | None = None,
+        max_cache_entries: int = 32,
+    ) -> "EvaluationSession":
+        return cls.from_spec(
+            RecurrenceSpec.from_observation(observation, context=context),
+            max_cache_entries=max_cache_entries,
+        )
 
     @property
     def evaluator(self) -> RecurrenceEvaluator:

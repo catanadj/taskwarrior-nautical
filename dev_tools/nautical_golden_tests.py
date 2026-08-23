@@ -2832,6 +2832,12 @@ def test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly():
         uuid_read = repository.by_uuid("aaaaaaaa", statuses=("pending",))
         child_read = repository.exact_child_slot("chain-a", 2, statuses=("completed",))
         expect(isinstance(uuid_read, Found) and isinstance(child_read, Found), "broad indexes were not reused")
+        expect(
+            isinstance(uuid_read, Found)
+            and uuid_read.value is broad.value.rows[0]
+            and uuid_read.value.provenance.source_query == "broad:lifecycle",
+            "exact read did not reuse the immutable broad observation",
+        )
         expect(len(client.calls) == 1, f"compatible reads repeated the broad export: {client.calls!r}")
 
         first_predecessor = repository.predecessor_slot("chain-a", 0)

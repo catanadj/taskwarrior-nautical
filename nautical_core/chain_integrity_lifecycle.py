@@ -555,7 +555,9 @@ def _plan_recovery_decision_unscoped(
         )
 
     try:
-        evaluator = SchedulerService.from_observation(observation).session.evaluator
+        evaluator = SchedulerService.from_task(
+            NauticalTask.from_observation(observation)
+        ).session.evaluator
         kind = evaluator.kind or "cp"
         limits = evaluator.limits
         until_dt = limits.chain_until

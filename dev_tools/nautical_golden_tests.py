@@ -25156,6 +25156,8 @@ def test_recurrence_evaluator_events_between_preserves_terminal_evidence():
 def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
     """Hook adaptation must keep generation decisions inside the shared service."""
     from nautical_core.chain_generation import ChainGenerationService
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask
 
     class Hook:
         core = core
@@ -25164,13 +25166,19 @@ def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
         )
 
     service = ChainGenerationService.from_hook(Hook())
-    parent = {
-        "chainID": "shared-generation",
-        "cp": "1d",
-        "link": 1,
-        "due": "20250101T090000Z",
-        "end": "20250101T100000Z",
-    }
+    parent = NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(
+        {
+            "uuid": "00000000-0000-4000-8000-000000000778",
+            "status": "pending",
+            "chainID": "shared-generation",
+            "cp": "1d",
+            "link": 1,
+            "due": "20250101T090000Z",
+            "end": "20250101T100000Z",
+            "description": "shared generation",
+        },
+        source_query="test:chain-generation",
+    ))
     child_due, metadata = service.compute_cp_child_due(parent)
     expect(child_due == datetime(2025, 1, 2, 9, 0, tzinfo=timezone.utc), f"shared CP service drifted: {child_due!r}")
     expect(metadata and metadata.get("basis") == "end+cp (preserve clock)", f"shared CP metadata drifted: {metadata!r}")

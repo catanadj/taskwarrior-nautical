@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from .modify_models import TaskView
 
-def recurrence_timezone_warning(core: Any, task: dict[str, Any]) -> str:
+
+def recurrence_timezone_warning(core: Any, task: TaskView) -> str:
     if getattr(core, "_LOCAL_TZ", None) is not None:
         return ""
     if not _has_recurrence_source(task):
@@ -22,7 +24,7 @@ def config_warnings() -> list[str]:
     return [f"NAUTICAL_CONFIG points to a missing file; built-in defaults are active ({env_path})."]
 
 
-def file_source_warnings(core: Any, task: dict[str, Any]) -> list[str]:
+def file_source_warnings(core: Any, task: TaskView) -> list[str]:
     warnings: list[str] = []
     anchor_file = str(task.get("anchor_file") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip()
@@ -57,7 +59,7 @@ def file_source_warnings(core: Any, task: dict[str, Any]) -> list[str]:
     return warnings
 
 
-def panel_warnings(core: Any, task: dict[str, Any], *, include_files: bool = True) -> list[str]:
+def panel_warnings(core: Any, task: TaskView, *, include_files: bool = True) -> list[str]:
     warnings: list[str] = []
     tz_warning = recurrence_timezone_warning(core, task)
     if tz_warning:
@@ -68,7 +70,7 @@ def panel_warnings(core: Any, task: dict[str, Any], *, include_files: bool = Tru
     return _dedup(warnings)
 
 
-def _has_recurrence_source(task: dict[str, Any]) -> bool:
+def _has_recurrence_source(task: TaskView) -> bool:
     return any(str(task.get(key) or "").strip() for key in ("anchor", "anchor_file", "cp"))
 
 

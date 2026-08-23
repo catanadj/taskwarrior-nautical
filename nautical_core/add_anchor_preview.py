@@ -973,7 +973,9 @@ def handle_anchor_file_preview_on_add(
 
 
 def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
-    task = {"anchor": anchor_str, "anchor_file": anchor_file_str}
+    from .modify_models import TaskView
+
+    task = TaskView.from_mapping({"anchor": anchor_str, "anchor_file": anchor_file_str})
     return bool(panel_diagnostics.recurrence_timezone_warning(core, task))
 
 
@@ -1070,7 +1072,9 @@ def handle_anchor_preview_on_add(
     rows: list[tuple[str, str]] = []
     panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
     compact_presentation = panel_mode in {"quiet", "minimal", "line", "text"}
-    for warning in panel_diagnostics.panel_warnings(core, task):
+    from .modify_models import TaskView
+
+    for warning in panel_diagnostics.panel_warnings(core, TaskView.from_mapping(task)):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
     dnf = None
     if anchor_str:

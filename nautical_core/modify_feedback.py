@@ -1357,7 +1357,7 @@ def orchestrate_anchor_completion_feedback(
         core=core,
         panel=panel,
     )
-    panel_warnings = panel_diagnostics.panel_warnings(core, new)
+    panel_warnings = panel_diagnostics.panel_warnings(core, modify_models.TaskView.from_mapping(new))
     if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
         integrity_warnings.extend(panel_warnings)
@@ -1423,7 +1423,11 @@ def orchestrate_cp_completion_feedback(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
         )
-    panel_warnings = panel_diagnostics.panel_warnings(core, new, include_files=False)
+    panel_warnings = panel_diagnostics.panel_warnings(
+        core,
+        modify_models.TaskView.from_mapping(new),
+        include_files=False,
+    )
     if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
         integrity_warnings.extend(panel_warnings)

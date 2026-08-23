@@ -1342,7 +1342,11 @@ def _handle_cp_preview_on_add(
 ) -> None:
     rows: list[tuple[str, str]] = []
     diagnostics = _module("panel_diagnostics")
-    for warning in diagnostics.panel_warnings(core, task, include_files=False):
+    for warning in diagnostics.panel_warnings(
+        core,
+        _module("modify_models").TaskView.from_mapping(task),
+        include_files=False,
+    ):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
 
     def _fmt(dt):

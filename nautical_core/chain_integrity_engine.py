@@ -38,6 +38,7 @@ from .integration_models import (
     Unavailable,
 )
 from .lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure
+from .task_models import TaskObservation
 
 
 class _SnapshotProvider(Protocol):
@@ -110,7 +111,7 @@ class ChainIntegrityEngine:
 
     def plan_recovery(
         self,
-        parent: dict[str, object],
+        parent: TaskObservation,
         *,
         existing_children: list[dict[str, object]],
         hook: object,

@@ -47,7 +47,7 @@ from nautical_core.integration_models import (  # noqa: E402
     Unavailable,
 )
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
-from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation  # noqa: E402
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload  # noqa: E402
 from nautical_core.task_codec import DEFAULT_TASK_CODEC  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
@@ -222,7 +222,7 @@ def _safe_parse_datetime(hook: Any, value: Any):
     return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
 
 
-def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any]) -> str:
+def _stable_child_uuid(hook: Any, parent: TaskPayload, child: TaskPayload) -> str:
     resolver = getattr(hook, "stable_child_uuid", None)
     if callable(resolver):
         return str(resolver(parent, child) or "")
@@ -570,7 +570,7 @@ def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> b
         return False
 
 
-def _recovery_existing_children(parent: dict[str, Any]) -> tuple[TaskObservation, ...]:
+def _recovery_existing_children(parent: TaskPayload) -> tuple[TaskObservation, ...]:
     """Read the successor slot as immutable observations."""
     parent_observation = (
         parent
@@ -595,7 +595,7 @@ def _recovery_existing_children(parent: dict[str, Any]) -> tuple[TaskObservation
     ).existing_children(parent_observation)
 
 
-def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
+def _existing_children_for_plan(task_bin: str, parent: TaskPayload, hook: Any) -> list[dict[str, Any]]:
     if str(parent.get("status") or "").strip() == "deleted":
         from nautical_core.task_codec import DEFAULT_TASK_CODEC
         observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile child lookup")
@@ -657,7 +657,7 @@ def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool):
         yield acquired
 
 
-def _fresh_parent(parent: dict[str, Any]) -> dict[str, Any] | None:
+def _fresh_parent(parent: TaskPayload) -> TaskPayload | None:
     parent_uuid = str(parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
@@ -668,7 +668,7 @@ def _fresh_parent(parent: dict[str, Any]) -> dict[str, Any] | None:
     return dict(value) if value is not None else None
 
 
-def _parent_identity_error(parent: dict[str, Any]) -> str:
+def _parent_identity_error(parent: TaskPayload) -> str:
     """Explain why a parent cannot be used as an atomic reconcile target."""
     chain_id = str(parent.get("chainID") or "").strip()
     if not chain_id:
@@ -688,7 +688,7 @@ def _parent_identity_error(parent: dict[str, Any]) -> str:
     return ""
 
 
-def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
+def _parent_guard_filters(parent: TaskPayload) -> list[str]:
     parent_uuid = str(parent.get("uuid") or "").strip()
     status = str(parent.get("status") or "").strip().lower()
     chain_id = str(parent.get("chainID") or "").strip()
@@ -714,7 +714,7 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
     ]
 
 
-def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
+def _verify_disabled_parent(task_bin: str, parent: TaskPayload) -> None:
     """Re-export a terminal parent before reporting chain disablement as applied."""
     fresh_parent = _fresh_parent(parent)
     if fresh_parent is None:
@@ -732,7 +732,7 @@ def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
 
 def _verify_applied_child(
     task_bin: str,
-    parent: dict[str, Any],
+    parent: TaskPayload,
     child_short: str,
     *,
     hook: Any = None,
@@ -788,7 +788,7 @@ def _verify_applied_child(
     return matched.to_mapping()
 
 
-def _stale_plan(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _stale_plan(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "stale",
         DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile stale plan"),
@@ -817,7 +817,7 @@ def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
 def _refresh_plan(
     task_bin: str,
     hook: Any,
-    original_parent: dict[str, Any],
+    original_parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
 ) -> lifecycle.LifecycleRecoveryDecision:
@@ -853,7 +853,7 @@ def _refresh_plan(
 def _plan_for_parent(
     task_bin: str,
     hook: Any,
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
 ) -> lifecycle.LifecycleRecoveryDecision:
@@ -1158,7 +1158,7 @@ def _execute_reconcile_terminal_plan(
 def _apply_parent_atomic(
     task_bin: str,
     hook: Any,
-    original_parent: dict[str, Any],
+    original_parent: TaskPayload,
     *,
     taskdata: Path,
     lease_held: bool = False,
@@ -1197,7 +1197,7 @@ def _apply_parent_atomic(
     )
 
 
-def _recovery_error(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_error(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "error",
         DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery error"),
@@ -1206,7 +1206,7 @@ def _recovery_error(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleR
     )
 
 
-def _recovery_terminal(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_terminal(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     """Classify an expired-but-still-pending child as resumable, not corrupt."""
     if reason.endswith("native until has already elapsed"):
         return _recovery_partial(
@@ -1216,7 +1216,7 @@ def _recovery_terminal(parent: dict[str, Any], reason: str) -> lifecycle.Lifecyc
     return _recovery_error(parent, reason)
 
 
-def _recovery_partial(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_partial(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "partial",
         DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery partial"),
@@ -1225,7 +1225,7 @@ def _recovery_partial(parent: dict[str, Any], reason: str) -> lifecycle.Lifecycl
     )
 
 
-def _recovery_manual_review(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_manual_review(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "manual_review",
         DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery review"),
@@ -1234,7 +1234,7 @@ def _recovery_manual_review(parent: dict[str, Any], reason: str) -> lifecycle.Li
     )
 
 
-def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> str:
+def _validate_recovery_child(parent: TaskPayload, child: TaskPayload) -> str:
     _child_short, child_error = lifecycle.resolve_existing_child(
         parent,
         [child],
@@ -1243,7 +1243,7 @@ def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> s
     return child_error
 
 
-def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any) -> str:
+def _terminal_recovery_error(child: TaskPayload, hook: Any, recovery_at: Any) -> str:
     if str(child.get("status") or "").strip().lower() != "pending":
         return ""
     until_raw = child.get("until")
@@ -1273,7 +1273,7 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
 
 
 def _next_recovery_child(
-    parent: dict[str, Any],
+    parent: TaskPayload,
     child_short: str,
 ) -> dict[str, Any]:
     wanted = str(child_short or "").strip().lower()
@@ -1339,7 +1339,7 @@ def _virtual_expired_child(
 def _reconcile_candidate(
     task_bin: str,
     hook: Any,
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     taskdata: Path | None,
     apply: bool,
@@ -1389,7 +1389,7 @@ def _reconcile_candidate(
         generation=generation,
     )
 
-def _fmt_parent(parent: dict[str, Any]) -> str:
+def _fmt_parent(parent: TaskPayload) -> str:
     uuid = lifecycle.short_uuid(parent.get("uuid")) or "????????"
     chain_id = str(parent.get("chainID") or "?")
     link = lifecycle.int_or_default(parent.get("link"), 0)

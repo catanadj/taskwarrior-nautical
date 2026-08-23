@@ -246,9 +246,17 @@ def _repository() -> TaskReadRepository:
     return state.repository
 
 
-def _read_value(read: Any, subject: str) -> Any | None:
+def _read_value(
+    read: Any,
+    subject: str,
+) -> TaskObservation | tuple[TaskObservation, ...] | None:
     if isinstance(read, Found):
-        return read.value.to_mapping() if isinstance(read.value, TaskObservation) else read.value
+        value = read.value
+        if isinstance(value, TaskObservation):
+            return value
+        if isinstance(value, tuple) and all(isinstance(row, TaskObservation) for row in value):
+            return value
+        raise _PlanReadUnavailable(f"{subject} returned an untyped task result")
     if isinstance(read, Absent):
         return None
     if isinstance(read, Unavailable):
@@ -665,7 +673,7 @@ def _fresh_parent(parent: TaskPayload) -> TaskPayload | None:
         _repository().verification(parent_uuid),
         f"parent {parent_uuid}",
     )
-    return dict(value) if value is not None else None
+    return value.to_mapping() if isinstance(value, TaskObservation) else None
 
 
 def _parent_identity_error(parent: TaskPayload) -> str:
@@ -1294,7 +1302,10 @@ def _next_recovery_child(
         raise RuntimeError(
             f"recovery child {wanted} lookup returned {len(matches)} exact match(es)"
         )
-    child = matches[0]
+    child_observation = matches[0]
+    if not isinstance(child_observation, TaskObservation):
+        raise RuntimeError(f"recovery child {wanted} lookup returned an untyped task")
+    child = child_observation.to_mapping()
     validation_error = _validate_recovery_child(parent, child)
     if validation_error:
         raise RuntimeError(validation_error)

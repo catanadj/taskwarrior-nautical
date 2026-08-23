@@ -160,6 +160,17 @@ def task_has_modify_nautical_fields(task: dict | None) -> bool:
     return any(_field_has_value(task, field) for field in fields)
 
 
+def _observation_has_fields(observation: TaskObservation, fields: tuple[str, ...]) -> bool:
+    """Classify from decoded field states without thawing the row."""
+    if observation is None or not callable(getattr(observation, "field", None)):
+        return False
+    return any(
+        observation.field(field).presence.value == "value"
+        and bool(str(observation.field(field).raw_value() or "").strip())
+        for field in fields
+    )
+
+
 def is_safe_nautical_ordinary_modify(old: dict | None, new: dict | None) -> bool:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return False
@@ -218,7 +229,7 @@ def probe_on_add(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> HookPr
         raw_text=raw_text,
         new=task,
         observation=observation,
-        is_nautical=task_has_add_nautical_fields(task),
+        is_nautical=_observation_has_fields(observation, _ADD_NAUTICAL_FIELDS),
     )
 
 
@@ -230,8 +241,10 @@ def _validate_modify_tasks(
     *,
     old_observation: TaskObservation | None = None,
     new_observation: TaskObservation | None = None,
+    is_nautical: bool | None = None,
 ) -> HookProtocolResult:
-    is_nautical = task_has_modify_nautical_fields(old) or task_has_modify_nautical_fields(new)
+    if is_nautical is None:
+        is_nautical = task_has_modify_nautical_fields(old) or task_has_modify_nautical_fields(new)
     old_uuid = str(old.get("uuid") or "").strip()
     new_uuid = str(new.get("uuid") or "").strip()
     if not old_uuid or not new_uuid:
@@ -298,6 +311,10 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
             tasks[-1],
             old_observation=observations[0],
             new_observation=observations[-1],
+            is_nautical=(
+                _observation_has_fields(observations[0], _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS)
+                or _observation_has_fields(observations[-1], _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS)
+            ),
         )
     if len(tasks) == 1:
         return _validate_modify_tasks(
@@ -307,6 +324,9 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
             tasks[0],
             old_observation=observations[0],
             new_observation=observations[0],
+            is_nautical=_observation_has_fields(
+                observations[0], _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS,
+            ),
         )
     return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 

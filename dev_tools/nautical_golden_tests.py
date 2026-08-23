@@ -3314,6 +3314,14 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         repair_request.payload.expected_until == "20260813T200000Z",
         "native-until patch lost guarded prior value",
     )
+    metadata_request = MutationRequest.metadata_repair(
+        guard,
+        TaskPatch.metadata_repair(TaskUUID(parent_uuid), nextLink=child_uuid[:8]),
+    )
+    expect(
+        metadata_request.payload.to_dict()["nextLink"] == child_uuid[:8],
+        "metadata patch lost its update",
+    )
 
     named = (
         MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),

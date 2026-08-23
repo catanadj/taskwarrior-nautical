@@ -671,6 +671,27 @@ class MutationRequest:
             NativeUntilRepairPayload(guard.task_uuid, expected, replacement),
         )
 
+    @classmethod
+    def metadata_repair(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a guarded metadata repair from a typed TaskPatch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("metadata repair requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.METADATA_REPAIR:
+            raise IntegrationContractError("metadata repair requires a METADATA_REPAIR TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("metadata patch target differs from guard")
+        values = dict(patch.set_values())
+        cleared = patch.clear_fields()
+        if cleared:
+            values.update({field: None for field in cleared})
+        return cls(
+            MutationOperation.METADATA_REPAIR,
+            guard,
+            MetadataRepairPayload.from_mapping(guard.task_uuid, values),
+        )
+
     def __post_init__(self) -> None:
         try:
             operation = MutationOperation(self.operation)

@@ -631,6 +631,27 @@ class TaskChange:
     group: int = 99
 
 
+class _ResolvedTaskView(Mapping[str, Any]):
+    """Immutable Navigator view with resolved chain references."""
+
+    __slots__ = ("_task", "_refs")
+
+    def __init__(self, task: Mapping[str, Any], refs: Mapping[str, str]) -> None:
+        self._task = task
+        self._refs = dict(refs)
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self._refs:
+            return self._refs[key]
+        return self._task[key]
+
+    def __iter__(self):
+        return iter(self._task)
+
+    def __len__(self) -> int:
+        return len(self._task)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Analyzer
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1071,12 +1092,17 @@ class TaskAnalyzer:
                     return matches[0]
             return raw
 
-        normalized: List[Dict] = []
+        normalized: List[Mapping[str, Any]] = []
         for task in tasks:
-            item = dict(task)
-            item["prevLink"] = resolve(item.get("prevLink"))
-            item["nextLink"] = resolve(item.get("nextLink"))
-            normalized.append(item)
+            normalized.append(
+                _ResolvedTaskView(
+                    task,
+                    {
+                        "prevLink": resolve(task.get("prevLink")),
+                        "nextLink": resolve(task.get("nextLink")),
+                    },
+                )
+            )
         return normalized
 
     def _render_line_plot(self, x_labels: List[str], series: Dict[str, List[Optional[float]]], height: int = 10, width: int = 60) -> Panel:

@@ -106,6 +106,32 @@ class TaskCodec:
             for row in payload
         )
 
+    def decode_object(
+        self,
+        text: str,
+        *,
+        source_query: str,
+        snapshot_id: str = "",
+        mutation_epoch: int = 0,
+        command_count: int = 0,
+    ) -> TaskObservation:
+        """Decode one Taskwarrior JSON object through the same row contract."""
+        if not isinstance(text, str) or not text.strip():
+            raise TaskCodecError("Taskwarrior task input is empty")
+        try:
+            payload = json.loads(text, parse_constant=_reject_constant)
+        except (TypeError, json.JSONDecodeError, TaskCodecError) as exc:
+            raise TaskCodecError(f"Taskwarrior task input contains malformed JSON: {exc}") from exc
+        if not isinstance(payload, Mapping):
+            raise TaskCodecError("Taskwarrior task input must be a JSON object")
+        return self.decode_row(
+            payload,
+            source_query=source_query,
+            snapshot_id=snapshot_id,
+            mutation_epoch=mutation_epoch,
+            command_count=command_count,
+        )
+
     def encode_task_import(self, value: TaskObservation | TaskDraft) -> str:
         """Encode a lossless observation or complete child draft."""
         if isinstance(value, TaskObservation):

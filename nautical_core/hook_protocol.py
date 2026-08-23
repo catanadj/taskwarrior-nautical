@@ -4,6 +4,11 @@ import json
 import sys
 from typing import TypeAlias
 
+try:
+    from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
+except ImportError:  # standalone hook bootstrap loader
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC, TaskCodecError  # type: ignore[no-redef]
+
 
 MAX_JSON_BYTES = 10 * 1024 * 1024
 
@@ -190,10 +195,12 @@ def probe_on_add(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> HookPr
     if not stripped:
         return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
     try:
-        task = json.loads(stripped)
-    except Exception:
-        return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
-    if not isinstance(task, dict):
+        observation = DEFAULT_TASK_CODEC.decode_object(
+            stripped,
+            source_query="hook:on-add",
+        )
+        task = observation.to_mapping()
+    except TaskCodecError:
         return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
     return HookProtocolResult(
         event="on-add",

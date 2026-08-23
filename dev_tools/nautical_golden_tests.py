@@ -24160,17 +24160,28 @@ def test_evaluation_session_is_task_scoped_and_fingerprint_bound():
     from nautical_core.evaluation_session import EvaluationSession
     from nautical_core.recurrence_context import RecurrenceContext
     from nautical_core.recurrence_spec import RecurrenceSpec
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-    first = EvaluationSession.from_task(
-        {"chainID": "session-a", "anchor": "w:mon"},
+    first_observation = DEFAULT_TASK_CODEC.decode_row(
+        {"uuid": "00000000-0000-4000-8000-000000000512", "status": "pending", "link": 1, "chainID": "session-a", "anchor": "w:mon"},
+        source_query="test:evaluation-session",
+    )
+    first = EvaluationSession.from_observation(
+        first_observation,
         context=RecurrenceContext(chain_id="session-a"),
     )
     expect(first.evaluator is first.evaluator, "session evaluator was rebuilt")
     first.get_or_create("provider", lambda: object())
     expect(first.get_or_create("provider", lambda: object()) is first.get_or_create("provider", lambda: object()), "session cache was not reused")
-    other = RecurrenceSpec.from_task({"chainID": "session-b", "anchor": "w:mon"})
+    other = RecurrenceSpec.from_observation(DEFAULT_TASK_CODEC.decode_row(
+        {"uuid": "00000000-0000-4000-8000-000000000513", "status": "pending", "link": 1, "chainID": "session-b", "anchor": "w:mon"},
+        source_query="test:evaluation-session",
+    ))
     expect(not first.matches(other), "session accepted a different task identity")
-    changed = RecurrenceSpec.from_task({"chainID": "session-a", "anchor": "w:tue"})
+    changed = RecurrenceSpec.from_observation(DEFAULT_TASK_CODEC.decode_row(
+        {"uuid": "00000000-0000-4000-8000-000000000514", "status": "pending", "link": 1, "chainID": "session-a", "anchor": "w:tue"},
+        source_query="test:evaluation-session",
+    ))
     expect(first.refresh(changed), "session did not refresh after scheduling state changed")
     expect(first.evaluator.spec.anchor == "w:tue", "session retained stale evaluator after refresh")
     expect(first.next_outcome is not None and first.collect_after_cursor is not None, "session service boundary missing")

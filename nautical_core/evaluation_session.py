@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 from .compiled_schedule import CompiledSchedule
 from .recurrence_context import RecurrenceContext
@@ -36,17 +36,6 @@ class EvaluationSession:
     @classmethod
     def from_spec(cls, spec: RecurrenceSpec, *, max_cache_entries: int = 32) -> "EvaluationSession":
         return cls(CompiledSchedule.from_spec(spec), max_cache_entries=max_cache_entries)
-
-    @classmethod
-    def from_task(
-        cls,
-        task: Mapping[str, Any],
-        *,
-        context: RecurrenceContext | None = None,
-        max_cache_entries: int = 32,
-    ) -> "EvaluationSession":
-        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="evaluation session")
-        return cls.from_observation(observation, context=context, max_cache_entries=max_cache_entries)
 
     @classmethod
     def from_observation(

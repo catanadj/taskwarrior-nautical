@@ -22,6 +22,7 @@ from .scheduler_models import OccurrenceSearchExhausted
 from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
 from .task_models import TaskObservation
+from .task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)
@@ -40,7 +41,8 @@ class SchedulerService:
         trace: SchedulerTrace | None = None,
     ) -> "SchedulerService":
         trace = trace or SchedulerTrace.from_env()
-        return cls(EvaluationSession.from_task(task, context=context), trace)
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="scheduler service")
+        return cls(EvaluationSession.from_observation(observation, context=context), trace)
 
     @classmethod
     def from_observation(

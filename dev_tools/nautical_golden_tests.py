@@ -149,6 +149,12 @@ def _task_observations(rows):
     )
 
 
+def _task_snapshot(row):
+    """Build lifecycle snapshots through the observation boundary."""
+    from nautical_core.lifecycle_models import TaskSnapshot
+    return TaskSnapshot.from_observation(_task_observations((row,))[0])
+
+
 def _found_task(row):
     from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
     return Found(row, "isolated test read")
@@ -4978,14 +4984,14 @@ def test_lifecycle_planner_is_pure_and_deterministic():
     )
 
     source = {
-        "uuid": "parent-uuid",
+        "uuid": "00000000-0000-4000-8000-000000000501",
         "status": "completed",
         "chain": "on",
         "chainID": "chain-1",
         "link": 4,
         "anchor": "w:mon",
     }
-    snapshot = TaskSnapshot.from_mapping(source)
+    snapshot = _task_snapshot(source)
 
     def build_child(task, event):
         expect(event is LifecycleEvent.COMPLETE, "unexpected event passed to child builder")
@@ -5047,7 +5053,7 @@ def test_lifecycle_planner_is_pure_and_deterministic():
         terminal = terminal_plan_for_snapshot(snapshot, event)
         expect(terminal.parent_patch_dict() == {"chain": "off"}, f"terminal patch drifted for {event.value}")
         expect(terminal.identity.event is event, f"terminal event was not retained for {event.value}")
-    linked_snapshot = TaskSnapshot.from_mapping({**source, "nextLink": "child123"})
+    linked_snapshot = _task_snapshot({**source, "nextLink": "child123"})
     try:
         terminal_plan_for_snapshot(linked_snapshot, LifecycleEvent.CHAIN_UNTIL)
     except LifecyclePlanningError as exc:
@@ -5061,7 +5067,7 @@ def test_lifecycle_planner_is_pure_and_deterministic():
 
     try:
         LifecyclePlanner({"scheduler_fingerprint": "fp-1"}).plan(
-            TaskSnapshot.from_mapping({"uuid": "parent-uuid", "link": 1}),
+            _task_snapshot({"uuid": "00000000-0000-4000-8000-000000000510", "status": "pending", "link": 1, "anchor": "w:mon"}),
             LifecycleEvent.COMPLETE,
         )
     except LifecyclePlanningError:
@@ -5092,9 +5098,9 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
         def build_child(self, snapshot, event, candidate, next_link):
             return {"uuid": f"child-{next_link}", "due": candidate.child_due, "link": next_link}
 
-    source = TaskSnapshot.from_mapping(
+    source = _task_snapshot(
         {
-            "uuid": "parent-uuid",
+            "uuid": "00000000-0000-4000-8000-000000000502",
             "status": "completed",
             "chain": "on",
             "chainID": "chain-1",
@@ -5123,8 +5129,8 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
     )
     expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "terminal candidate spawned a child")
 
-    no_recurrence = TaskSnapshot.from_mapping(
-        {"uuid": "parent-uuid", "status": "completed", "chain": "on", "chainID": "chain-1", "link": 4}
+    no_recurrence = _task_snapshot(
+        {"uuid": "00000000-0000-4000-8000-000000000503", "status": "completed", "chain": "on", "chainID": "chain-1", "link": 4}
     )
     empty = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=service).plan(
         no_recurrence,
@@ -5155,7 +5161,7 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
         def build_child_from_parent(self, parent, due, field, link, parent_short, kind, cpmax, until):
             return {"uuid": "generated-child", field: due, "link": link, "kind": kind, "chainMax": cpmax}
 
-    generated_source = TaskSnapshot.from_mapping({**source.to_dict(), "chainUntil": "2026-08-12T09:00:00Z"})
+    generated_source = _task_snapshot({**source.to_dict(), "chainUntil": "2026-08-12T09:00:00Z"})
     generated = ChainGenerationPlanningService(Generation())
     generated_planner = LifecyclePlanner(
         {"scheduler_fingerprint": "fp-1"},
@@ -5178,7 +5184,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
 
     due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "00000000-0000-4000-8000-000000000508",
         "status": "completed",
         "chain": "on",
         "chainID": "planner-parity",
@@ -5203,11 +5209,12 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
         core = Core()
 
         def build_child_from_parent(self, task, child_due, child_field, next_link, parent_short, kind, cpmax, until):
+            values = task.observation.to_mapping() if hasattr(task, "observation") else task
             return {
-                "uuid": "22222222-0000-0000-0000-000000000002",
+                "uuid": "00000000-0000-4000-8000-000000000507",
                 "status": "pending",
                 "chain": "on",
-                "chainID": task["chainID"],
+                "chainID": values["chainID"],
                 "link": next_link,
                 "prevLink": parent_short,
                 child_field: child_due,
@@ -5217,7 +5224,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
 
     generation = Generation()
     candidate = RecurrenceCandidate(child_due=due, metadata=(("target_field", "due"),))
-    snapshot = TaskSnapshot.from_mapping(parent)
+    snapshot = _task_snapshot(parent)
     completion_plan = plan_candidate_successor(
         snapshot,
         LifecycleEvent.COMPLETE,
@@ -5227,7 +5234,7 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
         compare_datetimes=lambda left, right: (left > right) - (left < right),
     )
     reconcile_plan = reconcile.plan_recovery_decision(
-        parent,
+        snapshot.observation,
         existing_children=[],
         hook=None,
         generation=type(
@@ -5259,7 +5266,7 @@ def test_expiration_candidate_uses_scheduled_recurrence_basis():
 
     scheduled = "2026-08-16T09:00:00Z"
     parent = {
-        "uuid": "33333333-0000-0000-0000-000000000003",
+        "uuid": "00000000-0000-4000-8000-000000000504",
         "status": "deleted",
         "chain": "on",
         "chainID": "expiration-parity",
@@ -5281,23 +5288,25 @@ def test_expiration_candidate_uses_scheduled_recurrence_basis():
         core = Core()
 
         def compute_cp_child_due(self, task):
-            expect(task["end"] == scheduled, "expiration candidate used deletion end instead of scheduled")
+            values = task.observation.to_mapping() if hasattr(task, "observation") else task
+            expect(values["end"] == scheduled, "expiration candidate used deletion end instead of scheduled")
             return datetime(2026, 8, 17, 9, tzinfo=timezone.utc), {"target_field": "scheduled"}
 
         def build_child_from_parent(self, task, due, field, link, parent_short, kind, cpmax, until):
+            values = task.observation.to_mapping() if hasattr(task, "observation") else task
             return {
-                "uuid": "44444444-0000-0000-0000-000000000004",
+                "uuid": "00000000-0000-4000-8000-000000000505",
                 "chain": "on",
-                "chainID": task["chainID"],
+                "chainID": values["chainID"],
                 "link": link,
                 "prevLink": parent_short,
                 field: due,
             }
 
     generation = Generation()
-    candidate = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+    candidate = expiration_candidate(_task_snapshot(parent), generation=generation)
     plan = plan_candidate_successor(
-        TaskSnapshot.from_mapping(parent),
+        _task_snapshot(parent),
         LifecycleEvent.EXPIRE,
         candidate,
         generation=generation,
@@ -5308,7 +5317,6 @@ def test_expiration_candidate_uses_scheduled_recurrence_basis():
         ),
     )
     expect(plan.child_dict()["scheduled"] == candidate.child_due, "expiration plan lost scheduled target field")
-
 
 def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
     """The shared planner must preserve semantic plans across supported recurrence boundaries."""
@@ -5343,17 +5351,18 @@ def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
             return (due, None) if value else (None, None)
 
         def build_child_from_parent(self, task, child_due, field, link, parent_short, kind, cpmax, until):
+            values = task.observation.to_mapping() if hasattr(task, "observation") else task
             child = {
-                "uuid": "55555555-0000-0000-0000-000000000005",
+                "uuid": "00000000-0000-4000-8000-000000000506",
                 "status": "pending",
                 "chain": "on",
-                "chainID": task["chainID"],
+                "chainID": values["chainID"],
                 "link": link,
                 "prevLink": parent_short,
                 field: child_due,
             }
-            if task.get("until"):
-                child["until"] = task["until"]
+            if values.get("until"):
+                child["until"] = values["until"]
             return child
 
     generation = Generation()
@@ -5367,14 +5376,14 @@ def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
     )
     for index, (fields, kind, metadata) in enumerate(cases):
         parent = {
-            "uuid": f"66666666-0000-0000-0000-00000000000{index}",
+            "uuid": f"00000000-0000-4000-8000-0000000005{index:02d}",
             "status": "completed",
             "chain": "on",
             "chainID": f"matrix-{index}",
             "link": 1,
             **fields,
         }
-        snapshot = TaskSnapshot.from_mapping(parent)
+        snapshot = _task_snapshot(parent)
         candidate = RecurrenceCandidate(child_due=due, metadata=tuple(metadata.items()))
         preflight = LifecyclePreflight.from_context(base_link=1, next_link=2, kind=kind, chain_id=f"matrix-{index}")
         first = plan_candidate_successor(
@@ -5427,13 +5436,13 @@ def test_lifecycle_terminal_policy_routes_all_terminal_events_through_one_patch(
         "nextLink": "successor",
     }
     try:
-        terminal_plan_for_snapshot(TaskSnapshot.from_mapping(linked), LifecycleEvent.CHAIN_UNTIL)
+        terminal_plan_for_snapshot(_task_snapshot(linked), LifecycleEvent.CHAIN_UNTIL)
     except Exception as exc:
         expect("persisted successor" in str(exc), "linked terminal rejection was not actionable")
     else:
         raise AssertionError("terminal finalization accepted a persisted successor")
     manual_plan = terminal_plan_for_snapshot(
-        TaskSnapshot.from_mapping({**linked, "status": "deleted"}),
+        _task_snapshot({**linked, "status": "deleted"}),
         LifecycleEvent.MANUAL_DELETE,
     )
     expect(manual_plan.action is LifecycleAction.DISABLE_CHAIN, "manual deletion did not retain successor policy")

@@ -3004,7 +3004,11 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int, reposi
     mode = _completion_chain_snapshot_mode()
     snapshot = repository.chain_snapshot(chain_id)
     if isinstance(snapshot, Found):
-        rows = [dict(row) for row in snapshot.value]
+        value = getattr(snapshot.value, "rows", snapshot.value)
+        rows = [
+            row.to_mapping() if hasattr(row, "to_mapping") else dict(row)
+            for row in value
+        ]
         loaded = True
         error = ""
     elif isinstance(snapshot, Absent):

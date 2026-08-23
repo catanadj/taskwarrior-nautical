@@ -24,6 +24,7 @@ from .integration_models import (
     Unavailable,
 )
 from .task_read_repository import AuthoritativeTaskSnapshot
+from .task_models import TaskObservation
 
 TaskRow = dict[str, Any]
 ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]
@@ -453,6 +454,9 @@ class LifecycleReadService:
             raise RuntimeError("typed repository returned an invalid chain snapshot")
         rows: list[TaskRow] = []
         for row in raw_rows:
+            if isinstance(row, TaskObservation):
+                rows.append(row.to_mapping())
+                continue
             if not isinstance(row, Mapping):
                 raise RuntimeError("typed repository returned a non-object chain row")
             rows.append(dict(row))

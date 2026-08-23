@@ -311,7 +311,7 @@ class LifecycleReconciliationService:
 
     def plan(
         self,
-        parent: dict[str, Any],
+        parent: TaskObservation,
         *,
         hook: Any,
         generation: ChainGenerationService,
@@ -332,16 +332,20 @@ class LifecycleReconciliationService:
             generation=generation,
         )
 
-    def existing_children(self, parent: dict[str, Any], *, safe_parse_datetime: Any) -> list[dict[str, Any]]:
-        if str(parent.get("status") or "").strip().lower() == "deleted":
+    def existing_children(self, parent: TaskObservation, *, safe_parse_datetime: Any) -> list[dict[str, Any]]:
+        if isinstance(parent, TaskObservation):
+            parent_values = parent.to_mapping()
+        else:
+            raise TypeError("lifecycle child lookup requires a TaskObservation parent")
+        if str(parent_values.get("status") or "").strip().lower() == "deleted":
             evidence = lifecycle.deleted_chain_disposition(
                 parent,
                 safe_parse_datetime=safe_parse_datetime,
             )
             if evidence.disposition is not DeletionDisposition.EXPIRATION:
                 return []
-        chain_id = str(parent.get("chainID") or "").strip()
-        next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
+        chain_id = str(parent_values.get("chainID") or "").strip()
+        next_link = lifecycle.int_or_default(parent_values.get("link"), 1) + 1
         if not chain_id:
             return []
         result = self.repository.exact_child_slot(chain_id, next_link, refresh=True)
@@ -350,7 +354,7 @@ class LifecycleReconciliationService:
         if isinstance(result, Absent):
             return []
         if isinstance(result, Found):
-            return [dict(result.value)]
+            return [result.value.to_mapping()]
         raise RuntimeError(f"child slot {chain_id}:{next_link} returned an invalid read result")
 
     def recover_candidate(

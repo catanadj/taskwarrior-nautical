@@ -159,6 +159,37 @@ def _task_observation(row):
     return _task_observations((row,))[0]
 
 
+def _task_draft(row):
+    """Build a typed child fixture without using the removed mapping seam."""
+    from datetime import datetime
+    from nautical_core.task_models import NauticalTask, TaskDraft
+
+    row = {
+        key: value.isoformat().replace("+00:00", "Z") if isinstance(value, datetime) else value
+        for key, value in row.items()
+    }
+    observation = _task_observation(row)
+    task = NauticalTask.from_observation(observation)
+    target_field = "due" if task.temporal.due is not None else "scheduled"
+    target = task.temporal.due or task.temporal.scheduled
+    if target is None:
+        raise AssertionError("typed child fixture requires a target")
+    excluded = {
+        "id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink", "nextLink",
+        "description", "chain", "anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file",
+        "bc", "chainMax", "chainUntil", "due", "scheduled",
+    }
+    values = observation.to_mapping()
+    return TaskDraft(
+        identity=task.identity,
+        description=task.description,
+        recurrence=task.recurrence,
+        target=target,
+        fields={key: value for key, value in values.items() if key not in excluded},
+        target_field=target_field,
+    )
+
+
 def _recovery_plan(reconcile, parent, **kwargs):
     return reconcile.plan_recovery_decision(_task_observation(parent), **kwargs)
 
@@ -5004,14 +5035,33 @@ def test_lifecycle_planner_is_pure_and_deterministic():
     def build_child(task, event):
         expect(event is LifecycleEvent.COMPLETE, "unexpected event passed to child builder")
         expect(task.to_dict() == source, "planner changed the input snapshot")
-        return {"uuid": "child-uuid", "link": 5, "description": "next"}
+        return _task_draft({
+            **source,
+            "uuid": "00000000-0000-4000-8000-000000000502",
+            "description": "next",
+            "status": "pending",
+            "link": 5,
+            "prevLink": source["uuid"][:8],
+            "due": "20260824T090000Z",
+        })
 
-    planner = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, child_builder=build_child)
+    class Recurrence:
+        def next_candidate(self, _snapshot, _event, _kind, _next_link):
+            from nautical_core.lifecycle_planner import RecurrenceCandidate
+            return RecurrenceCandidate(child_due="20260824T090000Z", metadata=(("target_field", "due"),))
+
+        def build_child(self, snapshot, event, _candidate, _next_link):
+            return build_child(snapshot, event)
+
+    planner = LifecyclePlanner(
+        {"scheduler_fingerprint": "fp-1"},
+        recurrence_service=Recurrence(),
+    )
     first = planner.plan(snapshot, LifecycleEvent.COMPLETE)
     second = planner.plan(snapshot, LifecycleEvent.COMPLETE)
     expect(first == second, "equal snapshots did not produce equal plans")
     expect(first.action is LifecycleAction.SPAWN_CHILD, "completion did not produce a spawn plan")
-    expect(first.child_dict()["uuid"] == "child-uuid", "child payload was not retained")
+    expect(first.child_dict()["uuid"] == "00000000-0000-4000-8000-000000000502", "child payload was not retained")
     expect(first.parent_guard.recurrence_fingerprint.startswith("rf1-"), "planner omitted recurrence fingerprint")
     expect(source == snapshot.to_dict(), "planner mutated the source task")
     preflight = LifecyclePreflight.from_context(
@@ -5104,7 +5154,16 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
             return self.candidate
 
         def build_child(self, snapshot, event, candidate, next_link):
-            return {"uuid": f"child-{next_link}", "due": candidate.child_due, "link": next_link}
+            values = snapshot.to_dict()
+            return _task_draft({
+                **values,
+                "uuid": f"00000000-0000-4000-8000-0000000005{next_link:02d}",
+                "description": "next",
+                "status": "pending",
+                "link": next_link,
+                "prevLink": str(values["uuid"])[:8],
+                "due": candidate.child_due,
+            })
 
     source = _task_snapshot(
         {
@@ -5166,8 +5225,17 @@ def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
         def safe_parse_datetime(self, value):
             return datetime(2026, 8, 12, 9, tzinfo=timezone.utc), None
 
-        def build_child_from_parent(self, parent, due, field, link, parent_short, kind, cpmax, until):
-            return {"uuid": "generated-child", field: due, "link": link, "kind": kind, "chainMax": cpmax}
+        def build_child_draft(self, parent, due, field, link, parent_short, kind, cpmax, until):
+            values = parent.observation.to_mapping()
+            return _task_draft({
+                **values,
+                "uuid": "00000000-0000-4000-8000-000000000504",
+                "description": "generated child",
+                "status": "pending",
+                "link": link,
+                "prevLink": parent_short,
+                field: due,
+            })
 
     generated_source = _task_snapshot({**source.to_dict(), "chainUntil": "2026-08-12T09:00:00Z"})
     generated = ChainGenerationPlanningService(Generation())
@@ -5216,19 +5284,19 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
 
         core = Core()
 
-        def build_child_from_parent(self, task, child_due, child_field, next_link, parent_short, kind, cpmax, until):
+        def build_child_draft(self, task, child_due, child_field, next_link, parent_short, kind, cpmax, until):
             values = task.observation.to_mapping() if hasattr(task, "observation") else task
-            return {
+            return _task_draft({
                 "uuid": "00000000-0000-4000-8000-000000000507",
+                "description": "parity child",
                 "status": "pending",
                 "chain": "on",
                 "chainID": values["chainID"],
                 "link": next_link,
                 "prevLink": parent_short,
                 child_field: child_due,
-                "kind": kind,
-                "chainMax": cpmax,
-            }
+                "cp": values.get("cp", "1d"),
+            })
 
     generation = Generation()
     candidate = RecurrenceCandidate(child_due=due, metadata=(("target_field", "due"),))
@@ -5300,16 +5368,19 @@ def test_expiration_candidate_uses_scheduled_recurrence_basis():
             expect(values["end"] == scheduled, "expiration candidate used deletion end instead of scheduled")
             return datetime(2026, 8, 17, 9, tzinfo=timezone.utc), {"target_field": "scheduled"}
 
-        def build_child_from_parent(self, task, due, field, link, parent_short, kind, cpmax, until):
+        def build_child_draft(self, task, due, field, link, parent_short, kind, cpmax, until):
             values = task.observation.to_mapping() if hasattr(task, "observation") else task
-            return {
+            return _task_draft({
                 "uuid": "00000000-0000-4000-8000-000000000505",
+                "description": "expiration child",
+                "status": "pending",
                 "chain": "on",
                 "chainID": values["chainID"],
                 "link": link,
                 "prevLink": parent_short,
                 field: due,
-            }
+                "cp": values.get("cp", "1d"),
+            })
 
     generation = Generation()
     candidate = expiration_candidate(_task_snapshot(parent), generation=generation)
@@ -5358,10 +5429,11 @@ def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
         def safe_parse_datetime(self, value):
             return (due, None) if value else (None, None)
 
-        def build_child_from_parent(self, task, child_due, field, link, parent_short, kind, cpmax, until):
+        def build_child_draft(self, task, child_due, field, link, parent_short, kind, cpmax, until):
             values = task.observation.to_mapping() if hasattr(task, "observation") else task
             child = {
                 "uuid": "00000000-0000-4000-8000-000000000506",
+                "description": "matrix child",
                 "status": "pending",
                 "chain": "on",
                 "chainID": values["chainID"],
@@ -5371,7 +5443,10 @@ def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
             }
             if values.get("until"):
                 child["until"] = values["until"]
-            return child
+            if cpmax:
+                child["chainMax"] = cpmax
+            child.update({key: values[key] for key in ("cp", "anchor", "anchor_file", "anchor_mode") if values.get(key)})
+            return _task_draft(child)
 
     generation = Generation()
     cases = (

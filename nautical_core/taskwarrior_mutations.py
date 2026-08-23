@@ -37,6 +37,7 @@ from .integration_models import (
 from .recurrence_spec import normalize_recurrence_text
 from .lifecycle_models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
+from .task_models import FieldPresence, TaskObservation
 
 
 class _TaskRepository(Protocol):
@@ -75,6 +76,14 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def _observed_value(row: TaskObservation | Mapping[str, Any], field: str) -> object:
+    """Read a postcondition field without thawing an observation."""
+    if isinstance(row, TaskObservation):
+        state = row.field(field)
+        return None if state.presence is FieldPresence.ABSENT else state.raw_value()
+    return row.get(field)
+
+
 def _timestamp_equal(left: object, right: object) -> bool:
     """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
     left_dt = _parse_timestamp(left)
@@ -108,7 +117,7 @@ def _link_text(value: object) -> str:
 
 
 def _child_import_matches(
-    row: Mapping[str, Any],
+    row: TaskObservation | Mapping[str, Any],
     payload: ChildImportPayload,
     parent_uuid: str,
 ) -> bool:
@@ -119,18 +128,18 @@ def _child_import_matches(
     by the existing-child fast path and the post-import verification path.
     """
     fields = payload.to_dict()
-    if _text(row.get("uuid")).lower() != payload.child_uuid.lower():
+    if _text(_observed_value(row, "uuid")).lower() != payload.child_uuid.lower():
         return False
-    if _text(row.get("chainID")) != payload.chain_id:
+    if _text(_observed_value(row, "chainID")) != payload.chain_id:
         return False
-    if _link_text(row.get("link")) != str(payload.target_link):
+    if _link_text(_observed_value(row, "link")) != str(payload.target_link):
         return False
     expected_prev = _text(fields.get("prevLink"))
-    if not expected_prev or _text(row.get("prevLink")).lower() != expected_prev.lower():
+    if not expected_prev or _text(_observed_value(row, "prevLink")).lower() != expected_prev.lower():
         return False
-    if _text(row.get("prevLink")).lower() != _text(parent_uuid)[:8].lower():
+    if _text(_observed_value(row, "prevLink")).lower() != _text(parent_uuid)[:8].lower():
         return False
-    status = _text(row.get("status")).lower()
+    status = _text(_observed_value(row, "status")).lower()
     if status != "pending":
         # Taskwarrior may immediately expire a child whose carried native
         # until is already in the past. That is a valid imported occurrence;
@@ -138,7 +147,7 @@ def _child_import_matches(
         until = _parse_timestamp(fields.get("until"))
         if status != "deleted" or until is None or until > datetime.now(timezone.utc):
             return False
-    if _text(row.get("chain")).lower() != "on":
+    if _text(_observed_value(row, "chain")).lower() != "on":
         return False
 
     # A child must retain the recurrence mode that generated it.  Compare
@@ -150,7 +159,7 @@ def _child_import_matches(
     for field in mode_fields:
         if (
             field in fields
-            and normalize_recurrence_text(row.get(field)) != normalize_recurrence_text(fields.get(field))
+            and normalize_recurrence_text(_observed_value(row, field)) != normalize_recurrence_text(fields.get(field))
         ):
             return False
     return True
@@ -409,8 +418,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="postcondition target is absent")
         if not isinstance(result, Found):
             return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid postcondition read result")
-        row = result.value.to_mapping() if hasattr(result.value, "to_mapping") else result.value
-        if not isinstance(row, Mapping) or not predicate(row):
+        row = result.value
+        if not isinstance(row, TaskObservation) or not predicate(row):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="postcondition does not match")
         return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
 
@@ -449,7 +458,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.CHILD_COMPENSATED,
-            lambda row: _text(row.get("status")).lower() == "deleted",
+            lambda row: _text(_observed_value(row, "status")).lower() == "deleted",
         )
 
     def import_child(self, request: MutationRequest, *, verify: bool = True) -> MutationOutcome:
@@ -526,7 +535,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.PARENT_LINKED,
-            lambda row: _text(row.get("nextLink")).casefold() == request.payload.child_short_uuid.casefold(),
+            lambda row: _text(_observed_value(row, "nextLink")).casefold() == request.payload.child_short_uuid.casefold(),
         )
 
     def apply_lifecycle_unverified(self, request: MutationRequest) -> MutationOutcome:
@@ -709,7 +718,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         failure = self._run_modify(request, self._selectors(request.guard), ("chain:off",))
         if failure is not None:
             return failure
-        return self._verify(request, MutationPostcondition.CHAIN_DISABLED, lambda row: _text(row.get("chain")).lower() == "off")
+        return self._verify(request, MutationPostcondition.CHAIN_DISABLED, lambda row: _text(_observed_value(row, "chain")).lower() == "off")
 
     def clear_parent_link(self, request: MutationRequest) -> MutationOutcome:
         if request.operation is not MutationOperation.PARENT_LINK_CLEAR or not isinstance(request.payload, ParentLinkClearPayload):
@@ -733,7 +742,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.PARENT_LINK_CLEARED,
-            lambda row: not _text(row.get("nextLink")),
+            lambda row: not _text(_observed_value(row, "nextLink")),
         )
 
     def repair_native_until(self, request: MutationRequest) -> MutationOutcome:
@@ -758,7 +767,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.NATIVE_UNTIL_REPAIRED,
-            lambda row: _timestamp_equal(row.get("until"), request.payload.replacement_until),
+            lambda row: _timestamp_equal(_observed_value(row, "until"), request.payload.replacement_until),
         )
 
     def repair_metadata(self, request: MutationRequest) -> MutationOutcome:
@@ -791,7 +800,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.METADATA_REPAIRED,
-            lambda row: all(_text(row.get(key)) == _text(value) for key, value in updates.items()),
+            lambda row: all(_text(_observed_value(row, key)) == _text(value) for key, value in updates.items()),
         )
 
     @staticmethod

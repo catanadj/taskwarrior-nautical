@@ -3421,6 +3421,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         Unavailable,
     )
     from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
     parent_uuid = "00000000-0000-0000-0000-000000000924"
@@ -3450,7 +3451,10 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             row = self.rows.get(str(uuid_value).lower())
             if row is None:
                 return Absent(f"uuid:{uuid_value}", "not present")
-            return Found(row, f"uuid:{uuid_value}")
+            return Found(
+                DEFAULT_TASK_CODEC.decode_row(row, source_query=f"uuid:{uuid_value}"),
+                f"uuid:{uuid_value}",
+            )
 
     class Client:
         def __init__(self, repo):

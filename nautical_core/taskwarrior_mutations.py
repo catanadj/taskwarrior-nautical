@@ -8,7 +8,6 @@ the requested postcondition before reporting success.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence, cast
 
@@ -37,6 +36,7 @@ from .integration_models import (
 )
 from .recurrence_spec import normalize_recurrence_text
 from .lifecycle_models import recurrence_fingerprint
+from .task_codec import DEFAULT_TASK_CODEC
 
 
 class _TaskRepository(Protocol):
@@ -478,7 +478,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
             purpose="lifecycle child import",
             timeout=self._timeout,
-            input_text=json.dumps(request.payload.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n",
+            input_text=DEFAULT_TASK_CODEC.encode_task_import_mapping(request.payload.to_dict()) + "\n",
             attempts=1,
         )
         if not result.ok:

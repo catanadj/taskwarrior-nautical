@@ -176,6 +176,12 @@ class TaskCodec:
             return _encode(value.to_mapping())
         raise TaskCodecError("task import requires a TaskObservation or TaskDraft")
 
+    def encode_task_import_mapping(self, value: Mapping[str, Any]) -> str:
+        """Encode a validated gateway payload at the Taskwarrior boundary."""
+        if not isinstance(value, Mapping):
+            raise TaskCodecError("task import payload requires an object")
+        return _encode(value)
+
     def encode_hook_stdout(self, task: Mapping[str, Any]) -> str:
         """Encode the strict plain JSON object emitted by a hook."""
         if not isinstance(task, Mapping):

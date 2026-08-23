@@ -216,6 +216,18 @@ _MODULE_SPECS = {
         "modify_models.py",
         "nautical_core.modify_models",
     ),
+    "task_codec": (
+        "_TASK_CODEC",
+        "_TASK_CODEC_LOAD_FAILED",
+        "task_codec.py",
+        "nautical_core.task_codec",
+    ),
+    "task_models": (
+        "_TASK_MODELS",
+        "_TASK_MODELS_LOAD_FAILED",
+        "task_models.py",
+        "nautical_core.task_models",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",

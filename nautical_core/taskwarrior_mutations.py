@@ -42,7 +42,7 @@ from .task_changes import timestamp_equal
 
 
 class _TaskRepository(Protocol):
-    def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[Mapping[str, Any]]: ...
+    def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[TaskObservation]: ...
 
 
 class _TaskClient(Protocol):
@@ -185,8 +185,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
         self._uow = unit_of_work
         self._timeout = max(0.05, float(timeout))
-        self._prefetched_children: dict[str, TaskRead[Mapping[str, Any]]] = {}
-        self._prefetched_parents: dict[str, Mapping[str, Any]] = {}
+        self._prefetched_children: dict[str, TaskRead[TaskObservation]] = {}
+        self._prefetched_parents: dict[str, TaskObservation] = {}
 
     def prefetch_lifecycle_batch(
         self,
@@ -254,7 +254,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 # A cached row that already has the requested link is not
                 # safe to trust across the batch; retain a fresh read for
                 # idempotent classification.
-                if _text(row.get("nextLink")).casefold() != expected_next_link.casefold():
+                if _text(_observed_value(row, "nextLink")).casefold() != expected_next_link.casefold():
                     self._prefetched_parents[parent_uuid] = row
 
     def _outcome(
@@ -275,7 +275,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             failure,
         )
 
-    def _read_target(self, request: MutationRequest) -> tuple[Mapping[str, Any] | None, MutationOutcome | None]:
+    def _read_target(self, request: MutationRequest) -> tuple[TaskObservation | None, MutationOutcome | None]:
         if self._uow.mutation_epoch != request.guard.expected_mutation_epoch:
             return None, self._outcome(
                 request,
@@ -296,8 +296,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason="guard task is absent")
         if not isinstance(result, Found):
             return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard read result")
-        row = result.value.to_mapping() if hasattr(result.value, "to_mapping") else result.value
-        if not isinstance(row, Mapping):
+        row = result.value
+        if not isinstance(row, TaskObservation):
             return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard task shape")
         mismatch = self._guard_mismatch(request.guard, row)
         if mismatch:
@@ -310,7 +310,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             if (
                 request.operation is MutationOperation.PARENT_LINK
                 and isinstance(request.payload, ParentLinkPayload)
-                and _text(row.get("nextLink")).casefold()
+                and _text(_observed_value(row, "nextLink")).casefold()
                 == request.payload.child_short_uuid.casefold()
                 and mismatch.startswith("guard modified changed")
             ):
@@ -323,34 +323,37 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                     None,
                 )
                 if expected_modified is not None:
-                    normalized = dict(row)
-                    normalized["modified"] = expected_modified
-                    if not self._guard_mismatch(request.guard, normalized):
+                    if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
                         return row, None
             if (
                 request.operation is MutationOperation.METADATA_REPAIR
                 and isinstance(request.payload, MetadataRepairPayload)
                 and request.payload.expected_dict().get("link") == ""
-                and not _text(row.get("link"))
+                and not _text(_observed_value(row, "link"))
                 and mismatch.startswith("guard link changed")
             ):
                 return row, None
             if (
                 request.operation is MutationOperation.CHAIN_DISABLE
                 and request.guard.chain == "on"
-                and _text(row.get("chain")).lower() == "off"
+                and _text(_observed_value(row, "chain")).lower() == "off"
             ):
                 return row, None
             if (
                 request.operation is MutationOperation.CHILD_COMPENSATION
-                and _text(row.get("status")).lower() == "deleted"
+                and _text(_observed_value(row, "status")).lower() == "deleted"
             ):
                 return row, None
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
         return row, None
 
     @staticmethod
-    def _guard_mismatch(guard: MutationGuard, row: Mapping[str, Any]) -> str:
+    def _guard_mismatch(
+        guard: MutationGuard,
+        row: TaskObservation,
+        *,
+        modified_override: str | None = None,
+    ) -> str:
         values = {
             "status": guard.status,
             "chain": guard.chain,
@@ -358,7 +361,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             "link": str(guard.link),
         }
         for field, expected in values.items():
-            actual = _text(row.get(field))
+            actual = _text(_observed_value(row, field))
             if field == "link":
                 try:
                     actual = str(int(float(actual)))
@@ -367,14 +370,19 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             if actual.casefold() != expected.casefold():
                 return f"guard {field} changed (expected {expected}, found {actual or '-'})"
         try:
-            actual_identity = recurrence_fingerprint(row)
+            actual_identity = recurrence_fingerprint(row.to_mapping())
         except Exception as exc:
             return f"guard recurrence identity unavailable: {exc}"
         if actual_identity != guard.recurrence_identity:
             return "guard recurrence identity changed"
         for timestamp in guard.timestamps:
             ts_field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
-            if ts_field is not None and _text(row.get(ts_field)) != timestamp.value:
+            actual_value: object = (
+                modified_override
+                if ts_field == "modified" and modified_override is not None
+                else _observed_value(row, ts_field) if ts_field is not None else None
+            )
+            if ts_field is not None and _text(actual_value) != timestamp.value:
                 return f"guard {ts_field} changed"
         return ""
 
@@ -438,13 +446,13 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert child is not None
-        if _text(child.get("status")).lower() == "deleted":
+        if _text(_observed_value(child, "status")).lower() == "deleted":
             return self._outcome(
                 request,
                 MutationOutcomeKind.ALREADY_APPLIED,
                 postcondition=MutationPostcondition.CHILD_COMPENSATED,
             )
-        if _text(child.get("status")).lower() != request.payload.expected_status:
+        if _text(_observed_value(child, "status")).lower() != request.payload.expected_status:
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="child status changed before compensation")
         failure = self._run_modify(request, self._selectors(request.guard), ("status:deleted",))
         if failure is not None:
@@ -462,7 +470,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        if _text(parent.get("chain")).lower() != "on":
+        if _text(_observed_value(parent, "chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
         existing = self._prefetched_children.pop(request.payload.child_uuid.lower(), None)
         if existing is None:
@@ -503,16 +511,16 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         cached_parent = self._prefetched_parents.pop(request.guard.task_uuid.lower(), None)
         parent: Mapping[str, Any] | None
         failure: MutationOutcome | None
-        if cached_parent is not None and _text(cached_parent.get("nextLink")).casefold() != request.payload.child_short_uuid.casefold():
+        if cached_parent is not None and _text(_observed_value(cached_parent, "nextLink")).casefold() != request.payload.child_short_uuid.casefold():
             parent, failure = cached_parent, None
         else:
             parent, failure = self._read_target(request)
         if failure is not None:
             return failure
         assert parent is not None
-        if _text(parent.get("chain")).lower() != "on":
+        if _text(_observed_value(parent, "chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
-        current = _text(parent.get("nextLink"))
+        current = _text(_observed_value(parent, "nextLink"))
         if current.casefold() == request.payload.child_short_uuid.casefold():
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINKED)
         if current != request.payload.expected_next_link:
@@ -707,7 +715,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        if _text(parent.get("chain")).lower() == "off":
+        if _text(_observed_value(parent, "chain")).lower() == "off":
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHAIN_DISABLED)
         failure = self._run_modify(request, self._selectors(request.guard), ("chain:off",))
         if failure is not None:
@@ -721,7 +729,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        current = _text(parent.get("nextLink"))
+        current = _text(_observed_value(parent, "nextLink"))
         if not current:
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINK_CLEARED)
         if current.casefold() != request.payload.expected_next_link.casefold():
@@ -746,7 +754,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        current = _text(parent.get("until"))
+        current = _text(_observed_value(parent, "until"))
         if current == request.payload.replacement_until:
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.NATIVE_UNTIL_REPAIRED)
         if current != request.payload.expected_until:
@@ -772,11 +780,11 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return failure
         assert parent is not None
         updates = request.payload.to_dict()
-        if all(_text(parent.get(key)) == _text(value) for key, value in updates.items()):
+        if all(_text(_observed_value(parent, key)) == _text(value) for key, value in updates.items()):
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.METADATA_REPAIRED)
         expected = request.payload.expected_dict()
         for key, value in expected.items():
-            if _text(parent.get(key)) != _text(value):
+            if _text(_observed_value(parent, key)) != _text(value):
                 return self._outcome(request, MutationOutcomeKind.CONFLICT, reason=f"metadata field {key} changed")
         failure = self._run_modify(
             request,

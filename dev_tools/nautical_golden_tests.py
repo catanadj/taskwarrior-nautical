@@ -3569,6 +3569,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     )
     from nautical_core.lifecycle_models import recurrence_fingerprint
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
     parent_uuid = "00000000-0000-4000-8000-000000000924"
@@ -3825,6 +3826,7 @@ def test_child_import_rejects_incomplete_existing_rows():
         MutationGuard, MutationOperation, MutationOutcomeKind, MutationRequest,
     )
     from nautical_core.lifecycle_models import recurrence_fingerprint
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
     parent_uuid = "00000000-0000-4000-8000-000000000926"
@@ -3854,7 +3856,12 @@ def test_child_import_rejects_incomplete_existing_rows():
         def by_uuid(self, uuid_value, *, refresh=False):
             del refresh
             row = self.rows.get(str(uuid_value).lower())
-            return Found(row, f"uuid:{uuid_value}") if row is not None else Absent(f"uuid:{uuid_value}", "not present")
+            if row is None:
+                return Absent(f"uuid:{uuid_value}", "not present")
+            return Found(
+                DEFAULT_TASK_CODEC.decode_row(row, source_query=f"uuid:{uuid_value}"),
+                f"uuid:{uuid_value}",
+            )
 
     class Uow:
         def __init__(self, rows):

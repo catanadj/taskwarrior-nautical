@@ -27,7 +27,7 @@ from nautical_core.lifecycle_planner import (
     plan_expiration_successor,
     plan_candidate_successor,
 )
-from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
@@ -35,7 +35,7 @@ from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
 
-def _child_draft(child: dict[str, Any]) -> TaskDraft:
+def _child_draft(child: TaskPayload) -> TaskDraft:
     task = NauticalTask.from_observation(
         DEFAULT_TASK_CODEC.decode_row(child, source_query="reconcile child draft")
     )
@@ -158,7 +158,7 @@ def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime
 
 
 def compute_expiration_child_due(
-    parent: dict[str, Any], *, hook: Any = None, generation: ChainGenerationService | None = None
+    parent: TaskPayload, *, hook: Any = None, generation: ChainGenerationService | None = None
 ) -> tuple[Any, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
@@ -183,7 +183,7 @@ def native_until_target_field(task: TaskObservation) -> str:
 
 def invalid_relative_carry_reason(
     parent: TaskObservation,
-    child: dict[str, Any],
+    child: TaskPayload,
     *,
     child_field: str,
     hook: Any = None,
@@ -298,7 +298,7 @@ def fallback_native_until_at_day_end(
         return None, "cannot infer native until at local 23:00"
 
 
-def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) -> str:
+def _child_recurrence_mismatch(parent: TaskPayload, child: TaskPayload) -> str:
     """Return a mismatch when a candidate child carries a different recurrence."""
     if not any(_recurrence_field_text(child.get(field)) for field in RECURRENCE_FIELDS):
         return ""
@@ -313,7 +313,7 @@ def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) ->
 
 
 def resolve_existing_child(
-    parent: dict[str, Any],
+    parent: TaskPayload,
     rows: list[dict[str, Any]],
     *,
     include_deleted: bool = False,
@@ -416,7 +416,7 @@ def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) 
 
 
 def _build_expiration_child_with_day_end(
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     child_due: Any,
     child_field: str,
@@ -452,7 +452,7 @@ def _build_expiration_child_with_day_end(
 
 
 def _plan_recovery_decision_unscoped(
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     existing_children: list[dict[str, Any]],
     hook: Any,

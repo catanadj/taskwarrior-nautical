@@ -3434,7 +3434,6 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
 
 
 def _handle_deleted_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
-    del transition  # consumed by the typed adapter; deletion flow migration follows next
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = _module("modify_expiration", required=False)
     if modify_expiration is None:

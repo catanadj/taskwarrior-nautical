@@ -449,7 +449,10 @@ class IntegrityOperation:
 
         if self.kind not in {RepairOperationKind.METADATA_REPAIR, RepairOperationKind.LINK_REPAIR}:
             raise IntegrityContractError("repair operation does not carry a task patch")
-        return TaskPatch.metadata_repair(TaskUUID(self.target_uuid), **dict(_thaw(self.payload)))
+        payload = _thaw(self.payload)
+        if not isinstance(payload, Mapping):
+            raise IntegrityContractError("repair payload must be a mapping")
+        return TaskPatch.metadata_repair(TaskUUID(self.target_uuid), **dict(payload))
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityOperation":

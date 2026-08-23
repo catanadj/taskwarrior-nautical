@@ -467,29 +467,6 @@ class ChainGenerationService:
             child_anchor_field=child_anchor_field,
         )
 
-    def build_child_from_parent(
-        self,
-        parent: NauticalTask,
-        child_due_utc: datetime,
-        child_field: str,
-        next_link_no: int,
-        parent_short: str,
-        kind: str,
-        cpmax: int,
-        until_dt: Any,
-    ) -> dict[str, Any]:
-        """Serialize a typed child draft for Taskwarrior import."""
-        return self.build_child_draft(
-            parent,
-            child_due_utc,
-            child_field,
-            next_link_no,
-            parent_short,
-            kind,
-            cpmax,
-            until_dt,
-        ).to_mapping()
-
     def build_child_draft(
         self,
         parent: NauticalTask,

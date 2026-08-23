@@ -11,7 +11,7 @@ from .integration_models import Absent, Found, Unavailable
 from .integration_context import IntegrationAccess
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .recurrence_context import RecurrenceContext
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
 from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_service import SchedulerService
 from .chain_generation import ChainGenerationService
@@ -82,9 +82,9 @@ def _task_identity(task: TaskRow) -> TaskIdentity:
         raise QueryServiceError("Taskwarrior row has no UUID")
     if not chain_id:
         raise QueryServiceError("Nautical task has no chainID; recurrence identity is incomplete")
-    anchor = normalize_recurrence_text(_task_value(task, "anchor"))
-    anchor_file = normalize_recurrence_text(_task_value(task, "anchor_file"))
-    cp = normalize_recurrence_text(_task_value(task, "cp"))
+    anchor = TaskCodec.normalize_text(_task_value(task, "anchor"))
+    anchor_file = TaskCodec.normalize_text(_task_value(task, "anchor_file"))
+    cp = TaskCodec.normalize_text(_task_value(task, "cp"))
     kind = "cp" if cp else "anchor" if anchor else "anchor_file" if anchor_file else ""
     expression = cp or anchor or anchor_file
     return TaskIdentity(
@@ -103,7 +103,7 @@ def _has_recurrence_identity(task: TaskRow) -> bool:
     return bool(
         str(_task_value(task, "chainID") or "").strip()
         and any(
-            normalize_recurrence_text(_task_value(task, field))
+            TaskCodec.normalize_text(_task_value(task, field))
             for field in ("anchor", "anchor_file", "cp")
         )
     )
@@ -496,7 +496,7 @@ class OccurrenceQueryService:
         parser = getattr(self._core, "parse_dt_any", None)
         if not callable(parser):
             raise QueryServiceError("Nautical datetime parser is unavailable")
-        for field in (("end",) if normalize_recurrence_text(_task_value(task, "cp")) else ()) + ("due", "scheduled"):
+        for field in (("end",) if TaskCodec.normalize_text(_task_value(task, "cp")) else ()) + ("due", "scheduled"):
             value = _task_value(task, field)
             if not value:
                 continue
@@ -618,7 +618,7 @@ class OccurrenceQueryService:
                     raise QueryServiceError("chainUntil is not a valid timezone-aware datetime")
                 return candidate.astimezone(timezone.utc) <= limit.astimezone(timezone.utc)
 
-            if normalize_recurrence_text(_task_value(task, "cp")):
+            if TaskCodec.normalize_text(_task_value(task, "cp")):
                 parent = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
                 if request.evaluation_at is not None:
                     formatter = getattr(self._core, "fmt_isoz", None)

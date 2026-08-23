@@ -6,13 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .recurrence_context import RecurrenceContext
+from .task_codec import TaskCodec
 from .task_models import FieldPresence, NauticalTask, TaskObservation
-
-
-def normalize_recurrence_text(value: Any) -> str:
-    """Normalize optional recurrence UDAs from Taskwarrior JSON/export forms."""
-    text = str(value or "").strip()
-    return "" if text.casefold() == "null" else text
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,14 +47,14 @@ class RecurrenceSpec:
                 raise ValueError("chainMax must be an integer in a recurrence specification.") from exc
         return cls(
             context=recurrence_context,
-            anchor=normalize_recurrence_text(task.get("anchor")),
-            anchor_file=normalize_recurrence_text(task.get("anchor_file")),
-            omit=normalize_recurrence_text(task.get("omit")),
-            omit_file=normalize_recurrence_text(task.get("omit_file")),
-            cp=normalize_recurrence_text(task.get("cp")),
-            anchor_mode=normalize_recurrence_text(task.get("anchor_mode") or "skip").lower() or "skip",
+            anchor=TaskCodec.normalize_text(task.get("anchor")),
+            anchor_file=TaskCodec.normalize_text(task.get("anchor_file")),
+            omit=TaskCodec.normalize_text(task.get("omit")),
+            omit_file=TaskCodec.normalize_text(task.get("omit_file")),
+            cp=TaskCodec.normalize_text(task.get("cp")),
+            anchor_mode=TaskCodec.normalize_text(task.get("anchor_mode") or "skip").lower() or "skip",
             chain_max=normalized_max,
-            chain_until=normalize_recurrence_text(task.get("chainUntil")),
+            chain_until=TaskCodec.normalize_text(task.get("chainUntil")),
         )
 
     @classmethod
@@ -96,14 +91,14 @@ class RecurrenceSpec:
                 raise ValueError("chainMax must be an integer in a recurrence specification.") from exc
         return cls(
             context=recurrence_context,
-            anchor=normalize_recurrence_text(value("anchor")),
-            anchor_file=normalize_recurrence_text(value("anchor_file")),
-            omit=normalize_recurrence_text(value("omit")),
-            omit_file=normalize_recurrence_text(value("omit_file")),
-            cp=normalize_recurrence_text(value("cp")),
-            anchor_mode=normalize_recurrence_text(value("anchor_mode") or "skip").lower() or "skip",
+            anchor=TaskCodec.normalize_text(value("anchor")),
+            anchor_file=TaskCodec.normalize_text(value("anchor_file")),
+            omit=TaskCodec.normalize_text(value("omit")),
+            omit_file=TaskCodec.normalize_text(value("omit_file")),
+            cp=TaskCodec.normalize_text(value("cp")),
+            anchor_mode=TaskCodec.normalize_text(value("anchor_mode") or "skip").lower() or "skip",
             chain_max=normalized_max,
-            chain_until=normalize_recurrence_text(value("chainUntil")),
+            chain_until=TaskCodec.normalize_text(value("chainUntil")),
         )
 
     @property
@@ -119,4 +114,4 @@ class RecurrenceSpec:
         return self.kind is not None
 
 
-__all__ = ("RecurrenceSpec", "normalize_recurrence_text")
+__all__ = ("RecurrenceSpec",)

@@ -23,7 +23,7 @@ from .lifecycle_models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import NauticalTask, TaskDraft
 
@@ -35,9 +35,9 @@ class LifecyclePlanningError(RuntimeError):
 def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
     get = task.get if isinstance(task, TaskSnapshot) else task.observation.to_mapping().get
-    if normalize_recurrence_text(get("cp")):
+    if TaskCodec.normalize_text(get("cp")):
         return "cp"
-    if normalize_recurrence_text(get("anchor_file")):
+    if TaskCodec.normalize_text(get("anchor_file")):
         return "anchor_file"
     return "anchor"
 
@@ -257,8 +257,8 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
     calculation_parent = dict(parent)
     calculation_parent["end"] = target
     kind = (
-        "cp" if normalize_recurrence_text(parent.get("cp"))
-        else "anchor_file" if normalize_recurrence_text(parent.get("anchor_file"))
+        "cp" if TaskCodec.normalize_text(parent.get("cp"))
+        else "anchor_file" if TaskCodec.normalize_text(parent.get("anchor_file"))
         else "anchor"
     )
     calculation_observation = DEFAULT_TASK_CODEC.decode_row(
@@ -493,7 +493,7 @@ class LifecyclePlanner:
         candidate: RecurrenceCandidate | None = None
         if self.recurrence_service is not None:
             kind = _recurrence_kind(snapshot)
-            if not any(normalize_recurrence_text(snapshot.get(field)) for field in ("cp", "anchor", "anchor_file")):
+            if not any(TaskCodec.normalize_text(snapshot.get(field)) for field in ("cp", "anchor", "anchor_file")):
                 return terminal_plan_for_snapshot(snapshot, event)
             try:
                 candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)

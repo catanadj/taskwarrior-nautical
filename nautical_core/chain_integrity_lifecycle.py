@@ -9,7 +9,7 @@ from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
-from nautical_core.recurrence_spec import normalize_recurrence_text
+from nautical_core.task_codec import TaskCodec
 from nautical_core.lifecycle_models import (
     LifecycleAction,
     LifecycleEvent,
@@ -44,7 +44,7 @@ def _child_draft(child: dict[str, Any]) -> TaskDraft:
 
 def _recurrence_field_text(value: object) -> str:
     """Normalize Taskwarrior's literal null UDA sentinel as an unset value."""
-    return normalize_recurrence_text(value)
+    return TaskCodec.normalize_text(value)
 
 
 def _generation_service(hook: Any = None) -> ChainGenerationService:
@@ -365,9 +365,9 @@ def resolve_existing_child(
 def recurrence_kind(task: TaskObservation) -> str:
     # Recovery only needs the recurrence family to carry native-until policy;
     # full schedule compilation belongs to the scheduler service.
-    if normalize_recurrence_text(_observation_value(task, "anchor")):
+    if TaskCodec.normalize_text(_observation_value(task, "anchor")):
         return "anchor"
-    if normalize_recurrence_text(_observation_value(task, "anchor_file")):
+    if TaskCodec.normalize_text(_observation_value(task, "anchor_file")):
         return "anchor_file"
     return "cp"
 

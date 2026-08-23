@@ -34,7 +34,7 @@ from .integration_models import (
     TaskwarriorMutationPort,
     Unavailable,
 )
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
 from .lifecycle_models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import FieldPresence, TaskObservation
@@ -153,7 +153,7 @@ def _child_import_matches(
     for field in mode_fields:
         if (
             field in fields
-            and normalize_recurrence_text(_observed_value(row, field)) != normalize_recurrence_text(fields.get(field))
+            and TaskCodec.normalize_text(_observed_value(row, field)) != TaskCodec.normalize_text(fields.get(field))
         ):
             return False
     return True

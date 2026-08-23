@@ -57,6 +57,12 @@ class TaskCodec:
         if self.version != TASK_CODEC_VERSION:
             raise TaskCodecError(f"unsupported task codec version: {self.version}")
 
+    @staticmethod
+    def normalize_text(value: Any) -> str:
+        """Normalize an optional Taskwarrior text field at the codec boundary."""
+        text = str(value or "").strip()
+        return "" if text.casefold() == "null" else text
+
     def decode_row(
         self,
         row: Mapping[str, Any],

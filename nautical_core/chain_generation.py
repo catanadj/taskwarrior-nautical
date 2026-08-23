@@ -16,7 +16,7 @@ from typing import Any, Mapping, MutableMapping
 
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
 from .task_models import TaskDraft, NauticalTask
 
 
@@ -287,8 +287,8 @@ class ChainGenerationService:
         task = parent
         self._require_chain_id(task)
         parent = task.observation.to_mapping()
-        expression = normalize_recurrence_text(parent.get("anchor"))
-        anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
+        expression = TaskCodec.normalize_text(parent.get("anchor"))
+        anchor_file = TaskCodec.normalize_text(parent.get("anchor_file"))
         if not expression and not anchor_file:
             return None, None, None
         scheduler = self._task_scheduler(task)
@@ -506,8 +506,8 @@ class ChainGenerationService:
         else:
             child["due"] = self.core.fmt_isoz(child_due_utc)
         if kind in {"anchor", "anchor_file"}:
-            anchor = normalize_recurrence_text(parent.get("anchor"))
-            anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
+            anchor = TaskCodec.normalize_text(parent.get("anchor"))
+            anchor_file = TaskCodec.normalize_text(parent.get("anchor_file"))
             if anchor:
                 child["anchor"] = anchor
             else:
@@ -516,7 +516,7 @@ class ChainGenerationService:
                 child["anchor_file"] = anchor_file
             else:
                 child.pop("anchor_file", None)
-            parent_mode = normalize_recurrence_text(parent.get("anchor_mode")) or "skip"
+            parent_mode = TaskCodec.normalize_text(parent.get("anchor_mode")) or "skip"
             child["anchor_mode"] = (
                 "all" if str(parent_mode).strip().lower() == "flex" else parent_mode
             )

@@ -4,11 +4,11 @@ from typing import Any
 
 from nautical_core.chain_generation import CarryFieldError
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
-from nautical_core.task_models import TaskDraft
+from nautical_core.task_models import TaskDraft, TaskPayload
 
 
 def completion_build_and_spawn_child(
-    new: dict[str, Any],
+    new: TaskPayload,
     *,
     child_due: Any,
     child_field: str = "due",

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from .task_models import TaskPayload
+
 
 def preserve_cp_relative_offsets_on_due_change(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     new_cp: str,
     *,
     field_changed: Any,
@@ -50,8 +52,8 @@ def preserve_cp_relative_offsets_on_due_change(
 
 
 def preserve_native_until_on_target_change(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     kind: str,
     *,
     field_changed: Any,

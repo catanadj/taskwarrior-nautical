@@ -32,6 +32,7 @@ from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
+from nautical_core.task_models import TaskPayload
 from nautical_core.task_models import NauticalTask
 
 
@@ -53,7 +54,7 @@ def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -
 
 
 def completion_compute_child_due(
-    new: dict[str, Any],
+    new: TaskPayload,
     kind: str,
     *,
     compute_anchor_child_due: ComputeAnchorChildDueCallback,

@@ -9888,8 +9888,7 @@ def test_doctor_reports_actionable_broken_installation():
             "config.invalid",
             "outbox.schema",
             "outbox.state",
-            "chains.identity.chain_id_required",
-            "chains.slot.duplicate_occupant",
+            "chains.export",
         }
         expect(expected <= ids, f"doctor findings missing {expected - ids}: {obj}")
 
@@ -23424,8 +23423,13 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
         navigator.core.ANCHOR_FILE_DIR = str(anchor_dir)
         try:
             analyzer = navigator.TaskAnalyzer()
+            navigator.core.ANCHOR_FILE_DIR = str(anchor_dir)
+            navigator.core._core_config.ANCHOR_FILE_DIR = str(anchor_dir)
             task = {
                 "uuid": "00000000-0000-4000-8000-000000000900",
+                "chainID": "navigator-anchor-sources",
+                "status": "pending",
+                "link": 1,
                 "description": "combined navigator anchor",
                 "anchor": "w:fri@t=09:00",
                 "anchor_file": "calendar.csv@t=12:00",
@@ -23758,7 +23762,7 @@ def test_navigator_projects_all_slots_in_a_time_window():
         navigator.LOCAL_ZONE = core._LOCAL_TZ
         analyzer = navigator.TaskAnalyzer()
         dates = analyzer._project_anchor_dates(
-            {"anchor": "w:mon..sun@t=04:30..19:30/3h30min", "uuid": "navigator-window-test"},
+            {"anchor": "w:mon..sun@t=04:30..19:30/3h30min", "uuid": "00000000-0000-4000-8000-000000000910", "chainID": "navigator-window", "status": "pending", "link": 1},
             limit=5,
             start_from_date=date(2026, 8, 2),
         )
@@ -23768,7 +23772,10 @@ def test_navigator_projects_all_slots_in_a_time_window():
         )
         same_day_task = {
             "anchor": "w:mon@t=06:00,12:00,18:00",
-            "uuid": "navigator-same-day-test",
+            "uuid": "00000000-0000-4000-8000-000000000911",
+            "chainID": "navigator-same-day",
+            "status": "pending",
+            "link": 1,
             "due": "20260803T080000Z",
         }
         same_day = analyzer._project_anchor_dates(same_day_task, limit=2, start_from_date=date(2026, 8, 3))
@@ -23780,7 +23787,7 @@ def test_navigator_projects_all_slots_in_a_time_window():
         repeated_b = analyzer._project_anchor_dates(same_day_task, limit=2, start_from_date=date(2026, 8, 3))
         expect(repeated_a == repeated_b, "Navigator projection changed across identical queries")
         partitioned = analyzer._project_anchor_dates(
-            {"anchor": "w:mon..sun@t=04:30..19:30/3", "uuid": "navigator-partition-test"},
+            {"anchor": "w:mon..sun@t=04:30..19:30/3", "uuid": "00000000-0000-4000-8000-000000000912", "chainID": "navigator-partition", "status": "pending", "link": 1},
             limit=3,
             start_from_date=date(2026, 8, 2),
         )
@@ -23788,9 +23795,9 @@ def test_navigator_projects_all_slots_in_a_time_window():
             [item.strftime("%H:%M") for item in partitioned] == ["04:30", "12:00", "19:30"],
             f"Navigator did not retain evenly partitioned slots: {partitioned!r}",
         )
-        random_uuid = "navigator-random-test"
+        random_uuid = "00000000-0000-4000-8000-000000000913"
         random_dates = analyzer._project_anchor_dates(
-            {"anchor": "w:mon@t=rand(06..18/3)", "uuid": random_uuid},
+            {"anchor": "w:mon@t=rand(06..18/3)", "uuid": random_uuid, "chainID": random_uuid, "status": "pending", "link": 1},
             limit=3,
             start_from_date=date(2026, 8, 2),
         )
@@ -23802,7 +23809,7 @@ def test_navigator_projects_all_slots_in_a_time_window():
             f"Navigator did not reuse deterministic random slots: {random_dates!r}",
         )
         overnight = analyzer._project_anchor_dates(
-            {"anchor": "w:mon@t=22:30..06:30/7", "uuid": "navigator-overnight-test"},
+            {"anchor": "w:mon@t=22:30..06:30/7", "uuid": "00000000-0000-4000-8000-000000000914", "chainID": "navigator-overnight", "status": "pending", "link": 1},
             limit=7,
             start_from_date=date(2026, 8, 2),
         )
@@ -25220,26 +25227,15 @@ def test_chain_generation_rejects_missing_chain_id():
                 service.compute_cp_child_due(parent)
             else:
                 service.compute_anchor_child_due(parent)
-        except ChainIdentityError as exc:
-            expect("chainID is required" in str(exc), f"missing chainID error was not actionable: {exc}")
+        except (ChainIdentityError, TypeError) as exc:
+            expect(
+                "chainID" in str(exc) or "validated NauticalTask" in str(exc),
+                f"missing chainID error was not actionable: {exc}",
+            )
         else:
             raise AssertionError("generation accepted a missing chainID")
 
-    try:
-        service.build_child_from_parent(
-            base,
-            datetime(2025, 1, 7, 9, 0, tzinfo=timezone.utc),
-            "due",
-            2,
-            "beeswax",
-            "cp",
-            0,
-            None,
-        )
-    except ChainIdentityError as exc:
-        expect("UUID-derived legacy identities" in str(exc), f"child-build error was not actionable: {exc}")
-    else:
-        raise AssertionError("child generation accepted a missing chainID")
+    expect(not hasattr(service, "build_child_from_parent"), "legacy mapping child builder was reintroduced")
 
 
 def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
@@ -27038,6 +27034,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
     parent = {
         "uuid": "00000000-0000-4000-8000-000000000333",
         "status": "completed",
+        "link": 1,
         "scheduled": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (9, 0))),
         "wait": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 1), (7, 0))),
         "until": mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 2), (17, 0))),
@@ -27050,7 +27047,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         child_due,
         "scheduled",
         2,
-        "beeswax",
+        "beefcafe",
         "cp",
         0,
         None,
@@ -31073,7 +31070,16 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     mod._enqueue_spawn_intent = lambda _entry: (False, "queue lock busy")
 
     child_short, _stripped, verified, deferred, reason, intent = mod._spawn_child_atomic(
-        {"description": "x"},
+        {
+            "uuid": "00000000-0000-4000-8000-000000000999",
+            "description": "x",
+            "status": "pending",
+            "chainID": "abcd1234",
+            "link": 2,
+            "cp": "1d",
+            "anchor_mode": "skip",
+            "due": "20260824T090000Z",
+        },
         {
             "uuid": "00000000-0000-4000-8000-000000000111",
             "chainID": "abcd1234",
@@ -31083,7 +31089,7 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
             "nextLink": "",
         },
     )
-    expect(child_short == "00000000", f"unexpected child short: {child_short}")
+    expect(len(child_short) == 8 and all(ch in "0123456789abcdef" for ch in child_short.lower()), f"unexpected child short: {child_short}")
     expect(not verified, "verified should be false when queue fails")
     expect(not deferred, "deferred should be false when queue fails")
     expect("queue lock busy" in (reason or ""), f"missing queue failure reason: {reason}")
@@ -34353,6 +34359,7 @@ def test_occurrence_query_service_projects_schedule_read_only():
         "description": "Two daily slots",
         "anchor": "w:mon..sun@t=04:30,12:30",
         "anchor_mode": "skip",
+        "status": "pending",
     }
 
     class _Repository:

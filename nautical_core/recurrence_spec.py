@@ -8,6 +8,11 @@ from .recurrence_context import RecurrenceContext
 from .task_models import NauticalTask, TaskObservation
 
 
+def _recurrence_text(value: object) -> str:
+    text = str(value or "").strip()
+    return "" if text.lower() == "null" else text
+
+
 @dataclass(frozen=True, slots=True)
 class RecurrenceSpec:
     """Immutable recurrence fields paired with their evaluation context."""
@@ -41,7 +46,13 @@ class RecurrenceSpec:
         return replace(
             spec,
             context=recurrence_context,
+            anchor=_recurrence_text(spec.anchor),
+            anchor_file=_recurrence_text(spec.anchor_file),
+            omit=_recurrence_text(spec.omit),
+            omit_file=_recurrence_text(spec.omit_file),
+            cp=_recurrence_text(spec.cp),
             anchor_mode=str(spec.anchor_mode or "skip").strip().lower() or "skip",
+            chain_until=_recurrence_text(spec.chain_until),
         )
 
     @classmethod

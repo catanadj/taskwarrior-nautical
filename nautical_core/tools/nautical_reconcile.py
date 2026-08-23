@@ -807,9 +807,13 @@ def _refresh_plan(
         return _stale_plan(original_parent, "parent no longer exists")
     status = str(parent.get("status") or "").strip().lower()
     if status == "completed":
-        candidate = lifecycle.is_orphan_completion_candidate(parent)
+        candidate = lifecycle.is_orphan_completion_candidate(
+            DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile refresh")
+        )
     elif status == "deleted":
-        candidate = lifecycle.is_orphan_deleted_chain_candidate(parent)
+        candidate = lifecycle.is_orphan_deleted_chain_candidate(
+            DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile refresh")
+        )
     else:
         candidate = False
     if not candidate:

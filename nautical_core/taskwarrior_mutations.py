@@ -293,7 +293,9 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason="guard task is absent")
         if not isinstance(result, Found):
             return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard read result")
-        row = result.value
+        row = result.value.to_mapping() if hasattr(result.value, "to_mapping") else result.value
+        if not isinstance(row, Mapping):
+            return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard task shape")
         mismatch = self._guard_mismatch(request.guard, row)
         if mismatch:
             # A successful parent link changes Taskwarrior's ``modified``
@@ -407,7 +409,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="postcondition target is absent")
         if not isinstance(result, Found):
             return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid postcondition read result")
-        if not predicate(result.value):
+        row = result.value.to_mapping() if hasattr(result.value, "to_mapping") else result.value
+        if not isinstance(row, Mapping) or not predicate(row):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="postcondition does not match")
         return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
 

@@ -2528,9 +2528,10 @@ def _render_anchor_completion_feedback(
 ) -> None:
     calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
     modify_feedback = _module("modify_feedback")
+    modify_models = _module("modify_models")
     modify_feedback.orchestrate_anchor_completion_feedback(
-        new=new,
-        child=child,
+        new=modify_models.TaskView.from_mapping(new),
+        child=modify_models.TaskView.from_mapping(child),
         child_due=child_due,
         child_short=child_short,
         next_no=next_no,
@@ -2583,9 +2584,10 @@ def _render_cp_completion_feedback(
     base_no: int,
 ) -> None:
     modify_feedback = _module("modify_feedback")
+    modify_models = _module("modify_models")
     modify_feedback.orchestrate_cp_completion_feedback(
-        new=new,
-        child=child,
+        new=modify_models.TaskView.from_mapping(new),
+        child=modify_models.TaskView.from_mapping(child),
         child_due=child_due,
         child_short=child_short,
         next_no=next_no,

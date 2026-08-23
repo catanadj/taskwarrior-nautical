@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias, Mapping
+from types import MappingProxyType
 
 from .task_models import TaskDraft
 
@@ -14,6 +15,36 @@ from .task_models import TaskDraft
 # modules support Taskwarrior's heterogeneous JSON fields.
 TaskRow: TypeAlias = dict[str, Any]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
+
+
+class TaskView(Mapping[str, Any]):
+    """Immutable task projection for feedback and panel rendering.
+
+    Taskwarrior mappings are mutable protocol payloads. Presentation code only
+    needs read access, so expose a frozen mapping view at that boundary.
+    """
+
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        self._values = MappingProxyType(dict(values))
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "TaskView":
+        if isinstance(values, cls):
+            return values
+        if not isinstance(values, Mapping):
+            raise TypeError("task view requires a mapping")
+        return cls(values)
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
 
 
 class PanelCallback(Protocol):

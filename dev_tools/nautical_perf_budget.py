@@ -189,6 +189,33 @@ def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
     return time.perf_counter() - started
 
 
+def _bench_task_immutability(rounds: int) -> float:
+    """Verify frozen task fields survive source mutation without copies."""
+    source = {
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "description": "immutable benchmark",
+        "status": "pending",
+        "chainID": "immutable-perf",
+        "link": 1,
+        "custom": {"nested": [{"value": "original"}, {"value": "stable"}]},
+    }
+    observation = task_codec.DEFAULT_TASK_CODEC.decode_row(source, source_query="perf:immutability")
+    frozen = observation.arbitrary["custom"]
+    source["custom"]["nested"][0]["value"] = "mutated"
+    if observation.arbitrary["custom"] != frozen or "mutated" in repr(observation.arbitrary["custom"]):
+        raise RuntimeError("immutable observation changed after source mutation")
+    if observation.arbitrary["custom"] is not frozen:
+        raise RuntimeError("immutable arbitrary field was rebuilt during access")
+    started = time.perf_counter()
+    for _ in range(max(1, int(rounds))):
+        for _ in range(1000):
+            if observation.arbitrary["custom"] is not frozen:
+                raise RuntimeError("immutable field access returned a new value")
+            if observation.field("description").value != "immutable benchmark":
+                raise RuntimeError("immutable scalar field changed")
+    return time.perf_counter() - started
+
+
 def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
     """Measure hint construction with an explicit persistent-cache state."""
     with _perf_cache_context():
@@ -2271,6 +2298,7 @@ def main() -> int:
     codec_rounds = int(workload.get("codec_rounds", 120))
     snapshot_reuse_rounds = int(workload.get("snapshot_reuse_rounds", 3))
     snapshot_reuse_rows = int(workload.get("snapshot_reuse_rows", 1000))
+    immutability_rounds = int(workload.get("immutability_rounds", 20))
     hints_rounds = int(workload.get("build_hints_rounds", 180))
     hints_cold_rounds = max(1, int(workload.get("build_hints_cold_rounds", 1)))
     hints_warm_rounds = max(1, int(workload.get("build_hints_warm_rounds", hints_rounds)))
@@ -2298,6 +2326,7 @@ def main() -> int:
             lambda: _bench_task_snapshot_reuse(snapshot_reuse_rounds, snapshot_reuse_rows),
             repeats,
         ),
+        ("task_immutability", lambda: _bench_task_immutability(immutability_rounds), repeats),
         (
             "build_hints_cold",
             lambda: _bench_build_hints(exprs, hints_cold_rounds, mode="cold"),

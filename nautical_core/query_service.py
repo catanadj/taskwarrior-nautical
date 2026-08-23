@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from types import ModuleType
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeAlias
 
 from .integration_models import Absent, Found, Unavailable
 from .integration_context import IntegrationAccess
@@ -36,7 +36,7 @@ class QueryServiceError(RuntimeError):
     """Raised when a query cannot be safely constructed or executed."""
 
 
-TaskRow = TaskObservation | Mapping[str, Any]
+TaskRow: TypeAlias = TaskObservation | Mapping[str, Any]
 
 
 def _task_value(task: TaskRow, name: str) -> object:
@@ -609,7 +609,7 @@ class OccurrenceQueryService:
             chain_max = _task_value(task, "chainMax")
             if chain_max not in (None, ""):
                 try:
-                    if link >= int(chain_max):
+                    if link >= int(str(chain_max)):
                         return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
                 except (TypeError, ValueError) as exc:
                     raise QueryServiceError("chainMax is not an integer") from exc

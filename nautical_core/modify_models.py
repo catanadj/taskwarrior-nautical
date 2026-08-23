@@ -346,8 +346,8 @@ class AnchorCompletionRenderCallback(Protocol):
     def __call__(
         self,
         *,
-        new: TaskRow,
-        child: TaskRow,
+        new: TaskView,
+        child: TaskView,
         child_due: Any,
         child_short: str,
         next_no: int,
@@ -377,8 +377,8 @@ class CpCompletionRenderCallback(Protocol):
     def __call__(
         self,
         *,
-        new: TaskRow,
-        child: TaskRow,
+        new: TaskView,
+        child: TaskView,
         child_due: Any,
         child_short: str,
         next_no: int,
@@ -403,7 +403,7 @@ class CpCompletionRenderCallback(Protocol):
 class LifecycleResultRenderCallback(Protocol):
     """Render a finalized non-success result without changing its state."""
 
-    def __call__(self, result: "CompletionLifecycleResult", task: TaskRow) -> None:
+    def __call__(self, result: "CompletionLifecycleResult", task: TaskView) -> None:
         ...
 
 

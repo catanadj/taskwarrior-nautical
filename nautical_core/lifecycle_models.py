@@ -112,7 +112,7 @@ class DeletionEvidence:
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
-LIFECYCLE_PLAN_SCHEMA_VERSION = 1
+LIFECYCLE_PLAN_SCHEMA_VERSION = 2
 
 
 # These are the inputs that can change the occurrence or carried timing of a
@@ -512,7 +512,7 @@ class LifecyclePlan:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize a complete plan for the durable lifecycle outbox."""
-        return {
+        payload = {
             "schema_version": LIFECYCLE_PLAN_SCHEMA_VERSION,
             "identity": {
                 "chainID": self.identity.chain_id,
@@ -530,6 +530,9 @@ class LifecyclePlan:
             "max_attempts": self.max_attempts,
             "terminal_kind": self.terminal_kind,
         }
+        if self.action is LifecycleAction.SPAWN_CHILD:
+            payload["child_payload_kind"] = "task_draft"
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "LifecyclePlan":
@@ -545,6 +548,23 @@ class LifecyclePlan:
                 f"unsupported lifecycle plan schema version: {version}"
             )
         child_payload = value.get("child_payload") or {}
+        if LifecycleAction(value.get("action")) is LifecycleAction.SPAWN_CHILD:
+            if value.get("child_payload_kind") != "task_draft":
+                raise LifecycleContractError("spawn plan child payload is not a versioned TaskDraft")
+            from .task_codec import DEFAULT_TASK_CODEC
+            from .task_models import NauticalTask
+
+            try:
+                NauticalTask.from_observation(
+                    DEFAULT_TASK_CODEC.decode_row(
+                        child_payload,
+                        source_query="lifecycle plan child payload",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise LifecycleContractError(
+                    f"spawn plan child payload is not a valid TaskDraft: {exc}"
+                ) from exc
         parent_patch = value.get("parent_patch") or {}
         expected = value.get("expected_postconditions") or ()
         if not isinstance(child_payload, Mapping) or not isinstance(parent_patch, Mapping):

@@ -782,8 +782,6 @@ _token_api = _LazyApiBundle(
         "_tok",
         "_tok_range",
         "_safe_match",
-        "sanitize_text",
-        "sanitize_task_strings",
         "_split_csv_tokens",
         "_split_csv_lower",
         "_iso_week_index",

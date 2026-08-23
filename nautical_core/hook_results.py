@@ -44,7 +44,7 @@ def emit_passthrough_json(task: Any) -> None:
 def emit_task_json(task: dict[str, Any], *, sanitize: bool = False, core=None, prof=None) -> None:
     t_out = time.perf_counter()
     if sanitize and core is not None and getattr(core, 'SANITIZE_UDA', False):
-        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
+        DEFAULT_TASK_CODEC.sanitize_task_mapping(task, max_len=core.SANITIZE_UDA_MAX_LEN)
     emit_passthrough_json(task)
     if prof is not None:
         prof.add_ms('stdout:emit', (time.perf_counter() - t_out) * 1000.0)

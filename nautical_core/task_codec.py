@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
+import os
 import re
+import sys
 from typing import Any, Mapping, Sequence
 
 from .task_models import TaskDraft, TaskObservation
@@ -13,6 +15,7 @@ from .task_models import TaskDraft, TaskObservation
 
 TASK_CODEC_VERSION = 1
 TASK_OBSERVATION_SCHEMA = "nautical.task.observation"
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class TaskCodecError(ValueError):
@@ -62,6 +65,26 @@ class TaskCodec:
         """Normalize an optional Taskwarrior text field at the codec boundary."""
         text = str(value or "").strip()
         return "" if text.casefold() == "null" else text
+
+    @staticmethod
+    def sanitize_task_mapping(task: dict[str, Any], max_len: int = 1024) -> None:
+        """Sanitize string fields at the Taskwarrior output boundary."""
+        if not isinstance(task, dict):
+            return
+        for key, value in list(task.items()):
+            if not isinstance(value, str):
+                continue
+            cleaned = _CONTROL_CHARS_RE.sub("", value)
+            if max_len > 0 and len(cleaned) > max_len:
+                if os.environ.get("NAUTICAL_DIAG") == "1":
+                    print(
+                        f"[nautical] UDA value truncated from {len(cleaned)} to {max_len} chars",
+                        file=sys.stderr,
+                    )
+                cleaned = cleaned[:max_len]
+            if cleaned != value and os.environ.get("NAUTICAL_DIAG") == "1":
+                print(f"[nautical] UDA field truncated: {key}", file=sys.stderr)
+            task[key] = cleaned
 
     def decode_row(
         self,

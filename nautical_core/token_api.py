@@ -27,12 +27,6 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             raise core["ParseError"]("Expression too complex")
         return pattern.match(text)
 
-    def sanitize_text(v: str, max_len: int = 1024) -> str:
-        return core["_common"].sanitize_text(v, max_len=max_len)
-
-    def sanitize_task_strings(task: dict, max_len: int = 1024) -> None:
-        core["_common"].sanitize_task_strings(task, max_len=max_len)
-
     def split_csv_tokens(spec: str) -> list[str]:
         return core["_common"].split_csv_tokens(spec)
 
@@ -86,8 +80,6 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         _tok=tok,
         _tok_range=tok_range,
         _safe_match=safe_match,
-        sanitize_text=sanitize_text,
-        sanitize_task_strings=sanitize_task_strings,
         _split_csv_tokens=split_csv_tokens,
         _split_csv_lower=split_csv_lower,
         _iso_week_index=iso_week_index,

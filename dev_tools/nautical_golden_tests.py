@@ -28361,7 +28361,8 @@ def test_sanitize_task_strings_removes_controls():
     import nautical_core as core
 
     task = {"description": "hi\x00there\x1f!"}
-    core.sanitize_task_strings(task, max_len=8)
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    DEFAULT_TASK_CODEC.sanitize_task_mapping(task, max_len=8)
     expect("\x00" not in task["description"], "control chars should be removed")
     expect(len(task["description"]) == 8, "should clamp length to max_len")
 

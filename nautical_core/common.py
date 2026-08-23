@@ -46,21 +46,6 @@ def sanitize_text(v: str, max_len: int = 1024):
     return s
 
 
-def sanitize_task_strings(task: dict, max_len: int = 1024) -> None:
-    """In-place sanitize of string values in a task payload."""
-    if not isinstance(task, dict):
-        return
-    for k, v in list(task.items()):
-        if isinstance(v, str):
-            cleaned = sanitize_text(v, max_len=max_len)
-            if cleaned != v and os.environ.get("NAUTICAL_DIAG") == "1":
-                try:
-                    print(f"[nautical] UDA field truncated: {k}", file=sys.stderr)
-                except Exception:
-                    pass
-            task[k] = cleaned
-
-
 def split_csv_tokens(spec: str) -> list[str]:
     return [t.strip() for t in str(spec or "").split(",") if t.strip()]
 

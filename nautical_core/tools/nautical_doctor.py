@@ -1008,13 +1008,25 @@ def _task_value(row: TaskObservation, field: str) -> Any:
 
 
 def _task_detail(row: TaskObservation) -> dict[str, Any]:
-    return {
+    detail = {
         "uuid": str(_task_value(row, "uuid") or ""),
         "description": str(_task_value(row, "description") or ""),
         "status": str(_task_value(row, "status") or ""),
         "chainID": str(_task_value(row, "chainID") or ""),
         "link": _task_value(row, "link"),
     }
+    if row.issues:
+        detail["decode_issues"] = [
+            {
+                "field": issue.field,
+                "code": issue.code,
+                "message": issue.message,
+                "severity": issue.severity.value,
+                "raw": issue.raw,
+            }
+            for issue in row.issues
+        ]
+    return detail
 
 
 def _existing_reconcile_children(rows: list[TaskObservation], parent: TaskObservation) -> list[dict[str, Any]]:

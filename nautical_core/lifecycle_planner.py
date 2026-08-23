@@ -414,11 +414,11 @@ def terminal_plan_for_snapshot(
         if action is LifecycleAction.DISABLE_CHAIN
         else ("terminal_chain", "no_successor")
     )
-    return LifecyclePlan.from_mappings(
+    return LifecyclePlan(
         identity=identity,
         action=action,
         parent_guard=guard,
-        parent_patch={"chain": "off"},
+        parent_patch=(("chain", "off"),),
         expected_postconditions=postconditions,
         terminal_kind=terminal_kind,
     )
@@ -470,11 +470,11 @@ class LifecyclePlanner:
         )
 
         if event in {LifecycleEvent.ACTIVATE, LifecycleEvent.RESUME}:
-            return LifecyclePlan.from_mappings(
+            return LifecyclePlan(
                 identity=identity,
                 action=LifecycleAction.UPDATE_PARENT,
                 parent_guard=guard,
-                parent_patch={"chain": "on"},
+                parent_patch=(("chain", "on"),),
                 expected_postconditions=("parent_chain_on",),
             )
 

@@ -25,13 +25,12 @@ PUBLIC_EXPORTS = (
     '_validate_yearly_spec_token', '_validate_yearly_token_format',
     '_warn_once_per_day', '_warn_once_per_day_any', '_warn_rate_limited_any',
     '_weekly_spec_to_wset', '_weeks_between', '_y_ranges_from_spec',
-    'anchor_cache_dir', 'anchor_cache_ttl',
     'anchor_preset_display', 'build_acf',
     'build_and_cache_hints', 'build_local_datetime', 'business_calendar_fingerprint',
     'business_calendar_displacement_for_date', 'business_calendar_for_task',
     'business_calendar_definitions', 'cache_key_for_task', 'cache_load', 'cache_save',
     'cache_gc', 'capture_business_calendar_displacements', 'coerce_int',
-    'describe_anchor_dnf', 'describe_anchor_expr', 'DiagnosticEvent', 'RecurrenceModeResult', 'diag', 'enable_anchor_cache',
+    'describe_anchor_dnf', 'describe_anchor_expr', 'DiagnosticEvent', 'RecurrenceModeResult', 'diag',
     'fcntl', 'fmt_dt_local', 'fmt_isoz',
     'configured_business_calendars', 'get_configured_business_calendar',
     'lint_anchor_expr', 'normalize_task_business_calendar', 'now_utc',
@@ -45,7 +44,6 @@ PUBLIC_EXPORTS = (
     'short_uuid', 'strip_rich_markup', 'tempfile',
     'term_width_stderr', 'time', 'to_local', 'utc_to_local_naive', 'local_naive_to_utc',
     'use_business_calendar', 'use_task_business_calendar', 'validate_anchor_expr_strict',
-    'write_text',
 )
 
 __all__ = ('PUBLIC_EXPORTS',)

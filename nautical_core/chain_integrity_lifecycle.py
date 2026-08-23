@@ -714,19 +714,22 @@ def _plan_recovery_decision_unscoped(
 
 
 def plan_recovery_decision(
-    parent: dict[str, Any],
+    parent: TaskObservation,
     *,
     existing_children: list[dict[str, Any]],
     hook: Any,
     generation: ChainGenerationService | None = None,
 ) -> LifecycleRecoveryDecision:
     """Build one plan inside the parent task's business-calendar context."""
+    if not isinstance(parent, TaskObservation):
+        raise TypeError("recovery planning requires a TaskObservation parent")
+    parent_values = parent.to_mapping()
     generation = generation or _generation_service(hook)
     core = generation.core
     use_task_calendar = getattr(core, "use_task_business_calendar", None)
     if not callable(use_task_calendar):
         return _plan_recovery_decision_unscoped(
-            parent,
+            parent_values,
             existing_children=existing_children,
             hook=hook,
             generation=generation,
@@ -734,11 +737,11 @@ def plan_recovery_decision(
 
     next_link = int_or_default(parent.get("link"), 1) + 1
     try:
-        calendar_context = use_task_calendar(parent)
+        calendar_context = use_task_calendar(parent_values)
     except Exception as exc:
         return LifecycleRecoveryDecision(
             "error",
-            parent,
+            parent_values,
             next_link,
             f"invalid business calendar: {exc}",
         )

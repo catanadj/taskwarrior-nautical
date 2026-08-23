@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -554,7 +554,7 @@ def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequ
     return "Preserve wall clock (period is multiple of 24h)"
 
 
-def _pretty_basis_anchor(meta: dict, task, *, fmt_dt_local) -> str:
+def _pretty_basis_anchor(meta: Mapping[str, Any], task: Mapping[str, Any], *, fmt_dt_local) -> str:
     mode = (meta.get("mode") or "skip").lower()
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)
@@ -773,7 +773,7 @@ def _child_expiration(child):
 
 def _append_next_expiration_row(
     fb: list[tuple[str, object]],
-    child: dict,
+    child: Mapping[str, Any],
     child_due,
     *,
     core,
@@ -1315,8 +1315,8 @@ def render_cp_completion_feedback(
 
 def orchestrate_anchor_completion_feedback(
     *,
-    new: dict,
-    child: dict,
+    new: Mapping[str, Any],
+    child: Mapping[str, Any],
     child_due,
     child_short: str,
     next_no: int,
@@ -1391,8 +1391,8 @@ def orchestrate_anchor_completion_feedback(
 
 def orchestrate_cp_completion_feedback(
     *,
-    new: dict,
-    child: dict,
+    new: Mapping[str, Any],
+    child: Mapping[str, Any],
     child_due,
     child_short: str,
     next_no: int,

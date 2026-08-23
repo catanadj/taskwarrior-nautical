@@ -124,10 +124,10 @@ def _completion_diagnostic(
     )
 
 
-def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: dict[str, Any]) -> None:
+def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: TaskView) -> None:
     """Keep presentation failures from suppressing the task response."""
     try:
-        services.render_lifecycle_result(result, TaskView.from_mapping(task))
+        services.render_lifecycle_result(result, task)
     except Exception:
         pass
 
@@ -168,7 +168,7 @@ def finalize_completion_modify(
                 ctx, chain_id, stage="spawn", failure_kind="missing_result"
             ),
         )
-        _render_lifecycle_result(services, lifecycle_result, new)
+        _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))
         services.print_task(new)
         return lifecycle_result
     spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
@@ -186,7 +186,7 @@ def finalize_completion_modify(
                 transition_id=str(getattr(spawned, "spawn_intent_id", "") or ""),
             ),
         )
-        _render_lifecycle_result(services, lifecycle_result, new)
+        _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))
         services.print_task(new)
         return lifecycle_result
 

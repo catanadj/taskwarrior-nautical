@@ -211,27 +211,6 @@ def probe_on_add(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> HookPr
     )
 
 
-def _decode_leading_json_objects(raw: str, *, max_objects: int = 2) -> tuple[list[object], int, str]:
-    decoder = json.JSONDecoder()
-    objects: list[object] = []
-    index = 0
-    length = len(raw)
-    while index < length and len(objects) < max_objects:
-        while index < length and raw[index].isspace():
-            index += 1
-        if index >= length:
-            break
-        try:
-            obj, end = decoder.raw_decode(raw, index)
-        except Exception:
-            return objects, index, "Invalid JSON input"
-        if end <= index:
-            return objects, index, "Invalid JSON input: parser made no progress"
-        objects.append(obj)
-        index = end
-    return objects, index, ""
-
-
 def _validate_modify_tasks(
     raw_bytes: bytes,
     raw_text: str,
@@ -277,7 +256,11 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
     if not raw_text.strip():
         return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 
-    objects, index, decode_error = _decode_leading_json_objects(raw_text, max_objects=2)
+    observations, index, decode_error = DEFAULT_TASK_CODEC.decode_leading_rows(
+        raw_text,
+        source_query="hook:on-modify",
+        max_objects=2,
+    )
     if decode_error:
         return _invalid("on-modify", raw_bytes, raw_text, decode_error, error_kind="protocol")
     if raw_text[index:].strip():
@@ -289,10 +272,7 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
             error_kind="protocol",
         )
 
-    if len(objects) == 1 and isinstance(objects[0], list):
-        tasks = [item for item in objects[0] if isinstance(item, dict)]
-    else:
-        tasks = [item for item in objects if isinstance(item, dict)]
+    tasks = [observation.to_mapping() for observation in observations]
 
     if len(tasks) >= 2:
         return _validate_modify_tasks(raw_bytes, raw_text, tasks[0], tasks[-1])

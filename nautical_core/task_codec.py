@@ -132,6 +132,42 @@ class TaskCodec:
             command_count=command_count,
         )
 
+    def decode_leading_rows(
+        self,
+        text: str,
+        *,
+        source_query: str,
+        max_objects: int = 2,
+    ) -> tuple[tuple[TaskObservation, ...], int, str]:
+        """Decode concatenated Taskwarrior objects or one JSON row array."""
+        if not isinstance(text, str) or not text.strip():
+            return (), 0, "Invalid JSON input"
+        decoder = json.JSONDecoder(parse_constant=_reject_constant)
+        objects: list[Any] = []
+        index = 0
+        while index < len(text) and len(objects) < max(1, int(max_objects)):
+            while index < len(text) and text[index].isspace():
+                index += 1
+            if index >= len(text):
+                break
+            try:
+                value, end = decoder.raw_decode(text, index)
+            except (TypeError, ValueError, TaskCodecError):
+                return (), index, "Invalid JSON input"
+            if end <= index:
+                return (), index, "Invalid JSON input: parser made no progress"
+            objects.append(value)
+            index = end
+        values = objects[0] if len(objects) == 1 and isinstance(objects[0], list) else objects
+        try:
+            rows = tuple(
+                self.decode_row(value, source_query=source_query)
+                for value in values
+            )
+        except (TypeError, TaskCodecError) as exc:
+            return (), index, str(exc)
+        return rows, index, ""
+
     def encode_task_import(self, value: TaskObservation | TaskDraft) -> str:
         """Encode a lossless observation or complete child draft."""
         if isinstance(value, TaskObservation):

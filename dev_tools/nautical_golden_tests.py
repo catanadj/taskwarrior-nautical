@@ -159,6 +159,45 @@ def _task_observation(row):
     return _task_observations((row,))[0]
 
 
+def _fixture_observation(task, *, context=None):
+    """Decode a scheduler fixture through the typed observation boundary.
+
+    Older tests intentionally used compact dictionaries.  The defaults here
+    are limited to identity fields needed by a scheduling fixture; malformed
+    fixtures without a chain identity remain malformed and continue to test
+    the rejection path.
+    """
+    from nautical_core.task_models import TaskObservation
+
+    if isinstance(task, TaskObservation):
+        return task
+    values = dict(task)
+    if context is not None and not values.get("chainID"):
+        values["chainID"] = context.chain_id
+    if values.get("chainID"):
+        values.setdefault("uuid", "00000000-0000-4000-8000-000000000001")
+        values.setdefault("status", "pending")
+        values.setdefault("link", 1)
+    return _task_observation(values)
+
+
+def _scheduler_for_fixture(task, *, context=None):
+    """Build the production scheduler from a typed test observation."""
+    from nautical_core.scheduler_service import SchedulerService
+    return SchedulerService.from_observation(_fixture_observation(task, context=context), context=context)
+
+
+def _evaluator_for_fixture(task, *, context=None, timezone_value=None):
+    """Build the production evaluator from a typed test observation."""
+    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+    if context is None:
+        from nautical_core.recurrence_context import RecurrenceContext
+        from datetime import timezone as _timezone
+        chain_id = str(dict(task).get("chainID") or "")
+        context = RecurrenceContext(chain_id=chain_id, timezone=timezone_value or _timezone.utc)
+    return RecurrenceEvaluator.from_observation(_fixture_observation(task, context=context), context=context)
+
+
 def _plan_from_values(**kwargs):
     """Construct lifecycle plans in tests without the removed mapping API."""
     from nautical_core.lifecycle_models import LifecyclePlan, _freeze_pairs
@@ -528,18 +567,16 @@ def _generation_service(hook):
 
 
 def _compute_anchor_child_due(hook, parent):
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.task_models import NauticalTask
     return _generation_service(hook).compute_anchor_child_due(
-        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation"))
+        NauticalTask.from_observation(_fixture_observation(parent))
     )
 
 
 def _compute_cp_child_due(hook, parent):
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.task_models import NauticalTask
     return _generation_service(hook).compute_cp_child_due(
-        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation"))
+        NauticalTask.from_observation(_fixture_observation(parent))
     )
 
 
@@ -12905,7 +12942,7 @@ def test_weekday_weekend_single_time():
 
     start_excl, end_excl = date(2026, 1, 4), date(2026, 1, 20)
     zone = ZoneInfo("UTC")
-    service = SchedulerService.from_task(
+    service = _scheduler_for_fixture(
         {"chainID": "weekday-weekend", "anchor": expr},
         context=RecurrenceContext(chain_id="weekday-weekend", timezone=zone),
     )
@@ -20856,9 +20893,7 @@ def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
     expected = mod.core.fmt_isoz(mod.core.build_local_datetime(date(2025, 1, 7), (9, 0)))
     expect(mod.core.fmt_isoz(child_due) == expected, f"unexpected next scheduled anchor: {mod.core.fmt_isoz(child_due)}")
     expect(meta.get("target_field") == "scheduled", f"expected scheduled target field: {meta}")
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    evaluator = RecurrenceEvaluator.from_task(parent, timezone=mod.core._LOCAL_TZ)
+    evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
     result = evaluator.select_mode(
         "all",
         due_local=mod.core.to_local(mod.core.parse_dt_any(parent["scheduled"])),
@@ -24074,11 +24109,10 @@ def test_occurrence_cursor_makes_lookup_semantics_explicit():
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
     from nautical_core.scheduler_cursor import OccurrenceCursor
 
     zone = ZoneInfo("Europe/Sofia")
-    evaluator = RecurrenceEvaluator.from_task(
+    evaluator = _evaluator_for_fixture(
         {"chainID": "cursor-chain", "anchor": "w:mon@t=09:00"},
         context=RecurrenceContext(chain_id="cursor-chain", timezone=zone),
     )
@@ -24102,10 +24136,9 @@ def test_occurrence_cursor_keeps_adjacent_weekday_occurrences():
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
     from nautical_core.scheduler_cursor import OccurrenceCursor
 
-    evaluator = RecurrenceEvaluator.from_task(
+    evaluator = _evaluator_for_fixture(
         {"chainID": "cursor-weekday", "anchor": "w:mon..fri"},
         context=RecurrenceContext(chain_id="cursor-weekday", timezone=ZoneInfo("Europe/Sofia")),
     )

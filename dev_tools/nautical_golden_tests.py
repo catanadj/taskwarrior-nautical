@@ -24714,7 +24714,6 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     """The evaluator should normalize recurrence state without performing I/O."""
     from zoneinfo import ZoneInfo
     from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
 
     task = {
         "chainID": "evaluator-chain",
@@ -24977,7 +24976,9 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
     finally:
         astronomy.resolve_event = original_resolve_event
 
-    invalid_mode = RecurrenceEvaluator.from_task({"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"})
+    invalid_mode = _evaluator_for_fixture(
+        {"chainID": "invalid-mode", "anchor": "w:mon", "anchor_mode": "bad"}
+    )
     try:
         _ = invalid_mode.anchor_mode
     except ValueError as exc:
@@ -24986,7 +24987,7 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         raise AssertionError("invalid anchor mode was silently accepted")
 
     try:
-        RecurrenceEvaluator.from_task({"anchor": "w:mon"})
+        _evaluator_for_fixture({"anchor": "w:mon"})
     except ValueError as exc:
         expect("chain ID" in str(exc), f"missing-chain failure was not actionable: {exc}")
     else:

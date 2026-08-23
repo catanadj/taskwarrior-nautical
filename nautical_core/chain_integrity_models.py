@@ -247,6 +247,22 @@ class ChainNode:
             return self.observation.field(name)
         return None
 
+    def reference_token(self, name: str) -> str:
+        """Return a normalized edge token from the typed observation boundary."""
+        if name not in {"prevLink", "nextLink"}:
+            raise ValueError("chain reference field must be prevLink or nextLink")
+        state = self.field_state(name)
+        if state is not None:
+            from .task_models import FieldPresence
+            if state.presence is FieldPresence.VALUE:
+                value = getattr(state.value, "value", state.value)
+                return str(value or "").strip().lower()
+            return ""
+        for key, value in self.fields:
+            if key == name:
+                return str(_thaw(value) or "").strip().lower()
+        return ""
+
     def to_dict(self) -> dict[str, object]:
         value = {key: _thaw(item) for key, item in self.fields}
         value.setdefault("uuid", self.task_uuid)

@@ -1707,7 +1707,11 @@ def _read_on_add_task(prof) -> dict:
     else:
         try:
             with prof.section("parse:json"):
-                task = json.loads(raw)
+                codec = _module("task_codec")
+                task = codec.DEFAULT_TASK_CODEC.decode_object(
+                    raw,
+                    source_query="hook:on-add",
+                ).to_mapping()
         except Exception:
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     if not isinstance(task, dict):

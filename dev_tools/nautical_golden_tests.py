@@ -534,10 +534,10 @@ def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
 def _build_child_from_parent(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.task_models import NauticalTask
-    return _generation_service(hook).build_child_from_parent(
+    return _generation_service(hook).build_child_draft(
         NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation")),
         child_due, child_field, next_link, parent_short, kind, cpmax, until_dt
-    )
+    ).to_mapping()
 
 def _load_core_module(path: str, module_name: str, config_path: str):
     prev_conf = os.environ.get("NAUTICAL_CONFIG")

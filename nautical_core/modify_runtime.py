@@ -150,18 +150,16 @@ def scheduler_service_for_task(
     from nautical_core.evaluation_session import EvaluationSession
     from nautical_core.recurrence_context import RecurrenceContext
     from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-    context = RecurrenceContext.from_task(
-        task,
-        fallback_chain_id=recurrence_seed_base(task),
+    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify scheduler")
+    context = RecurrenceContext.from_observation(
+        observation,
         timezone=core._LOCAL_TZ,
         business_calendar=core.business_calendar_for_task(task),
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
     )
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-
-    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify scheduler")
     service = SchedulerService(EvaluationSession.from_observation(observation, context=context))
     state.scheduler_services[cache_key] = service
     state.diag_stats["evaluator_session_misses"] = state.diag_stats.get("evaluator_session_misses", 0) + 1

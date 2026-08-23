@@ -176,6 +176,7 @@ def _fixture_observation(task, *, context=None):
         values["chainID"] = context.chain_id
     if values.get("chainID"):
         values.setdefault("uuid", "00000000-0000-4000-8000-000000000001")
+        values.setdefault("description", "typed fixture task")
         values.setdefault("status", "pending")
         values.setdefault("link", 1)
     return _task_observation(values)
@@ -639,10 +640,9 @@ def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
 
 
 def _build_child_from_parent(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.task_models import NauticalTask
     return _generation_service(hook).build_child_draft(
-        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation")),
+        NauticalTask.from_observation(_fixture_observation(parent)),
         child_due, child_field, next_link, parent_short, kind, cpmax, until_dt
     ).to_mapping()
 
@@ -677,6 +677,16 @@ def _assert_stdout_json_only(stdout_text: str) -> dict:
 def _call_with_supported_kwargs(fn, **kwargs):
     sig = inspect.signature(fn)
     filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    for key in ("task", "new", "old", "parent", "child"):
+        value = filtered.get(key)
+        if isinstance(value, dict) and {"anchor", "anchor_file", "cp", "chainID"}.intersection(value):
+            value = dict(value)
+            value.setdefault("uuid", "00000000-0000-4000-8000-000000000701")
+            value.setdefault("status", "pending")
+            value.setdefault("link", 1)
+            value.setdefault("chainID", "fixture-domain")
+            value.setdefault("chain", "on")
+            filtered[key] = value
     return fn(**filtered)
 
 def _strip_markup(s: str) -> str:
@@ -19202,7 +19212,7 @@ def test_on_modify_build_child_carries_until_across_dst():
             child_due,
             "due",
             2,
-            "beeswax",
+            "beefcafe",
             "cp",
             0,
             None,
@@ -19870,7 +19880,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
             child_due_utc,
             "due",
             2,
-            "beeswax",
+            "beefcafe",
             "cp",
             0,
             None,

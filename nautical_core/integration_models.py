@@ -430,6 +430,15 @@ class ChildImportPayload:
             raise IntegrationContractError("child import payload requires an integer link")
         return cls(parent_uuid, child_uuid, chain_id, target_link, _freeze_pairs(payload))
 
+    @classmethod
+    def from_draft(cls, draft: object, *, parent_uuid: str) -> "ChildImportPayload":
+        """Create an import payload only from a validated child draft."""
+        from .task_models import TaskDraft
+
+        if not isinstance(draft, TaskDraft):
+            raise IntegrationContractError("child import requires a validated TaskDraft")
+        return cls.from_mapping(draft.to_mapping(), parent_uuid=parent_uuid)
+
     def to_dict(self) -> dict[str, object]:
         return {key: _thaw(value) for key, value in self.fields}
 

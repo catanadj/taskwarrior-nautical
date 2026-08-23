@@ -22,6 +22,21 @@ class LifecycleContractError(ValueError):
     """Raised when a lifecycle model violates a transition invariant."""
 
 
+@dataclass(frozen=True, slots=True)
+class VirtualExpiredChild:
+    """Typed dry-run representation of a child already past native ``until``."""
+
+    observation: TaskObservation
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.observation, TaskObservation):
+            raise TypeError("virtual expired child requires a TaskObservation")
+
+    def to_mapping(self) -> dict[str, Any]:
+        """Serialize only at a policy callback boundary."""
+        return self.observation.to_mapping()
+
+
 class LifecycleEvent(str, Enum):
     ACTIVATE = "activate"
     RESUME = "resume"

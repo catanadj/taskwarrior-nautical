@@ -15,7 +15,7 @@ from . import chain_integrity_lifecycle as lifecycle
 from .chain_generation import ChainGenerationService
 from .chain_integrity_engine import ChainIntegrityEngine
 from .integration_models import Absent, Found, Unavailable
-from .lifecycle_models import DeletionDisposition
+from .lifecycle_models import DeletionDisposition, VirtualExpiredChild
 from .lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path
 from .cache_locking import safe_lock
 from .task_models import FieldPresence, TaskObservation
@@ -42,7 +42,7 @@ class LifecycleRecoveryOperations(Protocol):
                      verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[Any, str]: ...
     def plan_parent(self, parent: dict[str, Any], *, generation: ChainGenerationService | None) -> Any: ...
     def next_child(self, parent: dict[str, Any], child_short: str) -> dict[str, Any]: ...
-    def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[dict[str, Any] | None, str]: ...
+    def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
     def terminal_error(self, child: dict[str, Any], recovery_at: Any) -> str: ...
     def is_orphan_deleted(self, child: dict[str, Any]) -> bool: ...
     def recovery_error(self, parent: dict[str, Any], reason: str) -> Any: ...
@@ -101,7 +101,7 @@ class CallbackLifecycleRecoveryOperations:
     apply_parent_callback: Callable[..., tuple[Any, str]]
     plan_parent_callback: Callable[..., Any]
     next_child_callback: Callable[..., dict[str, Any]]
-    virtual_child_callback: Callable[..., tuple[dict[str, Any] | None, str]]
+    virtual_child_callback: Callable[..., tuple[VirtualExpiredChild | None, str]]
     terminal_error_callback: Callable[..., str]
     is_orphan_deleted_callback: Callable[..., bool]
     recovery_error_callback: Callable[..., Any]
@@ -412,15 +412,16 @@ class LifecycleReconciliationService:
             try:
                 child = operations.next_child(plan_parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
                 if child is None:
-                    child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
+                    virtual_child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
                     if child_error:
                         outcomes.append((operations.recovery_error(plan_parent, child_error), ""))
                         break
-                    if child is None:
+                    if virtual_child is None:
                         terminal_error = operations.terminal_error(dict(plan.child or {}), recovery_at)
                         if terminal_error:
                             outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                         break
+                    child = virtual_child.to_mapping()
             except Exception as exc:
                 outcomes.append((operations.recovery_from_exception(plan_parent, exc), ""))
                 break

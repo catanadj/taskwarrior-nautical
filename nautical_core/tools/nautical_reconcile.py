@@ -36,6 +36,7 @@ from nautical_core.lifecycle_models import (  # noqa: E402
     LifecycleEvent,
     LifecyclePlan,
     TaskSnapshot,
+    VirtualExpiredChild,
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
@@ -1305,7 +1306,7 @@ def _virtual_expired_child(
     *,
     hook: Any,
     recovery_at: Any,
-) -> tuple[dict[str, Any] | None, str]:
+) -> tuple[VirtualExpiredChild | None, str]:
     child = dict(plan.child or {})
     until_raw = child.get("until")
     try:
@@ -1330,7 +1331,9 @@ def _virtual_expired_child(
     validation_error = _validate_recovery_child(plan.parent.to_mapping(), child)
     if validation_error:
         return None, validation_error
-    return child, ""
+    return VirtualExpiredChild(
+        TaskObservation.from_mapping(child, source_query="reconcile virtual expiration")
+    ), ""
 
 
 def _reconcile_candidate(

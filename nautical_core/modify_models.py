@@ -6,7 +6,21 @@ from datetime import datetime
 from typing import Any, Protocol, TypeAlias, Mapping
 from types import MappingProxyType
 
-from .task_models import TaskDraft
+from .task_models import (
+    ChainIdentity,
+    ChainID,
+    ChainState,
+    FieldPresence,
+    NauticalTask,
+    ShortUUIDRef,
+    TaskDraft,
+    TaskLink,
+    TaskObservation,
+    TaskStatus,
+    TaskTimestamp,
+    TaskUUID,
+    TemporalState,
+)
 
 
 # Hook implementations are intentionally assembled at runtime, but the
@@ -24,10 +38,11 @@ class TaskView(Mapping[str, Any]):
     needs read access, so expose a frozen mapping view at that boundary.
     """
 
-    __slots__ = ("_values",)
+    __slots__ = ("_values", "observation")
 
-    def __init__(self, values: Mapping[str, Any]) -> None:
+    def __init__(self, values: Mapping[str, Any], observation: TaskObservation | None = None) -> None:
         self._values = MappingProxyType(dict(values))
+        self.observation = observation
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "TaskView":
@@ -35,7 +50,48 @@ class TaskView(Mapping[str, Any]):
             return values
         if not isinstance(values, Mapping):
             raise TypeError("task view requires a mapping")
-        return cls(values)
+        observation = TaskObservation.from_mapping(values, source_query="presentation")
+        return cls(values, observation)
+
+    @property
+    def temporal(self) -> TemporalState:
+        values: dict[str, TaskTimestamp | None] = {}
+        presence: dict[str, FieldPresence] = {}
+        observation = self.observation
+        if observation is None:
+            return TemporalState()
+        for name in ("due", "scheduled", "wait", "until", "entry", "modified", "end"):
+            field = observation.field(name)
+            presence[name] = field.presence
+            values[name] = field.value if isinstance(field.value, TaskTimestamp) else None
+        return TemporalState(**values, presence=presence)
+
+    @property
+    def status(self) -> TaskStatus | None:
+        value = self.observation.field("status").value if self.observation else None
+        return value if isinstance(value, TaskStatus) else None
+
+    @property
+    def chain_identity(self) -> ChainIdentity | None:
+        if self.observation is None:
+            return None
+        uuid = self.observation.field("uuid").value
+        chain_id = self.observation.field("chainID").value
+        link = self.observation.field("link").value
+        if not isinstance(uuid, TaskUUID) or not isinstance(chain_id, ChainID) or not isinstance(link, TaskLink):
+            return None
+        previous = self.observation.field("prevLink").value
+        following = self.observation.field("nextLink").value
+        if previous is not None and not isinstance(previous, (TaskUUID, ShortUUIDRef)):
+            previous = None
+        if following is not None and not isinstance(following, (TaskUUID, ShortUUIDRef)):
+            following = None
+        state = ChainState.ENABLED if str(self.get("chain") or "on").lower() == "on" else ChainState.DISABLED
+        return ChainIdentity(uuid, chain_id, link, previous, following, state)
+
+    def timestamp(self, field: str) -> TaskTimestamp | None:
+        """Return one typed timestamp, preserving absent/null as ``None``."""
+        return getattr(self.temporal, str(field), None)
 
     def __getitem__(self, key: str) -> Any:
         return self._values[key]

@@ -16,7 +16,7 @@ from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_service import SchedulerService
 from .chain_generation import ChainGenerationService
 from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
-from .task_models import FieldPresence, TaskObservation
+from .task_models import FieldPresence, NauticalTask, TaskObservation
 from .task_codec import DEFAULT_TASK_CODEC
 from .query_models import (
     HARD_MAX_FILE_SKIPS,
@@ -47,6 +47,14 @@ def _task_value(task: TaskRow, name: str) -> object:
             return None
         return getattr(state.value, "value", state.value)
     return task.get(name)
+
+
+def _task_with_overrides(task: TaskRow, **overrides: Any) -> NauticalTask:
+    """Build one validated domain task for a projected scheduler step."""
+    values = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
+    values.update(overrides)
+    observation = DEFAULT_TASK_CODEC.decode_row(values, source_query="query projected recurrence")
+    return NauticalTask.from_observation(observation)
 
 
 def _timezone_name(value: tzinfo) -> str:
@@ -329,11 +337,8 @@ class OccurrenceQueryService:
                 break
             if max_link is not None and link >= max_link:
                 break
-            parent = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
             stamp = self._core.fmt_isoz(current.astimezone(timezone.utc))
-            parent["end"] = stamp
-            parent["due"] = stamp
-            parent["link"] = link
+            parent = _task_with_overrides(task, end=stamp, due=stamp, link=link)
             child_due, _metadata = generator.compute_cp_child_due(parent)
             if child_due is None:
                 break
@@ -622,17 +627,19 @@ class OccurrenceQueryService:
                 return candidate.astimezone(timezone.utc) <= limit.astimezone(timezone.utc)
 
             if TaskCodec.normalize_text(_task_value(task, "cp")):
-                parent = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
                 if request.evaluation_at is not None:
                     formatter = getattr(self._core, "fmt_isoz", None)
                     if not callable(formatter):
                         raise QueryServiceError("Nautical datetime formatter is unavailable")
-                    parent["end"] = formatter(evaluated_utc)
-                elif not parent.get("end"):
+                    projected_end = formatter(evaluated_utc)
+                elif not _task_value(task, "end"):
                     formatter = getattr(self._core, "fmt_isoz", None)
                     if not callable(formatter):
                         raise QueryServiceError("Nautical datetime formatter is unavailable")
-                    parent["end"] = formatter(reference_utc)
+                    projected_end = formatter(reference_utc)
+                else:
+                    projected_end = str(_task_value(task, "end") or "")
+                parent = _task_with_overrides(task, end=projected_end)
                 child_due, _metadata = ChainGenerationService.from_core(self._core).compute_cp_child_due(parent)
                 if child_due is None:
                     return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)

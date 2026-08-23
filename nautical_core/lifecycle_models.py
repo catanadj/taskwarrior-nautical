@@ -479,6 +479,37 @@ class LifecyclePlan:
             terminal_kind=terminal_kind,
         )
 
+    @classmethod
+    def from_draft(
+        cls,
+        *,
+        identity: LifecycleIdentity,
+        action: LifecycleAction,
+        parent_guard: ParentGuard,
+        draft: Any,
+        parent_patch: Mapping[str, Any] | None = None,
+        expected_postconditions: tuple[str, ...] = (),
+        max_attempts: int = 3,
+        stage: ExecutionStage = ExecutionStage.PLANNED,
+        terminal_kind: str | None = None,
+    ) -> "LifecyclePlan":
+        """Create a plan from a validated TaskDraft at the planning boundary."""
+        from .task_models import TaskDraft
+
+        if not isinstance(draft, TaskDraft):
+            raise LifecycleContractError("lifecycle child payload requires a validated TaskDraft")
+        return cls.from_mappings(
+            identity=identity,
+            action=action,
+            parent_guard=parent_guard,
+            child_payload=draft.to_mapping(),
+            parent_patch=parent_patch,
+            expected_postconditions=expected_postconditions,
+            max_attempts=max_attempts,
+            stage=stage,
+            terminal_kind=terminal_kind,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize a complete plan for the durable lifecycle outbox."""
         return {

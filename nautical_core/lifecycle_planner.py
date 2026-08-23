@@ -546,11 +546,11 @@ class LifecyclePlanner:
                 raise LifecyclePlanningError(str(carry_error))
         child_uuid = str(child_values.get("uuid") or "").strip()
         parent_patch = {"nextLink": child_uuid[:8]} if child_uuid else {}
-        return LifecyclePlan.from_mappings(
+        return LifecyclePlan.from_draft(
             identity=identity,
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=guard,
-            child_payload=child_values,
+            draft=child,
             parent_patch=parent_patch,
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )

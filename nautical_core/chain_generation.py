@@ -10,12 +10,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
+import uuid
 from typing import Any, Mapping, MutableMapping
 
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import normalize_recurrence_text
-from .task_models import NauticalTask
+from .task_models import ChainIdentity, TaskDraft, TaskTimestamp, TaskUUID, NauticalTask
+
+
+_STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 
 
 _RESERVED_DROP = frozenset(
@@ -473,6 +478,30 @@ class ChainGenerationService:
         cpmax: int,
         until_dt: Any,
     ) -> dict[str, Any]:
+        """Serialize a typed child draft for Taskwarrior import."""
+        return self.build_child_draft(
+            parent,
+            child_due_utc,
+            child_field,
+            next_link_no,
+            parent_short,
+            kind,
+            cpmax,
+            until_dt,
+        ).to_mapping()
+
+    def build_child_draft(
+        self,
+        parent: NauticalTask,
+        child_due_utc: datetime,
+        child_field: str,
+        next_link_no: int,
+        parent_short: str,
+        kind: str,
+        cpmax: int,
+        until_dt: Any,
+    ) -> TaskDraft:
+        """Build a complete, validated child intent without exposing mappings."""
         parent_chain = self._require_chain_id(parent)
         parent_task = parent
         parent = parent_task.observation.to_mapping()
@@ -559,7 +588,55 @@ class ChainGenerationService:
         if until_dt:
             child["chainUntil"] = self.core.fmt_isoz(until_dt)
         child["chainID"] = parent_chain
-        return child
+        child_uuid = uuid.uuid5(
+            _STABLE_CHILD_UUID_NAMESPACE,
+            json.dumps(
+                {
+                    "chain_id": parent_chain.lower(),
+                    "kind": "anchor" if kind in {"anchor", "anchor_file"} else "cp",
+                    "link": int(next_link_no),
+                    "parent_uuid": parent_task.identity.task_uuid.value.lower(),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+        child["uuid"] = str(child_uuid)
+        child_observation = self.core._import_sibling("task_codec").DEFAULT_TASK_CODEC.decode_row(
+            child,
+            source_query="chain generation child draft",
+        )
+        child_task = NauticalTask.from_observation(child_observation)
+        target = child_task.temporal.due if child_field != "scheduled" else child_task.temporal.scheduled
+        if target is None:
+            raise ValueError("generated child draft has no recurrence target")
+        excluded_fields = {
+                "id", "uuid", "status", "modified", "end", "chainID", "link",
+                "prevLink", "nextLink", "description", "chain", "anchor", "anchor_file",
+                "anchor_mode", "cp", "omit", "omit_file", "bc", "chainMax", "chainUntil",
+                "due", "scheduled",
+        }
+        serialized = child_observation.to_mapping()
+        copy_fields = {
+            key: value for key, value in serialized.items()
+            if key not in excluded_fields
+        }
+        return TaskDraft(
+            identity=ChainIdentity(
+                TaskUUID(str(child_uuid)),
+                child_task.identity.chain_id,
+                child_task.identity.link,
+                child_task.identity.previous,
+                child_task.identity.next,
+                child_task.identity.state,
+            ),
+            description=child_task.description,
+            recurrence=child_task.recurrence,
+            target=target,
+            fields=copy_fields,
+            target_field=child_field,
+        )
 
 
 __all__ = (

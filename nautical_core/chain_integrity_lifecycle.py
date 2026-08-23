@@ -435,7 +435,9 @@ def _build_expiration_child_with_day_end(
     fallback_parent = dict(parent)
     fallback_parent["until"] = generation.core.fmt_isoz(fallback_until)
     return generation.build_child_from_parent(
-        fallback_parent,
+        NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(fallback_parent, source_query="reconcile expiration fallback")
+        ),
         child_due,
         child_field,
         next_link,
@@ -735,7 +737,7 @@ def plan_recovery_decision(
             generation=generation,
         )
 
-    next_link = int_or_default(parent.get("link"), 1) + 1
+    next_link = int_or_default(parent_values.get("link"), 1) + 1
     try:
         calendar_context = use_task_calendar(parent_values)
     except Exception as exc:
@@ -747,7 +749,7 @@ def plan_recovery_decision(
         )
     with calendar_context:
         return _plan_recovery_decision_unscoped(
-            parent,
+            parent_values,
             existing_children=existing_children,
             hook=hook,
             generation=generation,

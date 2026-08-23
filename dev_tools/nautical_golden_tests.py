@@ -441,11 +441,19 @@ def _generation_service(hook):
 
 
 def _compute_anchor_child_due(hook, parent):
-    return _generation_service(hook).compute_anchor_child_due(parent)
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask
+    return _generation_service(hook).compute_anchor_child_due(
+        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation"))
+    )
 
 
 def _compute_cp_child_due(hook, parent):
-    return _generation_service(hook).compute_cp_child_due(parent)
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask
+    return _generation_service(hook).compute_cp_child_due(
+        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation"))
+    )
 
 
 def _carry_relative_datetime(hook, parent, child, child_due, field, **kwargs):
@@ -473,8 +481,11 @@ def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
 
 
 def _build_child_from_parent(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask
     return _generation_service(hook).build_child_from_parent(
-        parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt
+        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="golden generation")),
+        child_due, child_field, next_link, parent_short, kind, cpmax, until_dt
     )
 
 def _load_core_module(path: str, module_name: str, config_path: str):
@@ -18887,6 +18898,7 @@ def test_on_modify_build_child_carries_until_across_dst():
 def test_on_modify_native_until_calendar_and_exact_carry_policy():
     """native until should use calendar carry by default and exact carry with the +1s marker."""
     import nautical_core.chain_integrity_lifecycle as reconcile
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_native_until_carry_policy_test")
@@ -18900,8 +18912,9 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
 
     def build(kind, child_due, until_value):
         parent = {
-            "uuid": "00000000-0000-0000-0000-000000000995",
+            "uuid": "00000000-0000-4000-8000-000000000995",
             "status": "completed",
+            "link": 1,
             "due": mod.core.fmt_isoz(due_0900),
             "until": mod.core.fmt_isoz(until_value),
             "chainID": "cid_until_policy",
@@ -18961,7 +18974,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         )
 
     expired_parent = {
-        "uuid": "00000000-0000-0000-0000-000000000996",
+        "uuid": "00000000-0000-4000-8000-000000000996",
         "status": "deleted",
         "anchor": "w:mon@t=09:00,13:00",
         "anchor_mode": "skip",
@@ -18972,7 +18985,10 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         "until": mod.core.fmt_isoz(until_2300),
         "end": mod.core.fmt_isoz(until_2300),
     }
-    plan = reconcile.plan_recovery_decision(expired_parent, existing_children=[], hook=mod)
+    plan = reconcile.plan_recovery_decision(
+        DEFAULT_TASK_CODEC.decode_row(expired_parent, source_query="golden recovery"),
+        existing_children=[], hook=mod,
+    )
     reconciled_until = mod.core.to_local(mod.core.parse_dt_any((plan.child or {}).get("until")))
     expect(plan.action == "spawn", f"expired anchor should produce a child plan: {plan}")
     expect(
@@ -18982,7 +18998,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
     )
 
     early_until_parent = {
-        "uuid": "00000000-0000-0000-0000-000000000997",
+        "uuid": "00000000-0000-4000-8000-000000000997",
         "status": "deleted",
         "anchor": "w:mon@t=09:00,13:00",
         "anchor_mode": "skip",
@@ -19001,7 +19017,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
 
     failing_generation = FailingBuildGeneration.from_core(mod.core)
     untyped_plan = reconcile.plan_recovery_decision(
-        early_until_parent,
+        DEFAULT_TASK_CODEC.decode_row(early_until_parent, source_query="golden recovery"),
         existing_children=[],
         hook=mod,
         generation=failing_generation,
@@ -19011,7 +19027,10 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         f"reconcile treated an untyped exception message as a carry conflict: {untyped_plan}",
     )
 
-    early_plan = reconcile.plan_recovery_decision(early_until_parent, existing_children=[], hook=mod)
+    early_plan = reconcile.plan_recovery_decision(
+        DEFAULT_TASK_CODEC.decode_row(early_until_parent, source_query="golden recovery"),
+        existing_children=[], hook=mod,
+    )
     early_until = mod.core.to_local(mod.core.parse_dt_any((early_plan.child or {}).get("until")))
     expect(early_plan.action == "spawn", f"expired anchor should still produce a child plan: {early_plan}")
     expect(

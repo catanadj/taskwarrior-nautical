@@ -46,6 +46,7 @@ from nautical_core.integration_models import (  # noqa: E402
     Unavailable,
 )
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
+from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
@@ -302,6 +303,14 @@ def _configuration_state(hook: Any) -> tuple[str, str]:
     return str(getattr(reason, "status", "drifted" if reason else "valid")), str(reason)
 
 
+def _observation_text(observation: TaskObservation, field: str) -> str:
+    state = observation.field(field)
+    if state.presence is FieldPresence.ABSENT:
+        return ""
+    value = getattr(state.value, "value", state.value)
+    return str(value or "").strip()
+
+
 class _ReconcileSnapshot:
     """Immutable read-phase views for active links and recovery candidates.
 
@@ -321,9 +330,9 @@ class _ReconcileSnapshot:
         self.repository = repository
         self.scope_filter = str(scope_filter or "").strip() or None
         self.full_audit = bool(full_audit)
-        self._rows: tuple[dict[str, Any], ...] | None = None
+        self._rows: tuple[TaskObservation, ...] | None = None
 
-    def _all_rows(self) -> tuple[dict[str, Any], ...]:
+    def _all_rows(self) -> tuple[TaskObservation, ...]:
         if self._rows is None:
             value = _read_value(
                 self.repository.lifecycle_candidates(
@@ -333,24 +342,24 @@ class _ReconcileSnapshot:
                 ),
                 "reconcile lifecycle snapshot",
             )
-            self._rows = tuple(dict(row) for row in (value or ()))
+            self._rows = tuple(value or ())
         else:
             _EXPORT_STATS["snapshot_hits"] += 1
         return self._rows
 
-    def active_rows(self) -> list[dict[str, Any]]:
+    def active_rows(self) -> list[TaskObservation]:
         return [
             row for row in self._all_rows()
-            if str(row.get("chainID") or "").strip()
-            and str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+            if _observation_text(row, "chainID")
+            and _observation_text(row, "status").lower() not in {"completed", "deleted"}
         ]
 
-    def candidate_rows(self) -> list[dict[str, Any]]:
+    def candidate_rows(self) -> list[TaskObservation]:
         return [
             row for row in self._all_rows()
-            if str(row.get("chainID") or "").strip()
-            and not str(row.get("nextLink") or "").strip()
-            and str(row.get("status") or "").strip().lower() in {"completed", "deleted"}
+            if _observation_text(row, "chainID")
+            and not _observation_text(row, "nextLink")
+            and _observation_text(row, "status").lower() in {"completed", "deleted"}
         ]
 
 

@@ -18,6 +18,7 @@ from .integration_models import Absent, Found, Unavailable
 from .lifecycle_models import DeletionDisposition
 from .lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path
 from .cache_locking import safe_lock
+from .task_models import FieldPresence, TaskObservation
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -27,7 +28,7 @@ _RECONCILE_LOCK_STALE_SECONDS = 300.0
 
 
 class LifecycleSnapshot(Protocol):
-    def candidate_rows(self) -> list[dict[str, Any]]: ...
+    def candidate_rows(self) -> list[TaskObservation]: ...
 
 
 class LifecycleChildRepository(Protocol):
@@ -144,12 +145,18 @@ class CallbackLifecycleRecoveryOperations:
 
 
 
-def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
+def _sort_key(row: TaskObservation) -> tuple[str, int, str, str]:
+    def value(name: str) -> object:
+        state = row.field(name)
+        if state.presence is FieldPresence.ABSENT:
+            return None
+        return getattr(state.value, "value", state.value)
+
     return (
-        str(row.get("chainID") or "").strip().casefold(),
-        lifecycle.int_or_default(row.get("link"), 0),
-        str(row.get("status") or "").strip().casefold(),
-        str(row.get("uuid") or "").strip().casefold(),
+        str(value("chainID") or "").strip().casefold(),
+        lifecycle.int_or_default(value("link"), 0),
+        str(value("status") or "").strip().casefold(),
+        str(value("uuid") or "").strip().casefold(),
     )
 
 
@@ -288,16 +295,16 @@ class LifecycleReconciliationService:
                 return plan, ""
 
 
-    def candidates(self) -> list[dict[str, Any]]:
+    def candidates(self) -> list[TaskObservation]:
         rows = self.snapshot.candidate_rows()
         candidates = [
             row for row in rows
-            if str(row.get("status") or "").strip().lower() == "completed"
+            if str(getattr(row.field("status").value, "value", row.field("status").value) or "").strip().lower() == "completed"
             and lifecycle.is_orphan_completion_candidate(row)
         ]
         candidates.extend(
             row for row in rows
-            if str(row.get("status") or "").strip().lower() == "deleted"
+            if str(getattr(row.field("status").value, "value", row.field("status").value) or "").strip().lower() == "deleted"
             and lifecycle.is_orphan_deleted_chain_candidate(row)
         )
         return sorted(candidates, key=_sort_key)

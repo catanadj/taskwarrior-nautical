@@ -80,28 +80,28 @@ def int_or_default(value: object, default: int = 0) -> int:
         return default
 
 
-def is_nautical_recurrence(task: dict[str, Any]) -> bool:
-    return any(str(task.get(field) or "").strip() for field in RECURRENCE_FIELDS)
+def is_nautical_recurrence(task: TaskObservation) -> bool:
+    return any(str(_observation_value(task, field) or "").strip() for field in RECURRENCE_FIELDS)
 
 
-def _is_unlinked_active_chain(task: dict[str, Any]) -> bool:
-    if str(task.get("chain") or "").strip().lower() != "on":
+def _is_unlinked_active_chain(task: TaskObservation) -> bool:
+    if str(_observation_value(task, "chain") or "").strip().lower() != "on":
         return False
-    if not str(task.get("chainID") or "").strip():
+    if not str(_observation_value(task, "chainID") or "").strip():
         return False
-    if str(task.get("nextLink") or "").strip():
+    if str(_observation_value(task, "nextLink") or "").strip():
         return False
     if not is_nautical_recurrence(task):
         return False
     return True
 
 
-def is_orphan_completion_candidate(task: dict[str, Any]) -> bool:
-    return str(task.get("status") or "").strip() == "completed" and _is_unlinked_active_chain(task)
+def is_orphan_completion_candidate(task: TaskObservation) -> bool:
+    return str(_observation_value(task, "status") or "").strip() == "completed" and _is_unlinked_active_chain(task)
 
 
-def is_orphan_deleted_chain_candidate(task: dict[str, Any]) -> bool:
-    return str(task.get("status") or "").strip() == "deleted" and _is_unlinked_active_chain(task)
+def is_orphan_deleted_chain_candidate(task: TaskObservation) -> bool:
+    return str(_observation_value(task, "status") or "").strip() == "deleted" and _is_unlinked_active_chain(task)
 
 
 def deleted_chain_disposition(

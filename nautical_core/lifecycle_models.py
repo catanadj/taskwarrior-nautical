@@ -113,6 +113,8 @@ class DeletionEvidence:
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
 LIFECYCLE_PLAN_SCHEMA_VERSION = 2
+LIFECYCLE_DRAFT_PAYLOAD_SCHEMA = 1
+LIFECYCLE_PATCH_PAYLOAD_SCHEMA = 1
 
 
 # These are the inputs that can change the occurrence or carried timing of a
@@ -530,12 +532,20 @@ class LifecyclePlan:
             "stage": self.stage.value,
             "child_payload": self.child_dict(),
             "parent_patch": self.parent_patch_dict(),
+            "parent_patch_schema": {
+                "version": LIFECYCLE_PATCH_PAYLOAD_SCHEMA,
+                "kind": "task_patch",
+            },
             "expected_postconditions": list(self.expected_postconditions),
             "max_attempts": self.max_attempts,
             "terminal_kind": self.terminal_kind,
         }
         if self.action is LifecycleAction.SPAWN_CHILD:
             payload["child_payload_kind"] = "task_draft"
+            payload["child_payload_schema"] = {
+                "version": LIFECYCLE_DRAFT_PAYLOAD_SCHEMA,
+                "kind": "task_draft",
+            }
         return payload
 
     @classmethod
@@ -552,19 +562,25 @@ class LifecyclePlan:
                 f"unsupported lifecycle plan schema version: {version}"
             )
         child_payload = value.get("child_payload") or {}
+        patch_schema = value.get("parent_patch_schema")
+        if not isinstance(patch_schema, Mapping) or patch_schema.get("version") != LIFECYCLE_PATCH_PAYLOAD_SCHEMA or patch_schema.get("kind") != "task_patch":
+            raise LifecycleContractError("lifecycle parent patch is not a versioned TaskPatch")
+        draft = None
         if LifecycleAction(value.get("action")) is LifecycleAction.SPAWN_CHILD:
-            if value.get("child_payload_kind") != "task_draft":
+            child_schema = value.get("child_payload_schema")
+            if value.get("child_payload_kind") != "task_draft" or not isinstance(child_schema, Mapping) or child_schema.get("version") != LIFECYCLE_DRAFT_PAYLOAD_SCHEMA or child_schema.get("kind") != "task_draft":
                 raise LifecycleContractError("spawn plan child payload is not a versioned TaskDraft")
             from .task_codec import DEFAULT_TASK_CODEC
-            from .task_models import NauticalTask
+            from .task_models import NauticalTask, TaskDraft
 
             try:
-                NauticalTask.from_observation(
+                child_task = NauticalTask.from_observation(
                     DEFAULT_TASK_CODEC.decode_row(
                         child_payload,
                         source_query="lifecycle plan child payload",
                     )
                 )
+                draft = TaskDraft.from_task(child_task)
             except (TypeError, ValueError) as exc:
                 raise LifecycleContractError(
                     f"spawn plan child payload is not a valid TaskDraft: {exc}"
@@ -583,16 +599,23 @@ class LifecyclePlan:
             parent_guard = ParentGuard.from_mapping(value.get("parent_guard") or {})
         except (TypeError, ValueError, KeyError) as exc:
             raise LifecycleContractError("invalid lifecycle plan fields") from exc
+        if draft is not None:
+            return cls.from_draft(
+                identity=identity,
+                action=action,
+                parent_guard=parent_guard,
+                draft=draft,
+                parent_patch=parent_patch,
+                expected_postconditions=tuple(str(item) for item in expected),
+                max_attempts=max_attempts,
+                stage=stage,
+                terminal_kind=value.get("terminal_kind"),
+            )
         return cls.from_mappings(
-            identity=identity,
-            action=action,
-            parent_guard=parent_guard,
-            stage=stage,
-            child_payload=child_payload,
-            parent_patch=parent_patch,
+            identity=identity, action=action, parent_guard=parent_guard,
+            stage=stage, child_payload=child_payload, parent_patch=parent_patch,
             expected_postconditions=tuple(str(item) for item in expected),
-            max_attempts=max_attempts,
-            terminal_kind=value.get("terminal_kind"),
+            max_attempts=max_attempts, terminal_kind=value.get("terminal_kind"),
         )
 
     def child_dict(self) -> dict[str, Any]:

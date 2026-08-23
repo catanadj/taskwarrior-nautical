@@ -866,11 +866,11 @@ def _integrity_request_factory(operation: Any) -> Any:
     from nautical_core.integration_models import (
         GuardTimestamp,
         GuardTimestampField,
-        MetadataRepairPayload,
         MutationGuard,
-        MutationOperation,
         MutationRequest,
     )
+    from nautical_core.task_changes import TaskPatch
+    from nautical_core.task_models import TaskUUID
 
     read = _repository().by_uuid(operation.target_uuid, refresh=True)
     row = _read_value(read, f"integrity target {operation.target_uuid}")
@@ -895,11 +895,8 @@ def _integrity_request_factory(operation: Any) -> Any:
         expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
         chain=str(row.get("chain") or "on"),
     )
-    return MutationRequest(
-        MutationOperation.METADATA_REPAIR,
-        guard,
-        MetadataRepairPayload.from_mapping(guard.task_uuid, updates, expected=expected),
-    )
+    patch = TaskPatch.metadata_repair(TaskUUID(guard.task_uuid), **updates)
+    return MutationRequest.metadata_repair(guard, patch, expected=expected)
 
 
 def _drain_integrity_work() -> tuple[Any, ...]:

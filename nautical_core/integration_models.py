@@ -672,7 +672,13 @@ class MutationRequest:
         )
 
     @classmethod
-    def metadata_repair(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+    def metadata_repair(
+        cls,
+        guard: MutationGuard,
+        patch: object,
+        *,
+        expected: Mapping[str, object] | None = None,
+    ) -> "MutationRequest":
         """Build a guarded metadata repair from a typed TaskPatch."""
         from .task_changes import PatchOperation, TaskPatch
 
@@ -689,7 +695,7 @@ class MutationRequest:
         return cls(
             MutationOperation.METADATA_REPAIR,
             guard,
-            MetadataRepairPayload.from_mapping(guard.task_uuid, values),
+            MetadataRepairPayload.from_mapping(guard.task_uuid, values, expected=dict(expected or {})),
         )
 
     @classmethod

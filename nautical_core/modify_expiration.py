@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from .task_models import TaskPayload
+
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import DeletionEvidence, LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
@@ -37,7 +39,7 @@ class DeletedModifyServices:
     recovery_warning: Any
 
 
-def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
+def has_expiration_evidence(task: TaskPayload, *, safe_parse_datetime) -> bool:
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
         end_dt, end_err = safe_parse_datetime(task.get("end"))
@@ -53,7 +55,7 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
 
 
 def classify_deleted_task(
-    task: dict,
+    task: TaskPayload,
     *,
     services: ExpirationServices,
     observation: Any = None,
@@ -67,7 +69,7 @@ def classify_deleted_task(
     )
 
 
-def render_recovery_warning(task: dict, reason: str, *, services: ExpirationServices) -> None:
+def render_recovery_warning(task: TaskPayload, reason: str, *, services: ExpirationServices) -> None:
     services.panel(
         "⚠ Nautical expiration recovery deferred",
         [
@@ -80,7 +82,7 @@ def render_recovery_warning(task: dict, reason: str, *, services: ExpirationServ
 
 
 def _render_recovery_panel(
-    task: dict,
+    task: TaskPayload,
     plan,
     *,
     services: ExpirationServices,
@@ -121,7 +123,7 @@ def _render_recovery_panel(
     services.panel("⌛ Nautical occurrence expired", rows, kind=panel_kind)
 
 
-def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -> bool:
+def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServices) -> bool:
     reconcile = services.reconcile
     try:
         observation = DEFAULT_TASK_CODEC.decode_row(

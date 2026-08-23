@@ -5,9 +5,10 @@ from typing import Any, Callable
 
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
+from .task_models import TaskPayload
 
 
-def _timeline_seed_base(task: dict[str, Any]) -> str:
+def _timeline_seed_base(task: TaskPayload) -> str:
     """Return the stable recurrence identity used by timeline projections."""
     return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
@@ -36,7 +37,7 @@ def _timeline_warning(message: str) -> tuple[object, None, dict[str, Any], str]:
 
 
 def _timeline_styles(
-    task: dict[str, Any],
+    task: TaskPayload,
     kind: str,
     *,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
@@ -95,7 +96,7 @@ def format_gap(prev_dt: Any, next_dt: Any, kind: str = "cp", round_hours: bool =
 
 
 def _timeline_initial_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     cur_no: int,
     nxt_no: int,
     child_due_utc: Any,
@@ -119,7 +120,7 @@ def _timeline_initial_items(
 
 
 def _timeline_future_cp_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     *,
     start_no: int,
@@ -180,7 +181,7 @@ def _timeline_future_cp_items(
 
 
 def _timeline_future_anchor_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     dnf: Any,
     child_due_utc: datetime,
     *,
@@ -314,7 +315,7 @@ def _timeline_future_anchor_items(
 
 
 def _timeline_omitted_before_next_anchor_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     dnf: Any,
     child_due_utc: datetime,
     *,
@@ -469,7 +470,7 @@ def _timeline_base_line(
     obj: dict[str, Any],
     item_type: str,
     *,
-    task: dict[str, Any],
+    task: TaskPayload,
     cap_no: int | None,
     prev_style: str,
     cur_style: str,
@@ -550,7 +551,7 @@ def _timeline_with_gap(
 
 
 def anchor_file_timeline_lines(
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
     *,
@@ -699,7 +700,7 @@ def anchor_file_timeline_lines(
 
 def timeline_lines(
     kind: str,
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
     dnf: Any,
@@ -833,7 +834,7 @@ def timeline_lines(
 
 def timeline_lines_for_task(
     kind: str,
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
     dnf: Any,

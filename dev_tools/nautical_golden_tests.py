@@ -4448,9 +4448,9 @@ def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
     now = [1000.0]
 
     def plan_for(link: int) -> LifecyclePlan:
-        parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
-        child_uuid = f"10000000-0000-0000-0000-{link:012d}"
-        return LifecyclePlan.from_mappings(
+        parent_uuid = f"00000000-0000-4000-8000-{link:012d}"
+        child_uuid = f"10000000-0000-4000-8000-{link:012d}"
+        return LifecyclePlan.from_draft(
             identity=LifecycleIdentity("retention-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=ParentGuard("completed", "on", "retention-chain", link, f"rf-{link}"),
@@ -4694,18 +4694,23 @@ def test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows():
     now = [1000.0]
 
     def plan_for(link: int, *, max_attempts: int = 3) -> LifecyclePlan:
-        parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
-        child_uuid = f"10000000-0000-0000-0000-{link:012d}"
-        return LifecyclePlan.from_mappings(
+        parent_uuid = f"00000000-0000-4000-8000-{link:012d}"
+        child_uuid = f"10000000-0000-4000-8000-{link:012d}"
+        return LifecyclePlan.from_draft(
             identity=LifecycleIdentity("claim-guards", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=ParentGuard("completed", "on", "claim-guards", link, "rf1-claim"),
-            child_payload={
+            draft=_task_draft({
                 "uuid": child_uuid,
+                "description": "claim guard child",
+                "status": "pending",
+                "chain": "on",
                 "chainID": "claim-guards",
                 "link": link + 1,
                 "prevLink": parent_uuid[:8],
-            },
+                "cp": "1d",
+                "due": "20260102T000000Z",
+            }),
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
             max_attempts=max_attempts,
@@ -34974,9 +34979,13 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
     def make_plan(parent_uuid, child_uuid):
         guard = ParentGuard("completed", "on", "chain-s12b", 1, "rf1-s12b", "20260101T000000Z")
         identity = LifecycleIdentity("chain-s12b", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
-        return LifecyclePlan.from_mappings(
+        return LifecyclePlan.from_draft(
             identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-            child_payload={"uuid": child_uuid, "chainID": "chain-s12b", "link": 2, "prevLink": parent_uuid[:8]},
+            draft=_task_draft({
+                "uuid": child_uuid, "description": "crash recovery child", "status": "pending", "chain": "on",
+                "chainID": "chain-s12b", "link": 2, "prevLink": parent_uuid[:8],
+                "cp": "1d", "due": "20260102T000000Z",
+            }),
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
@@ -34987,7 +34996,7 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
         uow = _Uow()
         svc1 = LifecycleApplicationService(unit_of_work=uow, mutations=_Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.RETRYABLE]),
                                             outbox=outbox, owner="owner-a", lease_seconds=0.2)
-        plan = make_plan("00000000-0000-0000-0000-000000000201", "00000000-0000-0000-0000-000000000202")
+        plan = make_plan("00000000-0000-4000-8000-000000000201", "00000000-0000-4000-8000-000000000202")
         svc1.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         d1 = svc1.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(d1.outcomes[0].kind is LifecycleApplicationOutcomeKind.RETRYABLE, f"expected retryable: {d1.outcomes[0]}")
@@ -35005,7 +35014,7 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
     # Crash scenario: both mutations done, verified stage not persisted -> no remutation on resume
     with tempfile.TemporaryDirectory() as td:
         outbox2 = LifecycleOutboxRepository(Path(td))
-        plan2 = make_plan("00000000-0000-0000-0000-000000000203", "00000000-0000-0000-0000-000000000204")
+        plan2 = make_plan("00000000-0000-4000-8000-000000000203", "00000000-0000-4000-8000-000000000204")
         staged = outbox2.enqueue(plan2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         outbox2.claim_intent(owner="owner-a", lease_seconds=0.2, intent_id=staged.record.intent_id)
         outbox2.advance_stage(intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.CHILD_PRESENT)

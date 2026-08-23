@@ -130,7 +130,16 @@ def classify_modify_route(
         status = new.get("status")
     is_deleted = str(status or "").lower() == "deleted"
     has_nautical_fields = task_has_nautical_fields(old) or task_has_nautical_fields(new)
-    is_non_completion = bool(has_nautical_fields and not is_deleted and is_non_completion_modify(old, new))
+    if transition is not None:
+        old_status = str(transition.old.field("status").raw_value() or "").strip().lower()
+        new_status = str(transition.new.field("status").raw_value() or "").strip().lower()
+        is_non_completion = bool(
+            has_nautical_fields
+            and not is_deleted
+            and (old_status == new_status or new_status != "completed")
+        )
+    else:
+        is_non_completion = bool(has_nautical_fields and not is_deleted and is_non_completion_modify(old, new))
     return ModifyLifecycleRoute(
         is_deleted=is_deleted,
         has_nautical_fields=has_nautical_fields,

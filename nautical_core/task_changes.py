@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
@@ -14,6 +15,28 @@ from .task_models import ChainID, TaskTimestamp, TaskUUID
 
 class TaskChangeError(ValueError):
     """A task patch is ambiguous, unsafe, or violates its operation policy."""
+
+
+def timestamp_equal(left: object, right: object) -> bool:
+    """Compare Taskwarrior compact and ISO timestamps by UTC instant."""
+    def parse(value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(text, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    left_value = parse(left)
+    right_value = parse(right)
+    return left_value is not None and right_value is not None and left_value == right_value
 
 
 class ChangeAction(str, Enum):
@@ -198,4 +221,5 @@ __all__ = (
     "TaskChange",
     "TaskChangeError",
     "TaskPatch",
+    "timestamp_equal",
 )

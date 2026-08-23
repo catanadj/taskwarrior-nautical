@@ -38,6 +38,7 @@ from .recurrence_spec import normalize_recurrence_text
 from .lifecycle_models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import FieldPresence, TaskObservation
+from .task_changes import timestamp_equal
 
 
 class _TaskRepository(Protocol):
@@ -82,13 +83,6 @@ def _observed_value(row: TaskObservation | Mapping[str, Any], field: str) -> obj
         state = row.field(field)
         return None if state.presence is FieldPresence.ABSENT else state.raw_value()
     return row.get(field)
-
-
-def _timestamp_equal(left: object, right: object) -> bool:
-    """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
-    left_dt = _parse_timestamp(left)
-    right_dt = _parse_timestamp(right)
-    return left_dt is not None and right_dt is not None and left_dt == right_dt
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -767,7 +761,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.NATIVE_UNTIL_REPAIRED,
-            lambda row: _timestamp_equal(_observed_value(row, "until"), request.payload.replacement_until),
+            lambda row: timestamp_equal(_observed_value(row, "until"), request.payload.replacement_until),
         )
 
     def repair_metadata(self, request: MutationRequest) -> MutationOutcome:

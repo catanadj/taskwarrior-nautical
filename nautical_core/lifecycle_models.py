@@ -16,6 +16,7 @@ import re
 from typing import Any, Callable, Iterable, Mapping, TypeAlias
 
 from .task_models import FieldPresence, TaskObservation
+from .task_field_policy import LIFECYCLE_VOLATILE_CHILD_FIELDS
 
 
 class LifecycleContractError(ValueError):
@@ -153,9 +154,6 @@ _RECURRENCE_FINGERPRINT_FIELDS = (
 _RECURRENCE_DATETIME_FIELDS = frozenset({"chainUntil", "due", "scheduled", "until", "wait"})
 _TASKWARRIOR_DATETIME_RE = re.compile(r"^(\d{8})T(\d{6})(Z|[+-]\d{4})$")
 _PLAN_DATETIME_FIELDS = frozenset({"due", "scheduled", "until", "wait", "chainUntil"})
-_PLAN_VOLATILE_CHILD_FIELDS = frozenset(
-    {"id", "entry", "modified", "urgency", "status", "end", "start", "nextLink", "mask", "imask", "parent", "recur", "rc"}
-)
 
 
 def _canonical_datetime_text(value: Any, parse_datetime: Callable[[Any], Any] | None) -> str:
@@ -621,7 +619,7 @@ class LifecyclePlan:
         payload.pop("max_attempts", None)
         child = payload.get("child_payload")
         if isinstance(child, dict):
-            for field in _PLAN_VOLATILE_CHILD_FIELDS:
+            for field in LIFECYCLE_VOLATILE_CHILD_FIELDS:
                 child.pop(field, None)
             for field in _PLAN_DATETIME_FIELDS:
                 if field in child:

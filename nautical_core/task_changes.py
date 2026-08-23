@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .task_models import ChainID, TaskObservation, TaskTimestamp, TaskUUID
+from .task_field_policy import IMMUTABLE_TASK_FIELDS, TASK_TIMESTAMP_FIELDS, VOLATILE_TASK_FIELDS
 
 
 class TaskChangeError(ValueError):
@@ -53,11 +54,6 @@ class PatchOperation(str, Enum):
     ORDINARY_CARRY = "ordinary_carry"
 
 
-_VOLATILE_FIELDS = frozenset({"id", "urgency", "modified", "end"})
-_IMMUTABLE_FIELDS = frozenset({"uuid", "chainID", "link", "prevLink"})
-_TIMESTAMP_FIELDS = frozenset({"due", "scheduled", "wait", "until", "entry", "modified", "end"})
-
-
 @dataclass(frozen=True, slots=True)
 class TaskTransition:
     """Immutable semantic old/new observation pair for a modify hook."""
@@ -81,7 +77,7 @@ class TaskTransition:
         changed: list[str] = []
         for field in fields:
             left, right = value(old, field), value(new, field)
-            if field in _TIMESTAMP_FIELDS and timestamp_equal(left, right):
+            if field in TASK_TIMESTAMP_FIELDS and timestamp_equal(left, right):
                 continue
             if left != right:
                 changed.append(field)
@@ -145,10 +141,10 @@ class TaskPatch:
         fields = [item.field for item in changes]
         if len(fields) != len(set(fields)):
             raise TaskChangeError("a task patch cannot change one field more than once")
-        forbidden = _VOLATILE_FIELDS.intersection(fields)
+        forbidden = VOLATILE_TASK_FIELDS.intersection(fields)
         if forbidden:
             raise TaskChangeError(f"volatile fields cannot be patched: {', '.join(sorted(forbidden))}")
-        immutable = _IMMUTABLE_FIELDS.intersection(fields)
+        immutable = IMMUTABLE_TASK_FIELDS.intersection(fields)
         if immutable and self.operation not in {PatchOperation.PARENT_LINK, PatchOperation.CHAIN_DISABLE}:
             raise TaskChangeError(f"immutable fields require a named structural operation: {', '.join(sorted(immutable))}")
         object.__setattr__(self, "changes", changes)

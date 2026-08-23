@@ -216,6 +216,35 @@ def _bench_task_immutability(rounds: int) -> float:
     return time.perf_counter() - started
 
 
+def _bench_task_resource_limits(rounds: int) -> float:
+    """Measure bounded nested freezing and the existing protocol size guard."""
+    from nautical_core.hook_protocol import MAX_JSON_BYTES, probe_on_add
+
+    nested = {"level": [{"value": "x" * 64, "items": [index, index + 1]} for index in range(32)]}
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000004",
+        "description": "resource limit benchmark",
+        "status": "pending",
+        "chainID": "resource-perf",
+        "link": 1,
+        "nested": nested,
+    }
+    encoded = json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) >= MAX_JSON_BYTES:
+        raise RuntimeError("resource benchmark fixture unexpectedly exceeds the protocol limit")
+    observation = task_codec.DEFAULT_TASK_CODEC.decode_row(row, source_query="perf:resource-limits")
+    oversize = b"{" + b'"description":"' + b"x" * MAX_JSON_BYTES + b'"}'
+    if probe_on_add(oversize, max_bytes=MAX_JSON_BYTES).failure is None:
+        raise RuntimeError("protocol accepted an oversized hook payload")
+    started = time.perf_counter()
+    for _ in range(max(1, int(rounds))):
+        if not observation.arbitrary.get("nested"):
+            raise RuntimeError("bounded nested arbitrary field was lost")
+        if len(encoded.encode("utf-8")) >= MAX_JSON_BYTES:
+            raise RuntimeError("resource fixture crossed the configured input limit")
+    return time.perf_counter() - started
+
+
 def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
     """Measure hint construction with an explicit persistent-cache state."""
     with _perf_cache_context():
@@ -2299,6 +2328,7 @@ def main() -> int:
     snapshot_reuse_rounds = int(workload.get("snapshot_reuse_rounds", 3))
     snapshot_reuse_rows = int(workload.get("snapshot_reuse_rows", 1000))
     immutability_rounds = int(workload.get("immutability_rounds", 20))
+    resource_limit_rounds = int(workload.get("resource_limit_rounds", 100))
     hints_rounds = int(workload.get("build_hints_rounds", 180))
     hints_cold_rounds = max(1, int(workload.get("build_hints_cold_rounds", 1)))
     hints_warm_rounds = max(1, int(workload.get("build_hints_warm_rounds", hints_rounds)))
@@ -2327,6 +2357,11 @@ def main() -> int:
             repeats,
         ),
         ("task_immutability", lambda: _bench_task_immutability(immutability_rounds), repeats),
+        (
+            "task_resource_limits",
+            lambda: _bench_task_resource_limits(resource_limit_rounds),
+            repeats,
+        ),
         (
             "build_hints_cold",
             lambda: _bench_build_hints(exprs, hints_cold_rounds, mode="cold"),

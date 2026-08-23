@@ -46,7 +46,7 @@ from nautical_core.integration_models import (  # noqa: E402
     Unavailable,
 )
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
-from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation  # noqa: E402
 from nautical_core.task_codec import DEFAULT_TASK_CODEC  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
@@ -1012,11 +1012,14 @@ def _lifecycle_plan_with_resolved_child_uuid(
     child["uuid"] = resolved_uuid
     patch = dict(lifecycle_plan.parent_patch_dict())
     patch["nextLink"] = resolved_uuid[:8]
-    resolved_plan = LifecyclePlan.from_mappings(
+    resolved_task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(child, source_query="reconcile resolved child")
+    )
+    resolved_plan = LifecyclePlan.from_draft(
         identity=lifecycle_plan.identity,
         action=lifecycle_plan.action,
         parent_guard=lifecycle_plan.parent_guard,
-        child_payload=child,
+        draft=TaskDraft.from_task(resolved_task),
         parent_patch=patch,
         expected_postconditions=lifecycle_plan.expected_postconditions,
         max_attempts=lifecycle_plan.max_attempts,

@@ -598,6 +598,14 @@ class MutationRequest:
     guard: MutationGuard
     payload: MutationPayload
 
+    @classmethod
+    def child_import(cls, guard: MutationGuard, draft: object) -> "MutationRequest":
+        """Build a guarded child-import request from a validated TaskDraft."""
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("child import requires a MutationGuard")
+        payload = ChildImportPayload.from_draft(draft, parent_uuid=guard.task_uuid)
+        return cls(MutationOperation.CHILD_IMPORT, guard, payload)
+
     def __post_init__(self) -> None:
         try:
             operation = MutationOperation(self.operation)

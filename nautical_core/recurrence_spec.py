@@ -38,7 +38,11 @@ class RecurrenceSpec:
         recurrence_context = context or spec.context
         if recurrence_context.chain_id != task.identity.chain_id.value:
             raise ValueError("Conflicting recurrence identities: context.chain_id does not match task chainID.")
-        return replace(spec, context=recurrence_context)
+        return replace(
+            spec,
+            context=recurrence_context,
+            anchor_mode=str(spec.anchor_mode or "skip").strip().lower() or "skip",
+        )
 
     @classmethod
     def from_observation(

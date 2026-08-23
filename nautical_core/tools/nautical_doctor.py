@@ -139,7 +139,7 @@ def _task_export(unit_of_work: TaskwarriorUnitOfWork) -> tuple[bool, list[TaskOb
         bounded=False,
     )
     if isinstance(read, Found):
-        return True, list(read.value.rows), ""
+        return True, list(read.value), ""
     if isinstance(read, Absent):
         return True, [], ""
     if isinstance(read, Unavailable):

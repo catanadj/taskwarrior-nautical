@@ -136,9 +136,10 @@ def _timeline_future_cp_items(
     if evaluator is None:
         from .scheduler_service import SchedulerService
         from .recurrence_context import RecurrenceContext
+        from .task_codec import DEFAULT_TASK_CODEC
 
-        evaluator = SchedulerService.from_task(
-            task,
+        evaluator = SchedulerService.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(task, source_query="modify timeline"),
             context=RecurrenceContext.from_task(
                 task,
                 fallback_chain_id=task.get("uuid") or "preview",

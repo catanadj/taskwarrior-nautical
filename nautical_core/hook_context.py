@@ -7,6 +7,7 @@ from typing import Any, Callable
 from .integration_context import IntegrationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation
+from .task_changes import TaskTransition
 
 
 @dataclass(slots=True)
@@ -33,6 +34,9 @@ class OnModifyRequest:
     runtime: HookRuntimeContext
     old: dict[str, Any]
     new: dict[str, Any]
+    old_observation: TaskObservation | None = None
+    new_observation: TaskObservation | None = None
+    transition: TaskTransition | None = None
 
 
 @dataclass(slots=True)
@@ -146,8 +150,27 @@ def build_on_add_request(
     return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 
 
-def build_on_modify_request(*, runtime: HookRuntimeContext, old: dict[str, Any], new: dict[str, Any]) -> OnModifyRequest:
-    return OnModifyRequest(runtime=runtime, old=old, new=new)
+def build_on_modify_request(
+    *,
+    runtime: HookRuntimeContext,
+    old: dict[str, Any],
+    new: dict[str, Any],
+    old_observation: TaskObservation | None = None,
+    new_observation: TaskObservation | None = None,
+) -> OnModifyRequest:
+    transition = (
+        TaskTransition.from_observations(old_observation, new_observation)
+        if old_observation is not None and new_observation is not None
+        else None
+    )
+    return OnModifyRequest(
+        runtime=runtime,
+        old=old,
+        new=new,
+        old_observation=old_observation,
+        new_observation=new_observation,
+        transition=transition,
+    )
 
 
 def build_on_exit_request(*, runtime: HookRuntimeContext) -> OnExitRequest:

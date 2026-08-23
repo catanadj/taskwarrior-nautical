@@ -81,7 +81,8 @@ class ProtocolFailure:
 
 class HookProtocolResult:
     __slots__ = (
-        "event", "raw_bytes", "raw_text", "old", "new", "observation", "is_nautical",
+        "event", "raw_bytes", "raw_text", "old", "new", "observation",
+        "old_observation", "new_observation", "is_nautical",
         "error", "error_kind", "request", "failure",
     )
 
@@ -94,6 +95,8 @@ class HookProtocolResult:
         old: dict | None = None,
         new: dict | None = None,
         observation: TaskObservation | None = None,
+        old_observation: TaskObservation | None = None,
+        new_observation: TaskObservation | None = None,
         is_nautical: bool = False,
         error: str = "",
         error_kind: str = "",
@@ -106,6 +109,8 @@ class HookProtocolResult:
         self.old = old
         self.new = new
         self.observation = observation
+        self.old_observation = old_observation
+        self.new_observation = new_observation
         self.is_nautical = bool(is_nautical)
         self.error = str(error or "")
         self.error_kind = str(error_kind or "")
@@ -222,6 +227,9 @@ def _validate_modify_tasks(
     raw_text: str,
     old: dict,
     new: dict,
+    *,
+    old_observation: TaskObservation | None = None,
+    new_observation: TaskObservation | None = None,
 ) -> HookProtocolResult:
     is_nautical = task_has_modify_nautical_fields(old) or task_has_modify_nautical_fields(new)
     old_uuid = str(old.get("uuid") or "").strip()
@@ -251,6 +259,8 @@ def _validate_modify_tasks(
         raw_text=raw_text,
         old=old,
         new=new,
+        old_observation=old_observation,
+        new_observation=new_observation,
         is_nautical=is_nautical,
     )
 
@@ -281,9 +291,23 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
     tasks = [observation.to_mapping() for observation in observations]
 
     if len(tasks) >= 2:
-        return _validate_modify_tasks(raw_bytes, raw_text, tasks[0], tasks[-1])
+        return _validate_modify_tasks(
+            raw_bytes,
+            raw_text,
+            tasks[0],
+            tasks[-1],
+            old_observation=observations[0],
+            new_observation=observations[-1],
+        )
     if len(tasks) == 1:
-        return _validate_modify_tasks(raw_bytes, raw_text, tasks[0], tasks[0])
+        return _validate_modify_tasks(
+            raw_bytes,
+            raw_text,
+            tasks[0],
+            tasks[0],
+            old_observation=observations[0],
+            new_observation=observations[0],
+        )
     return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 
 

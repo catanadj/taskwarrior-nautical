@@ -939,6 +939,8 @@ def _fail_and_exit(title: str, msg: str) -> NoReturn:
 
 _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
+_PARSED_OLD_OBSERVATION = None
+_PARSED_NEW_OBSERVATION = None
 
 
 def _fail_protocol_error(msg: str) -> NoReturn:
@@ -985,10 +987,12 @@ def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[o
 
 
 def _read_two():
-    global _RAW_INPUT_TEXT, _PARSED_NEW
+    global _RAW_INPUT_TEXT, _PARSED_NEW, _PARSED_OLD_OBSERVATION, _PARSED_NEW_OBSERVATION
     if _EARLY_PROTOCOL_RESULT is not None:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
         _PARSED_NEW = _EARLY_PROTOCOL_RESULT.new
+        _PARSED_OLD_OBSERVATION = getattr(_EARLY_PROTOCOL_RESULT, "old_observation", None)
+        _PARSED_NEW_OBSERVATION = getattr(_EARLY_PROTOCOL_RESULT, "new_observation", None)
         if not _EARLY_PROTOCOL_RESULT.valid:
             if _EARLY_PROTOCOL_RESULT.error_kind == "protocol":
                 _fail_protocol_error(_EARLY_PROTOCOL_RESULT.error)
@@ -1018,6 +1022,8 @@ def _read_two():
         old = getattr(request, "old", None) or result.old
         new = getattr(request, "new", None) or result.new
         if isinstance(old, dict) and isinstance(new, dict):
+            _PARSED_OLD_OBSERVATION = getattr(result, "old_observation", None)
+            _PARSED_NEW_OBSERVATION = getattr(result, "new_observation", None)
             _PARSED_NEW = new
             return old, new
         _fail_invalid_input("on-modify must receive two JSON tasks")
@@ -3485,6 +3491,8 @@ def main():
         runtime=_build_hook_runtime_context(),
         old=old,
         new=new,
+        old_observation=_PARSED_OLD_OBSERVATION,
+        new_observation=_PARSED_NEW_OBSERVATION,
     )
     if _IMPORT_MS is not None:
         state.diag_stats["startup_import_ms"] = round(float(_IMPORT_MS), 3)

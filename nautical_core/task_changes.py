@@ -10,7 +10,7 @@ import json
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .task_models import ChainID, TaskTimestamp, TaskUUID
+from .task_models import ChainID, TaskObservation, TaskTimestamp, TaskUUID
 
 
 class TaskChangeError(ValueError):
@@ -55,6 +55,40 @@ class PatchOperation(str, Enum):
 
 _VOLATILE_FIELDS = frozenset({"id", "urgency", "modified", "end"})
 _IMMUTABLE_FIELDS = frozenset({"uuid", "chainID", "link", "prevLink"})
+_TIMESTAMP_FIELDS = frozenset({"due", "scheduled", "wait", "until", "entry", "modified", "end"})
+
+
+@dataclass(frozen=True, slots=True)
+class TaskTransition:
+    """Immutable semantic old/new observation pair for a modify hook."""
+
+    old: TaskObservation
+    new: TaskObservation
+    changed_fields: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.old, TaskObservation) or not isinstance(self.new, TaskObservation):
+            raise TaskChangeError("task transition requires typed observations")
+        object.__setattr__(self, "changed_fields", tuple(self.changed_fields))
+
+    @classmethod
+    def from_observations(cls, old: TaskObservation, new: TaskObservation) -> "TaskTransition":
+        fields = sorted(set(old.fields) | set(new.fields) | set(old.arbitrary) | set(new.arbitrary))
+
+        def value(row: TaskObservation, field: str) -> object:
+            return row.field(field).raw_value()
+
+        changed: list[str] = []
+        for field in fields:
+            left, right = value(old, field), value(new, field)
+            if field in _TIMESTAMP_FIELDS and timestamp_equal(left, right):
+                continue
+            if left != right:
+                changed.append(field)
+        return cls(old, new, tuple(changed))
+
+    def changed(self, field: str) -> bool:
+        return str(field) in self.changed_fields
 
 
 def _freeze(value: Any) -> Any:

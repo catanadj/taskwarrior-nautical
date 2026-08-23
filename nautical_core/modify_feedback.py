@@ -559,7 +559,8 @@ def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) 
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)
     target_field = "scheduled" if meta.get("target_field") == "scheduled" else "due"
-    due0 = parse_dt_any(task.get("due") or task.get("scheduled"))
+    typed_due = task.timestamp("due") or task.timestamp("scheduled") if hasattr(task, "timestamp") else None
+    due0 = typed_due.value if typed_due is not None else parse_dt_any(task.get("due") or task.get("scheduled"))
     due_s = fmt_dt_local(due0) if due0 else f"(no {target_field})"
     if mode == "skip":
         return "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)"
@@ -767,6 +768,9 @@ def _lifecycle_result_label(lifecycle_result) -> str:
 
 def _child_expiration(core, child: dict):
     try:
+        typed_until = child.timestamp("until") if hasattr(child, "timestamp") else None
+        if typed_until is not None:
+            return typed_until.value
         return core.parse_dt_any(child.get("until"))
     except Exception:
         return None

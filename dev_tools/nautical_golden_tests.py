@@ -155,6 +155,14 @@ def _task_snapshot(row):
     return TaskSnapshot.from_observation(_task_observations((row,))[0])
 
 
+def _task_observation(row):
+    return _task_observations((row,))[0]
+
+
+def _recovery_plan(reconcile, parent, **kwargs):
+    return reconcile.plan_recovery_decision(_task_observation(parent), **kwargs)
+
+
 def _found_task(row):
     from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
     return Found(row, "isolated test read")
@@ -26514,7 +26522,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
 
     import nautical_core.chain_integrity_lifecycle as reconcile
 
-    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
+    plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
     expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
     expect("wait carry failed" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
 
@@ -29047,7 +29055,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
         "end": "20260726T205959Z",
     }
     is_candidate = lambda task: reconcile.is_orphan_expiration_candidate(
-        task,
+        _task_observation(task),
         safe_parse_datetime=mod._safe_parse_datetime,
     )
 
@@ -29055,21 +29063,21 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     manual = dict(parent, end="20260726T205958Z")
     expect(not is_candidate(manual), "manual deletion before until must not advance")
     evidence = reconcile.deleted_chain_disposition(
-        manual,
+        _task_observation(manual),
         safe_parse_datetime=mod._safe_parse_datetime,
     )
     expect(evidence.disposition.value == "manual", f"early deletion should stop the chain: {evidence!r}")
     no_until_evidence = reconcile.deleted_chain_disposition(
-        {key: value for key, value in parent.items() if key != "until"},
+        _task_observation({key: value for key, value in parent.items() if key != "until"}),
         safe_parse_datetime=mod._safe_parse_datetime,
     )
     expect(no_until_evidence.disposition.value == "manual", f"deletion without until should stop the chain: {no_until_evidence!r}")
     malformed_evidence = reconcile.deleted_chain_disposition(
-        dict(parent, until="not-a-date"),
+        _task_observation(dict(parent, until="not-a-date")),
         safe_parse_datetime=mod._safe_parse_datetime,
     )
     expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
-    manual_plan = reconcile.plan_recovery_decision(manual, existing_children=[], hook=mod)
+    manual_plan = _recovery_plan(reconcile, manual, existing_children=[], hook=mod)
     expect(manual_plan.action == "manual_stop", f"manual deletion should disable the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
     expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
@@ -29357,6 +29365,7 @@ def test_reconcile_expiration_cp_advances_from_recurrence_target():
     due = mod.core.build_local_datetime(date(2026, 7, 20), (9, 0))
     expired_end = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
     parent = {
+        "uuid": "00000000-0000-4000-8000-000000000509",
         "status": "deleted",
         "cp": "7d",
         "chainID": "11111111",
@@ -29404,7 +29413,7 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
         "wait": mod.core.fmt_isoz(wait),
         "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
     }
-    plan = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
+    plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
     expect(plan.action == "spawn" and plan.child is not None, f"valid hookless carry did not produce a child: {plan}")
     child_due = mod.core.parse_dt_any(plan.child.get("due"))
     child_scheduled = mod.core.parse_dt_any(plan.child.get("scheduled"))
@@ -29413,10 +29422,10 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
     expect(child_wait - child_due == wait - due, f"wait carry drifted: {plan.child!r}")
 
     malformed = dict(parent, scheduled="not-a-date")
-    failed = reconcile.plan_recovery_decision(malformed, existing_children=[], hook=mod)
+    failed = _recovery_plan(reconcile, malformed, existing_children=[], hook=mod)
     expect(failed.action == "error" and "scheduled field" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
     malformed_wait = dict(parent, wait="not-a-date")
-    failed_wait = reconcile.plan_recovery_decision(malformed_wait, existing_children=[], hook=mod)
+    failed_wait = _recovery_plan(reconcile, malformed_wait, existing_children=[], hook=mod)
     expect(failed_wait.action == "error" and "wait carry" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
@@ -29427,6 +29436,7 @@ def test_reconcile_expiration_anchor_advances_from_recurrence_target():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_reconcile_expiration_anchor_due_test")
     parent = {
+        "uuid": "00000000-0000-4000-8000-00000000050a",
         "status": "deleted",
         "anchor": "w:mon@t=09:00",
         "anchor_mode": "skip",
@@ -29471,17 +29481,18 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         "prevLink": "11111111",
     }
 
-    backfill = reconcile.plan_recovery_decision(parent, existing_children=[deleted_child], hook=mod)
+    backfill = _recovery_plan(reconcile, parent, existing_children=[deleted_child], hook=mod)
     expect(
         backfill.action == "backfill_nextlink" and backfill.child_short == "22222222",
         f"deleted next slot should be backfilled rather than duplicated: {backfill}",
     )
 
-    capped = reconcile.plan_recovery_decision(dict(parent, chainMax=1), existing_children=[], hook=mod)
+    capped = _recovery_plan(reconcile, dict(parent, chainMax=1), existing_children=[], hook=mod)
     expect(capped.action == "legitimate_final" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
 
     chain_until = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
-    limited = reconcile.plan_recovery_decision(
+    limited = _recovery_plan(
+        reconcile,
         dict(parent, chainUntil=mod.core.fmt_isoz(chain_until)),
         existing_children=[],
         hook=mod,
@@ -29491,7 +29502,7 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         f"chainUntil not enforced against expired successor: {limited}",
     )
 
-    spawned = reconcile.plan_recovery_decision(parent, existing_children=[], hook=mod)
+    spawned = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
     expect(spawned.action == "spawn", f"expected expiration spawn plan: {spawned}")
     expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
     expect((spawned.child or {}).get("until"), f"spawned child should carry relative until: {spawned}")

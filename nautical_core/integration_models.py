@@ -606,6 +606,27 @@ class MutationRequest:
         payload = ChildImportPayload.from_draft(draft, parent_uuid=guard.task_uuid)
         return cls(MutationOperation.CHILD_IMPORT, guard, payload)
 
+    @classmethod
+    def parent_link(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a guarded parent-link request from a typed TaskPatch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("parent link requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.PARENT_LINK:
+            raise IntegrationContractError("parent link requires a PARENT_LINK TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("parent-link patch target differs from guard")
+        values = patch.set_values()
+        child_short = str(values.get("nextLink") or "").strip()
+        if not child_short:
+            raise IntegrationContractError("parent-link patch requires nextLink")
+        return cls(
+            MutationOperation.PARENT_LINK,
+            guard,
+            ParentLinkPayload(guard.task_uuid, child_short),
+        )
+
     def __post_init__(self) -> None:
         try:
             operation = MutationOperation(self.operation)

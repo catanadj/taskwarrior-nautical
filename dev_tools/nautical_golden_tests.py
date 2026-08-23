@@ -3269,6 +3269,19 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         draft_request.payload.child_uuid == child_uuid,
         "typed child draft request lost its identity",
     )
+    from nautical_core.task_changes import TaskPatch
+    from nautical_core.task_models import TaskUUID
+    link_request = MutationRequest.parent_link(
+        guard,
+        TaskPatch.parent_link(
+            TaskUUID(parent_uuid),
+            TaskUUID(child_uuid),
+        ),
+    )
+    expect(
+        link_request.payload.child_short_uuid == child_uuid,
+        "typed parent-link patch lost its child identity",
+    )
 
     named = (
         MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),

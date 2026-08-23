@@ -14,6 +14,7 @@ import json
 from typing import Any, Mapping
 
 from .recurrence_spec import RecurrenceSpec
+from .task_models import TaskObservation
 
 
 COMPILER_SCHEMA_VERSION = 1
@@ -279,6 +280,11 @@ class CompiledSchedule:
     @classmethod
     def from_task(cls, task: Mapping[str, Any], **kwargs: Any) -> "CompiledSchedule":
         return cls.from_spec(RecurrenceSpec.from_task(task, **kwargs))
+
+    @classmethod
+    def from_observation(cls, observation: TaskObservation, **kwargs: Any) -> "CompiledSchedule":
+        """Compile one validated Taskwarrior observation without thawing it."""
+        return cls.from_spec(RecurrenceSpec.from_observation(observation, **kwargs))
 
     def to_dict(self) -> dict[str, Any]:
         return {

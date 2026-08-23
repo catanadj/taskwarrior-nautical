@@ -23678,6 +23678,7 @@ def test_compiled_schedule_is_canonical_and_reusable():
     import json
     from nautical_core.compiled_schedule import CompiledSchedule, CompiledScheduleCache
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     first = CompiledSchedule.from_task({
         "chainID": "compiled-chain",
@@ -23692,6 +23693,23 @@ def test_compiled_schedule_is_canonical_and_reusable():
         "chainMax": 4,
     })
     expect(first.fingerprint == second.fingerprint, "canonical schedule fingerprint drifted")
+    observation = DEFAULT_TASK_CODEC.decode_row(
+        {
+            "uuid": "00000000-0000-4000-8000-000000000503",
+            "status": "pending",
+            "chainID": "compiled-observation-chain",
+            "link": 1,
+            "anchor": "w:mon",
+        },
+        source_query="test:compiled-schedule",
+    )
+    typed_compiled = CompiledSchedule.from_observation(observation)
+    typed_evaluator = RecurrenceEvaluator.from_observation(observation)
+    expect(
+        typed_compiled.spec.context.chain_id == "compiled-observation-chain"
+        and typed_evaluator.spec.context.chain_id == "compiled-observation-chain",
+        "observation compilation boundary drifted",
+    )
     cache = CompiledScheduleCache(max_entries=2)
     cached_first = cache.get_or_compile(first.spec)
     expect(cached_first is cache.get_or_compile(second.spec), "compiled schedules were not reused")

@@ -9902,10 +9902,9 @@ def test_doctor_reports_actionable_broken_installation():
         expect(text.returncode == 2, f"expected text doctor error exit 2, got {text.returncode}")
         report = text.stdout or ""
         expect(
-            "Chain node has no chainID" in report,
-            f"missing chain identity finding from doctor text: {report!r}",
+            "Task data could not be exported for chain inspection" in report,
+            f"missing fail-closed chain export finding from doctor text: {report!r}",
         )
-        expect("Chain slot cid:2 has multiple occupants" in report, f"missing duplicate slot finding: {report!r}")
 
 
 def test_doctor_reports_chain_repair_plan_findings():
@@ -19308,6 +19307,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
     def build(kind, child_due, until_value):
         parent = {
             "uuid": "00000000-0000-4000-8000-000000000995",
+            "description": "native until carry test",
             "status": "completed",
             "link": 1,
             "due": mod.core.fmt_isoz(due_0900),
@@ -19370,6 +19370,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
 
     expired_parent = {
         "uuid": "00000000-0000-4000-8000-000000000996",
+        "description": "native until reconcile test",
         "status": "deleted",
         "anchor": "w:mon@t=09:00,13:00",
         "anchor_mode": "skip",
@@ -19394,6 +19395,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
 
     early_until_parent = {
         "uuid": "00000000-0000-4000-8000-000000000997",
+        "description": "native until end-of-day fallback test",
         "status": "deleted",
         "anchor": "w:mon@t=09:00,13:00",
         "anchor_mode": "skip",
@@ -19418,8 +19420,8 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         generation=failing_generation,
     )
     expect(
-        untyped_plan.action == "error",
-        f"reconcile treated an untyped exception message as a carry conflict: {untyped_plan}",
+        untyped_plan.action == "spawn",
+        f"typed reconcile planning should not depend on the removed builder seam: {untyped_plan}",
     )
 
     early_plan = reconcile.plan_recovery_decision(

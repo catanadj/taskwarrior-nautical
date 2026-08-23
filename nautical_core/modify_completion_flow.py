@@ -10,6 +10,7 @@ from nautical_core.modify_models import (
     CompletionComputeResult,
     CompletionFinalizeServices,
     CompletionPreflightContext,
+    TaskView,
 )
 from nautical_core.task_changes import TaskTransition
 
@@ -242,6 +243,13 @@ def finalize_completion_modify(
     state.panel_chain_by_short = chain_by_short
     state.panel_chain_snapshot_loaded = True
 
+    # The lifecycle read cache remains in its operational row form.  Panels
+    # receive immutable views so presentation cannot mutate chain history.
+    presentation_chain_by_short = {
+        short: TaskView.from_mapping(row)
+        for short, row in (chain_by_short or {}).items()
+    }
+
     analytics_advice = None
     integrity_warnings = None
     if chain and services.show_analytics:
@@ -274,7 +282,7 @@ def finalize_completion_modify(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
             lifecycle_result=lifecycle_result,
-            chain_by_short=chain_by_short,
+            chain_by_short=presentation_chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
             base_no=base_no,
@@ -296,7 +304,7 @@ def finalize_completion_modify(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
             lifecycle_result=lifecycle_result,
-            chain_by_short=chain_by_short,
+            chain_by_short=presentation_chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
             base_no=base_no,

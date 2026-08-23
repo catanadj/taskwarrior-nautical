@@ -363,7 +363,7 @@ class AnchorCompletionRenderCallback(Protocol):
         deferred_spawn: bool,
         spawn_intent_id: str | None,
         lifecycle_result: "CompletionLifecycleResult",
-        chain_by_short: dict[str, Any] | None,
+        chain_by_short: dict[str, TaskView] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
         base_no: int,
@@ -392,7 +392,7 @@ class CpCompletionRenderCallback(Protocol):
         deferred_spawn: bool,
         spawn_intent_id: str | None,
         lifecycle_result: "CompletionLifecycleResult",
-        chain_by_short: dict[str, Any] | None,
+        chain_by_short: dict[str, TaskView] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
         base_no: int,
@@ -496,7 +496,7 @@ class CpCompletionFeedbackModel:
     deferred_spawn: bool
     spawn_intent_id: str | None
     lifecycle_result: "CompletionLifecycleResult"
-    chain_by_short: dict[str, Any] | None
+    chain_by_short: dict[str, TaskView] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
     base_no: int
@@ -521,7 +521,7 @@ class AnchorCompletionFeedbackModel:
     deferred_spawn: bool
     spawn_intent_id: str | None
     lifecycle_result: "CompletionLifecycleResult"
-    chain_by_short: dict[str, Any] | None
+    chain_by_short: dict[str, TaskView] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
     base_no: int

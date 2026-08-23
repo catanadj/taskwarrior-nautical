@@ -1243,11 +1243,22 @@ def test_lifecycle_models_enforce_transition_contract():
         }
     )
     identity = LifecycleIdentity("chain-1", "parent-uuid", 4, 5, LifecycleEvent.COMPLETE)
-    plan = LifecyclePlan.from_mappings(
+    plan = LifecyclePlan.from_draft(
         identity=identity,
         action=LifecycleAction.SPAWN_CHILD,
         parent_guard=guard,
-        child_payload={"uuid": "child-uuid", "nested": {"unicode": "Répéter 🌊"}},
+        draft=_task_draft({
+            "uuid": "22222222-0000-4000-8000-000000000902",
+            "description": "next",
+            "status": "pending",
+            "chain": "on",
+            "chainID": "chain-1",
+            "link": 5,
+            "prevLink": "11111111",
+            "cp": "1d",
+            "due": "20260824T090000Z",
+            "nested": {"unicode": "Répéter 🌊"},
+        }),
         parent_patch={"nextLink": "child-uuid"},
         expected_postconditions=("child_exists", "parent_linked"),
     )
@@ -2064,11 +2075,21 @@ def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
     expect(restored.terminal_kind == "date_limit", "terminal exhaustion kind was not durable")
 
     spawn_identity = LifecycleIdentity("final-chain", parent_uuid, 2, 3, LifecycleEvent.COMPLETE)
-    spawn_plan = LifecyclePlan.from_mappings(
+    spawn_plan = LifecyclePlan.from_draft(
         identity=spawn_identity,
         action=LifecycleAction.SPAWN_CHILD,
         parent_guard=guard,
-        child_payload={"uuid": "22222222-0000-0000-0000-000000000930"},
+        draft=_task_draft({
+            "uuid": "22222222-0000-0000-0000-000000000930",
+            "description": "next",
+            "status": "pending",
+            "chain": "on",
+            "chainID": "final-chain",
+            "link": 3,
+            "prevLink": parent_uuid[:8],
+            "cp": "1d",
+            "due": "20260824T090000Z",
+        }),
         parent_patch={"nextLink": "22222222"},
         expected_postconditions=("child_exists", "parent_linked"),
     )

@@ -27,12 +27,19 @@ from nautical_core.lifecycle_planner import (
     plan_expiration_successor,
     plan_candidate_successor,
 )
-from nautical_core.task_models import FieldPresence, NauticalTask, TaskObservation
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
+
+
+def _child_draft(child: dict[str, Any]) -> TaskDraft:
+    task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(child, source_query="reconcile child draft")
+    )
+    return TaskDraft.from_task(task)
 
 
 def _recurrence_field_text(value: object) -> str:
@@ -513,11 +520,11 @@ def _plan_recovery_decision_unscoped(
                 target_link=next_link,
                 event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
             )
-            lifecycle_plan = LifecyclePlan.from_mappings(
+            lifecycle_plan = LifecyclePlan.from_draft(
                 identity=identity,
                 action=LifecycleAction.SPAWN_CHILD,
                 parent_guard=guard,
-                child_payload=existing_child,
+                draft=_child_draft(existing_child),
                 parent_patch={"nextLink": child_short},
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
@@ -684,11 +691,11 @@ def _plan_recovery_decision_unscoped(
                 target_link=next_link,
                 event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
             )
-            lifecycle_plan = LifecyclePlan.from_mappings(
+            lifecycle_plan = LifecyclePlan.from_draft(
                 identity=identity,
                 action=LifecycleAction.SPAWN_CHILD,
                 parent_guard=guard,
-                child_payload=child,
+                draft=_child_draft(child),
                 parent_patch={},
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )

@@ -2952,7 +2952,7 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transit
         _fail_and_exit("Nautical recurrence activation failed", str(exc))
 
 
-def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:
+def _completion_validate_cp_and_anchor(old: dict, new: dict, *, transition=None) -> tuple[str, str, str]:
     modify_validation = _module("modify_validation")
     modify_lifecycle = _module("modify_lifecycle")
     return modify_validation.validate_completion_cp_and_anchor(
@@ -2965,7 +2965,11 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
             validate_chain_limits=_validate_chain_limits_on_modify,
             parse_cp_sequence=core.parse_cp_sequence,
             cp_sequence_parse_error=core.cp_sequence_parse_error,
-            field_changed=_field_changed,
+            field_changed=(
+                (lambda _old, _new, field: transition.changed(field))
+                if transition is not None
+                else _field_changed
+            ),
             validate_anchor=_validate_anchor_on_modify,
             validate_cp=_validate_cp_on_modify,
             apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
@@ -3344,7 +3348,9 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work, *, transition=
     )
     flow_services = modify_completion_flow.CompletionFlowServices(
         runtime_state=_modify_runtime_state,
-        prepare_recurrence=_completion_validate_cp_and_anchor,
+        prepare_recurrence=lambda old_task, new_task: _completion_validate_cp_and_anchor(
+            old_task, new_task, transition=transition,
+        ),
         preserve_cp_relative_offsets=_preserve_cp_relative_offsets_on_due_change,
         preserve_native_until=_preserve_native_until_on_target_change,
         validate_native_until=_validate_native_until_after_target_or_fail,

@@ -3270,7 +3270,7 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         "typed child draft request lost its identity",
     )
     from nautical_core.task_changes import TaskPatch
-    from nautical_core.task_models import TaskUUID
+    from nautical_core.task_models import TaskTimestamp, TaskUUID
     link_request = MutationRequest.parent_link(
         guard,
         TaskPatch.parent_link(
@@ -3289,6 +3289,30 @@ def test_integration_mutation_requests_use_named_typed_payloads():
     expect(
         disable_request.payload.target_chain == "off",
         "typed chain-disable patch lost its target state",
+    )
+    from datetime import datetime, timezone
+    repair_guard = MutationGuard(
+        parent_uuid,
+        "completed",
+        "chain-requests",
+        7,
+        "rf1-requests",
+        (
+            GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),
+            GuardTimestamp(GuardTimestampField.UNTIL, "20260813T200000Z"),
+        ),
+        0,
+    )
+    repair_request = MutationRequest.native_until_repair(
+        repair_guard,
+        TaskPatch.native_until_repair(
+            TaskUUID(parent_uuid),
+            TaskTimestamp(datetime(2026, 8, 14, 20, tzinfo=timezone.utc)),
+        ),
+    )
+    expect(
+        repair_request.payload.expected_until == "20260813T200000Z",
+        "native-until patch lost guarded prior value",
     )
 
     named = (

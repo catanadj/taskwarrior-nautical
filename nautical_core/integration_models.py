@@ -647,6 +647,30 @@ class MutationRequest:
             ChainDisablePayload(guard.task_uuid, expected_chain=guard.chain, target_chain="off"),
         )
 
+    @classmethod
+    def native_until_repair(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a native-until repair from typed patch and guard evidence."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("native-until repair requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.NATIVE_UNTIL_REPAIR:
+            raise IntegrationContractError("native-until repair requires a NATIVE_UNTIL_REPAIR TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("native-until patch target differs from guard")
+        replacement = str(patch.set_values().get("until") or "").strip()
+        expected = next(
+            (item.value for item in guard.timestamps if item.field is GuardTimestampField.UNTIL),
+            "",
+        )
+        if not expected:
+            raise IntegrationContractError("native-until repair requires guarded until evidence")
+        return cls(
+            MutationOperation.NATIVE_UNTIL_REPAIR,
+            guard,
+            NativeUntilRepairPayload(guard.task_uuid, expected, replacement),
+        )
+
     def __post_init__(self) -> None:
         try:
             operation = MutationOperation(self.operation)

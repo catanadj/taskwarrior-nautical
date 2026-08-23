@@ -420,24 +420,19 @@ class ChildImportPayload:
         object.__setattr__(self, "fields", fields)
 
     @classmethod
-    def from_mapping(cls, payload: dict[str, object], *, parent_uuid: str) -> "ChildImportPayload":
-        if not isinstance(payload, dict):
-            raise IntegrationContractError("child import payload must be an object")
-        child_uuid = _required_text(payload.get("uuid"), "child UUID")
-        chain_id = _required_text(payload.get("chainID"), "child chainID")
-        target_link = _coerce_payload_link(payload.get("link"))
-        if target_link is None:
-            raise IntegrationContractError("child import payload requires an integer link")
-        return cls(parent_uuid, child_uuid, chain_id, target_link, _freeze_pairs(payload))
-
-    @classmethod
     def from_draft(cls, draft: object, *, parent_uuid: str) -> "ChildImportPayload":
         """Create an import payload only from a validated child draft."""
         from .task_models import TaskDraft
 
         if not isinstance(draft, TaskDraft):
             raise IntegrationContractError("child import requires a validated TaskDraft")
-        return cls.from_mapping(draft.to_mapping(), parent_uuid=parent_uuid)
+        return cls(
+            parent_uuid=parent_uuid,
+            child_uuid=draft.identity.task_uuid.value,
+            chain_id=draft.identity.chain_id.value,
+            target_link=draft.identity.link.value,
+            fields=_freeze_pairs(draft.to_mapping()),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {key: _thaw(value) for key, value in self.fields}

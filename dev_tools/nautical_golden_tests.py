@@ -2452,6 +2452,28 @@ def test_task_codec_is_strict_lossless_and_contract_specific():
         raise AssertionError("unsupported serializer value was stringified")
 
 
+def test_task_codec_decodes_hook_framing_once():
+    """The shared codec owns concatenated and array hook task framing."""
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
+    first = {"uuid": "00000000-0000-0000-0000-000000000101", "status": "pending"}
+    second = {"uuid": "00000000-0000-0000-0000-000000000102", "status": "completed"}
+    concatenated = json.dumps(first) + json.dumps(second)
+    rows, index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
+        concatenated, source_query="golden hook framing"
+    )
+    expect(not error and len(rows) == 2 and index == len(concatenated), "concatenated rows were not decoded once")
+    rows, index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
+        json.dumps([first, second]), source_query="golden hook array"
+    )
+    expect(not error and len(rows) == 2 and index > 0, "hook row array was not decoded")
+    rows, _index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
+        json.dumps([first, {"status": "pending", "link": "bad"}]),
+        source_query="golden malformed hook array",
+    )
+    expect(not error and len(rows) == 2 and rows[1].issues, "malformed row was not preserved with issues")
+
+
 def test_task_draft_and_patch_have_explicit_mutation_semantics():
     """Drafts are complete child intents and patches distinguish set, clear, and preserve."""
     from nautical_core.task_changes import ChangeAction, PatchOperation, TaskChangeError, TaskPatch
@@ -32828,6 +32850,7 @@ TESTS = [
     test_task_observation_contract_is_lossless_and_immutable,
     test_nautical_task_projection_validates_operations_without_losing_observation,
     test_task_codec_is_strict_lossless_and_contract_specific,
+    test_task_codec_decodes_hook_framing_once,
     test_task_draft_and_patch_have_explicit_mutation_semantics,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,

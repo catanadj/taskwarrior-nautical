@@ -2887,12 +2887,16 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
 
 
 def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
-    del transition  # consumed by the typed adapter; field migration follows per lifecycle path
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
+    field_changed = (
+        (lambda _old, _new, field: transition.changed(field))
+        if transition is not None
+        else _field_changed
+    )
     services = modify_ordinary.OrdinaryModifyServices(
-        field_changed=_field_changed,
+        field_changed=field_changed,
         strip_quotes=_strip_quotes,
         validate_anchor=_non_completion_validate_anchor,
         validate_omit=_validate_omit_for_anchor_or_fail,

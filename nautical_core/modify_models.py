@@ -52,6 +52,13 @@ class TaskView(Mapping[str, Any]):
         observation = TaskObservation.from_mapping(values, source_query="presentation")
         return cls(values, observation)
 
+    @classmethod
+    def from_observation(cls, observation: TaskObservation) -> "TaskView":
+        """Expose an already-decoded observation without decoding it again."""
+        if not isinstance(observation, TaskObservation):
+            raise TypeError("task view requires a TaskObservation")
+        return cls(observation.to_mapping(), observation)
+
     @property
     def temporal(self) -> TemporalState:
         values: dict[str, TaskTimestamp | None] = {}

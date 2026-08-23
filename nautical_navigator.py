@@ -28,7 +28,7 @@ import shutil
 import weakref
 from pathlib import Path
 from functools import lru_cache
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, List, Optional, Tuple, Any, Set, Mapping
 from dataclasses import dataclass
 from dateutil import parser as date_parser, tz
 from datetime import date, timedelta
@@ -147,10 +147,12 @@ try:
     from nautical_core.integration_models import Absent, Found, Unavailable
     from nautical_core.integration_context import IntegrationAccess
     from nautical_core.taskwarrior_uow import build_operator_uow
+    from nautical_core.modify_models import TaskView
 except Exception:
     Absent = Found = Unavailable = None
     IntegrationAccess = None
     build_operator_uow = None
+    TaskView = None
 
 _UNIT_OF_WORK = None
 
@@ -185,7 +187,9 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
         complete_chain_history=True,
     )
     if Found is not None and isinstance(read, Found):
-        return [dict(row) for row in read.value.rows]
+        if TaskView is None:
+            raise RuntimeError("Nautical typed task-view support is unavailable")
+        return [TaskView.from_observation(row) for row in read.value.rows]
     if Absent is not None and isinstance(read, Absent):
         return []
     if Unavailable is not None and isinstance(read, Unavailable):
@@ -254,6 +258,7 @@ def _reset_navigator_runtime_state() -> None:
         analyzer._task_cache.clear()
         analyzer._uuid_cache.clear()
         analyzer._children.clear()
+        analyzer._meaningful_changes.clear()
     analyzer_cls = globals().get("TaskAnalyzer")
     if analyzer_cls is None:
         return
@@ -636,6 +641,7 @@ class TaskAnalyzer:
         self._task_cache: Dict[int, Dict] = {}
         self._uuid_cache: Dict[str, Dict] = {}
         self._children: Dict[str, List[Dict]] = {}  # prev_uuid -> [children]
+        self._meaningful_changes: Dict[str, List[TaskChange]] = {}
         self._projection_warnings: List[str] = []
         _ACTIVE_ANALYZERS.add(self)
 
@@ -1038,7 +1044,7 @@ class TaskAnalyzer:
             payload = [payload]
         if not isinstance(payload, list):
             return []
-        tasks = [t for t in payload if isinstance(t, dict)]
+        tasks = [t for t in payload if isinstance(t, Mapping)]
         for t in tasks:
             if t.get("id"):
                 self._task_cache[int(t["id"])] = t
@@ -2565,7 +2571,11 @@ class TaskAnalyzer:
     def _display_chain_table(self, chain: List[Dict]):
         # Keep only rows that *actually* have non-timing changes after our filters
         rows = [
-            (t.get("uuid", "")[:8], self._context_datetime_for_task(t), t.get("meaningful_changes", []))
+            (
+                t.get("uuid", "")[:8],
+                self._context_datetime_for_task(t),
+                self._meaningful_changes.get(str(t.get("uuid") or ""), []),
+            )
             for t in chain
         ]
         rows = [(u, d, ch) for (u, d, ch) in rows if ch]  # drop "no changes"
@@ -2776,9 +2786,9 @@ class TaskAnalyzer:
                         )
                     ]
 
-                task["meaningful_changes"] = changes
+                self._meaningful_changes[str(task.get("uuid") or "")] = changes
             else:
-                task["meaningful_changes"] = []
+                self._meaningful_changes[str(task.get("uuid") or "")] = []
 
         # calendar data:
         completed_dates = self._get_completion_dates(full_chain)

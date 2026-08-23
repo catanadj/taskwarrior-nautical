@@ -3291,7 +3291,6 @@ def _completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt,
-    planned_child: dict | None = None,
 ):
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
@@ -3312,7 +3311,6 @@ def _completion_build_and_spawn_child(
         kind=kind,
         cpmax=cpmax,
         until_dt=until_dt,
-        planned_child=planned_child,
         services=services,
     )
 

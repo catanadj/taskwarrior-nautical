@@ -17,22 +17,18 @@ def completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt: Any,
-    planned_child: dict[str, Any] | None = None,
     services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
     build_child_draft = services.build_child_draft
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
     try:
-        child = planned_child
-        child_draft: TaskDraft | None = None
-        if child is None:
-            child_draft = build_child_draft(
-                new, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
-            )
-            if not isinstance(child_draft, TaskDraft):
-                raise TypeError("child builder returned a non-TaskDraft value")
-            child = child_draft.to_mapping()
+        child_draft = build_child_draft(
+            new, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
+        )
+        if not isinstance(child_draft, TaskDraft):
+            raise TypeError("child builder returned a non-TaskDraft value")
+        child = child_draft.to_mapping()
     except Exception as exc:
         if callable(diag):
             diag(f"build child failed: {exc}")

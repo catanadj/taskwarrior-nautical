@@ -13,8 +13,6 @@ class SpawnServices:
     child_uuid_for_spawn: Callable[..., str]
     fmt_isoz: Callable[[Any], str]
     now_utc: Callable[[], Any]
-    strip_none_and_cast: Callable[[dict], dict]
-    normalise_datetime_fields: Callable[[dict], None]
     lifecycle_models: Any
     lifecycle_spawn_identity: Callable[[dict, dict], Any]
     enqueue_spawn_intent: Callable[[Any], tuple[bool, str]]
@@ -41,8 +39,6 @@ def spawn_child_atomic(
         child_uuid_for_spawn=services.child_uuid_for_spawn,
         fmt_isoz=services.fmt_isoz,
         now_utc=services.now_utc,
-        strip_none_and_cast=services.strip_none_and_cast,
-        normalise_datetime_fields=services.normalise_datetime_fields,
     )
     child_obj = child_draft.to_mapping()
 

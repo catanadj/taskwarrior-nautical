@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math
+import re
 from typing import Any, Mapping, Sequence
 
 from .task_models import TaskDraft, TaskObservation
@@ -181,6 +182,39 @@ class TaskCodec:
         if not isinstance(value, Mapping):
             raise TaskCodecError("task import payload requires an object")
         return _encode(value)
+
+    def prepare_task_import_mapping(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize one validated child payload for Taskwarrior import."""
+        if not isinstance(value, Mapping):
+            raise TaskCodecError("task import payload requires an object")
+        output: dict[str, Any] = {}
+        for key, item in value.items():
+            if item is None:
+                continue
+            if key in ("link", "chainMax"):
+                try:
+                    item = int(item)
+                except (TypeError, ValueError):
+                    pass
+            output[str(key)] = item
+
+        def compact(value: Any) -> Any:
+            if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
+                return value.replace("-", "").replace(":", "")
+            return value
+
+        for key in ("entry", "modified", "due", "end", "wait", "until", "scheduled"):
+            if key in output:
+                output[key] = compact(output[key])
+        annotations = output.get("annotations")
+        if isinstance(annotations, list):
+            output["annotations"] = [
+                {**annotation, "entry": compact(annotation.get("entry"))}
+                if isinstance(annotation, Mapping) and annotation.get("entry")
+                else annotation
+                for annotation in annotations
+            ]
+        return output
 
     def encode_hook_stdout(self, task: Mapping[str, Any]) -> str:
         """Encode the strict plain JSON object emitted by a hook."""

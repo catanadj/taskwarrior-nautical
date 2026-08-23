@@ -136,8 +136,6 @@ def prepare_spawn_child_payload(
     child_uuid_for_spawn,
     fmt_isoz,
     now_utc,
-    strip_none_and_cast,
-    normalise_datetime_fields,
 ) -> tuple[object, str, str]:
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.task_models import NauticalTask, TaskDraft
@@ -161,8 +159,7 @@ def prepare_spawn_child_payload(
         child_obj["modified"] = child_obj["entry"]
 
     child_short = child_uuid[:8]
-    child_obj = strip_none_and_cast(child_obj)
-    normalise_datetime_fields(child_obj)
+    child_obj = DEFAULT_TASK_CODEC.prepare_task_import_mapping(child_obj)
     child_task = NauticalTask.from_observation(
         DEFAULT_TASK_CODEC.decode_row(child_obj, source_query="hook child import")
     )

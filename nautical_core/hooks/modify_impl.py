@@ -1281,13 +1281,6 @@ def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
     return _module("modify_spawn_prep").sanitize_unknown_attrs(stderr, payload)
 
 
-def _normalise_datetime_fields(obj: dict) -> None:
-    _module("modify_spawn_prep").normalise_datetime_fields(obj)
-
-
-def _strip_none_and_cast(obj: dict):
-    return _module("modify_spawn_prep").strip_none_and_cast(obj)
-
 def _format_line_preview(
     link_no: int,
     task: dict,
@@ -1396,8 +1389,6 @@ def _spawn_child_atomic(
             child_uuid_for_spawn=_child_uuid_for_spawn,
             fmt_isoz=core.fmt_isoz,
             now_utc=core.now_utc,
-            strip_none_and_cast=_strip_none_and_cast,
-            normalise_datetime_fields=_normalise_datetime_fields,
             lifecycle_models=_module("lifecycle_models"),
             lifecycle_spawn_identity=_lifecycle_spawn_identity,
             enqueue_spawn_intent=_enqueue_spawn_intent,

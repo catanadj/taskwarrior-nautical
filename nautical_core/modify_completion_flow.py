@@ -11,6 +11,7 @@ from nautical_core.modify_models import (
     CompletionFinalizeServices,
     CompletionPreflightContext,
 )
+from nautical_core.task_changes import TaskTransition
 
 
 @dataclass(slots=True)
@@ -31,6 +32,7 @@ class CompletionFlowServices:
     diag_lifecycle_result: Callable[[CompletionLifecycleResult], None]
     finalize_completion: Callable[..., CompletionLifecycleResult]
     finalize_services: CompletionFinalizeServices
+    transition: TaskTransition | None = None
 
 
 def handle_completion_modify(
@@ -45,7 +47,13 @@ def handle_completion_modify(
     prepared = dict(new)
     new_cp, new_anchor, new_anchor_file = services.prepare_recurrence(old, prepared)
     services.preserve_cp_relative_offsets(old, prepared, new_cp)
-    if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
+    recurrence_fields = ("cp", "anchor", "anchor_file")
+    has_previous_recurrence = (
+        any(services.transition.old.field(field).raw_value() for field in recurrence_fields)
+        if services.transition is not None
+        else any(str(old.get(field) or "").strip() for field in recurrence_fields)
+    )
+    if has_previous_recurrence:
         recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
         services.preserve_native_until(old, prepared, recurrence_kind)
     services.validate_native_until(prepared)

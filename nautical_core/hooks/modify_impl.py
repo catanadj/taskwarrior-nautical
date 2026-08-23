@@ -3307,7 +3307,6 @@ def _completion_build_and_spawn_child(
 
 
 def _handle_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> "CompletionLifecycleResult | None":
-    del transition  # consumed by the typed adapter; completion flow migration follows next
     # Completion preflight and feedback must share the invocation's
     # authoritative repository, just like ordinary and deleted edits.
     _modify_runtime_state().task_repository = unit_of_work.repository
@@ -3343,6 +3342,7 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work, *, transition=
         diag_lifecycle_result=_diag_lifecycle_result,
         finalize_completion=modify_completion_flow.finalize_completion_modify,
         finalize_services=finalize_services,
+        transition=transition,
     )
     return modify_completion_flow.handle_completion_modify(
         old,

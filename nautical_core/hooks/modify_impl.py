@@ -2770,10 +2770,10 @@ def _render_cp_schedule_adjusted_panel(
 
 
 def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, ...]) -> None:
+    new = _module("modify_models").TaskView.from_mapping(new)
     _module("modify_feedback").render_explicit_timing_order_warning(
         new,
         changed_fields,
-        parse_datetime=core.parse_dt_any,
         format_offset=_fmt_td_dd_hhmm,
         panel=_panel,
     )

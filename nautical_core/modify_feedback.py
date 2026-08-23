@@ -88,10 +88,9 @@ def render_cp_schedule_adjusted_panel(
 
 
 def render_explicit_timing_order_warning(
-    new: dict[str, Any],
+    new: Mapping[str, Any],
     changed_fields: tuple[str, ...],
     *,
-    parse_datetime: Callable[[Any], Any],
     format_offset: Callable[[timedelta], str],
     panel: Callable[..., Any],
 ) -> None:
@@ -100,13 +99,8 @@ def render_explicit_timing_order_warning(
         return
 
     def parsed(field: str) -> Any:
-        value = new.get(field)
-        if not value:
-            return None
-        try:
-            return parse_datetime(value)
-        except Exception:
-            return None
+        value = new.timestamp(field)
+        return value.value if value is not None else None
 
     due = parsed("due")
     scheduled = parsed("scheduled")

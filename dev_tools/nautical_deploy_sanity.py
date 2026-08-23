@@ -384,6 +384,35 @@ def _check_removed_ownership(root: Path) -> list[dict]:
     return results
 
 
+def _check_domain_model_boundaries(root: Path) -> list[dict]:
+    """Keep removed mapping/facade construction paths out of shipped code."""
+    forbidden = (
+        "LifecyclePlan.from_mappings",
+        "ParentGuard.from_mapping",
+        "LifecycleIdentity.from_mapping",
+        "ChildImportPayload.from_mapping",
+        "MetadataRepairPayload.from_mapping",
+        "sanitize_task_strings",
+    )
+    violations: list[str] = []
+    package = root / "nautical_core"
+    if package.is_dir():
+        for path in package.rglob("*.py"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for token in forbidden:
+                if token in text:
+                    violations.append(f"{path.relative_to(root)}:{token}")
+    return [{
+        "kind": "domain-model",
+        "name": "removed-construction-paths",
+        "ok": not violations,
+        "message": "absent" if not violations else "removed domain-model paths found: " + ", ".join(sorted(violations)),
+    }]
+
+
 def _check_scheduler_ownership(root: Path) -> list[dict]:
     """Reject operational calls to scheduler aliases removed from the facade."""
     legacy_names = {
@@ -678,6 +707,7 @@ def main() -> int:
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
         results.extend(_check_removed_ownership(root))
+        results.extend(_check_domain_model_boundaries(root))
         results.extend(_check_scheduler_ownership(root))
         results.extend(_check_taskwarrior_process_ownership(root))
         results.extend(_check_performance_workflow(root))

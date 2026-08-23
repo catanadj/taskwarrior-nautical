@@ -27,7 +27,7 @@ from nautical_core.lifecycle_planner import (
     plan_expiration_successor,
     plan_candidate_successor,
 )
-from nautical_core.task_models import FieldPresence, TaskObservation
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskObservation
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
@@ -106,18 +106,20 @@ def is_orphan_deleted_chain_candidate(task: TaskObservation) -> bool:
 
 
 def deleted_chain_disposition(
-    task: dict[str, Any],
+    task: TaskObservation,
     *,
     safe_parse_datetime: Any,
 ) -> DeletionEvidence:
     """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
     if not is_orphan_deleted_chain_candidate(task):
         return DeletionEvidence(DeletionDisposition.NOT_APPLICABLE)
-    if not str(task.get("until") or "").strip():
+    until_raw = _observation_value(task, "until")
+    end_raw = _observation_value(task, "end")
+    if not str(until_raw or "").strip():
         return DeletionEvidence(DeletionDisposition.MANUAL, "deleted without native until")
     try:
-        until_dt, until_err = safe_parse_datetime(task.get("until"))
-        end_dt, end_err = safe_parse_datetime(task.get("end"))
+        until_dt, until_err = safe_parse_datetime(until_raw)
+        end_dt, end_err = safe_parse_datetime(end_raw)
     except Exception:
         return DeletionEvidence(
             DeletionDisposition.AMBIGUOUS,
@@ -139,7 +141,7 @@ def deleted_chain_disposition(
         )
 
 
-def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
+def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime: Any) -> bool:
     """Return whether a deleted link has strong evidence of native until expiration."""
     evidence = deleted_chain_disposition(
         task,
@@ -183,7 +185,7 @@ def native_until_target_field(task: TaskObservation) -> str:
 
 
 def invalid_relative_carry_reason(
-    parent: dict[str, Any],
+    parent: TaskObservation,
     child: dict[str, Any],
     *,
     child_field: str,
@@ -201,13 +203,14 @@ def invalid_relative_carry_reason(
     if child_field != "scheduled":
         fields.append("scheduled")
     for field in fields:
-        if not parent.get(field):
+        parent_value_raw = _observation_value(parent, field)
+        if not parent_value_raw:
             continue
         if not child.get(field):
             return f"{field} carry is missing from the reconciled child"
         try:
-            parent_target = core.parse_dt_any(parent.get(parent_field))
-            parent_value = core.parse_dt_any(parent.get(field))
+            parent_target = core.parse_dt_any(_observation_value(parent, parent_field))
+            parent_value = core.parse_dt_any(parent_value_raw)
             child_target = core.parse_dt_any(child.get(child_field))
             child_value = core.parse_dt_any(child.get(field))
             if not all((parent_target, parent_value, child_target, child_value)):
@@ -451,12 +454,14 @@ def _plan_recovery_decision_unscoped(
     generation: ChainGenerationService | None = None,
 ) -> LifecycleRecoveryDecision:
     generation = generation or _generation_service(hook)
+    observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery")
+    operational_parent = NauticalTask.from_observation(observation)
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
     if is_expiration:
         evidence = deleted_chain_disposition(
-            parent,
+            operational_parent.observation,
             safe_parse_datetime=generation.safe_parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
@@ -536,7 +541,7 @@ def _plan_recovery_decision_unscoped(
         )
 
     try:
-        evaluator = SchedulerService.from_task(parent).session.evaluator
+        evaluator = SchedulerService.from_observation(observation).session.evaluator
         kind = evaluator.kind or "cp"
         limits = evaluator.limits
         until_dt = limits.chain_until
@@ -546,7 +551,7 @@ def _plan_recovery_decision_unscoped(
         # Keep incomplete legacy rows classifiable; normal validation below
         # still reports malformed chain limits through the hook boundary.
         evaluator = None
-        kind = recurrence_kind(parent)
+        kind = recurrence_kind(operational_parent)
         until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
         cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
@@ -560,15 +565,15 @@ def _plan_recovery_decision_unscoped(
     try:
         if is_expiration:
             expiration = expiration_candidate(
-                TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile expiration")),
+                TaskSnapshot.from_observation(observation),
                 generation=generation,
             )
             child_due = expiration.child_due
             meta = dict(expiration.metadata)
         elif kind in {"anchor", "anchor_file"}:
-            child_due, meta, _dnf = generation.compute_anchor_child_due(parent)
+            child_due, meta, _dnf = generation.compute_anchor_child_due(operational_parent)
         else:
-            child_due, meta = generation.compute_cp_child_due(parent)
+            child_due, meta = generation.compute_cp_child_due(operational_parent)
     except Exception as exc:
         if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
             return LifecycleRecoveryDecision(
@@ -609,7 +614,7 @@ def _plan_recovery_decision_unscoped(
                 chain_id=parent.get("chainID"),
             ),
             "carry_validator": lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
-                snapshot.to_dict(),
+                snapshot.observation,
                 dict(candidate_child),
                 child_field=child_field,
                 generation=generation,
@@ -617,12 +622,12 @@ def _plan_recovery_decision_unscoped(
         }
         lifecycle_plan = (
             plan_expiration_successor(
-                TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile expiration")),
+                TaskSnapshot.from_observation(observation),
                 **planner_kwargs,
             )
             if is_expiration
             else plan_candidate_successor(
-                TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile successor")),
+                TaskSnapshot.from_observation(observation),
                 LifecycleEvent.COMPLETE,
                 candidate,
                 **planner_kwargs,

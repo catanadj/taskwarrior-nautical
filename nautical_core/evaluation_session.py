@@ -14,6 +14,7 @@ from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
 from .time_projection import ProjectionResult, TimeProjectionService
 from .task_models import TaskObservation
+from .task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)
@@ -44,8 +45,8 @@ class EvaluationSession:
         context: RecurrenceContext | None = None,
         max_cache_entries: int = 32,
     ) -> "EvaluationSession":
-        spec = RecurrenceSpec.from_task(task, context=context)
-        return cls.from_spec(spec, max_cache_entries=max_cache_entries)
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="evaluation session")
+        return cls.from_observation(observation, context=context, max_cache_entries=max_cache_entries)
 
     @classmethod
     def from_observation(

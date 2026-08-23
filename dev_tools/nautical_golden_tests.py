@@ -23883,8 +23883,16 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
     from nautical_core.recurrence_context import RecurrenceContext
     from nautical_core.recurrence_spec import RecurrenceSpec
 
-    spec = RecurrenceSpec.from_task({
+    def spec_from_row(row):
+        return RecurrenceSpec.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(row, source_query="test:recurrence-spec")
+        )
+
+    spec = spec_from_row({
+        "uuid": "00000000-0000-4000-8000-000000000505",
+        "status": "pending",
         "chainID": "spec-chain",
+        "link": 1,
         "anchor": " w:mon ",
         "anchor_file": " events.csv ",
         "omit": " y:12-25 ",
@@ -23916,17 +23924,28 @@ def test_recurrence_spec_normalizes_task_fields_and_context():
         and typed_spec.chain_max == 4,
         f"typed observation was not converted to a recurrence spec: {typed_spec!r}",
     )
-    null_spec = RecurrenceSpec.from_task({
+    null_spec = spec_from_row({
+        "uuid": "00000000-0000-4000-8000-000000000506",
+        "status": "pending",
         "chainID": "spec-null-chain",
+        "link": 1,
         "anchor": "w:mon",
         "anchor_file": "null",
         "anchor_mode": "skip",
     })
     expect(null_spec.anchor_file == "" and null_spec.kind == "anchor", f"literal null UDA was not unset: {null_spec!r}")
     supplied = RecurrenceContext(chain_id="supplied")
-    expect(RecurrenceSpec.from_task({"anchor": "w:fri"}, context=supplied).context is supplied, "supplied context was replaced")
+    supplied_observation = DEFAULT_TASK_CODEC.decode_row(
+        {"uuid": "00000000-0000-4000-8000-000000000502", "status": "pending", "chainID": "supplied", "link": 1, "anchor": "w:fri"},
+        source_query="test:recurrence-spec",
+    )
+    expect(RecurrenceSpec.from_observation(supplied_observation, context=supplied).context is supplied, "supplied context was replaced")
     try:
-        RecurrenceSpec.from_task({"chainID": "task-chain", "anchor": "w:fri"}, context=supplied)
+        conflicting_observation = DEFAULT_TASK_CODEC.decode_row(
+            {"uuid": "00000000-0000-4000-8000-000000000504", "status": "pending", "chainID": "task-chain", "link": 1, "anchor": "w:fri"},
+            source_query="test:recurrence-spec",
+        )
+        RecurrenceSpec.from_observation(conflicting_observation, context=supplied)
         expect(False, "recurrence spec accepted a conflicting context identity")
     except ValueError as exc:
         expect("Conflicting recurrence identities" in str(exc), f"unexpected spec identity error: {exc}")
@@ -23939,14 +23958,25 @@ def test_compiled_schedule_is_canonical_and_reusable():
     from nautical_core.recurrence_evaluator import RecurrenceEvaluator
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-    first = CompiledSchedule.from_task({
+    def compiled_from_row(row):
+        return CompiledSchedule.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(row, source_query="test:compiled-schedule")
+        )
+
+    first = compiled_from_row({
+        "uuid": "00000000-0000-4000-8000-000000000507",
+        "status": "pending",
         "chainID": "compiled-chain",
+        "link": 1,
         "anchor": " w:mon ",
         "anchor_mode": "SKIP",
         "chainMax": "4",
     })
-    second = CompiledSchedule.from_task({
+    second = compiled_from_row({
+        "uuid": "00000000-0000-4000-8000-000000000508",
+        "status": "pending",
         "chainID": "compiled-chain",
+        "link": 1,
         "anchor": "w:mon",
         "anchor_mode": "skip",
         "chainMax": 4,
@@ -23976,8 +24006,11 @@ def test_compiled_schedule_is_canonical_and_reusable():
     expect(first.cache_key.startswith("compiled-schedule:1:cs1-"), "compiled cache key was not namespaced")
     diagnostic = first.to_diagnostic_json()
     expect(json.loads(diagnostic) == first.to_dict(), "compiled diagnostic JSON did not round-trip")
-    normalized = CompiledSchedule.from_task({
+    normalized = compiled_from_row({
+        "uuid": "00000000-0000-4000-8000-000000000509",
+        "status": "pending",
         "chainID": "compiled-chain",
+        "link": 1,
         "anchor": "w:mon + y:jul@t=09:00",
         "omit": "y:07-04",
         "chainMax": 4,
@@ -23998,18 +24031,18 @@ def test_compiled_schedule_is_canonical_and_reusable():
     finally:
         core.parse_anchor_expr_to_dnf_cached = parser
     try:
-        CompiledSchedule.from_task({"chainID": "plain-task"})
+        compiled_from_row({"uuid": "00000000-0000-4000-8000-000000000510", "status": "pending", "chainID": "plain-task", "link": 1})
     except ValueError as exc:
-        expect("without a recurrence" in str(exc), f"invalid schedule error was unclear: {exc}")
+        expect("recurrence requires" in str(exc), f"invalid schedule error was unclear: {exc}")
     else:
         raise AssertionError("plain task produced a compiled recurrence schedule")
     for invalid, message in (
         ({"cp": "1d", "anchor": "w:mon"}, "both cp and anchor"),
-        ({"anchor": "w:mon", "chainMax": 0}, "greater than zero"),
+        ({"anchor": "w:mon", "chainMax": 0}, "chainMax"),
         ({"anchor": "w:mon", "anchor_mode": "unknown"}, "anchor_mode"),
     ):
         try:
-            CompiledSchedule.from_task({"chainID": "compiled-chain", **invalid})
+            compiled_from_row({"uuid": "00000000-0000-4000-8000-000000000511", "status": "pending", "chainID": "compiled-chain", "link": 1, **invalid})
         except ValueError as exc:
             expect(message in str(exc), f"compiled validation error was unclear: {exc}")
         else:

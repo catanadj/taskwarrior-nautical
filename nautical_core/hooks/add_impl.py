@@ -730,8 +730,12 @@ def _validate_native_until_anchor_slots_or_fail(
     recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
         chain_id=task.get("chainID") or task.get("uuid") or "preview"
     )
-    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+    observation = core._import_sibling("task_codec").DEFAULT_TASK_CODEC.decode_row(
         task,
+        source_query="on-add recurrence validation",
+    )
+    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_observation(
+        observation,
         context=recurrence_context,
     )
     anchor_file_value = recurrence_spec.anchor_file

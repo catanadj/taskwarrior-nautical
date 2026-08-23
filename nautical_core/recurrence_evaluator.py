@@ -15,6 +15,7 @@ from typing import Any, Mapping, NoReturn
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
 from .task_models import TaskObservation
+from .task_codec import DEFAULT_TASK_CODEC
 from .scheduler_cursor import OccurrenceCursor
 from .occurrence_outcomes import (
     ExhaustedOccurrence,
@@ -170,7 +171,8 @@ class RecurrenceEvaluator:
             anchor_file_dir=anchor_file_dir,
             namespace=namespace,
         )
-        return cls(RecurrenceSpec.from_task(task, context=recurrence_context))
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="recurrence evaluator")
+        return cls.from_observation(observation, context=recurrence_context)
 
     @classmethod
     def from_spec(cls, spec: RecurrenceSpec) -> "RecurrenceEvaluator":

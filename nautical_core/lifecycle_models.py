@@ -471,36 +471,6 @@ class LifecyclePlan:
         object.__setattr__(self, "terminal_kind", terminal_kind)
 
     @classmethod
-    def from_mappings(
-        cls,
-        *,
-        identity: LifecycleIdentity,
-        action: LifecycleAction,
-        parent_guard: ParentGuard,
-        child_payload: Mapping[str, Any] | None = None,
-        parent_patch: Mapping[str, Any] | None = None,
-        expected_postconditions: tuple[str, ...] = (),
-        max_attempts: int = 3,
-        stage: ExecutionStage = ExecutionStage.PLANNED,
-        terminal_kind: str | None = None,
-    ) -> "LifecyclePlan":
-        if LifecycleAction(action) is LifecycleAction.SPAWN_CHILD and child_payload:
-            raise LifecycleContractError(
-                "spawn lifecycle plans require LifecyclePlan.from_draft"
-            )
-        return cls(
-            identity=identity,
-            action=action,
-            parent_guard=parent_guard,
-            stage=stage,
-            child_payload=_freeze_pairs(child_payload),
-            parent_patch=_freeze_pairs(parent_patch),
-            expected_postconditions=expected_postconditions,
-            max_attempts=max_attempts,
-            terminal_kind=terminal_kind,
-        )
-
-    @classmethod
     def from_draft(
         cls,
         *,
@@ -626,11 +596,16 @@ class LifecyclePlan:
                 stage=stage,
                 terminal_kind=value.get("terminal_kind"),
             )
-        return cls.from_mappings(
-            identity=identity, action=action, parent_guard=parent_guard,
-            stage=stage, child_payload=child_payload, parent_patch=parent_patch,
+        return cls(
+            identity=identity,
+            action=action,
+            parent_guard=parent_guard,
+            stage=stage,
+            child_payload=_freeze_pairs(child_payload),
+            parent_patch=_freeze_pairs(parent_patch),
             expected_postconditions=tuple(str(item) for item in expected),
-            max_attempts=max_attempts, terminal_kind=value.get("terminal_kind"),
+            max_attempts=max_attempts,
+            terminal_kind=value.get("terminal_kind"),
         )
 
     def child_dict(self) -> dict[str, Any]:

@@ -86,6 +86,7 @@ def _field_text(row: TaskObservation, name: str) -> str:
 
 
 def _link_number(value: object) -> int | None:
+    value = getattr(value, "value", value)
     if isinstance(value, bool):
         return None
     try:

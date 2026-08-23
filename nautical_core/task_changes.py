@@ -152,6 +152,45 @@ class TaskPatch:
     def clear_fields(self) -> tuple[str, ...]:
         return tuple(item.field for item in self.changes if item.action is ChangeAction.CLEAR)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return the versioned, lossless patch envelope for persistence."""
+        return {
+            "schema_version": 1,
+            "target": self.target.value,
+            "operation": self.operation.value,
+            "changes": [
+                {
+                    "field": item.field,
+                    "action": item.action.value,
+                    **({"value": _thaw(item.value)} if item.action is ChangeAction.SET else {}),
+                }
+                for item in self.changes
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "TaskPatch":
+        """Decode only the current strict patch schema."""
+        if not isinstance(value, Mapping) or value.get("schema_version") != 1:
+            raise TaskChangeError("unsupported task patch schema")
+        try:
+            target = TaskUUID(str(value["target"]))
+            operation = PatchOperation(value["operation"])
+            changes = tuple(
+                TaskChange(
+                    str(item["field"]),
+                    ChangeAction(item["action"]),
+                    item.get("value"),
+                )
+                for item in value["changes"]
+                if isinstance(item, Mapping)
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TaskChangeError(f"invalid task patch: {exc}") from exc
+        if not changes:
+            raise TaskChangeError("task patch requires changes")
+        return cls(target, operation, changes)
+
 
 __all__ = (
     "ChangeAction",

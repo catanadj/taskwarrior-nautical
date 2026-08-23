@@ -3330,6 +3330,15 @@ def test_integration_mutation_requests_use_named_typed_payloads():
         carry_request.payload.to_dict()["scheduled"] == "20260814T090000Z",
         "ordinary-carry patch lost its update",
     )
+    restored_patch = TaskPatch.from_dict(TaskPatch.ordinary_carry(
+        TaskUUID(parent_uuid), scheduled="20260814T090000Z",
+    ).to_dict())
+    expect(
+        restored_patch.fingerprint == TaskPatch.ordinary_carry(
+            TaskUUID(parent_uuid), scheduled="20260814T090000Z",
+        ).fingerprint,
+        "task patch persistence changed its semantic fingerprint",
+    )
 
     named = (
         MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),

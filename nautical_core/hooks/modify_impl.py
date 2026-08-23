@@ -2823,6 +2823,8 @@ def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
     new_cp: str,
+    *,
+    transition=None,
 ) -> tuple[
     datetime,
     datetime,
@@ -2832,7 +2834,11 @@ def _preserve_cp_relative_offsets_on_due_change(
         old,
         new,
         new_cp,
-        field_changed=_field_changed,
+        field_changed=(
+            (lambda _old, _new, field: transition.changed(field))
+            if transition is not None
+            else _field_changed
+        ),
         parse_datetime=core.parse_dt_any,
         utc_to_local_naive=_utc_to_local_naive,
         local_naive_to_utc=_local_naive_to_utc,
@@ -2871,12 +2877,16 @@ def _reject_native_until_carry(
     sys.exit(1)
 
 
-def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> bool:
+def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, transition=None) -> bool:
     return _module("modify_carry").preserve_native_until_on_target_change(
         old,
         new,
         kind,
-        field_changed=_field_changed,
+        field_changed=(
+            (lambda _old, _new, field: transition.changed(field))
+            if transition is not None
+            else _field_changed
+        ),
         recurrence_anchor_field=_recurrence_anchor_field,
         parse_datetime=core.parse_dt_any,
         native_until=core._import_sibling("native_until"),
@@ -2902,9 +2912,13 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transit
         validate_omit=_validate_omit_for_anchor_or_fail,
         reject_conflicting_types=_non_completion_reject_conflicting_types,
         validate_chain_limits=_validate_chain_limits_on_modify,
-        preserve_cp_offsets=_preserve_cp_relative_offsets_on_due_change,
+        preserve_cp_offsets=lambda old_task, new_task, cp: _preserve_cp_relative_offsets_on_due_change(
+            old_task, new_task, cp, transition=transition,
+        ),
         task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
-        preserve_native_until=_preserve_native_until_on_target_change,
+        preserve_native_until=lambda old_task, new_task, kind: _preserve_native_until_on_target_change(
+            old_task, new_task, kind, transition=transition,
+        ),
         validate_native_until=_validate_native_until_after_target_or_fail,
         validate_native_until_slots=_validate_native_until_anchor_slots_or_fail,
         render_cp_adjustment=_render_cp_schedule_adjusted_panel,

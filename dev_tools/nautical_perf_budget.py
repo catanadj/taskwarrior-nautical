@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tracemalloc
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -42,6 +43,7 @@ install_runtime = importlib.import_module("nautical_core.install_runtime")
 lifecycle_outbox = importlib.import_module("nautical_core.lifecycle_outbox")
 task_codec = importlib.import_module("nautical_core.task_codec")
 IMPORT_PROFILES: dict[str, int] = {}
+RESOURCE_DETAILS: dict[str, object] = {}
 
 
 def _load_budget_config(path: Path) -> dict:
@@ -242,6 +244,46 @@ def _bench_task_resource_limits(rounds: int) -> float:
             raise RuntimeError("bounded nested arbitrary field was lost")
         if len(encoded.encode("utf-8")) >= MAX_JSON_BYTES:
             raise RuntimeError("resource fixture crossed the configured input limit")
+    return time.perf_counter() - started
+
+
+def _bench_task_snapshot_memory(counts: Sequence[int]) -> float:
+    """Measure peak memory while decoding and indexing bounded snapshots."""
+    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
+    from nautical_core.task_read_repository import AuthoritativeTaskSnapshot, TaskQueryKind, TaskSnapshotScope
+
+    command = TaskCommand(("task", "export"), "perf snapshot memory", 1.0)
+    result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.0)
+    measurements: dict[str, dict[str, int]] = {}
+    started = time.perf_counter()
+    for requested in counts:
+        row_count = max(1, int(requested))
+        rows = [
+            {
+                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/memory/{index}")),
+                "description": f"memory row {index}",
+                "status": "pending",
+                "chain": "on",
+                "chainID": f"memory-chain-{index // 10}",
+                "link": (index % 10) + 1,
+                "anchor": "w:mon",
+                "due": "20260824T090000Z",
+            }
+            for index in range(row_count)
+        ]
+        tracemalloc.start()
+        observations = tuple(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(row, source_query="perf:memory")
+            for row in rows
+        )
+        scope = TaskSnapshotScope(TaskQueryKind.BROAD, f"perf-memory-{row_count}", ("pending",))
+        snapshot = AuthoritativeTaskSnapshot(scope, observations, result)
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        if len(snapshot.rows) != row_count or len(snapshot.by_uuid) != row_count:
+            raise RuntimeError("memory benchmark snapshot was truncated")
+        measurements[str(row_count)] = {"current_bytes": int(current), "peak_bytes": int(peak)}
+    RESOURCE_DETAILS["task_snapshot_memory"] = measurements
     return time.perf_counter() - started
 
 
@@ -2329,6 +2371,9 @@ def main() -> int:
     snapshot_reuse_rows = int(workload.get("snapshot_reuse_rows", 1000))
     immutability_rounds = int(workload.get("immutability_rounds", 20))
     resource_limit_rounds = int(workload.get("resource_limit_rounds", 100))
+    snapshot_memory_counts = tuple(
+        int(value) for value in workload.get("snapshot_memory_counts", [100, 1000, 10000])
+    )
     hints_rounds = int(workload.get("build_hints_rounds", 180))
     hints_cold_rounds = max(1, int(workload.get("build_hints_cold_rounds", 1)))
     hints_warm_rounds = max(1, int(workload.get("build_hints_warm_rounds", hints_rounds)))
@@ -2361,6 +2406,11 @@ def main() -> int:
             "task_resource_limits",
             lambda: _bench_task_resource_limits(resource_limit_rounds),
             repeats,
+        ),
+        (
+            "task_snapshot_memory",
+            lambda: _bench_task_snapshot_memory(snapshot_memory_counts),
+            1,
         ),
         (
             "build_hints_cold",
@@ -2537,6 +2587,8 @@ def main() -> int:
         elif name == "cold_modify_impl_import":
             r["module_count"] = IMPORT_PROFILES.get("modify_impl", 0)
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)
+        if name in RESOURCE_DETAILS:
+            r["details"] = RESOURCE_DETAILS[name]
         results[name] = r
         if args.enforce and not r["pass"]:
             failures.append(name)

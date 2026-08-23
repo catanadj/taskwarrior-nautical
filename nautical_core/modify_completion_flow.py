@@ -13,6 +13,7 @@ from nautical_core.modify_models import (
     TaskView,
 )
 from nautical_core.task_changes import TaskTransition
+from nautical_core.task_models import TaskPayload
 
 
 @dataclass(slots=True)
@@ -20,13 +21,13 @@ class CompletionFlowServices:
     """Typed collaborators for the complete-on-modify lifecycle boundary."""
 
     runtime_state: Callable[[], Any]
-    prepare_recurrence: Callable[[dict[str, Any], dict[str, Any]], tuple[str, str, str]]
-    preserve_cp_relative_offsets: Callable[[dict[str, Any], dict[str, Any], str], None]
-    preserve_native_until: Callable[[dict[str, Any], dict[str, Any], str], None]
-    validate_native_until: Callable[[dict[str, Any]], None]
-    validate_native_until_slots: Callable[[dict[str, Any]], None]
+    prepare_recurrence: Callable[[TaskPayload, TaskPayload], tuple[str, str, str]]
+    preserve_cp_relative_offsets: Callable[[TaskPayload, TaskPayload, str], None]
+    preserve_native_until: Callable[[TaskPayload, TaskPayload, str], None]
+    validate_native_until: Callable[[TaskPayload], None]
+    validate_native_until_slots: Callable[[TaskPayload], None]
     now_utc: Callable[[], Any]
-    preflight_context: Callable[[dict[str, Any], Any, Any], CompletionPreflightContext | None]
+    preflight_context: Callable[[TaskPayload, Any, Any], CompletionPreflightContext | None]
     compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
     lifecycle_read_service: Any
     diag_count: Callable[[str, int], None]
@@ -37,8 +38,8 @@ class CompletionFlowServices:
 
 
 def handle_completion_modify(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     unit_of_work: Any,
     *,
     services: CompletionFlowServices,
@@ -134,7 +135,7 @@ def _render_lifecycle_result(services: CompletionFinalizeServices, result: Compl
 
 def finalize_completion_modify(
     *,
-    new: dict[str, Any],
+    new: TaskPayload,
     ctx: CompletionPreflightContext,
     computed: CompletionComputeResult,
     now_utc: Any,

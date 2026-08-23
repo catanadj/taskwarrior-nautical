@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from .integration_context import IntegrationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
-from .task_models import TaskObservation
+from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
 
 
@@ -24,7 +24,7 @@ class HookRuntimeContext:
 @dataclass(slots=True)
 class OnAddRequest:
     runtime: HookRuntimeContext
-    task: dict[str, Any]
+    task: TaskPayload
     observation: TaskObservation | None = None
     prof: Any | None = None
 
@@ -32,8 +32,8 @@ class OnAddRequest:
 @dataclass(slots=True)
 class OnModifyRequest:
     runtime: HookRuntimeContext
-    old: dict[str, Any]
-    new: dict[str, Any]
+    old: TaskPayload
+    new: TaskPayload
     old_observation: TaskObservation | None = None
     new_observation: TaskObservation | None = None
     transition: TaskTransition | None = None
@@ -46,7 +46,7 @@ class OnExitRequest:
 
 @dataclass(slots=True)
 class OnAddContext:
-    task: dict[str, Any]
+    task: TaskPayload
     observation: TaskObservation | None
     now_utc: datetime
     now_local: datetime
@@ -84,15 +84,15 @@ def build_hook_runtime_context(
 
 
 def build_on_add_context(
-    task: dict[str, Any],
+    task: TaskPayload,
     now_utc: datetime,
     now_local: datetime,
     *,
     validate_kind_not_conflicting: Callable[[str, str, str], tuple[bool, str]],
-    kind_and_defaults_on_add: Callable[[dict[str, Any], str, str, str], tuple[str | None, str]],
-    validate_chain_limits_on_add: Callable[[dict[str, Any], datetime], datetime | None],
+    kind_and_defaults_on_add: Callable[[TaskPayload, str, str, str], tuple[str | None, str]],
+    validate_chain_limits_on_add: Callable[[TaskPayload, datetime], datetime | None],
     due_context_on_add: Callable[
-        [dict[str, Any], datetime],
+        [TaskPayload, datetime],
         tuple[bool, str, datetime, str | None, Any, tuple[int, int]],
     ],
     observation: TaskObservation | None = None,
@@ -145,7 +145,7 @@ def build_on_add_context(
 
 
 def build_on_add_request(
-    *, runtime: HookRuntimeContext, task: dict[str, Any], observation: TaskObservation | None = None, prof=None,
+    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None, prof=None,
 ) -> OnAddRequest:
     return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 
@@ -153,8 +153,8 @@ def build_on_add_request(
 def build_on_modify_request(
     *,
     runtime: HookRuntimeContext,
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     old_observation: TaskObservation | None = None,
     new_observation: TaskObservation | None = None,
 ) -> OnModifyRequest:

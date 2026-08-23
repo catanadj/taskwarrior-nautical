@@ -15,11 +15,13 @@ import json
 import math
 import re
 from types import MappingProxyType
-from typing import Any, Mapping, TypeAlias
+from typing import Any, Mapping, MutableMapping, TypeAlias
 from uuid import UUID
 
 
 FrozenValue: TypeAlias = object
+# Mutable Taskwarrior JSON at the hook protocol edge.
+TaskPayload: TypeAlias = MutableMapping[str, Any]
 _MISSING = object()
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
 _SHORT_REF_RE = re.compile(r"^[0-9a-fA-F]{1,8}$")

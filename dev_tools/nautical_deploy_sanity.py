@@ -405,6 +405,41 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
             for token in forbidden:
                 if token in text:
                     violations.append(f"{path.relative_to(root)}:{token}")
+    # JSON decoding is permitted only at explicit protocol, cache, query, or
+    # durable-persistence boundaries.  Domain/service modules must consume
+    # TaskObservation rather than re-parsing Taskwarrior JSON.
+    allowed_json_modules = {
+        "nautical_core/task_codec.py",
+        "nautical_core/runtime.py",
+        "nautical_core/hooks/add_impl.py",
+        "nautical_core/hooks/exit_impl.py",
+        "nautical_core/tools/nautical_query.py",
+        "nautical_core/tools/nautical_install_verify.py",
+        "nautical_core/install_runtime.py",
+        "nautical_core/lifecycle_outbox.py",
+        "nautical_core/position_selection.py",
+    }
+    direct_json_violations: list[str] = []
+    if package.is_dir():
+        for path in package.rglob("*.py"):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError):
+                continue
+            uses_json_loads = any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "json"
+                and node.func.attr == "loads"
+                for node in ast.walk(tree)
+            )
+            relative = str(path.relative_to(root))
+            if uses_json_loads and relative not in allowed_json_modules:
+                direct_json_violations.append(relative)
+    if direct_json_violations:
+        violations.extend(f"direct-json:{path}" for path in direct_json_violations)
+
     return [{
         "kind": "domain-model",
         "name": "removed-construction-paths",

@@ -2441,6 +2441,55 @@ def test_task_codec_is_strict_lossless_and_contract_specific():
         raise AssertionError("unsupported serializer value was stringified")
 
 
+def test_task_draft_and_patch_have_explicit_mutation_semantics():
+    """Drafts are complete child intents and patches distinguish set, clear, and preserve."""
+    from nautical_core.task_changes import ChangeAction, PatchOperation, TaskChangeError, TaskPatch
+    from nautical_core.task_models import TaskDraft, TaskObservation, TaskTimestamp, validate_task, TaskOperation, ValidatedTask
+
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000004",
+        "status": "pending", "chain": "on", "chainID": "draft-chain", "link": 4,
+        "anchor": "w:mon", "anchor_mode": "skip", "due": "20260824T090000Z",
+        "description": "draft source",
+    }
+    validated = validate_task(TaskObservation.from_mapping(row, source_query="chain:draft-chain"), TaskOperation.SCHEDULE)
+    expect(isinstance(validated, ValidatedTask), f"draft source was not valid: {validated!r}")
+    draft = TaskDraft(
+        identity=validated.task.identity,
+        description="draft child",
+        recurrence=validated.task.recurrence,
+        target=TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc)),
+        fields={"project": "Routines", "tags": ["🌊"]},
+    )
+    encoded = draft.to_mapping()
+    expect(encoded["status"] == "pending" and encoded["tags"] == ["🌊"], "draft fields were not encoded explicitly")
+    expect(draft.fingerprint == TaskDraft(
+        validated.task.identity, "draft child", validated.task.recurrence,
+        TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc)), {"tags": ["🌊"], "project": "Routines"}
+    ).fingerprint, "draft fingerprint depends on field insertion order")
+
+    target = validated.task.identity.task_uuid
+    patch = TaskPatch.set(target, PatchOperation.ORDINARY_CARRY, scheduled="2026-08-31T08:30:00Z")
+    clear = TaskPatch.clear(target, PatchOperation.ORDINARY_CARRY, "wait")
+    expect(patch.set_values()["scheduled"] == "2026-08-31T08:30:00Z", "set operation lost its value")
+    expect(clear.clear_fields() == ("wait",), "clear operation was not explicit")
+    expect(TaskPatch.parent_link(target, target).changes[0].action is ChangeAction.SET, "parent link was not a set")
+    expect(TaskPatch.set(target, PatchOperation.METADATA_REPAIR, a=1, b=2).fingerprint ==
+           TaskPatch.set(target, PatchOperation.METADATA_REPAIR, b=2, a=1).fingerprint,
+           "patch fingerprint depends on field insertion order")
+    invalid = (
+        lambda: TaskPatch.set(target, PatchOperation.METADATA_REPAIR, modified="now"),
+        lambda: TaskPatch.set(target, PatchOperation.METADATA_REPAIR, chainID="other"),
+        lambda: TaskPatch(target, PatchOperation.ORDINARY_CARRY, ()),
+    )
+    for make_invalid in invalid:
+        try:
+            make_invalid()
+        except TaskChangeError:
+            continue
+        raise AssertionError("unsafe task patch was accepted")
+
+
 def test_taskwarrior_client_preserves_evidence_and_redacts_observation():
     """The process boundary preserves evidence without observing command contents."""
     from nautical_core.integration_models import CommandFailureKind
@@ -32705,6 +32754,7 @@ TESTS = [
     test_task_observation_contract_is_lossless_and_immutable,
     test_nautical_task_projection_validates_operations_without_losing_observation,
     test_task_codec_is_strict_lossless_and_contract_specific,
+    test_task_draft_and_patch_have_explicit_mutation_semantics,
     test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
     test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,

@@ -7,7 +7,7 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
-from .task_models import TaskObservation
+from .task_models import TaskDraft, TaskObservation
 
 
 TASK_CODEC_VERSION = 1
@@ -106,11 +106,13 @@ class TaskCodec:
             for row in payload
         )
 
-    def encode_task_import(self, observation: TaskObservation) -> str:
-        """Encode a lossless plain Taskwarrior import object."""
-        if not isinstance(observation, TaskObservation):
-            raise TaskCodecError("task import requires a TaskObservation")
-        return _encode(observation.to_mapping())
+    def encode_task_import(self, value: TaskObservation | TaskDraft) -> str:
+        """Encode a lossless observation or complete child draft."""
+        if isinstance(value, TaskObservation):
+            return _encode(value.to_mapping())
+        if isinstance(value, TaskDraft):
+            return _encode(value.to_mapping())
+        raise TaskCodecError("task import requires a TaskObservation or TaskDraft")
 
     def encode_hook_stdout(self, task: Mapping[str, Any]) -> str:
         """Encode the strict plain JSON object emitted by a hook."""

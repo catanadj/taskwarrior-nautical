@@ -528,6 +528,75 @@ class NauticalTask:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskDraft:
+    """A complete, immutable child task intent before Taskwarrior encoding."""
+
+    identity: ChainIdentity
+    description: str
+    recurrence: RecurrenceState
+    target: TaskTimestamp
+    fields: Mapping[str, FrozenValue] = field(default_factory=dict)
+    target_field: str = "due"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, ChainIdentity):
+            raise TypeError("task draft requires chain identity")
+        if not isinstance(self.recurrence, RecurrenceState):
+            raise TypeError("task draft requires recurrence state")
+        if not isinstance(self.target, TaskTimestamp):
+            raise TypeError("task draft requires a typed target timestamp")
+        description = str(self.description).strip()
+        if not description:
+            raise ValueError("task draft requires a description")
+        target_field = str(self.target_field).strip().lower()
+        if target_field not in {"due", "scheduled"}:
+            raise ValueError("task draft target field must be due or scheduled")
+        forbidden = {"id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink"}
+        copied = {str(key): _freeze(value) for key, value in self.fields.items()}
+        overlap = forbidden.intersection(copied)
+        if overlap:
+            raise ValueError(f"task draft cannot supply generated or identity fields: {', '.join(sorted(overlap))}")
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "target_field", target_field)
+        object.__setattr__(self, "fields", MappingProxyType(copied))
+
+    @property
+    def fingerprint(self) -> str:
+        from hashlib import sha256
+        payload = self.to_mapping()
+        return sha256(_canonical_json(payload).encode("utf-8")).hexdigest()[:24]
+
+    def to_mapping(self) -> dict[str, Any]:
+        recurrence_spec = self.recurrence.spec
+        result = {key: _thaw(value) for key, value in self.fields.items()}
+        result.update(
+            {
+                "uuid": self.identity.task_uuid.value,
+                "description": self.description,
+                "chain": self.identity.state.value,
+                "chainID": self.identity.chain_id.value,
+                "link": self.identity.link.value,
+                "status": "pending",
+                "prevLink": str(self.identity.previous) if self.identity.previous is not None else None,
+                self.target_field: self.target.value.isoformat().replace("+00:00", "Z"),
+                "anchor": str(getattr(recurrence_spec, "anchor", "") or ""),
+                "anchor_file": str(getattr(recurrence_spec, "anchor_file", "") or ""),
+                "omit": self.recurrence.omit,
+                "omit_file": self.recurrence.omit_file,
+                "cp": str(getattr(recurrence_spec, "cp", "") or ""),
+                "anchor_mode": self.recurrence.anchor_mode,
+            }
+        )
+        if self.recurrence.chain_max is not None:
+            result["chainMax"] = self.recurrence.chain_max
+        if self.recurrence.chain_until is not None:
+            result["chainUntil"] = self.recurrence.chain_until.value.isoformat().replace("+00:00", "Z")
+        if self.recurrence.business_calendar:
+            result["bc"] = self.recurrence.business_calendar
+        return result
+
+
+@dataclass(frozen=True, slots=True)
 class ValidatedTask:
     operation: TaskOperation
     task: NauticalTask
@@ -573,6 +642,7 @@ __all__ = (
     "TaskStatus",
     "TaskLink",
     "TaskObservation",
+    "TaskDraft",
     "TaskOperation",
     "TaskTimestamp",
     "TaskUUID",

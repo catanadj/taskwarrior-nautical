@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .task_changes import TaskTransition
+
 
 class RecurrenceActivationError(RuntimeError):
     """Raised when a recurrence transition cannot be applied safely."""
@@ -48,6 +50,7 @@ def handle_non_completion_modify(
     *,
     services: OrdinaryModifyServices,
     lifecycle: Any,
+    transition: TaskTransition | None = None,
 ) -> None:
     """Apply ordinary edit validation, carry-forward, and feedback policy."""
     explicit_timing_changes = tuple(
@@ -80,9 +83,20 @@ def handle_non_completion_modify(
         services.validate_chain_limits(new)
 
     schedule_adjustment = services.preserve_cp_offsets(old, new, new_cp)
-    new_has_recurrence = services.task_has_recurrence(new)
+    if transition is not None:
+        def observation_has_recurrence(observation: Any) -> bool:
+            return any(
+                bool(str(observation.field(field).raw_value() or "").strip())
+                for field in ("cp", "anchor", "anchor_file")
+            )
+
+        old_has_recurrence = observation_has_recurrence(transition.old)
+        new_has_recurrence = observation_has_recurrence(transition.new)
+    else:
+        old_has_recurrence = services.task_has_recurrence(old)
+        new_has_recurrence = services.task_has_recurrence(new)
     recurrence_enabled = (
-        new_has_recurrence and not services.task_has_recurrence(old)
+        new_has_recurrence and not old_has_recurrence
     )
     if new_has_recurrence and not recurrence_enabled:
         recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
@@ -105,12 +119,21 @@ def handle_non_completion_modify(
             f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}"
         ) from exc
     recurrence_removed = (
-        services.task_has_recurrence(old)
-        and not services.task_has_recurrence(new)
+        old_has_recurrence
+        and not new_has_recurrence
     )
+    if transition is not None:
+        recurrence_removed = old_has_recurrence and not new_has_recurrence
     chain_was_disabled = (
-        str(old.get("chain") or "").strip().lower() == "on"
-        and str(new.get("chain") or "").strip().lower() == "off"
+        (
+            str(transition.old.field("chain").raw_value() or "").strip().lower() == "on"
+            and str(transition.new.field("chain").raw_value() or "").strip().lower() == "off"
+        )
+        if transition is not None
+        else (
+            str(old.get("chain") or "").strip().lower() == "on"
+            and str(new.get("chain") or "").strip().lower() == "off"
+        )
     )
     if transition and transition.state == "enabled":
         rows = [

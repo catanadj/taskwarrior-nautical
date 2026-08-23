@@ -2930,6 +2930,7 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transit
             new,
             services=services,
             lifecycle=modify_lifecycle,
+            transition=transition,
         )
     except _module("chain_generation").CarryFieldError as exc:
         _fail_and_exit("Nautical carry failed", str(exc))

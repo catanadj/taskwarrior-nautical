@@ -208,6 +208,18 @@ def _plan_from_values(**kwargs):
 
     child_payload = kwargs.pop("child_payload", None)
     parent_patch = kwargs.pop("parent_patch", None)
+    if child_payload is not None and getattr(kwargs.get("action"), "value", kwargs.get("action")) == "spawn_child":
+        child_payload = dict(child_payload)
+        child_payload.setdefault("description", "typed lifecycle child")
+        child_payload.setdefault("status", "pending")
+        child_payload.setdefault("chain", "on")
+        child_payload.setdefault("anchor", "")
+        child_payload.setdefault("anchor_file", "")
+        child_payload.setdefault("omit", "")
+        child_payload.setdefault("omit_file", "")
+        child_payload.setdefault("anchor_mode", "skip")
+        child_payload.setdefault("cp", "1d")
+        child_payload.setdefault("due", "2026-01-02T00:00:00Z")
     return LifecyclePlan(
         **kwargs,
         child_payload=_freeze_pairs(child_payload),
@@ -3556,7 +3568,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             args = list(args)
             self.calls.append((args, purpose))
             command = TaskCommand(("task", *args), purpose, timeout, input_text)
-            if args[0:3] == ["rc.hooks=off", "rc.verbose=nothing", "import"]:
+            if "import" in args:
                 row = json.loads(input_text or "{}")
                 self.repo.rows[str(row["uuid"]).lower()] = row
             elif "delete" in args:
@@ -4540,7 +4552,7 @@ def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
     def plan_for(link: int) -> LifecyclePlan:
         parent_uuid = f"00000000-0000-4000-8000-{link:012d}"
         child_uuid = f"10000000-0000-4000-8000-{link:012d}"
-        return LifecyclePlan.from_draft(
+        return _plan_from_values(
             identity=LifecycleIdentity("retention-chain", parent_uuid, link, link + 1, LifecycleEvent.COMPLETE),
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=ParentGuard("completed", "on", "retention-chain", link, f"rf-{link}"),
@@ -4590,7 +4602,7 @@ def test_lifecycle_outbox_prunes_only_expired_acknowledged_rows():
         expect(status_result.ok, "status after retention failed")
         expect((status.get("retention") or {}).get("eligible") == 0, f"expired retention remained eligible: {status}")
         states = status.get("states", {})
-        expect(states.get(OutboxProcessingState.READY.value) == 1, f"retry evidence was pruned: {states}")
+        expect(states.get(OutboxProcessingState.RETRY.value) == 1, f"retry evidence was pruned: {states}")
         expect(states.get(OutboxProcessingState.CLAIMED.value) == 1, f"claimed evidence was pruned: {states}")
         expect(states.get(OutboxProcessingState.MANUAL_REVIEW.value) == 1, f"manual review evidence was pruned: {states}")
         expect(states.get(OutboxProcessingState.ACKNOWLEDGED.value, 0) == 0, f"old acknowledgement remained: {states}")
@@ -35058,7 +35070,9 @@ def test_lifecycle_application_happy_path_real_stack():
             self.rows = dict(rows)
         def by_uuid(self, u, *, refresh=False):
             r = self.rows.get(str(u).lower())
-            return Found(r, f"uuid:{u}") if r is not None else Absent(f"uuid:{u}", "not found")
+            if r is None:
+                return Absent(f"uuid:{u}", "not found")
+            return Found(_task_observation(r), f"uuid:{u}")
 
     class _Client:
         def __init__(self, repo):
@@ -35066,7 +35080,7 @@ def test_lifecycle_application_happy_path_real_stack():
         def execute(self, args, *, purpose, timeout, input_text=None, attempts=1):
             args = list(args)
             command = TaskCommand(("task", *args), purpose, timeout, input_text)
-            if args[0:3] == ["rc.hooks=off", "rc.verbose=nothing", "import"]:
+            if "import" in args:
                 row = json.loads(input_text or "{}")
                 self.repo.rows[str(row["uuid"]).lower()] = row
             elif "modify" in args:

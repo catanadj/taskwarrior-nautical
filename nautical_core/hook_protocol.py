@@ -7,10 +7,29 @@ from typing import TYPE_CHECKING, TypeAlias
 if TYPE_CHECKING:
     from .task_models import TaskObservation
 
+class _ProtocolCodecError(Exception):
+    """Fallback error type used while the standalone gate is being loaded."""
+
+
 try:
     from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 except ImportError:  # standalone hook bootstrap loader
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC, TaskCodecError  # type: ignore[no-redef]
+    DEFAULT_TASK_CODEC = None  # type: ignore[assignment]
+    TaskCodecError = _ProtocolCodecError  # type: ignore[assignment,misc]
+
+
+def _codec():
+    """Resolve the strict codec only when a probe actually decodes a task."""
+    global DEFAULT_TASK_CODEC, TaskCodecError
+    if DEFAULT_TASK_CODEC is None:
+        try:
+            from .task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+        except ImportError:  # dynamically loaded protocol test/hook wrapper
+            from nautical_core.task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+
+        DEFAULT_TASK_CODEC = codec
+        TaskCodecError = error
+    return DEFAULT_TASK_CODEC
 
 
 MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -216,7 +235,7 @@ def probe_on_add(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> HookPr
     if not stripped:
         return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
     try:
-        observation = DEFAULT_TASK_CODEC.decode_object(
+        observation = _codec().decode_object(
             stripped,
             source_query="hook:on-add",
         )
@@ -285,7 +304,7 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
     if not raw_text.strip():
         return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 
-    observations, index, decode_error = DEFAULT_TASK_CODEC.decode_leading_rows(
+    observations, index, decode_error = _codec().decode_leading_rows(
         raw_text,
         source_query="hook:on-modify",
         max_objects=2,

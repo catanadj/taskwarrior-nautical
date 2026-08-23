@@ -400,7 +400,7 @@ def _active_chain_rows(
     *,
     include_inactive: bool = False,
     snapshot: _ReconcileSnapshot | None = None,
-) -> list[dict[str, Any]]:
+) -> list[TaskObservation]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
     if snapshot is None:
         raise RuntimeError("active-chain reads require an authoritative snapshot")
@@ -409,7 +409,7 @@ def _active_chain_rows(
         (
             row
             for row in rows
-            if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+            if _observation_text(row, "status").lower() not in {"completed", "deleted"}
         ),
         key=IntegrityRecoveryService.candidate_sort_key,
     )

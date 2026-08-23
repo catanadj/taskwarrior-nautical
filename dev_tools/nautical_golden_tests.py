@@ -4068,8 +4068,8 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         child_description: str = "",
         numeric_variant: bool = False,
     ) -> LifecyclePlan:
-        parent_uuid = f"00000000-0000-0000-0000-{link:012d}"
-        child_uuid = f"10000000-0000-0000-0000-{link:012d}"
+        parent_uuid = f"00000000-0000-4000-8000-{link:012d}"
+        child_uuid = f"10000000-0000-4000-8000-{link:012d}"
         child_payload = {
             "uuid": child_uuid,
             "description": child_description or "outbox child",

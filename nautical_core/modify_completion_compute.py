@@ -32,6 +32,7 @@ from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
+from nautical_core.task_models import NauticalTask
 
 
 def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
@@ -501,10 +502,13 @@ def first_recurrence_target(
     parent["end"] = format_datetime(target)
     try:
         generation = generation_service()
+        typed_parent = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(parent, source_query="completion recurrence target")
+        )
         if source in {"anchor", "anchor_file"}:
-            result = generation.compute_anchor_child_due(parent)
+            result = generation.compute_anchor_child_due(typed_parent)
         else:
-            result = generation.compute_cp_child_due(parent)
+            result = generation.compute_cp_child_due(typed_parent)
         return result[0] if result else None
     except Exception:
         return None

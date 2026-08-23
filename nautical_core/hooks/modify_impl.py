@@ -3053,6 +3053,19 @@ def _completion_preflight_context(new: dict, now_utc: datetime, repository):
 def _completion_compute_child_due(new: dict, kind: str):
     modify_completion_compute = _module("modify_completion_compute")
     generation = _chain_generation_service()
+    task_codec = _module("task_codec")
+    task_models = _module("task_models")
+
+    def typed_task(task: dict):
+        return task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
+        )
+
+    def compute_anchor(task: dict):
+        return generation.compute_anchor_child_due(typed_task(task))
+
+    def compute_cp(task: dict):
+        return generation.compute_cp_child_due(typed_task(task))
 
     def handle_terminal(exc) -> None:
         message = core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
@@ -3082,8 +3095,8 @@ def _completion_compute_child_due(new: dict, kind: str):
     return modify_completion_compute.completion_compute_child_due(
         new,
         kind,
-        compute_anchor_child_due=generation.compute_anchor_child_due,
-        compute_cp_child_due=generation.compute_cp_child_due,
+        compute_anchor_child_due=compute_anchor,
+        compute_cp_child_due=compute_cp,
         panel=_panel,
         print_task=_print_task,
         diag=_diag,
@@ -3314,13 +3327,30 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "Completion
 def _expiration_services():
     modify_expiration = _module("modify_expiration")
     generation = _chain_generation_service()
+    task_codec = _module("task_codec")
+    task_models = _module("task_models")
+
+    def typed_task(task: dict):
+        return task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify expiration")
+        )
+
+    def compute_anchor(task: dict):
+        return generation.compute_anchor_child_due(typed_task(task))
+
+    def compute_cp(task: dict):
+        return generation.compute_cp_child_due(typed_task(task))
+
+    def build_child(task: dict, *args, **kwargs):
+        return generation.build_child_from_parent(typed_task(task), *args, **kwargs)
+
     return modify_expiration.ExpirationServices(
         core=core,
         reconcile=_module("chain_integrity_lifecycle"),
         safe_parse_datetime=_safe_parse_datetime,
-        compute_anchor_child_due=generation.compute_anchor_child_due,
-        compute_cp_child_due=generation.compute_cp_child_due,
-        build_child_from_parent=generation.build_child_from_parent,
+        compute_anchor_child_due=compute_anchor,
+        compute_cp_child_due=compute_cp,
+        build_child_from_parent=build_child,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         short=_short,

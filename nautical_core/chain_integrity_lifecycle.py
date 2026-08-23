@@ -430,7 +430,7 @@ def _build_expiration_child_with_day_end(
     fallback_until = generation.core.build_local_datetime(target_local.date(), (23, 59)) + timedelta(seconds=59)
     fallback_parent = dict(parent)
     fallback_parent["until"] = generation.core.fmt_isoz(fallback_until)
-    return generation.build_child_from_parent(
+    return generation.build_child_draft(
         NauticalTask.from_observation(
             DEFAULT_TASK_CODEC.decode_row(fallback_parent, source_query="reconcile expiration fallback")
         ),
@@ -441,7 +441,7 @@ def _build_expiration_child_with_day_end(
         kind,
         cpmax,
         until_dt,
-    )
+    ).to_mapping()
 
 
 def _plan_recovery_decision_unscoped(

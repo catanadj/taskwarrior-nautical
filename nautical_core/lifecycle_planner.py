@@ -42,14 +42,6 @@ def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     return "anchor"
 
 
-class ChildPlanBuilder(Protocol):
-    def __call__(
-        self,
-        snapshot: TaskSnapshot,
-        event: LifecycleEvent,
-    ) -> Mapping[str, Any] | None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class RecurrenceCandidate:
     """Pure recurrence result consumed by completion/expiration planning."""
@@ -437,7 +429,6 @@ class LifecyclePlanner:
     """Construct side-effect-free lifecycle plans from immutable snapshots."""
 
     validated_configuration: Any
-    child_builder: ChildPlanBuilder | None = None
     recurrence_service: RecurrencePlanningService | None = None
     successor_limit_policy: SuccessorLimitPolicy | None = None
 
@@ -532,13 +523,6 @@ class LifecyclePlanner:
                 raise LifecyclePlanningError(
                     f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
                 ) from exc
-        elif self.child_builder is not None:
-            try:
-                child = self.child_builder(snapshot, event)
-            except Exception as exc:
-                raise LifecyclePlanningError(
-                    f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
-                ) from exc
         if child is None:
             return terminal_plan_for_snapshot(snapshot, event)
         if isinstance(child, TaskDraft):
@@ -573,7 +557,6 @@ class LifecyclePlanner:
 
 
 __all__ = (
-    "ChildPlanBuilder",
     "CarryValidator",
     "ChainGenerationLimitPolicy",
     "ChainGenerationPlanningService",

@@ -493,12 +493,12 @@ class OccurrenceQueryService:
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
         )
 
-    def _reference_utc(self, task: Mapping[str, Any]) -> datetime:
+    def _reference_utc(self, task: TaskRow) -> datetime:
         parser = getattr(self._core, "parse_dt_any", None)
         if not callable(parser):
             raise QueryServiceError("Nautical datetime parser is unavailable")
-        for field in (("end",) if normalize_recurrence_text(task.get("cp")) else ()) + ("due", "scheduled"):
-            value = task.get(field)
+        for field in (("end",) if normalize_recurrence_text(_task_value(task, "cp")) else ()) + ("due", "scheduled"):
+            value = _task_value(task, field)
             if not value:
                 continue
             parsed = parser(value)
@@ -553,13 +553,13 @@ class OccurrenceQueryService:
 
     def _query_next_task(
         self,
-        task: Mapping[str, Any],
+        task: TaskRow,
         request: OccurrenceQueryRequest,
     ) -> TaskOccurrenceResult:
-        if task.get("_query_absent"):
-            return TaskOccurrenceResult(None, "absent", failure=_failure("task_absent", "Taskwarrior returned no task", task_uuid=str(task.get("uuid") or "")))
-        if task.get("_query_ambiguous"):
-            return TaskOccurrenceResult(None, "invalid", failure=_failure("ambiguous_uuid", "UUID selector matched more than one task", task_uuid=str(task.get("uuid") or "")))
+        if isinstance(task, Mapping) and task.get("_query_absent"):
+            return TaskOccurrenceResult(None, "absent", failure=_failure("task_absent", "Taskwarrior returned no task", task_uuid=str(_task_value(task, "uuid") or "")))
+        if isinstance(task, Mapping) and task.get("_query_ambiguous"):
+            return TaskOccurrenceResult(None, "invalid", failure=_failure("ambiguous_uuid", "UUID selector matched more than one task", task_uuid=str(_task_value(task, "uuid") or "")))
         identity: TaskIdentity | None = None
         try:
             identity = _task_identity(task)
@@ -575,31 +575,31 @@ class OccurrenceQueryService:
                 if request.evaluation_at is not None
                 else reference_utc
             )
-            link = _link_value(task.get("link")) or 1
+            link = _link_value(_task_value(task, "link")) or 1
             chain_metadata: dict[str, Any] = {
                 "chainID": identity.chain_id,
                 "link": link,
-                "prevLink": str(task.get("prevLink") or "") or None,
-                "nextLink": str(task.get("nextLink") or "") or None,
-                "status": str(task.get("status") or "") or None,
-                "chainMax": task.get("chainMax") or None,
-                "chainUntil": task.get("chainUntil") or None,
+                "prevLink": str(_task_value(task, "prevLink") or "") or None,
+                "nextLink": str(_task_value(task, "nextLink") or "") or None,
+                "status": str(_task_value(task, "status") or "") or None,
+                "chainMax": _task_value(task, "chainMax") or None,
+                "chainUntil": _task_value(task, "chainUntil") or None,
             }
             recurrence_kind = identity.recurrence_kind
-            reference_field = "end" if recurrence_kind == "cp" and task.get("end") else (
-                "due" if task.get("due") else "scheduled"
+            reference_field = "end" if recurrence_kind == "cp" and _task_value(task, "end") else (
+                "due" if _task_value(task, "due") else "scheduled"
             )
             lifecycle_metadata: dict[str, Any] = {
                 "projected": True,
-                "basis": "completion-end" if recurrence_kind == "cp" and task.get("end") else "task-reference",
+                "basis": "completion-end" if recurrence_kind == "cp" and _task_value(task, "end") else "task-reference",
                 "reference_field": reference_field,
                 "reference_utc": reference_utc.isoformat().replace("+00:00", "Z"),
-                "target_field": "scheduled" if not task.get("due") and task.get("scheduled") else "due",
+                "target_field": "scheduled" if not _task_value(task, "due") and _task_value(task, "scheduled") else "due",
                 "child_created": False,
             }
             if request.evaluation_at is not None:
                 lifecycle_metadata["evaluated_at"] = evaluated_utc.astimezone(self._timezone).isoformat()
-            chain_max = task.get("chainMax")
+            chain_max = _task_value(task, "chainMax")
             if chain_max not in (None, ""):
                 try:
                     if link >= int(chain_max):
@@ -608,7 +608,7 @@ class OccurrenceQueryService:
                     raise QueryServiceError("chainMax is not an integer") from exc
 
             def bounded(candidate: datetime) -> bool:
-                chain_until = task.get("chainUntil")
+                chain_until = _task_value(task, "chainUntil")
                 if not chain_until:
                     return True
                 parser = getattr(self._core, "parse_dt_any", None)
@@ -619,8 +619,8 @@ class OccurrenceQueryService:
                     raise QueryServiceError("chainUntil is not a valid timezone-aware datetime")
                 return candidate.astimezone(timezone.utc) <= limit.astimezone(timezone.utc)
 
-            if normalize_recurrence_text(task.get("cp")):
-                parent = dict(task)
+            if normalize_recurrence_text(_task_value(task, "cp")):
+                parent = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
                 if request.evaluation_at is not None:
                     formatter = getattr(self._core, "fmt_isoz", None)
                     if not callable(formatter):
@@ -646,18 +646,22 @@ class OccurrenceQueryService:
                     source="cp",
                 )
                 return TaskOccurrenceResult(identity, "found", (record,), chain=chain_metadata, lifecycle=lifecycle_metadata)
-            scheduler = SchedulerService.from_task(task, context=context)
+            scheduler = (
+                SchedulerService.from_observation(task, context=context)
+                if isinstance(task, TaskObservation)
+                else SchedulerService.from_task(task, context=context)
+            )
             lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             if request.evaluation_at is not None:
                 due_local = reference_utc.astimezone(self._timezone)
                 evaluated_local = evaluated_utc.astimezone(self._timezone)
-                mode = str(task.get("anchor_mode") or "skip").strip().lower() or "skip"
+                mode = str(_task_value(task, "anchor_mode") or "skip").strip().lower() or "skip"
                 selected = scheduler.select_mode(
                     mode,
                     due_local=due_local,
                     end_local=evaluated_local,
-                    due_explicit=bool(task.get("due")),
+                    due_explicit=bool(_task_value(task, "due")),
                     fallback_hhmm=(due_local.hour, due_local.minute),
                     default_seed_date=due_local.date(),
                 )
@@ -727,7 +731,7 @@ class OccurrenceQueryService:
             return TaskOccurrenceResult(
                 identity,
                 "invalid",
-                failure=_failure("next_projection_invalid", str(exc), task_uuid=identity.uuid if identity else str(task.get("uuid") or "")),
+                failure=_failure("next_projection_invalid", str(exc), task_uuid=identity.uuid if identity else str(_task_value(task, "uuid") or "")),
                 chain=({"chainID": identity.chain_id} if identity is not None else {}),
                 lifecycle={"projected": True, "child_created": False},
             )

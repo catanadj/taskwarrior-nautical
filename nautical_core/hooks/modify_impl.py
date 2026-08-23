@@ -3428,7 +3428,7 @@ def _handle_deleted_modify(old: dict, new: dict, unit_of_work, *, transition=Non
         diag=_diag,
         recovery_warning=_expiration_recovery_warning,
     )
-    modify_expiration.handle_deleted_modify(old, new, services=services)
+    modify_expiration.handle_deleted_modify(old, new, services=services, transition=transition)
 
 
 class _OnModifyServices:

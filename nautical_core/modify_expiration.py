@@ -187,11 +187,27 @@ def handle_deleted_modify(
     new: dict[str, Any],
     *,
     services: DeletedModifyServices,
+    transition: Any = None,
 ) -> None:
     """Classify one deleted pending task and converge its chain state."""
-    if str(old.get("status") or "").strip().lower() != "pending":
+    old_status = (
+        transition.old.field("status").raw_value()
+        if transition is not None
+        else old.get("status")
+    )
+    if str(old_status or "").strip().lower() != "pending":
         return
-    if not ((old.get("chainID") or new.get("chainID") or "").strip()):
+    old_chain_id = (
+        transition.old.field("chainID").raw_value()
+        if transition is not None
+        else old.get("chainID")
+    )
+    new_chain_id = (
+        transition.new.field("chainID").raw_value()
+        if transition is not None
+        else new.get("chainID")
+    )
+    if not ((old_chain_id or new_chain_id or "").strip()):
         return
     expiration = services.expiration
     try:

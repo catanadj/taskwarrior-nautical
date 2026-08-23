@@ -47,17 +47,23 @@ class RecoveryAudit:
 class IntegrityRecoveryService:
     """Build typed recovery evidence from one authoritative chain snapshot."""
 
-    def __init__(self, *, child_lookup: Callable[[str, int], dict[str, Any] | None] | None = None) -> None:
+    def __init__(self, *, child_lookup: Callable[[str, int], TaskObservation | None] | None = None) -> None:
         self._child_lookup = child_lookup
 
-    def existing_children(self, parent: dict[str, Any]) -> list[dict[str, Any]]:
+    def existing_children(self, parent: TaskObservation) -> tuple[TaskObservation, ...]:
         """Resolve the single successor slot without owning repository I/O."""
-        chain_id = str(parent.get("chainID") or "").strip()
-        next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
+        if not isinstance(parent, TaskObservation):
+            raise TypeError("recovery child lookup requires a TaskObservation parent")
+        chain_id = str(_observation_value(parent, "chainID") or "").strip()
+        next_link = lifecycle.int_or_default(_observation_value(parent, "link"), 1) + 1
         if not chain_id or self._child_lookup is None:
-            return []
+            return ()
         value = self._child_lookup(chain_id, next_link)
-        return [dict(value)] if value is not None else []
+        if value is None:
+            return ()
+        if not isinstance(value, TaskObservation):
+            raise TypeError("recovery child lookup returned a non-observation value")
+        return (value,)
 
     @staticmethod
     def native_until_request(
@@ -76,7 +82,7 @@ class IntegrityRecoveryService:
             raise ValueError("native until repair lacks task identity")
         guard = MutationGuard(
             task_uuid=uuid,
-            status=str(row.get("status") or ""),
+            status=str(_observation_value(row, "status") or ""),
             chain_id=chain_id,
             link=link,
             recurrence_identity=recurrence_fingerprint(row.to_mapping()),

@@ -569,14 +569,29 @@ def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> b
         return False
 
 
-def _recovery_existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
-    """Adapt the authoritative repository read to the recovery service."""
+def _recovery_existing_children(parent: dict[str, Any]) -> tuple[TaskObservation, ...]:
+    """Read the successor slot as immutable observations."""
+    parent_observation = (
+        parent
+        if isinstance(parent, TaskObservation)
+        else DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile child lookup")
+    )
+
+    def child_observation(chain_id: str, link: int) -> TaskObservation | None:
+        read = _repository().exact_child_slot(chain_id, link, refresh=True)
+        if isinstance(read, Found):
+            if not isinstance(read.value, TaskObservation):
+                raise _PlanReadUnavailable(f"child slot {chain_id}:{link} returned an invalid observation")
+            return read.value
+        if isinstance(read, Absent):
+            return None
+        if isinstance(read, Unavailable):
+            raise _PlanReadUnavailable(f"child slot {chain_id}:{link} unavailable: {read.evidence.detail}")
+        raise _PlanReadUnavailable(f"child slot {chain_id}:{link} returned an invalid typed result")
+
     return IntegrityRecoveryService(
-        child_lookup=lambda chain_id, link: _read_value(
-            _repository().exact_child_slot(chain_id, link, refresh=True),
-            f"child slot {chain_id}:{link}",
-        ),
-    ).existing_children(parent)
+        child_lookup=child_observation,
+    ).existing_children(parent_observation)
 
 
 def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
@@ -589,7 +604,9 @@ def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any
         )
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return []
-    return _recovery_existing_children(parent)
+    # The lifecycle planner still accepts serialized rows; keep this conversion
+    # at that explicit boundary rather than in the repository/recovery service.
+    return [row.to_mapping() for row in _recovery_existing_children(parent)]
 
 
 def _expiration_hop_limit(value: str) -> int:
@@ -735,7 +752,8 @@ def _verify_applied_child(
         raise RuntimeError(
             f"post-apply verification found parent nextLink {shown}; expected {child_short}"
         )
-    rows = _recovery_existing_children(fresh_parent)
+    observations = _recovery_existing_children(fresh_parent)
+    rows = [row.to_mapping() for row in observations]
     resolved, child_error = lifecycle.resolve_existing_child(
         fresh_parent,
         rows,
@@ -751,22 +769,22 @@ def _verify_applied_child(
     matched = next(
         (
             row
-            for row in rows
-            if str(row.get("uuid") or "").strip().lower().startswith(expected_child)
+            for row in observations
+            if str(row.field("uuid").raw_value() or "").strip().lower().startswith(expected_child)
         ),
         None,
     )
     if matched is None:
         raise RuntimeError("post-apply child verification could not identify the resolved child")
     if callable(getattr(hook, "stable_child_uuid", None)):
-        expected_uuid = _stable_child_uuid(hook, fresh_parent, matched).strip().lower()
-        actual_uuid = str(matched.get("uuid") or "").strip().lower()
+        expected_uuid = _stable_child_uuid(hook, fresh_parent, matched.to_mapping()).strip().lower()
+        actual_uuid = str(matched.field("uuid").raw_value() or "").strip().lower()
         if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
             raise RuntimeError(
                 f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
                 f"does not match deterministic slot identity {expected_uuid[:8]}"
             )
-    return matched
+    return matched.to_mapping()
 
 
 def _stale_plan(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
@@ -972,13 +990,11 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:
     child = lifecycle_plan.child_dict()
     child_uuid = str(child.get("uuid") or "").strip().lower()
     rows = _recovery_existing_children({"chainID": lifecycle_plan.identity.chain_id, "link": lifecycle_plan.identity.source_link})
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
     parent_short = str(lifecycle_plan.identity.parent_uuid or "").strip().lower()[:8]
-    for raw_row in rows:
-        row = DEFAULT_TASK_CODEC.decode_row(raw_row, source_query="reconcile positional child")
+    for row in rows:
         def value(name: str) -> object:
             state = row.field(name)
-            return getattr(state.value, "value", state.value)
+            return state.raw_value()
         row_uuid = str(value("uuid") or "").strip().lower()
         if child_uuid and row_uuid == child_uuid:
             return row

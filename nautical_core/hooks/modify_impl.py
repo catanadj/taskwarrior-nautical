@@ -3275,7 +3275,7 @@ def _completion_build_and_spawn_child(
     modify_runtime = _module("modify_runtime")
     generation = _chain_generation_service()
     services = modify_runtime.build_spawn_services(
-        build_child_from_parent=generation.build_child_from_parent,
+        build_child_draft=generation.build_child_draft,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         print_task=_print_task,
@@ -3357,8 +3357,8 @@ def _expiration_services():
     def compute_cp(task: dict):
         return generation.compute_cp_child_due(typed_task(task))
 
-    def build_child(task: dict, *args, **kwargs):
-        return generation.build_child_from_parent(typed_task(task), *args, **kwargs)
+    def build_child_draft(task: dict, *args, **kwargs):
+        return generation.build_child_draft(typed_task(task), *args, **kwargs)
 
     return modify_expiration.ExpirationServices(
         core=core,
@@ -3366,7 +3366,7 @@ def _expiration_services():
         safe_parse_datetime=_safe_parse_datetime,
         compute_anchor_child_due=compute_anchor,
         compute_cp_child_due=compute_cp,
-        build_child_from_parent=build_child,
+        build_child_draft=build_child_draft,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         short=_short,

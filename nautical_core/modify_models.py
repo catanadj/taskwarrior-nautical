@@ -252,8 +252,8 @@ CompletionCapsCallback: TypeAlias = Callable[
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
 ]
-BuildChildCallback: TypeAlias = Callable[
-    [TaskRow, Any, str, int, str, str, int, Any], TaskRow
+BuildChildDraftCallback: TypeAlias = Callable[
+    [TaskRow, Any, str, int, str, str, int, Any], Any
 ]
 SpawnChildCallback: TypeAlias = Callable[
     [TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
@@ -564,7 +564,7 @@ class CompletionLifecycleResult:
 
 @dataclass(slots=True)
 class CompletionSpawnServices:
-    build_child_from_parent: BuildChildCallback
+    build_child_draft: BuildChildDraftCallback
     spawn_child_atomic: SpawnChildCallback
     panel: PanelCallback
     print_task: PrintTaskCallback

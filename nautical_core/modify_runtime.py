@@ -12,7 +12,7 @@ from nautical_core.modify_models import (
     CompletionPreflightServices,
     CompletionSpawnServices,
     CpFeedbackServices,
-    BuildChildCallback,
+    BuildChildDraftCallback,
     CompletionCapGuardCallback,
     CompletionCapsCallback,
     CompletionChainIdCallback,
@@ -337,14 +337,14 @@ def build_compute_services(
 
 def build_spawn_services(
     *,
-    build_child_from_parent: BuildChildCallback,
+    build_child_draft: BuildChildDraftCallback,
     spawn_child_atomic: SpawnChildCallback,
     panel: PanelCallback,
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback,
 ) -> CompletionSpawnServices:
     return CompletionSpawnServices(
-        build_child_from_parent=build_child_from_parent,
+        build_child_draft=build_child_draft,
         spawn_child_atomic=spawn_child_atomic,
         panel=panel,
         print_task=print_task,

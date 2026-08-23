@@ -19,20 +19,15 @@ def completion_build_and_spawn_child(
     planned_child: dict[str, Any] | None = None,
     services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
-    build_child_from_parent = services.build_child_from_parent
+    build_child_draft = services.build_child_draft
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
     try:
-        child = planned_child or build_child_from_parent(
-            new,
-            child_due,
-            child_field,
-            next_no,
-            parent_short,
-            kind,
-            cpmax,
-            until_dt,
-        )
+        child = planned_child
+        if child is None:
+            child = build_child_draft(
+                new, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
+            ).to_mapping()
     except Exception as exc:
         if callable(diag):
             diag(f"build child failed: {exc}")

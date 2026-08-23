@@ -17,7 +17,7 @@ class ExpirationServices:
     safe_parse_datetime: Any
     compute_anchor_child_due: Any
     compute_cp_child_due: Any
-    build_child_from_parent: Any
+    build_child_draft: Any
     spawn_child_atomic: Any
     panel: Any
     short: Any
@@ -137,7 +137,7 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
         _safe_parse_datetime=services.safe_parse_datetime,
         _compute_anchor_child_due=services.compute_anchor_child_due,
         _compute_cp_child_due=services.compute_cp_child_due,
-        _build_child_from_parent=services.build_child_from_parent,
+        _build_child_draft=services.build_child_draft,
     )
     plan = reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook)
 

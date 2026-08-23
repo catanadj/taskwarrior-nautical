@@ -159,9 +159,6 @@ def finalize_completion_modify(
         "cpmax": computed.cpmax,
         "until_dt": computed.until_dt,
     }
-    planned_child = getattr(computed, "planned_child", None)
-    if planned_child is not None:
-        spawn_args["planned_child"] = planned_child
     spawned = services.build_and_spawn_child(new, **spawn_args)
     if spawned is None:
         lifecycle_result = CompletionLifecycleResult(

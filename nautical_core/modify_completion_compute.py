@@ -602,7 +602,6 @@ def attach_lifecycle_plan(
                 ),
             )
         computed.lifecycle_plan = plan
-        computed.planned_child = plan.child_dict()
     except Exception as exc:
         diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
         panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")

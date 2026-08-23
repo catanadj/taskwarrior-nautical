@@ -91,7 +91,15 @@ class TaskView(Mapping[str, Any]):
 
     def timestamp(self, field: str) -> TaskTimestamp | None:
         """Return one typed timestamp, preserving absent/null as ``None``."""
-        return getattr(self.temporal, str(field), None)
+        name = str(field)
+        temporal_value = getattr(self.temporal, name, None)
+        if temporal_value is not None:
+            return temporal_value
+        if self.observation is not None:
+            value = self.observation.field(name).value
+            if isinstance(value, TaskTimestamp):
+                return value
+        return None
 
     def __getitem__(self, key: str) -> Any:
         return self._values[key]

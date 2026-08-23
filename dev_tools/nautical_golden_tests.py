@@ -5758,6 +5758,7 @@ def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
         "cp": "P1D",
         "chain": "on",
         "chainID": "abcd1234",
+        "link": 1,
         "link": 4,
     }
     for field, value in (
@@ -7338,6 +7339,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
         "due": "20260727T090000Z",
         "chain": "on",
         "chainID": "abcd1234",
+        "link": 1,
     }
     new = {**old, "anchor": "w:tue,thu"}
     captured = {}

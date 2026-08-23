@@ -216,7 +216,7 @@ def _recurrence_update_panel_rows(
 
 def render_recurrence_updated_panel(
     changes: list[tuple[str, str, str]],
-    new: dict[str, Any],
+    new: Mapping[str, Any],
     *,
     parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
@@ -245,9 +245,11 @@ def render_recurrence_updated_panel(
 
     if any(field == "until" for field, _old, _new in changes):
         try:
-            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
-            until_dt = parse_datetime(new.get("until"))
-            target_dt = parse_datetime(new.get(target_field)) if target_field else None
+            target_field = "due" if new.timestamp("due") else "scheduled" if new.timestamp("scheduled") else ""
+            until_value = new.timestamp("until")
+            target_value = new.timestamp(target_field) if target_field else None
+            until_dt = until_value.value if until_value else None
+            target_dt = target_value.value if target_value else None
             carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
             if carry:
                 rows.append(("Carry", carry))
@@ -256,7 +258,8 @@ def render_recurrence_updated_panel(
 
     if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
         max_link = coerce_int(new.get("chainMax"), 0)
-        deadline = parse_datetime(new.get("chainUntil"))
+        deadline_value = new.timestamp("chainUntil")
+        deadline = deadline_value.value if deadline_value else None
         if max_link:
             rows.append(("Final link", f"#{max_link}"))
         if deadline and not any(field == "chainUntil" for field, _old, _new in changes):

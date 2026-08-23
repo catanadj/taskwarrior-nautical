@@ -53,6 +53,7 @@ def handle_non_completion_modify(
     transition: TaskTransition | None = None,
 ) -> None:
     """Apply ordinary edit validation, carry-forward, and feedback policy."""
+    input_transition = transition
     explicit_timing_changes = tuple(
         field
         for field in ("due", "scheduled", "wait")
@@ -90,8 +91,8 @@ def handle_non_completion_modify(
                 for field in ("cp", "anchor", "anchor_file")
             )
 
-        old_has_recurrence = observation_has_recurrence(transition.old)
-        new_has_recurrence = observation_has_recurrence(transition.new)
+        old_has_recurrence = observation_has_recurrence(input_transition.old)
+        new_has_recurrence = observation_has_recurrence(input_transition.new)
     else:
         old_has_recurrence = services.task_has_recurrence(old)
         new_has_recurrence = services.task_has_recurrence(new)
@@ -113,7 +114,7 @@ def handle_non_completion_modify(
     services.render_timing_warning(new, explicit_timing_changes)
 
     try:
-        transition = services.apply_transition(old, new)
+        lifecycle_transition = services.apply_transition(old, new)
     except Exception as exc:
         raise RecurrenceActivationError(
             f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}"
@@ -122,39 +123,39 @@ def handle_non_completion_modify(
         old_has_recurrence
         and not new_has_recurrence
     )
-    if transition is not None:
+    if input_transition is not None:
         recurrence_removed = old_has_recurrence and not new_has_recurrence
     chain_was_disabled = (
         (
-            str(transition.old.field("chain").raw_value() or "").strip().lower() == "on"
-            and str(transition.new.field("chain").raw_value() or "").strip().lower() == "off"
+            str(input_transition.old.field("chain").raw_value() or "").strip().lower() == "on"
+            and str(input_transition.new.field("chain").raw_value() or "").strip().lower() == "off"
         )
-        if transition is not None
+        if input_transition is not None
         else (
             str(old.get("chain") or "").strip().lower() == "on"
             and str(new.get("chain") or "").strip().lower() == "off"
         )
     )
-    if transition and transition.state == "enabled":
+    if lifecycle_transition and lifecycle_transition.state == "enabled":
         rows = [
             (
                 "Reason",
-                transition.reason
+                lifecycle_transition.reason
                 or "This task just gained Nautical recurrence and was promoted to chain:on.",
             ),
-            ("Source", transition.source),
+            ("Source", lifecycle_transition.source),
         ]
-        rows.extend(services.recurrence_enabled_rows(new, transition.source))
+        rows.extend(services.recurrence_enabled_rows(new, lifecycle_transition.source))
         services.panel("⚓ Nautical enabled", rows, kind="note")
-    elif transition and transition.state == "disabled":
+    elif lifecycle_transition and lifecycle_transition.state == "disabled":
         rows = [
             (
                 "Reason",
-                transition.reason or "This task's Nautical recurrence is disabled.",
+                lifecycle_transition.reason or "This task's Nautical recurrence is disabled.",
             )
         ]
-        if transition.source:
-            rows.append(("Source", transition.source))
+        if lifecycle_transition.source:
+            rows.append(("Source", lifecycle_transition.source))
         rows.append(("Chain", "off"))
         services.panel("⚓ Nautical disabled", rows, kind="disabled")
         if recurrence_removed or chain_was_disabled:
@@ -164,12 +165,12 @@ def handle_non_completion_modify(
                 else "Chain manually disabled."
             )
             services.render_disabled_summary(old, new, reason)
-    elif transition and transition.state == "resumed":
+    elif lifecycle_transition and lifecycle_transition.state == "resumed":
         rows = [
-            ("Reason", transition.reason or "This task's Nautical recurrence was resumed.")
+            ("Reason", lifecycle_transition.reason or "This task's Nautical recurrence was resumed.")
         ]
-        if transition.source:
-            rows.append(("Source", transition.source))
+        if lifecycle_transition.source:
+            rows.append(("Source", lifecycle_transition.source))
         rows.append(("Chain", services.semantic_diff_value("off", "on")))
         source = "anchor" if new.get("anchor") else "anchor_file" if new.get("anchor_file") else "cp"
         first = services.first_recurrence_target(new, source)
@@ -178,7 +179,7 @@ def handle_non_completion_modify(
         services.panel("⚓ Nautical resumed", rows, kind="note")
     else:
         try:
-            changes = lifecycle.recurrence_setting_changes(old, new, transition=transition)
+            changes = lifecycle.recurrence_setting_changes(old, new, transition=input_transition)
         except Exception:
             changes = []
         services.render_recurrence_updated(changes, new)

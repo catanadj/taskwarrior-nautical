@@ -2714,10 +2714,11 @@ def _semantic_diff_value(old_text: str, new_text: str) -> str:
 
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
     modify_feedback = _module("modify_feedback")
+    modify_models = _module("modify_models")
     add_validation = core._import_sibling("add_validation")
     modify_feedback.render_recurrence_updated_panel(
         changes,
-        new,
+        modify_models.TaskView.from_mapping(new),
         parse_datetime=core.parse_dt_any,
         format_local=_fmtlocal,
         describe_native_until_carry=add_validation.describe_native_until_carry,

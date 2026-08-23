@@ -6,18 +6,20 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from .task_models import TaskPayload
 
-def summary_current(current: dict, current_task: dict | None) -> dict:
+
+def summary_current(current: TaskPayload, current_task: TaskPayload | None) -> TaskPayload:
     return current_task if current_task else current
 
 
-def summary_chain_id(current: dict) -> str:
+def summary_chain_id(current: TaskPayload) -> str:
     return (current.get("chainID") or "").strip()
 
 
 def span_fields(
     chain_id: str,
-    chain: list[dict],
+    chain: list[TaskPayload],
     *,
     stop_at: datetime | None = None,
     stopped_by_delete: bool = False,
@@ -128,7 +130,7 @@ def last_n_timeline(
     if not chain:
         return []
 
-    def get_link(task: dict[str, Any]) -> int:
+    def get_link(task: TaskPayload) -> int:
         link = task.get("link")
         if link is None or link == "":
             return -1
@@ -142,7 +144,7 @@ def last_n_timeline(
     else:
         label_width = 4
 
-    def history_line(task: dict[str, Any], link_no: int) -> str:
+    def history_line(task: TaskPayload, link_no: int) -> str:
         end = parse_datetime(task.get("end"))
         due = parse_datetime(task.get("due"))
         is_deleted = str(task.get("status") or "").strip().lower() == "deleted"
@@ -185,7 +187,7 @@ def render_chain_summary(
     current: dict[str, Any],
     reason: str,
     now_utc: Any,
-    current_task: dict[str, Any] | None = None,
+    current_task: TaskPayload | None = None,
     *,
     export_sorted_chain: Callable[[str, dict[str, Any]], list[dict[str, Any]]],
     root_uuid_from: Callable[[dict[str, Any]], Any],

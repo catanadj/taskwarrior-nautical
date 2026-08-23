@@ -10,6 +10,8 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .task_models import TaskPayload
+
 
 def _median(values: list[float]) -> float | None:
     if not values:
@@ -84,7 +86,7 @@ def lateness_stats(
 def chain_health_advice(
     chain: list[dict],
     kind: str,
-    task: dict,
+    task: TaskPayload,
     *,
     core: Any,
     parse_datetime: Callable[[Any], datetime | None],

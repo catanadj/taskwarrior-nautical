@@ -467,6 +467,10 @@ class LifecyclePlan:
         stage: ExecutionStage = ExecutionStage.PLANNED,
         terminal_kind: str | None = None,
     ) -> "LifecyclePlan":
+        if LifecycleAction(action) is LifecycleAction.SPAWN_CHILD and child_payload:
+            raise LifecycleContractError(
+                "spawn lifecycle plans require LifecyclePlan.from_draft"
+            )
         return cls(
             identity=identity,
             action=action,
@@ -498,12 +502,12 @@ class LifecyclePlan:
 
         if not isinstance(draft, TaskDraft):
             raise LifecycleContractError("lifecycle child payload requires a validated TaskDraft")
-        return cls.from_mappings(
+        return cls(
             identity=identity,
             action=action,
             parent_guard=parent_guard,
-            child_payload=draft.to_mapping(),
-            parent_patch=parent_patch,
+            child_payload=_freeze_pairs(draft.to_mapping()),
+            parent_patch=_freeze_pairs(parent_patch),
             expected_postconditions=expected_postconditions,
             max_attempts=max_attempts,
             stage=stage,

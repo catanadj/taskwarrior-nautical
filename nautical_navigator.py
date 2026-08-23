@@ -470,6 +470,7 @@ def _anchor_preview_details(
         from nautical_core.recurrence_context import RecurrenceContext
         from nautical_core.scheduler_cursor import OccurrenceCursor
         from nautical_core.scheduler_service import SchedulerService
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
         now_local = core.to_local(core.now_utc())
         # Navigator previews are date-oriented: start after today's final
@@ -482,8 +483,18 @@ def _anchor_preview_details(
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
-        service = SchedulerService.from_task(
-            {"anchor": expr, "chainID": "preview"},
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000002",
+                "status": "pending",
+                "link": 1,
+                "anchor": expr,
+                "chainID": "preview",
+            },
+            source_query="navigator expression preview",
+        )
+        service = SchedulerService.from_observation(
+            observation,
             context=context,
             trace=trace,
         )
@@ -832,19 +843,20 @@ class TaskAnalyzer:
                 from nautical_core.recurrence_context import RecurrenceContext
                 from nautical_core.scheduler_cursor import OccurrenceCursor
                 from nautical_core.scheduler_service import SchedulerService
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
                 due_dt = core.parse_dt_any(last.get("due")) if last.get("due") else None
                 due_local = core.to_local(due_dt) if due_dt else None
                 clock = (due_local.hour, due_local.minute) if due_local else (core.DEFAULT_DUE_HOUR, 0)
-                context = RecurrenceContext.from_task(
-                    last,
-                    fallback_chain_id=last.get("uuid") or "navigator",
+                observation = DEFAULT_TASK_CODEC.decode_row(last, source_query="navigator anchor projection")
+                context = RecurrenceContext.from_observation(
+                    observation,
                     timezone=getattr(core, "_LOCAL_TZ", None),
                     business_calendar=business_calendar,
                     astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                     anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 )
-                scheduler_service = SchedulerService.from_task(last, context=context)
+                scheduler_service = SchedulerService.from_observation(observation, context=context)
                 cursor = OccurrenceCursor.strict_after(
                     core.build_local_datetime(window_start - timedelta(days=1), (23, 59)),
                     timezone=context.timezone,
@@ -2126,11 +2138,13 @@ class TaskAnalyzer:
     # ── Anchor / CP analysis helpers ─────────────────────────────────────────
     def _anchor_summary(self, task: Dict) -> Optional[Tuple[str, str]]:
         """Return a concise summary for anchor / anchor_file sources."""
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-            task, fallback_chain_id=task.get("uuid") or "analyzer"
+        codec = core._import_sibling("task_codec")
+        observation = codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator anchor summary")
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_observation(
+            observation
         )
-        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
-            task,
+        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_observation(
+            observation,
             context=recurrence_context,
         )
         anchor_expr = recurrence_spec.anchor
@@ -2171,16 +2185,18 @@ class TaskAnalyzer:
         except Exception as exc:
             self._record_projection_warning(f"Business calendar: {_format_runtime_error(exc)}")
             return []
-        scheduler_service = core._import_sibling("scheduler_service").SchedulerService.from_task(
-            task,
-            context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-                task,
-                fallback_chain_id=task.get("uuid") or "analyzer",
+        codec = core._import_sibling("task_codec")
+        observation = codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator anchor projection")
+        context = core._import_sibling("recurrence_context").RecurrenceContext.from_observation(
+            observation,
                 timezone=LOCAL_ZONE,
                 business_calendar=business_calendar,
                 astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            ),
+        )
+        scheduler_service = core._import_sibling("scheduler_service").SchedulerService.from_observation(
+            observation,
+            context=context,
         )
         recurrence_evaluator = scheduler_service.session.evaluator
         recurrence_context = recurrence_evaluator.context
@@ -2319,9 +2335,6 @@ class TaskAnalyzer:
         anchor_file = (task.get("anchor_file") or "").strip()
         if not anchor_expr and not anchor_file:
             return None
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-            task, fallback_chain_id=task.get("uuid") or "analyzer"
-        )
         try:
             business_calendar = core.business_calendar_for_task(task)
         except Exception:
@@ -2336,16 +2349,17 @@ class TaskAnalyzer:
                 from nautical_core.recurrence_context import RecurrenceContext
                 from nautical_core.scheduler_cursor import OccurrenceCursor
                 from nautical_core.scheduler_service import SchedulerService
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-                context = RecurrenceContext.from_task(
-                    task,
-                    fallback_chain_id=task.get("uuid") or "analyzer",
+                observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator due check")
+                context = RecurrenceContext.from_observation(
+                    observation,
                     timezone=getattr(core, "_LOCAL_TZ", None),
                     business_calendar=business_calendar,
                     astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                     anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 )
-                service = SchedulerService.from_task(task, context=context)
+                service = SchedulerService.from_observation(observation, context=context)
                 cursor_dt = core.build_local_datetime(due_day - timedelta(days=1), (23, 59))
                 outcome = service.next(
                     OccurrenceCursor.strict_after(cursor_dt, timezone=context.timezone),

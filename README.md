@@ -69,4 +69,4 @@ ready-to-adapt examples whenever you need them.
 
 If Nautical is useful to you, support is appreciated:
 
-[Buy me a coffee](https://buymeacoffee.com/catanadj)
+[Buy me a book](https://buymeacoffee.com/catanadj)

@@ -13,7 +13,7 @@ from .occurrence_outcomes import OccurrenceOutcome
 from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
 from .time_projection import ProjectionResult, TimeProjectionService
-from .task_models import TaskObservation
+from .task_models import NauticalTask, TaskObservation
 from .task_codec import DEFAULT_TASK_CODEC
 
 
@@ -36,6 +36,21 @@ class EvaluationSession:
     @classmethod
     def from_spec(cls, spec: RecurrenceSpec, *, max_cache_entries: int = 32) -> "EvaluationSession":
         return cls(CompiledSchedule.from_spec(spec), max_cache_entries=max_cache_entries)
+
+    @classmethod
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+        max_cache_entries: int = 32,
+    ) -> "EvaluationSession":
+        if not isinstance(task, NauticalTask):
+            raise TypeError("evaluation session requires a validated NauticalTask")
+        return cls.from_spec(
+            RecurrenceSpec.from_task(task, context=context),
+            max_cache_entries=max_cache_entries,
+        )
 
     @classmethod
     def from_observation(

@@ -34812,6 +34812,7 @@ def test_query_service_respects_current_task_reference_bounds():
         "anchor_mode": "all",
         "due": "2030-01-07T09:00:00+00:00",
         "status": "pending",
+        "status": "pending",
     }
 
     class _Repository:
@@ -34901,6 +34902,7 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
         "anchor": "w:mon..sun@t=04:30",
         "anchor_mode": "skip",
         "due": "20260824T013000Z",
+        "status": "pending",
     }
     cp_task = {
         "uuid": "00000000-0000-4000-8000-000000000007",
@@ -34909,6 +34911,7 @@ def test_query_next_projects_anchor_and_cp_without_mutation():
         "description": "Next cp",
         "cp": "1d",
         "due": "20260824T013000Z",
+        "status": "pending",
     }
 
     class _Repository:

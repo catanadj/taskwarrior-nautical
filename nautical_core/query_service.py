@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from types import ModuleType
 from typing import Any, Mapping, TypeAlias
@@ -36,25 +36,54 @@ class QueryServiceError(RuntimeError):
     """Raised when a query cannot be safely constructed or executed."""
 
 
-TaskRow: TypeAlias = TaskObservation | Mapping[str, Any]
+@dataclass(frozen=True, slots=True)
+class _AbsentTask:
+    uuid: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AmbiguousTask:
+    uuid: str
+
+
+TaskRow: TypeAlias = TaskObservation | _AbsentTask | _AmbiguousTask
 
 
 def _task_value(task: TaskRow, name: str) -> object:
     """Read a task field from the authoritative observation boundary."""
-    if isinstance(task, TaskObservation):
-        state = task.field(name)
-        if state.presence is FieldPresence.ABSENT:
-            return None
-        return getattr(state.value, "value", state.value)
-    return task.get(name)
+    if not isinstance(task, TaskObservation):
+        return None
+    state = task.field(name)
+    if state.presence is FieldPresence.ABSENT:
+        return None
+    return getattr(state.value, "value", state.value)
 
 
-def _task_with_overrides(task: TaskRow, **overrides: Any) -> NauticalTask:
+def _task_raw_value(task: TaskObservation, name: str) -> object:
+    state = task.field(name)
+    return state.raw_value() if state.presence is FieldPresence.VALUE else None
+
+
+def _task_with_overrides(task: TaskObservation, **overrides: Any) -> NauticalTask:
     """Build one validated domain task for a projected scheduler step."""
-    values = task.to_mapping() if isinstance(task, TaskObservation) else dict(task)
+    values = task.to_mapping()
     values.update(overrides)
     observation = DEFAULT_TASK_CODEC.decode_row(values, source_query="query projected recurrence")
     return NauticalTask.from_observation(observation)
+
+
+def _decode_repository_row(value: Any, *, source_query: str) -> TaskObservation:
+    """Normalize a repository boundary row before it reaches query logic.
+
+    Production repositories already return observations.  The explicit mapping
+    branch keeps lightweight repository adapters honest at this single boundary
+    without allowing raw rows into scheduling or query consumers.
+    """
+    if isinstance(value, TaskObservation):
+        return value
+    if isinstance(value, Mapping):
+        return DEFAULT_TASK_CODEC.decode_row(value, source_query=source_query)
+    raise TypeError("TaskReadRepository returned a non-task row")
 
 
 def _timezone_name(value: tzinfo) -> str:
@@ -84,7 +113,7 @@ def _link_value(value: object) -> int | None:
     return result if result >= 0 else None
 
 
-def _task_identity(task: TaskRow) -> TaskIdentity:
+def _task_identity(task: TaskObservation) -> TaskIdentity:
     uuid_value = str(_task_value(task, "uuid") or "").strip()
     chain_id = str(_task_value(task, "chainID") or "").strip()
     if not uuid_value:
@@ -103,12 +132,12 @@ def _task_identity(task: TaskRow) -> TaskIdentity:
         description=str(_task_value(task, "description") or ""),
         recurrence_kind=kind,
         expression=expression,
-        current_due=str(_task_value(task, "due") or ""),
-        current_scheduled=str(_task_value(task, "scheduled") or ""),
+        current_due=str(_task_raw_value(task, "due") or ""),
+        current_scheduled=str(_task_raw_value(task, "scheduled") or ""),
     )
 
 
-def _has_recurrence_identity(task: TaskRow) -> bool:
+def _has_recurrence_identity(task: TaskObservation) -> bool:
     return bool(
         str(_task_value(task, "chainID") or "").strip()
         and any(
@@ -118,8 +147,8 @@ def _has_recurrence_identity(task: TaskRow) -> bool:
     )
 
 
-def _ordered_rows(rows: tuple[TaskRow, ...]) -> tuple[TaskRow, ...]:
-    def key(row: TaskRow) -> tuple[str, int, str]:
+def _ordered_rows(rows: tuple[TaskObservation, ...]) -> tuple[TaskObservation, ...]:
+    def key(row: TaskObservation) -> tuple[str, int, str]:
         link = _link_value(_task_value(row, "link"))
         return (
             str(_task_value(row, "chainID") or "").strip().lower(),
@@ -167,7 +196,7 @@ class OccurrenceQueryService:
         calendar = None
         resolver = getattr(self._core, "business_calendar_for_task", None)
         if callable(resolver):
-            calendar = resolver(task.to_mapping() if isinstance(task, TaskObservation) else dict(task))
+            calendar = resolver(task.to_mapping())
         return RecurrenceContext(
             chain_id=chain_id,
             timezone=self._timezone,
@@ -178,7 +207,7 @@ class OccurrenceQueryService:
 
     def _starts_after_request_end(
         self,
-        task: TaskRow,
+        task: TaskObservation,
         request: OccurrenceQueryRequest,
     ) -> bool:
         if request.end is None:
@@ -201,12 +230,12 @@ class OccurrenceQueryService:
                 complete_chain_history=False,
             )
             if isinstance(read, Found):
-                rows = tuple(
-                    row
-                    for row in read.value.rows
-                    if _has_recurrence_identity(row)
-                    and not self._starts_after_request_end(row, request)
-                )
+                selected: list[TaskObservation] = []
+                for raw_row in read.value.rows:
+                    row = _decode_repository_row(raw_row, source_query="query all-active")
+                    if _has_recurrence_identity(row) and not self._starts_after_request_end(row, request):
+                        selected.append(row)
+                rows = tuple(selected)
                 return _ordered_rows(rows)[: request.max_tasks]
             if isinstance(read, Absent):
                 return ()
@@ -214,7 +243,9 @@ class OccurrenceQueryService:
         if selector.chain_id:
             read = repository.chain_snapshot(selector.chain_id, statuses=ALL_TASK_STATUSES, complete_history=True)
             if isinstance(read, Found):
-                return _ordered_rows(tuple(read.value))[: request.max_tasks]
+                return _ordered_rows(
+                    tuple(_decode_repository_row(row, source_query="query chain") for row in read.value)
+                )[: request.max_tasks]
             if isinstance(read, Absent):
                 return _failure("chain_absent", read.reason)
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
@@ -233,20 +264,20 @@ class OccurrenceQueryService:
             for uuid_value in selector.uuids:
                 matches = read.value.uuid_matches(uuid_value)
                 if not matches:
-                    uuid_rows.append({"uuid": uuid_value, "_query_absent": True})
+                    uuid_rows.append(_AbsentTask(uuid_value))
                 elif len(matches) == 1:
-                    uuid_rows.append(matches[0])
+                    uuid_rows.append(_decode_repository_row(matches[0], source_query="query UUID snapshot"))
                 else:
-                    uuid_rows.append({"uuid": uuid_value, "_query_ambiguous": True})
+                    uuid_rows.append(_AmbiguousTask(uuid_value))
             return tuple(uuid_rows[: request.max_tasks])
         single_rows: list[TaskRow] = []
         for uuid_value in selector.uuids:
             read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
             if isinstance(read, Found):
-                single_rows.append(read.value)
+                single_rows.append(_decode_repository_row(read.value, source_query="query UUID"))
                 continue
             if isinstance(read, Absent):
-                single_rows.append({"uuid": uuid_value, "_query_absent": True})
+                single_rows.append(_AbsentTask(uuid_value))
                 continue
             return _failure(
                 "task_read_unavailable",
@@ -274,7 +305,7 @@ class OccurrenceQueryService:
             )
         return tuple(records)
 
-    def _task_reference_local(self, task: TaskRow) -> datetime | None:
+    def _task_reference_local(self, task: TaskObservation) -> datetime | None:
         """Return the task's current recurrence reference in query timezone."""
         raw = _task_value(task, "due") or _task_value(task, "scheduled")
         if not raw:
@@ -289,7 +320,7 @@ class OccurrenceQueryService:
 
     def _query_cp_task(
         self,
-        task: TaskRow,
+        task: TaskObservation,
         identity: TaskIdentity,
         request: OccurrenceQueryRequest,
     ) -> TaskOccurrenceResult:
@@ -351,14 +382,14 @@ class OccurrenceQueryService:
         )
 
     def _query_task(self, task: TaskRow, request: OccurrenceQueryRequest) -> TaskOccurrenceResult:
-        if isinstance(task, Mapping) and task.get("_query_absent"):
+        if isinstance(task, _AbsentTask):
             return TaskOccurrenceResult(
                 task=None,
                 status="absent",
-                failure=_failure("task_absent", "Taskwarrior returned no task for the requested UUID", task_uuid=str(_task_value(task, "uuid") or "")),
+                failure=_failure("task_absent", "Taskwarrior returned no task for the requested UUID", task_uuid=task.uuid),
             )
-        if isinstance(task, Mapping) and task.get("_query_ambiguous"):
-            uuid_value = str(_task_value(task, "uuid") or "")
+        if isinstance(task, _AmbiguousTask):
+            uuid_value = task.uuid
             return TaskOccurrenceResult(
                 task=None,
                 status="invalid",
@@ -372,14 +403,9 @@ class OccurrenceQueryService:
             identity = _task_identity(task)
             if identity.recurrence_kind == "cp":
                 return self._query_cp_task(task, identity, request)
+            domain_task = NauticalTask.from_observation(task)
             context = self._context_for(task)
-            scheduler = SchedulerService.from_observation(
-                task if isinstance(task, TaskObservation) else DEFAULT_TASK_CODEC.decode_row(
-                    task,
-                    source_query="query occurrence task",
-                ),
-                context=context,
-            )
+            scheduler = SchedulerService.from_task(domain_task, context=context)
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
             task_reference = self._task_reference_local(task)
@@ -500,7 +526,7 @@ class OccurrenceQueryService:
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
         )
 
-    def _reference_utc(self, task: TaskRow) -> datetime:
+    def _reference_utc(self, task: TaskObservation) -> datetime:
         parser = getattr(self._core, "parse_dt_any", None)
         if not callable(parser):
             raise QueryServiceError("Nautical datetime parser is unavailable")
@@ -563,13 +589,14 @@ class OccurrenceQueryService:
         task: TaskRow,
         request: OccurrenceQueryRequest,
     ) -> TaskOccurrenceResult:
-        if isinstance(task, Mapping) and task.get("_query_absent"):
-            return TaskOccurrenceResult(None, "absent", failure=_failure("task_absent", "Taskwarrior returned no task", task_uuid=str(_task_value(task, "uuid") or "")))
-        if isinstance(task, Mapping) and task.get("_query_ambiguous"):
-            return TaskOccurrenceResult(None, "invalid", failure=_failure("ambiguous_uuid", "UUID selector matched more than one task", task_uuid=str(_task_value(task, "uuid") or "")))
+        if isinstance(task, _AbsentTask):
+            return TaskOccurrenceResult(None, "absent", failure=_failure("task_absent", "Taskwarrior returned no task", task_uuid=task.uuid))
+        if isinstance(task, _AmbiguousTask):
+            return TaskOccurrenceResult(None, "invalid", failure=_failure("ambiguous_uuid", "UUID selector matched more than one task", task_uuid=task.uuid))
         identity: TaskIdentity | None = None
         try:
             identity = _task_identity(task)
+            domain_task = NauticalTask.from_observation(task)
             context = self._context_for(task)
             reference_utc = self._reference_utc(task)
             evaluated_utc = (
@@ -655,13 +682,7 @@ class OccurrenceQueryService:
                     source="cp",
                 )
                 return TaskOccurrenceResult(identity, "found", (record,), chain=chain_metadata, lifecycle=lifecycle_metadata)
-            scheduler = SchedulerService.from_observation(
-                task if isinstance(task, TaskObservation) else DEFAULT_TASK_CODEC.decode_row(
-                    task,
-                    source_query="query occurrence task",
-                ),
-                context=context,
-            )
+            scheduler = SchedulerService.from_task(domain_task, context=context)
             lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             if request.evaluation_at is not None:

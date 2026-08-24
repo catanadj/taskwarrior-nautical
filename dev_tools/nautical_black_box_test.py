@@ -294,14 +294,22 @@ def _install_task_command_shim(root: Path, env: dict[str, str]) -> Path:
     shim_dir.mkdir()
     shim = shim_dir / "task"
     log_path = root / "task-command-log.jsonl"
+    fail_marker = root / "task-shim-failed-once"
     shim.write_text(
         "#!/usr/bin/env python3\n"
         "import json\n"
         "import os\n"
         "import sys\n"
+        "from pathlib import Path\n"
         f"log_path = {str(log_path)!r}\n"
         "with open(log_path, 'a', encoding='utf-8') as stream:\n"
         "    stream.write(json.dumps(sys.argv[1:], ensure_ascii=False) + '\\n')\n"
+        f"fail_marker = Path({str(fail_marker)!r})\n"
+        "fail_match = os.environ.get('NAUTICAL_TASK_SHIM_FAIL_MATCH', '')\n"
+        "if fail_match and fail_match in ' '.join(sys.argv[1:]) and not fail_marker.exists():\n"
+        "    fail_marker.touch()\n"
+        "    print('injected Taskwarrior failure', file=sys.stderr)\n"
+        "    raise SystemExit(42)\n"
         f"real_task = {real_task!r}\n"
         "os.execv(real_task, [real_task, *sys.argv[1:]])\n",
         encoding="utf-8",
@@ -510,6 +518,27 @@ def _scenario_recovery_paths(env: dict[str, str]) -> dict:
     before = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
     if before:
         raise AssertionError("hookless completion unexpectedly spawned a child before reconcile")
+    env["NAUTICAL_TASK_SHIM_FAIL_MATCH"] = "import"
+    failed_reconcile = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"),
+            "--json",
+            "--apply",
+            "--chain-id",
+            recovery_chain,
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    env.pop("NAUTICAL_TASK_SHIM_FAIL_MATCH", None)
+    if failed_reconcile.returncode == 0:
+        raise AssertionError("injected child-import failure was not reported")
+    still_missing = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
+    if still_missing:
+        raise AssertionError("partial child import left a visible successor before retry")
     reconcile = subprocess.run(
         [
             sys.executable,
@@ -525,11 +554,16 @@ def _scenario_recovery_paths(env: dict[str, str]) -> dict:
         timeout=30.0,
     )
     if reconcile.returncode not in (0, 1, 2):
-        raise AssertionError(f"hookless completion reconcile failed: {reconcile.stderr!r}")
+        raise AssertionError(f"hookless completion reconcile retry failed: {reconcile.stderr!r}")
     after = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
     if len(after) != 1:
         raise AssertionError(f"reconcile did not recover the hookless completion: {after!r}")
-    return {"deleted_chain_off": True, "recovered_child": after[0].get("uuid"), "reconcile_exit": reconcile.returncode}
+    return {
+        "deleted_chain_off": True,
+        "partial_failure_exit": failed_reconcile.returncode,
+        "recovered_child": after[0].get("uuid"),
+        "reconcile_exit": reconcile.returncode,
+    }
 
 
 def main() -> int:

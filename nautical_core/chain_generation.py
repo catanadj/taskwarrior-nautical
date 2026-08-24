@@ -10,11 +10,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
+import uuid
 from typing import Any, Mapping, MutableMapping
 
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
+from .task_models import TaskDraft, NauticalTask
+
+
+_STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 
 
 _RESERVED_DROP = frozenset(
@@ -159,13 +165,15 @@ class ChainGenerationService:
         return parsed, None
 
     @staticmethod
-    def _require_chain_id(task: Mapping[str, Any]) -> str:
-        chain_id = str(task.get("chainID") or "").strip()
+    def _require_chain_id(task: NauticalTask) -> str:
+        if not isinstance(task, NauticalTask):
+            raise TypeError("chain generation requires a validated NauticalTask")
+        chain_id = task.identity.chain_id.value
         if not chain_id:
             raise ChainIdentityError()
         return chain_id
 
-    def _task_scheduler(self, task: Mapping[str, Any]) -> SchedulerService:
+    def _task_scheduler(self, task: NauticalTask) -> SchedulerService:
         identity = self._require_chain_id(task)
         key = (
             identity,
@@ -181,11 +189,10 @@ class ChainGenerationService:
         cached = self._evaluator_cache.get(key)
         if cached is not None:
             return cached
-        context = RecurrenceContext.from_task(
-            task,
-            fallback_chain_id=identity,
+        context = RecurrenceContext.from_observation(
+            task.observation,
             timezone=getattr(self.core, "_LOCAL_TZ", None),
-            business_calendar=self.core.business_calendar_for_task(task),
+            business_calendar=self.core.business_calendar_for_task(task.observation),
             astronomy_config=getattr(self.core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(self.core, "ANCHOR_FILE_DIR", ""),
         )
@@ -197,7 +204,7 @@ class ChainGenerationService:
         return self.core.to_local(value)
 
     def _anchor_parent_local_times(
-        self, parent: Mapping[str, Any]
+        self, parent: NauticalTask
     ) -> tuple[datetime | None, datetime | None, datetime | None]:
         end_dt, error = self.safe_parse_datetime(parent.get("end"))
         if error:
@@ -215,7 +222,8 @@ class ChainGenerationService:
         due_local = self._local(anchor_dt) if anchor_dt else end_local
         return end_local, due_local, due_dt
 
-    def compute_cp_child_due(self, parent: dict[str, Any]) -> CpChildDueResult:
+    def compute_cp_child_due(self, parent: NauticalTask) -> CpChildDueResult:
+        self._require_chain_id(parent)
         duration = str(parent.get("cp") or "").strip()
         if not duration:
             return None, None
@@ -272,20 +280,21 @@ class ChainGenerationService:
             meta.update({"cp_sequence_len": len(tokens), "cp_sequence_step": seq_idx + 1})
         return candidate, meta
 
-    def compute_anchor_child_due(self, parent: dict[str, Any]) -> AnchorChildDueResult:
-        expression = normalize_recurrence_text(parent.get("anchor"))
-        anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
+    def compute_anchor_child_due(self, parent: NauticalTask) -> AnchorChildDueResult:
+        task = parent
+        self._require_chain_id(task)
+        expression = TaskCodec.normalize_text(task.get("anchor"))
+        anchor_file = TaskCodec.normalize_text(task.get("anchor_file"))
         if not expression and not anchor_file:
             return None, None, None
-        self._require_chain_id(parent)
-        scheduler = self._task_scheduler(parent)
+        scheduler = self._task_scheduler(task)
         evaluator = scheduler.session.evaluator
-        end_local, due_local, due_dt = self._anchor_parent_local_times(parent)
+        end_local, due_local, due_dt = self._anchor_parent_local_times(task)
         if end_local is None or due_local is None:
             return None, None, None
         try:
             result = scheduler.select_mode(
-                str(parent.get("anchor_mode") or "skip").strip().lower() or "skip",
+                str(task.get("anchor_mode") or "skip").strip().lower() or "skip",
                 due_local=due_local,
                 end_local=end_local,
                 due_explicit=due_dt is not None,
@@ -298,18 +307,22 @@ class ChainGenerationService:
             raise
         if result.selected_occurrence is None:
             raise ValueError("Could not compute next anchor occurrence")
-        target_field = "scheduled" if due_dt is None and parent.get("scheduled") else "due"
+        target_field = "scheduled" if due_dt is None and task.get("scheduled") else "due"
         return (
             result.selected_occurrence.astimezone(timezone.utc),
             result.metadata(target_field=target_field),
             evaluator.anchor_dnf or None,
         )
 
-    def _recurrence_anchor_field(self, task: Mapping[str, Any]) -> str:
+    def _recurrence_anchor_field(self, task: NauticalTask) -> str:
         return "due" if task.get("due") else "scheduled" if task.get("scheduled") else "due"
 
-    def _configured_recurrence_uda_fields(self, parent: Mapping[str, Any]) -> tuple[str, ...]:
-        keys = {str(key).lower(): key for key in parent if isinstance(key, str) and key}
+    def _configured_recurrence_uda_fields(self, parent: NauticalTask) -> tuple[str, ...]:
+        keys = {
+            str(key).lower(): key
+            for key in (*parent.observation.fields.keys(), *parent.observation.arbitrary.keys())
+            if isinstance(key, str) and key
+        }
         out: list[str] = []
         seen: set[str] = set()
         for configured in self.recurrence_update_udas:
@@ -324,7 +337,7 @@ class ChainGenerationService:
 
     def _carry_relative_datetime(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         field: str,
@@ -368,7 +381,7 @@ class ChainGenerationService:
 
     def carry_relative_datetime(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         field: str,
@@ -396,7 +409,7 @@ class ChainGenerationService:
 
     def _carry_native_until(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         kind: str,
@@ -434,7 +447,7 @@ class ChainGenerationService:
 
     def carry_native_until(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child: dict[str, Any],
         child_due_utc: datetime,
         kind: str,
@@ -452,9 +465,9 @@ class ChainGenerationService:
             child_anchor_field=child_anchor_field,
         )
 
-    def build_child_from_parent(
+    def build_child_draft(
         self,
-        parent: dict[str, Any],
+        parent: NauticalTask,
         child_due_utc: datetime,
         child_field: str,
         next_link_no: int,
@@ -462,14 +475,19 @@ class ChainGenerationService:
         kind: str,
         cpmax: int,
         until_dt: Any,
-    ) -> dict[str, Any]:
+    ) -> TaskDraft:
+        """Build a complete, validated child intent without exposing mappings."""
         parent_chain = self._require_chain_id(parent)
+        parent_task = parent
         if self.debug_wait_sched and self.wait_sched_debug is not None:
             try:
                 self.wait_sched_debug.clear()
             except Exception:
                 pass
-        child = {key: value for key, value in parent.items() if key not in _RESERVED_DROP}
+        # One explicit serialization creates the mutable Taskwarrior import
+        # payload; all scheduling and carry decisions above use typed fields.
+        parent_payload = parent_task.observation.to_mapping()
+        child = {key: value for key, value in parent_payload.items() if key not in _RESERVED_DROP}
         for key in _RESERVED_OVERRIDE:
             child.pop(key, None)
         child.update(
@@ -488,8 +506,8 @@ class ChainGenerationService:
         else:
             child["due"] = self.core.fmt_isoz(child_due_utc)
         if kind in {"anchor", "anchor_file"}:
-            anchor = normalize_recurrence_text(parent.get("anchor"))
-            anchor_file = normalize_recurrence_text(parent.get("anchor_file"))
+            anchor = TaskCodec.normalize_text(parent.get("anchor"))
+            anchor_file = TaskCodec.normalize_text(parent.get("anchor_file"))
             if anchor:
                 child["anchor"] = anchor
             else:
@@ -498,7 +516,7 @@ class ChainGenerationService:
                 child["anchor_file"] = anchor_file
             else:
                 child.pop("anchor_file", None)
-            parent_mode = normalize_recurrence_text(parent.get("anchor_mode")) or "skip"
+            parent_mode = TaskCodec.normalize_text(parent.get("anchor_mode")) or "skip"
             child["anchor_mode"] = (
                 "all" if str(parent_mode).strip().lower() == "flex" else parent_mode
             )
@@ -509,7 +527,7 @@ class ChainGenerationService:
             child.pop("anchor_file", None)
             child.pop("anchor_mode", None)
         self._carry_relative_datetime(
-            parent,
+            parent_task,
             child,
             child_due_utc,
             "wait",
@@ -518,7 +536,7 @@ class ChainGenerationService:
         )
         if child_field != "scheduled":
             self._carry_relative_datetime(
-                parent,
+                parent_task,
                 child,
                 child_due_utc,
                 "scheduled",
@@ -526,7 +544,7 @@ class ChainGenerationService:
                 child_anchor_field=child_field,
             )
         self._carry_native_until(
-            parent,
+            parent_task,
             child,
             child_due_utc,
             kind,
@@ -535,7 +553,7 @@ class ChainGenerationService:
         )
         for field_name in self._configured_recurrence_uda_fields(parent):
             self._carry_relative_datetime(
-                parent,
+                parent_task,
                 child,
                 child_due_utc,
                 field_name,
@@ -547,7 +565,30 @@ class ChainGenerationService:
         if until_dt:
             child["chainUntil"] = self.core.fmt_isoz(until_dt)
         child["chainID"] = parent_chain
-        return child
+        child_uuid = uuid.uuid5(
+            _STABLE_CHILD_UUID_NAMESPACE,
+            json.dumps(
+                {
+                    "chain_id": parent_chain.lower(),
+                    "kind": "anchor" if kind in {"anchor", "anchor_file"} else "cp",
+                    "link": int(next_link_no),
+                    "parent_uuid": parent_task.identity.task_uuid.value.lower(),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+        child["uuid"] = str(child_uuid)
+        child_observation = self.core._import_sibling("task_codec").DEFAULT_TASK_CODEC.decode_row(
+            child,
+            source_query="chain generation child draft",
+        )
+        child_task = NauticalTask.from_observation(child_observation)
+        target = child_task.temporal.due if child_field != "scheduled" else child_task.temporal.scheduled
+        if target is None:
+            raise ValueError("generated child draft has no recurrence target")
+        return TaskDraft.from_task(child_task, target_field=child_field)
 
 
 __all__ = (

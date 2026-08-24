@@ -384,6 +384,149 @@ def _check_removed_ownership(root: Path) -> list[dict]:
     return results
 
 
+def _check_domain_model_boundaries(root: Path) -> list[dict]:
+    """Keep removed mapping/facade construction paths out of shipped code."""
+    forbidden = (
+        "LifecyclePlan.from_mappings",
+        "ParentGuard.from_mapping",
+        "LifecycleIdentity.from_mapping",
+        "ChildImportPayload.from_mapping",
+        "MetadataRepairPayload.from_mapping",
+        "sanitize_task_strings",
+    )
+    violations: list[str] = []
+    package = root / "nautical_core"
+    if package.is_dir():
+        for path in package.rglob("*.py"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for token in forbidden:
+                if token in text:
+                    violations.append(f"{path.relative_to(root)}:{token}")
+    # JSON decoding is permitted only at explicit protocol, cache, query, or
+    # durable-persistence boundaries.  Domain/service modules must consume
+    # TaskObservation rather than re-parsing Taskwarrior JSON.
+    allowed_json_modules = {
+        "nautical_core/task_codec.py",
+        "nautical_core/runtime.py",
+        "nautical_core/hooks/add_impl.py",
+        "nautical_core/hooks/exit_impl.py",
+        "nautical_core/tools/nautical_query.py",
+        "nautical_core/tools/nautical_install_verify.py",
+        "nautical_core/install_runtime.py",
+        "nautical_core/lifecycle_outbox.py",
+        "nautical_core/position_selection.py",
+    }
+    direct_json_violations: list[str] = []
+    if package.is_dir():
+        for path in package.rglob("*.py"):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, SyntaxError):
+                continue
+            uses_json_loads = any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "json"
+                and node.func.attr == "loads"
+                for node in ast.walk(tree)
+            )
+            relative = str(path.relative_to(root))
+            if uses_json_loads and relative not in allowed_json_modules:
+                direct_json_violations.append(relative)
+    if direct_json_violations:
+        violations.extend(f"direct-json:{path}" for path in direct_json_violations)
+
+    typed_domain_modules = {
+        "nautical_core/add_anchor_preview.py",
+        "nautical_core/lifecycle_planner.py",
+        "nautical_core/chain_integrity_lifecycle.py",
+        "nautical_core/lifecycle_reconciliation.py",
+        "nautical_core/hook_engine.py",
+        "nautical_core/modify_validation.py",
+        "nautical_core/modify_feedback.py",
+        "nautical_core/modify_expiration.py",
+        "nautical_core/modify_timeline.py",
+        "nautical_core/query_service.py",
+        "nautical_core/modify_completion_flow.py",
+    }
+    typed_violations: list[str] = []
+    for relative in sorted(typed_domain_modules):
+        path = root / relative
+        if not path.is_file():
+            typed_violations.append(f"missing:{relative}")
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError) as exc:
+            typed_violations.append(f"invalid:{relative}:{type(exc).__name__}")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for argument in [*node.args.args, *node.args.kwonlyargs]:
+                if argument.arg not in {"task", "parent", "child", "old", "new"}:
+                    continue
+                annotation = ast.unparse(argument.annotation) if argument.annotation else ""
+                if "dict" in annotation.lower() or "mapping" in annotation.lower():
+                    typed_violations.append(f"{relative}:{node.name}:{argument.arg}:{annotation}")
+    if typed_violations:
+        violations.extend(f"untyped-domain:{item}" for item in typed_violations)
+
+    # Remaining task-shaped mappings are explicit protocol/configuration,
+    # mutation-adapter, presentation, or durable-serialization boundaries.
+    # New domain modules must use TaskPayload/TaskObservation instead.
+    task_mapping_allowlist = {
+        "nautical_core/business_calendar_api.py",
+        "nautical_core/calendar_feedback.py",
+        "nautical_core/chain_generation.py",
+        "nautical_core/common.py",
+        "nautical_core/description_aliases.py",
+        "nautical_core/hook_protocol.py",
+        "nautical_core/hook_results.py",
+        "nautical_core/hooks/add_impl.py",
+        "nautical_core/hooks/modify_impl.py",
+        "nautical_core/lifecycle_models.py",
+        "nautical_core/modify_analytics.py",
+        "nautical_core/modify_chain_summary.py",
+        "nautical_core/modify_completion_compute.py",
+        "nautical_core/modify_protocol.py",
+        "nautical_core/modify_runtime.py",
+        "nautical_core/natural_language.py",
+        "nautical_core/natural_language_api.py",
+        "nautical_core/recurrence_context.py",
+        "nautical_core/task_codec.py",
+        "nautical_core/tools/nautical_doctor.py",
+    }
+    for path in package.rglob("*.py") if package.is_dir() else ():
+        relative = str(path.relative_to(root))
+        if relative in task_mapping_allowlist:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for argument in [*node.args.args, *node.args.kwonlyargs]:
+                if argument.arg not in {"task", "parent", "child", "old", "new"}:
+                    continue
+                annotation = ast.unparse(argument.annotation) if argument.annotation else ""
+                if "dict" in annotation.lower() or "mapping" in annotation.lower():
+                    violations.append(f"mapping-boundary:{relative}:{node.name}:{argument.arg}")
+
+    return [{
+        "kind": "domain-model",
+        "name": "removed-construction-paths",
+        "ok": not violations,
+        "message": "absent" if not violations else "removed domain-model paths found: " + ", ".join(sorted(violations)),
+    }]
+
+
 def _check_scheduler_ownership(root: Path) -> list[dict]:
     """Reject operational calls to scheduler aliases removed from the facade."""
     legacy_names = {
@@ -678,6 +821,7 @@ def main() -> int:
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
         results.extend(_check_removed_ownership(root))
+        results.extend(_check_domain_model_boundaries(root))
         results.extend(_check_scheduler_ownership(root))
         results.extend(_check_taskwarrior_process_ownership(root))
         results.extend(_check_performance_workflow(root))

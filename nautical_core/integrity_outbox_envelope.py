@@ -10,6 +10,7 @@ from .chain_integrity_models import IntegrityRepairPlan
 from .lifecycle_models import ExecutionStage
 from .lifecycle_outbox import OutboxProcessingState
 
+INTEGRITY_OUTBOX_SCHEMA_VERSION = 1
 
 class OutboxWorkKind(str, Enum):
     LIFECYCLE = "lifecycle"
@@ -54,6 +55,7 @@ class IntegrityOutboxEnvelope:
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "schema_version": INTEGRITY_OUTBOX_SCHEMA_VERSION,
             "work_kind": self.work_kind.value,
             "intent_id": self.intent_id,
             "plan": self.plan.to_dict(),
@@ -68,7 +70,11 @@ class IntegrityOutboxEnvelope:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> "IntegrityOutboxEnvelope":
-        if not isinstance(value, dict) or value.get("work_kind") != OutboxWorkKind.INTEGRITY.value:
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version") != INTEGRITY_OUTBOX_SCHEMA_VERSION
+            or value.get("work_kind") != OutboxWorkKind.INTEGRITY.value
+        ):
             raise ValueError("not an integrity outbox envelope")
         plan_value = value.get("plan")
         if not isinstance(plan_value, dict):
@@ -129,4 +135,9 @@ class IntegrityOutboxRecord:
         return self.envelope.schedule_fingerprint
 
 
-__all__ = ["IntegrityOutboxEnvelope", "IntegrityOutboxRecord", "OutboxWorkKind"]
+__all__ = [
+    "INTEGRITY_OUTBOX_SCHEMA_VERSION",
+    "IntegrityOutboxEnvelope",
+    "IntegrityOutboxRecord",
+    "OutboxWorkKind",
+]

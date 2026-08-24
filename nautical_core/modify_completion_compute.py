@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from nautical_core.modify_models import (
     CapFromUntilAnchorCallback,
@@ -31,6 +31,9 @@ from nautical_core.scheduler_models import (
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
+from nautical_core.task_codec import DEFAULT_TASK_CODEC
+from nautical_core.task_models import TaskPayload
+from nautical_core.task_models import NauticalTask
 
 
 def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -> CompletionLifecycleDiagnostic:
@@ -51,7 +54,7 @@ def _terminal_diagnostic(new: dict[str, Any], next_no: int, failure_kind: str) -
 
 
 def completion_compute_child_due(
-    new: dict[str, Any],
+    new: TaskPayload,
     kind: str,
     *,
     compute_anchor_child_due: ComputeAnchorChildDueCallback,
@@ -61,13 +64,14 @@ def completion_compute_child_due(
     diag: DiagnosticCallback | None = None,
     on_terminal: Any | None = None,
 ) -> tuple[Any, Any, Any] | None:
+    task_row = dict(new)
     try:
         if kind in {"anchor", "anchor_file"}:
-            child_due, meta, dnf = compute_anchor_child_due(new)
+            child_due, meta, dnf = compute_anchor_child_due(task_row)
             if kind == "anchor_file" and dnf is None:
                 dnf = []
         else:
-            child_due, meta = compute_cp_child_due(new)
+            child_due, meta = compute_cp_child_due(task_row)
             dnf = None
         return child_due, meta, dnf
     except OccurrenceSearchExhausted as exc:
@@ -79,7 +83,7 @@ def completion_compute_child_due(
                 [("Scheduler", occurrence_exhaustion_message(exc))],
                 kind="error",
             )
-            print_task(new)
+            print_task(task_row)
         return None
     except ValueError as exc:
         panel(
@@ -87,7 +91,7 @@ def completion_compute_child_due(
             [("Reason", f"Invalid task field: {str(exc)}")],
             kind="error",
         )
-        print_task(new)
+        print_task(task_row)
         return None
     except Exception as exc:
         if callable(diag):
@@ -97,7 +101,7 @@ def completion_compute_child_due(
             [("Reason", "Could not compute next recurrence timestamp")],
             kind="error",
         )
-        print_task(new)
+        print_task(task_row)
         return None
 
 
@@ -482,7 +486,7 @@ def estimate_anchor_final_by_max(
 
 
 def first_recurrence_target(
-    task: dict[str, Any],
+    task: Mapping[str, Any],
     source: str,
     *,
     parse_datetime: Any,
@@ -500,10 +504,13 @@ def first_recurrence_target(
     parent["end"] = format_datetime(target)
     try:
         generation = generation_service()
+        typed_parent = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(parent, source_query="completion recurrence target")
+        )
         if source in {"anchor", "anchor_file"}:
-            result = generation.compute_anchor_child_due(parent)
+            result = generation.compute_anchor_child_due(typed_parent)
         else:
-            result = generation.compute_cp_child_due(parent)
+            result = generation.compute_cp_child_due(typed_parent)
         return result[0] if result else None
     except Exception:
         return None
@@ -555,7 +562,9 @@ def attach_lifecycle_plan(
             until=computed.until_dt,
         )
         plan = lifecycle_planner.plan_candidate_successor(
-            lifecycle_models.TaskSnapshot.from_mapping(new),
+            lifecycle_models.TaskSnapshot.from_observation(
+                DEFAULT_TASK_CODEC.decode_row(new, source_query="modify completion")
+            ),
             lifecycle_models.LifecycleEvent.COMPLETE,
             candidate,
             generation=generation,
@@ -572,8 +581,8 @@ def attach_lifecycle_plan(
                 else None
             ),
             carry_validator=lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
-                snapshot.to_dict(),
-                dict(candidate_child),
+                snapshot.observation,
+                candidate_child,
                 child_field=str(computed.meta.get("target_field") or "due"),
                 generation=generation,
             ),
@@ -595,7 +604,6 @@ def attach_lifecycle_plan(
                 ),
             )
         computed.lifecycle_plan = plan
-        computed.planned_child = plan.child_dict()
     except Exception as exc:
         diag(f"lifecycle planner failed: {type(exc).__name__}: {exc}")
         panel("⛓ Chain error", [("Reason", str(exc) or "Could not construct a lifecycle successor plan")], kind="error")

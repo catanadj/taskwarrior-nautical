@@ -38,6 +38,7 @@ from .integration_models import (
     Unavailable,
 )
 from .lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure
+from .task_models import TaskObservation
 
 
 class _SnapshotProvider(Protocol):
@@ -110,9 +111,9 @@ class ChainIntegrityEngine:
 
     def plan_recovery(
         self,
-        parent: dict[str, object],
+        parent: TaskObservation,
         *,
-        existing_children: list[dict[str, object]],
+        existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
         hook: object,
         generation: object = None,
     ) -> object:
@@ -182,7 +183,7 @@ class ChainIntegrityEngine:
                 for field in ("prevLink", "nextLink")
             ):
                 required.add(node.chain_id)
-            elif node.link is not None and node.link > 1 and not str(node.field("prevLink", "") or "").strip():
+            elif node.link is not None and node.link > 1 and not node.reference_token("prevLink"):
                 required.add(node.chain_id)
         if not required:
             return snapshot, frozenset()

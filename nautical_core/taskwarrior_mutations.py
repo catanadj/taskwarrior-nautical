@@ -8,7 +8,6 @@ the requested postcondition before reporting success.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence, cast
 
@@ -35,12 +34,15 @@ from .integration_models import (
     TaskwarriorMutationPort,
     Unavailable,
 )
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
 from .lifecycle_models import recurrence_fingerprint
+from .task_codec import DEFAULT_TASK_CODEC
+from .task_models import FieldPresence, TaskObservation
+from .task_changes import timestamp_equal
 
 
 class _TaskRepository(Protocol):
-    def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[Mapping[str, Any]]: ...
+    def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[TaskObservation]: ...
 
 
 class _TaskClient(Protocol):
@@ -75,11 +77,12 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
-def _timestamp_equal(left: object, right: object) -> bool:
-    """Compare Taskwarrior compact and Nautical ISO timestamps by instant."""
-    left_dt = _parse_timestamp(left)
-    right_dt = _parse_timestamp(right)
-    return left_dt is not None and right_dt is not None and left_dt == right_dt
+def _observed_value(row: TaskObservation | Mapping[str, Any], field: str) -> object:
+    """Read a postcondition field without thawing an observation."""
+    if isinstance(row, TaskObservation):
+        state = row.field(field)
+        return None if state.presence is FieldPresence.ABSENT else state.raw_value()
+    return row.get(field)
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -108,7 +111,7 @@ def _link_text(value: object) -> str:
 
 
 def _child_import_matches(
-    row: Mapping[str, Any],
+    row: TaskObservation | Mapping[str, Any],
     payload: ChildImportPayload,
     parent_uuid: str,
 ) -> bool:
@@ -119,18 +122,18 @@ def _child_import_matches(
     by the existing-child fast path and the post-import verification path.
     """
     fields = payload.to_dict()
-    if _text(row.get("uuid")).lower() != payload.child_uuid.lower():
+    if _text(_observed_value(row, "uuid")).lower() != payload.child_uuid.lower():
         return False
-    if _text(row.get("chainID")) != payload.chain_id:
+    if _text(_observed_value(row, "chainID")) != payload.chain_id:
         return False
-    if _link_text(row.get("link")) != str(payload.target_link):
+    if _link_text(_observed_value(row, "link")) != str(payload.target_link):
         return False
     expected_prev = _text(fields.get("prevLink"))
-    if not expected_prev or _text(row.get("prevLink")).lower() != expected_prev.lower():
+    if not expected_prev or _text(_observed_value(row, "prevLink")).lower() != expected_prev.lower():
         return False
-    if _text(row.get("prevLink")).lower() != _text(parent_uuid)[:8].lower():
+    if _text(_observed_value(row, "prevLink")).lower() != _text(parent_uuid)[:8].lower():
         return False
-    status = _text(row.get("status")).lower()
+    status = _text(_observed_value(row, "status")).lower()
     if status != "pending":
         # Taskwarrior may immediately expire a child whose carried native
         # until is already in the past. That is a valid imported occurrence;
@@ -138,7 +141,7 @@ def _child_import_matches(
         until = _parse_timestamp(fields.get("until"))
         if status != "deleted" or until is None or until > datetime.now(timezone.utc):
             return False
-    if _text(row.get("chain")).lower() != "on":
+    if _text(_observed_value(row, "chain")).lower() != "on":
         return False
 
     # A child must retain the recurrence mode that generated it.  Compare
@@ -150,7 +153,7 @@ def _child_import_matches(
     for field in mode_fields:
         if (
             field in fields
-            and normalize_recurrence_text(row.get(field)) != normalize_recurrence_text(fields.get(field))
+            and TaskCodec.normalize_text(_observed_value(row, field)) != TaskCodec.normalize_text(fields.get(field))
         ):
             return False
     return True
@@ -182,8 +185,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def __init__(self, unit_of_work: _UnitOfWork, *, timeout: float = 30.0) -> None:
         self._uow = unit_of_work
         self._timeout = max(0.05, float(timeout))
-        self._prefetched_children: dict[str, TaskRead[Mapping[str, Any]]] = {}
-        self._prefetched_parents: dict[str, Mapping[str, Any]] = {}
+        self._prefetched_children: dict[str, TaskRead[TaskObservation]] = {}
+        self._prefetched_parents: dict[str, TaskObservation] = {}
 
     def prefetch_lifecycle_batch(
         self,
@@ -251,7 +254,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 # A cached row that already has the requested link is not
                 # safe to trust across the batch; retain a fresh read for
                 # idempotent classification.
-                if _text(row.get("nextLink")).casefold() != expected_next_link.casefold():
+                if _text(_observed_value(row, "nextLink")).casefold() != expected_next_link.casefold():
                     self._prefetched_parents[parent_uuid] = row
 
     def _outcome(
@@ -272,7 +275,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             failure,
         )
 
-    def _read_target(self, request: MutationRequest) -> tuple[Mapping[str, Any] | None, MutationOutcome | None]:
+    def _read_target(self, request: MutationRequest) -> tuple[TaskObservation | None, MutationOutcome | None]:
         if self._uow.mutation_epoch != request.guard.expected_mutation_epoch:
             return None, self._outcome(
                 request,
@@ -294,6 +297,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if not isinstance(result, Found):
             return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard read result")
         row = result.value
+        if not isinstance(row, TaskObservation):
+            return None, self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid guard task shape")
         mismatch = self._guard_mismatch(request.guard, row)
         if mismatch:
             # A successful parent link changes Taskwarrior's ``modified``
@@ -305,7 +310,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             if (
                 request.operation is MutationOperation.PARENT_LINK
                 and isinstance(request.payload, ParentLinkPayload)
-                and _text(row.get("nextLink")).casefold()
+                and _text(_observed_value(row, "nextLink")).casefold()
                 == request.payload.child_short_uuid.casefold()
                 and mismatch.startswith("guard modified changed")
             ):
@@ -318,34 +323,53 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                     None,
                 )
                 if expected_modified is not None:
-                    normalized = dict(row)
-                    normalized["modified"] = expected_modified
-                    if not self._guard_mismatch(request.guard, normalized):
+                    if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
+                        return row, None
+            if (
+                request.operation is MutationOperation.NATIVE_UNTIL_REPAIR
+                and isinstance(request.payload, NativeUntilRepairPayload)
+                and mismatch.startswith("guard modified changed")
+            ):
+                expected_modified = next(
+                    (
+                        timestamp.value
+                        for timestamp in request.guard.timestamps
+                        if timestamp.field.value == "modified"
+                    ),
+                    None,
+                )
+                if expected_modified is not None:
+                    if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
                         return row, None
             if (
                 request.operation is MutationOperation.METADATA_REPAIR
                 and isinstance(request.payload, MetadataRepairPayload)
                 and request.payload.expected_dict().get("link") == ""
-                and not _text(row.get("link"))
+                and not _text(_observed_value(row, "link"))
                 and mismatch.startswith("guard link changed")
             ):
                 return row, None
             if (
                 request.operation is MutationOperation.CHAIN_DISABLE
                 and request.guard.chain == "on"
-                and _text(row.get("chain")).lower() == "off"
+                and _text(_observed_value(row, "chain")).lower() == "off"
             ):
                 return row, None
             if (
                 request.operation is MutationOperation.CHILD_COMPENSATION
-                and _text(row.get("status")).lower() == "deleted"
+                and _text(_observed_value(row, "status")).lower() == "deleted"
             ):
                 return row, None
             return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
         return row, None
 
     @staticmethod
-    def _guard_mismatch(guard: MutationGuard, row: Mapping[str, Any]) -> str:
+    def _guard_mismatch(
+        guard: MutationGuard,
+        row: TaskObservation,
+        *,
+        modified_override: str | None = None,
+    ) -> str:
         values = {
             "status": guard.status,
             "chain": guard.chain,
@@ -353,7 +377,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             "link": str(guard.link),
         }
         for field, expected in values.items():
-            actual = _text(row.get(field))
+            actual = _text(_observed_value(row, field))
             if field == "link":
                 try:
                     actual = str(int(float(actual)))
@@ -362,14 +386,19 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             if actual.casefold() != expected.casefold():
                 return f"guard {field} changed (expected {expected}, found {actual or '-'})"
         try:
-            actual_identity = recurrence_fingerprint(row)
+            actual_identity = recurrence_fingerprint(row.to_mapping())
         except Exception as exc:
             return f"guard recurrence identity unavailable: {exc}"
         if actual_identity != guard.recurrence_identity:
             return "guard recurrence identity changed"
         for timestamp in guard.timestamps:
             ts_field = _TIMESTAMP_FIELDS.get(timestamp.field.value)
-            if ts_field is not None and _text(row.get(ts_field)) != timestamp.value:
+            actual_value: object = (
+                modified_override
+                if ts_field == "modified" and modified_override is not None
+                else _observed_value(row, ts_field) if ts_field is not None else None
+            )
+            if ts_field is not None and _text(actual_value) != timestamp.value:
                 return f"guard {ts_field} changed"
         return ""
 
@@ -407,7 +436,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="postcondition target is absent")
         if not isinstance(result, Found):
             return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid postcondition read result")
-        if not predicate(result.value):
+        row = result.value
+        if not isinstance(row, TaskObservation) or not predicate(row):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="postcondition does not match")
         return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=postcondition)
 
@@ -432,13 +462,13 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert child is not None
-        if _text(child.get("status")).lower() == "deleted":
+        if _text(_observed_value(child, "status")).lower() == "deleted":
             return self._outcome(
                 request,
                 MutationOutcomeKind.ALREADY_APPLIED,
                 postcondition=MutationPostcondition.CHILD_COMPENSATED,
             )
-        if _text(child.get("status")).lower() != request.payload.expected_status:
+        if _text(_observed_value(child, "status")).lower() != request.payload.expected_status:
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="child status changed before compensation")
         failure = self._run_modify(request, self._selectors(request.guard), ("status:deleted",))
         if failure is not None:
@@ -446,7 +476,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.CHILD_COMPENSATED,
-            lambda row: _text(row.get("status")).lower() == "deleted",
+            lambda row: _text(_observed_value(row, "status")).lower() == "deleted",
         )
 
     def import_child(self, request: MutationRequest, *, verify: bool = True) -> MutationOutcome:
@@ -456,7 +486,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        if _text(parent.get("chain")).lower() != "on":
+        if _text(_observed_value(parent, "chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
         existing = self._prefetched_children.pop(request.payload.child_uuid.lower(), None)
         if existing is None:
@@ -475,7 +505,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
             purpose="lifecycle child import",
             timeout=self._timeout,
-            input_text=json.dumps(request.payload.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n",
+            input_text=DEFAULT_TASK_CODEC.encode_task_import_mapping(request.payload.to_dict()) + "\n",
             attempts=1,
         )
         if not result.ok:
@@ -495,18 +525,18 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if request.operation is not MutationOperation.PARENT_LINK or not isinstance(request.payload, ParentLinkPayload):
             raise TypeError("parent linking requires a parent-link request")
         cached_parent = self._prefetched_parents.pop(request.guard.task_uuid.lower(), None)
-        parent: Mapping[str, Any] | None
+        parent: TaskObservation | None
         failure: MutationOutcome | None
-        if cached_parent is not None and _text(cached_parent.get("nextLink")).casefold() != request.payload.child_short_uuid.casefold():
+        if cached_parent is not None and _text(_observed_value(cached_parent, "nextLink")).casefold() != request.payload.child_short_uuid.casefold():
             parent, failure = cached_parent, None
         else:
             parent, failure = self._read_target(request)
         if failure is not None:
             return failure
         assert parent is not None
-        if _text(parent.get("chain")).lower() != "on":
+        if _text(_observed_value(parent, "chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
-        current = _text(parent.get("nextLink"))
+        current = _text(_observed_value(parent, "nextLink"))
         if current.casefold() == request.payload.child_short_uuid.casefold():
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINKED)
         if current != request.payload.expected_next_link:
@@ -523,7 +553,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.PARENT_LINKED,
-            lambda row: _text(row.get("nextLink")).casefold() == request.payload.child_short_uuid.casefold(),
+            lambda row: _text(_observed_value(row, "nextLink")).casefold() == request.payload.child_short_uuid.casefold(),
         )
 
     def apply_lifecycle_unverified(self, request: MutationRequest) -> MutationOutcome:
@@ -683,7 +713,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed parent postcondition snapshot: {exc}"
                 )
                 continue
-            if len(matches) == 1 and _text(matches[0].get("nextLink")).casefold() == request.payload.child_short_uuid.casefold():
+            if len(matches) == 1 and _text(_observed_value(matches[0], "nextLink")).casefold() == request.payload.child_short_uuid.casefold():
                 outcomes[request.guard.task_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.PARENT_LINKED
                 )
@@ -701,12 +731,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        if _text(parent.get("chain")).lower() == "off":
+        if _text(_observed_value(parent, "chain")).lower() == "off":
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHAIN_DISABLED)
         failure = self._run_modify(request, self._selectors(request.guard), ("chain:off",))
         if failure is not None:
             return failure
-        return self._verify(request, MutationPostcondition.CHAIN_DISABLED, lambda row: _text(row.get("chain")).lower() == "off")
+        return self._verify(request, MutationPostcondition.CHAIN_DISABLED, lambda row: _text(_observed_value(row, "chain")).lower() == "off")
 
     def clear_parent_link(self, request: MutationRequest) -> MutationOutcome:
         if request.operation is not MutationOperation.PARENT_LINK_CLEAR or not isinstance(request.payload, ParentLinkClearPayload):
@@ -715,7 +745,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        current = _text(parent.get("nextLink"))
+        current = _text(_observed_value(parent, "nextLink"))
         if not current:
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.PARENT_LINK_CLEARED)
         if current.casefold() != request.payload.expected_next_link.casefold():
@@ -730,7 +760,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.PARENT_LINK_CLEARED,
-            lambda row: not _text(row.get("nextLink")),
+            lambda row: not _text(_observed_value(row, "nextLink")),
         )
 
     def repair_native_until(self, request: MutationRequest) -> MutationOutcome:
@@ -740,14 +770,14 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if failure is not None:
             return failure
         assert parent is not None
-        current = _text(parent.get("until"))
-        if current == request.payload.replacement_until:
+        current = _text(_observed_value(parent, "until"))
+        if timestamp_equal(current, request.payload.replacement_until):
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.NATIVE_UNTIL_REPAIRED)
-        if current != request.payload.expected_until:
+        if not timestamp_equal(current, request.payload.expected_until):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="native until changed")
         failure = self._run_modify(
             request,
-            self._selectors(request.guard, extra=(f"until:{current}",)),
+            self._selectors(request.guard, extra=(f"until:{current}",), include_modified=False),
             (f"until:{request.payload.replacement_until}",),
         )
         if failure is not None:
@@ -755,7 +785,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.NATIVE_UNTIL_REPAIRED,
-            lambda row: _timestamp_equal(row.get("until"), request.payload.replacement_until),
+            lambda row: timestamp_equal(_observed_value(row, "until"), request.payload.replacement_until),
         )
 
     def repair_metadata(self, request: MutationRequest) -> MutationOutcome:
@@ -766,11 +796,11 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return failure
         assert parent is not None
         updates = request.payload.to_dict()
-        if all(_text(parent.get(key)) == _text(value) for key, value in updates.items()):
+        if all(_text(_observed_value(parent, key)) == _text(value) for key, value in updates.items()):
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.METADATA_REPAIRED)
         expected = request.payload.expected_dict()
         for key, value in expected.items():
-            if _text(parent.get(key)) != _text(value):
+            if _text(_observed_value(parent, key)) != _text(value):
                 return self._outcome(request, MutationOutcomeKind.CONFLICT, reason=f"metadata field {key} changed")
         failure = self._run_modify(
             request,
@@ -788,7 +818,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return self._verify(
             request,
             MutationPostcondition.METADATA_REPAIRED,
-            lambda row: all(_text(row.get(key)) == _text(value) for key, value in updates.items()),
+            lambda row: all(_text(_observed_value(row, key)) == _text(value) for key, value in updates.items()),
         )
 
     @staticmethod
@@ -797,6 +827,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         *,
         extra: Sequence[str] = (),
         include_link: bool = True,
+        include_modified: bool = True,
     ) -> tuple[str, ...]:
         selectors: tuple[str, ...] = (
             f"uuid:{guard.task_uuid}",
@@ -810,7 +841,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             (timestamp.value for timestamp in guard.timestamps if timestamp.field.value == "modified"),
             "",
         )
-        if modified:
+        # Native-until repairs already include an exact ``until`` selector.
+        # Taskwarrior rewrites ``modified`` as part of that same update, so a
+        # stale timestamp selector can reject an otherwise safe repair after a
+        # fresh guard read. Identity plus expected-until remains the atomic
+        # mutation boundary for this operation.
+        if modified and include_modified:
             selectors = (*selectors, f"modified:{modified}")
         return (*selectors, *tuple(extra))
 

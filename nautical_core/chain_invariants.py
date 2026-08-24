@@ -87,6 +87,28 @@ def _identity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     return tuple(findings)
 
 
+def _observation_issue_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
+    """Expose decode evidence without weakening operational validation."""
+    findings: list[IntegrityFinding] = []
+    for node in graph.nodes:
+        if node.observation is None:
+            continue
+        for issue in node.observation.issues:
+            findings.append(_finding(
+                graph,
+                "observation.decode_issue",
+                FindingStatus.MANUAL_REVIEW,
+                FindingSeverity.ERROR,
+                node,
+                issue.code,
+                f"Task observation field {issue.field!r} is malformed: {issue.message}",
+                observed=(("field", issue.field), ("raw", issue.raw)),
+                expected=(("field", "valid Taskwarrior value"),),
+                evidence=(("source_query", node.observation.provenance.source_query),),
+            ))
+    return tuple(findings)
+
+
 def _duplicate_slot_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
     findings: list[IntegrityFinding] = []
     for (chain_id, link), nodes in sorted(graph.by_slot.items(), key=lambda item: item[0]):
@@ -556,6 +578,7 @@ def _temporal_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
 
 DEFAULT_INVARIANTS: tuple[InvariantRule, ...] = (
     InvariantRule("identity", SnapshotCoverage.CANDIDATES, _identity_rule),
+    InvariantRule("observation.decode_issue", SnapshotCoverage.CANDIDATES, _observation_issue_rule),
     InvariantRule("slot.duplicate_occupant", SnapshotCoverage.CANDIDATES, _duplicate_slot_rule),
     InvariantRule("slot.missing_link", SnapshotCoverage.CHAIN, _missing_link_rule),
     InvariantRule("edge", SnapshotCoverage.CANDIDATES, _edge_rule),

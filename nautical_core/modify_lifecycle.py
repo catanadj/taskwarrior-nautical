@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from .task_changes import TaskTransition
+from .task_models import TaskPayload
+
 RECURRENCE_SETTING_FIELDS = (
     "anchor",
     "anchor_file",
@@ -31,7 +34,7 @@ class ModifyNauticalTransition:
     reason: str = ""
 
 
-def task_has_nautical_recurrence_fields(task: dict[str, Any] | None) -> bool:
+def task_has_nautical_recurrence_fields(task: TaskPayload | None) -> bool:
     if not isinstance(task, dict):
         return False
     keys = ("anchor", "anchor_file", "cp", "omit", "omit_file")
@@ -48,7 +51,7 @@ def task_has_nautical_recurrence_fields(task: dict[str, Any] | None) -> bool:
     return False
 
 
-def task_has_nautical_chain_fields(task: dict[str, Any] | None) -> bool:
+def task_has_nautical_chain_fields(task: TaskPayload | None) -> bool:
     if not isinstance(task, dict):
         return False
     keys = ("chainID", "nextLink", "prevLink", "link")
@@ -65,7 +68,7 @@ def task_has_nautical_chain_fields(task: dict[str, Any] | None) -> bool:
     return False
 
 
-def task_has_nautical_fields(task: dict[str, Any] | None) -> bool:
+def task_has_nautical_fields(task: TaskPayload | None) -> bool:
     return task_has_nautical_recurrence_fields(task) or task_has_nautical_chain_fields(task)
 
 
@@ -76,7 +79,7 @@ def _norm_field(value: Any) -> str:
         return ""
 
 
-def ensure_terminal_chain_off(task: dict[str, Any]) -> bool:
+def ensure_terminal_chain_off(task: TaskPayload) -> bool:
     """Apply the idempotent terminal chain patch and report whether it changed."""
     if not isinstance(task, dict):
         raise ValueError("terminal chain patch requires a task mapping")
@@ -86,20 +89,37 @@ def ensure_terminal_chain_off(task: dict[str, Any]) -> bool:
     return True
 
 
-def apply_terminal_transition(task: dict[str, Any], event: Any) -> bool:
+def apply_terminal_transition(task: TaskPayload, event: Any) -> bool:
     """Validate one terminal event, then apply its idempotent chain patch."""
     from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
     from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
     try:
         normalized = LifecycleEvent(event)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"unsupported terminal lifecycle event: {event!r}") from exc
-    terminal_plan_for_snapshot(TaskSnapshot.from_mapping(task), normalized)
+    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify lifecycle")
+    terminal_plan_for_snapshot(TaskSnapshot.from_observation(observation), normalized)
     return ensure_terminal_chain_off(task)
 
 
-def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+def recurrence_setting_changes(
+    old: TaskPayload | None,
+    new: TaskPayload | None,
+    *,
+    transition: TaskTransition | None = None,
+) -> list[tuple[str, str, str]]:
+    if transition is not None:
+        return [
+            (
+                field,
+                _norm_field(transition.old.field(field).raw_value()),
+                _norm_field(transition.new.field(field).raw_value()),
+            )
+            for field in RECURRENCE_SETTING_FIELDS
+            if transition.changed(field)
+        ]
     if not isinstance(old, dict) or not isinstance(new, dict):
         return []
     changes: list[tuple[str, str, str]] = []
@@ -112,16 +132,37 @@ def recurrence_setting_changes(old: dict[str, Any] | None, new: dict[str, Any] |
 
 
 def classify_modify_route(
-    old: dict[str, Any] | None,
-    new: dict[str, Any] | None,
+    old: TaskPayload | None,
+    new: TaskPayload | None,
     *,
     is_non_completion_modify: Callable[[dict[str, Any], dict[str, Any]], bool],
+    transition: TaskTransition | None = None,
 ) -> ModifyLifecycleRoute:
     old = old if isinstance(old, dict) else {}
     new = new if isinstance(new, dict) else {}
-    is_deleted = (str(new.get("status") or "").lower() == "deleted")
+    if transition is not None:
+        status = transition.new.field("status").raw_value()
+    else:
+        status = new.get("status")
+    is_deleted = str(status or "").lower() == "deleted"
     has_nautical_fields = task_has_nautical_fields(old) or task_has_nautical_fields(new)
-    is_non_completion = bool(has_nautical_fields and not is_deleted and is_non_completion_modify(old, new))
+    if transition is not None:
+        def observation_has_fields(observation: Any) -> bool:
+            return any(
+                bool(str(observation.field(field).raw_value() or "").strip())
+                for field in RECURRENCE_SETTING_FIELDS + ("chainID", "nextLink", "prevLink", "link")
+            )
+
+        has_nautical_fields = observation_has_fields(transition.old) or observation_has_fields(transition.new)
+        old_status = str(transition.old.field("status").raw_value() or "").strip().lower()
+        new_status = str(transition.new.field("status").raw_value() or "").strip().lower()
+        is_non_completion = bool(
+            has_nautical_fields
+            and not is_deleted
+            and (old_status == new_status or new_status != "completed")
+        )
+    else:
+        is_non_completion = bool(has_nautical_fields and not is_deleted and is_non_completion_modify(old, new))
     return ModifyLifecycleRoute(
         is_deleted=is_deleted,
         has_nautical_fields=has_nautical_fields,
@@ -130,8 +171,8 @@ def classify_modify_route(
 
 
 def promote_newly_nautical_task(
-    old: dict[str, Any] | None,
-    new: dict[str, Any] | None,
+    old: TaskPayload | None,
+    new: TaskPayload | None,
     *,
     short_uuid: Callable[[Any], str],
 ) -> str | None:
@@ -140,8 +181,8 @@ def promote_newly_nautical_task(
 
 
 def apply_nautical_transition(
-    old: dict[str, Any] | None,
-    new: dict[str, Any] | None,
+    old: TaskPayload | None,
+    new: TaskPayload | None,
     *,
     short_uuid: Callable[[Any], str],
 ) -> ModifyNauticalTransition:

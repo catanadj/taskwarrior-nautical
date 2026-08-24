@@ -9,7 +9,7 @@ from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
-from nautical_core.recurrence_spec import normalize_recurrence_text
+from nautical_core.task_codec import TaskCodec
 from nautical_core.lifecycle_models import (
     LifecycleAction,
     LifecycleEvent,
@@ -27,15 +27,24 @@ from nautical_core.lifecycle_planner import (
     plan_expiration_successor,
     plan_candidate_successor,
 )
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload
+from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
 
 
+def _child_draft(child: TaskPayload) -> TaskDraft:
+    task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(child, source_query="reconcile child draft")
+    )
+    return TaskDraft.from_task(task)
+
+
 def _recurrence_field_text(value: object) -> str:
     """Normalize Taskwarrior's literal null UDA sentinel as an unset value."""
-    return normalize_recurrence_text(value)
+    return TaskCodec.normalize_text(value)
 
 
 def _generation_service(hook: Any = None) -> ChainGenerationService:
@@ -79,43 +88,45 @@ def int_or_default(value: object, default: int = 0) -> int:
         return default
 
 
-def is_nautical_recurrence(task: dict[str, Any]) -> bool:
-    return any(str(task.get(field) or "").strip() for field in RECURRENCE_FIELDS)
+def is_nautical_recurrence(task: TaskObservation) -> bool:
+    return any(str(_observation_value(task, field) or "").strip() for field in RECURRENCE_FIELDS)
 
 
-def _is_unlinked_active_chain(task: dict[str, Any]) -> bool:
-    if str(task.get("chain") or "").strip().lower() != "on":
+def _is_unlinked_active_chain(task: TaskObservation) -> bool:
+    if str(_observation_value(task, "chain") or "").strip().lower() != "on":
         return False
-    if not str(task.get("chainID") or "").strip():
+    if not str(_observation_value(task, "chainID") or "").strip():
         return False
-    if str(task.get("nextLink") or "").strip():
+    if str(_observation_value(task, "nextLink") or "").strip():
         return False
     if not is_nautical_recurrence(task):
         return False
     return True
 
 
-def is_orphan_completion_candidate(task: dict[str, Any]) -> bool:
-    return str(task.get("status") or "").strip() == "completed" and _is_unlinked_active_chain(task)
+def is_orphan_completion_candidate(task: TaskObservation) -> bool:
+    return str(_observation_value(task, "status") or "").strip() == "completed" and _is_unlinked_active_chain(task)
 
 
-def is_orphan_deleted_chain_candidate(task: dict[str, Any]) -> bool:
-    return str(task.get("status") or "").strip() == "deleted" and _is_unlinked_active_chain(task)
+def is_orphan_deleted_chain_candidate(task: TaskObservation) -> bool:
+    return str(_observation_value(task, "status") or "").strip() == "deleted" and _is_unlinked_active_chain(task)
 
 
 def deleted_chain_disposition(
-    task: dict[str, Any],
+    task: TaskObservation,
     *,
     safe_parse_datetime: Any,
 ) -> DeletionEvidence:
     """Classify an unlinked deleted chain as expiration, manual stop, or ambiguous."""
     if not is_orphan_deleted_chain_candidate(task):
         return DeletionEvidence(DeletionDisposition.NOT_APPLICABLE)
-    if not str(task.get("until") or "").strip():
+    until_raw = _observation_value(task, "until")
+    end_raw = _observation_value(task, "end")
+    if not str(until_raw or "").strip():
         return DeletionEvidence(DeletionDisposition.MANUAL, "deleted without native until")
     try:
-        until_dt, until_err = safe_parse_datetime(task.get("until"))
-        end_dt, end_err = safe_parse_datetime(task.get("end"))
+        until_dt, until_err = safe_parse_datetime(until_raw)
+        end_dt, end_err = safe_parse_datetime(end_raw)
     except Exception:
         return DeletionEvidence(
             DeletionDisposition.AMBIGUOUS,
@@ -137,7 +148,7 @@ def deleted_chain_disposition(
         )
 
 
-def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime: Any) -> bool:
+def is_orphan_expiration_candidate(task: TaskObservation, *, safe_parse_datetime: Any) -> bool:
     """Return whether a deleted link has strong evidence of native until expiration."""
     evidence = deleted_chain_disposition(
         task,
@@ -146,33 +157,33 @@ def is_orphan_expiration_candidate(task: dict[str, Any], *, safe_parse_datetime:
     return evidence.disposition is DeletionDisposition.EXPIRATION
 
 
-def expiration_recurrence_parent(parent: dict[str, Any]) -> dict[str, Any]:
-    """Return a computation-only parent that advances from due/scheduled, not deletion time."""
-    target = parent.get("due") or parent.get("scheduled")
-    if not str(target or "").strip():
-        raise ValueError("expired recurrence has no due or scheduled timestamp")
-    calculation_parent = dict(parent)
-    calculation_parent["end"] = target
-    return calculation_parent
-
-
 def compute_expiration_child_due(
-    parent: dict[str, Any], *, hook: Any = None, generation: ChainGenerationService | None = None
+    parent: TaskPayload, *, hook: Any = None, generation: ChainGenerationService | None = None
 ) -> tuple[Any, dict[str, Any]]:
     """Compute the next recurrence target after an expired link without mutating it."""
     generation = generation or _generation_service(hook)
-    candidate = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+    candidate = expiration_candidate(
+        TaskSnapshot.from_observation(DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile expiration")),
+        generation=generation,
+    )
     return candidate.child_due, dict(candidate.metadata)
 
 
-def native_until_target_field(task: dict[str, Any]) -> str:
+def _observation_value(task: TaskObservation, field: str) -> object:
+    state = task.field(field)
+    if state.presence is FieldPresence.ABSENT:
+        return None
+    return state.raw_value()
+
+
+def native_until_target_field(task: TaskObservation) -> str:
     """Return the recurrence target field used by a task."""
-    return "due" if task.get("due") else "scheduled"
+    return "due" if _observation_value(task, "due") else "scheduled"
 
 
 def invalid_relative_carry_reason(
-    parent: dict[str, Any],
-    child: dict[str, Any],
+    parent: TaskObservation,
+    child: TaskDraft,
     *,
     child_field: str,
     hook: Any = None,
@@ -189,15 +200,17 @@ def invalid_relative_carry_reason(
     if child_field != "scheduled":
         fields.append("scheduled")
     for field in fields:
-        if not parent.get(field):
+        parent_value_raw = _observation_value(parent, field)
+        if not parent_value_raw:
             continue
-        if not child.get(field):
+        child_value_raw = child.field_value(field)
+        if not child_value_raw:
             return f"{field} carry is missing from the reconciled child"
         try:
-            parent_target = core.parse_dt_any(parent.get(parent_field))
-            parent_value = core.parse_dt_any(parent.get(field))
-            child_target = core.parse_dt_any(child.get(child_field))
-            child_value = core.parse_dt_any(child.get(field))
+            parent_target = core.parse_dt_any(_observation_value(parent, parent_field))
+            parent_value = core.parse_dt_any(parent_value_raw)
+            child_target = core.parse_dt_any(child.field_value(child_field))
+            child_value = core.parse_dt_any(child_value_raw)
             if not all((parent_target, parent_value, child_target, child_value)):
                 return f"{field} carry contains an unparseable timestamp"
             parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
@@ -210,14 +223,14 @@ def invalid_relative_carry_reason(
 
 
 def invalid_native_until_reason(
-    task: dict[str, Any],
+    task: TaskObservation,
     *,
     safe_parse_datetime: Any,
 ) -> str | None:
     """Describe an invalid native expiration window, if one is present."""
-    until_raw = task.get("until")
+    until_raw = _observation_value(task, "until")
     target_field = native_until_target_field(task)
-    target_raw = task.get(target_field)
+    target_raw = _observation_value(task, target_field)
     if not until_raw or not target_raw:
         return None
     until_dt, until_err = safe_parse_datetime(until_raw)
@@ -230,8 +243,8 @@ def invalid_native_until_reason(
 
 
 def repair_native_until_from_previous(
-    previous: dict[str, Any],
-    current: dict[str, Any],
+    previous: TaskObservation,
+    current: TaskObservation,
     *,
     kind: str,
     safe_parse_datetime: Any,
@@ -242,9 +255,9 @@ def repair_native_until_from_previous(
     """Carry the previous link's native expiration policy onto the current target."""
     parent_field = native_until_target_field(previous)
     child_field = native_until_target_field(current)
-    parent_target, parent_target_err = safe_parse_datetime(previous.get(parent_field))
-    parent_until, parent_until_err = safe_parse_datetime(previous.get("until"))
-    child_target, child_target_err = safe_parse_datetime(current.get(child_field))
+    parent_target, parent_target_err = safe_parse_datetime(_observation_value(previous, parent_field))
+    parent_until, parent_until_err = safe_parse_datetime(_observation_value(previous, "until"))
+    child_target, child_target_err = safe_parse_datetime(_observation_value(current, child_field))
     if parent_target_err or parent_until_err or child_target_err:
         return None, "previous link lacks parseable target/until state"
     if not all((parent_target, parent_until, child_target)):
@@ -264,7 +277,7 @@ def repair_native_until_from_previous(
 
 
 def fallback_native_until_at_day_end(
-    current: dict[str, Any],
+    current: TaskObservation,
     *,
     safe_parse_datetime: Any,
     fmt_isoz: Any,
@@ -273,7 +286,7 @@ def fallback_native_until_at_day_end(
 ) -> tuple[str | None, str | None]:
     """Use local 23:00 when a prior link cannot provide an expiration policy."""
     target_field = native_until_target_field(current)
-    target, target_err = safe_parse_datetime(current.get(target_field))
+    target, target_err = safe_parse_datetime(_observation_value(current, target_field))
     if target_err or target is None:
         return None, f"cannot infer native until without a parseable {target_field}"
     try:
@@ -286,13 +299,13 @@ def fallback_native_until_at_day_end(
         return None, "cannot infer native until at local 23:00"
 
 
-def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) -> str:
+def _child_recurrence_mismatch(parent: TaskObservation, child: TaskObservation) -> str:
     """Return a mismatch when a candidate child carries a different recurrence."""
-    if not any(_recurrence_field_text(child.get(field)) for field in RECURRENCE_FIELDS):
+    if not any(_recurrence_field_text(_observation_value(child, field)) for field in RECURRENCE_FIELDS):
         return ""
     for field in RECURRENCE_FIELDS:
-        parent_value = _recurrence_field_text(parent.get(field))
-        child_value = _recurrence_field_text(child.get(field))
+        parent_value = _recurrence_field_text(_observation_value(parent, field))
+        child_value = _recurrence_field_text(_observation_value(child, field))
         if child_value and child_value != parent_value:
             expected = parent_value or "<empty>"
             actual = child_value or "<empty>"
@@ -301,22 +314,24 @@ def _child_recurrence_mismatch(parent: dict[str, Any], child: dict[str, Any]) ->
 
 
 def resolve_existing_child(
-    parent: dict[str, Any],
-    rows: list[dict[str, Any]],
+    parent: TaskObservation,
+    rows: list[TaskObservation] | tuple[TaskObservation, ...],
     *,
     include_deleted: bool = False,
 ) -> tuple[str, str]:
-    chain_id = str(parent.get("chainID") or "").strip()
-    next_link = int_or_default(parent.get("link"), 1) + 1
-    matches: dict[str, dict[str, Any]] = {}
+    if not isinstance(parent, TaskObservation) or any(not isinstance(row, TaskObservation) for row in rows):
+        raise TypeError("child resolution requires typed task observations")
+    chain_id = str(_observation_value(parent, "chainID") or "").strip()
+    next_link = int_or_default(_observation_value(parent, "link"), 1) + 1
+    matches: dict[str, TaskObservation] = {}
     for row in rows:
-        if str(row.get("chainID") or "").strip() != chain_id:
+        if str(_observation_value(row, "chainID") or "").strip() != chain_id:
             continue
-        if int_or_default(row.get("link"), -1) != next_link:
+        if int_or_default(_observation_value(row, "link"), -1) != next_link:
             continue
-        if not include_deleted and str(row.get("status") or "").strip() == "deleted":
+        if not include_deleted and str(_observation_value(row, "status") or "").strip() == "deleted":
             continue
-        child_uuid = str(row.get("uuid") or "").strip()
+        child_uuid = str(_observation_value(row, "uuid") or "").strip()
         if len(child_uuid) < 8:
             return "", f"next slot #{next_link} contains a task without a valid UUID"
         matches[child_uuid.lower()] = row
@@ -328,11 +343,11 @@ def resolve_existing_child(
         return "", f"next slot #{next_link} contains multiple tasks: {children}"
 
     child_uuid, child = next(iter(matches.items()))
-    parent_uuid = str(parent.get("uuid") or "").strip().lower()
+    parent_uuid = str(_observation_value(parent, "uuid") or "").strip().lower()
     parent_short = short_uuid(parent_uuid)
     if len(parent_uuid) < 8 or not parent_short:
         return "", "parent task has no valid UUID for reciprocal link validation"
-    prev_link = str(child.get("prevLink") or "").strip().lower()
+    prev_link = str(_observation_value(child, "prevLink") or "").strip().lower()
     if prev_link not in {parent_short, parent_uuid}:
         shown = prev_link or "<empty>"
         return (
@@ -350,34 +365,36 @@ def resolve_existing_child(
     return short_uuid(child_uuid), ""
 
 
-def recurrence_kind(task: dict[str, Any]) -> str:
-    try:
-        evaluator = SchedulerService.from_task(task).session.evaluator
-    except ValueError:
-        # Preserve useful classification for incomplete legacy rows; the
-        # reconciler reports their missing identity separately.
-        if normalize_recurrence_text(task.get("anchor")):
-            return "anchor"
-        if normalize_recurrence_text(task.get("anchor_file")):
-            return "anchor_file"
-        return "cp"
-    return evaluator.kind or "cp"
+def recurrence_kind(task: TaskObservation) -> str:
+    # Recovery only needs the recurrence family to carry native-until policy;
+    # full schedule compilation belongs to the scheduler service.
+    if TaskCodec.normalize_text(_observation_value(task, "anchor")):
+        return "anchor"
+    if TaskCodec.normalize_text(_observation_value(task, "anchor_file")):
+        return "anchor_file"
+    return "cp"
 
 
 def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     parent = plan.parent
+    parent_values = parent.to_mapping() if isinstance(parent, TaskObservation) else parent
+    parent_observation = (
+        parent
+        if isinstance(parent, TaskObservation)
+        else DEFAULT_TASK_CODEC.decode_row(parent_values, source_query="lifecycle plan description")
+    )
     if plan.action == "manual_stop":
         trigger = "manual_deletion"
-    elif str(parent.get("status") or "").strip() == "deleted":
+    elif str(parent_values.get("status") or "").strip() == "deleted":
         trigger = "expiration"
     else:
         trigger = "completion"
     evidence: dict[str, Any] = {
-        "parent": short_uuid(parent.get("uuid")),
-        "chainID": str(parent.get("chainID") or ""),
-        "parent_link": int_or_default(parent.get("link"), 0),
+        "parent": short_uuid(parent_values.get("uuid")),
+        "chainID": str(parent_values.get("chainID") or ""),
+        "parent_link": int_or_default(parent_values.get("link"), 0),
         "next_link": plan.next_link,
-        "kind": recurrence_kind(parent),
+        "kind": recurrence_kind(parent_observation),
         "trigger": trigger,
         "reason": plan.reason,
     }
@@ -393,16 +410,16 @@ def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) 
                 pass
     if plan.child_short:
         evidence["existing_child"] = plan.child_short
-    if plan.child:
-        field = "due" if "due" in plan.child else "scheduled" if "scheduled" in plan.child else "due"
+    child_draft = plan.child_draft
+    if child_draft is not None:
+        field = child_draft.target_field
         evidence["child_field"] = field
-        if plan.child.get(field) is not None:
-            evidence["child_target"] = str(plan.child.get(field))
+        evidence["child_target"] = str(child_draft.field_value(field, ""))
     return evidence
 
 
 def _build_expiration_child_with_day_end(
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     child_due: Any,
     child_field: str,
@@ -423,8 +440,10 @@ def _build_expiration_child_with_day_end(
     fallback_until = generation.core.build_local_datetime(target_local.date(), (23, 59)) + timedelta(seconds=59)
     fallback_parent = dict(parent)
     fallback_parent["until"] = generation.core.fmt_isoz(fallback_until)
-    return generation.build_child_from_parent(
-        fallback_parent,
+    return generation.build_child_draft(
+        NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(fallback_parent, source_query="reconcile expiration fallback")
+        ),
         child_due,
         child_field,
         next_link,
@@ -432,55 +451,66 @@ def _build_expiration_child_with_day_end(
         kind,
         cpmax,
         until_dt,
-    )
+    ).to_mapping()
 
 
 def _plan_recovery_decision_unscoped(
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
-    existing_children: list[dict[str, Any]],
+    existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
     hook: Any,
     generation: ChainGenerationService | None = None,
 ) -> LifecycleRecoveryDecision:
     generation = generation or _generation_service(hook)
+    observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery")
+    try:
+        operational_parent = NauticalTask.from_observation(observation)
+    except (TypeError, ValueError) as exc:
+        return LifecycleRecoveryDecision(
+            "error",
+            observation,
+            int_or_default(parent.get("link"), 1) + 1,
+            f"parent task validation failed: {exc}",
+        )
+    decision_parent = observation
     link = int_or_default(parent.get("link"), 1)
     next_link = link + 1
     is_expiration = str(parent.get("status") or "").strip() == "deleted"
     if is_expiration:
         evidence = deleted_chain_disposition(
-            parent,
+            operational_parent.observation,
             safe_parse_datetime=generation.safe_parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
-            return LifecycleRecoveryDecision("manual_stop", parent, next_link, evidence.reason)
+            return LifecycleRecoveryDecision("manual_stop", decision_parent, next_link, evidence.reason)
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 evidence.reason or "deleted task has no reliable native-until expiration evidence",
             )
 
     child_short, child_error = resolve_existing_child(
-        parent,
+        decision_parent,
         existing_children,
         include_deleted=is_expiration,
     )
     if child_error:
-        return LifecycleRecoveryDecision("error", parent, next_link, child_error)
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, child_error)
     if child_short:
         existing_child = next(
             (
                 row
                 for row in existing_children
-                if str(row.get("uuid") or "").strip().lower().startswith(child_short.lower())
+                if str(_observation_value(row, "uuid") or "").strip().lower().startswith(child_short.lower())
             ),
             None,
         )
-        if not isinstance(existing_child, dict):
+        if not isinstance(existing_child, TaskObservation):
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 "existing successor identity could not be loaded",
                 child_short=child_short,
@@ -501,34 +531,38 @@ def _plan_recovery_decision_unscoped(
                 target_link=next_link,
                 event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
             )
-            lifecycle_plan = LifecyclePlan.from_mappings(
+            lifecycle_plan = LifecyclePlan.from_draft(
                 identity=identity,
                 action=LifecycleAction.SPAWN_CHILD,
                 parent_guard=guard,
-                child_payload=existing_child,
+                draft=_child_draft(existing_child.to_mapping()),
                 parent_patch={"nextLink": child_short},
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
         except Exception as exc:
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
                 child_short=child_short,
             )
         return LifecycleRecoveryDecision(
             "backfill_nextlink",
-            parent,
+            decision_parent,
             next_link,
             "next link already exists",
             child_short=child_short,
-            child=existing_child,
+            child=existing_child.to_mapping(),
             lifecycle_plan=lifecycle_plan,
+            child_observation=existing_child,
+            child_draft=lifecycle_plan.child_draft(),
         )
 
     try:
-        evaluator = SchedulerService.from_task(parent).session.evaluator
+        evaluator = SchedulerService.from_task(
+            NauticalTask.from_observation(observation)
+        ).session.evaluator
         kind = evaluator.kind or "cp"
         limits = evaluator.limits
         until_dt = limits.chain_until
@@ -538,42 +572,45 @@ def _plan_recovery_decision_unscoped(
         # Keep incomplete legacy rows classifiable; normal validation below
         # still reports malformed chain limits through the hook boundary.
         evaluator = None
-        kind = recurrence_kind(parent)
+        kind = recurrence_kind(operational_parent)
         until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
         cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
-        return LifecycleRecoveryDecision("error", parent, next_link, f"invalid chainUntil: {until_err}")
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, f"invalid chainUntil: {until_err}")
 
     if cpmax and next_link > cpmax:
         return LifecycleRecoveryDecision(
-            "legitimate_final", parent, next_link, "reached chainMax", terminal_kind="chain_max",
+            "legitimate_final", decision_parent, next_link, "reached chainMax", terminal_kind="chain_max",
         )
 
     try:
         if is_expiration:
-            expiration = expiration_candidate(TaskSnapshot.from_mapping(parent), generation=generation)
+            expiration = expiration_candidate(
+                TaskSnapshot.from_observation(observation),
+                generation=generation,
+            )
             child_due = expiration.child_due
             meta = dict(expiration.metadata)
         elif kind in {"anchor", "anchor_file"}:
-            child_due, meta, _dnf = generation.compute_anchor_child_due(parent)
+            child_due, meta, _dnf = generation.compute_anchor_child_due(operational_parent)
         else:
-            child_due, meta = generation.compute_cp_child_due(parent)
+            child_due, meta = generation.compute_cp_child_due(operational_parent)
     except Exception as exc:
         if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
             return LifecycleRecoveryDecision(
                 "legitimate_final",
-                parent,
+                decision_parent,
                 next_link,
                 occurrence_exhaustion_message(exc),
                 terminal_kind=exc.kind,
             )
-        return LifecycleRecoveryDecision("error", parent, next_link, scheduling_error_message(exc))
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, scheduling_error_message(exc))
 
     if not child_due:
-        return LifecycleRecoveryDecision("error", parent, next_link, "could not compute next recurrence timestamp")
+        return LifecycleRecoveryDecision("error", decision_parent, next_link, "could not compute next recurrence timestamp")
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
         return LifecycleRecoveryDecision(
-            "legitimate_final", parent, next_link, "reached chainUntil",
+            "legitimate_final", decision_parent, next_link, "reached chainUntil",
             child_due=child_due, terminal_kind="chain_until",
         )
 
@@ -598,17 +635,20 @@ def _plan_recovery_decision_unscoped(
                 chain_id=parent.get("chainID"),
             ),
             "carry_validator": lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
-                snapshot.to_dict(),
-                dict(candidate_child),
+                snapshot.observation,
+                candidate_child,
                 child_field=child_field,
                 generation=generation,
             ),
         }
         lifecycle_plan = (
-            plan_expiration_successor(TaskSnapshot.from_mapping(parent), **planner_kwargs)
+            plan_expiration_successor(
+                TaskSnapshot.from_observation(observation),
+                **planner_kwargs,
+            )
             if is_expiration
             else plan_candidate_successor(
-                TaskSnapshot.from_mapping(parent),
+                TaskSnapshot.from_observation(observation),
                 LifecycleEvent.COMPLETE,
                 candidate,
                 **planner_kwargs,
@@ -617,7 +657,7 @@ def _plan_recovery_decision_unscoped(
         if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return LifecycleRecoveryDecision(
                 "legitimate_final",
-                parent,
+                decision_parent,
                 next_link,
                 "reached lifecycle successor limit",
                 child_due=child_due,
@@ -646,9 +686,9 @@ def _plan_recovery_decision_unscoped(
                     generation=generation,
                 )
             except Exception as fallback_exc:
-                return LifecycleRecoveryDecision("error", parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
+                return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
-            return LifecycleRecoveryDecision("error", parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
+            return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
     if lifecycle_plan is None:
         try:
             guard = ParentGuard(
@@ -666,18 +706,18 @@ def _plan_recovery_decision_unscoped(
                 target_link=next_link,
                 event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
             )
-            lifecycle_plan = LifecyclePlan.from_mappings(
+            lifecycle_plan = LifecyclePlan.from_draft(
                 identity=identity,
                 action=LifecycleAction.SPAWN_CHILD,
                 parent_guard=guard,
-                child_payload=child,
+                draft=_child_draft(child),
                 parent_patch={},
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
         except Exception as exc:
             return LifecycleRecoveryDecision(
                 "error",
-                parent,
+                decision_parent,
                 next_link,
                 f"failed to build lifecycle plan: {scheduling_error_message(exc)}",
                 child_due=child_due,
@@ -685,37 +725,41 @@ def _plan_recovery_decision_unscoped(
     reason = "expired link missing next link" if is_expiration else "missing next link"
     return LifecycleRecoveryDecision(
         "spawn",
-        parent,
+        decision_parent,
         next_link,
         reason,
         child=child,
         child_due=child_due,
         lifecycle_plan=lifecycle_plan,
+        child_draft=lifecycle_plan.child_draft() if lifecycle_plan is not None else None,
     )
 
 
 def plan_recovery_decision(
-    parent: dict[str, Any],
+    parent: TaskObservation,
     *,
-    existing_children: list[dict[str, Any]],
+    existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
     hook: Any,
     generation: ChainGenerationService | None = None,
 ) -> LifecycleRecoveryDecision:
     """Build one plan inside the parent task's business-calendar context."""
+    if not isinstance(parent, TaskObservation):
+        raise TypeError("recovery planning requires a TaskObservation parent")
+    parent_values = parent.to_mapping()
     generation = generation or _generation_service(hook)
     core = generation.core
     use_task_calendar = getattr(core, "use_task_business_calendar", None)
     if not callable(use_task_calendar):
         return _plan_recovery_decision_unscoped(
-            parent,
+            parent_values,
             existing_children=existing_children,
             hook=hook,
             generation=generation,
         )
 
-    next_link = int_or_default(parent.get("link"), 1) + 1
+    next_link = int_or_default(parent_values.get("link"), 1) + 1
     try:
-        calendar_context = use_task_calendar(parent)
+        calendar_context = use_task_calendar(parent_values)
     except Exception as exc:
         return LifecycleRecoveryDecision(
             "error",
@@ -725,7 +769,7 @@ def plan_recovery_decision(
         )
     with calendar_context:
         return _plan_recovery_decision_unscoped(
-            parent,
+            parent_values,
             existing_children=existing_children,
             hook=hook,
             generation=generation,

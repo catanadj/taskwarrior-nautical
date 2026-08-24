@@ -4,10 +4,11 @@ from typing import Any
 
 from nautical_core.chain_generation import CarryFieldError
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
+from nautical_core.task_models import TaskDraft, TaskPayload
 
 
 def completion_build_and_spawn_child(
-    new: dict[str, Any],
+    new: TaskPayload,
     *,
     child_due: Any,
     child_field: str = "due",
@@ -16,27 +17,23 @@ def completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt: Any,
-    planned_child: dict[str, Any] | None = None,
     services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
-    build_child_from_parent = services.build_child_from_parent
+    task_row = dict(new)
+    build_child_draft = services.build_child_draft
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
     try:
-        child = planned_child or build_child_from_parent(
-            new,
-            child_due,
-            child_field,
-            next_no,
-            parent_short,
-            kind,
-            cpmax,
-            until_dt,
+        child_draft = build_child_draft(
+            task_row, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
         )
+        if not isinstance(child_draft, TaskDraft):
+            raise TypeError("child builder returned a non-TaskDraft value")
+        child = child_draft.to_mapping()
     except Exception as exc:
         if callable(diag):
             diag(f"build child failed: {exc}")
-        reason = str(exc) if isinstance(exc, CarryFieldError) else "Failed to build next link"
+        reason = str(exc) or "Failed to build next link"
         return CompletionSpawnResult(
             child={},
             child_short="",
@@ -58,7 +55,7 @@ def completion_build_and_spawn_child(
             deferred_spawn,
             defer_reason,
             spawn_intent_id,
-        ) = spawn_child_atomic(child, new)
+        ) = spawn_child_atomic(child_draft or child, task_row)
         if not verified and not deferred_spawn:
             review_reason = defer_reason or "Child spawn could not be verified; parent not updated"
             return CompletionSpawnResult(

@@ -10,7 +10,10 @@ from nautical_core.modify_models import (
     CompletionComputeResult,
     CompletionFinalizeServices,
     CompletionPreflightContext,
+    TaskView,
 )
+from nautical_core.task_changes import TaskTransition
+from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 @dataclass(slots=True)
@@ -18,24 +21,25 @@ class CompletionFlowServices:
     """Typed collaborators for the complete-on-modify lifecycle boundary."""
 
     runtime_state: Callable[[], Any]
-    prepare_recurrence: Callable[[dict[str, Any], dict[str, Any]], tuple[str, str, str]]
-    preserve_cp_relative_offsets: Callable[[dict[str, Any], dict[str, Any], str], None]
-    preserve_native_until: Callable[[dict[str, Any], dict[str, Any], str], None]
-    validate_native_until: Callable[[dict[str, Any]], None]
-    validate_native_until_slots: Callable[[dict[str, Any]], None]
+    prepare_recurrence: Callable[[TaskPayload, TaskPayload], tuple[str, str, str]]
+    preserve_cp_relative_offsets: Callable[[TaskPayload, TaskPayload, str], None]
+    preserve_native_until: Callable[[TaskPayload, TaskPayload, str], None]
+    validate_native_until: Callable[[TaskPayload], None]
+    validate_native_until_slots: Callable[[TaskPayload], None]
     now_utc: Callable[[], Any]
-    preflight_context: Callable[[dict[str, Any], Any, Any], CompletionPreflightContext | None]
+    preflight_context: Callable[[TaskPayload, Any, Any], CompletionPreflightContext | None]
     compute_next_and_limits: Callable[..., CompletionComputeResult | CompletionLifecycleResult | None]
     lifecycle_read_service: Any
     diag_count: Callable[[str, int], None]
     diag_lifecycle_result: Callable[[CompletionLifecycleResult], None]
     finalize_completion: Callable[..., CompletionLifecycleResult]
     finalize_services: CompletionFinalizeServices
+    transition: TaskTransition | None = None
 
 
 def handle_completion_modify(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     unit_of_work: Any,
     *,
     services: CompletionFlowServices,
@@ -45,7 +49,13 @@ def handle_completion_modify(
     prepared = dict(new)
     new_cp, new_anchor, new_anchor_file = services.prepare_recurrence(old, prepared)
     services.preserve_cp_relative_offsets(old, prepared, new_cp)
-    if any(str(old.get(field) or "").strip() for field in ("cp", "anchor", "anchor_file")):
+    recurrence_fields = ("cp", "anchor", "anchor_file")
+    has_previous_recurrence = (
+        any(services.transition.old.field(field).raw_value() for field in recurrence_fields)
+        if services.transition is not None
+        else any(str(old.get(field) or "").strip() for field in recurrence_fields)
+    )
+    if has_previous_recurrence:
         recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
         services.preserve_native_until(old, prepared, recurrence_kind)
     services.validate_native_until(prepared)
@@ -115,7 +125,7 @@ def _completion_diagnostic(
     )
 
 
-def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: dict[str, Any]) -> None:
+def _render_lifecycle_result(services: CompletionFinalizeServices, result: CompletionLifecycleResult, task: TaskView) -> None:
     """Keep presentation failures from suppressing the task response."""
     try:
         services.render_lifecycle_result(result, task)
@@ -125,15 +135,15 @@ def _render_lifecycle_result(services: CompletionFinalizeServices, result: Compl
 
 def finalize_completion_modify(
     *,
-    new: dict[str, Any],
+    new: TaskPayload,
     ctx: CompletionPreflightContext,
     computed: CompletionComputeResult,
     now_utc: Any,
     need_chain: bool,
     chain_snapshot_loaded: bool,
-    preloaded_chain: list[dict[str, Any]],
-    preloaded_chain_by_link: dict[int, dict[str, Any]],
-    preloaded_chain_by_short: dict[str, dict[str, Any]],
+    preloaded_chain: list[TaskObservation],
+    preloaded_chain_by_link: dict[int, list[TaskObservation]],
+    preloaded_chain_by_short: dict[str, TaskObservation],
     chain_id: str,
     services: CompletionFinalizeServices,
 ) -> CompletionLifecycleResult:
@@ -150,9 +160,6 @@ def finalize_completion_modify(
         "cpmax": computed.cpmax,
         "until_dt": computed.until_dt,
     }
-    planned_child = getattr(computed, "planned_child", None)
-    if planned_child is not None:
-        spawn_args["planned_child"] = planned_child
     spawned = services.build_and_spawn_child(new, **spawn_args)
     if spawned is None:
         lifecycle_result = CompletionLifecycleResult(
@@ -162,7 +169,7 @@ def finalize_completion_modify(
                 ctx, chain_id, stage="spawn", failure_kind="missing_result"
             ),
         )
-        _render_lifecycle_result(services, lifecycle_result, new)
+        _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))
         services.print_task(new)
         return lifecycle_result
     spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
@@ -180,7 +187,7 @@ def finalize_completion_modify(
                 transition_id=str(getattr(spawned, "spawn_intent_id", "") or ""),
             ),
         )
-        _render_lifecycle_result(services, lifecycle_result, new)
+        _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))
         services.print_task(new)
         return lifecycle_result
 
@@ -234,6 +241,13 @@ def finalize_completion_modify(
     state.panel_chain_by_short = chain_by_short
     state.panel_chain_snapshot_loaded = True
 
+    # The lifecycle read cache remains in its operational row form.  Panels
+    # receive immutable views so presentation cannot mutate chain history.
+    presentation_chain_by_short = {
+        short: TaskView.from_observation(row)
+        for short, row in (chain_by_short or {}).items()
+    }
+
     analytics_advice = None
     integrity_warnings = None
     if chain and services.show_analytics:
@@ -266,7 +280,7 @@ def finalize_completion_modify(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
             lifecycle_result=lifecycle_result,
-            chain_by_short=chain_by_short,
+            chain_by_short=presentation_chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
             base_no=base_no,
@@ -288,7 +302,7 @@ def finalize_completion_modify(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
             lifecycle_result=lifecycle_result,
-            chain_by_short=chain_by_short,
+            chain_by_short=presentation_chain_by_short,
             analytics_advice=analytics_advice,
             integrity_warnings=integrity_warnings,
             base_no=base_no,

@@ -28,7 +28,7 @@ import shutil
 import weakref
 from pathlib import Path
 from functools import lru_cache
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, List, Optional, Tuple, Any, Set, Mapping
 from dataclasses import dataclass
 from dateutil import parser as date_parser, tz
 from datetime import date, timedelta
@@ -147,10 +147,12 @@ try:
     from nautical_core.integration_models import Absent, Found, Unavailable
     from nautical_core.integration_context import IntegrationAccess
     from nautical_core.taskwarrior_uow import build_operator_uow
+    from nautical_core.modify_models import TaskView
 except Exception:
     Absent = Found = Unavailable = None
     IntegrationAccess = None
     build_operator_uow = None
+    TaskView = None
 
 _UNIT_OF_WORK = None
 
@@ -185,7 +187,9 @@ def _run_task_export(filters: tuple[str, ...]) -> Any:
         complete_chain_history=True,
     )
     if Found is not None and isinstance(read, Found):
-        return [dict(row) for row in read.value.rows]
+        if TaskView is None:
+            raise RuntimeError("Nautical typed task-view support is unavailable")
+        return [TaskView.from_observation(row) for row in read.value.rows]
     if Absent is not None and isinstance(read, Absent):
         return []
     if Unavailable is not None and isinstance(read, Unavailable):
@@ -254,6 +258,7 @@ def _reset_navigator_runtime_state() -> None:
         analyzer._task_cache.clear()
         analyzer._uuid_cache.clear()
         analyzer._children.clear()
+        analyzer._meaningful_changes.clear()
     analyzer_cls = globals().get("TaskAnalyzer")
     if analyzer_cls is None:
         return
@@ -465,6 +470,7 @@ def _anchor_preview_details(
         from nautical_core.recurrence_context import RecurrenceContext
         from nautical_core.scheduler_cursor import OccurrenceCursor
         from nautical_core.scheduler_service import SchedulerService
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
         now_local = core.to_local(core.now_utc())
         # Navigator previews are date-oriented: start after today's final
@@ -477,8 +483,18 @@ def _anchor_preview_details(
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
-        service = SchedulerService.from_task(
-            {"anchor": expr, "chainID": "preview"},
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000002",
+                "status": "pending",
+                "link": 1,
+                "anchor": expr,
+                "chainID": "preview",
+            },
+            source_query="navigator expression preview",
+        )
+        service = SchedulerService.from_observation(
+            observation,
             context=context,
             trace=trace,
         )
@@ -626,6 +642,27 @@ class TaskChange:
     group: int = 99
 
 
+class _ResolvedTaskView(Mapping[str, Any]):
+    """Immutable Navigator view with resolved chain references."""
+
+    __slots__ = ("_task", "_refs")
+
+    def __init__(self, task: Mapping[str, Any], refs: Mapping[str, str]) -> None:
+        self._task = task
+        self._refs = dict(refs)
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self._refs:
+            return self._refs[key]
+        return self._task[key]
+
+    def __iter__(self):
+        return iter(self._task)
+
+    def __len__(self) -> int:
+        return len(self._task)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Analyzer
 # ──────────────────────────────────────────────────────────────────────────────
@@ -636,6 +673,7 @@ class TaskAnalyzer:
         self._task_cache: Dict[int, Dict] = {}
         self._uuid_cache: Dict[str, Dict] = {}
         self._children: Dict[str, List[Dict]] = {}  # prev_uuid -> [children]
+        self._meaningful_changes: Dict[str, List[TaskChange]] = {}
         self._projection_warnings: List[str] = []
         _ACTIVE_ANALYZERS.add(self)
 
@@ -805,19 +843,20 @@ class TaskAnalyzer:
                 from nautical_core.recurrence_context import RecurrenceContext
                 from nautical_core.scheduler_cursor import OccurrenceCursor
                 from nautical_core.scheduler_service import SchedulerService
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
                 due_dt = core.parse_dt_any(last.get("due")) if last.get("due") else None
                 due_local = core.to_local(due_dt) if due_dt else None
                 clock = (due_local.hour, due_local.minute) if due_local else (core.DEFAULT_DUE_HOUR, 0)
-                context = RecurrenceContext.from_task(
-                    last,
-                    fallback_chain_id=last.get("uuid") or "navigator",
+                observation = DEFAULT_TASK_CODEC.decode_row(last, source_query="navigator anchor projection")
+                context = RecurrenceContext.from_observation(
+                    observation,
                     timezone=getattr(core, "_LOCAL_TZ", None),
                     business_calendar=business_calendar,
                     astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                     anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 )
-                scheduler_service = SchedulerService.from_task(last, context=context)
+                scheduler_service = SchedulerService.from_observation(observation, context=context)
                 cursor = OccurrenceCursor.strict_after(
                     core.build_local_datetime(window_start - timedelta(days=1), (23, 59)),
                     timezone=context.timezone,
@@ -1038,7 +1077,7 @@ class TaskAnalyzer:
             payload = [payload]
         if not isinstance(payload, list):
             return []
-        tasks = [t for t in payload if isinstance(t, dict)]
+        tasks = [t for t in payload if isinstance(t, Mapping)]
         for t in tasks:
             if t.get("id"):
                 self._task_cache[int(t["id"])] = t
@@ -1065,12 +1104,17 @@ class TaskAnalyzer:
                     return matches[0]
             return raw
 
-        normalized: List[Dict] = []
+        normalized: List[Mapping[str, Any]] = []
         for task in tasks:
-            item = dict(task)
-            item["prevLink"] = resolve(item.get("prevLink"))
-            item["nextLink"] = resolve(item.get("nextLink"))
-            normalized.append(item)
+            normalized.append(
+                _ResolvedTaskView(
+                    task,
+                    {
+                        "prevLink": resolve(task.get("prevLink")),
+                        "nextLink": resolve(task.get("nextLink")),
+                    },
+                )
+            )
         return normalized
 
     def _render_line_plot(self, x_labels: List[str], series: Dict[str, List[Optional[float]]], height: int = 10, width: int = 60) -> Panel:
@@ -2094,11 +2138,13 @@ class TaskAnalyzer:
     # ── Anchor / CP analysis helpers ─────────────────────────────────────────
     def _anchor_summary(self, task: Dict) -> Optional[Tuple[str, str]]:
         """Return a concise summary for anchor / anchor_file sources."""
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-            task, fallback_chain_id=task.get("uuid") or "analyzer"
+        codec = core._import_sibling("task_codec")
+        observation = codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator anchor summary")
+        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_observation(
+            observation
         )
-        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
-            task,
+        recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_observation(
+            observation,
             context=recurrence_context,
         )
         anchor_expr = recurrence_spec.anchor
@@ -2139,16 +2185,18 @@ class TaskAnalyzer:
         except Exception as exc:
             self._record_projection_warning(f"Business calendar: {_format_runtime_error(exc)}")
             return []
-        scheduler_service = core._import_sibling("scheduler_service").SchedulerService.from_task(
-            task,
-            context=core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-                task,
-                fallback_chain_id=task.get("uuid") or "analyzer",
+        codec = core._import_sibling("task_codec")
+        observation = codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator anchor projection")
+        context = core._import_sibling("recurrence_context").RecurrenceContext.from_observation(
+            observation,
                 timezone=LOCAL_ZONE,
                 business_calendar=business_calendar,
                 astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            ),
+        )
+        scheduler_service = core._import_sibling("scheduler_service").SchedulerService.from_observation(
+            observation,
+            context=context,
         )
         recurrence_evaluator = scheduler_service.session.evaluator
         recurrence_context = recurrence_evaluator.context
@@ -2287,9 +2335,6 @@ class TaskAnalyzer:
         anchor_file = (task.get("anchor_file") or "").strip()
         if not anchor_expr and not anchor_file:
             return None
-        recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-            task, fallback_chain_id=task.get("uuid") or "analyzer"
-        )
         try:
             business_calendar = core.business_calendar_for_task(task)
         except Exception:
@@ -2304,16 +2349,17 @@ class TaskAnalyzer:
                 from nautical_core.recurrence_context import RecurrenceContext
                 from nautical_core.scheduler_cursor import OccurrenceCursor
                 from nautical_core.scheduler_service import SchedulerService
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-                context = RecurrenceContext.from_task(
-                    task,
-                    fallback_chain_id=task.get("uuid") or "analyzer",
+                observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator due check")
+                context = RecurrenceContext.from_observation(
+                    observation,
                     timezone=getattr(core, "_LOCAL_TZ", None),
                     business_calendar=business_calendar,
                     astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                     anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
                 )
-                service = SchedulerService.from_task(task, context=context)
+                service = SchedulerService.from_observation(observation, context=context)
                 cursor_dt = core.build_local_datetime(due_day - timedelta(days=1), (23, 59))
                 outcome = service.next(
                     OccurrenceCursor.strict_after(cursor_dt, timezone=context.timezone),
@@ -2565,7 +2611,11 @@ class TaskAnalyzer:
     def _display_chain_table(self, chain: List[Dict]):
         # Keep only rows that *actually* have non-timing changes after our filters
         rows = [
-            (t.get("uuid", "")[:8], self._context_datetime_for_task(t), t.get("meaningful_changes", []))
+            (
+                t.get("uuid", "")[:8],
+                self._context_datetime_for_task(t),
+                self._meaningful_changes.get(str(t.get("uuid") or ""), []),
+            )
             for t in chain
         ]
         rows = [(u, d, ch) for (u, d, ch) in rows if ch]  # drop "no changes"
@@ -2776,9 +2826,9 @@ class TaskAnalyzer:
                         )
                     ]
 
-                task["meaningful_changes"] = changes
+                self._meaningful_changes[str(task.get("uuid") or "")] = changes
             else:
-                task["meaningful_changes"] = []
+                self._meaningful_changes[str(task.get("uuid") or "")] = []
 
         # calendar data:
         completed_dates = self._get_completion_dates(full_chain)

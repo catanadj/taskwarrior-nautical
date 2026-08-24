@@ -15,9 +15,10 @@ from . import chain_integrity_lifecycle as lifecycle
 from .chain_generation import ChainGenerationService
 from .chain_integrity_engine import ChainIntegrityEngine
 from .integration_models import Absent, Found, Unavailable
-from .lifecycle_models import DeletionDisposition
+from .lifecycle_models import DeletionDisposition, VirtualExpiredChild
 from .lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path
 from .cache_locking import safe_lock
+from .task_models import FieldPresence, TaskObservation, TaskPayload
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -27,7 +28,7 @@ _RECONCILE_LOCK_STALE_SECONDS = 300.0
 
 
 class LifecycleSnapshot(Protocol):
-    def candidate_rows(self) -> list[dict[str, Any]]: ...
+    def candidate_rows(self) -> list[TaskObservation]: ...
 
 
 class LifecycleChildRepository(Protocol):
@@ -37,23 +38,23 @@ class LifecycleChildRepository(Protocol):
 class LifecycleRecoveryOperations(Protocol):
     """Policy operations used by the service-owned recovery loop."""
 
-    def apply_parent(self, parent: dict[str, Any], *, taskdata: Path, lease_held: bool,
+    def apply_parent(self, parent: TaskPayload, *, taskdata: Path, lease_held: bool,
                      verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[Any, str]: ...
-    def plan_parent(self, parent: dict[str, Any], *, generation: ChainGenerationService | None) -> Any: ...
-    def next_child(self, parent: dict[str, Any], child_short: str) -> dict[str, Any]: ...
-    def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[dict[str, Any] | None, str]: ...
-    def terminal_error(self, child: dict[str, Any], recovery_at: Any) -> str: ...
-    def is_orphan_deleted(self, child: dict[str, Any]) -> bool: ...
-    def recovery_error(self, parent: dict[str, Any], reason: str) -> Any: ...
-    def recovery_partial(self, parent: dict[str, Any], reason: str) -> Any: ...
-    def recovery_manual_review(self, parent: dict[str, Any], reason: str) -> Any: ...
-    def recovery_terminal(self, parent: dict[str, Any], reason: str) -> Any: ...
-    def recovery_from_exception(self, parent: dict[str, Any], exc: Exception) -> Any: ...
+    def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
+    def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation: ...
+    def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
+    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str: ...
+    def is_orphan_deleted(self, child: TaskObservation) -> bool: ...
+    def recovery_error(self, parent: TaskPayload, reason: str) -> Any: ...
+    def recovery_partial(self, parent: TaskPayload, reason: str) -> Any: ...
+    def recovery_manual_review(self, parent: TaskPayload, reason: str) -> Any: ...
+    def recovery_terminal(self, parent: TaskPayload, reason: str) -> Any: ...
+    def recovery_from_exception(self, parent: TaskPayload, exc: Exception) -> Any: ...
 
 
 class LifecycleApplyOperations(Protocol):
     def configuration_state(self, hook: Any) -> tuple[str, str]: ...
-    def refresh_plan(self, parent: dict[str, Any], *, generation: ChainGenerationService | None) -> Any: ...
+    def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
     def execute_plan(self, plan: Any, *, verified_children: dict[str, dict[str, Any]] | None,
                      label: str, strict_uuid: bool) -> str: ...
     def terminal_plan(self, plan: Any) -> str: ...
@@ -99,8 +100,8 @@ class CallbackLifecycleRecoveryOperations:
 
     apply_parent_callback: Callable[..., tuple[Any, str]]
     plan_parent_callback: Callable[..., Any]
-    next_child_callback: Callable[..., dict[str, Any]]
-    virtual_child_callback: Callable[..., tuple[dict[str, Any] | None, str]]
+    next_child_callback: Callable[..., TaskObservation]
+    virtual_child_callback: Callable[..., tuple[VirtualExpiredChild | None, str]]
     terminal_error_callback: Callable[..., str]
     is_orphan_deleted_callback: Callable[..., bool]
     recovery_error_callback: Callable[..., Any]
@@ -144,12 +145,18 @@ class CallbackLifecycleRecoveryOperations:
 
 
 
-def _sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
+def _sort_key(row: TaskObservation) -> tuple[str, int, str, str]:
+    def value(name: str) -> object:
+        state = row.field(name)
+        if state.presence is FieldPresence.ABSENT:
+            return None
+        return getattr(state.value, "value", state.value)
+
     return (
-        str(row.get("chainID") or "").strip().casefold(),
-        lifecycle.int_or_default(row.get("link"), 0),
-        str(row.get("status") or "").strip().casefold(),
-        str(row.get("uuid") or "").strip().casefold(),
+        str(value("chainID") or "").strip().casefold(),
+        lifecycle.int_or_default(value("link"), 0),
+        str(value("status") or "").strip().casefold(),
+        str(value("uuid") or "").strip().casefold(),
     )
 
 
@@ -247,7 +254,7 @@ class LifecycleReconciliationService:
 
     def apply_parent(
         self,
-        parent: dict[str, Any],
+        parent: TaskPayload,
         *,
         operations: LifecycleApplyOperations,
         taskdata: Path,
@@ -288,23 +295,23 @@ class LifecycleReconciliationService:
                 return plan, ""
 
 
-    def candidates(self) -> list[dict[str, Any]]:
+    def candidates(self) -> list[TaskObservation]:
         rows = self.snapshot.candidate_rows()
         candidates = [
             row for row in rows
-            if str(row.get("status") or "").strip().lower() == "completed"
+            if str(getattr(row.field("status").value, "value", row.field("status").value) or "").strip().lower() == "completed"
             and lifecycle.is_orphan_completion_candidate(row)
         ]
         candidates.extend(
             row for row in rows
-            if str(row.get("status") or "").strip().lower() == "deleted"
+            if str(getattr(row.field("status").value, "value", row.field("status").value) or "").strip().lower() == "deleted"
             and lifecycle.is_orphan_deleted_chain_candidate(row)
         )
         return sorted(candidates, key=_sort_key)
 
     def plan(
         self,
-        parent: dict[str, Any],
+        parent: TaskObservation,
         *,
         hook: Any,
         generation: ChainGenerationService,
@@ -325,30 +332,34 @@ class LifecycleReconciliationService:
             generation=generation,
         )
 
-    def existing_children(self, parent: dict[str, Any], *, safe_parse_datetime: Any) -> list[dict[str, Any]]:
-        if str(parent.get("status") or "").strip().lower() == "deleted":
+    def existing_children(self, parent: TaskObservation, *, safe_parse_datetime: Any) -> tuple[TaskObservation, ...]:
+        if not isinstance(parent, TaskObservation):
+            raise TypeError("lifecycle child lookup requires a TaskObservation parent")
+        if str(getattr(parent.field("status").value, "value", parent.field("status").value) or "").strip().lower() == "deleted":
             evidence = lifecycle.deleted_chain_disposition(
                 parent,
                 safe_parse_datetime=safe_parse_datetime,
             )
             if evidence.disposition is not DeletionDisposition.EXPIRATION:
                 return []
-        chain_id = str(parent.get("chainID") or "").strip()
-        next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
+        chain_id = str(getattr(parent.field("chainID").value, "value", parent.field("chainID").value) or "").strip()
+        next_link = lifecycle.int_or_default(getattr(parent.field("link").value, "value", parent.field("link").value), 1) + 1
         if not chain_id:
-            return []
+            return ()
         result = self.repository.exact_child_slot(chain_id, next_link, refresh=True)
         if isinstance(result, Unavailable):
             raise RuntimeError(result.evidence.detail or f"child slot {chain_id}:{next_link} unavailable")
         if isinstance(result, Absent):
-            return []
+            return ()
         if isinstance(result, Found):
-            return [dict(result.value)]
+            if not isinstance(result.value, TaskObservation):
+                raise RuntimeError(f"child slot {chain_id}:{next_link} returned an untyped observation")
+            return (result.value,)
         raise RuntimeError(f"child slot {chain_id}:{next_link} returned an invalid read result")
 
     def recover_candidate(
         self,
-        parent: dict[str, Any],
+        parent: TaskPayload,
         *,
         operations: LifecycleRecoveryOperations,
         taskdata: Path | None,
@@ -397,28 +408,35 @@ class LifecycleReconciliationService:
                 break
             expiration_hops += 1
             child_short = applied_short or plan.child_short
+            plan_parent = plan.parent.to_mapping()
             try:
                 child = operations.next_child(plan.parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
                 if child is None:
-                    child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
+                    virtual_child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
                     if child_error:
-                        outcomes.append((operations.recovery_error(plan.parent, child_error), ""))
+                        outcomes.append((operations.recovery_error(plan_parent, child_error), ""))
                         break
-                    if child is None:
-                        terminal_error = operations.terminal_error(dict(plan.child or {}), recovery_at)
-                        if terminal_error:
-                            outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
+                    if virtual_child is None:
+                        if plan.child_draft is not None:
+                            child = TaskObservation.from_mapping(
+                                plan.child_draft.to_mapping(),
+                                source_query="reconcile planned child verification",
+                            )
+                            terminal_error = operations.terminal_error(child, recovery_at)
+                            if terminal_error:
+                                outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                         break
+                    child = virtual_child.observation
             except Exception as exc:
-                outcomes.append((operations.recovery_from_exception(plan.parent, exc), ""))
+                outcomes.append((operations.recovery_from_exception(plan_parent, exc), ""))
                 break
             terminal_error = operations.terminal_error(child, recovery_at)
             if terminal_error:
-                outcomes.append((operations.recovery_terminal(plan.parent, terminal_error), ""))
+                outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                 break
             if not operations.is_orphan_deleted(child):
                 break
-            current = child
+            current = child.to_mapping()
         return outcomes
 
 

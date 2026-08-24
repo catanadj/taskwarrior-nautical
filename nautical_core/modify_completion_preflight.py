@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from nautical_core.integration_models import Absent, Found, Unavailable
 from nautical_core.modify_models import CompletionPreflightContext
+from nautical_core.task_models import TaskPayload
 
 
 def completion_link_numbers_or_fail(
-    new: dict,
+    new: TaskPayload,
     *,
     coerce_int,
     max_link_number: int,
@@ -34,7 +35,7 @@ def completion_link_numbers_or_fail(
 
 
 def completion_kind_or_stop(
-    new: dict,
+    new: TaskPayload,
     now_utc,
     *,
     panel,
@@ -66,7 +67,7 @@ def completion_kind_or_stop(
     return kind
 
 
-def completion_chain_id_or_fail(new: dict, *, panel, print_task) -> str | None:
+def completion_chain_id_or_fail(new: TaskPayload, *, panel, print_task) -> str | None:
     chain_id = (new.get("chainID") or "").strip()
     if chain_id:
         return chain_id
@@ -83,7 +84,7 @@ def completion_chain_id_or_fail(new: dict, *, panel, print_task) -> str | None:
 
 
 def completion_existing_next_or_fail(
-    new: dict,
+    new: TaskPayload,
     next_no: int,
     *,
     existing_next_lookup,
@@ -121,6 +122,19 @@ def completion_existing_next_or_fail(
         existing_next = existing_next.value
     if not existing_next:
         return True
+    if hasattr(existing_next, "to_mapping"):
+        existing_next = existing_next.to_mapping()
+    if not isinstance(existing_next, dict):
+        panel(
+            "⚠ Chain lookup unavailable",
+            [
+                ("Reason", "The existing next-link record has an unsupported typed shape."),
+                ("Action", "Retry completion or run nautical reconcile before spawning."),
+            ],
+            kind="warning",
+        )
+        print_task(new)
+        return False
     ex_uuid = (existing_next.get("uuid") or "").strip()
     ex_short = short(ex_uuid)
     ex_status = ((existing_next.get("status") or "").strip() or "unknown").lower()
@@ -137,7 +151,7 @@ def completion_existing_next_or_fail(
 
 
 def completion_preflight_context(
-    new: dict,
+    new: TaskPayload,
     now_utc,
     *,
     services,

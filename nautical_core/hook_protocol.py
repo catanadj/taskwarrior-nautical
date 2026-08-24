@@ -2,7 +2,45 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
+
+if TYPE_CHECKING:
+    from .task_models import TaskObservation
+
+class _ProtocolCodecError(Exception):
+    """Fallback error type used while the standalone gate is being loaded."""
+
+
+TaskCodecError: type[Exception]
+
+
+try:
+    from .task_codec import DEFAULT_TASK_CODEC as _imported_codec, TaskCodecError as _imported_error
+    DEFAULT_TASK_CODEC = _imported_codec
+    TaskCodecError = _imported_error
+except ImportError:  # standalone hook bootstrap loader
+    DEFAULT_TASK_CODEC = None
+    TaskCodecError = _ProtocolCodecError
+
+
+def _codec():
+    """Resolve the strict codec only when a probe actually decodes a task."""
+    global DEFAULT_TASK_CODEC, TaskCodecError
+    if DEFAULT_TASK_CODEC is None:
+        try:
+            from .task_codec import DEFAULT_TASK_CODEC as _codec_a, TaskCodecError as _error_a
+            imported_codec, imported_error = _codec_a, _error_a
+        except ImportError:  # dynamically loaded protocol test/hook wrapper
+            try:
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC as _codec_b, TaskCodecError as _error_b
+                imported_codec, imported_error = _codec_b, _error_b
+            except Exception:
+                from task_codec import DEFAULT_TASK_CODEC as _codec_c, TaskCodecError as _error_c
+                imported_codec, imported_error = _codec_c, _error_c
+
+        DEFAULT_TASK_CODEC = imported_codec
+        TaskCodecError = imported_error
+    return DEFAULT_TASK_CODEC
 
 
 MAX_JSON_BYTES = 10 * 1024 * 1024
@@ -73,7 +111,8 @@ class ProtocolFailure:
 
 class HookProtocolResult:
     __slots__ = (
-        "event", "raw_bytes", "raw_text", "old", "new", "is_nautical",
+        "event", "raw_bytes", "raw_text", "old", "new", "observation",
+        "old_observation", "new_observation", "is_nautical",
         "error", "error_kind", "request", "failure",
     )
 
@@ -85,6 +124,9 @@ class HookProtocolResult:
         raw_text: str,
         old: dict | None = None,
         new: dict | None = None,
+        observation: TaskObservation | None = None,
+        old_observation: TaskObservation | None = None,
+        new_observation: TaskObservation | None = None,
         is_nautical: bool = False,
         error: str = "",
         error_kind: str = "",
@@ -96,6 +138,9 @@ class HookProtocolResult:
         self.raw_text = raw_text
         self.old = old
         self.new = new
+        self.observation = observation
+        self.old_observation = old_observation
+        self.new_observation = new_observation
         self.is_nautical = bool(is_nautical)
         self.error = str(error or "")
         self.error_kind = str(error_kind or "")
@@ -145,6 +190,17 @@ def task_has_modify_nautical_fields(task: dict | None) -> bool:
     return any(_field_has_value(task, field) for field in fields)
 
 
+def _observation_has_fields(observation: TaskObservation, fields: tuple[str, ...]) -> bool:
+    """Classify from decoded field states without thawing the row."""
+    if observation is None or not callable(getattr(observation, "field", None)):
+        return False
+    return any(
+        observation.field(field).presence.value == "value"
+        and bool(str(observation.field(field).raw_value() or "").strip())
+        for field in fields
+    )
+
+
 def is_safe_nautical_ordinary_modify(old: dict | None, new: dict | None) -> bool:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return False
@@ -190,39 +246,21 @@ def probe_on_add(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> HookPr
     if not stripped:
         return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
     try:
-        task = json.loads(stripped)
-    except Exception:
-        return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
-    if not isinstance(task, dict):
+        observation = _codec().decode_object(
+            stripped,
+            source_query="hook:on-add",
+        )
+        task = observation.to_mapping()
+    except TaskCodecError:
         return _invalid("on-add", raw_bytes, raw_text, "on-add must receive a single JSON task")
     return HookProtocolResult(
         event="on-add",
         raw_bytes=raw_bytes,
         raw_text=raw_text,
         new=task,
-        is_nautical=task_has_add_nautical_fields(task),
+        observation=observation,
+        is_nautical=_observation_has_fields(observation, _ADD_NAUTICAL_FIELDS),
     )
-
-
-def _decode_leading_json_objects(raw: str, *, max_objects: int = 2) -> tuple[list[object], int, str]:
-    decoder = json.JSONDecoder()
-    objects: list[object] = []
-    index = 0
-    length = len(raw)
-    while index < length and len(objects) < max_objects:
-        while index < length and raw[index].isspace():
-            index += 1
-        if index >= length:
-            break
-        try:
-            obj, end = decoder.raw_decode(raw, index)
-        except Exception:
-            return objects, index, "Invalid JSON input"
-        if end <= index:
-            return objects, index, "Invalid JSON input: parser made no progress"
-        objects.append(obj)
-        index = end
-    return objects, index, ""
 
 
 def _validate_modify_tasks(
@@ -230,8 +268,13 @@ def _validate_modify_tasks(
     raw_text: str,
     old: dict,
     new: dict,
+    *,
+    old_observation: TaskObservation | None = None,
+    new_observation: TaskObservation | None = None,
+    is_nautical: bool | None = None,
 ) -> HookProtocolResult:
-    is_nautical = task_has_modify_nautical_fields(old) or task_has_modify_nautical_fields(new)
+    if is_nautical is None:
+        is_nautical = task_has_modify_nautical_fields(old) or task_has_modify_nautical_fields(new)
     old_uuid = str(old.get("uuid") or "").strip()
     new_uuid = str(new.get("uuid") or "").strip()
     if not old_uuid or not new_uuid:
@@ -259,6 +302,8 @@ def _validate_modify_tasks(
         raw_text=raw_text,
         old=old,
         new=new,
+        old_observation=old_observation,
+        new_observation=new_observation,
         is_nautical=is_nautical,
     )
 
@@ -270,7 +315,11 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
     if not raw_text.strip():
         return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 
-    objects, index, decode_error = _decode_leading_json_objects(raw_text, max_objects=2)
+    observations, index, decode_error = _codec().decode_leading_rows(
+        raw_text,
+        source_query="hook:on-modify",
+        max_objects=2,
+    )
     if decode_error:
         return _invalid("on-modify", raw_bytes, raw_text, decode_error, error_kind="protocol")
     if raw_text[index:].strip():
@@ -282,15 +331,33 @@ def probe_on_modify(raw: bytes | str, *, max_bytes: int = MAX_JSON_BYTES) -> Hoo
             error_kind="protocol",
         )
 
-    if len(objects) == 1 and isinstance(objects[0], list):
-        tasks = [item for item in objects[0] if isinstance(item, dict)]
-    else:
-        tasks = [item for item in objects if isinstance(item, dict)]
+    tasks = [observation.to_mapping() for observation in observations]
 
     if len(tasks) >= 2:
-        return _validate_modify_tasks(raw_bytes, raw_text, tasks[0], tasks[-1])
+        return _validate_modify_tasks(
+            raw_bytes,
+            raw_text,
+            tasks[0],
+            tasks[-1],
+            old_observation=observations[0],
+            new_observation=observations[-1],
+            is_nautical=(
+                _observation_has_fields(observations[0], _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS)
+                or _observation_has_fields(observations[-1], _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS)
+            ),
+        )
     if len(tasks) == 1:
-        return _validate_modify_tasks(raw_bytes, raw_text, tasks[0], tasks[0])
+        return _validate_modify_tasks(
+            raw_bytes,
+            raw_text,
+            tasks[0],
+            tasks[0],
+            old_observation=observations[0],
+            new_observation=observations[0],
+            is_nautical=_observation_has_fields(
+                observations[0], _MODIFY_RECURRENCE_FIELDS + _MODIFY_CHAIN_FIELDS,
+            ),
+        )
     return _invalid("on-modify", raw_bytes, raw_text, "on-modify must receive two JSON tasks")
 
 

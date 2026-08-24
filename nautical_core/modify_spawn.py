@@ -9,12 +9,10 @@ from typing import Any, Callable
 
 @dataclass(slots=True)
 class SpawnServices:
-    prepare_spawn_child_payload: Callable[..., tuple[dict, str, str]]
+    prepare_spawn_child_payload: Callable[..., tuple[Any, str, str]]
     child_uuid_for_spawn: Callable[..., str]
     fmt_isoz: Callable[[Any], str]
     now_utc: Callable[[], Any]
-    strip_none_and_cast: Callable[[dict], dict]
-    normalise_datetime_fields: Callable[[dict], None]
     lifecycle_models: Any
     lifecycle_spawn_identity: Callable[[dict, dict], Any]
     enqueue_spawn_intent: Callable[[Any], tuple[bool, str]]
@@ -34,16 +32,15 @@ def spawn_child_atomic(
     response; this function only stages the immutable child plan.
     """
     env = os.environ.copy()
-    child_obj, _child_uuid, child_short = services.prepare_spawn_child_payload(
+    child_draft, _child_uuid, child_short = services.prepare_spawn_child_payload(
         child_task,
         parent_task_with_nextlink,
         env,
         child_uuid_for_spawn=services.child_uuid_for_spawn,
         fmt_isoz=services.fmt_isoz,
         now_utc=services.now_utc,
-        strip_none_and_cast=services.strip_none_and_cast,
-        normalise_datetime_fields=services.normalise_datetime_fields,
     )
+    child_obj = child_draft.to_mapping()
 
     lifecycle_models = services.lifecycle_models
     lifecycle_identity = services.lifecycle_spawn_identity(parent_task_with_nextlink, child_obj)
@@ -52,19 +49,19 @@ def spawn_child_atomic(
         parent_task_with_nextlink,
         parse_datetime=services.parse_datetime,
     )
-    parent_guard = {
-        "status": parent_task_with_nextlink.get("status") or "",
-        "chain": parent_task_with_nextlink.get("chain") or "",
-        "chainID": parent_task_with_nextlink.get("chainID") or "",
-        "link": parent_task_with_nextlink.get("link") or "",
-        "modified": parent_task_with_nextlink.get("modified") or "",
-        "recurrence_fingerprint": recurrence_guard,
-    }
-    lifecycle_plan = lifecycle_models.LifecyclePlan.from_mappings(
+    parent_guard = lifecycle_models.ParentGuard(
+        status=str(parent_task_with_nextlink.get("status") or ""),
+        chain=str(parent_task_with_nextlink.get("chain") or ""),
+        chain_id=str(parent_task_with_nextlink.get("chainID") or ""),
+        link=int(parent_task_with_nextlink.get("link") or 0),
+        modified=str(parent_task_with_nextlink.get("modified") or ""),
+        recurrence_fingerprint=recurrence_guard,
+    )
+    lifecycle_plan = lifecycle_models.LifecyclePlan.from_draft(
         identity=lifecycle_identity,
         action=lifecycle_models.LifecycleAction.SPAWN_CHILD,
-        parent_guard=lifecycle_models.ParentGuard.from_mapping(parent_guard),
-        child_payload=child_obj,
+        parent_guard=parent_guard,
+        draft=child_draft,
         parent_patch={"nextLink": child_short},
         expected_postconditions=("child_present", "parent_linked", "verified"),
     )

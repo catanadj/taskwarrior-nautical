@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Callable
 
+from .task_models import TaskPayload
+
 
 def render_business_calendar_displacement(
-    task: dict[str, Any],
+    task: TaskPayload,
     occurrence: date | datetime,
     *,
     core: Any,

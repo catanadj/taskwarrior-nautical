@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Mapping
+from dataclasses import dataclass, replace
 
 from .recurrence_context import RecurrenceContext
+from .task_models import NauticalTask, TaskObservation
 
 
-def normalize_recurrence_text(value: Any) -> str:
-    """Normalize optional recurrence UDAs from Taskwarrior JSON/export forms."""
+def _recurrence_text(value: object) -> str:
     text = str(value or "").strip()
-    return "" if text.casefold() == "null" else text
+    return "" if text.lower() == "null" else text
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,35 +30,42 @@ class RecurrenceSpec:
     @classmethod
     def from_task(
         cls,
-        task: Mapping[str, Any],
+        task: NauticalTask,
         *,
         context: RecurrenceContext | None = None,
     ) -> "RecurrenceSpec":
-        task_chain_id = str(task.get("chainID") or "").strip()
-        if context is not None and task_chain_id and context.chain_id != task_chain_id:
-            raise ValueError(
-                "Conflicting recurrence identities: context.chain_id does not match task.chainID."
-            )
-        recurrence_context = context or RecurrenceContext.from_task(task)
-        chain_max = task.get("chainMax")
-        if chain_max in (None, ""):
-            normalized_max = None
-        else:
-            try:
-                normalized_max = int(chain_max)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("chainMax must be an integer in a recurrence specification.") from exc
-        return cls(
+        """Build a specification from an already validated domain task."""
+        if not isinstance(task, NauticalTask):
+            raise TypeError("recurrence specification requires a validated NauticalTask")
+        spec = task.recurrence.spec
+        if not isinstance(spec, cls):
+            raise TypeError("NauticalTask recurrence does not contain a RecurrenceSpec")
+        recurrence_context = context or spec.context
+        if recurrence_context.chain_id != task.identity.chain_id.value:
+            raise ValueError("Conflicting recurrence identities: context.chain_id does not match task chainID.")
+        return replace(
+            spec,
             context=recurrence_context,
-            anchor=normalize_recurrence_text(task.get("anchor")),
-            anchor_file=normalize_recurrence_text(task.get("anchor_file")),
-            omit=normalize_recurrence_text(task.get("omit")),
-            omit_file=normalize_recurrence_text(task.get("omit_file")),
-            cp=normalize_recurrence_text(task.get("cp")),
-            anchor_mode=normalize_recurrence_text(task.get("anchor_mode") or "skip").lower() or "skip",
-            chain_max=normalized_max,
-            chain_until=normalize_recurrence_text(task.get("chainUntil")),
+            anchor=_recurrence_text(spec.anchor),
+            anchor_file=_recurrence_text(spec.anchor_file),
+            omit=_recurrence_text(spec.omit),
+            omit_file=_recurrence_text(spec.omit_file),
+            cp=_recurrence_text(spec.cp),
+            anchor_mode=str(spec.anchor_mode or "skip").strip().lower() or "skip",
+            chain_until=_recurrence_text(spec.chain_until),
         )
+
+    @classmethod
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "RecurrenceSpec":
+        """Build a recurrence specification without thawing a task mapping."""
+        if not isinstance(observation, TaskObservation):
+            raise TypeError("recurrence specification requires a TaskObservation")
+        return cls.from_task(NauticalTask.from_observation(observation), context=context)
 
     @property
     def kind(self) -> str | None:
@@ -74,4 +80,4 @@ class RecurrenceSpec:
         return self.kind is not None
 
 
-__all__ = ("RecurrenceSpec", "normalize_recurrence_text")
+__all__ = ("RecurrenceSpec",)

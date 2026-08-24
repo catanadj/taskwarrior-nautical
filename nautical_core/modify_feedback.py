@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
+
+from .task_models import TaskPayload
+from .modify_models import TaskView
 
 
 def append_next_wait_sched_rows(
     rows: list[tuple[str, str]],
-    next_task: dict[str, Any],
+    next_task: TaskView,
     next_due_utc: datetime,
     *,
     anchor_field: str = "due",
-    parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
     compare_datetimes: Callable[[datetime, datetime], int],
     format_delta: Callable[[timedelta], str],
@@ -21,8 +23,10 @@ def append_next_wait_sched_rows(
     if not (isinstance(next_due_utc, datetime) and next_due_utc):
         return
 
-    scheduled = parse_datetime(next_task.get("scheduled"))
-    wait = parse_datetime(next_task.get("wait"))
+    scheduled_value = next_task.timestamp("scheduled")
+    wait_value = next_task.timestamp("wait")
+    scheduled = scheduled_value.value if scheduled_value is not None else None
+    wait = wait_value.value if wait_value is not None else None
     anchor_label = "scheduled" if anchor_field == "scheduled" else "due"
     for field, label, value in (
         ("scheduled", "Scheduled", scheduled),
@@ -87,10 +91,9 @@ def render_cp_schedule_adjusted_panel(
 
 
 def render_explicit_timing_order_warning(
-    new: dict[str, Any],
+    new: TaskPayload,
     changed_fields: tuple[str, ...],
     *,
-    parse_datetime: Callable[[Any], Any],
     format_offset: Callable[[timedelta], str],
     panel: Callable[..., Any],
 ) -> None:
@@ -99,13 +102,8 @@ def render_explicit_timing_order_warning(
         return
 
     def parsed(field: str) -> Any:
-        value = new.get(field)
-        if not value:
-            return None
-        try:
-            return parse_datetime(value)
-        except Exception:
-            return None
+        value = new.timestamp(field)
+        return value.value if value is not None else None
 
     due = parsed("due")
     scheduled = parsed("scheduled")
@@ -216,7 +214,7 @@ def _recurrence_update_panel_rows(
 
 def render_recurrence_updated_panel(
     changes: list[tuple[str, str, str]],
-    new: dict[str, Any],
+    new: TaskPayload,
     *,
     parse_datetime: Callable[[Any], Any],
     format_local: Callable[[Any], str],
@@ -245,9 +243,11 @@ def render_recurrence_updated_panel(
 
     if any(field == "until" for field, _old, _new in changes):
         try:
-            target_field = "due" if new.get("due") else "scheduled" if new.get("scheduled") else ""
-            until_dt = parse_datetime(new.get("until"))
-            target_dt = parse_datetime(new.get(target_field)) if target_field else None
+            target_field = "due" if new.timestamp("due") else "scheduled" if new.timestamp("scheduled") else ""
+            until_value = new.timestamp("until")
+            target_value = new.timestamp(target_field) if target_field else None
+            until_dt = until_value.value if until_value else None
+            target_dt = target_value.value if target_value else None
             carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
             if carry:
                 rows.append(("Carry", carry))
@@ -256,7 +256,8 @@ def render_recurrence_updated_panel(
 
     if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
         max_link = coerce_int(new.get("chainMax"), 0)
-        deadline = parse_datetime(new.get("chainUntil"))
+        deadline_value = new.timestamp("chainUntil")
+        deadline = deadline_value.value if deadline_value else None
         if max_link:
             rows.append(("Final link", f"#{max_link}"))
         if deadline and not any(field == "chainUntil" for field, _old, _new in changes):
@@ -297,7 +298,7 @@ def render_recurrence_updated_panel(
 
 
 def recurrence_enabled_rows(
-    task: dict[str, Any],
+    task: TaskPayload,
     source: str,
     *,
     describe_anchor: Callable[[str], str],
@@ -467,7 +468,7 @@ def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
 
 def format_line_preview(
     link_no: int,
-    task: dict,
+    task: TaskPayload,
     child_due_utc: Any,
     child_short: str,
     now_utc: Any,
@@ -481,7 +482,6 @@ def format_line_preview(
     minimal: bool = False,
     core: Any,
     format_local,
-    parse_datetime,
     on_time_delta,
     human_delta,
 ) -> str:
@@ -491,8 +491,10 @@ def format_line_preview(
     lead = f"#{link_no} ✓"
     if minimal:
         return " ".join((lead, f"next {next_glyph}", due_local)).strip()
-    cur_due = parse_datetime(task.get("due"))
-    cur_end = parse_datetime(task.get("end"))
+    due_value = task.timestamp("due")
+    end_value = task.timestamp("end")
+    cur_due = due_value.value if due_value is not None else None
+    cur_end = end_value.value if end_value is not None else None
     delta_text = core.strip_rich_markup(on_time_delta(cur_due, cur_end) or "").strip()
     if delta_text.startswith("(") and delta_text.endswith(")"):
         delta_text = delta_text[1:-1].strip()
@@ -521,7 +523,7 @@ def format_line_preview(
     return line.strip()
 
 
-def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
+def _pretty_basis_cp(task: TaskPayload, meta: dict, *, parse_cp_duration, parse_cp_sequence=None, cp_sequence_interval_for_link=None) -> str:
     if callable(cp_sequence_interval_for_link):
         td = cp_sequence_interval_for_link(
             task.get("cp") or "",
@@ -554,12 +556,13 @@ def _pretty_basis_cp(task: dict, meta: dict, *, parse_cp_duration, parse_cp_sequ
     return "Preserve wall clock (period is multiple of 24h)"
 
 
-def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) -> str:
+def _pretty_basis_anchor(meta: Mapping[str, Any], task: TaskPayload, *, fmt_dt_local) -> str:
     mode = (meta.get("mode") or "skip").lower()
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)
     target_field = "scheduled" if meta.get("target_field") == "scheduled" else "due"
-    due0 = parse_dt_any(task.get("due") or task.get("scheduled"))
+    typed_due = task.timestamp("due") or task.timestamp("scheduled")
+    due0 = typed_due.value if typed_due is not None else None
     due_s = fmt_dt_local(due0) if due0 else f"(no {target_field})"
     if mode == "skip":
         return "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)"
@@ -572,7 +575,7 @@ def _pretty_basis_anchor(meta: dict, task: dict, *, parse_dt_any, fmt_dt_local) 
     return "ALL — Next anchor after completion"
 
 
-def _anchor_summary(task: dict) -> tuple[str, str]:
+def _anchor_summary(task: TaskPayload) -> tuple[str, str]:
     anchor_expr = str(task.get("anchor") or "").strip()
     anchor_file = str(task.get("anchor_file") or "").strip()
     if anchor_expr and anchor_file:
@@ -602,7 +605,7 @@ def _omit_pattern_row(core, expr: str) -> tuple[str, str]:
     return "Omit", expr
 
 
-def _anchor_mode_tag(new: dict) -> str:
+def _anchor_mode_tag(new: TaskPayload) -> str:
     return {
         "skip": "[cyan]SKIP[/]",
         "all": "[yellow]ALL[/]",
@@ -610,7 +613,7 @@ def _anchor_mode_tag(new: dict) -> str:
     }.get((new.get("anchor_mode") or "skip").lower(), "[cyan]SKIP[/]")
 
 
-def _anchor_feedback_natural(core, task: dict, dnf) -> str:
+def _anchor_feedback_natural(core, task: TaskPayload, dnf) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_raw, omit_natural, _omit_warns, omit_file = _anchor_omit_summary(core, task)
     omit_parts = []
@@ -627,7 +630,7 @@ def _anchor_feedback_natural(core, task: dict, dnf) -> str:
     return natural
 
 
-def _anchor_omit_summary(core, task: dict) -> tuple[str | None, str | None, list[str], str | None]:
+def _anchor_omit_summary(core, task: TaskPayload) -> tuple[str | None, str | None, list[str], str | None]:
     omit_raw = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip() or None
     if not omit_raw:
@@ -721,7 +724,7 @@ def _append_final_rows(
     fb.append(("Last occurrence", f"{fmt_dt_local(last)}  ({human_delta(now_utc, last, True)})"))
 
 
-def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: dict, until_dt, *, core) -> None:
+def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: TaskPayload, until_dt, *, core) -> None:
     chain_max = core.coerce_int(task.get("chainMax"), 0)
     if chain_max:
         fb.append(("Chain cap", f"#{chain_max}"))
@@ -765,22 +768,20 @@ def _lifecycle_result_label(lifecycle_result) -> str:
     }.get(state, state.replace("_", " ").title() if state else "")
 
 
-def _child_expiration(core, child: dict):
-    try:
-        return core.parse_dt_any(child.get("until"))
-    except Exception:
-        return None
+def _child_expiration(child):
+    typed_until = child.timestamp("until")
+    return typed_until.value if typed_until is not None else None
 
 
 def _append_next_expiration_row(
     fb: list[tuple[str, object]],
-    child: dict,
+    child: TaskPayload,
     child_due,
     *,
     core,
     target_field: str = "due",
 ) -> None:
-    expires = _child_expiration(core, child)
+    expires = _child_expiration(child)
     if expires is None:
         return
     try:
@@ -993,7 +994,7 @@ def render_anchor_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="anchor",
             minimal=(mode == "minimal"),
         )
@@ -1014,7 +1015,7 @@ def render_anchor_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="anchor",
             minimal=False,
         )
@@ -1031,7 +1032,7 @@ def render_anchor_completion_feedback(
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
                 child_due=feedback.child_due,
-                child_expires=_child_expiration(core, feedback.child),
+                child_expires=_child_expiration(feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
                 lifecycle_result=feedback.lifecycle_result,
@@ -1075,7 +1076,7 @@ def render_anchor_completion_feedback(
         fb.append(("Natural", _anchor_feedback_natural(core, feedback.new, feedback.dnf)))
     elif anchor_label == "Anchor file":
         fb.append(("Natural", f"Dates from {expr_str.split('@', 1)[0]}"))
-    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, parse_dt_any=core.parse_dt_any, fmt_dt_local=core.fmt_dt_local)
+    basis_text = _pretty_basis_anchor(feedback.meta, feedback.new, fmt_dt_local=core.fmt_dt_local)
     if basis_text != "SKIP — Next anchor after completion (multi-time: between slots counts as previous slot)":
         fb.append(("Basis", basis_text))
     fb.append(("Root", format_root_and_age(feedback.new, feedback.now_utc)))
@@ -1168,7 +1169,7 @@ def render_cp_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="cp",
             minimal=(mode == "minimal"),
         )
@@ -1189,7 +1190,7 @@ def render_cp_completion_feedback(
             cap_no=feedback.cap_no,
             until_dt=feedback.until_dt,
             until_no=feedback.until_cap_no,
-            child_until_dt=_child_expiration(core, feedback.child),
+            child_until_dt=_child_expiration(feedback.child),
             kind="cp",
             minimal=False,
         )
@@ -1206,7 +1207,7 @@ def render_cp_completion_feedback(
                 base_no=feedback.base_no,
                 until_dt=feedback.until_dt,
                 child_due=feedback.child_due,
-                child_expires=_child_expiration(core, feedback.child),
+                child_expires=_child_expiration(feedback.child),
                 expiration_basis=("scheduled" if feedback.meta.get("target_field") == "scheduled" else "due"),
                 last_occurrence=_effective_last_occurrence(feedback.finals),
                 lifecycle_result=feedback.lifecycle_result,
@@ -1316,8 +1317,8 @@ def render_cp_completion_feedback(
 
 def orchestrate_anchor_completion_feedback(
     *,
-    new: dict,
-    child: dict,
+    new: TaskPayload,
+    child: TaskPayload,
     child_due,
     child_short: str,
     next_no: int,
@@ -1359,7 +1360,7 @@ def orchestrate_anchor_completion_feedback(
         core=core,
         panel=panel,
     )
-    panel_warnings = panel_diagnostics.panel_warnings(core, new)
+    panel_warnings = panel_diagnostics.panel_warnings(core, modify_models.TaskView.from_mapping(new))
     if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
         integrity_warnings.extend(panel_warnings)
@@ -1392,8 +1393,8 @@ def orchestrate_anchor_completion_feedback(
 
 def orchestrate_cp_completion_feedback(
     *,
-    new: dict,
-    child: dict,
+    new: TaskPayload,
+    child: TaskPayload,
     child_due,
     child_short: str,
     next_no: int,
@@ -1425,7 +1426,11 @@ def orchestrate_cp_completion_feedback(
             deferred_spawn=deferred_spawn,
             spawn_intent_id=spawn_intent_id,
         )
-    panel_warnings = panel_diagnostics.panel_warnings(core, new, include_files=False)
+    panel_warnings = panel_diagnostics.panel_warnings(
+        core,
+        modify_models.TaskView.from_mapping(new),
+        include_files=False,
+    )
     if panel_warnings:
         integrity_warnings = list(integrity_warnings or [])
         integrity_warnings.extend(panel_warnings)

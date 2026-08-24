@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from .integration_context import IntegrationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
+from .task_models import TaskObservation, TaskPayload
+from .task_changes import TaskTransition
 
 
 @dataclass(slots=True)
@@ -22,15 +24,19 @@ class HookRuntimeContext:
 @dataclass(slots=True)
 class OnAddRequest:
     runtime: HookRuntimeContext
-    task: dict[str, Any]
+    task: TaskPayload
+    observation: TaskObservation | None = None
     prof: Any | None = None
 
 
 @dataclass(slots=True)
 class OnModifyRequest:
     runtime: HookRuntimeContext
-    old: dict[str, Any]
-    new: dict[str, Any]
+    old: TaskPayload
+    new: TaskPayload
+    old_observation: TaskObservation | None = None
+    new_observation: TaskObservation | None = None
+    transition: TaskTransition | None = None
 
 
 @dataclass(slots=True)
@@ -40,7 +46,8 @@ class OnExitRequest:
 
 @dataclass(slots=True)
 class OnAddContext:
-    task: dict[str, Any]
+    task: TaskPayload
+    observation: TaskObservation | None
     now_utc: datetime
     now_local: datetime
     cp_str: str
@@ -77,17 +84,18 @@ def build_hook_runtime_context(
 
 
 def build_on_add_context(
-    task: dict[str, Any],
+    task: TaskPayload,
     now_utc: datetime,
     now_local: datetime,
     *,
     validate_kind_not_conflicting: Callable[[str, str, str], tuple[bool, str]],
-    kind_and_defaults_on_add: Callable[[dict[str, Any], str, str, str], tuple[str | None, str]],
-    validate_chain_limits_on_add: Callable[[dict[str, Any], datetime], datetime | None],
+    kind_and_defaults_on_add: Callable[[TaskPayload, str, str, str], tuple[str | None, str]],
+    validate_chain_limits_on_add: Callable[[TaskPayload, datetime], datetime | None],
     due_context_on_add: Callable[
-        [dict[str, Any], datetime],
+        [TaskPayload, datetime],
         tuple[bool, str, datetime, str | None, Any, tuple[int, int]],
     ],
+    observation: TaskObservation | None = None,
 ) -> OnAddContext:
     cp_str = (task.get('cp') or '').strip()
     anchor_str = (task.get('anchor') or '').strip()
@@ -118,6 +126,7 @@ def build_on_add_context(
         ) = due_context_on_add(task, now_utc)
     return OnAddContext(
         task=task,
+        observation=observation,
         now_utc=now_utc,
         now_local=now_local,
         cp_str=cp_str,
@@ -135,12 +144,33 @@ def build_on_add_context(
     )
 
 
-def build_on_add_request(*, runtime: HookRuntimeContext, task: dict[str, Any], prof=None) -> OnAddRequest:
-    return OnAddRequest(runtime=runtime, task=task, prof=prof)
+def build_on_add_request(
+    *, runtime: HookRuntimeContext, task: TaskPayload, observation: TaskObservation | None = None, prof=None,
+) -> OnAddRequest:
+    return OnAddRequest(runtime=runtime, task=task, observation=observation, prof=prof)
 
 
-def build_on_modify_request(*, runtime: HookRuntimeContext, old: dict[str, Any], new: dict[str, Any]) -> OnModifyRequest:
-    return OnModifyRequest(runtime=runtime, old=old, new=new)
+def build_on_modify_request(
+    *,
+    runtime: HookRuntimeContext,
+    old: TaskPayload,
+    new: TaskPayload,
+    old_observation: TaskObservation | None = None,
+    new_observation: TaskObservation | None = None,
+) -> OnModifyRequest:
+    transition = (
+        TaskTransition.from_observations(old_observation, new_observation)
+        if old_observation is not None and new_observation is not None
+        else None
+    )
+    return OnModifyRequest(
+        runtime=runtime,
+        old=old,
+        new=new,
+        old_observation=old_observation,
+        new_observation=new_observation,
+        transition=transition,
+    )
 
 
 def build_on_exit_request(*, runtime: HookRuntimeContext) -> OnExitRequest:

@@ -10,6 +10,8 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from .task_models import TaskObservation, TaskPayload
+
 
 def _median(values: list[float]) -> float | None:
     if not values:
@@ -23,12 +25,12 @@ def _compact_delta(delta: timedelta, format_delta: Callable[[timedelta], str]) -
 
 
 def sort_chain_for_analytics(
-    chain: list[dict],
+    chain: list[TaskObservation],
     *,
     coerce_int: Callable[[Any, Any], int | None],
     parse_datetime: Callable[[Any], datetime | None],
-) -> list[dict]:
-    def link_sort_key(obj: dict) -> tuple[int, Any]:
+) -> list[TaskObservation]:
+    def link_sort_key(obj: TaskObservation) -> tuple[int, Any]:
         link = coerce_int(obj.get("link"), None)
         if link is not None:
             return (0, link)
@@ -42,7 +44,7 @@ def sort_chain_for_analytics(
 
 
 def lateness_stats(
-    chain: list[dict],
+    chain: list[TaskObservation],
     *,
     parse_datetime: Callable[[Any], datetime | None],
     tol_secs: int = 60,
@@ -82,9 +84,9 @@ def lateness_stats(
 
 
 def chain_health_advice(
-    chain: list[dict],
+    chain: list[TaskObservation],
     kind: str,
-    task: dict,
+    task: TaskPayload,
     *,
     core: Any,
     parse_datetime: Callable[[Any], datetime | None],
@@ -105,7 +107,7 @@ def chain_health_advice(
         item for item in ordered
         if str(item.get("status") or "").strip().lower() == "completed"
     ]
-    completed_with_dates: list[dict] = []
+    completed_with_dates: list[TaskObservation] = []
     deltas: list[float] = []
     for item in completed:
         due = parse_datetime(item.get("due"))
@@ -216,7 +218,7 @@ def chain_health_advice(
 
 
 def chain_integrity_warnings(
-    chain: list[dict],
+    chain: list[TaskObservation],
     *,
     expected_chain_id: str | None = None,
     coerce_int: Callable[[Any, Any], int | None],
@@ -225,12 +227,10 @@ def chain_integrity_warnings(
     if not isinstance(chain, list) or not chain:
         return []
     warnings: list[str] = []
-    short_map: dict[str, dict] = {}
-    link_map: dict[int, dict] = {}
+    short_map: dict[str, TaskObservation] = {}
+    link_map: dict[int, TaskObservation] = {}
     missing_link: list[str] = []
     for item in chain:
-        if not isinstance(item, dict):
-            continue
         uid = item.get("uuid")
         if uid:
             short_map[short(uid)] = item

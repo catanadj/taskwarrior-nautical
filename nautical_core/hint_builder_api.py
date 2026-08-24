@@ -31,8 +31,19 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                 astronomy_config=core.get("ASTRONOMY_CONFIG"),
                 anchor_file_dir=core.get("ANCHOR_FILE_DIR", ""),
             )
+            observation = core["_import_sibling"]("task_codec").DEFAULT_TASK_CODEC.decode_row(
+                {
+                    "uuid": "00000000-0000-4000-8000-000000000001",
+                    "status": "pending",
+                    "link": 1,
+                    "chainID": "preview",
+                    "anchor": anchor,
+                },
+                source_query="hint builder",
+            )
+            task_model = core["_import_sibling"]("task_models").NauticalTask.from_observation(observation)
             return scheduler_service.SchedulerService.from_task(
-                {"chainID": "preview", "anchor": anchor},
+                task_model,
                 context=context,
             )
 

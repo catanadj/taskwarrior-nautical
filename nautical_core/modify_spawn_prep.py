@@ -5,7 +5,6 @@ import re
 import uuid
 
 
-_TW_JISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
 
 
@@ -27,36 +26,6 @@ def sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
             payload.pop(name, None)
             removed.add(name)
     return removed
-
-
-def normalise_datetime_fields(obj: dict) -> None:
-    """Use Taskwarrior's compact UTC format for imported datetime fields."""
-    def to_tw_compact_isoz(value: str) -> str:
-        if isinstance(value, str) and _TW_JISO.fullmatch(value):
-            return value.replace("-", "").replace(":", "")
-        return value
-
-    for key in ("entry", "modified", "due", "end", "wait", "until", "scheduled"):
-        if key in obj and obj[key]:
-            obj[key] = to_tw_compact_isoz(obj[key])
-    if isinstance(obj.get("annotations"), list):
-        for annotation in obj["annotations"]:
-            if isinstance(annotation, dict) and annotation.get("entry"):
-                annotation["entry"] = to_tw_compact_isoz(annotation["entry"])
-
-
-def strip_none_and_cast(obj: dict) -> dict:
-    out = {}
-    for key, value in obj.items():
-        if value is None:
-            continue
-        if key in ("link", "chainMax"):
-            try:
-                value = int(value)
-            except Exception:
-                pass
-        out[key] = value
-    return out
 
 
 def categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
@@ -136,9 +105,10 @@ def prepare_spawn_child_payload(
     child_uuid_for_spawn,
     fmt_isoz,
     now_utc,
-    strip_none_and_cast,
-    normalise_datetime_fields,
-) -> tuple[dict, str, str]:
+) -> tuple[object, str, str]:
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.task_models import NauticalTask, TaskDraft
+
     parent_chain_id = str((parent_task or {}).get("chainID") or "").strip()
     child_chain_id = str(child_task.get("chainID") or "").strip()
     if parent_task is not None and not parent_chain_id:
@@ -158,109 +128,8 @@ def prepare_spawn_child_payload(
         child_obj["modified"] = child_obj["entry"]
 
     child_short = child_uuid[:8]
-    child_obj = strip_none_and_cast(child_obj)
-    normalise_datetime_fields(child_obj)
-    return child_obj, child_uuid, child_short
-
-
-def build_child_from_parent(
-    parent: dict,
-    child_due_utc,
-    child_field: str,
-    next_link_no: int,
-    parent_short: str,
-    kind: str,
-    cpmax: int,
-    until_dt,
-    *,
-    reserved_drop,
-    reserved_override,
-    debug_wait_sched: bool,
-    clear_wait_sched_debug,
-    fmt_isoz,
-    now_utc,
-    carry_relative_datetime,
-    carry_native_until,
-    recurrence_anchor_field,
-    configured_recurrence_uda_fields,
-) -> dict:
-    parent_chain = str(parent.get("chainID") or "").strip()
-    if not parent_chain:
-        raise SpawnIdentityError()
-    child = {k: v for k, v in parent.items() if k not in reserved_drop}
-    if debug_wait_sched:
-        clear_wait_sched_debug()
-    for key in reserved_override:
-        child.pop(key, None)
-    child.update(
-        {
-            "status": "pending",
-            "entry": fmt_isoz(now_utc()),
-            "chain": "on",
-            "prevLink": parent_short,
-            "link": next_link_no,
-        }
+    child_obj = DEFAULT_TASK_CODEC.prepare_task_import_mapping(child_obj)
+    child_task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(child_obj, source_query="hook child import")
     )
-    parent_anchor_field = recurrence_anchor_field(parent)
-    if child_field == "scheduled":
-        child.pop("due", None)
-        child["scheduled"] = fmt_isoz(child_due_utc)
-    else:
-        child["due"] = fmt_isoz(child_due_utc)
-    if kind in {"anchor", "anchor_file"}:
-        child["anchor"] = parent.get("anchor")
-        child["anchor_file"] = parent.get("anchor_file")
-        parent_mode = parent.get("anchor_mode") or "skip"
-        child["anchor_mode"] = (
-            "all" if str(parent_mode).strip().lower() == "flex" else parent_mode
-        )
-        child.pop("cp", None)
-    else:
-        child["cp"] = parent.get("cp")
-        child.pop("anchor", None)
-        child.pop("anchor_file", None)
-        child.pop("anchor_mode", None)
-
-    carry_relative_datetime(
-        parent,
-        child,
-        child_due_utc,
-        "wait",
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_field,
-    )
-    if child_field != "scheduled":
-        carry_relative_datetime(
-            parent,
-            child,
-            child_due_utc,
-            "scheduled",
-            parent_anchor_field=parent_anchor_field,
-            child_anchor_field=child_field,
-        )
-    carry_native_until(
-        parent,
-        child,
-        child_due_utc,
-        kind,
-        parent_anchor_field=parent_anchor_field,
-        child_anchor_field=child_field,
-    )
-    for uda_field in configured_recurrence_uda_fields(parent):
-        carry_relative_datetime(
-            parent,
-            child,
-            child_due_utc,
-            uda_field,
-            parent_anchor_field=parent_anchor_field,
-            child_anchor_field=child_field,
-        )
-
-    if cpmax:
-        child["chainMax"] = int(cpmax)
-    if until_dt:
-        child["chainUntil"] = fmt_isoz(until_dt)
-
-    child["chainID"] = parent_chain
-
-    return child
+    return TaskDraft.from_task(child_task), child_uuid, child_short

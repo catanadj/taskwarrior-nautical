@@ -4,9 +4,12 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from .task_models import TaskPayload
+
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import DeletionEvidence, LifecycleEvent
 from nautical_core.modify_lifecycle import apply_terminal_transition
+from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)
@@ -16,7 +19,7 @@ class ExpirationServices:
     safe_parse_datetime: Any
     compute_anchor_child_due: Any
     compute_cp_child_due: Any
-    build_child_from_parent: Any
+    build_child_draft: Any
     spawn_child_atomic: Any
     panel: Any
     short: Any
@@ -36,7 +39,7 @@ class DeletedModifyServices:
     recovery_warning: Any
 
 
-def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
+def has_expiration_evidence(task: TaskPayload, *, safe_parse_datetime) -> bool:
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
         end_dt, end_err = safe_parse_datetime(task.get("end"))
@@ -51,15 +54,22 @@ def has_expiration_evidence(task: dict, *, safe_parse_datetime) -> bool:
         return False
 
 
-def classify_deleted_task(task: dict, *, services: ExpirationServices) -> DeletionEvidence:
+def classify_deleted_task(
+    task: TaskPayload,
+    *,
+    services: ExpirationServices,
+    observation: Any = None,
+) -> DeletionEvidence:
     """Return the deletion disposition without turning unavailable evidence into manual stop."""
+    if observation is None:
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify deletion classification")
     return services.reconcile.deleted_chain_disposition(
-        task,
+        observation,
         safe_parse_datetime=services.safe_parse_datetime,
     )
 
 
-def render_recovery_warning(task: dict, reason: str, *, services: ExpirationServices) -> None:
+def render_recovery_warning(task: TaskPayload, reason: str, *, services: ExpirationServices) -> None:
     services.panel(
         "⚠ Nautical expiration recovery deferred",
         [
@@ -72,7 +82,7 @@ def render_recovery_warning(task: dict, reason: str, *, services: ExpirationServ
 
 
 def _render_recovery_panel(
-    task: dict,
+    task: TaskPayload,
     plan,
     *,
     services: ExpirationServices,
@@ -88,7 +98,8 @@ def _render_recovery_panel(
     if plan.child_due is not None:
         next_label = "Blocked next" if plan.action == "legitimate_final" else "Next"
         rows.append((next_label, services.core.fmt_dt_local(plan.child_due)))
-    child_until = plan.child.get("until") if isinstance(plan.child, dict) else None
+    child_draft = plan.child_draft
+    child_until = child_draft.field_value("until") if child_draft is not None else None
     child_until_dt, child_until_err = services.safe_parse_datetime(child_until)
     if child_until_dt is not None and not child_until_err:
         if plan.child_due is not None:
@@ -113,10 +124,19 @@ def _render_recovery_panel(
     services.panel("⌛ Nautical occurrence expired", rows, kind=panel_kind)
 
 
-def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -> bool:
+def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServices) -> bool:
     reconcile = services.reconcile
+    try:
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            task,
+            source_query="on-modify expiration recovery",
+        )
+    except Exception as exc:
+        services.diag(f"expiration recovery task decode failed: {exc}")
+        render_recovery_warning(task, "The expired task could not be validated for recovery.", services=services)
+        return True
     if not reconcile.is_orphan_expiration_candidate(
-        task,
+        observation,
         safe_parse_datetime=services.safe_parse_datetime,
     ):
         return False
@@ -126,9 +146,9 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
         _safe_parse_datetime=services.safe_parse_datetime,
         _compute_anchor_child_due=services.compute_anchor_child_due,
         _compute_cp_child_due=services.compute_cp_child_due,
-        _build_child_from_parent=services.build_child_from_parent,
+        _build_child_draft=services.build_child_draft,
     )
-    plan = reconcile.plan_recovery_decision(task, existing_children=[], hook=plan_hook)
+    plan = reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook)
 
     if plan.action == "legitimate_final":
         apply_terminal_transition(task, LifecycleEvent.EXPIRE)
@@ -139,13 +159,13 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
             result="[yellow]Chain finished at configured limit[/]",
         )
         return True
-    if plan.action != "spawn" or not plan.child:
+    if plan.action != "spawn" or plan.child_draft is None:
         render_recovery_warning(task, plan.reason, services=services)
         return True
 
     try:
         child_short, _stripped, verified, deferred, reason, _intent_id = services.spawn_child_atomic(
-            plan.child,
+            plan.child_draft.to_mapping(),
             task,
         )
     except Exception as exc:
@@ -172,19 +192,39 @@ def handle_expired_deleted_modify(task: dict, *, services: ExpirationServices) -
 
 
 def handle_deleted_modify(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     *,
     services: DeletedModifyServices,
+    transition: Any = None,
 ) -> None:
     """Classify one deleted pending task and converge its chain state."""
-    if str(old.get("status") or "").strip().lower() != "pending":
+    old_status = (
+        transition.old.field("status").raw_value()
+        if transition is not None
+        else old.get("status")
+    )
+    if str(old_status or "").strip().lower() != "pending":
         return
-    if not ((old.get("chainID") or new.get("chainID") or "").strip()):
+    old_chain_id = (
+        transition.old.field("chainID").raw_value()
+        if transition is not None
+        else old.get("chainID")
+    )
+    new_chain_id = (
+        transition.new.field("chainID").raw_value()
+        if transition is not None
+        else new.get("chainID")
+    )
+    if not ((old_chain_id or new_chain_id or "").strip()):
         return
     expiration = services.expiration
     try:
-        evidence = classify_deleted_task(new, services=expiration)
+        evidence = classify_deleted_task(
+            new,
+            services=expiration,
+            observation=(transition.new if transition is not None else None),
+        )
         disposition = evidence.disposition.value
         disposition_reason = evidence.reason
     except Exception as exc:

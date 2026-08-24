@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from .task_models import FieldPresence, TaskObservation
+
 
 @dataclass(frozen=True, slots=True)
 class RecurrenceContext:
@@ -44,6 +46,20 @@ class RecurrenceContext:
         """Build context, with any non-chain fallback requiring explicit opt-in."""
         chain_id = task.get("chainID") or fallback_chain_id or ""
         return cls(chain_id=str(chain_id), **kwargs)
+
+    @classmethod
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        **kwargs: Any,
+    ) -> "RecurrenceContext":
+        """Build scheduling context directly from an immutable observation."""
+        if not isinstance(observation, TaskObservation):
+            raise TypeError("recurrence context requires a TaskObservation")
+        state = observation.field("chainID")
+        value = state.value if state.presence is FieldPresence.VALUE else ""
+        chain_id = getattr(value, "value", value)
+        return cls(chain_id=str(chain_id or ""), **kwargs)
 
 
 __all__ = ("RecurrenceContext",)

@@ -51,7 +51,7 @@ from .lifecycle_models import (
     LifecycleIdentity,
     LifecyclePlan,
 )
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
 from .lifecycle_outbox import (
     LifecycleOutboxRecord,
     LifecycleOutboxRepository,
@@ -188,22 +188,29 @@ def _mutation_guard(plan: LifecyclePlan, *, mutation_epoch: int) -> MutationGuar
 
 
 def _child_import_payload(plan: LifecyclePlan) -> ChildImportPayload | None:
+    from .task_codec import DEFAULT_TASK_CODEC
+    from .task_models import NauticalTask, TaskDraft
+
     child = plan.child_dict()
     if not child:
         return None
     for field in ("anchor", "anchor_file", "omit", "omit_file", "cp", "chainMax", "chainUntil", "bc"):
         if field not in child:
             continue
-        value = normalize_recurrence_text(child.get(field))
+        value = TaskCodec.normalize_text(child.get(field))
         if value:
             child[field] = value
         else:
             child.pop(field, None)
     if "anchor_mode" in child:
-        child["anchor_mode"] = normalize_recurrence_text(child.get("anchor_mode")) or "skip"
+        child["anchor_mode"] = TaskCodec.normalize_text(child.get("anchor_mode")) or "skip"
     try:
-        return ChildImportPayload.from_mapping(child, parent_uuid=plan.identity.parent_uuid)
-    except IntegrationContractError:
+        task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(child, source_query="lifecycle child import")
+        )
+        draft = TaskDraft.from_task(task)
+        return ChildImportPayload.from_draft(draft, parent_uuid=plan.identity.parent_uuid)
+    except (IntegrationContractError, TypeError, ValueError):
         return None
 
 
@@ -229,7 +236,9 @@ def _update_parent_payload(plan: LifecyclePlan) -> MetadataRepairPayload | None:
     if not updates:
         return None
     try:
-        return MetadataRepairPayload.from_mapping(plan.identity.parent_uuid, updates)
+        from .integration_models import _freeze_pairs
+
+        return MetadataRepairPayload(plan.identity.parent_uuid, _freeze_pairs(updates))
     except IntegrationContractError:
         return None
 

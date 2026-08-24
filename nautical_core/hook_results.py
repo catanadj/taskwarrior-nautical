@@ -7,6 +7,11 @@ import time
 from typing import Any, Callable
 from dataclasses import dataclass
 
+try:
+    from .task_codec import DEFAULT_TASK_CODEC
+except ImportError:  # standalone hook bootstrap loader
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
+
 
 @dataclass(slots=True)
 class TaskHookResponse:
@@ -39,7 +44,7 @@ def emit_passthrough_json(task: Any) -> None:
 def emit_task_json(task: dict[str, Any], *, sanitize: bool = False, core=None, prof=None) -> None:
     t_out = time.perf_counter()
     if sanitize and core is not None and getattr(core, 'SANITIZE_UDA', False):
-        core.sanitize_task_strings(task, max_len=core.SANITIZE_UDA_MAX_LEN)
+        DEFAULT_TASK_CODEC.sanitize_task_mapping(task, max_len=core.SANITIZE_UDA_MAX_LEN)
     emit_passthrough_json(task)
     if prof is not None:
         prof.add_ms('stdout:emit', (time.perf_counter() - t_out) * 1000.0)
@@ -54,29 +59,14 @@ def read_stdin_text(max_bytes: int) -> tuple[bytes, str]:
 def decode_latest_task_from_raw(raw: str) -> dict | None:
     if not isinstance(raw, str) or not raw.strip():
         return None
-    decoder = json.JSONDecoder()
-    idx = 0
-    n = len(raw)
-    last_task = None
-    while idx < n:
-        while idx < n and raw[idx].isspace():
-            idx += 1
-        if idx >= n:
-            break
-        try:
-            obj, end = decoder.raw_decode(raw, idx)
-        except Exception:
-            break
-        if isinstance(obj, dict):
-            last_task = obj
-        elif isinstance(obj, list):
-            arr = [x for x in obj if isinstance(x, dict)]
-            if arr:
-                last_task = arr[-1]
-        if end <= idx:
-            break
-        idx = end
-    return last_task if isinstance(last_task, dict) else None
+    observations, _index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
+        raw,
+        source_query="hook:panic-passthrough",
+        max_objects=2,
+    )
+    if error or not observations:
+        return None
+    return observations[-1].to_mapping()
 
 
 def redirect_stdout_to_devnull() -> None:
@@ -103,13 +93,6 @@ def panic_passthrough(
         if task is None:
             try:
                 task = globals()["decode_latest_task_from_raw"](raw_input_text)
-            except Exception:
-                task = None
-        if task is None:
-            try:
-                parsed = json.loads(raw_input_text.strip())
-                if isinstance(parsed, dict):
-                    task = parsed
             except Exception:
                 task = None
     try:

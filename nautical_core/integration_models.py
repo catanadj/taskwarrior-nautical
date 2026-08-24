@@ -420,15 +420,19 @@ class ChildImportPayload:
         object.__setattr__(self, "fields", fields)
 
     @classmethod
-    def from_mapping(cls, payload: dict[str, object], *, parent_uuid: str) -> "ChildImportPayload":
-        if not isinstance(payload, dict):
-            raise IntegrationContractError("child import payload must be an object")
-        child_uuid = _required_text(payload.get("uuid"), "child UUID")
-        chain_id = _required_text(payload.get("chainID"), "child chainID")
-        target_link = _coerce_payload_link(payload.get("link"))
-        if target_link is None:
-            raise IntegrationContractError("child import payload requires an integer link")
-        return cls(parent_uuid, child_uuid, chain_id, target_link, _freeze_pairs(payload))
+    def from_draft(cls, draft: object, *, parent_uuid: str) -> "ChildImportPayload":
+        """Create an import payload only from a validated child draft."""
+        from .task_models import TaskDraft
+
+        if not isinstance(draft, TaskDraft):
+            raise IntegrationContractError("child import requires a validated TaskDraft")
+        return cls(
+            parent_uuid=parent_uuid,
+            child_uuid=draft.identity.task_uuid.value,
+            chain_id=draft.identity.chain_id.value,
+            target_link=draft.identity.link.value,
+            fields=_freeze_pairs(draft.to_mapping()),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {key: _thaw(value) for key, value in self.fields}
@@ -551,18 +555,6 @@ class MetadataRepairPayload:
         object.__setattr__(self, "updates", updates)
         object.__setattr__(self, "expected", expected)
 
-    @classmethod
-    def from_mapping(
-        cls,
-        task_uuid: str,
-        updates: dict[str, object],
-        *,
-        expected: dict[str, object] | None = None,
-    ) -> "MetadataRepairPayload":
-        if not isinstance(updates, dict):
-            raise IntegrationContractError("metadata repair updates must be an object")
-        return cls(task_uuid, _freeze_pairs(updates), _freeze_pairs(expected or {}))
-
     def to_dict(self) -> dict[str, object]:
         return {key: _thaw(value) for key, value in self.updates}
 
@@ -588,6 +580,125 @@ class MutationRequest:
     operation: MutationOperation
     guard: MutationGuard
     payload: MutationPayload
+
+    @classmethod
+    def child_import(cls, guard: MutationGuard, draft: object) -> "MutationRequest":
+        """Build a guarded child-import request from a validated TaskDraft."""
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("child import requires a MutationGuard")
+        payload = ChildImportPayload.from_draft(draft, parent_uuid=guard.task_uuid)
+        return cls(MutationOperation.CHILD_IMPORT, guard, payload)
+
+    @classmethod
+    def parent_link(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a guarded parent-link request from a typed TaskPatch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("parent link requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.PARENT_LINK:
+            raise IntegrationContractError("parent link requires a PARENT_LINK TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("parent-link patch target differs from guard")
+        values = patch.set_values()
+        child_short = str(values.get("nextLink") or "").strip()
+        if not child_short:
+            raise IntegrationContractError("parent-link patch requires nextLink")
+        return cls(
+            MutationOperation.PARENT_LINK,
+            guard,
+            ParentLinkPayload(guard.task_uuid, child_short),
+        )
+
+    @classmethod
+    def chain_disable(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a guarded chain-disable request from a typed TaskPatch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("chain disable requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.CHAIN_DISABLE:
+            raise IntegrationContractError("chain disable requires a CHAIN_DISABLE TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("chain-disable patch target differs from guard")
+        values = patch.set_values()
+        if str(values.get("chain") or "").strip().lower() != "off":
+            raise IntegrationContractError("chain-disable patch must set chain=off")
+        return cls(
+            MutationOperation.CHAIN_DISABLE,
+            guard,
+            ChainDisablePayload(guard.task_uuid, expected_chain=guard.chain, target_chain="off"),
+        )
+
+    @classmethod
+    def native_until_repair(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a native-until repair from typed patch and guard evidence."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("native-until repair requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.NATIVE_UNTIL_REPAIR:
+            raise IntegrationContractError("native-until repair requires a NATIVE_UNTIL_REPAIR TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("native-until patch target differs from guard")
+        replacement = str(patch.set_values().get("until") or "").strip()
+        expected = next(
+            (item.value for item in guard.timestamps if item.field is GuardTimestampField.UNTIL),
+            "",
+        )
+        if not expected:
+            raise IntegrationContractError("native-until repair requires guarded until evidence")
+        return cls(
+            MutationOperation.NATIVE_UNTIL_REPAIR,
+            guard,
+            NativeUntilRepairPayload(guard.task_uuid, expected, replacement),
+        )
+
+    @classmethod
+    def metadata_repair(
+        cls,
+        guard: MutationGuard,
+        patch: object,
+        *,
+        expected: Mapping[str, object] | None = None,
+    ) -> "MutationRequest":
+        """Build a guarded metadata repair from a typed TaskPatch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("metadata repair requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.METADATA_REPAIR:
+            raise IntegrationContractError("metadata repair requires a METADATA_REPAIR TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("metadata patch target differs from guard")
+        values = dict(patch.set_values())
+        cleared = patch.clear_fields()
+        if cleared:
+            values.update({field: None for field in cleared})
+        return cls(
+            MutationOperation.METADATA_REPAIR,
+            guard,
+            MetadataRepairPayload(guard.task_uuid, _freeze_pairs(values), _freeze_pairs(expected or {})),
+        )
+
+    @classmethod
+    def ordinary_carry(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
+        """Build a metadata-gateway request from an ordinary-carry patch."""
+        from .task_changes import PatchOperation, TaskPatch
+
+        if not isinstance(guard, MutationGuard):
+            raise IntegrationContractError("ordinary carry requires a MutationGuard")
+        if not isinstance(patch, TaskPatch) or patch.operation is not PatchOperation.ORDINARY_CARRY:
+            raise IntegrationContractError("ordinary carry requires an ORDINARY_CARRY TaskPatch")
+        if patch.target.value.lower() != guard.task_uuid.lower():
+            raise IntegrationContractError("ordinary-carry patch target differs from guard")
+        values = dict(patch.set_values())
+        values.update({field: None for field in patch.clear_fields()})
+        return cls(
+            MutationOperation.METADATA_REPAIR,
+            guard,
+            MetadataRepairPayload(guard.task_uuid, _freeze_pairs(values)),
+        )
 
     def __post_init__(self) -> None:
         try:

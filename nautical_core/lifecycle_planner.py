@@ -23,28 +23,23 @@ from .lifecycle_models import (
     TaskSnapshot,
     recurrence_fingerprint,
 )
-from .recurrence_spec import normalize_recurrence_text
+from .task_codec import TaskCodec
+from .task_codec import DEFAULT_TASK_CODEC
+from .task_models import NauticalTask, TaskDraft, TaskPayload
 
 
 class LifecyclePlanningError(RuntimeError):
     """Raised when a lifecycle plan cannot be constructed safely."""
 
 
-def _recurrence_kind(task: Mapping[str, Any]) -> str:
+def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
-    if normalize_recurrence_text(task.get("cp")):
+    get = task.get if isinstance(task, TaskSnapshot) else lambda key: task.observation.field(key).raw_value()
+    if TaskCodec.normalize_text(get("cp")):
         return "cp"
-    if normalize_recurrence_text(task.get("anchor_file")):
+    if TaskCodec.normalize_text(get("anchor_file")):
         return "anchor_file"
     return "anchor"
-
-
-class ChildPlanBuilder(Protocol):
-    def __call__(
-        self,
-        snapshot: TaskSnapshot,
-        event: LifecycleEvent,
-    ) -> Mapping[str, Any] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +104,7 @@ class RecurrencePlanningService(Protocol):
         event: LifecycleEvent,
         candidate: RecurrenceCandidate,
         next_link: int,
-    ) -> Mapping[str, Any] | None: ...
+    ) -> TaskDraft | None: ...
 
 
 class SuccessorLimitPolicy(Protocol):
@@ -128,7 +123,7 @@ class CarryValidator(Protocol):
     def __call__(
         self,
         snapshot: TaskSnapshot,
-        child: Mapping[str, Any],
+        child: TaskDraft,
         candidate: RecurrenceCandidate,
     ) -> str | None: ...
 
@@ -147,7 +142,7 @@ class ChainGenerationPlanningService:
         next_link: int,
     ) -> RecurrenceCandidate | None:
         del event, next_link
-        parent = snapshot.to_dict()
+        parent = NauticalTask.from_observation(snapshot.observation)
         if kind == "cp":
             child_due, metadata = self.generation.compute_cp_child_due(parent)
             dnf = None
@@ -157,7 +152,7 @@ class ChainGenerationPlanningService:
             return None
         meta = dict(metadata or {})
         until = None
-        raw_until = parent.get("chainUntil")
+        raw_until = parent.observation.field("chainUntil").raw_value()
         if raw_until:
             until, error = self.generation.safe_parse_datetime(raw_until)
             if error or until is None:
@@ -175,15 +170,15 @@ class ChainGenerationPlanningService:
         event: LifecycleEvent,
         candidate: RecurrenceCandidate,
         next_link: int,
-    ) -> Mapping[str, Any] | None:
+    ) -> TaskDraft | None:
         del event
-        parent = snapshot.to_dict()
+        parent = NauticalTask.from_observation(snapshot.observation)
         metadata = dict(candidate.metadata)
         child_field = str(metadata.get("target_field") or "due")
         kind = _recurrence_kind(parent)
-        cpmax = self.generation.core.coerce_int(parent.get("chainMax"), 0)
-        parent_short = str(parent.get("uuid") or "").strip()[:8]
-        return self.generation.build_child_from_parent(
+        cpmax = self.generation.core.coerce_int(parent.observation.field("chainMax").raw_value(), 0)
+        parent_short = str(parent.observation.field("uuid").raw_value() or "").strip()[:8]
+        return self.generation.build_child_draft(
             parent,
             candidate.child_due,
             child_field,
@@ -260,11 +255,20 @@ def expiration_candidate(snapshot: TaskSnapshot, *, generation: Any) -> Recurren
         raise LifecyclePlanningError("expired recurrence has no due or scheduled timestamp")
     calculation_parent = dict(parent)
     calculation_parent["end"] = target
-    kind = _recurrence_kind(parent)
+    kind = (
+        "cp" if TaskCodec.normalize_text(parent.get("cp"))
+        else "anchor_file" if TaskCodec.normalize_text(parent.get("anchor_file"))
+        else "anchor"
+    )
+    calculation_observation = DEFAULT_TASK_CODEC.decode_row(
+        calculation_parent,
+        source_query="lifecycle expiration calculation",
+    )
+    calculation_task = NauticalTask.from_observation(calculation_observation)
     if kind in {"anchor", "anchor_file"}:
-        child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_parent)
+        child_due, metadata, dnf = generation.compute_anchor_child_due(calculation_task)
     else:
-        child_due, metadata = generation.compute_cp_child_due(calculation_parent)
+        child_due, metadata = generation.compute_cp_child_due(calculation_task)
         dnf = None
     result_metadata = dict(metadata or {})
     result_metadata["basis"] = f"{target_field} recurrence target (expired)"
@@ -409,11 +413,11 @@ def terminal_plan_for_snapshot(
         if action is LifecycleAction.DISABLE_CHAIN
         else ("terminal_chain", "no_successor")
     )
-    return LifecyclePlan.from_mappings(
+    return LifecyclePlan(
         identity=identity,
         action=action,
         parent_guard=guard,
-        parent_patch={"chain": "off"},
+        parent_patch=(("chain", "off"),),
         expected_postconditions=postconditions,
         terminal_kind=terminal_kind,
     )
@@ -424,7 +428,6 @@ class LifecyclePlanner:
     """Construct side-effect-free lifecycle plans from immutable snapshots."""
 
     validated_configuration: Any
-    child_builder: ChildPlanBuilder | None = None
     recurrence_service: RecurrencePlanningService | None = None
     successor_limit_policy: SuccessorLimitPolicy | None = None
 
@@ -466,11 +469,11 @@ class LifecyclePlanner:
         )
 
         if event in {LifecycleEvent.ACTIVATE, LifecycleEvent.RESUME}:
-            return LifecyclePlan.from_mappings(
+            return LifecyclePlan(
                 identity=identity,
                 action=LifecycleAction.UPDATE_PARENT,
                 parent_guard=guard,
-                parent_patch={"chain": "on"},
+                parent_patch=(("chain", "on"),),
                 expected_postconditions=("parent_chain_on",),
             )
 
@@ -489,7 +492,7 @@ class LifecyclePlanner:
         candidate: RecurrenceCandidate | None = None
         if self.recurrence_service is not None:
             kind = _recurrence_kind(snapshot)
-            if not any(normalize_recurrence_text(snapshot.get(field)) for field in ("cp", "anchor", "anchor_file")):
+            if not any(TaskCodec.normalize_text(snapshot.get(field)) for field in ("cp", "anchor", "anchor_file")):
                 return terminal_plan_for_snapshot(snapshot, event)
             try:
                 candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)
@@ -519,17 +522,12 @@ class LifecyclePlanner:
                 raise LifecyclePlanningError(
                     f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
                 ) from exc
-        elif self.child_builder is not None:
-            try:
-                child = self.child_builder(snapshot, event)
-            except Exception as exc:
-                raise LifecyclePlanningError(
-                    f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
-                ) from exc
         if child is None:
             return terminal_plan_for_snapshot(snapshot, event)
-        if not isinstance(child, Mapping) or child.get("link") in (None, ""):
-            raise LifecyclePlanningError("child builder returned an incomplete successor")
+        if not isinstance(child, TaskDraft):
+            raise LifecyclePlanningError("recurrence builder returned a non-TaskDraft successor")
+        if child.identity.link.value <= 0:
+            raise LifecyclePlanningError("child draft is missing its link")
         if carry_validator is not None:
             try:
                 carry_error = carry_validator(
@@ -543,20 +541,19 @@ class LifecyclePlanner:
                 ) from exc
             if carry_error:
                 raise LifecyclePlanningError(str(carry_error))
-        child_uuid = str(child.get("uuid") or "").strip()
+        child_uuid = child.identity.task_uuid.value
         parent_patch = {"nextLink": child_uuid[:8]} if child_uuid else {}
-        return LifecyclePlan.from_mappings(
+        return LifecyclePlan.from_draft(
             identity=identity,
             action=LifecycleAction.SPAWN_CHILD,
             parent_guard=guard,
-            child_payload=child,
+            draft=child,
             parent_patch=parent_patch,
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
 
 
 __all__ = (
-    "ChildPlanBuilder",
     "CarryValidator",
     "ChainGenerationLimitPolicy",
     "ChainGenerationPlanningService",

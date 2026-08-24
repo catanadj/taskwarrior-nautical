@@ -143,7 +143,12 @@ def _scenario_cp(env: dict[str, str]) -> dict:
     delta = _parse_tw_datetime(child.get("due")) - _parse_tw_datetime(root.get("due"))
     if delta != timedelta(days=1):
         raise AssertionError(f"cp child delta was {delta}, expected 1 day")
-    return {"root": root["uuid"], "root_id": root["id"], "child": child["uuid"]}
+    return {
+        "root": root["uuid"],
+        "root_id": root["id"],
+        "child": child["uuid"],
+        "chainID": root["chainID"],
+    }
 
 
 def _scenario_navigator(env: dict[str, str], cp_result: dict) -> dict:
@@ -289,14 +294,22 @@ def _install_task_command_shim(root: Path, env: dict[str, str]) -> Path:
     shim_dir.mkdir()
     shim = shim_dir / "task"
     log_path = root / "task-command-log.jsonl"
+    fail_marker = root / "task-shim-failed-once"
     shim.write_text(
         "#!/usr/bin/env python3\n"
         "import json\n"
         "import os\n"
         "import sys\n"
+        "from pathlib import Path\n"
         f"log_path = {str(log_path)!r}\n"
         "with open(log_path, 'a', encoding='utf-8') as stream:\n"
         "    stream.write(json.dumps(sys.argv[1:], ensure_ascii=False) + '\\n')\n"
+        f"fail_marker = Path({str(fail_marker)!r})\n"
+        "fail_match = os.environ.get('NAUTICAL_TASK_SHIM_FAIL_MATCH', '')\n"
+        "if fail_match and fail_match in ' '.join(sys.argv[1:]) and not fail_marker.exists():\n"
+        "    fail_marker.touch()\n"
+        "    print('injected Taskwarrior failure', file=sys.stderr)\n"
+        "    raise SystemExit(42)\n"
         f"real_task = {real_task!r}\n"
         "os.execv(real_task, [real_task, *sys.argv[1:]])\n",
         encoding="utf-8",
@@ -390,6 +403,169 @@ def _assert_clean_state(data_dir: Path) -> None:
         raise AssertionError(f"lifecycle outbox did not drain: {active}")
 
 
+def _scenario_operator_cutover(env: dict[str, str], data_dir: Path, cp_result: dict) -> dict:
+    """Exercise the installed operator surfaces against the disposable database."""
+    task_bin = shutil.which("task") or "task"
+    tools = {
+        "doctor": ROOT / "nautical_core" / "tools" / "nautical_doctor.py",
+        "query": ROOT / "nautical_core" / "tools" / "nautical_query.py",
+        "reconcile": ROOT / "nautical_core" / "tools" / "nautical_reconcile.py",
+        "queue": ROOT / "nautical_core" / "tools" / "nautical_queue_status.py",
+    }
+
+    def invoke(name: str, *args: str, allowed: tuple[int, ...] = (0,)) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(tools[name]), *args],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30.0,
+        )
+        if proc.returncode not in allowed:
+            raise AssertionError(
+                f"{name} failed ({proc.returncode}): stdout={proc.stdout!r} stderr={proc.stderr!r}"
+            )
+        try:
+            payload = json.loads((proc.stdout or "").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"{name} did not emit JSON: {proc.stdout!r}") from exc
+        if not isinstance(payload, dict):
+            raise AssertionError(f"{name} emitted a non-object payload: {payload!r}")
+        return payload
+
+    installation = invoke(
+        "doctor", "--taskdata", str(data_dir), "--task-bin", task_bin, "--json", "--installation-only"
+    )
+    if installation.get("status") != "ok":
+        raise AssertionError(f"installation Doctor was not healthy: {installation!r}")
+    full_doctor = invoke("doctor", "--taskdata", str(data_dir), "--task-bin", task_bin, "--json", allowed=(0, 1))
+    integrity = invoke("query", "integrity", "--all", allowed=(0, 3))
+    if integrity.get("status") not in {"ok", "found", "empty", "manual_review"}:
+        raise AssertionError(f"integrity query was unavailable: {integrity!r}")
+    chain_id = str(cp_result.get("chainID") or "")
+    if not chain_id:
+        raise AssertionError("cutover scenario lost the CP chain identity")
+    dry_run = invoke("reconcile", "--json", "--chain-id", chain_id, allowed=(0, 1, 2))
+    applied = invoke("reconcile", "--json", "--apply", "--chain-id", chain_id, allowed=(0, 1, 2))
+    queue = invoke("queue", "--taskdata", str(data_dir), "--json", allowed=(0, 1))
+    return {
+        "installation": installation.get("status"),
+        "doctor": full_doctor.get("status"),
+        "integrity": integrity.get("status"),
+        "reconcile_dry_run": dry_run.get("status"),
+        "reconcile_apply": applied.get("status"),
+        "queue": queue.get("status"),
+    }
+
+
+def _scenario_invalid_chain_isolation(env: dict[str, str], safe_result: dict) -> dict:
+    """An invalid unrelated chain must not suppress a safe scoped query."""
+    _task(
+        [
+            "rc.hooks=off",
+            "add",
+            "blackbox invalid chain",
+            "anchor:w:mon",
+            "chain:on",
+        ],
+        env,
+    )
+    safe_uuid = str(safe_result.get("child") or "")
+    if not safe_uuid:
+        raise AssertionError("safe scenario did not provide a child UUID")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "nautical_core" / "tools" / "nautical_query.py"),
+            "occurrences",
+            "--uuid",
+            safe_uuid,
+            "--from",
+            datetime.now(timezone.utc).date().isoformat(),
+            "--count",
+            "1",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"safe scoped query failed: stdout={proc.stdout!r} stderr={proc.stderr!r}")
+    payload = json.loads((proc.stdout or "{}").strip() or "{}")
+    if payload.get("status") not in {"found", "empty"}:
+        raise AssertionError(f"invalid unrelated chain hid safe query: {payload!r}")
+    return {"invalid_added": True, "safe_status": payload.get("status")}
+
+
+def _scenario_recovery_paths(env: dict[str, str]) -> dict:
+    """Exercise deletion, hookless completion recovery, and review reporting."""
+    delete_description = "blackbox deletion"
+    _task(["add", delete_description, "anchor:w:mon", "due:today"], env)
+    deleted = _one(env, f"description:{delete_description}", "status:pending")
+    deleted_uuid = str(deleted.get("uuid") or "")
+    _task([f"uuid:{deleted_uuid}", "delete"], env)
+    deleted_row = _one(env, f"uuid:{deleted_uuid}")
+    if deleted_row.get("status") != "deleted" or deleted_row.get("chain") != "off":
+        raise AssertionError(f"manual deletion did not complete the chain: {deleted_row!r}")
+
+    recovery_description = "blackbox hookless completion"
+    _task(["add", recovery_description, "cp:1d", "due:today"], env)
+    recovery_root = _one(env, f"description:{recovery_description}", "status:pending")
+    recovery_uuid = str(recovery_root.get("uuid") or "")
+    recovery_chain = str(recovery_root.get("chainID") or "")
+    _task(["rc.hooks=off", f"uuid:{recovery_uuid}", "done"], env)
+    before = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
+    if before:
+        raise AssertionError("hookless completion unexpectedly spawned a child before reconcile")
+    env["NAUTICAL_TASK_SHIM_FAIL_MATCH"] = "import"
+    failed_reconcile = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"),
+            "--json",
+            "--apply",
+            "--chain-id",
+            recovery_chain,
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    env.pop("NAUTICAL_TASK_SHIM_FAIL_MATCH", None)
+    if failed_reconcile.returncode == 0:
+        raise AssertionError("injected child-import failure was not reported")
+    still_missing = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
+    if still_missing:
+        raise AssertionError("partial child import left a visible successor before retry")
+    reconcile = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"),
+            "--json",
+            "--apply",
+            "--chain-id",
+            recovery_chain,
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if reconcile.returncode not in (0, 1, 2):
+        raise AssertionError(f"hookless completion reconcile retry failed: {reconcile.stderr!r}")
+    after = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
+    if len(after) != 1:
+        raise AssertionError(f"reconcile did not recover the hookless completion: {after!r}")
+    return {
+        "deleted_chain_off": True,
+        "partial_failure_exit": failed_reconcile.returncode,
+        "recovered_child": after[0].get("uuid"),
+        "reconcile_exit": reconcile.returncode,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit a JSON result")
@@ -436,6 +612,9 @@ def main() -> int:
         scenarios["modify"] = _scenario_modify(env)
         scenarios["duplicate_guard"] = _scenario_duplicate_guard(env, scenarios["cp"])
         scenarios["no_nested_hooks"] = _scenario_no_nested_hooks(env, data_dir)
+        scenarios["invalid_chain_isolation"] = _scenario_invalid_chain_isolation(env, scenarios["preset"])
+        scenarios["recovery_paths"] = _scenario_recovery_paths(env)
+        scenarios["operator_cutover"] = _scenario_operator_cutover(env, data_dir, scenarios["cp"])
         _assert_clean_state(data_dir)
         result["ok"] = True
     except Exception as exc:

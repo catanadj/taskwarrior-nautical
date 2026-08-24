@@ -6,26 +6,28 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
 
+from .task_models import TaskPayload
+
 
 @dataclass(slots=True)
 class CompletionValidationServices:
     strip_quotes: Callable[[str], str]
     reject_conflicting_types: Callable[[str, str, str], None]
     validate_omit: Callable[[str, str, str, str], None]
-    validate_chain_limits: Callable[[dict[str, Any]], None]
+    validate_chain_limits: Callable[[TaskPayload], None]
     parse_cp_sequence: Callable[[str], Any]
     cp_sequence_parse_error: Callable[[str], str | None]
-    field_changed: Callable[[dict[str, Any], dict[str, Any], str], bool]
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
     validate_anchor: Callable[[str], None]
     validate_cp: Callable[[str, Any, Any], None]
-    apply_transition: Callable[[dict[str, Any], dict[str, Any]], None]
+    apply_transition: Callable[[TaskPayload, TaskPayload], None]
     fail: Callable[[str, str], Any]
     diagnostic: Callable[[str], None]
 
 
 def validate_completion_cp_and_anchor(
-    old: dict[str, Any],
-    new: dict[str, Any],
+    old: TaskPayload,
+    new: TaskPayload,
     *,
     services: CompletionValidationServices,
 ) -> tuple[str, str, str]:
@@ -138,7 +140,7 @@ def validate_cp_on_modify(
 
 
 def validate_chain_limits_on_modify(
-    task: dict[str, Any],
+    task: TaskPayload,
     *,
     parse_chain_max: Any,
     parse_datetime: Any,
@@ -166,7 +168,7 @@ def validate_chain_limits_on_modify(
 
 
 def validate_native_until_after_target_or_fail(
-    task: dict[str, Any],
+    task: TaskPayload,
     *,
     validate_anchor_mode: Any,
     safe_parse_datetime: Any,
@@ -228,7 +230,7 @@ def validate_native_until_after_target_or_fail(
 
 
 def validate_native_until_anchor_slots_or_fail(
-    task: dict[str, Any],
+    task: TaskPayload,
     *,
     safe_parse_datetime: Any,
     validate_anchor: Any,

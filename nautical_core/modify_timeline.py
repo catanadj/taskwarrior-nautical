@@ -5,13 +5,12 @@ from typing import Any, Callable
 
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
+from .task_models import TaskObservation, TaskPayload
 
 
-def _timeline_seed_base(task: dict[str, Any]) -> str:
+def _timeline_seed_base(task: TaskPayload) -> str:
     """Return the stable recurrence identity used by timeline projections."""
-    from .recurrence_context import RecurrenceContext
-
-    return RecurrenceContext.from_task(task, fallback_chain_id="preview").seed_base
+    return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
 
 def _timeline_omit_label(
@@ -38,7 +37,7 @@ def _timeline_warning(message: str) -> tuple[object, None, dict[str, Any], str]:
 
 
 def _timeline_styles(
-    task: dict[str, Any],
+    task: TaskPayload,
     kind: str,
     *,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
@@ -97,20 +96,21 @@ def format_gap(prev_dt: Any, next_dt: Any, kind: str = "cp", round_hours: bool =
 
 
 def _timeline_initial_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     cur_no: int,
     nxt_no: int,
     child_due_utc: Any,
     child_short: str,
     *,
     core: Any,
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
 ) -> list[tuple[int, Any, dict[str, Any], str]]:
     items: list[tuple[int, Any, dict[str, Any], str]] = []
     prevs = collect_prev_two(task)
     prev_count = len(prevs)
-    for idx, obj in enumerate(prevs):
+    for idx, observation in enumerate(prevs):
+        obj = observation.to_mapping()
         no = core.coerce_int(obj.get("link"), None) or (cur_no - (prev_count - idx))
         end_dt = dtparse(obj.get("end"))
         items.append((no, end_dt, obj, "prev"))
@@ -121,7 +121,7 @@ def _timeline_initial_items(
 
 
 def _timeline_future_cp_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     *,
     start_no: int,
@@ -136,12 +136,15 @@ def _timeline_future_cp_items(
     if evaluator is None:
         from .scheduler_service import SchedulerService
         from .recurrence_context import RecurrenceContext
+        from .task_codec import DEFAULT_TASK_CODEC
+        from .task_models import NauticalTask
 
+        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify timeline")
+        domain_task = NauticalTask.from_observation(observation)
         evaluator = SchedulerService.from_task(
-            task,
-            context=RecurrenceContext.from_task(
-                task,
-                fallback_chain_id=task.get("uuid") or "preview",
+            domain_task,
+            context=RecurrenceContext.from_observation(
+                observation,
                 timezone=getattr(core, "_LOCAL_TZ", None),
                 astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
                 anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
@@ -181,7 +184,7 @@ def _timeline_future_cp_items(
 
 
 def _timeline_future_anchor_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     dnf: Any,
     child_due_utc: datetime,
     *,
@@ -315,7 +318,7 @@ def _timeline_future_anchor_items(
 
 
 def _timeline_omitted_before_next_anchor_items(
-    task: dict[str, Any],
+    task: TaskPayload,
     dnf: Any,
     child_due_utc: datetime,
     *,
@@ -470,7 +473,7 @@ def _timeline_base_line(
     obj: dict[str, Any],
     item_type: str,
     *,
-    task: dict[str, Any],
+    task: TaskPayload,
     cap_no: int | None,
     prev_style: str,
     cur_style: str,
@@ -551,7 +554,7 @@ def _timeline_with_gap(
 
 
 def anchor_file_timeline_lines(
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
     *,
@@ -563,7 +566,7 @@ def anchor_file_timeline_lines(
     core: Any,
     max_iterations: int,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -700,7 +703,7 @@ def anchor_file_timeline_lines(
 
 def timeline_lines(
     kind: str,
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
     dnf: Any,
@@ -713,7 +716,7 @@ def timeline_lines(
     core: Any,
     max_iterations: int,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -834,7 +837,7 @@ def timeline_lines(
 
 def timeline_lines_for_task(
     kind: str,
-    task: dict[str, Any],
+    task: TaskPayload,
     child_due_utc: datetime,
     child_short: str,
     dnf: Any,
@@ -847,7 +850,7 @@ def timeline_lines_for_task(
     core: Any,
     max_iterations: int,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],

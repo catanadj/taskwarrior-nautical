@@ -21,12 +21,20 @@ from .integration_models import (
     NativeUntilRepairPayload,
 )
 from .lifecycle_models import recurrence_fingerprint
+from .task_models import FieldPresence, TaskObservation
+
+
+def _observation_value(row: TaskObservation, name: str) -> object:
+    state = row.field(name)
+    if state.presence is FieldPresence.ABSENT:
+        return None
+    return getattr(state.value, "value", state.value)
 
 
 @dataclass(frozen=True, slots=True)
 class NativeUntilRepairCandidate:
-    row: dict[str, Any]
-    previous: dict[str, Any] | None
+    row: TaskObservation
+    previous: TaskObservation | None
     item: dict[str, Any]
 
 
@@ -39,42 +47,48 @@ class RecoveryAudit:
 class IntegrityRecoveryService:
     """Build typed recovery evidence from one authoritative chain snapshot."""
 
-    def __init__(self, *, child_lookup: Callable[[str, int], dict[str, Any] | None] | None = None) -> None:
+    def __init__(self, *, child_lookup: Callable[[str, int], TaskObservation | None] | None = None) -> None:
         self._child_lookup = child_lookup
 
-    def existing_children(self, parent: dict[str, Any]) -> list[dict[str, Any]]:
+    def existing_children(self, parent: TaskObservation) -> tuple[TaskObservation, ...]:
         """Resolve the single successor slot without owning repository I/O."""
-        chain_id = str(parent.get("chainID") or "").strip()
-        next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
+        if not isinstance(parent, TaskObservation):
+            raise TypeError("recovery child lookup requires a TaskObservation parent")
+        chain_id = str(_observation_value(parent, "chainID") or "").strip()
+        next_link = lifecycle.int_or_default(_observation_value(parent, "link"), 1) + 1
         if not chain_id or self._child_lookup is None:
-            return []
+            return ()
         value = self._child_lookup(chain_id, next_link)
-        return [dict(value)] if value is not None else []
+        if value is None:
+            return ()
+        if not isinstance(value, TaskObservation):
+            raise TypeError("recovery child lookup returned a non-observation value")
+        return (value,)
 
     @staticmethod
     def native_until_request(
-        row: dict[str, Any],
+        row: TaskObservation,
         new_until: str,
         *,
         mutation_epoch: int,
     ) -> MutationRequest:
         """Build the guarded native-until mutation without Taskwarrior I/O."""
-        uuid = str(row.get("uuid") or "").strip()
-        chain_id = str(row.get("chainID") or "").strip()
-        link = lifecycle.int_or_default(row.get("link"), 0)
-        modified = str(row.get("modified") or "").strip()
-        expected_until = str(row.get("until") or "").strip()
+        uuid = str(_observation_value(row, "uuid") or "").strip()
+        chain_id = str(_observation_value(row, "chainID") or "").strip()
+        link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
+        modified = str(_observation_value(row, "modified") or "").strip()
+        expected_until = str(_observation_value(row, "until") or "").strip()
         if not uuid or not chain_id or link <= 0 or not modified or not expected_until:
             raise ValueError("native until repair lacks task identity")
         guard = MutationGuard(
             task_uuid=uuid,
-            status=str(row.get("status") or ""),
+            status=str(_observation_value(row, "status") or ""),
             chain_id=chain_id,
             link=link,
             recurrence_identity=recurrence_fingerprint(row),
             timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
             expected_mutation_epoch=mutation_epoch,
-            chain=str(row.get("chain") or "on"),
+            chain=str(_observation_value(row, "chain") or "on"),
         )
         return MutationRequest(
             MutationOperation.NATIVE_UNTIL_REPAIR,
@@ -83,21 +97,21 @@ class IntegrityRecoveryService:
         )
 
     @staticmethod
-    def candidate_sort_key(row: dict[str, Any]) -> tuple[str, int, str, str]:
+    def candidate_sort_key(row: TaskObservation) -> tuple[str, int, str, str]:
         return (
-            str(row.get("chainID") or "").strip().casefold(),
-            lifecycle.int_or_default(row.get("link"), 0),
-            str(row.get("status") or "").strip().casefold(),
-            str(row.get("uuid") or "").strip().casefold(),
+            str(_observation_value(row, "chainID") or "").strip().casefold(),
+            lifecycle.int_or_default(_observation_value(row, "link"), 0),
+            str(_observation_value(row, "status") or "").strip().casefold(),
+            str(_observation_value(row, "uuid") or "").strip().casefold(),
         )
 
     @staticmethod
-    def ambiguous_candidate_slots(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    def ambiguous_candidate_slots(rows: Iterable[TaskObservation]) -> dict[tuple[str, int], str]:
         grouped: dict[tuple[str, int], set[str]] = {}
         for row in rows:
-            chain_id = str(row.get("chainID") or "").strip()
-            link = lifecycle.int_or_default(row.get("link"), 0)
-            uuid = str(row.get("uuid") or "").strip().lower()
+            chain_id = str(_observation_value(row, "chainID") or "").strip()
+            link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
+            uuid = str(_observation_value(row, "uuid") or "").strip().lower()
             if chain_id and link > 0 and uuid:
                 grouped.setdefault((chain_id, link), set()).add(uuid)
         return {
@@ -111,17 +125,20 @@ class IntegrityRecoveryService:
 
     def audit_native_until(
         self,
-        rows: Iterable[dict[str, Any]],
+        rows: Iterable[TaskObservation],
         *,
-        predecessor: Callable[[dict[str, Any]], dict[str, Any] | None],
+        predecessor: Callable[[TaskObservation], TaskObservation | None],
         safe_parse_datetime: Callable[[Any], tuple[Any, str | None]],
         fmt_isoz: Callable[[Any], str],
         utc_to_local_naive: Callable[[Any], Any],
         local_naive_to_utc: Callable[[Any], Any],
     ) -> RecoveryAudit:
-        materialized = tuple(dict(row) for row in rows)
+        materialized = tuple(rows)
         by_chain_link = {
-            (str(row.get("chainID") or "").strip(), lifecycle.int_or_default(row.get("link"), 0)): row
+            (
+                str(_observation_value(row, "chainID") or "").strip(),
+                lifecycle.int_or_default(_observation_value(row, "link"), 0),
+            ): row
             for row in materialized
         }
         repairs: list[dict[str, Any]] = []
@@ -131,15 +148,15 @@ class IntegrityRecoveryService:
             reason = lifecycle.invalid_native_until_reason(row, safe_parse_datetime=safe_parse_datetime)
             if not reason:
                 continue
-            chain_id = str(row.get("chainID") or "").strip()
-            link = lifecycle.int_or_default(row.get("link"), 0)
+            chain_id = str(_observation_value(row, "chainID") or "").strip()
+            link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
             previous = by_chain_link.get((chain_id, link - 1)) or predecessor(row)
             item: dict[str, Any] = {
-                "task": lifecycle.short_uuid(row.get("uuid")),
+                "task": lifecycle.short_uuid(_observation_value(row, "uuid")),
                 "chainID": chain_id,
                 "link": link,
-                "target": row.get("due") or row.get("scheduled"),
-                "until": row.get("until"),
+                "target": _observation_value(row, "due") or _observation_value(row, "scheduled"),
+                "until": _observation_value(row, "until"),
                 "reason": reason,
             }
             repaired: str | None = None
@@ -181,7 +198,7 @@ class IntegrityRecoveryService:
             item["action"] = "repair_until"
             item["new_until"] = repaired
             repairs.append(item)
-            candidates.append(NativeUntilRepairCandidate(dict(row), dict(previous) if previous else None, item))
+            candidates.append(NativeUntilRepairCandidate(row, previous, item))
         for item in repairs:
             if item.get("action") == "repair_error":
                 errors.append(
@@ -192,8 +209,8 @@ class IntegrityRecoveryService:
 
     def apply_native_until_candidate(
         self,
-        row: dict[str, Any],
-        previous: dict[str, Any] | None,
+        row: TaskObservation,
+        previous: TaskObservation | None,
         item: dict[str, Any],
         *,
         repaired: str,
@@ -201,12 +218,12 @@ class IntegrityRecoveryService:
         lease_held: bool,
         mutation_lock: Callable[[Any, bool], Any],
         parent_lock: Callable[[str], Any],
-        refresh_parent: Callable[[dict[str, Any]], dict[str, Any] | None],
-        refresh_previous: Callable[[dict[str, Any]], dict[str, Any] | None],
-        guard_error: Callable[[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None], str | None],
+        refresh_parent: Callable[[TaskObservation], TaskObservation | None],
+        refresh_previous: Callable[[TaskObservation], TaskObservation | None],
+        guard_error: Callable[[TaskObservation, TaskObservation | None, TaskObservation | None], str | None],
         configuration: Callable[[], tuple[str, str]],
-        mutate: Callable[[dict[str, Any], str], None],
-        verify: Callable[[dict[str, Any] | None, str], bool],
+        mutate: Callable[[TaskObservation, str], None],
+        verify: Callable[[TaskObservation | None, str], bool],
         on_lock_busy: Callable[[str], None],
     ) -> str | None:
         """Apply one candidate with ordered locks and fail-closed guards."""
@@ -220,7 +237,7 @@ class IntegrityRecoveryService:
                 item["action"] = "repair_error"
                 item["repair_error"] = "another reconcile apply is already running"
             else:
-                with parent_lock(str(row.get("uuid") or "")) as acquired:
+                with parent_lock(str(_observation_value(row, "uuid") or "")) as acquired:
                     if not acquired:
                         on_lock_busy("parent")
                         item["action"] = "repair_error"
@@ -246,7 +263,7 @@ class IntegrityRecoveryService:
                                 mutate(fresh, repaired)
                                 verified = refresh_parent(fresh)
                                 if not verify(verified, repaired):
-                                    actual = str((verified or {}).get("until") or "<missing>")
+                                    actual = str(_observation_value(verified, "until") if verified else "<missing>")
                                     item["action"] = "repair_error"
                                     item["repair_error"] = (
                                         f"native until repair verification failed (expected {repaired}; found {actual})"

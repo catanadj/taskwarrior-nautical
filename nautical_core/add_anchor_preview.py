@@ -9,15 +9,11 @@ from . import calendar_feedback, panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
+from .task_models import TaskPayload
 
-def _preview_seed_base(task: dict[str, Any], fallback_chain_id: str) -> str:
-    """Resolve the stable preview identity through the shared context model."""
-    from .recurrence_context import RecurrenceContext
-
-    return RecurrenceContext.from_task(
-        task,
-        fallback_chain_id=fallback_chain_id,
-    ).seed_base
+def _preview_seed_base(task: TaskPayload, fallback_chain_id: str) -> str:
+    """Resolve the stable preview identity at the raw-input boundary."""
+    return str(task.get("chainID") or fallback_chain_id).strip()
 
 
 def _anchor_file_natural_text(expr: str) -> str:
@@ -25,7 +21,7 @@ def _anchor_file_natural_text(expr: str) -> str:
     return f"Dates from {file_name}" if file_name else ""
 
 
-def _anchor_omit_natural_text(task: dict[str, Any], *, core: Any) -> str:
+def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
     omit_raw = str(task.get('omit') or '').strip()
     omit_file = str(task.get('omit_file') or '').strip()
     parts: list[str] = []
@@ -48,7 +44,7 @@ def _anchor_omit_natural_text(task: dict[str, Any], *, core: Any) -> str:
     return ' and '.join(part for part in parts if part)
 
 
-def _anchor_preview_natural_text(task: dict[str, Any], dnf, anchor_file_str: str, *, core: Any) -> str:
+def _anchor_preview_natural_text(task: TaskPayload, dnf, anchor_file_str: str, *, core: Any) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_text = _anchor_omit_natural_text(task, core=core)
     if omit_text and (task.get('anchor_mode') or 'skip').lower() == 'skip':
@@ -64,7 +60,7 @@ def _anchor_preview_natural_text(task: dict[str, Any], dnf, anchor_file_str: str
 
 
 def anchor_preview_prepare_dnf(
-    task: dict[str, Any],
+    task: TaskPayload,
     anchor_str: str,
     due_dt: datetime,
     rows: list[tuple[str, str]],
@@ -113,7 +109,7 @@ def anchor_preview_prepare_dnf(
 
 
 def anchor_preview_prepare_omit_dnf(
-    task: dict[str, Any],
+    task: TaskPayload,
     rows: list[tuple[str, str]],
     *,
     core: Any,
@@ -173,7 +169,7 @@ def anchor_preview_prepare_omit_dnf(
 
 
 def anchor_preview_seed_context(
-    task: dict[str, Any],
+    task: TaskPayload,
     due_day: Any,
     now_local: datetime,
     user_provided_due: bool,
@@ -187,7 +183,7 @@ def anchor_preview_seed_context(
 
 
 def anchor_preview_first_due(
-    task: dict[str, Any],
+    task: TaskPayload,
     dnf,
     omit_dnf,
     *,
@@ -372,7 +368,7 @@ def _anchor_file_occurrences_local(
     return deduplicated
 
 
-def _preview_omit_label(task: dict[str, Any], item_local: datetime, *, core: Any) -> str:
+def _preview_omit_label(task: TaskPayload, item_local: datetime, *, core: Any) -> str:
     omit_file = str(task.get("omit_file") or "").strip()
     if not omit_file:
         return "omitted"
@@ -396,7 +392,7 @@ def _preview_occurrence_lines(
     first_due_local_dt: datetime,
     preview_limit: int,
     core: Any,
-    task: dict[str, Any],
+    task: TaskPayload,
 ) -> list[str]:
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
     out: list[str] = []
@@ -771,7 +767,7 @@ def _collect_events_with_provider(
 
 def handle_anchor_file_preview_on_add(
     *,
-    task: dict[str, Any],
+    task: TaskPayload,
     anchor_file_str: str,
     ch: str,
     now_utc: datetime,
@@ -817,8 +813,11 @@ def handle_anchor_file_preview_on_add(
     from .recurrence_context import RecurrenceContext
     from .scheduler_service import SchedulerService
 
+    from .task_codec import DEFAULT_TASK_CODEC
+    from .task_models import NauticalTask
+
     scheduler_service = SchedulerService.from_task(
-        task,
+        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview")),
         context=RecurrenceContext(
             chain_id=str(task.get("chainID") or seed_base),
             timezone=getattr(core, "_LOCAL_TZ", None),
@@ -976,7 +975,9 @@ def handle_anchor_file_preview_on_add(
 
 
 def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
-    task = {"anchor": anchor_str, "anchor_file": anchor_file_str}
+    from .modify_models import TaskView
+
+    task = TaskView.from_mapping({"anchor": anchor_str, "anchor_file": anchor_file_str})
     return bool(panel_diagnostics.recurrence_timezone_warning(core, task))
 
 
@@ -1031,7 +1032,7 @@ def _initial_occurrence_limit(preview_hard_cap: int, compact_presentation: bool)
 
 def handle_anchor_preview_on_add(
     *,
-    task: dict[str, Any],
+    task: TaskPayload,
     anchor_str: str,
     anchor_file_str: str = "",
     ch: str,
@@ -1073,7 +1074,9 @@ def handle_anchor_preview_on_add(
     rows: list[tuple[str, str]] = []
     panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
     compact_presentation = panel_mode in {"quiet", "minimal", "line", "text"}
-    for warning in panel_diagnostics.panel_warnings(core, task):
+    from .modify_models import TaskView
+
+    for warning in panel_diagnostics.panel_warnings(core, TaskView.from_mapping(task)):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
     dnf = None
     if anchor_str:
@@ -1145,7 +1148,13 @@ def handle_anchor_preview_on_add(
             astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
-        scheduler_service = SchedulerService.from_task(task, context=context)
+        from .task_codec import DEFAULT_TASK_CODEC
+        from .task_models import NauticalTask
+
+        scheduler_service = SchedulerService.from_task(
+            NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview")),
+            context=context,
+        )
         recurrence_evaluator = scheduler_service.session.evaluator
     except Exception as exc:
         error_and_exit(

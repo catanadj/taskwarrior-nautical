@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Mapping, TypeAlias
+
+if TYPE_CHECKING:
+    from .task_models import TaskObservation
 
 
 class IntegrityContractError(ValueError):
@@ -93,6 +96,7 @@ class IntegrityReportStatus(str, Enum):
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
+INTEGRITY_PATCH_SCHEMA_VERSION = 1
 
 
 def _required_text(value: object, field: str) -> str:
@@ -146,6 +150,7 @@ class ChainNode:
     link: int | None
     status: str
     fields: FrozenPairs = ()
+    observation: "TaskObservation | None" = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_uuid", _required_text(self.task_uuid, "task UUID"))
@@ -153,31 +158,49 @@ class ChainNode:
         if self.link is not None and (isinstance(self.link, bool) or not isinstance(self.link, int) or self.link <= 0):
             raise IntegrityContractError("node link must be a positive integer or None")
         object.__setattr__(self, "status", _required_text(self.status, "task status").lower())
+        if self.observation is not None:
+            from .task_models import TaskObservation
+            if not isinstance(self.observation, TaskObservation):
+                raise IntegrityContractError("chain node observation must be a TaskObservation")
         fields = tuple(self.fields)
         if any(not isinstance(item, tuple) or len(item) != 2 or not isinstance(item[0], str) for item in fields):
             raise IntegrityContractError("node fields must be frozen key/value pairs")
         object.__setattr__(self, "fields", fields)
 
     @classmethod
-    def from_mapping(cls, row: Mapping[str, object]) -> "ChainNode":
-        if not isinstance(row, Mapping):
-            raise IntegrityContractError("chain row must be an object")
-        task_uuid = _required_text(row.get("uuid"), "task UUID")
-        raw_link = row.get("link")
-        link: int | None
-        if raw_link in (None, ""):
+    def from_observation(cls, observation: "TaskObservation") -> "ChainNode":
+        """Build a graph node directly from an authoritative observation."""
+        from .task_models import FieldPresence, TaskObservation
+
+        if not isinstance(observation, TaskObservation):
+            raise IntegrityContractError("chain node requires a TaskObservation")
+
+        def value(name: str) -> object:
+            state = observation.field(name)
+            if state.presence is FieldPresence.ABSENT:
+                return None
+            typed = state.value
+            return getattr(typed, "value", typed)
+
+        fields: dict[str, object] = {}
+        for name, state in observation.fields.items():
+            if state.presence is not FieldPresence.ABSENT:
+                fields[name] = state.raw_value()
+        fields.update(observation.to_mapping())
+        raw_link = value("link")
+        if isinstance(raw_link, int) and not isinstance(raw_link, bool):
+            link: int | None = raw_link
+        elif raw_link in (None, ""):
             link = None
         else:
-            try:
-                link = int(float(str(raw_link).strip()))
-            except (TypeError, ValueError, OverflowError):
-                link = None
+            link = None
         return cls(
-            task_uuid,
-            str(row.get("chainID", row.get("chain_id", "")) or ""),
+            str(value("uuid") or ""),
+            str(value("chainID") or ""),
             link,
-            str(row.get("status", "") or ""),
-            _freeze_pairs(row),
+            str(value("status") or ""),
+            _freeze_pairs(fields),
+            observation,
         )
 
     @property
@@ -207,10 +230,38 @@ class ChainNode:
         return LifecycleIntent.UNKNOWN
 
     def field(self, name: str, default: object = None) -> object:
+        state = self.field_state(name)
+        if state is not None:
+            from .task_models import FieldPresence
+            if state.presence is not FieldPresence.ABSENT:
+                return getattr(state.value, "value", state.value)
+            return default
         for key, value in self.fields:
             if key == name:
                 return _thaw(value)
         return default
+
+    def field_state(self, name: str) -> object | None:
+        """Return the source observation's typed field state when available."""
+        if self.observation is not None:
+            return self.observation.field(name)
+        return None
+
+    def reference_token(self, name: str) -> str:
+        """Return a normalized edge token from the typed observation boundary."""
+        if name not in {"prevLink", "nextLink"}:
+            raise ValueError("chain reference field must be prevLink or nextLink")
+        state = self.field_state(name)
+        if state is not None:
+            from .task_models import FieldPresence
+            if state.presence is FieldPresence.VALUE:
+                value = getattr(state.value, "value", state.value)
+                return str(value or "").strip().lower()
+            return ""
+        for key, value in self.fields:
+            if key == name:
+                return str(_thaw(value) or "").strip().lower()
+        return ""
 
     def to_dict(self) -> dict[str, object]:
         value = {key: _thaw(item) for key, item in self.fields}
@@ -323,6 +374,22 @@ class IntegrityFinding:
                 raise IntegrityContractError(f"finding {field_name} must be frozen key/value pairs")
             object.__setattr__(self, field_name, fields)
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize immutable finding evidence for operator/API consumers."""
+        return {
+            "invariant_id": self.invariant_id,
+            "status": self.status.value,
+            "severity": self.severity.value,
+            "snapshot_id": self.snapshot_id,
+            "chain_id": self.chain_id,
+            "subject_uuids": list(self.subject_uuids),
+            "reason_code": self.reason_code,
+            "message": self.message,
+            "observed": _thaw(self.observed),
+            "expected": _thaw(self.expected),
+            "evidence": _thaw(self.evidence),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class IntegrityOperation:
@@ -364,6 +431,21 @@ class IntegrityOperation:
         object.__setattr__(self, "depends_on", dependencies)
 
     def to_dict(self) -> dict[str, object]:
+        raw_payload = _thaw(self.payload)
+        payload: object = raw_payload
+        if raw_payload:
+            if not isinstance(raw_payload, dict):
+                raise IntegrityContractError("repair operation payload must be an object")
+            payload = {
+                "schema_version": INTEGRITY_PATCH_SCHEMA_VERSION,
+                "kind": "task_patch",
+                "target": self.target_uuid,
+                "operation": "metadata_repair",
+                "changes": [
+                    {"field": key, "action": "set", "value": value}
+                    for key, value in sorted(raw_payload.items())
+                ],
+            }
         return {
             "operation_id": self.operation_id,
             "kind": self.kind.value,
@@ -372,14 +454,51 @@ class IntegrityOperation:
             "guard": _thaw(self.guard),
             "preconditions": list(self.preconditions),
             "postconditions": list(self.postconditions),
-            "payload": _thaw(self.payload),
+            "payload": payload,
             "depends_on": list(self.depends_on),
         }
+
+    def task_patch(self):
+        """Materialize a repair payload as the canonical typed TaskPatch."""
+        from .task_changes import TaskPatch
+        from .task_models import TaskUUID
+
+        if self.kind not in {RepairOperationKind.METADATA_REPAIR, RepairOperationKind.LINK_REPAIR}:
+            raise IntegrityContractError("repair operation does not carry a task patch")
+        payload = _thaw(self.payload)
+        if not isinstance(payload, Mapping):
+            raise IntegrityContractError("repair payload must be a mapping")
+        return TaskPatch.metadata_repair(TaskUUID(self.target_uuid), **dict(payload))
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityOperation":
         if not isinstance(value, Mapping):
             raise IntegrityContractError("integrity operation must be an object")
+        raw_payload = value.get("payload")
+        payload: Mapping[str, object] | None
+        if raw_payload in (None, {}, ()):
+            payload = None
+        else:
+            if not isinstance(raw_payload, Mapping):
+                raise IntegrityContractError("integrity operation payload must be an object")
+            if (
+                raw_payload.get("schema_version") != INTEGRITY_PATCH_SCHEMA_VERSION
+                or raw_payload.get("kind") != "task_patch"
+                or str(raw_payload.get("target") or "") != str(value.get("target_uuid") or "")
+            ):
+                raise IntegrityContractError("integrity operation payload is not a versioned TaskPatch")
+            changes = raw_payload.get("changes")
+            if not isinstance(changes, (list, tuple)):
+                raise IntegrityContractError("integrity TaskPatch changes must be a list")
+            fields: dict[str, object] = {}
+            for change in changes:
+                if not isinstance(change, Mapping) or change.get("action") != "set":
+                    raise IntegrityContractError("integrity TaskPatch changes must be set operations")
+                field = str(change.get("field") or "").strip()
+                if not field or field in fields:
+                    raise IntegrityContractError("integrity TaskPatch contains an invalid or duplicate field")
+                fields[field] = change.get("value")
+            payload = fields
         return cls(
             str(value.get("operation_id") or ""),
             value.get("kind"),
@@ -388,7 +507,7 @@ class IntegrityOperation:
             _freeze_pairs(value.get("guard") if isinstance(value.get("guard"), Mapping) else {}),
             tuple(value.get("preconditions") or ()),
             tuple(value.get("postconditions") or ()),
-            _freeze_pairs(value.get("payload") if isinstance(value.get("payload"), Mapping) else {}),
+            _freeze_pairs(payload),
             tuple(value.get("depends_on") or ()),
         )
 

@@ -161,6 +161,9 @@ def load_core_helper_module(
             package_parent = str(package_dir.parent)
             if package_parent not in sys.path:
                 sys.path.insert(0, package_parent)
+            package_root = str(package_dir)
+            if package_root not in sys.path:
+                sys.path.insert(0, package_root)
         spec = importlib.util.spec_from_file_location(module_name, helper_path)
         if spec is None or spec.loader is None:
             raise ImportError(f"could not load {helper_path}")

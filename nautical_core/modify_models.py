@@ -3,7 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Iterator, Protocol, TypeAlias, Mapping
+from types import MappingProxyType
+
+from .task_models import (
+    ChainIdentity,
+    ChainID,
+    ChainState,
+    FieldPresence,
+    ShortUUIDRef,
+    TaskDraft,
+    TaskLink,
+    TaskObservation,
+    TaskStatus,
+    TaskTimestamp,
+    TaskUUID,
+    TemporalState,
+)
 
 
 # Hook implementations are intentionally assembled at runtime, but the
@@ -12,6 +28,93 @@ from typing import Any, Protocol, TypeAlias
 # modules support Taskwarrior's heterogeneous JSON fields.
 TaskRow: TypeAlias = dict[str, Any]
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
+
+
+class TaskView(Mapping[str, Any]):
+    """Immutable task projection for feedback and panel rendering.
+
+    Taskwarrior mappings are mutable protocol payloads. Presentation code only
+    needs read access, so expose a frozen mapping view at that boundary.
+    """
+
+    __slots__ = ("_values", "observation")
+
+    def __init__(self, values: Mapping[str, Any], observation: TaskObservation | None = None) -> None:
+        self._values = MappingProxyType(dict(values))
+        self.observation = observation
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "TaskView":
+        if isinstance(values, cls):
+            return values
+        if not isinstance(values, Mapping):
+            raise TypeError("task view requires a mapping")
+        observation = TaskObservation.from_mapping(values, source_query="presentation")
+        return cls(values, observation)
+
+    @classmethod
+    def from_observation(cls, observation: TaskObservation) -> "TaskView":
+        """Expose an already-decoded observation without decoding it again."""
+        if not isinstance(observation, TaskObservation):
+            raise TypeError("task view requires a TaskObservation")
+        return cls(observation.to_mapping(), observation)
+
+    @property
+    def temporal(self) -> TemporalState:
+        values: dict[str, TaskTimestamp | None] = {}
+        presence: dict[str, FieldPresence] = {}
+        observation = self.observation
+        if observation is None:
+            return TemporalState()
+        for name in ("due", "scheduled", "wait", "until", "entry", "modified", "end"):
+            field = observation.field(name)
+            presence[name] = field.presence
+            values[name] = field.value if isinstance(field.value, TaskTimestamp) else None
+        return TemporalState(**values, presence=presence)
+
+    @property
+    def status(self) -> TaskStatus | None:
+        value = self.observation.field("status").value if self.observation else None
+        return value if isinstance(value, TaskStatus) else None
+
+    @property
+    def chain_identity(self) -> ChainIdentity | None:
+        if self.observation is None:
+            return None
+        uuid = self.observation.field("uuid").value
+        chain_id = self.observation.field("chainID").value
+        link = self.observation.field("link").value
+        if not isinstance(uuid, TaskUUID) or not isinstance(chain_id, ChainID) or not isinstance(link, TaskLink):
+            return None
+        previous = self.observation.field("prevLink").value
+        following = self.observation.field("nextLink").value
+        if previous is not None and not isinstance(previous, (TaskUUID, ShortUUIDRef)):
+            previous = None
+        if following is not None and not isinstance(following, (TaskUUID, ShortUUIDRef)):
+            following = None
+        state = ChainState.ENABLED if str(self.get("chain") or "on").lower() == "on" else ChainState.DISABLED
+        return ChainIdentity(uuid, chain_id, link, previous, following, state)
+
+    def timestamp(self, field: str) -> TaskTimestamp | None:
+        """Return one typed timestamp, preserving absent/null as ``None``."""
+        name = str(field)
+        temporal_value = getattr(self.temporal, name, None)
+        if temporal_value is not None:
+            return temporal_value
+        if self.observation is not None:
+            value = self.observation.field(name).value
+            if isinstance(value, TaskTimestamp):
+                return value
+        return None
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
 
 
 class PanelCallback(Protocol):
@@ -252,11 +355,11 @@ CompletionCapsCallback: TypeAlias = Callable[
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
 ]
-BuildChildCallback: TypeAlias = Callable[
-    [TaskRow, Any, str, int, str, str, int, Any], TaskRow
+BuildChildDraftCallback: TypeAlias = Callable[
+    [TaskRow, Any, str, int, str, str, int, Any], Any
 ]
 SpawnChildCallback: TypeAlias = Callable[
-    [TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
+    [TaskDraft | TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
 ]
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
@@ -313,8 +416,8 @@ class AnchorCompletionRenderCallback(Protocol):
     def __call__(
         self,
         *,
-        new: TaskRow,
-        child: TaskRow,
+        new: TaskView,
+        child: TaskView,
         child_due: Any,
         child_short: str,
         next_no: int,
@@ -330,7 +433,7 @@ class AnchorCompletionRenderCallback(Protocol):
         deferred_spawn: bool,
         spawn_intent_id: str | None,
         lifecycle_result: "CompletionLifecycleResult",
-        chain_by_short: dict[str, Any] | None,
+        chain_by_short: dict[str, TaskView] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
         base_no: int,
@@ -344,8 +447,8 @@ class CpCompletionRenderCallback(Protocol):
     def __call__(
         self,
         *,
-        new: TaskRow,
-        child: TaskRow,
+        new: TaskView,
+        child: TaskView,
         child_due: Any,
         child_short: str,
         next_no: int,
@@ -359,7 +462,7 @@ class CpCompletionRenderCallback(Protocol):
         deferred_spawn: bool,
         spawn_intent_id: str | None,
         lifecycle_result: "CompletionLifecycleResult",
-        chain_by_short: dict[str, Any] | None,
+        chain_by_short: dict[str, TaskView] | None,
         analytics_advice: str | None,
         integrity_warnings: list[str] | None,
         base_no: int,
@@ -370,14 +473,14 @@ class CpCompletionRenderCallback(Protocol):
 class LifecycleResultRenderCallback(Protocol):
     """Render a finalized non-success result without changing its state."""
 
-    def __call__(self, result: "CompletionLifecycleResult", task: TaskRow) -> None:
+    def __call__(self, result: "CompletionLifecycleResult", task: TaskView) -> None:
         ...
 
 
 @dataclass(slots=True)
 class CompletionChainSnapshot:
     mode: str
-    rows: list[dict[str, Any]]
+    rows: list[TaskObservation]
     loaded: bool
     chain_id: str = ""
     error: str = ""
@@ -419,7 +522,6 @@ class CompletionComputeResult:
     cap_no: int | None
     finals: list[tuple[str, Any]]
     until_cap_no: int | None
-    planned_child: dict[str, Any] | None = None
     lifecycle_plan: Any = None
 
 
@@ -463,7 +565,7 @@ class CpCompletionFeedbackModel:
     deferred_spawn: bool
     spawn_intent_id: str | None
     lifecycle_result: "CompletionLifecycleResult"
-    chain_by_short: dict[str, Any] | None
+    chain_by_short: dict[str, TaskView] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
     base_no: int
@@ -488,7 +590,7 @@ class AnchorCompletionFeedbackModel:
     deferred_spawn: bool
     spawn_intent_id: str | None
     lifecycle_result: "CompletionLifecycleResult"
-    chain_by_short: dict[str, Any] | None
+    chain_by_short: dict[str, TaskView] | None
     analytics_advice: str | None
     integrity_warnings: list[str] | None
     base_no: int
@@ -564,7 +666,7 @@ class CompletionLifecycleResult:
 
 @dataclass(slots=True)
 class CompletionSpawnServices:
-    build_child_from_parent: BuildChildCallback
+    build_child_draft: BuildChildDraftCallback
     spawn_child_atomic: SpawnChildCallback
     panel: PanelCallback
     print_task: PrintTaskCallback

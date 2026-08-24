@@ -18,6 +18,7 @@ from .integration_models import (
     Unavailable,
 )
 from .task_read_repository import ALL_TASK_STATUSES, AuthoritativeTaskSnapshot
+from .task_models import TaskObservation
 
 
 class _SnapshotRepository(Protocol):
@@ -113,7 +114,7 @@ class IntegritySnapshotRequest:
                    complete_chain_history=complete_chain_history, refresh=refresh)
 
 
-def _snapshot_id(request: IntegritySnapshotRequest, rows: tuple[dict[str, object], ...], fingerprint: str) -> str:
+def _snapshot_id(request: IntegritySnapshotRequest, rows: tuple[TaskObservation, ...], fingerprint: str) -> str:
     payload = {
         "request": {
             "kind": request.kind.value,
@@ -122,7 +123,7 @@ def _snapshot_id(request: IntegritySnapshotRequest, rows: tuple[dict[str, object
             "statuses": request.statuses,
             "complete_chain_history": request.complete_chain_history,
         },
-        "rows": rows,
+        "rows": [row.semantic_fingerprint for row in rows],
         "configuration_fingerprint": fingerprint,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -173,28 +174,28 @@ class ChainSnapshotService:
     def from_rows(
         self,
         request: IntegritySnapshotRequest,
-        rows: Sequence[dict[str, object]],
+        rows: Sequence[TaskObservation],
         *,
         source: str,
         coverage: SnapshotCoverage | None = None,
     ) -> ChainSnapshot | Unavailable:
         """Build a validated snapshot from already-authoritative rows."""
-        raw_rows = tuple(dict(row) for row in rows)
-        invalid = self._validate_mapping_rows(request, raw_rows)
+        observations = tuple(rows)
+        invalid = self._validate_observations(request, observations)
         if invalid:
             return Unavailable(self._query(request), FailureEvidence(
                 TaskCommand(("task", "export"), "chain snapshot rows", 0.0),
                 CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.0, False, invalid,
             ))
         try:
-            normalized = tuple(ChainNode.from_mapping(row) for row in raw_rows)
+            normalized = tuple(ChainNode.from_observation(row) for row in observations)
         except (TypeError, ValueError) as exc:
             return Unavailable(self._query(request), FailureEvidence(
                 TaskCommand(("task", "export"), "chain snapshot rows", 0.0),
                 CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.0, False, str(exc),
             ))
         return ChainSnapshot(
-            _snapshot_id(request, raw_rows, self._configuration_fingerprint),
+            _snapshot_id(request, observations, self._configuration_fingerprint),
             coverage or (
                 SnapshotCoverage.CHAIN
                 if request.kind is IntegritySnapshotKind.CHAIN
@@ -223,19 +224,22 @@ class ChainSnapshotService:
         seen: set[str] = set()
         allowed_statuses = frozenset(request.statuses)
         for row in snapshot.rows:
-            uuid_value = str(row.get("uuid") or "").strip().lower()
+            uuid_state = row.field("uuid")
+            uuid_value = str(getattr(uuid_state.value, "value", uuid_state.value) or "").strip().lower()
             if not uuid_value:
                 return "chain export contains a row without a UUID"
             if uuid_value in seen:
                 return f"chain export contains duplicate full UUID {uuid_value}"
             seen.add(uuid_value)
-            status = str(row.get("status") or "").strip().lower()
+            status_state = row.field("status")
+            status = str(getattr(status_state.value, "value", status_state.value) or "").strip().lower()
             if not status:
                 return f"chain export row {uuid_value} has no status"
             if status not in allowed_statuses:
                 return f"chain export row {uuid_value} has status {status!r} outside requested scope"
             if request.kind is IntegritySnapshotKind.CHAIN:
-                chain_id = str(row.get("chainID") or row.get("chain_id") or "").strip()
+                chain_state = row.field("chainID")
+                chain_id = str(getattr(chain_state.value, "value", chain_state.value) or "").strip()
                 if chain_id != request.chain_id:
                     return (
                         f"chain export returned row {uuid_value} with chainID "
@@ -243,16 +247,15 @@ class ChainSnapshotService:
                     )
         return ""
 
-    @classmethod
-    def _validate_mapping_rows(
-        cls,
+    @staticmethod
+    def _validate_observations(
         request: IntegritySnapshotRequest,
-        rows: Sequence[dict[str, object]],
+        rows: Sequence[TaskObservation],
     ) -> str:
         class _Rows:
-            def __init__(self, values: Sequence[dict[str, object]]) -> None:
+            def __init__(self, values: Sequence[TaskObservation]) -> None:
                 self.rows = tuple(values)
-        return cls._validate_rows(request, _Rows(rows))
+        return ChainSnapshotService._validate_rows(request, _Rows(rows))
 
     def _read(self, request: IntegritySnapshotRequest) -> TaskRead[AuthoritativeTaskSnapshot]:
         if request.kind is IntegritySnapshotKind.CHAIN:

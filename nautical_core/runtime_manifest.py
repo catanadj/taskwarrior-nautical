@@ -27,6 +27,9 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "hook_context",
         "hook_results",
         "hook_engine",
+        "modify_models",
+        "task_codec",
+        "task_models",
     ),
     "on-modify": (
         *_SHARED_HOOK_MODULES,
@@ -41,6 +44,8 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_completion_compute",
         "modify_completion_spawn",
         "modify_models",
+        "task_codec",
+        "task_models",
         "lifecycle_models",
         "lifecycle_planner",
         "chain_integrity_lifecycle",

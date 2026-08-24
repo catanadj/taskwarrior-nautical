@@ -210,6 +210,24 @@ _MODULE_SPECS = {
         "panel_diagnostics.py",
         "nautical_core.panel_diagnostics",
     ),
+    "modify_models": (
+        "_MODIFY_MODELS",
+        "_MODIFY_MODELS_LOAD_FAILED",
+        "modify_models.py",
+        "nautical_core.modify_models",
+    ),
+    "task_codec": (
+        "_TASK_CODEC",
+        "_TASK_CODEC_LOAD_FAILED",
+        "task_codec.py",
+        "nautical_core.task_codec",
+    ),
+    "task_models": (
+        "_TASK_MODELS",
+        "_TASK_MODELS_LOAD_FAILED",
+        "task_models.py",
+        "nautical_core.task_models",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
@@ -444,9 +462,12 @@ def _panel(title, rows, kind: str = "info", task: dict | None = None):
             return
     themes = core.panel_themes()
     if task is not None and core.CHAIN_COLOR_PER_CHAIN and kind in {"preview_anchor", "preview_cp"}:
+        # Presentation consumes an immutable view; the mutable task remains
+        # owned by the on-add mutation/serialization boundary.
+        task_view = _module("modify_models").TaskView.from_mapping(task)
         theme = dict(themes[kind])
         colour_kind = "cp" if kind == "preview_cp" else "anchor"
-        colour = core.chain_colour_root(colour_kind, str(task.get("chainID") or ""))
+        colour = core.chain_colour_root(colour_kind, str(task_view.get("chainID") or ""))
         theme["border"] = colour
         theme["title"] = colour
         themes[kind] = theme
@@ -555,6 +576,7 @@ def _error_and_exit(msg_tuples):
 
 _RAW_INPUT_TEXT = ""
 _PARSED_TASK = None
+_PARSED_OBSERVATION = None
 
 def _panic_passthrough() -> None:
     """Emit a valid fallback JSON task on unexpected errors."""
@@ -563,10 +585,11 @@ def _panic_passthrough() -> None:
 
 
 
-# Local ISO string back to Taskwarrior (lets default-due adjusters run)
+# Canonical timezone-aware local ISO string back to Taskwarrior.  Typed
+# recurrence validation requires an explicit timezone once preview assigns a
+# target, while retaining the user's configured wall-clock time.
 def _fmt_local_for_task(dt_utc):
-    dl = core.to_local(dt_utc)
-    return dl.strftime("%Y-%m-%dT%H:%M:%S")
+    return core.to_local(dt_utc).isoformat(timespec="seconds")
 
 
 # ------------------------------------------------------------------------------
@@ -726,8 +749,13 @@ def _validate_native_until_anchor_slots_or_fail(
     recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext(
         chain_id=task.get("chainID") or task.get("uuid") or "preview"
     )
-    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+    observation = core._import_sibling("task_codec").DEFAULT_TASK_CODEC.decode_row(
         task,
+        source_query="on-add recurrence validation",
+    )
+    domain_task = core._import_sibling("task_models").NauticalTask.from_observation(observation)
+    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+        domain_task,
         context=recurrence_context,
     )
     anchor_file_value = recurrence_spec.anchor_file
@@ -1334,7 +1362,11 @@ def _handle_cp_preview_on_add(
 ) -> None:
     rows: list[tuple[str, str]] = []
     diagnostics = _module("panel_diagnostics")
-    for warning in diagnostics.panel_warnings(core, task, include_files=False):
+    for warning in diagnostics.panel_warnings(
+        core,
+        _module("modify_models").TaskView.from_mapping(task),
+        include_files=False,
+    ):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
 
     def _fmt(dt):
@@ -1675,13 +1707,14 @@ def _build_profiler():
 
 
 def _read_on_add_task(prof) -> dict:
-    global _RAW_INPUT_TEXT, _PARSED_TASK
+    global _RAW_INPUT_TEXT, _PARSED_TASK, _PARSED_OBSERVATION
     if _EARLY_PROTOCOL_RESULT is not None:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
         if not _EARLY_PROTOCOL_RESULT.valid:
             _fail_and_exit("Invalid input", _EARLY_PROTOCOL_RESULT.error)
         request = getattr(_EARLY_PROTOCOL_RESULT, "request", None)
         task = getattr(request, "task", None) or _EARLY_PROTOCOL_RESULT.task
+        _PARSED_OBSERVATION = getattr(_EARLY_PROTOCOL_RESULT, "observation", None)
         if not isinstance(task, dict):
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
         _PARSED_TASK = task
@@ -1707,7 +1740,13 @@ def _read_on_add_task(prof) -> dict:
     else:
         try:
             with prof.section("parse:json"):
-                task = json.loads(raw)
+                codec = _module("task_codec")
+                observation = codec.DEFAULT_TASK_CODEC.decode_object(
+                    raw,
+                    source_query="hook:on-add",
+                )
+                task = observation.to_mapping()
+                _PARSED_OBSERVATION = observation
         except Exception:
             _fail_and_exit("Invalid input", "on-add must receive a single JSON task")
     if not isinstance(task, dict):
@@ -1733,7 +1772,14 @@ def _build_hook_runtime_context():
     )
 
 
-def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *, prof=None):
+def _build_on_add_context(
+    task: dict,
+    now_utc: datetime,
+    now_local: datetime,
+    *,
+    observation=None,
+    prof=None,
+):
     hook_context = _module("hook_context")
     _t_conf = time.perf_counter()
     try:
@@ -1745,6 +1791,7 @@ def _build_on_add_context(task: dict, now_utc: datetime, now_local: datetime, *,
             kind_and_defaults_on_add=_kind_and_defaults_on_add,
             validate_chain_limits_on_add=_validate_chain_limits_on_add,
             due_context_on_add=_due_context_on_add,
+            observation=observation,
         )
         omit_expr = _strip_quotes((task.get("omit") or "").strip())
         if omit_expr:
@@ -1839,8 +1886,8 @@ class _OnAddServices:
     def fail_and_exit(self, title: str, message: str):
         _fail_and_exit(title, message)
 
-    def build_context(self, task, now_utc, now_local, *, prof):
-        return _build_on_add_context(task, now_utc, now_local, prof=prof)
+    def build_context(self, task, now_utc, now_local, *, observation=None, prof):
+        return _build_on_add_context(task, now_utc, now_local, observation=observation, prof=prof)
 
     def stamp_chain_id(self, task):
         _stamp_chain_id_on_add(task)
@@ -1987,7 +2034,12 @@ def main():
     hook_context = _module("hook_context")
     hook_engine = _module("hook_engine")
     runtime = _build_hook_runtime_context()
-    request = hook_context.build_on_add_request(runtime=runtime, task=task, prof=prof)
+    request = hook_context.build_on_add_request(
+        runtime=runtime,
+        task=task,
+        observation=_PARSED_OBSERVATION,
+        prof=prof,
+    )
     with calendar_context, displacement_context:
         result = hook_engine.handle_on_add(
             request,

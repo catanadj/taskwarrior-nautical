@@ -446,10 +446,9 @@ def _append_next_wait_sched_rows(
     """Compatibility adapter for wait/scheduled feedback presentation."""
     _module("modify_feedback").append_next_wait_sched_rows(
         fb,
-        nxt,
+        _module("modify_models").TaskView.from_mapping(nxt),
         nxt_due_utc,
         anchor_field=anchor_field,
-        parse_datetime=_dtparse,
         format_local=core.fmt_dt_local,
         compare_datetimes=_compare_datetimes,
         format_delta=_fmt_td_dd_hhmm,
@@ -592,6 +591,18 @@ _MODULE_SPECS = {
         "_LIFECYCLE_MODELS_LOAD_FAILED",
         "lifecycle_models.py",
         "nautical_core.lifecycle_models",
+    ),
+    "task_codec": (
+        "_TASK_CODEC",
+        "_TASK_CODEC_LOAD_FAILED",
+        "task_codec.py",
+        "nautical_core.task_codec",
+    ),
+    "task_models": (
+        "_TASK_MODELS",
+        "_TASK_MODELS_LOAD_FAILED",
+        "task_models.py",
+        "nautical_core.task_models",
     ),
     "lifecycle_planner": (
         "_LIFECYCLE_PLANNER",
@@ -927,6 +938,8 @@ def _fail_and_exit(title: str, msg: str) -> NoReturn:
 
 _RAW_INPUT_TEXT = ""
 _PARSED_NEW = None
+_PARSED_OLD_OBSERVATION = None
+_PARSED_NEW_OBSERVATION = None
 
 
 def _fail_protocol_error(msg: str) -> NoReturn:
@@ -973,10 +986,12 @@ def _decode_leading_json_objects(raw: str, max_objects: int = 2) -> tuple[list[o
 
 
 def _read_two():
-    global _RAW_INPUT_TEXT, _PARSED_NEW
+    global _RAW_INPUT_TEXT, _PARSED_NEW, _PARSED_OLD_OBSERVATION, _PARSED_NEW_OBSERVATION
     if _EARLY_PROTOCOL_RESULT is not None:
         _RAW_INPUT_TEXT = _EARLY_PROTOCOL_RESULT.raw_text
         _PARSED_NEW = _EARLY_PROTOCOL_RESULT.new
+        _PARSED_OLD_OBSERVATION = getattr(_EARLY_PROTOCOL_RESULT, "old_observation", None)
+        _PARSED_NEW_OBSERVATION = getattr(_EARLY_PROTOCOL_RESULT, "new_observation", None)
         if not _EARLY_PROTOCOL_RESULT.valid:
             if _EARLY_PROTOCOL_RESULT.error_kind == "protocol":
                 _fail_protocol_error(_EARLY_PROTOCOL_RESULT.error)
@@ -1006,6 +1021,8 @@ def _read_two():
         old = getattr(request, "old", None) or result.old
         new = getattr(request, "new", None) or result.new
         if isinstance(old, dict) and isinstance(new, dict):
+            _PARSED_OLD_OBSERVATION = getattr(result, "old_observation", None)
+            _PARSED_NEW_OBSERVATION = getattr(result, "new_observation", None)
             _PARSED_NEW = new
             return old, new
         _fail_invalid_input("on-modify must receive two JSON tasks")
@@ -1263,13 +1280,6 @@ def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
     return _module("modify_spawn_prep").sanitize_unknown_attrs(stderr, payload)
 
 
-def _normalise_datetime_fields(obj: dict) -> None:
-    _module("modify_spawn_prep").normalise_datetime_fields(obj)
-
-
-def _strip_none_and_cast(obj: dict):
-    return _module("modify_spawn_prep").strip_none_and_cast(obj)
-
 def _format_line_preview(
     link_no: int,
     task: dict,
@@ -1284,6 +1294,7 @@ def _format_line_preview(
     kind: str = "cp",
     minimal: bool = False,
 ) -> str:
+    task = _module("modify_models").TaskView.from_mapping(task)
     return _module("modify_feedback").format_line_preview(
         link_no,
         task,
@@ -1299,7 +1310,6 @@ def _format_line_preview(
         minimal=minimal,
         core=core,
         format_local=_fmtlocal,
-        parse_datetime=_dtparse,
         on_time_delta=_fmt_on_time_delta,
         human_delta=_human_delta,
     )
@@ -1364,10 +1374,12 @@ def _lifecycle_spawn_identity(parent: dict, child: dict):
 
 
 def _spawn_child_atomic(
-    child_task: dict,
+    child_task,
     parent_task_with_nextlink: dict,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     modify_spawn = _module("modify_spawn")
+    if hasattr(child_task, "to_mapping"):
+        child_task = child_task.to_mapping()
     return modify_spawn.spawn_child_atomic(
         child_task,
         parent_task_with_nextlink,
@@ -1376,8 +1388,6 @@ def _spawn_child_atomic(
             child_uuid_for_spawn=_child_uuid_for_spawn,
             fmt_isoz=core.fmt_isoz,
             now_utc=core.now_utc,
-            strip_none_and_cast=_strip_none_and_cast,
-            normalise_datetime_fields=_normalise_datetime_fields,
             lifecycle_models=_module("lifecycle_models"),
             lifecycle_spawn_identity=_lifecycle_spawn_identity,
             enqueue_spawn_intent=_enqueue_spawn_intent,
@@ -1452,7 +1462,7 @@ def _tw_get_cached(ref: str) -> str:
             cached, cache_chain_id = (
                 _lifecycle_read_service().lookup_short(short) if short else (None, "")
             )
-            if short and isinstance(cached, dict):
+            if short and hasattr(cached, "get"):
                 _diag_count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
             if short and cache_chain_id:
@@ -1676,7 +1686,7 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
     return "[green](on time)[/]"
 
 
-def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
+def _collect_prev_two(current_task: dict, chain_by_link=None):
     from nautical_core.integration_models import Absent, Found, Unavailable
 
     service = _lifecycle_read_service()
@@ -1693,11 +1703,11 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
         return []
     if not isinstance(read, Found):
         raise RuntimeError("lifecycle predecessor read returned an invalid result")
-    return [dict(row) for row in read.value]
+    return list(read.value)
 
 
-def _cached_chain_token_match(task: dict, token: str) -> bool:
-    if not isinstance(task, dict) or not isinstance(token, str) or not token:
+def _cached_chain_token_match(task, token: str) -> bool:
+    if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
     if token.startswith("+"):
         want = token[1:].strip().lower()
@@ -1762,14 +1772,19 @@ def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = N
         return None
     short = uuid_str[:8]
     service = _lifecycle_read_service()
-    task_obj = service.seed_lookup_task(dict(task), short_uuid=short)
+    task_codec = _module("task_codec")
+    observation = task_codec.DEFAULT_TASK_CODEC.decode_row(
+        task,
+        source_query="on-modify lookup seed",
+    )
+    task_obj = service.seed_lookup_task(observation, short_uuid=short)
     requested_short = str(lookup_short or "").strip()
     if requested_short and requested_short != short:
         task_obj = service.seed_lookup_task(task_obj, short_uuid=requested_short)
     entry = task_obj.get("entry")
     if short and entry:
         _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
-    return task_obj
+    return task_obj.to_mapping()
 
 
 def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
@@ -1782,16 +1797,8 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
 # ------------------------------------------------------------------------------
 
 def _recurrence_seed_base(task: dict) -> str:
-    """Resolve the task recurrence identity once for preview-like paths."""
-    # This helper is also used by isolated preview/test paths that do not pass
-    # through ``run_hook`` first.  Ensure the lazy core binding exists before
-    # resolving the shared recurrence context.
-    _load_core()
-    context = core._import_sibling("recurrence_context").RecurrenceContext.from_task(
-        task,
-        fallback_chain_id="preview",
-    )
-    return context.seed_base
+    """Resolve the task recurrence identity at the hook input boundary."""
+    return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
 def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     """Normalize various core representations of @t into a sorted list of (hh, mm)."""
@@ -2214,12 +2221,14 @@ def _end_summary_chain_id_row(actual_current: dict) -> str:
     return _module("modify_chain_summary").summary_chain_id(actual_current)
 
 
-def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
+def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list:
     chain = tw_export_chain_required(actual_current)
     if actual_current and chain:
         for i, task in enumerate(chain):
             if task.get("uuid") == actual_current.get("uuid"):
-                chain[i] = actual_current
+                chain[i] = _module("task_models").TaskObservation.from_mapping(
+                    actual_current, source_query=f"chain:{chain_id}:current"
+                )
                 break
     try:
         chain = _sort_chain_for_analytics(chain)
@@ -2430,7 +2439,7 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
         out.append(f"{key}:{value}")
     return out
 
-def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
+def _export_chain_endpoint(chain_id: str, direction: str):
     """Return a chain endpoint from the invocation's authoritative snapshot."""
     rows = _lifecycle_read_service().get_chain_export(chain_id)
     if rows is None:
@@ -2438,13 +2447,12 @@ def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     with_links = [
         (core.coerce_int(row.get("link"), None), row)
         for row in rows
-        if isinstance(row, dict)
     ]
     with_links = [(link, row) for link, row in with_links if link is not None]
     if not with_links:
         return None
     with_links.sort(key=lambda item: item[0])
-    return dict(with_links[0 if direction == "first" else -1][1])
+    return with_links[0 if direction == "first" else -1][1]
 
 # ------------------------------------------------------------------------------
 # Main
@@ -2508,9 +2516,10 @@ def _render_anchor_completion_feedback(
 ) -> None:
     calendar_feedback = importlib.import_module("nautical_core.calendar_feedback")
     modify_feedback = _module("modify_feedback")
+    modify_models = _module("modify_models")
     modify_feedback.orchestrate_anchor_completion_feedback(
-        new=new,
-        child=child,
+        new=modify_models.TaskView.from_mapping(new),
+        child=modify_models.TaskView.from_mapping(child),
         child_due=child_due,
         child_short=child_short,
         next_no=next_no,
@@ -2563,9 +2572,10 @@ def _render_cp_completion_feedback(
     base_no: int,
 ) -> None:
     modify_feedback = _module("modify_feedback")
+    modify_models = _module("modify_models")
     modify_feedback.orchestrate_cp_completion_feedback(
-        new=new,
-        child=child,
+        new=modify_models.TaskView.from_mapping(new),
+        child=modify_models.TaskView.from_mapping(child),
         child_due=child_due,
         child_short=child_short,
         next_no=next_no,
@@ -2591,7 +2601,7 @@ def _render_cp_completion_feedback(
     )
 
 
-def _render_lifecycle_result(result, task: dict) -> None:
+def _render_lifecycle_result(result, task) -> None:
     """Render one finalized non-success outcome without deciding its state."""
     state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
     title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
@@ -2701,10 +2711,11 @@ def _semantic_diff_value(old_text: str, new_text: str) -> str:
 
 def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
     modify_feedback = _module("modify_feedback")
+    modify_models = _module("modify_models")
     add_validation = core._import_sibling("add_validation")
     modify_feedback.render_recurrence_updated_panel(
         changes,
-        new,
+        modify_models.TaskView.from_mapping(new),
         parse_datetime=core.parse_dt_any,
         format_local=_fmtlocal,
         describe_native_until_carry=add_validation.describe_native_until_carry,
@@ -2720,8 +2731,9 @@ def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: d
 
 
 def _first_recurrence_target(new: dict, source: str):
+    task_view = _module("modify_models").TaskView.from_mapping(new)
     return _module("modify_completion_compute").first_recurrence_target(
-        new,
+        task_view,
         source,
         parse_datetime=core.parse_dt_any,
         format_datetime=core.fmt_isoz,
@@ -2730,8 +2742,9 @@ def _first_recurrence_target(new: dict, source: str):
 
 
 def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
+    task_view = _module("modify_models").TaskView.from_mapping(new)
     return _module("modify_feedback").recurrence_enabled_rows(
-        new,
+        task_view,
         source,
         describe_anchor=core.describe_anchor_expr,
         parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
@@ -2757,10 +2770,10 @@ def _render_cp_schedule_adjusted_panel(
 
 
 def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, ...]) -> None:
+    new = _module("modify_models").TaskView.from_mapping(new)
     _module("modify_feedback").render_explicit_timing_order_warning(
         new,
         changed_fields,
-        parse_datetime=core.parse_dt_any,
         format_offset=_fmt_td_dd_hhmm,
         panel=_panel,
     )
@@ -2770,17 +2783,20 @@ def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
     """Show the normal finished-chain summary when an active chain is stopped."""
     if not (old.get("chainID") or new.get("chainID")):
         return
+    modify_models = _module("modify_models")
+    old_view = modify_models.TaskView.from_mapping(old)
+    new_view = modify_models.TaskView.from_mapping(new)
     now_utc = core.now_utc()
     try:
-        _end_chain_summary(old, reason, now_utc, current_task=old)
+        _end_chain_summary(old_view, reason, now_utc, current_task=new_view)
     except Exception as exc:
         _diag(f"removed recurrence chain summary failed: {exc}")
         _panel(
             "⛔ Nautical chain stopped",
             [
                 ("Reason", reason),
-                ("Root", _format_root_and_age(old, now_utc)),
-                ("Task", _short(old.get("uuid")) or "–"),
+                ("Root", _format_root_and_age(old_view, now_utc)),
+                ("Task", _short(old_view.get("uuid")) or "–"),
             ],
             kind="summary",
         )
@@ -2791,8 +2807,11 @@ def _ensure_terminal_chain_off(task: dict, event: str | None = None) -> bool:
     if event:
         lifecycle_models = _module("lifecycle_models")
         lifecycle_planner = _module("lifecycle_planner")
+        task_codec = _module("task_codec")
         lifecycle_planner.terminal_plan_for_snapshot(
-            lifecycle_models.TaskSnapshot.from_mapping(task),
+            lifecycle_models.TaskSnapshot.from_observation(
+                task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify terminal")
+            ),
             lifecycle_models.LifecycleEvent(event),
         )
     return _module("modify_lifecycle").ensure_terminal_chain_off(task)
@@ -2802,6 +2821,8 @@ def _preserve_cp_relative_offsets_on_due_change(
     old: dict,
     new: dict,
     new_cp: str,
+    *,
+    transition=None,
 ) -> tuple[
     datetime,
     datetime,
@@ -2811,7 +2832,11 @@ def _preserve_cp_relative_offsets_on_due_change(
         old,
         new,
         new_cp,
-        field_changed=_field_changed,
+        field_changed=(
+            (lambda _old, _new, field: transition.changed(field))
+            if transition is not None
+            else _field_changed
+        ),
         parse_datetime=core.parse_dt_any,
         utc_to_local_naive=_utc_to_local_naive,
         local_naive_to_utc=_local_naive_to_utc,
@@ -2850,12 +2875,16 @@ def _reject_native_until_carry(
     sys.exit(1)
 
 
-def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> bool:
+def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, transition=None) -> bool:
     return _module("modify_carry").preserve_native_until_on_target_change(
         old,
         new,
         kind,
-        field_changed=_field_changed,
+        field_changed=(
+            (lambda _old, _new, field: transition.changed(field))
+            if transition is not None
+            else _field_changed
+        ),
         recurrence_anchor_field=_recurrence_anchor_field,
         parse_datetime=core.parse_dt_any,
         native_until=core._import_sibling("native_until"),
@@ -2865,20 +2894,29 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str) -> 
     )
 
 
-def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
+def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = _module("modify_ordinary")
     modify_lifecycle = _module("modify_lifecycle")
+    field_changed = (
+        (lambda _old, _new, field: transition.changed(field))
+        if transition is not None
+        else _field_changed
+    )
     services = modify_ordinary.OrdinaryModifyServices(
-        field_changed=_field_changed,
+        field_changed=field_changed,
         strip_quotes=_strip_quotes,
         validate_anchor=_non_completion_validate_anchor,
         validate_omit=_validate_omit_for_anchor_or_fail,
         reject_conflicting_types=_non_completion_reject_conflicting_types,
         validate_chain_limits=_validate_chain_limits_on_modify,
-        preserve_cp_offsets=_preserve_cp_relative_offsets_on_due_change,
+        preserve_cp_offsets=lambda old_task, new_task, cp: _preserve_cp_relative_offsets_on_due_change(
+            old_task, new_task, cp, transition=transition,
+        ),
         task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
-        preserve_native_until=_preserve_native_until_on_target_change,
+        preserve_native_until=lambda old_task, new_task, kind: _preserve_native_until_on_target_change(
+            old_task, new_task, kind, transition=transition,
+        ),
         validate_native_until=_validate_native_until_after_target_or_fail,
         validate_native_until_slots=_validate_native_until_anchor_slots_or_fail,
         render_cp_adjustment=_render_cp_schedule_adjusted_panel,
@@ -2904,6 +2942,7 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
             new,
             services=services,
             lifecycle=modify_lifecycle,
+            transition=transition,
         )
     except _module("chain_generation").CarryFieldError as exc:
         _fail_and_exit("Nautical carry failed", str(exc))
@@ -2911,7 +2950,7 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work) -> None:
         _fail_and_exit("Nautical recurrence activation failed", str(exc))
 
 
-def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, str]:
+def _completion_validate_cp_and_anchor(old: dict, new: dict, *, transition=None) -> tuple[str, str, str]:
     modify_validation = _module("modify_validation")
     modify_lifecycle = _module("modify_lifecycle")
     return modify_validation.validate_completion_cp_and_anchor(
@@ -2924,7 +2963,11 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict) -> tuple[str, str, 
             validate_chain_limits=_validate_chain_limits_on_modify,
             parse_cp_sequence=core.parse_cp_sequence,
             cp_sequence_parse_error=core.cp_sequence_parse_error,
-            field_changed=_field_changed,
+            field_changed=(
+                (lambda _old, _new, field: transition.changed(field))
+                if transition is not None
+                else _field_changed
+            ),
             validate_anchor=_validate_anchor_on_modify,
             validate_cp=_validate_cp_on_modify,
             apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
@@ -3001,7 +3044,14 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int, reposi
     mode = _completion_chain_snapshot_mode()
     snapshot = repository.chain_snapshot(chain_id)
     if isinstance(snapshot, Found):
-        rows = [dict(row) for row in snapshot.value]
+        value = getattr(snapshot.value, "rows", snapshot.value)
+        task_models = _module("task_models")
+        rows = [
+            row if hasattr(row, "to_mapping") else task_models.TaskObservation.from_mapping(
+                row, source_query=f"chain:{chain_id}:completion"
+            )
+            for row in value
+        ]
         loaded = True
         error = ""
     elif isinstance(snapshot, Absent):
@@ -3050,6 +3100,19 @@ def _completion_preflight_context(new: dict, now_utc: datetime, repository):
 def _completion_compute_child_due(new: dict, kind: str):
     modify_completion_compute = _module("modify_completion_compute")
     generation = _chain_generation_service()
+    task_codec = _module("task_codec")
+    task_models = _module("task_models")
+
+    def typed_task(task: dict):
+        return task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
+        )
+
+    def compute_anchor(task: dict):
+        return generation.compute_anchor_child_due(typed_task(task))
+
+    def compute_cp(task: dict):
+        return generation.compute_cp_child_due(typed_task(task))
 
     def handle_terminal(exc) -> None:
         message = core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
@@ -3079,8 +3142,8 @@ def _completion_compute_child_due(new: dict, kind: str):
     return modify_completion_compute.completion_compute_child_due(
         new,
         kind,
-        compute_anchor_child_due=generation.compute_anchor_child_due,
-        compute_cp_child_due=generation.compute_cp_child_due,
+        compute_anchor_child_due=compute_anchor,
+        compute_cp_child_due=compute_cp,
         panel=_panel,
         print_task=_print_task,
         diag=_diag,
@@ -3237,13 +3300,21 @@ def _completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt,
-    planned_child: dict | None = None,
 ):
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
     generation = _chain_generation_service()
+    task_codec = _module("task_codec")
+    task_models = _module("task_models")
+
+    def build_child_draft(task: dict, *args, **kwargs):
+        typed_task = task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
+        )
+        return generation.build_child_draft(typed_task, *args, **kwargs)
+
     services = modify_runtime.build_spawn_services(
-        build_child_from_parent=generation.build_child_from_parent,
+        build_child_draft=build_child_draft,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         print_task=_print_task,
@@ -3258,12 +3329,11 @@ def _completion_build_and_spawn_child(
         kind=kind,
         cpmax=cpmax,
         until_dt=until_dt,
-        planned_child=planned_child,
         services=services,
     )
 
 
-def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "CompletionLifecycleResult | None":
+def _handle_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> "CompletionLifecycleResult | None":
     # Completion preflight and feedback must share the invocation's
     # authoritative repository, just like ordinary and deleted edits.
     _modify_runtime_state().task_repository = unit_of_work.repository
@@ -3286,7 +3356,9 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "Completion
     )
     flow_services = modify_completion_flow.CompletionFlowServices(
         runtime_state=_modify_runtime_state,
-        prepare_recurrence=_completion_validate_cp_and_anchor,
+        prepare_recurrence=lambda old_task, new_task: _completion_validate_cp_and_anchor(
+            old_task, new_task, transition=transition,
+        ),
         preserve_cp_relative_offsets=_preserve_cp_relative_offsets_on_due_change,
         preserve_native_until=_preserve_native_until_on_target_change,
         validate_native_until=_validate_native_until_after_target_or_fail,
@@ -3299,6 +3371,7 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "Completion
         diag_lifecycle_result=_diag_lifecycle_result,
         finalize_completion=modify_completion_flow.finalize_completion_modify,
         finalize_services=finalize_services,
+        transition=transition,
     )
     return modify_completion_flow.handle_completion_modify(
         old,
@@ -3311,13 +3384,30 @@ def _handle_completion_modify(old: dict, new: dict, unit_of_work) -> "Completion
 def _expiration_services():
     modify_expiration = _module("modify_expiration")
     generation = _chain_generation_service()
+    task_codec = _module("task_codec")
+    task_models = _module("task_models")
+
+    def typed_task(task: dict):
+        return task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify expiration")
+        )
+
+    def compute_anchor(task: dict):
+        return generation.compute_anchor_child_due(typed_task(task))
+
+    def compute_cp(task: dict):
+        return generation.compute_cp_child_due(typed_task(task))
+
+    def build_child_draft(task: dict, *args, **kwargs):
+        return generation.build_child_draft(typed_task(task), *args, **kwargs)
+
     return modify_expiration.ExpirationServices(
         core=core,
         reconcile=_module("chain_integrity_lifecycle"),
         safe_parse_datetime=_safe_parse_datetime,
-        compute_anchor_child_due=generation.compute_anchor_child_due,
-        compute_cp_child_due=generation.compute_cp_child_due,
-        build_child_from_parent=generation.build_child_from_parent,
+        compute_anchor_child_due=compute_anchor,
+        compute_cp_child_due=compute_cp,
+        build_child_draft=build_child_draft,
         spawn_child_atomic=_spawn_child_atomic,
         panel=_panel,
         short=_short,
@@ -3349,7 +3439,7 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
     return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
 
 
-def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
+def _handle_deleted_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = _module("modify_expiration", required=False)
     if modify_expiration is None:
@@ -3366,7 +3456,7 @@ def _handle_deleted_modify(old: dict, new: dict, unit_of_work) -> None:
         diag=_diag,
         recovery_warning=_expiration_recovery_warning,
     )
-    modify_expiration.handle_deleted_modify(old, new, services=services)
+    modify_expiration.handle_deleted_modify(old, new, services=services, transition=transition)
 
 
 class _OnModifyServices:
@@ -3374,6 +3464,8 @@ class _OnModifyServices:
 
     def __init__(self, result_cls):
         self._result_cls = result_cls
+
+    typed_transition_handlers = True
 
     def result(self, task, *, sanitize: bool):
         return self._result_cls(task=task, sanitize=sanitize)
@@ -3393,14 +3485,14 @@ class _OnModifyServices:
     def is_non_completion(self, old, new):
         return _is_non_completion_modify(old, new)
 
-    def handle_non_completion(self, old, new, unit_of_work):
-        _handle_non_completion_modify(old, new, unit_of_work)
+    def handle_non_completion(self, old, new, unit_of_work, transition=None):
+        _handle_non_completion_modify(old, new, unit_of_work, transition=transition)
 
-    def handle_completion(self, old, new, unit_of_work):
-        return _handle_completion_modify(old, new, unit_of_work)
+    def handle_completion(self, old, new, unit_of_work, transition=None):
+        return _handle_completion_modify(old, new, unit_of_work, transition=transition)
 
-    def handle_deleted(self, old, new, unit_of_work):
-        _handle_deleted_modify(old, new, unit_of_work)
+    def handle_deleted(self, old, new, unit_of_work, transition=None):
+        _handle_deleted_modify(old, new, unit_of_work, transition=transition)
 
 
 def main():
@@ -3436,6 +3528,8 @@ def main():
         runtime=_build_hook_runtime_context(),
         old=old,
         new=new,
+        old_observation=_PARSED_OLD_OBSERVATION,
+        new_observation=_PARSED_NEW_OBSERVATION,
     )
     if _IMPORT_MS is not None:
         state.diag_stats["startup_import_ms"] = round(float(_IMPORT_MS), 3)

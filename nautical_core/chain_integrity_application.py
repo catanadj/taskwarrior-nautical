@@ -181,7 +181,8 @@ class IntegrityApplicationService:
             raise ValueError("mutation guard does not match integrity operation target")
         if not isinstance(request.payload, MetadataRepairPayload):
             raise TypeError("integrity metadata repair requires MetadataRepairPayload")
-        if request.payload.to_dict() != dict(operation.payload):
+        patch = operation.task_patch()
+        if request.payload.to_dict() != dict(patch.set_values()):
             raise ValueError("metadata request payload differs from integrity operation")
 
 

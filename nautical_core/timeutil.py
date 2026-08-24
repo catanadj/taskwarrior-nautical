@@ -99,7 +99,16 @@ def parse_dt_any(s: str, date_formats) -> datetime | None:
     """Parse datetime from string using multiple formats."""
     if not s:
         return None
-    s = str(s)
+    s = str(s).strip()
+    # Preserve the time component for typed temporal fields such as
+    # ``chainUntil`` before the date-only fallback below is considered.
+    iso_value = s[:-1] + "+00:00" if s.endswith("Z") else s
+    try:
+        parsed = datetime.fromisoformat(iso_value)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        pass
     for fmt in date_formats:
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
 from .evaluation_session import EvaluationSession
 from .occurrence_outcomes import (
@@ -21,6 +21,7 @@ from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_models import OccurrenceSearchExhausted
 from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
+from .task_models import NauticalTask, TaskObservation
 
 
 @dataclass(slots=True)
@@ -31,15 +32,27 @@ class SchedulerService:
     trace: SchedulerTrace | None = None
 
     @classmethod
-    def from_task(
+    def from_observation(
         cls,
-        task: Mapping[str, Any],
+        observation: TaskObservation,
         *,
         context: RecurrenceContext | None = None,
         trace: SchedulerTrace | None = None,
     ) -> "SchedulerService":
         trace = trace or SchedulerTrace.from_env()
-        return cls(EvaluationSession.from_task(task, context=context), trace)
+        return cls(EvaluationSession.from_observation(observation, context=context), trace)
+
+    @classmethod
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+        trace: SchedulerTrace | None = None,
+    ) -> "SchedulerService":
+        if not isinstance(task, NauticalTask):
+            raise TypeError("scheduler requires a validated NauticalTask")
+        return cls(EvaluationSession.from_task(task, context=context), trace or SchedulerTrace.from_env())
 
     def _flush_trace(self) -> None:
         if self.trace is not None and self.trace.enabled:

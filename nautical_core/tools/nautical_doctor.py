@@ -42,6 +42,7 @@ from nautical_core.integration_context import (  # noqa: E402
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
+from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
@@ -130,14 +131,15 @@ def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]
     return proc.ok, proc.stdout.strip()
 
 
-def _task_export(unit_of_work: TaskwarriorUnitOfWork) -> tuple[bool, list[dict[str, Any]], str]:
+def _task_export(unit_of_work: TaskwarriorUnitOfWork) -> tuple[bool, list[TaskObservation], str]:
     unit_of_work.repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    read = ChainSnapshotService(
-        unit_of_work,
-        configuration_fingerprint=unit_of_work.context.configuration.fingerprint,
-    ).collect(IntegritySnapshotRequest.candidates(complete_chain_history=True))
+    read = unit_of_work.repository.lifecycle_candidates(
+        statuses=ALL_TASK_STATUSES,
+        scope_filter=None,
+        bounded=False,
+    )
     if isinstance(read, Found):
-        return True, [node.to_dict() for node in read.value.rows], ""
+        return True, list(read.value), ""
     if isinstance(read, Absent):
         return True, [], ""
     if isinstance(read, Unavailable):
@@ -998,27 +1000,46 @@ def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) 
     return sorted(set(paths))
 
 
-def _task_detail(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "uuid": str(row.get("uuid") or ""),
-        "description": str(row.get("description") or ""),
-        "status": str(row.get("status") or ""),
-        "chainID": str(row.get("chainID") or ""),
-        "link": row.get("link"),
+def _task_value(row: TaskObservation, field: str) -> Any:
+    state = row.field(field)
+    if state.presence is FieldPresence.ABSENT:
+        return None
+    return getattr(state.value, "value", state.value)
+
+
+def _task_detail(row: TaskObservation) -> dict[str, Any]:
+    detail = {
+        "uuid": str(_task_value(row, "uuid") or ""),
+        "description": str(_task_value(row, "description") or ""),
+        "status": str(_task_value(row, "status") or ""),
+        "chainID": str(_task_value(row, "chainID") or ""),
+        "link": _task_value(row, "link"),
     }
+    if row.issues:
+        detail["decode_issues"] = [
+            {
+                "field": issue.field,
+                "code": issue.code,
+                "message": issue.message,
+                "severity": issue.severity.value,
+                "raw": issue.raw,
+            }
+            for issue in row.issues
+        ]
+    return detail
 
 
-def _existing_reconcile_children(rows: list[dict[str, Any]], parent: dict[str, Any]) -> list[dict[str, Any]]:
-    chain_id = str(parent.get("chainID") or "").strip()
-    next_link = lifecycle.int_or_default(parent.get("link"), 1) + 1
-    include_deleted = str(parent.get("status") or "").strip() == "deleted"
-    return [
+def _existing_reconcile_children(rows: list[TaskObservation], parent: TaskObservation) -> tuple[TaskObservation, ...]:
+    chain_id = str(_task_value(parent, "chainID") or "").strip()
+    next_link = lifecycle.int_or_default(_task_value(parent, "link"), 1) + 1
+    include_deleted = str(_task_value(parent, "status") or "").strip() == "deleted"
+    return tuple(
         row
         for row in rows
-        if str(row.get("chainID") or "").strip() == chain_id
-        and lifecycle.int_or_default(row.get("link"), -1) == next_link
-        and (include_deleted or str(row.get("status") or "").strip() != "deleted")
-    ]
+        if str(_task_value(row, "chainID") or "").strip() == chain_id
+        and lifecycle.int_or_default(_task_value(row, "link"), -1) == next_link
+        and (include_deleted or str(_task_value(row, "status") or "").strip() != "deleted")
+    )
 
 
 def _safe_parse_datetime(runtime: Any, value: Any):
@@ -1038,7 +1059,7 @@ def _safe_parse_datetime(runtime: Any, value: Any):
 def _check_reconcile_plans(
     findings: list[dict[str, Any]],
     *,
-    rows: list[dict[str, Any]],
+    rows: list[TaskObservation],
     unit_of_work: TaskwarriorUnitOfWork | None = None,
 ) -> None:
     completion_candidates = [row for row in rows if lifecycle.is_orphan_completion_candidate(row)]
@@ -1082,16 +1103,18 @@ def _check_reconcile_plans(
                 generation=generation,
             )
             plans.append(plan)
-            if str(parent.get("status") or "").strip().lower() != "deleted":
+            if str(_task_value(parent, "status") or "").strip().lower() != "deleted":
                 continue
             continues_through_deleted = any(
-                str(child.get("status") or "").strip().lower() == "deleted"
+                str(_task_value(child, "status") or "").strip().lower() == "deleted"
                 for child in existing_children
             )
             planned_until_elapsed = False
-            if plan.action == "spawn" and isinstance(plan.child, dict) and hook is not None:
+            if plan.action == "spawn" and plan.child_draft is not None and hook is not None:
                 try:
-                    until_dt, until_err = _safe_parse_datetime(hook, plan.child.get("until"))
+                    until_dt, until_err = _safe_parse_datetime(
+                        hook, plan.child_draft.field_value("until")
+                    )
                     now_utc = getattr(hook, "now_utc", None)
                     planned_until_elapsed = (
                         not until_err
@@ -1161,7 +1184,7 @@ def _check_chains(
 ) -> dict[str, int]:
     if unit_of_work is None:
         ok = False
-        rows: list[dict[str, Any]] = []
+        rows: list[TaskObservation] = []
         err = "validated integration context is unavailable"
     else:
         ok, rows, err = _task_export(unit_of_work)
@@ -1198,14 +1221,14 @@ def _check_chains(
 
     nautical = [
         row for row in rows
-        if any(str(row.get(field) or "").strip() for field in RECURRENCE_FIELDS)
-        or str(row.get("chainID") or "").strip()
+        if any(str(_task_value(row, field) or "").strip() for field in RECURRENCE_FIELDS)
+        or str(_task_value(row, "chainID") or "").strip()
     ]
 
     return {
         "tasks": len(rows),
         "nautical_tasks": len(nautical),
-        "chains": len({str(row.get("chainID") or "") for row in nautical if row.get("chainID")}),
+        "chains": len({_task_value(row, "chainID") for row in nautical if _task_value(row, "chainID")}),
     }
 
 

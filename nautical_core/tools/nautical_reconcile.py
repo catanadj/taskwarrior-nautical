@@ -36,6 +36,7 @@ from nautical_core.lifecycle_models import (  # noqa: E402
     LifecycleEvent,
     LifecyclePlan,
     TaskSnapshot,
+    VirtualExpiredChild,
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_planner import terminal_plan_for_snapshot  # noqa: E402
@@ -46,6 +47,8 @@ from nautical_core.integration_models import (  # noqa: E402
     Unavailable,
 )
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
+from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload  # noqa: E402
+from nautical_core.task_codec import DEFAULT_TASK_CODEC  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
@@ -219,7 +222,7 @@ def _safe_parse_datetime(hook: Any, value: Any):
     return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
 
 
-def _stable_child_uuid(hook: Any, parent: dict[str, Any], child: dict[str, Any]) -> str:
+def _stable_child_uuid(hook: Any, parent: TaskPayload, child: TaskPayload) -> str:
     resolver = getattr(hook, "stable_child_uuid", None)
     if callable(resolver):
         return str(resolver(parent, child) or "")
@@ -243,9 +246,17 @@ def _repository() -> TaskReadRepository:
     return state.repository
 
 
-def _read_value(read: Any, subject: str) -> Any | None:
+def _read_value(
+    read: Any,
+    subject: str,
+) -> TaskObservation | tuple[TaskObservation, ...] | None:
     if isinstance(read, Found):
-        return read.value
+        value = read.value
+        if isinstance(value, TaskObservation):
+            return value
+        if isinstance(value, tuple) and all(isinstance(row, TaskObservation) for row in value):
+            return value
+        raise _PlanReadUnavailable(f"{subject} returned an untyped task result")
     if isinstance(read, Absent):
         return None
     if isinstance(read, Unavailable):
@@ -302,6 +313,14 @@ def _configuration_state(hook: Any) -> tuple[str, str]:
     return str(getattr(reason, "status", "drifted" if reason else "valid")), str(reason)
 
 
+def _observation_text(observation: TaskObservation, field: str) -> str:
+    state = observation.field(field)
+    if state.presence is FieldPresence.ABSENT:
+        return ""
+    value = state.raw_value()
+    return str(value or "").strip()
+
+
 class _ReconcileSnapshot:
     """Immutable read-phase views for active links and recovery candidates.
 
@@ -321,9 +340,9 @@ class _ReconcileSnapshot:
         self.repository = repository
         self.scope_filter = str(scope_filter or "").strip() or None
         self.full_audit = bool(full_audit)
-        self._rows: tuple[dict[str, Any], ...] | None = None
+        self._rows: tuple[TaskObservation, ...] | None = None
 
-    def _all_rows(self) -> tuple[dict[str, Any], ...]:
+    def _all_rows(self) -> tuple[TaskObservation, ...]:
         if self._rows is None:
             value = _read_value(
                 self.repository.lifecycle_candidates(
@@ -333,24 +352,24 @@ class _ReconcileSnapshot:
                 ),
                 "reconcile lifecycle snapshot",
             )
-            self._rows = tuple(dict(row) for row in (value or ()))
+            self._rows = tuple(value or ())
         else:
             _EXPORT_STATS["snapshot_hits"] += 1
         return self._rows
 
-    def active_rows(self) -> list[dict[str, Any]]:
+    def active_rows(self) -> list[TaskObservation]:
         return [
             row for row in self._all_rows()
-            if str(row.get("chainID") or "").strip()
-            and str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+            if _observation_text(row, "chainID")
+            and _observation_text(row, "status").lower() not in {"completed", "deleted"}
         ]
 
-    def candidate_rows(self) -> list[dict[str, Any]]:
+    def candidate_rows(self) -> list[TaskObservation]:
         return [
             row for row in self._all_rows()
-            if str(row.get("chainID") or "").strip()
-            and not str(row.get("nextLink") or "").strip()
-            and str(row.get("status") or "").strip().lower() in {"completed", "deleted"}
+            if _observation_text(row, "chainID")
+            and not _observation_text(row, "nextLink")
+            and _observation_text(row, "status").lower() in {"completed", "deleted"}
         ]
 
 
@@ -391,7 +410,7 @@ def _active_chain_rows(
     *,
     include_inactive: bool = False,
     snapshot: _ReconcileSnapshot | None = None,
-) -> list[dict[str, Any]]:
+) -> list[TaskObservation]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
     if snapshot is None:
         raise RuntimeError("active-chain reads require an authoritative snapshot")
@@ -400,21 +419,21 @@ def _active_chain_rows(
         (
             row
             for row in rows
-            if str(row.get("status") or "").strip().lower() not in {"completed", "deleted"}
+            if _observation_text(row, "status").lower() not in {"completed", "deleted"}
         ),
         key=IntegrityRecoveryService.candidate_sort_key,
     )
 
 
-def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -> str | None:
+def _native_until_guard_error(expected: TaskObservation, fresh: TaskObservation) -> str | None:
     """Detect target or recurrence changes made after the audit export."""
     fields = (
         "uuid", "status", "chain", "chainID", "link", "due", "scheduled", "until",
         "anchor", "anchor_file", "cp", "chainMax", "chainUntil",
     )
     for field in fields:
-        left = expected.get(field)
-        right = fresh.get(field)
+        left = _observation_text(expected, field)
+        right = _observation_text(fresh, field)
         if field == "link":
             left = lifecycle.int_or_default(left, 0)
             right = lifecycle.int_or_default(right, 0)
@@ -426,16 +445,26 @@ def _native_until_guard_error(expected: dict[str, Any], fresh: dict[str, Any]) -
     return None
 
 
-def _fresh_native_until_previous(row: dict[str, Any]) -> dict[str, Any] | None:
-    chain_id = str(row.get("chainID") or "").strip()
-    link = lifecycle.int_or_default(row.get("link"), 0)
+def _fresh_native_until_previous(row: TaskObservation) -> TaskObservation | None:
+    chain_id = _observation_text(row, "chainID")
+    link = lifecycle.int_or_default(getattr(row.field("link").value, "value", row.field("link").value), 0)
     if not chain_id or link <= 1:
         return None
     value = _read_value(
         _repository().predecessor_slot(chain_id, link - 1, refresh=True),
         f"predecessor {chain_id}:{link - 1}",
     )
-    return dict(value) if value is not None else None
+    return value
+
+
+def _fresh_native_until_parent(row: TaskObservation) -> TaskObservation | None:
+    uuid_value = _observation_text(row, "uuid")
+    if not uuid_value:
+        raise RuntimeError("native-until target has no UUID")
+    return _read_value(
+        _repository().verification(uuid_value),
+        f"native-until parent {uuid_value}",
+    )
 
 
 def _native_until_repairs(
@@ -478,8 +507,11 @@ def _native_until_repairs(
     for candidate in recovery_audit.candidates:
         row = candidate.row
         previous = candidate.previous
-        chain_id = str(row.get("chainID") or "").strip()
-        link = lifecycle.int_or_default(row.get("link"), 0)
+        chain_id = _observation_text(row, "chainID")
+        link = lifecycle.int_or_default(
+            getattr(row.field("link").value, "value", row.field("link").value),
+            0,
+        )
         item = repair_items.get((chain_id, link))
         if item is None:
             continue
@@ -496,7 +528,7 @@ def _native_until_repairs(
                 # The recovery service supplies the parent UUID to this
                 # callback; bind the invocation's Taskdata once here.
                 parent_lock=lambda parent_uuid: _parent_apply_lock(taskdata, parent_uuid),
-                refresh_parent=_fresh_parent,
+                refresh_parent=_fresh_native_until_parent,
                 refresh_previous=_fresh_native_until_previous,
                 guard_error=lambda expected, fresh, fresh_previous: (
                     _native_until_guard_error(expected, fresh)
@@ -519,7 +551,7 @@ def _native_until_repairs(
     return repairs, errors
 
 
-def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> None:
+def _modify_native_until(task_bin: str, row: TaskObservation, new_until: str) -> None:
     del task_bin
     if _UNIT_OF_WORK is None:
         raise RuntimeError("native until repair requires an integration unit of work")
@@ -533,9 +565,9 @@ def _modify_native_until(task_bin: str, row: dict[str, Any], new_until: str) -> 
         raise RuntimeError(outcome.reason or outcome.kind.value)
 
 
-def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bool:
+def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> bool:
     """Compare native-until timestamps by instant, tolerating Taskwarrior formatting."""
-    actual = str(fresh.get("until") or "").strip()
+    actual = _observation_text(fresh, "until")
     if actual == str(expected or "").strip():
         return True
     try:
@@ -546,25 +578,29 @@ def _native_until_matches(fresh: dict[str, Any], expected: str, hook: Any) -> bo
         return False
 
 
-def _recovery_existing_children(parent: dict[str, Any]) -> list[dict[str, Any]]:
-    """Adapt the authoritative repository read to the recovery service."""
+def _recovery_existing_children(parent: TaskPayload) -> tuple[TaskObservation, ...]:
+    """Read the successor slot as immutable observations."""
+    parent_observation = (
+        parent
+        if isinstance(parent, TaskObservation)
+        else DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile child lookup")
+    )
+
+    def child_observation(chain_id: str, link: int) -> TaskObservation | None:
+        read = _repository().exact_child_slot(chain_id, link, refresh=True)
+        if isinstance(read, Found):
+            if not isinstance(read.value, TaskObservation):
+                raise _PlanReadUnavailable(f"child slot {chain_id}:{link} returned an invalid observation")
+            return read.value
+        if isinstance(read, Absent):
+            return None
+        if isinstance(read, Unavailable):
+            raise _PlanReadUnavailable(f"child slot {chain_id}:{link} unavailable: {read.evidence.detail}")
+        raise _PlanReadUnavailable(f"child slot {chain_id}:{link} returned an invalid typed result")
+
     return IntegrityRecoveryService(
-        child_lookup=lambda chain_id, link: _read_value(
-            _repository().exact_child_slot(chain_id, link, refresh=True),
-            f"child slot {chain_id}:{link}",
-        ),
-    ).existing_children(parent)
-
-
-def _existing_children_for_plan(task_bin: str, parent: dict[str, Any], hook: Any) -> list[dict[str, Any]]:
-    if str(parent.get("status") or "").strip() == "deleted":
-        evidence = lifecycle.deleted_chain_disposition(
-            parent,
-            safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
-        )
-        if evidence.disposition is not DeletionDisposition.EXPIRATION:
-            return []
-    return _recovery_existing_children(parent)
+        child_lookup=child_observation,
+    ).existing_children(parent_observation)
 
 
 def _expiration_hop_limit(value: str) -> int:
@@ -614,7 +650,7 @@ def _reconcile_mutation_lock(taskdata: Path, *, lease_held: bool):
         yield acquired
 
 
-def _fresh_parent(parent: dict[str, Any]) -> dict[str, Any] | None:
+def _fresh_parent(parent: TaskPayload) -> TaskPayload | None:
     parent_uuid = str(parent.get("uuid") or "").strip()
     if not parent_uuid:
         raise RuntimeError("parent task has no UUID")
@@ -622,10 +658,10 @@ def _fresh_parent(parent: dict[str, Any]) -> dict[str, Any] | None:
         _repository().verification(parent_uuid),
         f"parent {parent_uuid}",
     )
-    return dict(value) if value is not None else None
+    return value.to_mapping() if isinstance(value, TaskObservation) else None
 
 
-def _parent_identity_error(parent: dict[str, Any]) -> str:
+def _parent_identity_error(parent: TaskPayload) -> str:
     """Explain why a parent cannot be used as an atomic reconcile target."""
     chain_id = str(parent.get("chainID") or "").strip()
     if not chain_id:
@@ -645,7 +681,7 @@ def _parent_identity_error(parent: dict[str, Any]) -> str:
     return ""
 
 
-def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
+def _parent_guard_filters(parent: TaskPayload) -> list[str]:
     parent_uuid = str(parent.get("uuid") or "").strip()
     status = str(parent.get("status") or "").strip().lower()
     chain_id = str(parent.get("chainID") or "").strip()
@@ -671,7 +707,7 @@ def _parent_guard_filters(parent: dict[str, Any]) -> list[str]:
     ]
 
 
-def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
+def _verify_disabled_parent(task_bin: str, parent: TaskPayload) -> None:
     """Re-export a terminal parent before reporting chain disablement as applied."""
     fresh_parent = _fresh_parent(parent)
     if fresh_parent is None:
@@ -689,7 +725,7 @@ def _verify_disabled_parent(task_bin: str, parent: dict[str, Any]) -> None:
 
 def _verify_applied_child(
     task_bin: str,
-    parent: dict[str, Any],
+    parent: TaskPayload,
     child_short: str,
     *,
     hook: Any = None,
@@ -710,10 +746,14 @@ def _verify_applied_child(
         raise RuntimeError(
             f"post-apply verification found parent nextLink {shown}; expected {child_short}"
         )
-    rows = _recovery_existing_children(fresh_parent)
-    resolved, child_error = lifecycle.resolve_existing_child(
+    observations = _recovery_existing_children(fresh_parent)
+    parent_observation = DEFAULT_TASK_CODEC.decode_row(
         fresh_parent,
-        rows,
+        source_query="reconcile post-apply parent verification",
+    )
+    resolved, child_error = lifecycle.resolve_existing_child(
+        parent_observation,
+        observations,
         include_deleted=True,
     )
     if child_error:
@@ -726,28 +766,28 @@ def _verify_applied_child(
     matched = next(
         (
             row
-            for row in rows
-            if str(row.get("uuid") or "").strip().lower().startswith(expected_child)
+            for row in observations
+            if str(row.field("uuid").raw_value() or "").strip().lower().startswith(expected_child)
         ),
         None,
     )
     if matched is None:
         raise RuntimeError("post-apply child verification could not identify the resolved child")
     if callable(getattr(hook, "stable_child_uuid", None)):
-        expected_uuid = _stable_child_uuid(hook, fresh_parent, matched).strip().lower()
-        actual_uuid = str(matched.get("uuid") or "").strip().lower()
+        expected_uuid = _stable_child_uuid(hook, fresh_parent, matched.to_mapping()).strip().lower()
+        actual_uuid = str(matched.field("uuid").raw_value() or "").strip().lower()
         if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
             raise RuntimeError(
                 f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
                 f"does not match deterministic slot identity {expected_uuid[:8]}"
             )
-    return matched
+    return matched.to_mapping()
 
 
-def _stale_plan(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _stale_plan(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "stale",
-        parent,
+        DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile stale plan"),
         lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
@@ -773,7 +813,7 @@ def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
 def _refresh_plan(
     task_bin: str,
     hook: Any,
-    original_parent: dict[str, Any],
+    original_parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
 ) -> lifecycle.LifecycleRecoveryDecision:
@@ -782,9 +822,13 @@ def _refresh_plan(
         return _stale_plan(original_parent, "parent no longer exists")
     status = str(parent.get("status") or "").strip().lower()
     if status == "completed":
-        candidate = lifecycle.is_orphan_completion_candidate(parent)
+        candidate = lifecycle.is_orphan_completion_candidate(
+            DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile refresh")
+        )
     elif status == "deleted":
-        candidate = lifecycle.is_orphan_deleted_chain_candidate(parent)
+        candidate = lifecycle.is_orphan_deleted_chain_candidate(
+            DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile refresh")
+        )
     else:
         candidate = False
     if not candidate:
@@ -805,7 +849,7 @@ def _refresh_plan(
 def _plan_for_parent(
     task_bin: str,
     hook: Any,
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
 ) -> lifecycle.LifecycleRecoveryDecision:
@@ -814,8 +858,13 @@ def _plan_for_parent(
     if configuration_status != "valid":
         raise _ConfigurationDrift(configuration_reason)
     try:
-        return _lifecycle_reconciliation_service().plan(
+        from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        observation = DEFAULT_TASK_CODEC.decode_row(
             parent,
+            source_query="reconcile lifecycle planning",
+        )
+        return _lifecycle_reconciliation_service().plan(
+            observation,
             hook=hook,
             generation=generation or _chain_generation_for_hook(hook),
             safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
@@ -832,40 +881,40 @@ def _integrity_request_factory(operation: Any) -> Any:
     from nautical_core.integration_models import (
         GuardTimestamp,
         GuardTimestampField,
-        MetadataRepairPayload,
         MutationGuard,
-        MutationOperation,
         MutationRequest,
     )
+    from nautical_core.task_changes import TaskPatch
+    from nautical_core.task_models import FieldPresence, TaskObservation, TaskUUID
 
     read = _repository().by_uuid(operation.target_uuid, refresh=True)
     row = _read_value(read, f"integrity target {operation.target_uuid}")
-    if row is None:
+    if not isinstance(row, TaskObservation):
         raise RuntimeError(f"integrity target {operation.target_uuid} is unavailable")
-    row = dict(row)
-    modified = str(row.get("modified") or "").strip()
+    def field_value(name: str) -> object:
+        state = row.field(name)
+        return None if state.presence is FieldPresence.ABSENT else state.raw_value()
+
+    modified = str(field_value("modified") or "").strip()
     if not modified:
         raise RuntimeError("integrity target has no modified timestamp")
-    link = lifecycle.int_or_default(row.get("link"), 0)
+    link = lifecycle.int_or_default(field_value("link"), 0)
     if link < 0:
         raise RuntimeError("integrity target has an invalid link")
     updates = dict(operation.payload)
-    expected = {key: row.get(key) for key in updates}
+    expected = {key: field_value(key) for key in updates}
     guard = MutationGuard(
-        task_uuid=str(row.get("uuid") or operation.target_uuid),
-        status=str(row.get("status") or "pending"),
-        chain_id=str(row.get("chainID") or operation.chain_id),
+        task_uuid=str(field_value("uuid") or operation.target_uuid),
+        status=str(field_value("status") or "pending"),
+        chain_id=str(field_value("chainID") or operation.chain_id),
         link=link,
-        recurrence_identity=recurrence_fingerprint(row),
+        recurrence_identity=recurrence_fingerprint(row.to_mapping()),
         timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
         expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
-        chain=str(row.get("chain") or "on"),
+        chain=str(field_value("chain") or "on"),
     )
-    return MutationRequest(
-        MutationOperation.METADATA_REPAIR,
-        guard,
-        MetadataRepairPayload.from_mapping(guard.task_uuid, updates, expected=expected),
-    )
+    patch = TaskPatch.metadata_repair(TaskUUID(guard.task_uuid), **updates)
+    return MutationRequest.metadata_repair(guard, patch, expected=expected)
 
 
 def _drain_integrity_work() -> tuple[Any, ...]:
@@ -929,7 +978,7 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
     )
 
 
-def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | None:
+def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:
     """Find a task already occupying this exact chain position, by uuid or
     by (chainID, link, prevLink) match, regardless of whether it carries the
     deterministic stable UUID. Preserves duplicate-avoidance for chains that
@@ -940,13 +989,16 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> dict[str, Any] | No
     rows = _recovery_existing_children({"chainID": lifecycle_plan.identity.chain_id, "link": lifecycle_plan.identity.source_link})
     parent_short = str(lifecycle_plan.identity.parent_uuid or "").strip().lower()[:8]
     for row in rows:
-        row_uuid = str(row.get("uuid") or "").strip().lower()
+        def value(name: str) -> object:
+            state = row.field(name)
+            return state.raw_value()
+        row_uuid = str(value("uuid") or "").strip().lower()
         if child_uuid and row_uuid == child_uuid:
             return row
         if (
-            str(row.get("chainID") or "").strip() == lifecycle_plan.identity.chain_id
-            and lifecycle.int_or_default(row.get("link"), None) == lifecycle_plan.identity.target_link
-            and str(row.get("prevLink") or "").strip().lower() == parent_short
+            str(value("chainID") or "").strip() == lifecycle_plan.identity.chain_id
+            and lifecycle.int_or_default(value("link"), None) == lifecycle_plan.identity.target_link
+            and str(value("prevLink") or "").strip().lower() == parent_short
         ):
             return row
     return None
@@ -970,19 +1022,22 @@ def _lifecycle_plan_with_resolved_child_uuid(
         return recon_plan
     child = lifecycle_plan.child_dict()
     existing = _find_positional_child(lifecycle_plan)
-    resolved_uuid = str(existing.get("uuid") or "").strip() if existing is not None else ""
+    resolved_uuid = str(existing.field("uuid").value.value or "").strip() if existing is not None else ""
     if not resolved_uuid:
-        resolved_uuid = _stable_child_uuid(hook, recon_plan.parent, child)
+        resolved_uuid = _stable_child_uuid(hook, recon_plan.parent.to_mapping(), child)
     if not resolved_uuid or resolved_uuid == str(child.get("uuid") or "").strip():
         return recon_plan
     child["uuid"] = resolved_uuid
     patch = dict(lifecycle_plan.parent_patch_dict())
     patch["nextLink"] = resolved_uuid[:8]
-    resolved_plan = LifecyclePlan.from_mappings(
+    resolved_task = NauticalTask.from_observation(
+        DEFAULT_TASK_CODEC.decode_row(child, source_query="reconcile resolved child")
+    )
+    resolved_plan = LifecyclePlan.from_draft(
         identity=lifecycle_plan.identity,
         action=lifecycle_plan.action,
         parent_guard=lifecycle_plan.parent_guard,
-        child_payload=child,
+        draft=TaskDraft.from_task(resolved_task),
         parent_patch=patch,
         expected_postconditions=lifecycle_plan.expected_postconditions,
         max_attempts=lifecycle_plan.max_attempts,
@@ -1039,7 +1094,7 @@ def _execute_reconcile_lifecycle_plan(
         schedule_fingerprint=configuration.scheduler_fingerprint,
         resolve_plan=lambda candidate: _lifecycle_plan_with_resolved_child_uuid(candidate, hook),
         verify_child=lambda parent, short, strict_uuid: _verify_applied_child(
-            task_bin, parent, short, hook=hook, strict_uuid=strict_uuid,
+            task_bin, parent.to_mapping(), short, hook=hook, strict_uuid=strict_uuid,
         ),
         verified_children=verified_children,
         strict_uuid=strict_uuid,
@@ -1056,7 +1111,7 @@ def _execute_reconcile_lifecycle_plan(
 
 def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> LifecyclePlan:
     """Create the typed terminal plan for a reconcile final/manual decision."""
-    parent = plan.parent
+    parent = plan.parent.to_mapping()
     if plan.action == "manual_stop":
         event = LifecycleEvent.MANUAL_DELETE
     elif str(parent.get("status") or "").strip().lower() == "deleted":
@@ -1069,7 +1124,9 @@ def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> Lifec
         event = LifecycleEvent.COMPLETE
     try:
         return terminal_plan_for_snapshot(
-            TaskSnapshot.from_mapping(parent),
+            TaskSnapshot.from_observation(
+                DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile terminal")
+            ),
             event,
             terminal_kind=plan.terminal_kind,
         )
@@ -1097,7 +1154,7 @@ def _execute_reconcile_terminal_plan(
 def _apply_parent_atomic(
     task_bin: str,
     hook: Any,
-    original_parent: dict[str, Any],
+    original_parent: TaskPayload,
     *,
     taskdata: Path,
     lease_held: bool = False,
@@ -1136,16 +1193,16 @@ def _apply_parent_atomic(
     )
 
 
-def _recovery_error(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_error(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "error",
-        parent,
+        DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery error"),
         lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
 
-def _recovery_terminal(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_terminal(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     """Classify an expired-but-still-pending child as resumable, not corrupt."""
     if reason.endswith("native until has already elapsed"):
         return _recovery_partial(
@@ -1155,37 +1212,52 @@ def _recovery_terminal(parent: dict[str, Any], reason: str) -> lifecycle.Lifecyc
     return _recovery_error(parent, reason)
 
 
-def _recovery_partial(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_partial(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "partial",
-        parent,
+        DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery partial"),
         lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
 
-def _recovery_manual_review(parent: dict[str, Any], reason: str) -> lifecycle.LifecycleRecoveryDecision:
+def _recovery_manual_review(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
     return lifecycle.LifecycleRecoveryDecision(
         "manual_review",
-        parent,
+        DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery review"),
         lifecycle.int_or_default(parent.get("link"), 1) + 1,
         reason,
     )
 
 
-def _validate_recovery_child(parent: dict[str, Any], child: dict[str, Any]) -> str:
-    _child_short, child_error = lifecycle.resolve_existing_child(
+def _validate_recovery_child(parent: TaskPayload, child: TaskPayload) -> str:
+    parent_observation = DEFAULT_TASK_CODEC.decode_row(
         parent,
-        [child],
+        source_query="reconcile recovery parent verification",
+    )
+    child_observation = DEFAULT_TASK_CODEC.decode_row(
+        child,
+        source_query="reconcile recovery child verification",
+    )
+    _child_short, child_error = lifecycle.resolve_existing_child(
+        parent_observation,
+        [child_observation],
         include_deleted=True,
     )
     return child_error
 
 
-def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any) -> str:
-    if str(child.get("status") or "").strip().lower() != "pending":
+def _terminal_recovery_error(child: TaskObservation, hook: Any, recovery_at: Any) -> str:
+    if not isinstance(child, TaskObservation):
+        raise TypeError("terminal recovery validation requires a TaskObservation")
+
+    def value(field: str) -> Any:
+        state = child.field(field)
+        return state.raw_value() if state.presence is FieldPresence.VALUE else None
+
+    if str(value("status") or "").strip().lower() != "pending":
         return ""
-    until_raw = child.get("until")
+    until_raw = value("until")
     try:
         until_dt, until_err = _safe_parse_datetime(hook, until_raw)
     except Exception:
@@ -1193,8 +1265,8 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
     if until_err or until_dt is None:
         return f"live recovery child has no reliable native until: {until_err or 'missing until'}"
 
-    target_field = "due" if child.get("due") else "scheduled"
-    target_raw = child.get(target_field)
+    target_field = "due" if value("due") else "scheduled"
+    target_raw = value(target_field)
     try:
         target_dt, target_err = _safe_parse_datetime(hook, target_raw)
     except Exception:
@@ -1212,9 +1284,9 @@ def _terminal_recovery_error(child: dict[str, Any], hook: Any, recovery_at: Any)
 
 
 def _next_recovery_child(
-    parent: dict[str, Any],
+    parent: TaskObservation,
     child_short: str,
-) -> dict[str, Any]:
+) -> TaskObservation:
     wanted = str(child_short or "").strip().lower()
     if not wanted:
         raise RuntimeError("recovery action did not identify its child")
@@ -1233,11 +1305,14 @@ def _next_recovery_child(
         raise RuntimeError(
             f"recovery child {wanted} lookup returned {len(matches)} exact match(es)"
         )
-    child = matches[0]
-    validation_error = _validate_recovery_child(parent, child)
+    child_observation = matches[0]
+    if not isinstance(child_observation, TaskObservation):
+        raise RuntimeError(f"recovery child {wanted} lookup returned an untyped task")
+    child = child_observation.to_mapping()
+    validation_error = _validate_recovery_child(parent.to_mapping(), child)
     if validation_error:
         raise RuntimeError(validation_error)
-    return child
+    return child_observation
 
 
 def _virtual_expired_child(
@@ -1245,8 +1320,10 @@ def _virtual_expired_child(
     *,
     hook: Any,
     recovery_at: Any,
-) -> tuple[dict[str, Any] | None, str]:
-    child = dict(plan.child or {})
+) -> tuple[VirtualExpiredChild | None, str]:
+    if plan.child_draft is None:
+        return None, "planned child draft is unavailable"
+    child = plan.child_draft.to_mapping()
     until_raw = child.get("until")
     try:
         until_dt, until_err = _safe_parse_datetime(hook, until_raw)
@@ -1267,16 +1344,18 @@ def _virtual_expired_child(
         f"{lifecycle.int_or_default(child.get('link'), plan.next_link)}"
     )
     child.pop("nextLink", None)
-    validation_error = _validate_recovery_child(plan.parent, child)
+    validation_error = _validate_recovery_child(plan.parent.to_mapping(), child)
     if validation_error:
         return None, validation_error
-    return child, ""
+    return VirtualExpiredChild(
+        TaskObservation.from_mapping(child, source_query="reconcile virtual expiration")
+    ), ""
 
 
 def _reconcile_candidate(
     task_bin: str,
     hook: Any,
-    parent: dict[str, Any],
+    parent: TaskPayload,
     *,
     taskdata: Path | None,
     apply: bool,
@@ -1324,7 +1403,7 @@ def _reconcile_candidate(
         generation=generation,
     )
 
-def _fmt_parent(parent: dict[str, Any]) -> str:
+def _fmt_parent(parent: TaskPayload) -> str:
     uuid = lifecycle.short_uuid(parent.get("uuid")) or "????????"
     chain_id = str(parent.get("chainID") or "?")
     link = lifecycle.int_or_default(parent.get("link"), 0)
@@ -1342,8 +1421,7 @@ def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
 
 def _describe_plan(plan: lifecycle.LifecycleRecoveryDecision, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
     evidence = lifecycle.describe_plan(plan, fmt_dt_local=fmt_dt_local)
-    child = plan.child if isinstance(plan.child, dict) else {}
-    child_until = child.get("until")
+    child_until = plan.child_draft.field_value("until") if plan.child_draft is not None else None
     if not child_until:
         return evidence
     try:
@@ -1384,7 +1462,7 @@ def _print_plan(
     *,
     applied_short: str = "",
 ) -> None:
-    parent = _fmt_parent(plan.parent)
+    parent = _fmt_parent(plan.parent.to_mapping())
     if evidence is None:
         evidence = lifecycle.describe_plan(plan)
     if plan.action == "spawn":
@@ -1420,7 +1498,7 @@ def _print_recovery_group(
     last, evidence, applied_short = items[-1]
     hops = sum(1 for plan, _evidence, _applied in items if plan.action in {"spawn", "backfill_nextlink"})
     noun = "occurrence" if hops == 1 else "occurrences"
-    print(_style(f"recover: {_fmt_parent(first.parent)} -> advanced {hops} {noun}", "cyan"))
+    print(_style(f"recover: {_fmt_parent(first.parent.to_mapping())} -> advanced {hops} {noun}", "cyan"))
     if last.action in {"error", "partial", "legitimate_final", "manual_stop", "stale"}:
         result = "terminal" if lifecycle.is_terminal_plan(last) else last.action.replace("_", " ")
         print(_style(f"  result: {result} ({last.reason})", _action_style(last.action)))
@@ -1662,7 +1740,8 @@ def main(
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = IntegrityRecoveryService.ambiguous_candidate_slots(candidates)
 
-    for parent in candidates:
+    for parent_observation in candidates:
+        parent = parent_observation.to_mapping()
         if configuration_status == "valid":
             configuration_status, configuration_drift_reason = _configuration_state(hook)
         if configuration_status != "valid":
@@ -1712,10 +1791,11 @@ def main(
                 )
         rendered: list[tuple[lifecycle.LifecycleRecoveryDecision, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
+            plan_parent = plan.parent.to_mapping()
             processed_slots.add(
                 (
-                    str(plan.parent.get("chainID") or "").strip(),
-                    lifecycle.int_or_default(plan.parent.get("link"), 0),
+                    str(plan_parent.get("chainID") or "").strip(),
+                    lifecycle.int_or_default(plan_parent.get("link"), 0),
                 )
             )
             plans.append(plan)
@@ -1727,7 +1807,7 @@ def main(
                 action = "disable_chain" if disabling else plan.action
                 record = {
                     "action": action,
-                    "parent": lifecycle.short_uuid(plan.parent.get("uuid")),
+                    "parent": lifecycle.short_uuid(plan_parent.get("uuid")),
                 }
                 if not disabling:
                     record["child"] = applied_short
@@ -1742,7 +1822,7 @@ def main(
     expiration_hops = sum(
         1
         for plan in plans
-        if str(plan.parent.get("status") or "").strip() == "deleted"
+        if str(plan.parent.to_mapping().get("status") or "").strip() == "deleted"
         and plan.action in {"spawn", "backfill_nextlink"}
     )
     recovered_chains = sum(
@@ -1751,7 +1831,7 @@ def main(
         if sum(
             1
             for plan, _applied in outcomes
-            if str(plan.parent.get("status") or "").strip() == "deleted"
+        if str(plan.parent.to_mapping().get("status") or "").strip() == "deleted"
             and plan.action in {"spawn", "backfill_nextlink"}
         )
         > 1

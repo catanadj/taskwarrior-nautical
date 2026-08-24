@@ -6,22 +6,24 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from .task_models import TaskObservation, TaskPayload
 
-def summary_current(current: dict, current_task: dict | None) -> dict:
+
+def summary_current(current: TaskPayload, current_task: TaskPayload | None) -> TaskPayload:
     return current_task if current_task else current
 
 
-def summary_chain_id(current: dict) -> str:
+def summary_chain_id(current: TaskPayload) -> str:
     return (current.get("chainID") or "").strip()
 
 
 def span_fields(
     chain_id: str,
-    chain: list[dict],
+    chain: list[TaskObservation],
     *,
     stop_at: datetime | None = None,
     stopped_by_delete: bool = False,
-    export_endpoint: Callable[[str, str], dict | None],
+    export_endpoint: Callable[[str, str], TaskObservation | None],
     parse_datetime: Callable[[Any], datetime | None],
     human_delta: Callable[..., str],
 ) -> tuple[datetime | None, datetime | None, str]:
@@ -31,8 +33,8 @@ def span_fields(
         first_task = export_endpoint(chain_id, "first")
     if not last_task and chain_id:
         last_task = export_endpoint(chain_id, "last")
-    first = parse_datetime((first_task or {}).get("due")) if first_task else None
-    last = parse_datetime((last_task or {}).get("end")) if last_task else None
+    first = parse_datetime(first_task.get("due")) if first_task else None
+    last = parse_datetime(last_task.get("end")) if last_task else None
     span = "–"
     if first and last:
         span = human_delta(first, last, prefer_months=True).replace("in ", "").replace("overdue by ", "")
@@ -82,7 +84,7 @@ def kind_rows(
 
 def stats_rows(
     rows: list[tuple[str, str]],
-    chain: list[dict],
+    chain: list[TaskObservation],
     now_utc: Any,
     *,
     lateness_stats: Callable[..., dict[str, Any]],
@@ -115,7 +117,7 @@ def limits_row(
 
 
 def last_n_timeline(
-    chain: list[dict[str, Any]],
+    chain: list[TaskObservation],
     n: int = 6,
     *,
     coerce_int: Callable[[Any, Any], int | None],
@@ -128,7 +130,7 @@ def last_n_timeline(
     if not chain:
         return []
 
-    def get_link(task: dict[str, Any]) -> int:
+    def get_link(task: TaskObservation) -> int:
         link = task.get("link")
         if link is None or link == "":
             return -1
@@ -142,7 +144,7 @@ def last_n_timeline(
     else:
         label_width = 4
 
-    def history_line(task: dict[str, Any], link_no: int) -> str:
+    def history_line(task: TaskObservation, link_no: int) -> str:
         end = parse_datetime(task.get("end"))
         due = parse_datetime(task.get("due"))
         is_deleted = str(task.get("status") or "").strip().lower() == "deleted"
@@ -185,17 +187,17 @@ def render_chain_summary(
     current: dict[str, Any],
     reason: str,
     now_utc: Any,
-    current_task: dict[str, Any] | None = None,
+    current_task: TaskPayload | None = None,
     *,
-    export_sorted_chain: Callable[[str, dict[str, Any]], list[dict[str, Any]]],
+    export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]],
     root_uuid_from: Callable[[dict[str, Any]], Any],
     short_uuid: Callable[[Any], str],
     format_root_and_age: Callable[[dict[str, Any], Any], str],
     kind_rows: Callable[[list[tuple[str, str]], str, dict[str, Any]], None],
     span_fields: Callable[..., tuple[datetime | None, datetime | None, str]],
-    stats_rows: Callable[[list[tuple[str, str]], list[dict[str, Any]], Any], None],
+    stats_rows: Callable[[list[tuple[str, str]], list[TaskObservation], Any], None],
     limits_row: Callable[[list[tuple[str, str]], dict[str, Any]], None],
-    last_n_timeline_rows: Callable[[list[dict[str, Any]], int], list[str]],
+    last_n_timeline_rows: Callable[[list[TaskObservation], int], list[str]],
     format_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
     coerce_int: Callable[[Any, Any], int | None],
     format_local: Callable[[Any], str],

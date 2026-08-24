@@ -13,11 +13,32 @@ from enum import Enum
 import hashlib
 import json
 import re
-from typing import Any, Callable, Iterable, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, TypeAlias
+
+from .task_models import FieldPresence, TaskObservation
+from .task_field_policy import LIFECYCLE_VOLATILE_CHILD_FIELDS
+
+if TYPE_CHECKING:
+    from .task_models import TaskDraft
 
 
 class LifecycleContractError(ValueError):
     """Raised when a lifecycle model violates a transition invariant."""
+
+
+@dataclass(frozen=True, slots=True)
+class VirtualExpiredChild:
+    """Typed dry-run representation of a child already past native ``until``."""
+
+    observation: TaskObservation
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.observation, TaskObservation):
+            raise TypeError("virtual expired child requires a TaskObservation")
+
+    def to_mapping(self) -> dict[str, Any]:
+        """Serialize only at a policy callback boundary."""
+        return self.observation.to_mapping()
 
 
 class LifecycleEvent(str, Enum):
@@ -36,7 +57,7 @@ class LifecycleRecoveryDecision:
     """Typed successor/expiration decision consumed by reconcile and UI."""
 
     action: str
-    parent: dict[str, Any]
+    parent: TaskObservation
     next_link: int
     reason: str
     child: dict[str, Any] | None = None
@@ -44,6 +65,18 @@ class LifecycleRecoveryDecision:
     child_due: Any = None
     terminal_kind: str | None = None
     lifecycle_plan: "LifecyclePlan | None" = None
+    child_observation: TaskObservation | None = None
+    child_draft: "TaskDraft | None" = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.parent, TaskObservation):
+            raise TypeError("lifecycle recovery decision requires a TaskObservation parent")
+        if self.child_observation is not None and not isinstance(self.child_observation, TaskObservation):
+            raise TypeError("lifecycle recovery child evidence requires a TaskObservation")
+        if self.child_draft is not None:
+            from .task_models import TaskDraft
+            if not isinstance(self.child_draft, TaskDraft):
+                raise TypeError("lifecycle recovery child draft requires a TaskDraft")
 
 
 class LifecycleAction(str, Enum):
@@ -106,7 +139,9 @@ class DeletionEvidence:
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
-LIFECYCLE_PLAN_SCHEMA_VERSION = 1
+LIFECYCLE_PLAN_SCHEMA_VERSION = 2
+LIFECYCLE_DRAFT_PAYLOAD_SCHEMA = 1
+LIFECYCLE_PATCH_PAYLOAD_SCHEMA = 1
 
 
 # These are the inputs that can change the occurrence or carried timing of a
@@ -130,9 +165,6 @@ _RECURRENCE_FINGERPRINT_FIELDS = (
 _RECURRENCE_DATETIME_FIELDS = frozenset({"chainUntil", "due", "scheduled", "until", "wait"})
 _TASKWARRIOR_DATETIME_RE = re.compile(r"^(\d{8})T(\d{6})(Z|[+-]\d{4})$")
 _PLAN_DATETIME_FIELDS = frozenset({"due", "scheduled", "until", "wait", "chainUntil"})
-_PLAN_VOLATILE_CHILD_FIELDS = frozenset(
-    {"id", "entry", "modified", "urgency", "status", "end", "start", "nextLink", "mask", "imask", "parent", "recur", "rc"}
-)
 
 
 def _canonical_datetime_text(value: Any, parse_datetime: Callable[[Any], Any] | None) -> str:
@@ -212,7 +244,7 @@ def _canonical_plan_value(value: Any) -> Any:
 
 
 def recurrence_fingerprint(
-    task: Mapping[str, Any],
+    task: Mapping[str, Any] | TaskObservation,
     *,
     parse_datetime: Callable[[Any], Any] | None = None,
     extra_fields: Iterable[str] = (),
@@ -225,9 +257,16 @@ def recurrence_fingerprint(
     fields = tuple(dict.fromkeys((*_RECURRENCE_FINGERPRINT_FIELDS, *(str(item) for item in extra_fields))))
     canonical: dict[str, Any] = {}
     for field in fields:
-        if field not in task:
-            continue
-        value = _canonical_recurrence_value(field, task.get(field), parse_datetime)
+        if isinstance(task, TaskObservation):
+            state = task.field(field)
+            if state.presence is FieldPresence.ABSENT:
+                continue
+            raw_value = state.raw_value()
+        else:
+            if field not in task:
+                continue
+            raw_value = task.get(field)
+        value = _canonical_recurrence_value(field, raw_value, parse_datetime)
         if value is not None:
             canonical[field] = value
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -282,23 +321,6 @@ class ParentGuard:
         object.__setattr__(self, "recurrence_fingerprint", str(self.recurrence_fingerprint or "").strip())
         object.__setattr__(self, "modified", str(self.modified or "").strip())
 
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "ParentGuard":
-        if not isinstance(value, Mapping):
-            raise LifecycleContractError("parent guard must be an object")
-        try:
-            link = int(value["link"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise LifecycleContractError("parent guard requires an integer link") from exc
-        return cls(
-            status=str(value.get("status", "")),
-            chain=str(value.get("chain", "")),
-            chain_id=str(value.get("chainID", value.get("chain_id", ""))),
-            link=link,
-            recurrence_fingerprint=str(value.get("recurrence_fingerprint", "")),
-            modified=str(value.get("modified", "")),
-        )
-
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "status": self.status,
@@ -317,22 +339,22 @@ class ParentGuard:
 class TaskSnapshot:
     """Immutable Taskwarrior row supplied to lifecycle planning."""
 
-    fields: FrozenPairs
+    observation: TaskObservation
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "TaskSnapshot":
-        if not isinstance(value, Mapping):
-            raise LifecycleContractError("task snapshot must be an object")
-        return cls(_freeze_pairs(value))
+    def from_observation(cls, value: TaskObservation) -> "TaskSnapshot":
+        if not isinstance(value, TaskObservation):
+            raise LifecycleContractError("task snapshot requires a TaskObservation")
+        return cls(value)
 
     def get(self, key: str, default: Any = None) -> Any:
-        for field, value in self.fields:
-            if field == key:
-                return _thaw(value)
-        return default
+        state = self.observation.field(key)
+        if state.presence is FieldPresence.ABSENT:
+            return default
+        return state.raw_value()
 
     def to_dict(self) -> dict[str, Any]:
-        return {key: _thaw(value) for key, value in self.fields}
+        return self.observation.to_mapping()
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,19 +388,6 @@ class LifecycleIdentity:
         object.__setattr__(self, "chain_id", chain_id)
         object.__setattr__(self, "parent_uuid", parent_uuid)
         object.__setattr__(self, "event", event)
-
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "LifecycleIdentity":
-        if not isinstance(value, Mapping):
-            raise LifecycleContractError("lifecycle identity must be an object")
-        target = value.get("target_link", value.get("targetLink"))
-        return cls(
-            chain_id=str(value.get("chainID", value.get("chain_id", ""))),
-            parent_uuid=str(value.get("parent_uuid", value.get("parentUUID", ""))),
-            source_link=int(value.get("source_link", value.get("sourceLink"))),
-            target_link=None if target in (None, "") else int(target),
-            event=LifecycleEvent(value.get("event")),
-        )
 
     @property
     def key(self) -> str:
@@ -448,34 +457,39 @@ class LifecyclePlan:
         object.__setattr__(self, "terminal_kind", terminal_kind)
 
     @classmethod
-    def from_mappings(
+    def from_draft(
         cls,
         *,
         identity: LifecycleIdentity,
         action: LifecycleAction,
         parent_guard: ParentGuard,
-        child_payload: Mapping[str, Any] | None = None,
+        draft: Any,
         parent_patch: Mapping[str, Any] | None = None,
         expected_postconditions: tuple[str, ...] = (),
         max_attempts: int = 3,
         stage: ExecutionStage = ExecutionStage.PLANNED,
         terminal_kind: str | None = None,
     ) -> "LifecyclePlan":
+        """Create a plan from a validated TaskDraft at the planning boundary."""
+        from .task_models import TaskDraft
+
+        if not isinstance(draft, TaskDraft):
+            raise LifecycleContractError("lifecycle child payload requires a validated TaskDraft")
         return cls(
             identity=identity,
             action=action,
             parent_guard=parent_guard,
-            stage=stage,
-            child_payload=_freeze_pairs(child_payload),
+            child_payload=_freeze_pairs(draft.to_mapping()),
             parent_patch=_freeze_pairs(parent_patch),
             expected_postconditions=expected_postconditions,
             max_attempts=max_attempts,
+            stage=stage,
             terminal_kind=terminal_kind,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize a complete plan for the durable lifecycle outbox."""
-        return {
+        payload = {
             "schema_version": LIFECYCLE_PLAN_SCHEMA_VERSION,
             "identity": {
                 "chainID": self.identity.chain_id,
@@ -489,10 +503,21 @@ class LifecyclePlan:
             "stage": self.stage.value,
             "child_payload": self.child_dict(),
             "parent_patch": self.parent_patch_dict(),
+            "parent_patch_schema": {
+                "version": LIFECYCLE_PATCH_PAYLOAD_SCHEMA,
+                "kind": "task_patch",
+            },
             "expected_postconditions": list(self.expected_postconditions),
             "max_attempts": self.max_attempts,
             "terminal_kind": self.terminal_kind,
         }
+        if self.action is LifecycleAction.SPAWN_CHILD:
+            payload["child_payload_kind"] = "task_draft"
+            payload["child_payload_schema"] = {
+                "version": LIFECYCLE_DRAFT_PAYLOAD_SCHEMA,
+                "kind": "task_draft",
+            }
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "LifecyclePlan":
@@ -508,6 +533,29 @@ class LifecyclePlan:
                 f"unsupported lifecycle plan schema version: {version}"
             )
         child_payload = value.get("child_payload") or {}
+        patch_schema = value.get("parent_patch_schema")
+        if not isinstance(patch_schema, Mapping) or patch_schema.get("version") != LIFECYCLE_PATCH_PAYLOAD_SCHEMA or patch_schema.get("kind") != "task_patch":
+            raise LifecycleContractError("lifecycle parent patch is not a versioned TaskPatch")
+        draft = None
+        if LifecycleAction(value.get("action")) is LifecycleAction.SPAWN_CHILD:
+            child_schema = value.get("child_payload_schema")
+            if value.get("child_payload_kind") != "task_draft" or not isinstance(child_schema, Mapping) or child_schema.get("version") != LIFECYCLE_DRAFT_PAYLOAD_SCHEMA or child_schema.get("kind") != "task_draft":
+                raise LifecycleContractError("spawn plan child payload is not a versioned TaskDraft")
+            from .task_codec import DEFAULT_TASK_CODEC
+            from .task_models import NauticalTask, TaskDraft
+
+            try:
+                child_task = NauticalTask.from_observation(
+                    DEFAULT_TASK_CODEC.decode_row(
+                        child_payload,
+                        source_query="lifecycle plan child payload",
+                    )
+                )
+                draft = TaskDraft.from_task(child_task)
+            except (TypeError, ValueError) as exc:
+                raise LifecycleContractError(
+                    f"spawn plan child payload is not a valid TaskDraft: {exc}"
+                ) from exc
         parent_patch = value.get("parent_patch") or {}
         expected = value.get("expected_postconditions") or ()
         if not isinstance(child_payload, Mapping) or not isinstance(parent_patch, Mapping):
@@ -518,17 +566,47 @@ class LifecyclePlan:
             stage = ExecutionStage(value.get("stage", ExecutionStage.PLANNED.value))
             action = LifecycleAction(value.get("action"))
             max_attempts = int(value.get("max_attempts", 3))
-            identity = LifecycleIdentity.from_mapping(value.get("identity") or {})
-            parent_guard = ParentGuard.from_mapping(value.get("parent_guard") or {})
+            identity_value = value.get("identity") or {}
+            guard_value = value.get("parent_guard") or {}
+            if not isinstance(identity_value, Mapping) or not isinstance(guard_value, Mapping):
+                raise LifecycleContractError("lifecycle identity and parent guard must be objects")
+            target = identity_value.get("target_link", identity_value.get("targetLink"))
+            identity = LifecycleIdentity(
+                chain_id=str(identity_value.get("chainID", identity_value.get("chain_id", ""))),
+                parent_uuid=str(identity_value.get("parent_uuid", identity_value.get("parentUUID", ""))),
+                source_link=int(identity_value.get("source_link", identity_value.get("sourceLink"))),
+                target_link=None if target in (None, "") else int(target),
+                event=LifecycleEvent(identity_value.get("event")),
+            )
+            parent_guard = ParentGuard(
+                status=str(guard_value.get("status", "")),
+                chain=str(guard_value.get("chain", "")),
+                chain_id=str(guard_value.get("chainID", guard_value.get("chain_id", ""))),
+                link=int(guard_value["link"]),
+                recurrence_fingerprint=str(guard_value.get("recurrence_fingerprint", "")),
+                modified=str(guard_value.get("modified", "")),
+            )
         except (TypeError, ValueError, KeyError) as exc:
             raise LifecycleContractError("invalid lifecycle plan fields") from exc
-        return cls.from_mappings(
+        if draft is not None:
+            return cls.from_draft(
+                identity=identity,
+                action=action,
+                parent_guard=parent_guard,
+                draft=draft,
+                parent_patch=parent_patch,
+                expected_postconditions=tuple(str(item) for item in expected),
+                max_attempts=max_attempts,
+                stage=stage,
+                terminal_kind=value.get("terminal_kind"),
+            )
+        return cls(
             identity=identity,
             action=action,
             parent_guard=parent_guard,
             stage=stage,
-            child_payload=child_payload,
-            parent_patch=parent_patch,
+            child_payload=_freeze_pairs(child_payload),
+            parent_patch=_freeze_pairs(parent_patch),
             expected_postconditions=tuple(str(item) for item in expected),
             max_attempts=max_attempts,
             terminal_kind=value.get("terminal_kind"),
@@ -536,6 +614,21 @@ class LifecyclePlan:
 
     def child_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.child_payload}
+
+    def child_draft(self) -> "TaskDraft | None":
+        """Return the immutable child draft at an explicit inspection boundary."""
+        if not self.child_payload:
+            return None
+        from .task_codec import DEFAULT_TASK_CODEC
+        from .task_models import NauticalTask, TaskDraft
+
+        task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(
+                self.child_dict(),
+                source_query="lifecycle plan child draft",
+            )
+        )
+        return TaskDraft.from_task(task, target_field="due" if task.temporal.due else "scheduled")
 
     def parent_patch_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.parent_patch}
@@ -559,7 +652,7 @@ class LifecyclePlan:
         payload.pop("max_attempts", None)
         child = payload.get("child_payload")
         if isinstance(child, dict):
-            for field in _PLAN_VOLATILE_CHILD_FIELDS:
+            for field in LIFECYCLE_VOLATILE_CHILD_FIELDS:
                 child.pop(field, None)
             for field in _PLAN_DATETIME_FIELDS:
                 if field in child:

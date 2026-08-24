@@ -12,7 +12,7 @@ from datetime import datetime
 from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 import threading
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeAlias
 
 from .integration_models import (
     Absent,
@@ -24,8 +24,10 @@ from .integration_models import (
     Unavailable,
 )
 from .task_read_repository import AuthoritativeTaskSnapshot
+from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
+from .task_models import TaskObservation
 
-TaskRow = dict[str, Any]
+TaskRow: TypeAlias = TaskObservation
 ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]
 ReadQuery = Callable[[str, tuple[Any, ...]], Any]
 ChainCache = Callable[[str], Sequence[TaskRow] | None]
@@ -78,6 +80,17 @@ def cached_chain_export(
     return tuple(rows)
 
 
+def _observation(value: object, *, source_query: str) -> TaskObservation:
+    if isinstance(value, TaskObservation):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return DEFAULT_TASK_CODEC.decode_row(value, source_query=source_query)
+        except TaskCodecError as exc:
+            raise RuntimeError(f"lifecycle row could not be decoded: {exc}") from exc
+    raise RuntimeError("lifecycle repository returned a non-object row")
+
+
 def clear_cached_chain_exports() -> None:
     """Clear the process-local export cache after a Taskwarrior mutation."""
     cached_chain_export.cache_clear()
@@ -110,7 +123,7 @@ class ChainCacheStore:
     def replace(self, chain_id: str, rows: Sequence[TaskRow], indexes: ChainIndexes) -> None:
         with self.lock:
             self.chain_id = str(chain_id or "")
-            self.rows = [dict(row) for row in rows if isinstance(row, dict)]
+            self.rows = list(rows)
             self.indexes = indexes
 
     def clear(self) -> None:
@@ -168,14 +181,15 @@ class LifecycleReadService:
         """Return the service-owned chain cache, if seeded for this chain."""
         if self._cache_store is not None:
             return self._cache_store.rows_for(chain_id)
-        return list(self._chain_cache_get(chain_id) or []) or None
+        rows = self._chain_cache_get(chain_id) or []
+        return [_observation(row, source_query=f"chain:{chain_id}:cache") for row in rows] or None
 
     def lookup_short(self, short_uuid: str) -> tuple[TaskRow | None, str]:
         """Return a cached short UUID row and the cache's chain ID."""
         if self._cache_store is not None:
             with self._cache_store.lock:
                 row = self._cache_store.indexes.by_short.get(short_uuid) if self._cache_store.indexes else None
-                return (dict(row) if isinstance(row, dict) else None, self._cache_store.chain_id)
+                return (row if isinstance(row, TaskObservation) else None, self._cache_store.chain_id)
         return None, ""
 
     def lookup_uuid(self, uuid_value: str) -> TaskRow | None:
@@ -183,7 +197,7 @@ class LifecycleReadService:
         if self._cache_store is not None:
             with self._cache_store.lock:
                 row = self._cache_store.indexes.by_uuid.get(uuid_value) if self._cache_store.indexes else None
-                return dict(row) if isinstance(row, dict) else None
+                return row if isinstance(row, TaskObservation) else None
         return None
 
     def cache_size(self, chain_id: str) -> int:
@@ -195,10 +209,12 @@ class LifecycleReadService:
 
     def seed_lookup_task(self, task: TaskRow, *, short_uuid: str) -> TaskRow:
         """Merge one exported task into the service-owned lookup indexes."""
+        if not isinstance(task, TaskObservation):
+            raise TypeError("lifecycle lookup seed requires a TaskObservation")
         if self._cache_store is None:
-            return dict(task)
+            return task
         uuid_value = str(task.get("uuid") or "").strip()
-        task_obj = dict(task)
+        task_obj = task
         with self._cache_store.lock:
             existing = None
             if short_uuid and self._cache_store.indexes:
@@ -206,9 +222,8 @@ class LifecycleReadService:
             if not isinstance(existing, dict) and uuid_value and self._cache_store.indexes:
                 existing = self._cache_store.indexes.by_uuid.get(uuid_value)
             if isinstance(existing, dict):
-                merged = dict(existing)
-                merged.update(task)
-                task_obj = merged
+                if existing.semantic_fingerprint != task.semantic_fingerprint:
+                    task_obj = task
             by_short = dict(self._cache_store.indexes.by_short) if self._cache_store.indexes else {}
             by_uuid = dict(self._cache_store.indexes.by_uuid) if self._cache_store.indexes else {}
             if short_uuid:
@@ -221,11 +236,11 @@ class LifecycleReadService:
                 by_short=by_short,
                 by_uuid=by_uuid,
             )
-        return task_obj
+            return task_obj
 
     def replace_chain_cache(self, chain_id: str, rows: Sequence[TaskRow]) -> ChainIndexes:
         """Replace cached chain rows and their indexes atomically."""
-        stored_rows = [dict(row) for row in rows if isinstance(row, dict)]
+        stored_rows = [_observation(row, source_query=f"chain:{chain_id}") for row in rows]
         indexes = self.build_indexes(stored_rows)
         if self._cache_store is not None:
             self._cache_store.replace(chain_id, stored_rows, indexes)
@@ -298,9 +313,8 @@ class LifecycleReadService:
         by_link: dict[int, list[TaskRow]] = {}
         by_short: dict[str, TaskRow] = {}
         by_uuid: dict[str, TaskRow] = {}
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
+        for raw_row in rows:
+            row = _observation(raw_row, source_query="lifecycle index")
             link_no = self._coerce_int(row.get("link"), None)
             if link_no is not None:
                 by_link.setdefault(link_no, []).append(row)
@@ -321,7 +335,7 @@ class LifecycleReadService:
         tokens = self._parse_extra_tokens(extra)
         if tokens is None:
             return None
-        filtered = [row for row in rows if isinstance(row, dict)]
+        filtered = [_observation(row, source_query="lifecycle filter") for row in rows]
         for token in tokens:
             filtered = [row for row in filtered if self._token_matcher(row, token)]
         if isinstance(limit, int) and limit > 0:
@@ -366,11 +380,10 @@ class LifecycleReadService:
                 "chain", read_query_key(chain_id, None, None, 0)
             )
             if full_snapshot is not missing:
-                if not isinstance(full_snapshot, list) or any(
-                    not isinstance(row, dict) for row in full_snapshot
-                ):
+                if not isinstance(full_snapshot, list):
                     self._diag(f"cached chain read has invalid shape (chainID={chain_id})")
                     return None
+                full_snapshot = [_observation(row, source_query=f"chain:{chain_id}:snapshot") for row in full_snapshot]
                 filtered = self.filter_full_snapshot(
                     full_snapshot,
                     extra=extra,
@@ -451,11 +464,7 @@ class LifecycleReadService:
         raw_rows = getattr(read.value, "rows", read.value)
         if not isinstance(raw_rows, Sequence) or isinstance(raw_rows, (str, bytes)):
             raise RuntimeError("typed repository returned an invalid chain snapshot")
-        rows: list[TaskRow] = []
-        for row in raw_rows:
-            if not isinstance(row, Mapping):
-                raise RuntimeError("typed repository returned a non-object chain row")
-            rows.append(dict(row))
+        rows: list[TaskRow] = [_observation(row, source_query=f"chain:{chain_id}:repository") for row in raw_rows]
         if since is not None:
             rows = [
                 row for row in rows
@@ -486,33 +495,35 @@ class LifecycleReadService:
         self,
         rows: Sequence[TaskRow],
         *,
-        parent_task: TaskRow,
-        child_task: TaskRow,
+        parent_task: TaskRow | Mapping[str, Any],
+        child_task: TaskRow | Mapping[str, Any],
         child_short: str,
         short_uuid: Callable[[str], str],
     ) -> list[TaskRow]:
         """Merge a spawned child into a previously read chain snapshot."""
         if not rows:
             return []
+        parent_task = _observation(parent_task, source_query="lifecycle merge parent")
+        child_task = _observation(child_task, source_query="lifecycle merge child")
         parent_uuid = str(parent_task.get("uuid") or "").strip()
         parent_short = short_uuid(parent_uuid)
         child_uuid = str(child_task.get("uuid") or "").strip()
         merged: list[TaskRow] = []
         child_present = False
         for row in rows:
-            row_obj = dict(row)
+            row_obj = row.to_mapping()
             row_uuid = str(row_obj.get("uuid") or "").strip()
             if parent_uuid and row_uuid == parent_uuid and child_short:
                 row_obj["nextLink"] = child_short
             if child_uuid and row_uuid == child_uuid:
                 child_present = True
-                row_obj.update(child_task)
-            merged.append(row_obj)
+                row_obj.update(child_task.to_mapping())
+            merged.append(_observation(row_obj, source_query="lifecycle merged chain"))
         if child_uuid and not child_present:
-            child_obj = dict(child_task)
+            child_obj = child_task.to_mapping()
             if parent_short and not str(child_obj.get("prevLink") or "").strip():
                 child_obj["prevLink"] = parent_short
-            merged.append(child_obj)
+            merged.append(_observation(child_obj, source_query="lifecycle merged child"))
         merged.sort(
             key=lambda task: (
                 self._coerce_int(task.get("link"), 10**9),

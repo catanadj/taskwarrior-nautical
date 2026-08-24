@@ -14,6 +14,7 @@ from typing import Any, Mapping, NoReturn
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
+from .task_models import NauticalTask, TaskObservation
 from .scheduler_cursor import OccurrenceCursor
 from .occurrence_outcomes import (
     ExhaustedOccurrence,
@@ -147,36 +148,32 @@ class RecurrenceEvaluator:
     _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     @classmethod
-    def from_task(
-        cls,
-        task: Mapping[str, Any],
-        *,
-        context: RecurrenceContext | None = None,
-        fallback_chain_id: str | None = None,
-        timezone: Any | None = None,
-        business_calendar: Any | None = None,
-        astronomy_config: Mapping[str, Any] | None = None,
-        anchor_file_dir: str = "",
-        namespace: str = "nautical",
-    ) -> "RecurrenceEvaluator":
-        """Build an evaluator from a task without performing any I/O."""
-        recurrence_context = context or RecurrenceContext.from_task(
-            task,
-            fallback_chain_id=fallback_chain_id,
-            timezone=timezone,
-            business_calendar=business_calendar,
-            astronomy_config=astronomy_config,
-            anchor_file_dir=anchor_file_dir,
-            namespace=namespace,
-        )
-        return cls(RecurrenceSpec.from_task(task, context=recurrence_context))
-
-    @classmethod
     def from_spec(cls, spec: RecurrenceSpec) -> "RecurrenceEvaluator":
         """Build an evaluator around an already-normalized specification."""
         if not isinstance(spec, RecurrenceSpec):
             raise TypeError("Recurrence evaluator requires a RecurrenceSpec.")
         return cls(spec)
+
+    @classmethod
+    def from_observation(
+        cls,
+        observation: TaskObservation,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "RecurrenceEvaluator":
+        """Build an evaluator directly from one validated observation."""
+        return cls.from_spec(RecurrenceSpec.from_observation(observation, context=context))
+
+    @classmethod
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "RecurrenceEvaluator":
+        if not isinstance(task, NauticalTask):
+            raise TypeError("recurrence evaluator requires a validated NauticalTask")
+        return cls.from_spec(RecurrenceSpec.from_task(task, context=context))
 
     @classmethod
     def from_compiled(cls, compiled: CompiledSchedule) -> "RecurrenceEvaluator":

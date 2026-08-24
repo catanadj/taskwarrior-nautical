@@ -1196,7 +1196,11 @@ def _read_exit_task_call_stats(path: Path) -> dict[str, int]:
     stats = payload.get("task_stats") if isinstance(payload, dict) else None
     if not isinstance(stats, dict):
         raise RuntimeError("queue drain benchmark stats did not contain task_stats")
-    return {str(key): int(value) for key, value in stats.items() if str(key).startswith("run_task_calls")}
+    return {
+        str(key): int(value)
+        for key, value in stats.items()
+        if str(key).startswith("run_task_calls") or str(key) == "task_read_rows"
+    }
 
 
 def _read_exit_task_timing_stats(path: Path) -> dict[str, float]:

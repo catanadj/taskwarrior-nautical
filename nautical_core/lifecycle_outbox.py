@@ -308,6 +308,13 @@ class LifecycleOutboxRepository:
         if self._benchmark_metrics is not None:
             self._benchmark_metrics[key] = self._benchmark_metrics.get(key, 0.0) + float(value)
 
+    @contextmanager
+    def _transaction(self, conn: sqlite3.Connection) -> Iterator[None]:
+        """Count benchmark transactions without changing transaction ownership."""
+        self._metric("outbox_transactions")
+        with _transaction(conn):
+            yield
+
     def _connect(self) -> sqlite3.Connection:
         self._metric("outbox_connections")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -629,7 +636,7 @@ class LifecycleOutboxRepository:
         now = self._clock()
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:
-            with _transaction(conn):
+            with self._transaction(conn):
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is not None:
                     current = self._from_row(row)
@@ -781,7 +788,7 @@ class LifecycleOutboxRepository:
         now = self._clock()
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:
-            with _transaction(conn):
+            with self._transaction(conn):
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is not None:
                     if str(row["work_kind"] or "lifecycle") != OutboxWorkKind.INTEGRITY.value:
@@ -819,7 +826,7 @@ class LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with _transaction(conn):
+            with self._transaction(conn):
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
                     "WHERE processing_state=? AND lease_expires_at <= ?",
@@ -893,7 +900,7 @@ class LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with _transaction(conn):
+            with self._transaction(conn):
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
                     "WHERE work_kind=? AND processing_state=? AND lease_expires_at <= ?",
@@ -954,7 +961,7 @@ class LifecycleOutboxRepository:
         try:
             conn = self._connect()
             self._initialize(conn)
-            with _transaction(conn):
+            with self._transaction(conn):
                 row = conn.execute(
                     "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
                     (intent_id, "integrity"),
@@ -1020,7 +1027,7 @@ class LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with _transaction(conn):
+            with self._transaction(conn):
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
                     "WHERE processing_state=? AND lease_expires_at <= ?",
@@ -1124,7 +1131,7 @@ class LifecycleOutboxRepository:
         now = self._clock()
 
         def run(conn: sqlite3.Connection) -> OutboxResult:
-            with _transaction(conn):
+            with self._transaction(conn):
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is None:
                     return OutboxResult(OutboxResultKind.CONFLICT, reason="outbox intent is absent")
@@ -1181,7 +1188,7 @@ class LifecycleOutboxRepository:
 
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
-            with _transaction(conn):
+            with self._transaction(conn):
                 for intent_id in ids:
                     # Lease renewal only needs the CAS columns. Avoid
                     # decoding plan/guard JSON on the healthy path.
@@ -1263,7 +1270,7 @@ class LifecycleOutboxRepository:
 
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
-            with _transaction(conn):
+            with self._transaction(conn):
                 for intent_id, target in normalized.items():
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is None:
@@ -1330,7 +1337,7 @@ class LifecycleOutboxRepository:
 
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
-            with _transaction(conn):
+            with self._transaction(conn):
                 for intent_id in ids:
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is None:
@@ -1612,7 +1619,7 @@ class LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with _transaction(conn):
+            with self._transaction(conn):
                 rows = conn.execute(
                     "SELECT intent_id FROM lifecycle_outbox "
                     "WHERE processing_state=? AND acknowledged_at > 0 AND acknowledged_at <= ? "
@@ -1700,7 +1707,7 @@ class LifecycleOutboxRepository:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
-            with _transaction(conn):
+            with self._transaction(conn):
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS lifecycle_maintenance ("
                     "key TEXT PRIMARY KEY, value REAL NOT NULL)"

@@ -653,6 +653,9 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
             run_task_seconds=max(0.0, float(getattr(commands, "duration", 0.0) or 0.0)),
             **purpose_stats,
         )
+        repository = getattr(unit_of_work, "repository", None)
+        read_metrics = repository.metrics() if repository is not None else {}
+        state.diag_stats["task_read_rows"] = max(0, int(read_metrics.get("rows", 0) or 0))
     benchmark_metrics = getattr(outbox, "_benchmark_metrics", None)
     if isinstance(benchmark_metrics, dict):
         state.diag_stats.update(benchmark_metrics)

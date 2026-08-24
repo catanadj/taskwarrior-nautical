@@ -661,9 +661,8 @@ Completion criteria:
 
 Verification: lifecycle crash-resume, stage-persistence matrix, lease-renewal, outbox-fault, conflict /
 retry-budget, configuration-drift, mutation-epoch, concurrent outbox-open, and
-concurrent operator golden tests pass. Dedicated exhaustive failure matrices
-for all process races and shuffled multi-process convergence remain open for the
-final safety campaign.
+concurrent operator golden tests pass. The process race and shuffled convergence
+matrix is covered by the dedicated golden tests below.
 
 Pass 2 scope: keep failure injection in the test harness (scripted mutation,
 outbox, lease, and repository doubles), rather than adding a production fault
@@ -679,14 +678,14 @@ asserts both return typed success. A two-process claim race now asserts exactly
 one lease owner for one intent. Queue-vs-reconcile, simultaneous reconcile,
 and simultaneous reconcile exact-claim races now assert one winner and one
 conflict. A short-lease stale-owner process test now asserts an independent
-replacement claim succeeds after expiry. User-edit race and shuffled/repeated
-convergence matrices remain open.
+replacement claim succeeds after expiry. User-edit and shuffled/repeated
+convergence matrices are covered by the later passes below.
 
 Pass 4 verification: the guarded mutation matrix now exercises parent status,
 chain state, chainID, link, recurrence fields, modified timestamp, nextLink,
 and child status/modified edits. Every stale edit returns a typed conflict or
 retryable outcome before issuing a Taskwarrior command. Child identity replacement
-and shuffled/repeated multi-process convergence remain open.
+and shuffled/repeated multi-process convergence are covered by the final pass.
 
 Pass 5 verification: independent queue/exact-claim and exact/exact-claim
 process races, stale-owner reclamation, child identity replacement, and

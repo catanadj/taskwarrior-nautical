@@ -723,12 +723,14 @@ stress suites.
   snapshots and 20 total calls: two phase snapshots on the failed invocation
   and two on recovery, with present children reused from the recovery
   preflight.
-- [ ] Require 32 independent one-hop reconcile candidates to use no more than
+- [x] Require 32 independent one-hop reconcile candidates to use no more than
   72 Taskwarrior calls unless measured Taskwarrior semantics require a
-  documented additional guard read. Current desktop evidence after removing
-  the duplicate reconcile child verification is 321 calls (192 broad reads,
-  64 child-slot reads, 32 imports, and 32 parent links); the remaining work
-  is to batch lifecycle application evidence across the reconcile wave.
+  documented additional guard read. The 2026-08-24 desktop workflow run
+  records 70 calls: one candidate snapshot, 32 child-slot reads, four broad
+  phase reads, one batched child import, and 32 guarded parent links. All 32
+  successors were created and verified. The wave path is restricted to
+  independent one-hop completed candidates; deleted and multi-hop expiration
+  recovery remains sequential by design.
 - [ ] Require queue and reconcile wall time to improve by at least 50% from the
   recorded baseline on both Termux devices without relaxing correctness gates.
 - [ ] Require exported and decoded row counts to scale with affected identities

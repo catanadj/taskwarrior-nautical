@@ -639,6 +639,89 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self.link_parent(request, verify=False)
         raise TypeError("batch lifecycle mutation supports child import and parent link only")
 
+    def apply_lifecycle_children_unverified(
+        self,
+        requests: Sequence[MutationRequest],
+    ) -> dict[str, MutationOutcome]:
+        """Import one lifecycle wave with one Taskwarrior command.
+
+        Parent guards and deterministic child identities are still checked per
+        request.  Only the external import command is combined; the following
+        authoritative child-set verification remains per-wave in
+        ``verify_lifecycle_children``.
+        """
+        pending = tuple(requests)
+        if any(
+            request.operation is not MutationOperation.CHILD_IMPORT
+            or not isinstance(request.payload, ChildImportPayload)
+            for request in pending
+        ):
+            raise TypeError("batch child import requires child-import requests")
+        outcomes: dict[str, MutationOutcome] = {}
+        imports: list[MutationRequest] = []
+        for request in pending:
+            payload = cast(ChildImportPayload, request.payload)
+            parent, failure = self._read_target(request)
+            if failure is not None:
+                outcomes[payload.child_uuid.lower()] = failure
+                continue
+            assert parent is not None
+            if _text(_observed_value(parent, "chain")).lower() != "on":
+                outcomes[payload.child_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active"
+                )
+                continue
+            existing = self._prefetched_children.pop(payload.child_uuid.lower(), None)
+            if existing is None:
+                existing = self._uow.repository.by_uuid(payload.child_uuid, refresh=True)
+            if isinstance(existing, Unavailable):
+                kind = MutationOutcomeKind.RETRYABLE if existing.retryable else MutationOutcomeKind.MANUAL_REVIEW
+                outcomes[payload.child_uuid.lower()] = self._outcome(
+                    request, kind, reason=existing.evidence.detail, failure=existing.evidence
+                )
+            elif isinstance(existing, Found):
+                if _child_import_matches(existing.value, payload, request.guard.task_uuid):
+                    outcomes[payload.child_uuid.lower()] = self._outcome(
+                        request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED
+                    )
+                else:
+                    outcomes[payload.child_uuid.lower()] = self._outcome(
+                        request, MutationOutcomeKind.CONFLICT, reason="unrelated task already owns child UUID"
+                    )
+            elif isinstance(existing, Absent):
+                imports.append(request)
+            else:
+                outcomes[payload.child_uuid.lower()] = self._outcome(
+                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child lookup result"
+                )
+        if not imports:
+            return outcomes
+        input_text = "".join(
+            DEFAULT_TASK_CODEC.encode_task_import_mapping(cast(ChildImportPayload, request.payload).to_dict()) + "\n"
+            for request in imports
+        )
+        result = self._uow.client.execute(
+            ["rc.hooks=off", "rc.verbose=nothing", "import", "-"],
+            purpose="lifecycle child import batch",
+            timeout=self._timeout,
+            input_text=input_text,
+            attempts=1,
+        )
+        if not result.ok:
+            self._uow.record_mutation(uncertain=True)
+            for request in imports:
+                outcomes[cast(ChildImportPayload, request.payload).child_uuid.lower()] = self._command_failure(
+                    request, result
+                )
+            return outcomes
+        self._uow.record_mutation(uncertain=True)
+        for request in imports:
+            payload = cast(ChildImportPayload, request.payload)
+            outcomes[payload.child_uuid.lower()] = self._outcome(
+                request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED
+            )
+        return outcomes
+
     def verify_lifecycle_children(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]:
         """Verify imported children with one authoritative broad snapshot."""
         pending = tuple(

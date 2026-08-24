@@ -542,6 +542,28 @@ class LifecycleApplicationService:
         validated = tuple(plans)
         if any(not isinstance(plan, LifecyclePlan) for plan in validated):
             raise LifecycleApplicationError("lifecycle wave requires validated plans")
+        preflight = getattr(self._mutations, "preflight_lifecycle_batch", None)
+        if callable(preflight) and validated:
+            payloads = tuple(
+                payload
+                for plan in validated
+                for payload in (_child_import_payload(plan),)
+                if payload is not None
+            )
+            parent_expectations = tuple(
+                (
+                    plan.identity.parent_uuid,
+                    str(plan.parent_patch_dict().get("nextLink") or "").strip(),
+                )
+                for plan in validated
+                if str(plan.parent_patch_dict().get("nextLink") or "").strip()
+            )
+            try:
+                preflight(payloads, parent_expectations=parent_expectations)
+            except Exception:
+                # Preflight is an optimization. The guarded mutation methods
+                # retain the authoritative read fallback when it is unavailable.
+                pass
         staged_records: list[LifecycleOutboxRecord] = []
         staged_outcomes: list[LifecycleApplicationOutcome] = []
         for plan in validated:
@@ -569,16 +591,25 @@ class LifecycleApplicationService:
                     outcomes=tuple(staged_outcomes),
                 )
             staged_records.append(claimed.record)
+        already_applied = tuple(
+            outcome
+            for outcome in staged_outcomes
+            if outcome.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED
+        )
         if not staged_records:
             return DrainResult(
                 claim=OutboxResult(OutboxResultKind.ALREADY_APPLIED),
                 outcomes=tuple(staged_outcomes),
             )
-        return self.drain_claimed(
+        drained = self.drain_claimed(
             staged_records,
             configuration_fingerprint=configuration_fingerprint,
             schedule_fingerprint=schedule_fingerprint,
             progress=progress,
+        )
+        return DrainResult(
+            claim=drained.claim,
+            outcomes=already_applied + drained.outcomes,
         )
 
     def _drain_open(
@@ -859,6 +890,7 @@ class LifecycleApplicationService:
             states.append(_BatchState(record, plan, child_payload, link_payload, record.stage, []))
 
         pending_children: list[tuple[_BatchState, MutationRequest]] = []
+        child_requests: list[tuple[_BatchState, MutationRequest]] = []
         renew_batch(states, "child import")
         for state in states:
             if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
@@ -867,19 +899,48 @@ class LifecycleApplicationService:
             if request is None:
                 state.terminal = self._manual_review(state.record, "could not construct child-import mutation")
                 continue
-            outcome = apply_unverified(request)
-            state.mutations.append(outcome)
-            report_action(state, "child mutation")
-            if outcome.kind is MutationOutcomeKind.APPLIED:
-                pending_children.append((state, request))
-            elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
-                report_action(state, "child verified")
-                settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
-                state.terminal = settled
-                if settled is None:
-                    state.stage = ExecutionStage.CHILD_PRESENT
-            else:
-                state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+            child_requests.append((state, request))
+        batch_children_apply = getattr(self._mutations, "apply_lifecycle_children_unverified", None)
+        if callable(batch_children_apply) and child_requests:
+            child_mutations = batch_children_apply(tuple(request for _state, request in child_requests))
+            for state, request in child_requests:
+                payload = cast(ChildImportPayload, request.payload)
+                outcome = child_mutations.get(payload.child_uuid.lower())
+                if outcome is None:
+                    outcome = MutationOutcome(
+                        request.operation,
+                        MutationOutcomeKind.MANUAL_REVIEW,
+                        request.guard,
+                        (),
+                        "child batch mutation returned no result",
+                    )
+                state.mutations.append(outcome)
+                report_action(state, "child mutation")
+                if outcome.kind is MutationOutcomeKind.APPLIED:
+                    pending_children.append((state, request))
+                elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
+                    report_action(state, "child verified")
+                    settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+                    state.terminal = settled
+                    if settled is None:
+                        state.stage = ExecutionStage.CHILD_PRESENT
+                else:
+                    state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+        else:
+            for state, request in child_requests:
+                outcome = apply_unverified(request)
+                state.mutations.append(outcome)
+                report_action(state, "child mutation")
+                if outcome.kind is MutationOutcomeKind.APPLIED:
+                    pending_children.append((state, request))
+                elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
+                    report_action(state, "child verified")
+                    settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+                    state.terminal = settled
+                    if settled is None:
+                        state.stage = ExecutionStage.CHILD_PRESENT
+                else:
+                    state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
 
         verified_children: list[tuple[_BatchState, MutationRequest]] = []
         renew_batch([state for state, _request in pending_children], "child verification")

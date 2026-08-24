@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import json
@@ -1083,6 +1083,85 @@ def _execute_reconcile_lifecycle_plan(
     return child_short
 
 
+def _execute_reconcile_lifecycle_wave(
+    hook: Any,
+    lifecycle_service: LifecycleReconciliationService,
+    application: Any,
+    mutations: TaskwarriorMutationService,
+    taskdata: Path,
+    planned: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]],
+    *,
+    configuration_fingerprint: str,
+    schedule_fingerprint: str,
+) -> dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] | None:
+    """Apply independent one-hop completion plans in one guarded wave.
+
+    The wave owns only completed parents whose first plan is a spawn. Deleted
+    parents and multi-hop expiration recovery remain on the sequential path:
+    their next decision depends on the child created by the preceding step.
+    Returning ``None`` means the lock or wave infrastructure was unavailable;
+    callers must then use the normal per-parent path.
+    """
+    if not planned:
+        return {}
+    from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind
+
+    ordered = tuple(sorted(planned.values(), key=lambda item: str(item[0].parent.field("uuid").raw_value())))
+    with ExitStack() as locks:
+        for decision, _ in ordered:
+            parent_uuid = str(decision.parent.field("uuid").raw_value() or "").strip()
+            if not parent_uuid:
+                return None
+            acquired = locks.enter_context(lifecycle_service.parent_lock(taskdata, parent_uuid))
+            if not acquired:
+                return None
+        plans: list[LifecyclePlan] = []
+        by_parent: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, LifecyclePlan]] = {}
+        for decision, _ in ordered:
+            lifecycle_plan = getattr(decision, "lifecycle_plan", None)
+            if not isinstance(lifecycle_plan, LifecyclePlan):
+                return None
+            child_uuid = str(lifecycle_plan.child_dict().get("uuid") or "").strip()
+            resolved = decision if child_uuid else _lifecycle_plan_with_resolved_child_uuid(decision, hook)
+            resolved_plan = getattr(resolved, "lifecycle_plan", None)
+            if not isinstance(resolved_plan, LifecyclePlan):
+                return None
+            parent_uuid = str(resolved_plan.identity.parent_uuid).strip().lower()
+            plans.append(resolved_plan)
+            by_parent[parent_uuid] = (resolved, resolved_plan)
+        result = application.execute_wave(
+            tuple(plans),
+            configuration_fingerprint=configuration_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
+        )
+    outcomes: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
+    result_by_parent = {
+        str(outcome.identity.parent_uuid).strip().lower(): outcome
+        for outcome in result.outcomes
+    }
+    for parent_uuid, (decision, plan) in by_parent.items():
+        outcome = result_by_parent.get(parent_uuid)
+        if outcome is None:
+            return None
+        if outcome.kind in {
+            LifecycleApplicationOutcomeKind.APPLIED,
+            LifecycleApplicationOutcomeKind.ALREADY_APPLIED,
+        }:
+            child_short = str(plan.parent_patch_dict().get("nextLink") or decision.child_short or "").strip()
+            if not child_short:
+                return None
+            outcomes[parent_uuid] = (decision, child_short)
+            continue
+        parent = decision.parent.to_mapping()
+        reason = f"wave lifecycle apply {outcome.kind.value}: {outcome.reason or 'mutation was not applied'}"
+        if outcome.kind is LifecycleApplicationOutcomeKind.RETRYABLE:
+            replacement = _recovery_partial(parent, reason)
+        else:
+            replacement = _recovery_manual_review(parent, reason)
+        outcomes[parent_uuid] = (replacement, "")
+    return outcomes
+
+
 def _terminal_lifecycle_plan(plan: lifecycle.LifecycleRecoveryDecision) -> LifecyclePlan:
     """Create the typed terminal plan for a reconcile final/manual decision."""
     parent = plan.parent.to_mapping()
@@ -1728,6 +1807,49 @@ def main(
     outcome_groups: list[list[tuple[lifecycle.LifecycleRecoveryDecision, str]]] = []
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = IntegrityRecoveryService.ambiguous_candidate_slots(candidates)
+    wave_results: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
+    if args.apply and configuration_status == "valid" and taskdata is not None:
+        wave_plans: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
+        for parent_observation in candidates:
+            parent = parent_observation.to_mapping()
+            parent_uuid = str(parent.get("uuid") or "").strip().lower()
+            if not parent_uuid or parent_uuid in ambiguous_slots:
+                continue
+            if str(parent.get("status") or "").strip().lower() != "completed":
+                continue
+            try:
+                planned_outcomes = _reconcile_candidate(
+                    args.task_bin,
+                    hook,
+                    parent,
+                    taskdata=taskdata,
+                    apply=False,
+                    max_expiration_hops=args.max_expiration_hops,
+                    recovery_at=recovery_at,
+                    lease_held=_apply_lease_held,
+                    generation=generation,
+                )
+            except Exception:
+                continue
+            if len(planned_outcomes) == 1 and planned_outcomes[0][0].action == "spawn":
+                wave_plans[parent_uuid] = planned_outcomes[0]
+        if wave_plans:
+            try:
+                wave_result = _execute_reconcile_lifecycle_wave(
+                    hook,
+                    lifecycle_service,
+                    lifecycle_application,
+                    mutation_gateway,
+                    taskdata,
+                    wave_plans,
+                    configuration_fingerprint=configuration.fingerprint,
+                    schedule_fingerprint=configuration.scheduler_fingerprint,
+                )
+                if wave_result is not None:
+                    wave_results = wave_result
+            except Exception as exc:
+                if os.environ.get("NAUTICAL_DIAG") == "1":
+                    print(f"[nautical] reconcile lifecycle wave deferred: {type(exc).__name__}: {exc}", file=sys.stderr)
     if configuration_status == "valid":
         try:
             lifecycle_service.preflight_wave(candidates)
@@ -1747,7 +1869,10 @@ def main(
         )
         if parent_slot in processed_slots:
             continue
-        if parent_slot in ambiguous_slots:
+        parent_uuid = str(parent.get("uuid") or "").strip().lower()
+        if parent_uuid in wave_results:
+            outcomes = [wave_results[parent_uuid]]
+        elif parent_slot in ambiguous_slots:
             outcomes = [(_recovery_error(parent, ambiguous_slots[parent_slot]), "")]
         else:
             try:

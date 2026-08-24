@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re
 from types import MappingProxyType
-from typing import Mapping, Protocol, TypeVar, cast
+from typing import Mapping, Protocol, cast
 from uuid import UUID
 
 from .integration_models import Absent, FailureEvidence, Found, TaskCommandResult, TaskRead, Unavailable

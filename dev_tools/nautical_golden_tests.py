@@ -36154,6 +36154,56 @@ def test_lifecycle_outbox_two_process_claims_are_exclusive():
         expect(sorted(item["count"] for item in payloads) == [0, 1], f"claim race duplicated work: {payloads}")
 
 
+def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
+    """FIFO drain and exact reconcile claims cannot own one intent together."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    parent_uuid = "00000000-0000-4000-8000-000000000921"
+    child_uuid = "00000000-0000-4000-8000-000000000922"
+    plan = _plan_from_values(
+        identity=LifecycleIdentity("cross-owner-race", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard("completed", "on", "cross-owner-race", 1, "rf-cross-owner", "20260101T000000Z"),
+        child_payload={"uuid": child_uuid, "chainID": "cross-owner-race", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+    worker = (
+        "import json, sys; from pathlib import Path; "
+        "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
+        "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
+        "result = (repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1)[0] "
+        "if sys.argv[3] == 'queue' else repo.claim_intent(owner=sys.argv[2], lease_seconds=5.0, intent_id=sys.argv[4])); "
+        "print(json.dumps({'kind': result.kind.value}), flush=True)"
+    )
+
+    def run_race(modes):
+        with tempfile.TemporaryDirectory(prefix="nautical-cross-owner-") as td:
+            repo = LifecycleOutboxRepository(Path(td))
+            staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            expect(staged.ok and staged.record is not None, f"cross-owner fixture did not stage: {staged}")
+            intent_id = staged.record.intent_id
+            processes = [
+                subprocess.Popen(
+                    [sys.executable, "-c", worker, td, f"owner-{idx}", mode, intent_id],
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                for idx, mode in enumerate(modes)
+            ]
+            results = [process.communicate(timeout=10) for process in processes]
+            payloads = [json.loads(stdout.strip()) for _process, (stdout, _stderr) in zip(processes, results)]
+            return [item["kind"] for item in payloads]
+
+    expect(sorted(run_race(("queue", "exact"))) == ["applied", "conflict"], "queue/reconcile claim race was not exclusive")
+    expect(sorted(run_race(("exact", "exact"))) == ["applied", "conflict"], "reconcile/reconcile claim race was not exclusive")
+
+
 def test_lifecycle_configuration_drift_blocks_mutation():
     """A plan persisted under one configuration cannot mutate under another."""
     import tempfile
@@ -36611,6 +36661,7 @@ TESTS.extend([
     test_lifecycle_application_outbox_faults_are_retryable,
     test_lifecycle_application_stage_failure_matrix_resumes_idempotently,
     test_lifecycle_outbox_two_process_claims_are_exclusive,
+    test_lifecycle_queue_and_reconcile_claims_are_exclusive,
     test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,

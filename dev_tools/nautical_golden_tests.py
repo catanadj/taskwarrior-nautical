@@ -3067,6 +3067,95 @@ def test_task_read_snapshot_retains_ambiguous_indexes():
     expect(len(snapshot.slot_rows("chain-a", 2)) == 2, "duplicate exact slot was collapsed")
 
 
+def test_authoritative_set_read_contracts_fail_closed():
+    """Bounded identity sets preserve absence, duplicates, contradictions, and epochs."""
+    from nautical_core.integration_models import (
+        Absent,
+        CommandFailureKind,
+        FailureEvidence,
+        Found,
+        TaskCommand,
+        TaskCommandResult,
+        Unavailable,
+    )
+    from nautical_core.task_read_repository import AuthoritativeTaskSnapshot, TaskQueryKind, TaskSnapshotScope
+    from nautical_core.task_set_reads import (
+        AuthoritativeSetReadService,
+        ChainSlot,
+        ChainSlotSetRequest,
+        SetReadStatus,
+        UUIDSetRequest,
+    )
+
+    first = "11111111-1111-4111-8111-111111111111"
+    second = "22222222-2222-4222-8222-222222222222"
+    command_result = _typed_command_result(("task", "export"), True, "[]")
+
+    class Repository:
+        mutation_epoch = 4
+
+        def __init__(self, rows):
+            self.rows = rows
+            self.calls = 0
+            self.fail_after = None
+
+        def broad_snapshot(self, *, identity, filters, statuses, refresh=False):
+            del identity, filters, statuses, refresh
+            self.calls += 1
+            if self.fail_after is not None and self.calls > self.fail_after:
+                command = TaskCommand(("task", "export"), "set read", 1.0)
+                result = TaskCommandResult(command, 1, "", "database is locked", CommandFailureKind.BUSY, 1, 0.1)
+                return Unavailable("set", FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.1, True, "locked"))
+            if not self.rows:
+                return Absent("set", "empty set")
+            snapshot = AuthoritativeTaskSnapshot(
+                TaskSnapshotScope(TaskQueryKind.BROAD, "set", ("pending",)),
+                _task_observations(self.rows),
+                command_result,
+            )
+            return Found(snapshot, "set")
+
+    service = AuthoritativeSetReadService(
+        Repository(({"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},))
+    )
+    result = service.read_uuids(UUIDSetRequest((first, second), expected_mutation_epoch=4))
+    expect(result.status is SetReadStatus.COMPLETE, f"mixed set read was not complete: {result}")
+    expect(first in result.found and second in result.absent, f"mixed found/absent set was lost: {result}")
+    expect(result.complete_for_requested_identities, "complete set did not assert requested authority")
+
+    duplicate = AuthoritativeSetReadService(
+        Repository((
+            {"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},
+            {"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 2},
+        ))
+    ).read_uuids(UUIDSetRequest((first,)))
+    expect(duplicate.status is SetReadStatus.DUPLICATE, f"duplicate UUID was accepted: {duplicate}")
+
+    slot = ChainSlot("abcdef12", 2)
+    contradictory = AuthoritativeSetReadService(
+        Repository(({"uuid": second, "status": "pending", "chainID": "abcdef12", "link": 2, "prevLink": "deadbeef"},))
+    ).read_slots(ChainSlotSetRequest((slot,), expected_predecessors={slot: "cafebabe"}))
+    expect(contradictory.status is SetReadStatus.CONTRADICTORY, f"slot contradiction was accepted: {contradictory}")
+
+    stale_repo = Repository(({"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},))
+    stale_repo.mutation_epoch = 5
+    stale = AuthoritativeSetReadService(stale_repo).read_uuids(UUIDSetRequest((first,), expected_mutation_epoch=4))
+    expect(stale.status is SetReadStatus.STALE, f"stale set read was not rejected: {stale}")
+
+    partial_repo = Repository(({"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},))
+    partial_repo.fail_after = 1
+    partial = AuthoritativeSetReadService(partial_repo).read_uuids(
+        UUIDSetRequest((first, second), max_chunk_size=1)
+    )
+    expect(partial.status is SetReadStatus.PARTIAL, f"chunk failure was not preserved: {partial}")
+    try:
+        UUIDSetRequest(("deadbeef",))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("short UUID was accepted as a set identity")
+
+
 def test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly():
     """Compatible reads reuse broad authority while excluded history stays narrow."""
     from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
@@ -33784,6 +33873,7 @@ TESTS = [
     test_taskwarrior_uow_observes_budget_without_blocking_commands,
     test_task_read_snapshot_preserves_scope_and_builds_indexes,
     test_task_read_snapshot_retains_ambiguous_indexes,
+    test_authoritative_set_read_contracts_fail_closed,
     test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly,
     test_task_read_repository_fails_closed_on_untrusted_output,
     test_task_read_repository_mutation_epoch_prevents_stale_reuse,

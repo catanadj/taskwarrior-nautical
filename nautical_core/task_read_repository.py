@@ -20,6 +20,7 @@ from .integration_models import (
 from .taskwarrior_uow import QueryScope, QueryScopeKind
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 from .task_models import FieldPresence, TaskObservation, TaskStatus
+from .task_set_reads import ChainSlotSetRequest, SetReadResult, UUIDSetRequest
 
 if TYPE_CHECKING:
     from .taskwarrior_uow import TaskwarriorUnitOfWork
@@ -229,6 +230,11 @@ class TaskReadRepository:
                 "slowest_seconds": self._slowest_command_seconds,
             }
         )
+
+    @property
+    def mutation_epoch(self) -> int:
+        """Expose the unit-of-work epoch to bounded set-read contracts."""
+        return int(self._uow.mutation_epoch)
 
     @staticmethod
     def _query_name(scope: TaskSnapshotScope) -> str:
@@ -488,6 +494,18 @@ class TaskReadRepository:
                 detail=f"UUID query returned {len(matches)} exact or prefix matches",
             )
         return Found(matches[0], query)
+
+    def read_uuid_set(self, request: UUIDSetRequest) -> SetReadResult:
+        """Read exactly the requested UUID set with explicit authority evidence."""
+        from .task_set_reads import AuthoritativeSetReadService
+
+        return AuthoritativeSetReadService(self).read_uuids(request)
+
+    def read_chain_slot_set(self, request: ChainSlotSetRequest) -> SetReadResult:
+        """Read exactly the requested chain-slot set with explicit authority evidence."""
+        from .task_set_reads import AuthoritativeSetReadService
+
+        return AuthoritativeSetReadService(self).read_slots(request)
 
     def exact_child_slot(
         self,

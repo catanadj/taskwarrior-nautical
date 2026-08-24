@@ -828,16 +828,33 @@ def main() -> int:
         "startup_request_ms": request_ms,
         "startup_total_ms": round((time.perf_counter() - startup_t0) * 1000.0, 3),
     }
+    startup_stats = dict(_exit_runtime_state().startup_stats)
     result = hook_engine.handle_on_exit(
         request,
         services=_OnExitServices(hook_results.ExitHookResponse),
     )
+    # The drain owns and resets its invocation state; restore the startup
+    # timings so benchmark-only reporting retains the complete breakdown.
+    _exit_runtime_state().startup_stats = startup_stats
     stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
+    presentation_t0 = time.perf_counter()
+    _render_exit_drain_failure_panel(result.stats or {})
+    exit_code = hook_results.emit_exit_result(
+        result,
+        emit_exit_feedback=_emit_exit_feedback,
+        emit_stats_diag=_emit_drain_stats_diag,
+    )
+    presentation_ms = round((time.perf_counter() - presentation_t0) * 1000.0, 3)
     if stats_path:
         try:
             Path(stats_path).write_text(
                 json.dumps(
-                    {"task_stats": dict(_exit_runtime_state().diag_stats)},
+                    {
+                        "task_stats": dict(_exit_runtime_state().diag_stats),
+                        "startup_stats": dict(_exit_runtime_state().startup_stats),
+                        "drain_stats": dict(result.stats or {}),
+                        "presentation_ms": presentation_ms,
+                    },
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
@@ -846,12 +863,7 @@ def main() -> int:
             )
         except Exception as exc:
             _diag(f"benchmark stats write failed: {type(exc).__name__}: {exc}")
-    _render_exit_drain_failure_panel(result.stats or {})
-    return hook_results.emit_exit_result(
-        result,
-        emit_exit_feedback=_emit_exit_feedback,
-        emit_stats_diag=_emit_drain_stats_diag,
-    )
+    return exit_code
 
 
 def run_hook(

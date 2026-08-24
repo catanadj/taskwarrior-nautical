@@ -1199,6 +1199,67 @@ def _read_exit_task_call_stats(path: Path) -> dict[str, int]:
     return {str(key): int(value) for key, value in stats.items() if str(key).startswith("run_task_calls")}
 
 
+def _read_exit_task_timing_stats(path: Path) -> dict[str, float]:
+    """Read benchmark-only timing breakdown emitted by on-exit."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"queue drain benchmark stats were unavailable: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("queue drain benchmark stats were not an object")
+    task_stats = payload.get("task_stats")
+    startup_stats = payload.get("startup_stats")
+    drain_stats = payload.get("drain_stats")
+    if not all(isinstance(value, dict) for value in (task_stats, startup_stats, drain_stats)):
+        raise RuntimeError("queue drain benchmark stats omitted timing sections")
+
+    def number(section: dict, key: str) -> float:
+        try:
+            return max(0.0, float(section.get(key, 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    return {
+        "run_task_seconds": number(task_stats, "run_task_seconds"),
+        "startup_import_ms": number(startup_stats, "startup_import_ms"),
+        "startup_module_ms": number(startup_stats, "startup_module_ms"),
+        "startup_request_ms": number(startup_stats, "startup_request_ms"),
+        "startup_total_ms": number(startup_stats, "startup_total_ms"),
+        "drain_ms": number(drain_stats, "drain_ms"),
+        "presentation_ms": number(payload, "presentation_ms"),
+    }
+
+
+def _attach_timing_breakdown(
+    result: dict,
+    wall_samples: list[float],
+    timing_samples: list[dict[str, float]],
+) -> None:
+    """Attach command, startup, presentation, and derived Python timing."""
+    result["timing_stats"] = timing_samples
+    result["timing_breakdown"] = [
+        {
+            "wall_seconds": round(float(wall), 6),
+            "taskwarrior_seconds": round(float(timing.get("run_task_seconds", 0.0)), 6),
+            "startup_seconds": round(float(timing.get("startup_total_ms", 0.0)) / 1000.0, 6),
+            "drain_seconds": round(float(timing.get("drain_ms", 0.0)) / 1000.0, 6),
+            "presentation_seconds": round(float(timing.get("presentation_ms", 0.0)) / 1000.0, 6),
+            "non_taskwarrior_seconds": round(
+                max(0.0, float(wall) - float(timing.get("run_task_seconds", 0.0))), 6
+            ),
+        }
+        for wall, timing in zip(wall_samples, timing_samples)
+    ]
+
+
+def _merge_task_timing_stats(*stats: dict[str, float]) -> dict[str, float]:
+    merged: dict[str, float] = {}
+    for item in stats:
+        for key, value in item.items():
+            merged[key] = merged.get(key, 0.0) + float(value)
+    return merged
+
+
 def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget: dict) -> None:
     """Attach and enforce per-workflow Taskwarrior call-count budgets."""
     if not isinstance(budget, dict) or not samples:
@@ -1732,12 +1793,19 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         queue_partial_first_samples = []
         queue_partial_recovery_samples = []
         queue_partial_call_stats: list[dict[str, int]] = []
+        queue_timing_stats: list[dict[str, float]] = []
+        queue_idempotent_timing_stats: list[dict[str, float]] = []
+        queue_partial_timing_stats: list[dict[str, float]] = []
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
             _init_empty_outbox(queue_data)
             stats_path = queue_data / "on-exit-task-stats.json"
             queue_env = dict(base_env, TASKDATA=str(queue_data), NAUTICAL_BENCH_STATS_FILE=str(stats_path))
-            queue_env["NAUTICAL_BENCH_TASK_BIN"] = str(task_wrapper)
+            # Healthy drains must measure the real Taskwarrior process.  The
+            # wrapper is reserved for the partial-import failure injection
+            # below; otherwise every command would include an avoidable Python
+            # process and obscure the queue's actual cost.
+            queue_env["NAUTICAL_BENCH_TASK_BIN"] = str(real_task)
             if os.environ.get("NAUTICAL_DIAG") == "1":
                 queue_env["NAUTICAL_DIAG"] = "1"
             parents, queue_plans = _outbox_lifecycle_fixture("queue", sample_index)
@@ -1794,6 +1862,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             )
             queue_samples.append(queue_elapsed)
             queue_call_stats.append(_read_exit_task_call_stats(stats_path))
+            queue_timing_stats.append(_read_exit_task_timing_stats(stats_path))
 
             if _workflow_outbox_pending(queue_data):
                 raise RuntimeError(
@@ -1815,6 +1884,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             )
             queue_idempotent_samples.append(idem_elapsed)
             queue_idempotent_call_stats.append(_read_exit_task_call_stats(stats_path))
+            queue_idempotent_timing_stats.append(_read_exit_task_timing_stats(stats_path))
             if _workflow_outbox_pending(queue_data):
                 raise RuntimeError(
                     "idempotent outbox drain left active intents: "
@@ -1914,6 +1984,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             )
             first_partial_elapsed = time.perf_counter() - partial_t0
             first_partial_stats = _read_exit_task_call_stats(partial_stats_path)
+            first_partial_timing = _read_exit_task_timing_stats(partial_stats_path)
             pending_after_partial = _workflow_outbox_pending(partial_data)
             if not 1 <= len(pending_after_partial) <= 8:
                 raise RuntimeError(
@@ -1931,6 +2002,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             )
             recovery_elapsed = time.perf_counter() - recovery_t0
             second_partial_stats = _read_exit_task_call_stats(partial_stats_path)
+            second_partial_timing = _read_exit_task_timing_stats(partial_stats_path)
             if _workflow_outbox_pending(partial_data):
                 raise RuntimeError(
                     "partial import recovery left active lifecycle intents: "
@@ -1940,11 +2012,13 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             queue_partial_recovery_samples.append(recovery_elapsed)
             queue_partial_samples.append(first_partial_elapsed + recovery_elapsed)
             queue_partial_call_stats.append(_merge_task_call_stats(first_partial_stats, second_partial_stats))
+            queue_partial_timing_stats.append(_merge_task_timing_stats(first_partial_timing, second_partial_timing))
         queue_result = _measure_workflow(
             "workflow_queue_drain", queue_samples,
             float(budgets.get("workflow_queue_drain", 3.0)),
         )
         queue_result["task_call_stats"] = queue_call_stats
+        _attach_timing_breakdown(queue_result, queue_samples, queue_timing_stats)
         call_budgets = workflow_cfg.get("task_call_budgets")
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
@@ -1959,6 +2033,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             float(budgets.get("workflow_queue_drain_idempotent", 3.0)),
         )
         queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
+        _attach_timing_breakdown(queue_idempotent_result, queue_idempotent_samples, queue_idempotent_timing_stats)
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
                 queue_idempotent_result,
@@ -1976,6 +2051,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         queue_partial_result["recovery_samples_s"] = sorted(queue_partial_recovery_samples)
         queue_partial_result["recovery_median_s"] = float(statistics.median(queue_partial_recovery_samples))
         queue_partial_result["task_call_stats"] = queue_partial_call_stats
+        _attach_timing_breakdown(queue_partial_result, queue_partial_samples, queue_partial_timing_stats)
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
                 queue_partial_result,

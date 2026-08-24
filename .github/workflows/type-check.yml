@@ -19,6 +19,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install deployment dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y taskwarrior
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
       - name: Install mypy
         run: |
           python3 -m pip install --upgrade pip

@@ -3822,6 +3822,21 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     link_payload = ParentLinkPayload(parent_uuid, child_uuid[:8])
     baseline_parent_link = request(MutationOperation.PARENT_LINK, link_payload, 1)
 
+    # Child identity replacement race: an existing UUID with changed chain
+    # identity or UUID payload is not treated as the requested child.
+    for field, value in (("uuid", "00000000-0000-4000-8000-000000000926"), ("chainID", "user-child-chain"), ("link", 99), ("prevLink", "user-edit")):
+        original = uow.repository.rows[child_uuid].get(field)
+        uow.repository.rows[child_uuid][field] = value
+        calls_before = len(uow.client.calls)
+        raced_child_identity = service.apply(request(MutationOperation.CHILD_IMPORT, child, 1))
+        expect(raced_child_identity.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
+               f"user edit of child identity {field} was not rejected: {raced_child_identity}")
+        expect(len(uow.client.calls) == calls_before, f"child identity {field} race reached Taskwarrior")
+        if original is None:
+            uow.repository.rows[child_uuid].pop(field, None)
+        else:
+            uow.repository.rows[child_uuid][field] = original
+
     # User-edit race matrix: every guarded parent identity change must stop a
     # stale mutation before it reaches Taskwarrior.
     parent_guard_fields = (
@@ -36297,6 +36312,60 @@ def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():
                f"replacement process could not reclaim stale owner: {process.stdout!r} {process.stderr!r}")
 
 
+def test_lifecycle_shuffled_process_drains_converge_to_same_outbox_state():
+    """Repeated worker processes converge despite shuffled staging order."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    plans = []
+    for index in range(3):
+        parent_uuid = f"00000000-0000-4000-8000-00000000094{index}"
+        child_uuid = f"00000000-0000-4000-8000-00000000095{index}"
+        chain_id = f"shuffle-{index}"
+        plans.append(_plan_from_values(
+            identity=LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("completed", "on", chain_id, 1, f"rf-{chain_id}", "20260101T000000Z"),
+            child_payload={"uuid": child_uuid, "chainID": chain_id, "link": 2, "prevLink": parent_uuid[:8]},
+            parent_patch={"nextLink": child_uuid[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        ))
+    worker = (
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository\n"
+        "repo = LifecycleOutboxRepository(Path(sys.argv[1]))\n"
+        "claimed = []\n"
+        "while True:\n"
+        "    result, records = repo.claim_batch(owner='convergence-worker', lease_seconds=5.0, limit=2)\n"
+        "    if not records:\n"
+        "        break\n"
+        "    for record in records:\n"
+        "        claimed.append(record.intent_id)\n"
+        "        repo.acknowledge(intent_id=record.intent_id, owner='convergence-worker')\n"
+        "_, status = repo.status()\n"
+        "print(json.dumps({'claimed': sorted(claimed), 'states': status['states']}, sort_keys=True), flush=True)"
+    )
+
+    def run(order):
+        with tempfile.TemporaryDirectory(prefix="nautical-convergence-") as td:
+            repo = LifecycleOutboxRepository(Path(td))
+            for plan in order:
+                staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+                expect(staged.ok, f"convergence fixture did not stage: {staged}")
+            process = subprocess.run(
+                [sys.executable, "-c", worker, td], cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            expect(process.returncode == 0, f"convergence worker failed: {process.stderr!r}")
+            return json.loads(process.stdout.strip())
+
+    forward = run(plans)
+    reverse = run(tuple(reversed(plans)))
+    expect(forward == reverse, f"shuffled process drains diverged: {forward} != {reverse}")
+
+
 def test_lifecycle_configuration_drift_blocks_mutation():
     """A plan persisted under one configuration cannot mutate under another."""
     import tempfile
@@ -36756,6 +36825,7 @@ TESTS.extend([
     test_lifecycle_outbox_two_process_claims_are_exclusive,
     test_lifecycle_queue_and_reconcile_claims_are_exclusive,
     test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process,
+    test_lifecycle_shuffled_process_drains_converge_to_same_outbox_state,
     test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,

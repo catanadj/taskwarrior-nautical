@@ -635,7 +635,7 @@ behavioral gates; device-specific TTY timing remains part of Section 14.
 - [x] Add deterministic failure injection before and after claim, each lease
   renewal, child import, child verification, child stage persistence, parent
   link, parent verification, acknowledgement, and compensation.
-- [ ] Add two-process tests for simultaneous queue drain, queue versus
+- [x] Add two-process tests for simultaneous queue drain, queue versus
   reconcile, two reconcile applies, lease expiration, stale lease owner,
   SQLite busy, and first-open schema initialization.
 - [x] Add user-edit races for parent completion state, chain state, chainID,
@@ -687,7 +687,14 @@ chain state, chainID, link, recurrence fields, modified timestamp, nextLink,
 and child status/modified edits. Every stale edit returns a typed conflict or
 retryable outcome before issuing a Taskwarrior command. Child identity replacement
 and shuffled/repeated multi-process convergence remain open.
-- [ ] Shuffled and repeated failure campaigns converge to the same durable
+
+Pass 5 verification: independent queue/exact-claim and exact/exact-claim
+process races, stale-owner reclamation, child identity replacement, and
+repeated shuffled staging/drain runs now compare durable outbox state and
+claimed intent sets. Section 13 concurrency and user-edit gates are complete;
+broader Taskwarrior mutation campaigns remain covered by compatibility and
+stress suites.
+- [x] Shuffled and repeated failure campaigns converge to the same durable
   state and typed outcomes.
 
 ## 14. Set And Enforce Performance Budgets

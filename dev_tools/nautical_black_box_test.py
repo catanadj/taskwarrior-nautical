@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -105,6 +106,20 @@ def _one(env: dict[str, str], *filters: str) -> dict:
     return rows[0]
 
 
+def _one_eventually(env: dict[str, str], *filters: str, timeout: float = 5.0) -> dict:
+    """Allow on-exit's synchronous queue drain to settle before asserting visibility."""
+    deadline = time.monotonic() + timeout
+    last_count = 0
+    while True:
+        rows = _export(env, *filters)
+        last_count = len(rows)
+        if last_count == 1:
+            return rows[0]
+        if last_count > 1 or time.monotonic() >= deadline:
+            raise AssertionError(f"expected one task for {filters!r}, got {last_count}")
+        time.sleep(0.1)
+
+
 def _parse_tw_datetime(value: object) -> datetime:
     raw = str(value or "").strip()
     if not raw:
@@ -125,7 +140,7 @@ def _complete_and_child(env: dict[str, str], root: dict) -> dict:
     root_uuid = str(root.get("uuid") or "").strip()
     chain_id = str(root.get("chainID") or "").strip()
     _task([f"uuid:{root_uuid}", "done"], env)
-    child = _one(env, f"chainID:{chain_id}", "status:pending", "link:2")
+    child = _one_eventually(env, f"chainID:{chain_id}", "status:pending", "link:2")
     if child.get("prevLink") != root_uuid[:8]:
         raise AssertionError("spawned child does not point to its parent")
     parent = _one(env, f"uuid:{root_uuid}")
@@ -364,7 +379,14 @@ def _scenario_no_nested_hooks(env: dict[str, str], data_dir: Path) -> dict:
         command_log.unlink()
 
     _task([f"uuid:{root_uuid}", "done"], env)
-    rows = _export(env, f"chainID:{chain_id}")
+    deadline = time.monotonic() + 5.0
+    rows: list[dict] = []
+    while time.monotonic() < deadline:
+        rows = _export(env, f"chainID:{chain_id}")
+        by_link = {int(float(row.get("link"))): row for row in rows if row.get("link") is not None}
+        if set(by_link) == {1, 2}:
+            break
+        time.sleep(0.1)
     by_link = {int(float(row.get("link"))): row for row in rows if row.get("link") is not None}
     if set(by_link) != {1, 2}:
         raise AssertionError(f"hook recursion fixture did not produce one child: {rows!r}")

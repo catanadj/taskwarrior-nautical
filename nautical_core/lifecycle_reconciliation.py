@@ -417,9 +417,9 @@ class LifecycleReconciliationService:
                         outcomes.append((operations.recovery_error(plan_parent, child_error), ""))
                         break
                     if virtual_child is None:
-                        if plan.child:
+                        if plan.child_draft is not None:
                             child = TaskObservation.from_mapping(
-                                plan.child,
+                                plan.child_draft.to_mapping(),
                                 source_query="reconcile planned child verification",
                             )
                             terminal_error = operations.terminal_error(child, recovery_at)

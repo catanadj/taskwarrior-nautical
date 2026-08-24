@@ -98,7 +98,8 @@ def _render_recovery_panel(
     if plan.child_due is not None:
         next_label = "Blocked next" if plan.action == "legitimate_final" else "Next"
         rows.append((next_label, services.core.fmt_dt_local(plan.child_due)))
-    child_until = plan.child.get("until") if isinstance(plan.child, dict) else None
+    child_draft = plan.child_draft
+    child_until = child_draft.field_value("until") if child_draft is not None else None
     child_until_dt, child_until_err = services.safe_parse_datetime(child_until)
     if child_until_dt is not None and not child_until_err:
         if plan.child_due is not None:
@@ -158,13 +159,13 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
             result="[yellow]Chain finished at configured limit[/]",
         )
         return True
-    if plan.action != "spawn" or not plan.child:
+    if plan.action != "spawn" or plan.child_draft is None:
         render_recovery_warning(task, plan.reason, services=services)
         return True
 
     try:
         child_short, _stripped, verified, deferred, reason, _intent_id = services.spawn_child_atomic(
-            plan.child,
+            plan.child_draft.to_mapping(),
             task,
         )
     except Exception as exc:

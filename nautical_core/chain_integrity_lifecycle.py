@@ -409,11 +409,11 @@ def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) 
                 pass
     if plan.child_short:
         evidence["existing_child"] = plan.child_short
-    if plan.child:
-        field = "due" if "due" in plan.child else "scheduled" if "scheduled" in plan.child else "due"
+    child_draft = plan.child_draft
+    if child_draft is not None:
+        field = child_draft.target_field
         evidence["child_field"] = field
-        if plan.child.get(field) is not None:
-            evidence["child_target"] = str(plan.child.get(field))
+        evidence["child_target"] = str(child_draft.field_value(field, ""))
     return evidence
 
 

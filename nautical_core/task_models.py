@@ -633,6 +633,16 @@ class TaskDraft:
             result["bc"] = self.recurrence.business_calendar
         return result
 
+    def field_value(self, name: str, default: Any = None) -> Any:
+        """Read an optional carried field without serializing the full draft."""
+        key = str(name)
+        if key == "description":
+            return self.description
+        if key == self.target_field:
+            return self.target.value.isoformat().replace("+00:00", "Z")
+        value = self.fields.get(key)
+        return default if value is None else _thaw(value)
+
 
 @dataclass(frozen=True, slots=True)
 class ValidatedTask:

@@ -233,7 +233,7 @@ def _canonical_plan_value(value: Any) -> Any:
 
 
 def recurrence_fingerprint(
-    task: Mapping[str, Any],
+    task: Mapping[str, Any] | TaskObservation,
     *,
     parse_datetime: Callable[[Any], Any] | None = None,
     extra_fields: Iterable[str] = (),
@@ -246,9 +246,16 @@ def recurrence_fingerprint(
     fields = tuple(dict.fromkeys((*_RECURRENCE_FINGERPRINT_FIELDS, *(str(item) for item in extra_fields))))
     canonical: dict[str, Any] = {}
     for field in fields:
-        if field not in task:
-            continue
-        value = _canonical_recurrence_value(field, task.get(field), parse_datetime)
+        if isinstance(task, TaskObservation):
+            state = task.field(field)
+            if state.presence is FieldPresence.ABSENT:
+                continue
+            raw_value = state.raw_value()
+        else:
+            if field not in task:
+                continue
+            raw_value = task.get(field)
+        value = _canonical_recurrence_value(field, raw_value, parse_datetime)
         if value is not None:
             canonical[field] = value
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)

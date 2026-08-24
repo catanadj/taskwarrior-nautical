@@ -13,10 +13,13 @@ from enum import Enum
 import hashlib
 import json
 import re
-from typing import Any, Callable, Iterable, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, TypeAlias
 
 from .task_models import FieldPresence, TaskObservation
 from .task_field_policy import LIFECYCLE_VOLATILE_CHILD_FIELDS
+
+if TYPE_CHECKING:
+    from .task_models import TaskDraft
 
 
 class LifecycleContractError(ValueError):
@@ -63,12 +66,17 @@ class LifecycleRecoveryDecision:
     terminal_kind: str | None = None
     lifecycle_plan: "LifecyclePlan | None" = None
     child_observation: TaskObservation | None = None
+    child_draft: "TaskDraft | None" = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.parent, TaskObservation):
             raise TypeError("lifecycle recovery decision requires a TaskObservation parent")
         if self.child_observation is not None and not isinstance(self.child_observation, TaskObservation):
             raise TypeError("lifecycle recovery child evidence requires a TaskObservation")
+        if self.child_draft is not None:
+            from .task_models import TaskDraft
+            if not isinstance(self.child_draft, TaskDraft):
+                raise TypeError("lifecycle recovery child draft requires a TaskDraft")
 
 
 class LifecycleAction(str, Enum):
@@ -606,6 +614,21 @@ class LifecyclePlan:
 
     def child_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.child_payload}
+
+    def child_draft(self) -> "TaskDraft | None":
+        """Return the immutable child draft at an explicit inspection boundary."""
+        if not self.child_payload:
+            return None
+        from .task_codec import DEFAULT_TASK_CODEC
+        from .task_models import NauticalTask, TaskDraft
+
+        task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(
+                self.child_dict(),
+                source_query="lifecycle plan child draft",
+            )
+        )
+        return TaskDraft.from_task(task, target_field="due" if task.temporal.due else "scheduled")
 
     def parent_patch_dict(self) -> dict[str, Any]:
         return {key: _thaw(value) for key, value in self.parent_patch}

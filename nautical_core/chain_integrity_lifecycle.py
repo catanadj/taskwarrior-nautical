@@ -555,6 +555,7 @@ def _plan_recovery_decision_unscoped(
             child=existing_child.to_mapping(),
             lifecycle_plan=lifecycle_plan,
             child_observation=existing_child,
+            child_draft=lifecycle_plan.child_draft(),
         )
 
     try:
@@ -729,6 +730,7 @@ def _plan_recovery_decision_unscoped(
         child=child,
         child_due=child_due,
         lifecycle_plan=lifecycle_plan,
+        child_draft=lifecycle_plan.child_draft() if lifecycle_plan is not None else None,
     )
 
 

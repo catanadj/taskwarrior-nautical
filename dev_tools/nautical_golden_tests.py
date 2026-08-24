@@ -8123,10 +8123,23 @@ def test_on_modify_expiration_panel_explains_carry():
         "description": "Take the trash out",
         "link": 1,
     }
+    child_draft = _task_draft(
+        {
+            "uuid": "22222222-0000-4000-8000-000000000001",
+            "description": "Take the trash out",
+            "status": "pending",
+            "chain": "on",
+            "chainID": "expiration-panel",
+            "link": 2,
+            "cp": "1d",
+            "due": child_due,
+            "until": mod.core.fmt_isoz(child_until),
+        }
+    )
     plan = SimpleNamespace(
         action="spawn",
         child_due=child_due,
-        child={"until": mod.core.fmt_isoz(child_until)},
+        child_draft=child_draft,
         next_link=2,
         reason="expired link missing next link",
     )

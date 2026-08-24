@@ -1686,7 +1686,7 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
     return "[green](on time)[/]"
 
 
-def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] | None = None) -> list[dict]:
+def _collect_prev_two(current_task: dict, chain_by_link=None):
     from nautical_core.integration_models import Absent, Found, Unavailable
 
     service = _lifecycle_read_service()
@@ -1703,7 +1703,7 @@ def _collect_prev_two(current_task: dict, chain_by_link: dict[int, list[dict]] |
         return []
     if not isinstance(read, Found):
         raise RuntimeError("lifecycle predecessor read returned an invalid result")
-    return [dict(row) for row in read.value]
+    return list(read.value)
 
 
 def _cached_chain_token_match(task: dict, token: str) -> bool:

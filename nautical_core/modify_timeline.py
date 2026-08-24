@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
-from .task_models import TaskPayload
+from .task_models import TaskObservation, TaskPayload
 
 
 def _timeline_seed_base(task: TaskPayload) -> str:
@@ -103,13 +103,14 @@ def _timeline_initial_items(
     child_short: str,
     *,
     core: Any,
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
 ) -> list[tuple[int, Any, dict[str, Any], str]]:
     items: list[tuple[int, Any, dict[str, Any], str]] = []
     prevs = collect_prev_two(task)
     prev_count = len(prevs)
-    for idx, obj in enumerate(prevs):
+    for idx, observation in enumerate(prevs):
+        obj = observation.to_mapping()
         no = core.coerce_int(obj.get("link"), None) or (cur_no - (prev_count - idx))
         end_dt = dtparse(obj.get("end"))
         items.append((no, end_dt, obj, "prev"))
@@ -565,7 +566,7 @@ def anchor_file_timeline_lines(
     core: Any,
     max_iterations: int,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -715,7 +716,7 @@ def timeline_lines(
     core: Any,
     max_iterations: int,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -849,7 +850,7 @@ def timeline_lines_for_task(
     core: Any,
     max_iterations: int,
     future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[dict[str, Any]]],
+    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],

@@ -293,14 +293,19 @@ def _smoke_hooks(
             "TASKDATA": td,
             "XDG_CACHE_HOME": str(Path(td) / "cache"),
             "TZ": "UTC",
+            "NAUTICAL_DIAG": "1",
         })
+        task_path = shutil.which("task", path=env.get("PATH"))
+        if task_path:
+            # Termux can expose the command through a shell PATH that is not
+            # preserved identically when the hook is launched by Python.
+            env["NAUTICAL_BENCH_TASK_BIN"] = task_path
         if core_base is None:
             env.pop("NAUTICAL_CORE_PATH", None)
             env.pop("NAUTICAL_TRUST_CORE_PATH", None)
         else:
             env["NAUTICAL_CORE_PATH"] = str(core_base)
             env["NAUTICAL_TRUST_CORE_PATH"] = "1"
-        env.pop("NAUTICAL_DIAG", None)
         env.pop("NAUTICAL_DIAG_LOG", None)
         cases = (
             ("on-add", json.dumps(plain), True),
@@ -321,8 +326,12 @@ def _smoke_hooks(
             except Exception as exc:
                 raise InstallError(f"{event} validation could not run: {exc}") from exc
             if proc.returncode != 0:
-                error = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
-                raise InstallError(f"{event} validation failed: {error}")
+                stderr = (proc.stderr or "").strip()
+                stdout = (proc.stdout or "").strip()
+                detail = stderr or stdout or f"exit {proc.returncode}"
+                if stderr and stdout:
+                    detail = f"{stderr}; stdout={stdout}"
+                raise InstallError(f"{event} validation failed (exit {proc.returncode}): {detail}")
             if expect_json and not _strict_json_object(proc.stdout):
                 raise InstallError(f"{event} validation did not emit one JSON object")
             if not expect_json and (proc.stdout or "").strip():

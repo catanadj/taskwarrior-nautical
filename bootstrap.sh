@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPOSITORY="https://github.com/catanadj/taskwarrior-nautical.git"
-DEFAULT_VERSION="v6.5.3"
+DEFAULT_VERSION="v7.0.0"
 VERSION="${NAUTICAL_VERSION:-$DEFAULT_VERSION}"
 TASKDATA="${TASKDATA:-$HOME/.task}"
 LAUNCHER_PATH=""

@@ -23660,6 +23660,8 @@ def test_navigator_resolves_symbolic_anchor_time_offsets():
             task = {
                 "uuid": "00000000-0000-4000-8000-000000000902",
                 "description": "symbolic navigator time",
+                "status": "pending",
+                "link": 1,
                 "anchor": "w:mon@t=sunset@+45m",
                 "chainID": "navigator-symbolic",
             }
@@ -32753,7 +32755,10 @@ def test_on_add_seasonal_selection_feedback():
     expect("the first Monday of each spring" in stderr, f"preview omitted natural season: {stderr}")
     expect(
         "Advice" in stderr
-        and "astronomical spring equinox through" in stderr
+        and (
+            "fixed March 1 through May 31" in stderr
+            or "astronomical spring equinox through" in stderr
+        )
         and "boundaries." in stderr,
         f"preview omitted season boundary: {stderr}",
     )

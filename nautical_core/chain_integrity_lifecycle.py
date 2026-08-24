@@ -298,13 +298,13 @@ def fallback_native_until_at_day_end(
         return None, "cannot infer native until at local 23:00"
 
 
-def _child_recurrence_mismatch(parent: TaskPayload, child: TaskPayload) -> str:
+def _child_recurrence_mismatch(parent: TaskObservation, child: TaskObservation) -> str:
     """Return a mismatch when a candidate child carries a different recurrence."""
-    if not any(_recurrence_field_text(child.get(field)) for field in RECURRENCE_FIELDS):
+    if not any(_recurrence_field_text(_observation_value(child, field)) for field in RECURRENCE_FIELDS):
         return ""
     for field in RECURRENCE_FIELDS:
-        parent_value = _recurrence_field_text(parent.get(field))
-        child_value = _recurrence_field_text(child.get(field))
+        parent_value = _recurrence_field_text(_observation_value(parent, field))
+        child_value = _recurrence_field_text(_observation_value(child, field))
         if child_value and child_value != parent_value:
             expected = parent_value or "<empty>"
             actual = child_value or "<empty>"
@@ -313,22 +313,24 @@ def _child_recurrence_mismatch(parent: TaskPayload, child: TaskPayload) -> str:
 
 
 def resolve_existing_child(
-    parent: TaskPayload,
-    rows: list[dict[str, Any]],
+    parent: TaskObservation,
+    rows: list[TaskObservation] | tuple[TaskObservation, ...],
     *,
     include_deleted: bool = False,
 ) -> tuple[str, str]:
-    chain_id = str(parent.get("chainID") or "").strip()
-    next_link = int_or_default(parent.get("link"), 1) + 1
-    matches: dict[str, dict[str, Any]] = {}
+    if not isinstance(parent, TaskObservation) or any(not isinstance(row, TaskObservation) for row in rows):
+        raise TypeError("child resolution requires typed task observations")
+    chain_id = str(_observation_value(parent, "chainID") or "").strip()
+    next_link = int_or_default(_observation_value(parent, "link"), 1) + 1
+    matches: dict[str, TaskObservation] = {}
     for row in rows:
-        if str(row.get("chainID") or "").strip() != chain_id:
+        if str(_observation_value(row, "chainID") or "").strip() != chain_id:
             continue
-        if int_or_default(row.get("link"), -1) != next_link:
+        if int_or_default(_observation_value(row, "link"), -1) != next_link:
             continue
-        if not include_deleted and str(row.get("status") or "").strip() == "deleted":
+        if not include_deleted and str(_observation_value(row, "status") or "").strip() == "deleted":
             continue
-        child_uuid = str(row.get("uuid") or "").strip()
+        child_uuid = str(_observation_value(row, "uuid") or "").strip()
         if len(child_uuid) < 8:
             return "", f"next slot #{next_link} contains a task without a valid UUID"
         matches[child_uuid.lower()] = row
@@ -340,11 +342,11 @@ def resolve_existing_child(
         return "", f"next slot #{next_link} contains multiple tasks: {children}"
 
     child_uuid, child = next(iter(matches.items()))
-    parent_uuid = str(parent.get("uuid") or "").strip().lower()
+    parent_uuid = str(_observation_value(parent, "uuid") or "").strip().lower()
     parent_short = short_uuid(parent_uuid)
     if len(parent_uuid) < 8 or not parent_short:
         return "", "parent task has no valid UUID for reciprocal link validation"
-    prev_link = str(child.get("prevLink") or "").strip().lower()
+    prev_link = str(_observation_value(child, "prevLink") or "").strip().lower()
     if prev_link not in {parent_short, parent_uuid}:
         shown = prev_link or "<empty>"
         return (
@@ -454,7 +456,7 @@ def _build_expiration_child_with_day_end(
 def _plan_recovery_decision_unscoped(
     parent: TaskPayload,
     *,
-    existing_children: list[dict[str, Any]],
+    existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
     hook: Any,
     generation: ChainGenerationService | None = None,
 ) -> LifecycleRecoveryDecision:
@@ -489,7 +491,7 @@ def _plan_recovery_decision_unscoped(
             )
 
     child_short, child_error = resolve_existing_child(
-        parent,
+        decision_parent,
         existing_children,
         include_deleted=is_expiration,
     )
@@ -500,11 +502,11 @@ def _plan_recovery_decision_unscoped(
             (
                 row
                 for row in existing_children
-                if str(row.get("uuid") or "").strip().lower().startswith(child_short.lower())
+                if str(_observation_value(row, "uuid") or "").strip().lower().startswith(child_short.lower())
             ),
             None,
         )
-        if not isinstance(existing_child, dict):
+        if not isinstance(existing_child, TaskObservation):
             return LifecycleRecoveryDecision(
                 "error",
                 decision_parent,
@@ -532,7 +534,7 @@ def _plan_recovery_decision_unscoped(
                 identity=identity,
                 action=LifecycleAction.SPAWN_CHILD,
                 parent_guard=guard,
-                draft=_child_draft(existing_child),
+                draft=_child_draft(existing_child.to_mapping()),
                 parent_patch={"nextLink": child_short},
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
@@ -550,12 +552,14 @@ def _plan_recovery_decision_unscoped(
             next_link,
             "next link already exists",
             child_short=child_short,
-            child=existing_child,
+            child=existing_child.to_mapping(),
             lifecycle_plan=lifecycle_plan,
         )
 
     try:
-        evaluator = SchedulerService.from_observation(observation).session.evaluator
+        evaluator = SchedulerService.from_task(
+            NauticalTask.from_observation(observation)
+        ).session.evaluator
         kind = evaluator.kind or "cp"
         limits = evaluator.limits
         until_dt = limits.chain_until
@@ -730,7 +734,7 @@ def _plan_recovery_decision_unscoped(
 def plan_recovery_decision(
     parent: TaskObservation,
     *,
-    existing_children: list[dict[str, Any]],
+    existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
     hook: Any,
     generation: ChainGenerationService | None = None,
 ) -> LifecycleRecoveryDecision:

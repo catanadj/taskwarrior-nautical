@@ -332,29 +332,29 @@ class LifecycleReconciliationService:
             generation=generation,
         )
 
-    def existing_children(self, parent: TaskObservation, *, safe_parse_datetime: Any) -> list[dict[str, Any]]:
-        if isinstance(parent, TaskObservation):
-            parent_values = parent.to_mapping()
-        else:
+    def existing_children(self, parent: TaskObservation, *, safe_parse_datetime: Any) -> tuple[TaskObservation, ...]:
+        if not isinstance(parent, TaskObservation):
             raise TypeError("lifecycle child lookup requires a TaskObservation parent")
-        if str(parent_values.get("status") or "").strip().lower() == "deleted":
+        if str(getattr(parent.field("status").value, "value", parent.field("status").value) or "").strip().lower() == "deleted":
             evidence = lifecycle.deleted_chain_disposition(
                 parent,
                 safe_parse_datetime=safe_parse_datetime,
             )
             if evidence.disposition is not DeletionDisposition.EXPIRATION:
                 return []
-        chain_id = str(parent_values.get("chainID") or "").strip()
-        next_link = lifecycle.int_or_default(parent_values.get("link"), 1) + 1
+        chain_id = str(getattr(parent.field("chainID").value, "value", parent.field("chainID").value) or "").strip()
+        next_link = lifecycle.int_or_default(getattr(parent.field("link").value, "value", parent.field("link").value), 1) + 1
         if not chain_id:
-            return []
+            return ()
         result = self.repository.exact_child_slot(chain_id, next_link, refresh=True)
         if isinstance(result, Unavailable):
             raise RuntimeError(result.evidence.detail or f"child slot {chain_id}:{next_link} unavailable")
         if isinstance(result, Absent):
-            return []
+            return ()
         if isinstance(result, Found):
-            return [result.value.to_mapping()]
+            if not isinstance(result.value, TaskObservation):
+                raise RuntimeError(f"child slot {chain_id}:{next_link} returned an untyped observation")
+            return (result.value,)
         raise RuntimeError(f"child slot {chain_id}:{next_link} returned an invalid read result")
 
     def recover_candidate(

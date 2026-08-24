@@ -197,7 +197,7 @@ class ChainGenerationService:
             astronomy_config=getattr(self.core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(self.core, "ANCHOR_FILE_DIR", ""),
         )
-        service = SchedulerService.from_observation(task.observation, context=context)
+        service = SchedulerService.from_task(task, context=context)
         self._evaluator_cache[key] = service
         return service
 

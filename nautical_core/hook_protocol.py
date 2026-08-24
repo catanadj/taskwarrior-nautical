@@ -25,7 +25,10 @@ def _codec():
         try:
             from .task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
         except ImportError:  # dynamically loaded protocol test/hook wrapper
-            from nautical_core.task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+            try:
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+            except Exception:
+                from task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
 
         DEFAULT_TASK_CODEC = codec
         TaskCodecError = error

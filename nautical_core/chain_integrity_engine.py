@@ -183,7 +183,7 @@ class ChainIntegrityEngine:
                 for field in ("prevLink", "nextLink")
             ):
                 required.add(node.chain_id)
-            elif node.link is not None and node.link > 1 and not str(node.field("prevLink", "") or "").strip():
+            elif node.link is not None and node.link > 1 and not node.reference_token("prevLink"):
                 required.add(node.chain_id)
         if not required:
             return snapshot, frozenset()

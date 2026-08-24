@@ -247,6 +247,22 @@ class ChainNode:
             return self.observation.field(name)
         return None
 
+    def reference_token(self, name: str) -> str:
+        """Return a normalized edge token from the typed observation boundary."""
+        if name not in {"prevLink", "nextLink"}:
+            raise ValueError("chain reference field must be prevLink or nextLink")
+        state = self.field_state(name)
+        if state is not None:
+            from .task_models import FieldPresence
+            if state.presence is FieldPresence.VALUE:
+                value = getattr(state.value, "value", state.value)
+                return str(value or "").strip().lower()
+            return ""
+        for key, value in self.fields:
+            if key == name:
+                return str(_thaw(value) or "").strip().lower()
+        return ""
+
     def to_dict(self) -> dict[str, object]:
         value = {key: _thaw(item) for key, item in self.fields}
         value.setdefault("uuid", self.task_uuid)
@@ -433,7 +449,10 @@ class IntegrityOperation:
 
         if self.kind not in {RepairOperationKind.METADATA_REPAIR, RepairOperationKind.LINK_REPAIR}:
             raise IntegrityContractError("repair operation does not carry a task patch")
-        return TaskPatch.metadata_repair(TaskUUID(self.target_uuid), **dict(_thaw(self.payload)))
+        payload = _thaw(self.payload)
+        if not isinstance(payload, Mapping):
+            raise IntegrityContractError("repair payload must be a mapping")
+        return TaskPatch.metadata_repair(TaskUUID(self.target_uuid), **dict(payload))
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "IntegrityOperation":

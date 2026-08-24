@@ -41,8 +41,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                 },
                 source_query="hint builder",
             )
-            return scheduler_service.SchedulerService.from_observation(
-                observation,
+            task_model = core["_import_sibling"]("task_models").NauticalTask.from_observation(observation)
+            return scheduler_service.SchedulerService.from_task(
+                task_model,
                 context=context,
             )
 

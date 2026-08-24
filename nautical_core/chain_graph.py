@@ -97,7 +97,7 @@ class ChainGraph:
         by_uuid: Mapping[str, list[ChainNode]],
         by_short: Mapping[str, list[ChainNode]],
     ) -> ChainReference:
-        token = str(node.field(field, "") or "").strip().lower()
+        token = node.reference_token(field)
         if not token:
             return ChainReference(field, "", ReferenceState.ABSENT, reason="reference is empty")
         matches = list(by_uuid.get(token, ()))
@@ -136,7 +136,7 @@ class ChainGraph:
         nodes = self.chain_nodes(chain_id) if str(chain_id or "").strip() else self.nodes
         return tuple(
             node for node in nodes
-            if not str(node.field("prevLink", "") or "").strip()
+            if not node.reference_token("prevLink")
         )
 
     def tips(self, chain_id: str = "") -> tuple[ChainNode, ...]:
@@ -144,7 +144,7 @@ class ChainGraph:
         nodes = self.chain_nodes(chain_id) if str(chain_id or "").strip() else self.nodes
         return tuple(
             node for node in nodes
-            if not str(node.field("nextLink", "") or "").strip()
+            if not node.reference_token("nextLink")
         )
 
     def orphan_candidates(self) -> tuple[ChainNode, ...]:

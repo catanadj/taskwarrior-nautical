@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .recurrence_context import RecurrenceContext
-from .task_codec import TaskCodec
-from .task_models import FieldPresence, NauticalTask, TaskObservation
+from .task_models import NauticalTask, TaskObservation
+
+
+def _recurrence_text(value: object) -> str:
+    text = str(value or "").strip()
+    return "" if text.lower() == "null" else text
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +28,34 @@ class RecurrenceSpec:
     chain_until: str = ""
 
     @classmethod
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "RecurrenceSpec":
+        """Build a specification from an already validated domain task."""
+        if not isinstance(task, NauticalTask):
+            raise TypeError("recurrence specification requires a validated NauticalTask")
+        spec = task.recurrence.spec
+        if not isinstance(spec, cls):
+            raise TypeError("NauticalTask recurrence does not contain a RecurrenceSpec")
+        recurrence_context = context or spec.context
+        if recurrence_context.chain_id != task.identity.chain_id.value:
+            raise ValueError("Conflicting recurrence identities: context.chain_id does not match task chainID.")
+        return replace(
+            spec,
+            context=recurrence_context,
+            anchor=_recurrence_text(spec.anchor),
+            anchor_file=_recurrence_text(spec.anchor_file),
+            omit=_recurrence_text(spec.omit),
+            omit_file=_recurrence_text(spec.omit_file),
+            cp=_recurrence_text(spec.cp),
+            anchor_mode=str(spec.anchor_mode or "skip").strip().lower() or "skip",
+            chain_until=_recurrence_text(spec.chain_until),
+        )
+
+    @classmethod
     def from_observation(
         cls,
         observation: TaskObservation,
@@ -33,39 +65,7 @@ class RecurrenceSpec:
         """Build a recurrence specification without thawing a task mapping."""
         if not isinstance(observation, TaskObservation):
             raise TypeError("recurrence specification requires a TaskObservation")
-        # Scheduling is an operational path: reject incomplete identity,
-        # status, temporal, or recurrence observations before compilation.
-        NauticalTask.from_observation(observation)
-
-        def value(name: str) -> object:
-            state = observation.field(name)
-            if state.presence is FieldPresence.ABSENT:
-                return None
-            return getattr(state.value, "value", state.value)
-
-        task_chain_id = str(value("chainID") or "").strip()
-        if context is not None and task_chain_id and context.chain_id != task_chain_id:
-            raise ValueError("Conflicting recurrence identities: context.chain_id does not match task.chainID.")
-        recurrence_context = context or RecurrenceContext.from_observation(observation)
-        raw_max = value("chainMax")
-        if raw_max in (None, ""):
-            normalized_max = None
-        else:
-            try:
-                normalized_max = int(raw_max)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("chainMax must be an integer in a recurrence specification.") from exc
-        return cls(
-            context=recurrence_context,
-            anchor=TaskCodec.normalize_text(value("anchor")),
-            anchor_file=TaskCodec.normalize_text(value("anchor_file")),
-            omit=TaskCodec.normalize_text(value("omit")),
-            omit_file=TaskCodec.normalize_text(value("omit_file")),
-            cp=TaskCodec.normalize_text(value("cp")),
-            anchor_mode=TaskCodec.normalize_text(value("anchor_mode") or "skip").lower() or "skip",
-            chain_max=normalized_max,
-            chain_until=TaskCodec.normalize_text(value("chainUntil")),
-        )
+        return cls.from_task(NauticalTask.from_observation(observation), context=context)
 
     @property
     def kind(self) -> str | None:

@@ -1029,17 +1029,17 @@ def _task_detail(row: TaskObservation) -> dict[str, Any]:
     return detail
 
 
-def _existing_reconcile_children(rows: list[TaskObservation], parent: TaskObservation) -> list[dict[str, Any]]:
+def _existing_reconcile_children(rows: list[TaskObservation], parent: TaskObservation) -> tuple[TaskObservation, ...]:
     chain_id = str(_task_value(parent, "chainID") or "").strip()
     next_link = lifecycle.int_or_default(_task_value(parent, "link"), 1) + 1
     include_deleted = str(_task_value(parent, "status") or "").strip() == "deleted"
-    return [
-        row.to_mapping()
+    return tuple(
+        row
         for row in rows
         if str(_task_value(row, "chainID") or "").strip() == chain_id
         and lifecycle.int_or_default(_task_value(row, "link"), -1) == next_link
         and (include_deleted or str(_task_value(row, "status") or "").strip() != "deleted")
-    ]
+    )
 
 
 def _safe_parse_datetime(runtime: Any, value: Any):
@@ -1106,7 +1106,7 @@ def _check_reconcile_plans(
             if str(_task_value(parent, "status") or "").strip().lower() != "deleted":
                 continue
             continues_through_deleted = any(
-                str(child.get("status") or "").strip().lower() == "deleted"
+                str(_task_value(child, "status") or "").strip().lower() == "deleted"
                 for child in existing_children
             )
             planned_until_elapsed = False

@@ -18,6 +18,15 @@ from types import MappingProxyType
 from typing import Any, Mapping, MutableMapping, TypeAlias
 from uuid import UUID
 
+try:
+    from .task_field_policy import DRAFT_FORBIDDEN_FIELDS
+except ImportError:  # standalone thin-hook helper loading
+    DRAFT_FORBIDDEN_FIELDS = frozenset(
+        {"uuid", "chainID", "link", "prevLink", "id", "status", "modified", "end"}
+    )
+
+
+
 
 FrozenValue: TypeAlias = object
 # Mutable Taskwarrior JSON at the hook protocol edge.
@@ -580,7 +589,7 @@ class TaskDraft:
         target_field = str(self.target_field).strip().lower()
         if target_field not in {"due", "scheduled"}:
             raise ValueError("task draft target field must be due or scheduled")
-        forbidden = {"id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink"}
+        forbidden = DRAFT_FORBIDDEN_FIELDS
         copied = {str(key): _freeze(value) for key, value in self.fields.items()}
         overlap = forbidden.intersection(copied)
         if overlap:

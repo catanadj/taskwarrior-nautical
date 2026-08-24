@@ -814,9 +814,10 @@ def handle_anchor_file_preview_on_add(
     from .scheduler_service import SchedulerService
 
     from .task_codec import DEFAULT_TASK_CODEC
+    from .task_models import NauticalTask
 
-    scheduler_service = SchedulerService.from_observation(
-        DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview"),
+    scheduler_service = SchedulerService.from_task(
+        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview")),
         context=RecurrenceContext(
             chain_id=str(task.get("chainID") or seed_base),
             timezone=getattr(core, "_LOCAL_TZ", None),
@@ -1148,9 +1149,10 @@ def handle_anchor_preview_on_add(
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         )
         from .task_codec import DEFAULT_TASK_CODEC
+        from .task_models import NauticalTask
 
-        scheduler_service = SchedulerService.from_observation(
-            DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview"),
+        scheduler_service = SchedulerService.from_task(
+            NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview")),
             context=context,
         )
         recurrence_evaluator = scheduler_service.session.evaluator

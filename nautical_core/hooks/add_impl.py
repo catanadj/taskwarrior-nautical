@@ -753,8 +753,9 @@ def _validate_native_until_anchor_slots_or_fail(
         task,
         source_query="on-add recurrence validation",
     )
-    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_observation(
-        observation,
+    domain_task = core._import_sibling("task_models").NauticalTask.from_observation(observation)
+    recurrence_spec = core._import_sibling("recurrence_spec").RecurrenceSpec.from_task(
+        domain_task,
         context=recurrence_context,
     )
     anchor_file_value = recurrence_spec.anchor_file

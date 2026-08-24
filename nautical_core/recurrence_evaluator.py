@@ -14,7 +14,7 @@ from typing import Any, Mapping, NoReturn
 
 from .recurrence_context import RecurrenceContext
 from .recurrence_spec import RecurrenceSpec
-from .task_models import TaskObservation
+from .task_models import NauticalTask, TaskObservation
 from .scheduler_cursor import OccurrenceCursor
 from .occurrence_outcomes import (
     ExhaustedOccurrence,
@@ -163,6 +163,17 @@ class RecurrenceEvaluator:
     ) -> "RecurrenceEvaluator":
         """Build an evaluator directly from one validated observation."""
         return cls.from_spec(RecurrenceSpec.from_observation(observation, context=context))
+
+    @classmethod
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+    ) -> "RecurrenceEvaluator":
+        if not isinstance(task, NauticalTask):
+            raise TypeError("recurrence evaluator requires a validated NauticalTask")
+        return cls.from_spec(RecurrenceSpec.from_task(task, context=context))
 
     @classmethod
     def from_compiled(cls, compiled: CompiledSchedule) -> "RecurrenceEvaluator":

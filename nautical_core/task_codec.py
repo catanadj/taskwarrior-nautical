@@ -10,7 +10,10 @@ import re
 import sys
 from typing import Any, Mapping, Sequence
 
-from .task_models import TaskDraft, TaskObservation
+try:
+    from .task_models import TaskDraft, TaskObservation
+except ImportError:  # standalone hook helper loading
+    from task_models import TaskDraft, TaskObservation
 
 
 TASK_CODEC_VERSION = 1

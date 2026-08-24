@@ -136,10 +136,12 @@ def _timeline_future_cp_items(
         from .scheduler_service import SchedulerService
         from .recurrence_context import RecurrenceContext
         from .task_codec import DEFAULT_TASK_CODEC
+        from .task_models import NauticalTask
 
         observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify timeline")
-        evaluator = SchedulerService.from_observation(
-            observation,
+        domain_task = NauticalTask.from_observation(observation)
+        evaluator = SchedulerService.from_task(
+            domain_task,
             context=RecurrenceContext.from_observation(
                 observation,
                 timezone=getattr(core, "_LOCAL_TZ", None),

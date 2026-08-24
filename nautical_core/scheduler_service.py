@@ -21,7 +21,7 @@ from .scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from .scheduler_models import OccurrenceSearchExhausted
 from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
-from .task_models import TaskObservation
+from .task_models import NauticalTask, TaskObservation
 
 
 @dataclass(slots=True)
@@ -41,6 +41,18 @@ class SchedulerService:
     ) -> "SchedulerService":
         trace = trace or SchedulerTrace.from_env()
         return cls(EvaluationSession.from_observation(observation, context=context), trace)
+
+    @classmethod
+    def from_task(
+        cls,
+        task: NauticalTask,
+        *,
+        context: RecurrenceContext | None = None,
+        trace: SchedulerTrace | None = None,
+    ) -> "SchedulerService":
+        if not isinstance(task, NauticalTask):
+            raise TypeError("scheduler requires a validated NauticalTask")
+        return cls(EvaluationSession.from_task(task, context=context), trace or SchedulerTrace.from_env())
 
     def _flush_trace(self) -> None:
         if self.trace is not None and self.trace.enabled:

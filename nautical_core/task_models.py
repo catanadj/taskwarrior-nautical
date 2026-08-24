@@ -19,11 +19,14 @@ from typing import Any, Mapping, MutableMapping, TypeAlias
 from uuid import UUID
 
 try:
-    from .task_field_policy import DRAFT_FORBIDDEN_FIELDS
+    from .task_field_policy import DRAFT_FORBIDDEN_FIELDS, draft_field_may_be_supplied
 except ImportError:  # standalone thin-hook helper loading
     DRAFT_FORBIDDEN_FIELDS = frozenset(
         {"uuid", "chainID", "link", "prevLink", "id", "status", "modified", "end"}
     )
+
+    def draft_field_may_be_supplied(field: str) -> bool:
+        return str(field) not in DRAFT_FORBIDDEN_FIELDS
 
 
 
@@ -296,6 +299,7 @@ class TaskObservation:
     issues: tuple[DecodeIssue, ...]
     provenance: ObservationProvenance
     _fingerprint: str
+    _projection_cache: dict[str, object] = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.provenance, ObservationProvenance):
@@ -309,6 +313,7 @@ class TaskObservation:
         object.__setattr__(self, "fields", fields)
         object.__setattr__(self, "arbitrary", arbitrary)
         object.__setattr__(self, "issues", tuple(self.issues))
+        object.__setattr__(self, "_projection_cache", {})
 
     @classmethod
     def from_mapping(
@@ -382,6 +387,15 @@ class TaskObservation:
             and self.issues == other.issues
             and self.provenance == other.provenance
         )
+
+    def cached_projection(self, key: str) -> object | None:
+        """Return an invocation-local validated projection, if already built."""
+        return self._projection_cache.get(str(key))
+
+    def cache_projection(self, key: str, value: object) -> object:
+        """Store a projection without exposing mutable state as part of the model."""
+        self._projection_cache[str(key)] = value
+        return value
 
 class RecurrenceKind(str, Enum):
     CP = "cp"
@@ -480,6 +494,9 @@ class NauticalTask:
     def from_observation(cls, observation: TaskObservation) -> "NauticalTask":
         if not isinstance(observation, TaskObservation):
             raise TypeError("NauticalTask requires a TaskObservation")
+        cached = observation.cached_projection("nautical_task")
+        if isinstance(cached, cls):
+            return cached
         errors = [issue for issue in observation.issues if issue.severity is IssueSeverity.ERROR]
         uuid = observation.field("uuid").value
         status = observation.field("status").value
@@ -535,7 +552,10 @@ class NauticalTask:
             str(observation.field("omit").value or ""),
             str(observation.field("omit_file").value or ""),
         )
-        return cls(observation, identity, status, temporal, recurrence, str(observation.field("description").value or ""))
+        return observation.cache_projection(
+            "nautical_task",
+            cls(observation, identity, status, temporal, recurrence, str(observation.field("description").value or "")),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,11 +609,10 @@ class TaskDraft:
         target_field = str(self.target_field).strip().lower()
         if target_field not in {"due", "scheduled"}:
             raise ValueError("task draft target field must be due or scheduled")
-        forbidden = DRAFT_FORBIDDEN_FIELDS
         copied = {str(key): _freeze(value) for key, value in self.fields.items()}
-        overlap = forbidden.intersection(copied)
+        overlap = {key for key in copied if not draft_field_may_be_supplied(key)}
         if overlap:
-            raise ValueError(f"task draft cannot supply generated or identity fields: {', '.join(sorted(overlap))}")
+            raise ValueError(f"task draft cannot supply generated, identity, or policy-owned fields: {', '.join(sorted(overlap))}")
         object.__setattr__(self, "description", description)
         object.__setattr__(self, "target_field", target_field)
         object.__setattr__(self, "fields", MappingProxyType(copied))

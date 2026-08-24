@@ -2581,7 +2581,15 @@ def test_task_observation_contract_is_lossless_and_immutable():
 
 def test_nautical_task_projection_validates_operations_without_losing_observation():
     """Operational validation is strict while malformed source evidence remains inspectable."""
-    from nautical_core.task_models import InvalidTask, TaskOperation, TaskStatus, ValidatedTask, TaskObservation, validate_task
+    from nautical_core.task_models import (
+        InvalidTask,
+        NauticalTask,
+        TaskOperation,
+        TaskStatus,
+        ValidatedTask,
+        TaskObservation,
+        validate_task,
+    )
 
     row = {
         "uuid": "00000000-0000-4000-8000-000000000002",
@@ -2598,6 +2606,10 @@ def test_nautical_task_projection_validates_operations_without_losing_observatio
     observation = TaskObservation.from_mapping(row, source_query="chain:chain-2", snapshot_id="snap-2")
     result = validate_task(observation, TaskOperation.SCHEDULE)
     expect(isinstance(result, ValidatedTask), f"valid Nautical task was rejected: {result!r}")
+    expect(
+        NauticalTask.from_observation(observation) is result.task,
+        "validated task projection was rebuilt instead of reused",
+    )
     expect(result.task.status is TaskStatus.PENDING, "typed status was not retained")
     expect(result.task.recurrence.kind.value == "anchor", "recurrence kind was not classified")
     expect(result.task.temporal.presence["until"].value == "null", "temporal null state was lost")
@@ -2750,6 +2762,18 @@ def test_task_draft_and_patch_have_explicit_mutation_semantics():
         except TaskChangeError:
             continue
         raise AssertionError("unsafe task patch was accepted")
+    for field in ("uuid", "chainID", "nextLink", "description", "anchor"):
+        try:
+            TaskDraft(
+                validated.task.identity,
+                "invalid draft",
+                validated.task.recurrence,
+                TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc)),
+                fields={field: "unexpected"},
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"draft policy accepted owner-managed field {field!r}")
 
 
 def test_taskwarrior_client_preserves_evidence_and_redacts_observation():

@@ -2216,12 +2216,14 @@ def _end_summary_chain_id_row(actual_current: dict) -> str:
     return _module("modify_chain_summary").summary_chain_id(actual_current)
 
 
-def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
-    chain = [row.to_mapping() for row in tw_export_chain_required(actual_current)]
+def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list:
+    chain = tw_export_chain_required(actual_current)
     if actual_current and chain:
         for i, task in enumerate(chain):
             if task.get("uuid") == actual_current.get("uuid"):
-                chain[i] = actual_current
+                chain[i] = _module("task_models").TaskObservation.from_mapping(
+                    actual_current, source_query=f"chain:{chain_id}:current"
+                )
                 break
     try:
         chain = _sort_chain_for_analytics(chain)

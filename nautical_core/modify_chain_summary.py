@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from .task_models import TaskPayload
+from .task_models import TaskObservation, TaskPayload
 
 
 def summary_current(current: TaskPayload, current_task: TaskPayload | None) -> TaskPayload:
@@ -84,7 +84,7 @@ def kind_rows(
 
 def stats_rows(
     rows: list[tuple[str, str]],
-    chain: list[dict],
+    chain: list[TaskObservation],
     now_utc: Any,
     *,
     lateness_stats: Callable[..., dict[str, Any]],
@@ -117,7 +117,7 @@ def limits_row(
 
 
 def last_n_timeline(
-    chain: list[dict[str, Any]],
+    chain: list[TaskObservation],
     n: int = 6,
     *,
     coerce_int: Callable[[Any, Any], int | None],
@@ -130,7 +130,7 @@ def last_n_timeline(
     if not chain:
         return []
 
-    def get_link(task: TaskPayload) -> int:
+    def get_link(task: TaskObservation) -> int:
         link = task.get("link")
         if link is None or link == "":
             return -1
@@ -144,7 +144,7 @@ def last_n_timeline(
     else:
         label_width = 4
 
-    def history_line(task: TaskPayload, link_no: int) -> str:
+    def history_line(task: TaskObservation, link_no: int) -> str:
         end = parse_datetime(task.get("end"))
         due = parse_datetime(task.get("due"))
         is_deleted = str(task.get("status") or "").strip().lower() == "deleted"
@@ -189,15 +189,15 @@ def render_chain_summary(
     now_utc: Any,
     current_task: TaskPayload | None = None,
     *,
-    export_sorted_chain: Callable[[str, dict[str, Any]], list[dict[str, Any]]],
+    export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]],
     root_uuid_from: Callable[[dict[str, Any]], Any],
     short_uuid: Callable[[Any], str],
     format_root_and_age: Callable[[dict[str, Any], Any], str],
     kind_rows: Callable[[list[tuple[str, str]], str, dict[str, Any]], None],
     span_fields: Callable[..., tuple[datetime | None, datetime | None, str]],
-    stats_rows: Callable[[list[tuple[str, str]], list[dict[str, Any]], Any], None],
+    stats_rows: Callable[[list[tuple[str, str]], list[TaskObservation], Any], None],
     limits_row: Callable[[list[tuple[str, str]], dict[str, Any]], None],
-    last_n_timeline_rows: Callable[[list[dict[str, Any]], int], list[str]],
+    last_n_timeline_rows: Callable[[list[TaskObservation], int], list[str]],
     format_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
     coerce_int: Callable[[Any, Any], int | None],
     format_local: Callable[[Any], str],

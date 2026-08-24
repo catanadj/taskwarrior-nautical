@@ -252,16 +252,12 @@ def finalize_completion_modify(
     integrity_warnings = None
     if chain and services.show_analytics:
         try:
-            analytics_advice = services.chain_health_advice(
-                [row.to_mapping() for row in chain], kind, new, style=services.analytics_style
-            )
+            analytics_advice = services.chain_health_advice(chain, kind, new, style=services.analytics_style)
         except Exception:
             analytics_advice = None
     if chain and services.check_integrity:
         try:
-            integrity_warnings = services.chain_integrity_warnings(
-                [row.to_mapping() for row in chain], expected_chain_id=chain_id
-            )
+            integrity_warnings = services.chain_integrity_warnings(chain, expected_chain_id=chain_id)
         except Exception:
             integrity_warnings = None
 

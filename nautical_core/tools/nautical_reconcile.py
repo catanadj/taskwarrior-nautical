@@ -731,57 +731,27 @@ def _verify_applied_child(
     hook: Any = None,
     strict_uuid: bool = False,
 ) -> dict[str, Any]:
-    """Re-export both sides of an apply before declaring the repair successful."""
+    """Verify one applied child through the exact UUID read boundary.
+
+    Parent-link and child-import mutations already verify their own guarded
+    postconditions.  Recovery needs only the child observation for the next
+    hop, so avoid repeating a broad parent/chain export here.
+    """
     expected_child = str(child_short or "").strip().lower()
     if not expected_child:
         raise RuntimeError("post-apply verification has no child identity")
-    fresh_parent = _fresh_parent(parent)
-    if fresh_parent is None:
-        raise RuntimeError("post-apply verification could not re-export the parent")
-    if str(fresh_parent.get("chainID") or "").strip() != str(parent.get("chainID") or "").strip():
-        raise RuntimeError("post-apply verification found a changed parent chainID")
-    linked_child = str(fresh_parent.get("nextLink") or "").strip().lower()
-    if linked_child != expected_child and not linked_child.startswith(expected_child):
-        shown = linked_child or "<empty>"
-        raise RuntimeError(
-            f"post-apply verification found parent nextLink {shown}; expected {child_short}"
-        )
-    observations = _recovery_existing_children(fresh_parent)
-    parent_observation = DEFAULT_TASK_CODEC.decode_row(
-        fresh_parent,
-        source_query="reconcile post-apply parent verification",
-    )
-    resolved, child_error = lifecycle.resolve_existing_child(
-        parent_observation,
-        observations,
-        include_deleted=True,
-    )
-    if child_error:
-        raise RuntimeError(f"post-apply child verification failed: {child_error}")
-    if resolved.lower() != expected_child:
-        shown = resolved or "<missing>"
-        raise RuntimeError(
-            f"post-apply child verification found {shown}; expected {child_short}"
-        )
-    matched = next(
-        (
-            row
-            for row in observations
-            if str(row.field("uuid").raw_value() or "").strip().lower().startswith(expected_child)
-        ),
-        None,
-    )
-    if matched is None:
-        raise RuntimeError("post-apply child verification could not identify the resolved child")
+    parent_observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile post-apply parent context")
+    matched = _next_recovery_child(parent_observation, expected_child)
+    matched_mapping = matched.to_mapping()
     if callable(getattr(hook, "stable_child_uuid", None)):
-        expected_uuid = _stable_child_uuid(hook, fresh_parent, matched.to_mapping()).strip().lower()
+        expected_uuid = _stable_child_uuid(hook, parent, matched_mapping).strip().lower()
         actual_uuid = str(matched.field("uuid").raw_value() or "").strip().lower()
         if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
             raise RuntimeError(
                 f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
                 f"does not match deterministic slot identity {expected_uuid[:8]}"
             )
-    return matched.to_mapping()
+    return matched_mapping
 
 
 def _stale_plan(parent: TaskPayload, reason: str) -> lifecycle.LifecycleRecoveryDecision:
@@ -1021,7 +991,7 @@ def _lifecycle_plan_with_resolved_child_uuid(
     if not isinstance(lifecycle_plan, LifecyclePlan) or lifecycle_plan.action is not LifecycleAction.SPAWN_CHILD:
         return recon_plan
     child = lifecycle_plan.child_dict()
-    existing = _find_positional_child(lifecycle_plan)
+    existing = recon_plan.child_observation or _find_positional_child(lifecycle_plan)
     resolved_uuid = str(existing.field("uuid").value.value or "").strip() if existing is not None else ""
     if not resolved_uuid:
         resolved_uuid = _stable_child_uuid(hook, recon_plan.parent.to_mapping(), child)
@@ -1607,12 +1577,23 @@ def main(
         full_audit=bool(args.full_audit),
     )
     configuration = _UNIT_OF_WORK.context.configuration
+    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+    lifecycle_application = LifecycleApplicationService(
+        unit_of_work=_UNIT_OF_WORK,
+        mutations=TaskwarriorMutationService(_UNIT_OF_WORK),
+        outbox=LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+        owner=f"reconcile-{os.getpid()}",
+        lease_seconds=120.0,
+    )
     lifecycle_service = LifecycleReconciliationService(
         snapshot,
         repository,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
         unit_of_work=_UNIT_OF_WORK,
+        application=lifecycle_application,
     )
     runtime_state = _ReconcileRuntimeState(repository, snapshot, lifecycle_service)
     _RECONCILE_RUNTIME.set(runtime_state)

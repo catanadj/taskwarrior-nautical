@@ -169,6 +169,7 @@ class LifecycleReconciliationService:
     configuration_fingerprint: str
     schedule_fingerprint: str
     unit_of_work: Any = None
+    application: Any = None
 
     @contextmanager
     def reconcile_lock(self, taskdata: Path):
@@ -191,21 +192,10 @@ class LifecycleReconciliationService:
             yield acquired
 
     def application_service(self) -> Any:
-        """Build the sole lifecycle mutation service for this invocation."""
-        if self.unit_of_work is None:
-            raise RuntimeError("lifecycle application requires a mutation-capable unit of work")
-        from .lifecycle_application import LifecycleApplicationService
-        from .lifecycle_outbox import LifecycleOutboxRepository
-        from .taskwarrior_mutations import TaskwarriorMutationService
-        import os
-
-        return LifecycleApplicationService(
-            unit_of_work=self.unit_of_work,
-            mutations=TaskwarriorMutationService(self.unit_of_work),
-            outbox=LifecycleOutboxRepository(self.unit_of_work.outbox.taskdata),
-            owner=f"reconcile-{os.getpid()}",
-            lease_seconds=120.0,
-        )
+        """Return the one mutation service owned by this invocation."""
+        if self.application is None:
+            raise RuntimeError("lifecycle reconciliation requires an invocation-scoped application service")
+        return self.application
 
     def execute_lifecycle_plan(
         self,

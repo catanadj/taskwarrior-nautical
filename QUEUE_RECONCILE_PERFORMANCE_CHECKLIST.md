@@ -463,30 +463,38 @@ run before the section commit.
 
 ## 8. Make Reconcile Services Invocation-Scoped
 
-- [ ] Construct one lifecycle application service, mutation gateway, outbox
+- [x] Construct one lifecycle application service, mutation gateway, outbox
   session, repository, configuration lease, and chain-generation service per
   reconcile invocation.
-- [ ] Remove per-plan construction from `application_service()` and every
+- [x] Remove per-plan construction from `application_service()` and every
   callback that rebuilds the same service inside the candidate loop.
-- [ ] Capture one validated configuration lease at startup. Check source file
+- [x] Capture one validated configuration lease at startup. Check source file
   identity at bounded phase boundaries and rehash only when the source changes.
-- [ ] Preserve immediate failure on configuration, timezone, astronomy,
+- [x] Preserve immediate failure on configuration, timezone, astronomy,
   calendar, or preset drift before the next mutation phase.
-- [ ] Carry typed parent, slot, child, and verification observations through
+- [x] Carry typed parent, slot, child, and verification observations through
   planning and application rather than re-exporting them through callbacks.
-- [ ] Remove the second positional-child lookup when the planning snapshot
+- [x] Remove the second positional-child lookup when the planning snapshot
   already carries exact slot evidence.
-- [ ] Remove final parent/child re-exports when the lifecycle application's
+- [x] Remove final parent/child re-exports when the lifecycle application's
   targeted postcondition snapshot already proves the same contract.
 
 Completion criteria:
 
-- [ ] One candidate is refreshed and verified only at declared authority
+- [x] One candidate is refreshed and verified only at declared authority
   boundaries, not repeatedly by adjacent layers.
-- [ ] Service construction, schema validation, configuration hashing, and plan
+- [x] Service construction, schema validation, configuration hashing, and plan
   normalization do not scale with candidate count.
-- [ ] Reconcile and on-exit use the same lifecycle application owner and typed
+- [x] Reconcile and on-exit use the same lifecycle application owner and typed
   outcomes without operator-specific duplicate verification.
+
+Verification: reconcile now injects one invocation-scoped lifecycle
+application service and reuses it for successor and terminal plans. Planning
+can carry an existing child observation directly; post-apply verification is
+an exact child UUID read rather than a second broad parent/chain export.
+Configuration remains fail-closed at startup and bounded candidate phase
+checks. Focused reconcile tests pass; full golden verification is run before
+the section commit.
 
 ## 9. Introduce Wave-Based Reconcile Planning
 

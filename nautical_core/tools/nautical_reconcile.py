@@ -477,10 +477,12 @@ def _native_until_repairs(
     lease_held: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
+    runtime_state = _reconcile_runtime_state()
+    runtime_snapshot = runtime_state.snapshot if runtime_state is not None else None
     active_rows = _active_chain_rows(
         task_bin,
         include_inactive=False,
-        snapshot=snapshot or (_reconcile_runtime_state().snapshot if _reconcile_runtime_state() is not None else None),
+        snapshot=snapshot or runtime_snapshot,
     )
     rows = active_rows
     recovery_engine = ChainIntegrityEngine.lifecycle_only(
@@ -517,6 +519,8 @@ def _native_until_repairs(
             continue
         repaired = str(item.get("new_until") or "").strip()
         if apply:
+            if taskdata is None:
+                raise RuntimeError("native-until repair requires Taskwarrior data location")
             error = recovery_engine.apply_native_until_candidate(
                 row,
                 previous,
@@ -896,7 +900,10 @@ def _drain_integrity_work(*, outbox_repository: Any = None, executor: Any = None
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
-    configuration = _UNIT_OF_WORK.context.configuration
+    unit_of_work = _UNIT_OF_WORK
+    if unit_of_work is None:
+        raise RuntimeError("integrity drain requires an integration unit of work")
+    configuration = unit_of_work.context.configuration
     engine = ChainIntegrityEngine(
         ChainSnapshotService(_UNIT_OF_WORK, configuration_fingerprint=configuration.fingerprint),
         configuration_fingerprint=configuration.fingerprint,
@@ -921,7 +928,10 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repos
     from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
-    configuration = _UNIT_OF_WORK.context.configuration
+    unit_of_work = _UNIT_OF_WORK
+    if unit_of_work is None:
+        raise RuntimeError("integrity audit requires an integration unit of work")
+    configuration = unit_of_work.context.configuration
     snapshot_result = ChainSnapshotService(
         _UNIT_OF_WORK,
         configuration_fingerprint=configuration.fingerprint,
@@ -1061,7 +1071,10 @@ def _execute_reconcile_lifecycle_plan(
     lifecycle_plan = getattr(plan, "lifecycle_plan", None)
     if not isinstance(lifecycle_plan, LifecyclePlan):
         raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan: {plan!r}")
-    configuration = _UNIT_OF_WORK.context.configuration
+    unit_of_work = _UNIT_OF_WORK
+    if unit_of_work is None:
+        raise RuntimeError("reconcile lifecycle execution requires an integration unit of work")
+    configuration = unit_of_work.context.configuration
     staged, outcome, child_short, _verified = _lifecycle_reconciliation_service().execute_lifecycle_plan(
         plan,
         configuration_fingerprint=configuration.fingerprint,

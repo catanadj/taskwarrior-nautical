@@ -3039,8 +3039,11 @@ def _completion_chain_snapshot(chain_id: str, base_no: int, next_no: int, reposi
     snapshot = repository.chain_snapshot(chain_id)
     if isinstance(snapshot, Found):
         value = getattr(snapshot.value, "rows", snapshot.value)
+        task_models = _module("task_models")
         rows = [
-            row.to_mapping() if hasattr(row, "to_mapping") else dict(row)
+            row if hasattr(row, "to_mapping") else task_models.TaskObservation.from_mapping(
+                row, source_query=f"chain:{chain_id}:completion"
+            )
             for row in value
         ]
         loaded = True

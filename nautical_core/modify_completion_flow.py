@@ -13,7 +13,7 @@ from nautical_core.modify_models import (
     TaskView,
 )
 from nautical_core.task_changes import TaskTransition
-from nautical_core.task_models import TaskPayload
+from nautical_core.task_models import TaskObservation, TaskPayload
 
 
 @dataclass(slots=True)
@@ -141,9 +141,9 @@ def finalize_completion_modify(
     now_utc: Any,
     need_chain: bool,
     chain_snapshot_loaded: bool,
-    preloaded_chain: list[dict[str, Any]],
-    preloaded_chain_by_link: dict[int, dict[str, Any]],
-    preloaded_chain_by_short: dict[str, dict[str, Any]],
+    preloaded_chain: list[TaskObservation],
+    preloaded_chain_by_link: dict[int, list[TaskObservation]],
+    preloaded_chain_by_short: dict[str, TaskObservation],
     chain_id: str,
     services: CompletionFinalizeServices,
 ) -> CompletionLifecycleResult:
@@ -244,7 +244,7 @@ def finalize_completion_modify(
     # The lifecycle read cache remains in its operational row form.  Panels
     # receive immutable views so presentation cannot mutate chain history.
     presentation_chain_by_short = {
-        short: TaskView.from_mapping(row)
+        short: TaskView.from_observation(row)
         for short, row in (chain_by_short or {}).items()
     }
 
@@ -252,12 +252,16 @@ def finalize_completion_modify(
     integrity_warnings = None
     if chain and services.show_analytics:
         try:
-            analytics_advice = services.chain_health_advice(chain, kind, new, style=services.analytics_style)
+            analytics_advice = services.chain_health_advice(
+                [row.to_mapping() for row in chain], kind, new, style=services.analytics_style
+            )
         except Exception:
             analytics_advice = None
     if chain and services.check_integrity:
         try:
-            integrity_warnings = services.chain_integrity_warnings(chain, expected_chain_id=chain_id)
+            integrity_warnings = services.chain_integrity_warnings(
+                [row.to_mapping() for row in chain], expected_chain_id=chain_id
+            )
         except Exception:
             integrity_warnings = None
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Protocol, TypeAlias, Mapping
+from typing import Any, Iterator, Protocol, TypeAlias, Mapping
 from types import MappingProxyType
 
 from .task_models import (
@@ -110,7 +110,7 @@ class TaskView(Mapping[str, Any]):
     def __getitem__(self, key: str) -> Any:
         return self._values[key]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self._values)
 
     def __len__(self) -> int:
@@ -480,7 +480,7 @@ class LifecycleResultRenderCallback(Protocol):
 @dataclass(slots=True)
 class CompletionChainSnapshot:
     mode: str
-    rows: list[dict[str, Any]]
+    rows: list[TaskObservation]
     loaded: bool
     chain_id: str = ""
     error: str = ""

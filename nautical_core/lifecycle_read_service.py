@@ -12,7 +12,7 @@ from datetime import datetime
 from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 import threading
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeAlias
 
 from .integration_models import (
     Absent,
@@ -27,7 +27,7 @@ from .task_read_repository import AuthoritativeTaskSnapshot
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 from .task_models import TaskObservation
 
-TaskRow = TaskObservation
+TaskRow: TypeAlias = TaskObservation
 ChainSnapshotValue = AuthoritativeTaskSnapshot | tuple[TaskRow, ...]
 ReadQuery = Callable[[str, tuple[Any, ...]], Any]
 ChainCache = Callable[[str], Sequence[TaskRow] | None]

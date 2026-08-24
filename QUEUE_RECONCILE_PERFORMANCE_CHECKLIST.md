@@ -430,29 +430,36 @@ history exports. Full golden suite: 963 passed (2026-08-24).
 
 ## 7. Complete Guarded Compensation
 
-- [ ] Define when an imported child must be compensated because its guarded
+- [x] Define when an imported child must be compensated because its guarded
   parent link cannot be applied.
-- [ ] Permit compensation only when the deterministic child still matches the
+- [x] Permit compensation only when the deterministic child still matches the
   intended chain, link, predecessor, recurrence identity, and mutable status.
-- [ ] Refuse compensation if the child was modified, completed, repurposed, or
+- [x] Refuse compensation if the child was modified, completed, repurposed, or
   no longer belongs exclusively to the failed intent.
-- [ ] Apply child deletion through the existing typed compensation mutation and
+- [x] Apply child deletion through the existing typed compensation mutation and
   verify the deletion authoritatively.
-- [ ] Persist compensation outcome and original parent-link failure evidence so
+- [x] Persist compensation outcome and original parent-link failure evidence so
   recovery does not repeat an unsafe action.
-- [ ] Use guarded parent-link compare-and-set behavior as the final authority;
+- [x] Use guarded parent-link compare-and-set behavior as the final authority;
   do not add an unguarded cached-parent fast path.
-- [ ] After compensation is proven, allow the intent to retry from a clean
+- [x] After compensation is proven, allow the intent to retry from a clean
   child-absent state or enter explicit manual review according to failure kind.
 
 Completion criteria:
 
-- [ ] Parent changes between preflight and link mutation cannot leave an
+- [x] Parent changes between preflight and link mutation cannot leave an
   unlinked mutable child without a durable recovery or compensation outcome.
-- [ ] Removing redundant normal-path parent reads does not weaken concurrency
+- [x] Removing redundant normal-path parent reads does not weaken concurrency
   safety because guarded link application and compensation close the race.
-- [ ] Crash tests cover import-before-stage, verification-before-stage,
+- [x] Crash tests cover import-before-stage, verification-before-stage,
   parent-conflict, compensation-before-stage, and compensation replay.
+
+Verification: non-retryable parent-link conflicts now trigger a child-scoped
+deterministic ownership re-read and the existing guarded compensation mutation;
+retryable command failures retain the child for a safe retry. Compensation and
+parent failure evidence are persisted as one manual-review/retry outcome.
+Focused mutation/application tests and mypy checks pass; full golden suite is
+run before the section commit.
 
 ## 8. Make Reconcile Services Invocation-Scoped
 

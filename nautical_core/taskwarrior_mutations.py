@@ -18,7 +18,10 @@ from .integration_models import (
     ChildImportPayload,
     CommandFailureKind,
     FailureEvidence,
+    GuardTimestamp,
+    GuardTimestampField,
     Found,
+    IntegrationContractError,
     MetadataRepairPayload,
     MutationGuard,
     MutationOperation,
@@ -465,6 +468,58 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             MutationPostcondition.CHILD_COMPENSATED,
             lambda row: _text(_observed_value(row, "status")).lower() == "deleted",
         )
+
+    def compensate_imported_child(self, request: MutationRequest) -> MutationOutcome:
+        """Build a child-scoped guard before compensating an imported child.
+
+        The import request is guarded by the parent, so it cannot be reused
+        directly for deletion.  Re-read the child, prove it still matches the
+        deterministic import, then delegate to the normal guarded
+        compensation mutation.  A changed or repurposed child is refused.
+        """
+        if request.operation is not MutationOperation.CHILD_IMPORT or not isinstance(request.payload, ChildImportPayload):
+            raise TypeError("imported-child compensation requires a child-import request")
+        child_result = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
+        if isinstance(child_result, Unavailable):
+            kind = MutationOutcomeKind.RETRYABLE if child_result.retryable else MutationOutcomeKind.MANUAL_REVIEW
+            return self._outcome(request, kind, reason=child_result.evidence.detail, failure=child_result.evidence)
+        if isinstance(child_result, Absent):
+            return self._outcome(
+                request,
+                MutationOutcomeKind.ALREADY_APPLIED,
+                postcondition=MutationPostcondition.CHILD_COMPENSATED,
+                reason="child is already absent",
+            )
+        if not isinstance(child_result, Found) or not isinstance(child_result.value, TaskObservation):
+            return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child compensation read result")
+        child = child_result.value
+        if not _child_import_matches(child, request.payload, request.guard.task_uuid):
+            return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="child changed before compensation")
+        mapping = child.to_mapping()
+        status = _text(_observed_value(child, "status")).lower()
+        chain_id = _text(_observed_value(child, "chainID"))
+        link_text = _link_text(_observed_value(child, "link"))
+        try:
+            link = int(link_text)
+            timestamp_value = _text(_observed_value(child, "modified")) or _text(_observed_value(child, "end"))
+            guard = MutationGuard(
+                task_uuid=request.payload.child_uuid,
+                status=status,
+                chain_id=chain_id,
+                link=link,
+                recurrence_identity=recurrence_fingerprint(mapping),
+                timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, timestamp_value),),
+                expected_mutation_epoch=self._uow.mutation_epoch,
+                chain=_text(_observed_value(child, "chain")).lower() or "on",
+            )
+            compensation = MutationRequest(
+                MutationOperation.CHILD_COMPENSATION,
+                guard,
+                ChildCompensationPayload(request.payload.child_uuid, expected_status=status),
+            )
+        except (IntegrationContractError, TypeError, ValueError) as exc:
+            return self._outcome(request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"child compensation guard unavailable: {exc}")
+        return self.compensate_child(compensation)
 
     def import_child(self, request: MutationRequest, *, verify: bool = True) -> MutationOutcome:
         if request.operation is not MutationOperation.CHILD_IMPORT or not isinstance(request.payload, ChildImportPayload):

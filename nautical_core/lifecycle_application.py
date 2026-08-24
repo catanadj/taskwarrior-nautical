@@ -33,6 +33,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from .integration_models import (
     ChainDisablePayload,
+    ChildCompensationPayload,
     ChildImportPayload,
     GuardTimestamp,
     GuardTimestampField,
@@ -813,7 +814,9 @@ class LifecycleApplicationService:
                 if settled is None:
                     state.stage = ExecutionStage.PARENT_LINKED
             else:
-                state.terminal = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
+                state.terminal = self._parent_failure(
+                    state.record, state.plan, state.child_payload, outcome, state.mutations
+                )
 
         verified_parents: list[tuple[_BatchState, MutationRequest]] = []
         renew_batch([state for state, _request in pending_parents], "parent verification")
@@ -837,7 +840,9 @@ class LifecycleApplicationService:
             if mutation_outcome.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
                 parent_stage_candidates.append(state)
             else:
-                state.terminal = self._settle_step(state.record, mutation_outcome, ExecutionStage.PARENT_LINKED)
+                state.terminal = self._parent_failure(
+                    state.record, state.plan, state.child_payload, mutation_outcome, state.mutations
+                )
         advance_batch(parent_stage_candidates, ExecutionStage.PARENT_LINKED, "could not persist parent-linked lifecycle stage")
 
         renew_batch(states, "verification")
@@ -1079,7 +1084,13 @@ class LifecycleApplicationService:
             lease_failure = self._renew_before_step(record, "parent-link progress", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
-            settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
+            if outcome.kind is MutationOutcomeKind.RETRYABLE or not any(
+                item.operation is MutationOperation.CHILD_IMPORT and item.kind is MutationOutcomeKind.APPLIED
+                for item in mutations
+            ):
+                settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
+            else:
+                settled = self._parent_failure(record, plan, child_payload, outcome, mutations)
             if settled is not None:
                 return LifecycleApplicationOutcome(
                     settled.kind, settled.identity, reason=settled.reason, intent_id=settled.intent_id, mutations=tuple(mutations)
@@ -1168,6 +1179,53 @@ class LifecycleApplicationService:
             record,
             outcome.reason or outcome.kind.value,
             failure=OutboxFailure(f"mutation_{outcome.kind.value}", outcome.reason or outcome.kind.value),
+        )
+
+    def _parent_failure(
+        self,
+        record: LifecycleOutboxRecord,
+        plan: LifecyclePlan,
+        child_payload: ChildImportPayload,
+        outcome: MutationOutcome,
+        mutations: list[MutationOutcome],
+    ) -> LifecycleApplicationOutcome:
+        """Close a non-retryable parent-link failure with guarded compensation.
+
+        Retryable command failures retain the imported child for the next
+        attempt.  Conflicts and rejections instead compensate only a child
+        imported by this intent; the mutation gateway re-reads and validates
+        its deterministic identity before deletion.  The resulting manual
+        review stores both the parent failure and compensation evidence in
+        the outbox, so recovery cannot repeat an unsafe mutation.
+        """
+        if outcome.kind is MutationOutcomeKind.RETRYABLE:
+            settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
+            assert settled is not None
+            return settled
+        child_imported = any(
+            item.operation is MutationOperation.CHILD_IMPORT and item.kind is MutationOutcomeKind.APPLIED
+            for item in mutations
+        )
+        if not child_imported:
+            settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
+            assert settled is not None
+            return settled
+        compensation_method = getattr(self._mutations, "compensate_imported_child", None)
+        compensation: MutationOutcome | None = None
+        if callable(compensation_method):
+            request = self._request_for(MutationOperation.CHILD_IMPORT, plan, child_payload)
+            if request is not None:
+                compensation = compensation_method(request)
+                mutations.append(compensation)
+        parent_reason = outcome.reason or outcome.kind.value
+        if compensation is None:
+            detail = "compensation could not be constructed"
+        else:
+            detail = f"child compensation {compensation.kind.value}: {compensation.reason or 'verified'}"
+        return self._manual_review(
+            record,
+            f"parent-link failure: {parent_reason}; {detail}",
+            failure=OutboxFailure("parent_link_compensation", f"{parent_reason}; {detail}"),
         )
 
     def _retry_or_review(

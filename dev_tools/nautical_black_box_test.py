@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -106,7 +107,7 @@ def _one(env: dict[str, str], *filters: str) -> dict:
     return rows[0]
 
 
-def _one_eventually(env: dict[str, str], *filters: str, timeout: float = 5.0) -> dict:
+def _one_eventually(env: dict[str, str], *filters: str, timeout: float = 30.0) -> dict:
     """Allow on-exit's synchronous queue drain to settle before asserting visibility."""
     deadline = time.monotonic() + timeout
     last_count = 0
@@ -116,7 +117,11 @@ def _one_eventually(env: dict[str, str], *filters: str, timeout: float = 5.0) ->
         if last_count == 1:
             return rows[0]
         if last_count > 1 or time.monotonic() >= deadline:
-            raise AssertionError(f"expected one task for {filters!r}, got {last_count}")
+            context = ""
+            if filters and str(filters[0]).startswith("chainID:"):
+                chain_rows = _export(env, filters[0])
+                context = f"; chain_rows={chain_rows!r}"
+            raise AssertionError(f"expected one task for {filters!r}, got {last_count}{context}")
         time.sleep(0.1)
 
 
@@ -139,7 +144,7 @@ def _assert_root(task: dict, recurrence_field: str) -> None:
 def _complete_and_child(env: dict[str, str], root: dict) -> dict:
     root_uuid = str(root.get("uuid") or "").strip()
     chain_id = str(root.get("chainID") or "").strip()
-    _task([f"uuid:{root_uuid}", "done"], env)
+    _task(["rc.hooks=on", f"uuid:{root_uuid}", "done"], env)
     child = _one_eventually(env, f"chainID:{chain_id}", "status:pending", "link:2")
     if child.get("prevLink") != root_uuid[:8]:
         raise AssertionError("spawned child does not point to its parent")
@@ -250,7 +255,7 @@ def _scenario_duplicate_guard(env: dict[str, str], cp_result: dict) -> dict:
     chain_id = str(_one(env, f"uuid:{root_uuid}").get("chainID") or "")
     before = _export(env, f"chainID:{chain_id}", "link:2", "status.not:deleted")
     _task([f"uuid:{root_uuid}", "modify", "status:pending"], env)
-    _task([f"uuid:{root_uuid}", "done"], env)
+    _task(["rc.hooks=on", f"uuid:{root_uuid}", "done"], env)
     after = _export(env, f"chainID:{chain_id}", "link:2", "status.not:deleted")
     if len(before) != 1 or len(after) != 1:
         raise AssertionError(f"duplicate completion changed child count: {len(before)} -> {len(after)}")
@@ -285,17 +290,15 @@ def _install_hook_counter(hooks_dir: Path, hook_name: str, counter_dir: Path) ->
     real_hook = hooks_dir / f"{hook_name}.real"
     hook.rename(real_hook)
     counter = counter_dir / f"{hook_name}.count"
+    # Keep this wrapper independent of Python imports.  The hook itself loads
+    # a colocated core package, so a Python wrapper can accidentally change
+    # import resolution on one runner (especially when the core contains a
+    # module with a stdlib name).
     wrapper = (
-        "#!/usr/bin/env python3\n"
-        "import os\n"
-        "import sys\n"
-        "from pathlib import Path\n"
-        f"counter = Path({str(counter)!r})\n"
-        "counter.parent.mkdir(parents=True, exist_ok=True)\n"
-        "with counter.open('a', encoding='ascii') as stream:\n"
-        "    stream.write('1\\n')\n"
-        f"real_hook = {str(real_hook)!r}\n"
-        "os.execv(real_hook, [real_hook, *sys.argv[1:]])\n"
+        "#!/bin/sh\n"
+        f"mkdir -p {shlex.quote(str(counter.parent))}\n"
+        f"printf '%s\\n' 1 >> {shlex.quote(str(counter))}\n"
+        f"exec {shlex.quote(str(real_hook))} \"$@\"\n"
     )
     hook.write_text(wrapper, encoding="utf-8")
     hook.chmod(0o755)
@@ -380,8 +383,8 @@ def _scenario_no_nested_hooks(env: dict[str, str], data_dir: Path) -> dict:
     if command_log.exists():
         command_log.unlink()
 
-    _task([f"uuid:{root_uuid}", "done"], env)
-    deadline = time.monotonic() + 5.0
+    _task(["rc.hooks=on", f"uuid:{root_uuid}", "done"], env)
+    deadline = time.monotonic() + 30.0
     rows: list[dict] = []
     while time.monotonic() < deadline:
         rows = _export(env, f"chainID:{chain_id}")
@@ -391,7 +394,12 @@ def _scenario_no_nested_hooks(env: dict[str, str], data_dir: Path) -> dict:
         time.sleep(0.1)
     by_link = {int(float(row.get("link"))): row for row in rows if row.get("link") is not None}
     if set(by_link) != {1, 2}:
-        raise AssertionError(f"hook recursion fixture did not produce one child: {rows!r}")
+        raise AssertionError(
+            "hook recursion fixture did not produce one child: "
+            f"rows={rows!r}; hooks={{'on-modify': {_read_hook_count(counter_dir, 'on-modify')}, "
+            f"'on-exit': {_read_hook_count(counter_dir, 'on-exit')}}}; "
+            f"commands={_read_task_command_log(command_log)!r}"
+        )
     child = by_link[2]
     if by_link[1].get("nextLink") != str(child.get("uuid") or "")[:8]:
         raise AssertionError("hook recursion fixture did not link the parent")

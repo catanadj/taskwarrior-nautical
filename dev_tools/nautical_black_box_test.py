@@ -490,6 +490,48 @@ def _scenario_invalid_chain_isolation(env: dict[str, str], safe_result: dict) ->
     return {"invalid_added": True, "safe_status": payload.get("status")}
 
 
+def _scenario_recovery_paths(env: dict[str, str]) -> dict:
+    """Exercise deletion, hookless completion recovery, and review reporting."""
+    delete_description = "blackbox deletion"
+    _task(["add", delete_description, "anchor:w:mon", "due:today"], env)
+    deleted = _one(env, f"description:{delete_description}", "status:pending")
+    deleted_uuid = str(deleted.get("uuid") or "")
+    _task([f"uuid:{deleted_uuid}", "delete"], env)
+    deleted_row = _one(env, f"uuid:{deleted_uuid}")
+    if deleted_row.get("status") != "deleted" or deleted_row.get("chain") != "off":
+        raise AssertionError(f"manual deletion did not complete the chain: {deleted_row!r}")
+
+    recovery_description = "blackbox hookless completion"
+    _task(["add", recovery_description, "cp:1d", "due:today"], env)
+    recovery_root = _one(env, f"description:{recovery_description}", "status:pending")
+    recovery_uuid = str(recovery_root.get("uuid") or "")
+    recovery_chain = str(recovery_root.get("chainID") or "")
+    _task(["rc.hooks=off", f"uuid:{recovery_uuid}", "done"], env)
+    before = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
+    if before:
+        raise AssertionError("hookless completion unexpectedly spawned a child before reconcile")
+    reconcile = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"),
+            "--json",
+            "--apply",
+            "--chain-id",
+            recovery_chain,
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if reconcile.returncode not in (0, 1, 2):
+        raise AssertionError(f"hookless completion reconcile failed: {reconcile.stderr!r}")
+    after = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
+    if len(after) != 1:
+        raise AssertionError(f"reconcile did not recover the hookless completion: {after!r}")
+    return {"deleted_chain_off": True, "recovered_child": after[0].get("uuid"), "reconcile_exit": reconcile.returncode}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit a JSON result")
@@ -537,6 +579,7 @@ def main() -> int:
         scenarios["duplicate_guard"] = _scenario_duplicate_guard(env, scenarios["cp"])
         scenarios["no_nested_hooks"] = _scenario_no_nested_hooks(env, data_dir)
         scenarios["invalid_chain_isolation"] = _scenario_invalid_chain_isolation(env, scenarios["preset"])
+        scenarios["recovery_paths"] = _scenario_recovery_paths(env)
         scenarios["operator_cutover"] = _scenario_operator_cutover(env, data_dir, scenarios["cp"])
         _assert_clean_state(data_dir)
         result["ok"] = True

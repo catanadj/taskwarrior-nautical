@@ -495,6 +495,10 @@ class NauticalTask:
     recurrence: RecurrenceState
     description: str = ""
 
+    def get(self, name: str, default: Any = None) -> Any:
+        """Read a raw source field without reconstructing a task mapping."""
+        return self.observation.get(name, default)
+
     @classmethod
     def from_observation(cls, observation: TaskObservation) -> "NauticalTask":
         if not isinstance(observation, TaskObservation):

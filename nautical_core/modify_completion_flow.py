@@ -192,6 +192,7 @@ def finalize_completion_modify(
         return lifecycle_result
 
     child = spawned.child
+    child_view = TaskView.from_mapping(child)
     services.seed_runtime_lookup_tasks(new, child)
     child_short = spawned.child_short
     stripped_attrs = spawned.stripped_attrs
@@ -264,7 +265,7 @@ def finalize_completion_modify(
     if kind in {"anchor", "anchor_file"}:
         services.render_anchor_completion_feedback(
             new=new,
-            child=child,
+            child=child_view,
             child_due=computed.child_due,
             child_short=child_short,
             next_no=next_no,
@@ -288,7 +289,7 @@ def finalize_completion_modify(
     else:
         services.render_cp_completion_feedback(
             new=new,
-            child=child,
+            child=child_view,
             child_due=computed.child_due,
             child_short=child_short,
             next_no=next_no,

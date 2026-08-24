@@ -374,6 +374,22 @@ class IntegrityFinding:
                 raise IntegrityContractError(f"finding {field_name} must be frozen key/value pairs")
             object.__setattr__(self, field_name, fields)
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize immutable finding evidence for operator/API consumers."""
+        return {
+            "invariant_id": self.invariant_id,
+            "status": self.status.value,
+            "severity": self.severity.value,
+            "snapshot_id": self.snapshot_id,
+            "chain_id": self.chain_id,
+            "subject_uuids": list(self.subject_uuids),
+            "reason_code": self.reason_code,
+            "message": self.message,
+            "observed": _thaw(self.observed),
+            "expected": _thaw(self.expected),
+            "evidence": _thaw(self.evidence),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class IntegrityOperation:

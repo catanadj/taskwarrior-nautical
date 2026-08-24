@@ -152,6 +152,16 @@ def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
     from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
     from nautical_core.chain_invariants import evaluate_invariants
 
+    class CountingCodec:
+        def __init__(self):
+            self.decode_count = 0
+
+        def decode_row(self, row, *, source_query, **kwargs):
+            self.decode_count += 1
+            return task_codec.DEFAULT_TASK_CODEC.decode_row(
+                row, source_query=source_query, **kwargs
+            )
+
     rows = [
         {
             "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/snapshot/{index}")),
@@ -165,10 +175,9 @@ def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
         }
         for index in range(max(1, int(row_count)))
     ]
-    observations = tuple(
-        task_codec.DEFAULT_TASK_CODEC.decode_row(row, source_query="perf:snapshot")
-        for row in rows
-    )
+    codec = CountingCodec()
+    observations = tuple(codec.decode_row(row, source_query="perf:snapshot") for row in rows)
+    expected_decode_count = len(rows)
     command = TaskCommand(("task", "export"), "perf snapshot", 1.0)
     result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.0)
     scope = TaskSnapshotScope(TaskQueryKind.BROAD, "perf-snapshot", ("pending",))
@@ -209,6 +218,10 @@ def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
         }
         if any(node.observation is not observation_by_uuid.get(node.task_uuid) for node in graph.nodes):
             raise RuntimeError("chain graph did not retain decoded observations")
+        if codec.decode_count != expected_decode_count:
+            raise RuntimeError(
+                "downstream snapshot consumers decoded a row more than once"
+            )
     if any(snapshot.uuid_matches(str(getattr(row.field("uuid").value, "value", "")))[0] is not row for row in observations):
         raise RuntimeError("snapshot indexes did not reuse immutable observations")
     return time.perf_counter() - started

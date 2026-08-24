@@ -1446,6 +1446,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         workflow_cfg["budgets_seconds"] = budgets
     repeats = max(1, int(workflow_cfg.get("repeats", 3)))
     budgets = workflow_cfg.get("budgets_seconds") if isinstance(workflow_cfg.get("budgets_seconds"), dict) else {}
+    reconcile_call_purposes: dict[str, int] = {}
     with tempfile.TemporaryDirectory(prefix="nautical-workflow-perf-") as td:
         root = Path(td)
         real_task = shutil.which("task")
@@ -2017,6 +2018,10 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 or bool(report.get("task_command_budget_exceeded", True))
             ):
                 raise RuntimeError(f"healthy reconcile workflow bounded snapshot budget failed: {report!r}")
+            for purpose, count in (report.get("task_command_by_purpose") or {}).items():
+                reconcile_call_purposes[str(purpose)] = max(
+                    reconcile_call_purposes.get(str(purpose), 0), int(count)
+                )
             reconcile_samples.append(time.perf_counter() - started)
         results["workflow_reconcile"] = _measure_workflow(
             "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
@@ -2351,6 +2356,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             mixed_samples,
             float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
         )
+        RESOURCE_DETAILS["reconcile_task_call_purposes"] = reconcile_call_purposes
         return results
 
 

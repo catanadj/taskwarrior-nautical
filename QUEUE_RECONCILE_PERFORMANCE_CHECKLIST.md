@@ -701,9 +701,9 @@ stress suites.
 - [x] Establish direct-Taskwarrior desktop budgets after the truthful benchmark
   pass; do not derive them from the failure-injection wrapper. Evidence:
   `perf.desktop.section14.json` (extended desktop run, 2026-08-24). The
-  wall-time budgets pass, while the purpose-specific broad-read sub-budgets
-  remain intentionally open (11 reads for healthy drain and 27 for partial
-  recovery versus the provisional target of three).
+  wall-time budgets pass. Subsequent workflow verification records three
+  broad reads for healthy drain and four for partial recovery after the
+  batching changes below.
 - [x] Establish a separate Termux budget from the supported reference device
   using the identical workload manifest and Taskwarrior-version metadata.
   Evidence: `perf.termux.device1.final.json`. Device 2 is intentionally

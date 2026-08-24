@@ -777,6 +777,16 @@ owner or per-plan lifecycle service construction. Broad queue reads are now
 targeted UUID-set reads; serial execution remains only for single-intent and
 deleted/multi-hop recovery where a wave cannot safely combine dependencies.
 
+Section 15 verification (2026-08-25): `py_compile`, targeted lifecycle mypy,
+shuffled golden tests (`968/968`), deployment sanity, black-box compatibility,
+the enforced CI stress campaign, and a 30-second enforced soak all passed.
+The desktop workflow benchmark also passed every enforced workflow budget,
+including reconcile apply scale, partial recovery, long history, and corrupted
+input paths. Full-tree strict mypy remains an explicit open gate: it reports
+504 pre-existing errors across 55 files and is not represented as a passing
+result here. The second Termux device was unavailable, so the two-device gate
+also remains open.
+
 - [x] Remove broad queue prefetch/postverification, per-plan service
   construction, redundant postverification, and obsolete SQL helpers after all
   consumers use the new owners. Bounded serial handling remains only where the
@@ -787,18 +797,20 @@ deleted/multi-hop recovery where a wave cannot safely combine dependencies.
 - [x] Keep benchmark counters that provide ongoing regression value, with
   outbox and read-row counters dormant unless explicit benchmark stats or
   diagnostics are enabled.
-- [ ] Update runtime manifest, deployment sanity, installer validation, Doctor,
+- [x] Update runtime manifest, deployment sanity, installer validation, Doctor,
   queue status, reconcile JSON, and query capabilities for the final module
   ownership without exposing internal implementation details.
-- [ ] Run `py_compile`, strict targeted mypy, full mypy, golden tests,
-  deterministic shuffled golden tests, black-box tests, deployment sanity,
-  stress, soak, compatibility, and installer smoke tests.
+- [x] Run `py_compile`, strict targeted mypy, golden tests, deterministic
+  shuffled golden tests, black-box tests, deployment sanity, stress, soak, and
+  compatibility checks. Full-tree strict mypy remains open because the current
+  tree reports 504 errors across 55 files; a dedicated real-installed installer
+  smoke run is also still pending.
 - [ ] Run queue and reconcile performance suites on desktop and both Termux
   devices and compare them with the recorded branch baseline.
 - [ ] Run a staged installed-layout recovery test with real Taskwarrior: queue
   completion, interrupted child import, parent-link recovery, reconcile dry
   run, reconcile apply, multi-hop expiration, and idempotent replay.
-- [ ] Verify hook stdout is strict JSON and all optional diagnostics go only to
+- [x] Verify hook stdout is strict JSON and all optional diagnostics go only to
   stderr under `NAUTICAL_DIAG=1`.
 - [x] Review the final diff for duplicate owners, broad task reads, unbounded
   loops, persistent task caches, weakened guards, and SQLite transactions held

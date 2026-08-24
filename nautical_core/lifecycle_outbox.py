@@ -298,6 +298,8 @@ class LifecycleOutboxRepository:
         self.connect_timeout = max(0.1, float(connect_timeout))
         self._clock = clock
         self._schema_identity: tuple[int, int, int] | None = None
+        self._session_conn: sqlite3.Connection | None = None
+        self._session_pid: int | None = None
         self._benchmark_metrics: dict[str, float] | None = (
             {} if os.environ.get("NAUTICAL_BENCH_STATS_FILE") else None
         )
@@ -323,6 +325,36 @@ class LifecycleOutboxRepository:
         for path in (self.path, self.path.with_name(f"{self.path.name}-wal"), self.path.with_name(f"{self.path.name}-shm")):
             if path.exists():
                 os.chmod(path, 0o600)
+
+    @contextmanager
+    def session(self) -> Iterator["LifecycleOutboxRepository"]:
+        """Open one validated outbox connection for a bounded invocation.
+
+        Repository methods continue to use short-lived connections when called
+        standalone.  A drain/reconcile caller can hold this context across its
+        phases so schema checks, WAL setup, permissions, and connection setup
+        happen once while each mutation still owns a short transaction.
+        """
+        if self._session_conn is not None:
+            raise LifecycleOutboxError("outbox session is already active")
+        conn: sqlite3.Connection | None = None
+        pid = os.getpid()
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            self._secure_state_files()
+            self._session_conn = conn
+            self._session_pid = pid
+            self._metric("outbox_sessions")
+            yield self
+        finally:
+            self._session_conn = None
+            self._session_pid = None
+            if conn is not None:
+                try:
+                    self._secure_state_files()
+                finally:
+                    conn.close()
 
     def open(self) -> OutboxResult:
         if self._schema_identity is not None:
@@ -452,6 +484,22 @@ class LifecycleOutboxRepository:
             raise LifecycleOutboxError(f"outbox schema is incomplete: missing {', '.join(missing)}")
 
     def _with_connection(self, operation: Callable[[sqlite3.Connection], OutboxResult]) -> OutboxResult:
+        if self._session_conn is not None:
+            if self._session_pid != os.getpid():
+                return OutboxResult(OutboxResultKind.REJECTED, reason="outbox session cannot cross a process boundary")
+            started = time.perf_counter()
+            try:
+                return operation(self._session_conn)
+            except sqlite3.OperationalError as exc:
+                if _busy(exc):
+                    self._metric("outbox_busy_failures")
+                return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
+            except LifecycleOutboxError as exc:
+                return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
+            except Exception as exc:
+                return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
+            finally:
+                self._metric("outbox_operation_seconds", time.perf_counter() - started)
         conn: sqlite3.Connection | None = None
         started = time.perf_counter()
         self._metric("outbox_operation_scopes")

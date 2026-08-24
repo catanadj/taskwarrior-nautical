@@ -436,6 +436,32 @@ class LifecycleApplicationService:
         schedule_fingerprint: str,
         progress: LifecycleDrainProgressCallback | None = None,
     ) -> DrainResult:
+        """Drain one bounded batch inside one invocation-scoped outbox session."""
+        try:
+            with self._outbox.session():
+                return self._drain_open(
+                    limit=limit,
+                    configuration_fingerprint=configuration_fingerprint,
+                    schedule_fingerprint=schedule_fingerprint,
+                    progress=progress,
+                )
+        except Exception as exc:
+            return DrainResult(
+                claim=OutboxResult(
+                    OutboxResultKind.RETRYABLE,
+                    reason=f"outbox session failed: {str(exc).strip() or type(exc).__name__}",
+                ),
+                outcomes=(),
+            )
+
+    def _drain_open(
+        self,
+        *,
+        limit: int,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+        progress: LifecycleDrainProgressCallback | None = None,
+    ) -> DrainResult:
         """Claim a bounded batch of ready spawn intents and execute each one.
 
         Bounded by ``limit`` so one invocation cannot be pinned to an

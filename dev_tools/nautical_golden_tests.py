@@ -4981,6 +4981,31 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
 
 
+def test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary():
+    """A bounded session reuses setup once and never leaks its connection."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResult, OutboxResultKind
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td))
+        connects = 0
+        original_connect = repo._connect
+
+        def traced_connect():
+            nonlocal connects
+            connects += 1
+            return original_connect()
+
+        repo._connect = traced_connect
+        with repo.session():
+            first = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
+            second = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
+            expect(first.ok and second.ok, "session operation failed")
+            expect(connects == 1, f"session opened multiple connections: {connects}")
+        expect(repo._session_conn is None and repo._session_pid is None, "session state survived its boundary")
+        standalone = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
+        expect(standalone.ok and connects == 2, "standalone call did not use a short-lived connection")
+
+
 def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
     """Integrity work uses the shared table but remains invisible to lifecycle claims."""
     from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
@@ -33918,6 +33943,7 @@ TESTS = [
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
+    test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary,
     test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,

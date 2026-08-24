@@ -234,7 +234,13 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return
         for payload in wanted:
             identity = payload.child_uuid.lower()
-            if identity not in result.found:
+            cached = result.found.get(identity)
+            if cached is not None:
+                self._prefetched_children[identity] = Found(
+                    cached,
+                    f"preflight:uuid:{identity}",
+                )
+            else:
                 self._prefetched_children[payload.child_uuid.lower()] = Absent(
                     f"preflight:uuid:{payload.child_uuid.lower()}", "preflight snapshot contains no matching UUID"
                 )
@@ -541,6 +547,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if _text(_observed_value(parent, "chain")).lower() != "on":
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent chain is no longer active")
         existing = self._prefetched_children.pop(request.payload.child_uuid.lower(), None)
+        prefetched = existing is not None
         if existing is None:
             existing = self._uow.repository.by_uuid(request.payload.child_uuid, refresh=True)
         if isinstance(existing, Unavailable):
@@ -549,6 +556,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if isinstance(existing, Found):
             row = existing.value
             if _child_import_matches(row, request.payload, request.guard.task_uuid):
+                # A present child from the batch preflight must still pass
+                # the phase-wide authoritative verification. This avoids a
+                # per-child reread during recovery without trusting stale
+                # identity evidence across the mutation boundary.
+                if prefetched and not verify:
+                    return self._outcome(request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
                 return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED)
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="unrelated task already owns child UUID")
         if not isinstance(existing, Absent):

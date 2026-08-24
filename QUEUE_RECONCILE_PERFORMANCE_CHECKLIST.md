@@ -718,8 +718,11 @@ stress suites.
   0.52 s median wall time.
 - [x] Preserve zero Taskwarrior calls for acknowledged replay. The desktop
   report records zero calls for all `workflow_queue_drain_idempotent` samples.
-- [ ] Establish a separate partial-recovery call budget that counts only work
-  made necessary by the injected failure.
+- [x] Establish a separate partial-recovery call budget that counts only work
+  made necessary by the injected failure. The supported budget is four broad
+  snapshots and 20 total calls: two phase snapshots on the failed invocation
+  and two on recovery, with present children reused from the recovery
+  preflight.
 - [ ] Require 32 independent one-hop reconcile candidates to use no more than
   72 Taskwarrior calls unless measured Taskwarrior semantics require a
   documented additional guard read.

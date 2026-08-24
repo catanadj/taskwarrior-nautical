@@ -353,6 +353,7 @@ class ParentGuard:
     link: int
     recurrence_fingerprint: str = ""
     modified: str = ""
+    end: str = ""
 
     def __post_init__(self) -> None:
         for name in ("status", "chain", "chain_id"):
@@ -364,6 +365,7 @@ class ParentGuard:
             raise LifecycleContractError("parent guard link must be a non-negative integer")
         object.__setattr__(self, "recurrence_fingerprint", str(self.recurrence_fingerprint or "").strip())
         object.__setattr__(self, "modified", str(self.modified or "").strip())
+        object.__setattr__(self, "end", str(self.end or "").strip())
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -376,6 +378,8 @@ class ParentGuard:
             result["recurrence_fingerprint"] = self.recurrence_fingerprint
         if self.modified:
             result["modified"] = self.modified
+        if self.end:
+            result["end"] = self.end
         return result
 
 
@@ -629,6 +633,7 @@ class LifecyclePlan:
                 link=int(guard_value["link"]),
                 recurrence_fingerprint=str(guard_value.get("recurrence_fingerprint", "")),
                 modified=str(guard_value.get("modified", "")),
+                end=str(guard_value.get("end", "")),
             )
         except (TypeError, ValueError, KeyError) as exc:
             raise LifecycleContractError("invalid lifecycle plan fields") from exc
@@ -714,6 +719,7 @@ class LifecyclePlan:
         guard = payload.get("parent_guard")
         if isinstance(guard, dict):
             guard.pop("modified", None)
+            guard.pop("end", None)
         return payload
 
     def with_stage(self, stage: ExecutionStage) -> "LifecyclePlan":

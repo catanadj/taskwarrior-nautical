@@ -8206,14 +8206,17 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
     new = dict(old, status="deleted", end="20260727T000000Z")
     panels = []
     stopped = []
-    original = (mod._handle_expired_deleted_modify, mod._panel, mod._end_chain_summary)
+    expiration = mod._module("modify_expiration")
+    original = (expiration.handle_expired_deleted_modify, mod._panel, mod._end_chain_summary)
     try:
-        mod._handle_expired_deleted_modify = lambda _task: (_ for _ in ()).throw(RuntimeError("missing module"))
+        expiration.handle_expired_deleted_modify = (
+            lambda _task, *, services: (_ for _ in ()).throw(RuntimeError("missing module"))
+        )
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
         mod._handle_deleted_modify(old, new, _test_operator_uow())
     finally:
-        mod._handle_expired_deleted_modify, mod._panel, mod._end_chain_summary = original
+        expiration.handle_expired_deleted_modify, mod._panel, mod._end_chain_summary = original
 
     expect(not stopped, "internal expiration failure must not be treated as an intentional deletion")
     expect(new.get("chain") == "on" and not new.get("nextLink"), f"recovery evidence was lost: {new!r}")
@@ -31302,6 +31305,27 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     expect(bool(intent), "spawn intent id should still be generated")
 
 
+def test_completion_parent_guard_uses_persisted_terminal_timestamp():
+    """Terminal plans guard stable end evidence, not volatile modified time."""
+    from nautical_core.integration_models import GuardTimestamp, GuardTimestampField, MutationGuard
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+
+    guard = MutationGuard(
+        task_uuid="00000000-0000-4000-8000-000000000777",
+        status="completed",
+        chain_id="terminal1",
+        link=1,
+        recurrence_identity="rf1-terminal",
+        timestamps=(GuardTimestamp(GuardTimestampField.END, "20260824T123939Z"),),
+        expected_mutation_epoch=0,
+    )
+    selectors = TaskwarriorMutationService._selectors(guard)
+    expect(
+        "end:20260824T123939Z" in selectors and not any(item.startswith("modified:") for item in selectors),
+        f"terminal mutation selectors did not preserve stable end evidence: {selectors!r}",
+    )
+
+
 def test_on_add_run_task_timeout():
     """on-add typed command execution reports timeouts."""
     hook = _find_hook_file("on-add.nautical")
@@ -34203,6 +34227,7 @@ TESTS = [
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
+    test_completion_parent_guard_uses_persisted_terminal_timestamp,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
     test_completion_preflight_stops_on_unavailable_next_lookup,

@@ -282,8 +282,8 @@ class MutationGuard:
         fields = tuple(item.field for item in timestamps)
         if len(fields) != len(set(fields)):
             raise IntegrationContractError("guard timestamp fields must be unique")
-        if GuardTimestampField.MODIFIED not in fields:
-            raise IntegrationContractError("guard requires the task modified timestamp")
+        if not {GuardTimestampField.MODIFIED, GuardTimestampField.END}.intersection(fields):
+            raise IntegrationContractError("guard requires the task modified or end timestamp")
         object.__setattr__(self, "timestamps", timestamps)
 
 

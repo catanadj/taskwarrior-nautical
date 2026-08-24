@@ -34,10 +34,14 @@ class LifecyclePlanningError(RuntimeError):
 
 def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
-    get = task.get if isinstance(task, TaskSnapshot) else lambda key: task.observation.field(key).raw_value()
-    if TaskCodec.normalize_text(get("cp")):
+    def raw_value(key: str) -> Any:
+        if isinstance(task, TaskSnapshot):
+            return task.get(key)
+        return task.observation.field(key).raw_value()
+
+    if TaskCodec.normalize_text(raw_value("cp")):
         return "cp"
-    if TaskCodec.normalize_text(get("anchor_file")):
+    if TaskCodec.normalize_text(raw_value("anchor_file")):
         return "anchor_file"
     return "anchor"
 

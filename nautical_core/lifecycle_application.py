@@ -187,7 +187,14 @@ _MUTATION_TO_APPLICATION = {
 def _mutation_guard(plan: LifecyclePlan, *, mutation_epoch: int) -> MutationGuard | None:
     """Build a fresh, invocation-scoped guard from a plan's durable ParentGuard."""
     guard = plan.parent_guard
-    if not guard.modified:
+    timestamp = (
+        GuardTimestamp(GuardTimestampField.END, guard.end)
+        if guard.end
+        else GuardTimestamp(GuardTimestampField.MODIFIED, guard.modified)
+        if guard.modified
+        else None
+    )
+    if timestamp is None:
         return None
     try:
         return MutationGuard(
@@ -196,7 +203,7 @@ def _mutation_guard(plan: LifecyclePlan, *, mutation_epoch: int) -> MutationGuar
             chain_id=guard.chain_id,
             link=guard.link,
             recurrence_identity=guard.recurrence_fingerprint,
-            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, guard.modified),),
+            timestamps=(timestamp,),
             expected_mutation_epoch=mutation_epoch,
             chain=guard.chain,
         )
@@ -262,8 +269,8 @@ def _update_parent_payload(plan: LifecyclePlan) -> MetadataRepairPayload | None:
 
 def _validate_spawn_plan(plan: LifecyclePlan) -> str:
     """Return an empty string if a SPAWN_CHILD plan is well-formed, else why not."""
-    if not plan.parent_guard.modified:
-        return "lifecycle plan is missing its parent modified guard timestamp"
+    if not (plan.parent_guard.modified or plan.parent_guard.end):
+        return "lifecycle plan is missing its parent guard timestamp"
     if _child_import_payload(plan) is None:
         return "lifecycle plan child payload is missing or malformed"
     if _parent_link_payload(plan) is None:
@@ -676,18 +683,18 @@ class LifecycleApplicationService:
         child_results = verify_children(tuple(request for _, request in verified_children))
         for state, request in verified_children:
             payload = cast(ChildImportPayload, request.payload)
-            outcome = child_results.get(payload.child_uuid.lower())
-            if outcome is None:
-                outcome = MutationOutcome(
+            mutation_outcome = child_results.get(payload.child_uuid.lower())
+            if mutation_outcome is None:
+                mutation_outcome = MutationOutcome(
                     request.operation,
                     MutationOutcomeKind.MANUAL_REVIEW,
                     request.guard,
                     (),
                     "child batch verification returned no result",
                 )
-            state.mutations.append(outcome)
+            state.mutations.append(mutation_outcome)
             report_action(state, "child verified")
-            settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
+            settled = self._settle_step(state.record, mutation_outcome, ExecutionStage.CHILD_PRESENT)
             state.terminal = settled
             if settled is None:
                 state.stage = ExecutionStage.CHILD_PRESENT
@@ -727,18 +734,18 @@ class LifecycleApplicationService:
             verified_parents.append((state, request))
         parent_results = verify_parents(tuple(request for _, request in verified_parents))
         for state, request in verified_parents:
-            outcome = parent_results.get(request.guard.task_uuid.lower())
-            if outcome is None:
-                outcome = MutationOutcome(
+            mutation_outcome = parent_results.get(request.guard.task_uuid.lower())
+            if mutation_outcome is None:
+                mutation_outcome = MutationOutcome(
                     request.operation,
                     MutationOutcomeKind.MANUAL_REVIEW,
                     request.guard,
                     (),
                     "parent batch verification returned no result",
                 )
-            state.mutations.append(outcome)
+            state.mutations.append(mutation_outcome)
             report_action(state, "parent verified")
-            settled = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
+            settled = self._settle_step(state.record, mutation_outcome, ExecutionStage.PARENT_LINKED)
             state.terminal = settled
             if settled is None:
                 state.stage = ExecutionStage.PARENT_LINKED

@@ -9,7 +9,7 @@ the requested postcondition before reporting success.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Mapping, Protocol, Sequence, cast
+from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from .integration_models import (
     Absent,
@@ -444,7 +444,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def apply(self, request: MutationRequest) -> MutationOutcome:
         if not isinstance(request, MutationRequest):
             raise TypeError("mutation service requires a MutationRequest")
-        handlers = {
+        handlers: dict[MutationOperation, Callable[[MutationRequest], MutationOutcome]] = {
             MutationOperation.CHILD_IMPORT: self.import_child,
             MutationOperation.CHILD_COMPENSATION: self.compensate_child,
             MutationOperation.PARENT_LINK: self.link_parent,
@@ -848,6 +848,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         # mutation boundary for this operation.
         if modified and include_modified:
             selectors = (*selectors, f"modified:{modified}")
+        end = next(
+            (timestamp.value for timestamp in guard.timestamps if timestamp.field.value == "end"),
+            "",
+        )
+        if end:
+            selectors = (*selectors, f"end:{end}")
         return (*selectors, *tuple(extra))
 
 

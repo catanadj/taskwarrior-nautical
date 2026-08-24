@@ -252,10 +252,30 @@ def _scenario_files(env: dict[str, str], anchor_dir: Path, omit_dir: Path) -> di
 
 def _scenario_duplicate_guard(env: dict[str, str], cp_result: dict) -> dict:
     root_uuid = cp_result["root"]
-    chain_id = str(_one(env, f"uuid:{root_uuid}").get("chainID") or "")
+    parent = _one(env, f"uuid:{root_uuid}")
+    chain_id = str(parent.get("chainID") or "")
     before = _export(env, f"chainID:{chain_id}", "link:2", "status.not:deleted")
-    _task([f"uuid:{root_uuid}", "modify", "status:pending"], env)
-    _task(["rc.hooks=on", f"uuid:{root_uuid}", "done"], env)
+    old = dict(parent)
+    old["status"] = "pending"
+    old.pop("end", None)
+    old.pop("nextLink", None)
+    hook = Path(env["TASKDATA"]) / "hooks" / "on-modify"
+    replay = subprocess.run(
+        [str(hook)],
+        input=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(parent, ensure_ascii=False) + "\n",
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if replay.returncode != 0:
+        raise AssertionError(
+            f"duplicate completion hook replay failed ({replay.returncode}): "
+            f"stdout={replay.stdout!r} stderr={replay.stderr!r}"
+        )
+    replayed = json.loads(replay.stdout.strip())
+    if not isinstance(replayed, dict) or replayed.get("uuid") != root_uuid:
+        raise AssertionError(f"duplicate completion hook returned invalid JSON: {replay.stdout!r}")
     after = _export(env, f"chainID:{chain_id}", "link:2", "status.not:deleted")
     if len(before) != 1 or len(after) != 1:
         raise AssertionError(f"duplicate completion changed child count: {len(before)} -> {len(after)}")

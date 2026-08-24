@@ -49,12 +49,20 @@ def spawn_child_atomic(
         parent_task_with_nextlink,
         parse_datetime=services.parse_datetime,
     )
+    status = str(parent_task_with_nextlink.get("status") or "").strip().lower()
+    end_guard = (
+        str(parent_task_with_nextlink.get("end") or "").strip()
+        if status in {"completed", "deleted"}
+        else ""
+    )
+    modified_guard = "" if end_guard else str(parent_task_with_nextlink.get("modified") or "").strip()
     parent_guard = lifecycle_models.ParentGuard(
         status=str(parent_task_with_nextlink.get("status") or ""),
         chain=str(parent_task_with_nextlink.get("chain") or ""),
         chain_id=str(parent_task_with_nextlink.get("chainID") or ""),
         link=int(parent_task_with_nextlink.get("link") or 0),
-        modified=str(parent_task_with_nextlink.get("modified") or ""),
+        modified=modified_guard,
+        end=end_guard,
         recurrence_fingerprint=recurrence_guard,
     )
     lifecycle_plan = lifecycle_models.LifecyclePlan.from_draft(

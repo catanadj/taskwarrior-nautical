@@ -86,7 +86,9 @@ def build_report(
         and str(item.get("id") or "").startswith(required_prefixes + ("astronomy.",))
         for item in findings
     )
-    status = "failed" if failed else "attention" if required or optional else "passed"
+    # Optional environment hints must not make an otherwise valid install
+    # appear unhealthy.  Only failed checks or required manual actions block.
+    status = "failed" if failed else "attention" if required else "passed"
     return {
         "schema": "nautical.install.verification",
         "version": 1,

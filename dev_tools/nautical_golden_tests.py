@@ -23661,6 +23661,7 @@ def test_navigator_resolves_symbolic_anchor_time_offsets():
                 "uuid": "00000000-0000-4000-8000-000000000902",
                 "description": "symbolic navigator time",
                 "anchor": "w:mon@t=sunset@+45m",
+                "chainID": "navigator-symbolic",
             }
             projected = analyzer._project_anchor_dates(task, limit=1, start_from_date=date(2026, 7, 1))
             expect(projected, "symbolic anchor time produced no projection")
@@ -30694,10 +30695,12 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
                 "uda.nextLink.type=string", "uda.chainMax.type=numeric", "uda.chainUntil.type=date",
             ]) + "\n", encoding="utf-8",
         )
+        config = root / "config-nautical.toml"
+        config.write_text('tz = "UTC"\n', encoding="utf-8")
         env = os.environ.copy()
         env.update({
             "TASKRC": str(taskrc), "TASKDATA": str(data_dir),
-            "NAUTICAL_CONFIG": str(Path(ROOT) / "config-nautical.toml"),
+            "NAUTICAL_CONFIG": str(config),
             "NAUTICAL_CORE_PATH": ROOT, "NO_COLOR": "1",
         })
         parent = {
@@ -30705,7 +30708,7 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
             "description": "Anchor repair", "entry": "20260820T080000Z",
             "modified": "20260820T100000Z", "end": "20260820T100000Z",
             "due": "20260820T090000Z", "until": "20260820T100000Z",
-            "anchor": "w:mon", "anchor_mode": "skip", "chain": "on",
+            "anchor": "y:09-01", "anchor_mode": "skip", "chain": "on",
             "chainID": "anchor-real", "link": 1,
         }
         imported = subprocess.run(
@@ -30715,7 +30718,7 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
         expect(imported.returncode == 0, f"anchor fixture import failed: {imported.stderr!r}")
         applied = subprocess.run(
             [sys.executable, str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
-             "--apply", "--task-bin", task_bin, "--json"],
+             "--apply", "--task-bin", task_bin, "--json", "--max-expiration-hops", "1"],
             text=True, capture_output=True, env=env, timeout=20.0,
         )
         expect(applied.returncode == 0, f"anchor reconcile failed: {applied.stderr!r}")

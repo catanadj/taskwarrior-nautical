@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from datetime import date, datetime, timezone
 from typing import Any
+
+
+def _json_default(value: object) -> str:
+    """Encode temporal evidence without weakening the JSON report contract."""
+    if isinstance(value, datetime):
+        encoded = value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return encoded
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
 
 
 def render_json(summary: Mapping[str, Any]) -> str:
     """Serialize the versioned report without presentation-side mutations."""
-    return json.dumps(dict(summary), ensure_ascii=False, indent=2)
+    return json.dumps(dict(summary), ensure_ascii=False, indent=2, default=_json_default)
 
 
 def render_human(summary: Mapping[str, Any], style: Callable[[str, str], str]) -> tuple[str, str]:

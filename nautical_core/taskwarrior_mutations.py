@@ -326,6 +326,22 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                     if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
                         return row, None
             if (
+                request.operation is MutationOperation.NATIVE_UNTIL_REPAIR
+                and isinstance(request.payload, NativeUntilRepairPayload)
+                and mismatch.startswith("guard modified changed")
+            ):
+                expected_modified = next(
+                    (
+                        timestamp.value
+                        for timestamp in request.guard.timestamps
+                        if timestamp.field.value == "modified"
+                    ),
+                    None,
+                )
+                if expected_modified is not None:
+                    if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
+                        return row, None
+            if (
                 request.operation is MutationOperation.METADATA_REPAIR
                 and isinstance(request.payload, MetadataRepairPayload)
                 and request.payload.expected_dict().get("link") == ""
@@ -755,13 +771,13 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return failure
         assert parent is not None
         current = _text(_observed_value(parent, "until"))
-        if current == request.payload.replacement_until:
+        if timestamp_equal(current, request.payload.replacement_until):
             return self._outcome(request, MutationOutcomeKind.ALREADY_APPLIED, postcondition=MutationPostcondition.NATIVE_UNTIL_REPAIRED)
-        if current != request.payload.expected_until:
+        if not timestamp_equal(current, request.payload.expected_until):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="native until changed")
         failure = self._run_modify(
             request,
-            self._selectors(request.guard, extra=(f"until:{current}",)),
+            self._selectors(request.guard, extra=(f"until:{current}",), include_modified=False),
             (f"until:{request.payload.replacement_until}",),
         )
         if failure is not None:
@@ -811,6 +827,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         *,
         extra: Sequence[str] = (),
         include_link: bool = True,
+        include_modified: bool = True,
     ) -> tuple[str, ...]:
         selectors: tuple[str, ...] = (
             f"uuid:{guard.task_uuid}",
@@ -824,7 +841,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             (timestamp.value for timestamp in guard.timestamps if timestamp.field.value == "modified"),
             "",
         )
-        if modified:
+        # Native-until repairs already include an exact ``until`` selector.
+        # Taskwarrior rewrites ``modified`` as part of that same update, so a
+        # stale timestamp selector can reject an otherwise safe repair after a
+        # fresh guard read. Identity plus expected-until remains the atomic
+        # mutation boundary for this operation.
+        if modified and include_modified:
             selectors = (*selectors, f"modified:{modified}")
         return (*selectors, *tuple(extra))
 

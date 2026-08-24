@@ -1364,8 +1364,8 @@ def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: s
             "chainID": chain_id,
             "link": 1,
             "chainMax": limit,
-            "due": "20260101T090000Z",
-            "modified": "20260101T090000Z",
+            "due": "20270101T090000Z",
+            "modified": "20270101T090000Z",
         }
     return {
         "uuid": parent_uuid,
@@ -1377,8 +1377,8 @@ def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: s
         "chainID": chain_id,
         "link": 1,
         "chainMax": limit,
-        "due": "20260105T090000Z",
-        "modified": "20260105T090000Z",
+        "due": "20270105T090000Z",
+        "modified": "20270105T090000Z",
     }
 
 
@@ -1395,7 +1395,7 @@ def _import_existing_completion_child(parent: dict, *, env: dict[str, str]) -> N
         # the completion lookup's requested link number.
         "link": "2",
         "prevLink": str(parent["uuid"])[:8],
-        "due": "20260102T090000Z" if parent.get("cp") else "20260112T090000Z",
+        "due": "20270102T090000Z" if parent.get("cp") else "20270112T090000Z",
     }
     if parent.get("cp"):
         child["cp"] = parent["cp"]
@@ -1654,10 +1654,10 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             fresh_samples = []
             for sample_index in range(repeats):
                 old = _completion_fixture(kind, sample_index, nonfinal=nonfinal, mode="fresh")
-                new = dict(old, status="completed", end="20260101T100000Z" if kind == "cp" else "20260105T100000Z")
+                new = dict(old, status="completed", end="20270101T100000Z" if kind == "cp" else "20270105T100000Z")
                 taskdata = root / f"{name}-fresh-{sample_index}"
                 taskdata.mkdir()
-                env = dict(base_env, TASKDATA=str(taskdata))
+                env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
                 _import_workflow_rows((old,), env=env)
                 elapsed, result, _stderr = _run_workflow_hook_result(
                     ROOT / "on-modify.nautical",
@@ -1670,7 +1670,10 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 queued = _workflow_outbox_pending(taskdata)
                 if nonfinal:
                     if result.get("chain") != "on" or len(queued) != 1:
-                        raise RuntimeError(f"{name} fresh sample did not queue exactly one child")
+                        raise RuntimeError(
+                            f"{name} fresh sample did not queue exactly one child: "
+                            f"result={result!r}; queued={queued!r}; stderr={_stderr.strip()!r}"
+                        )
                     if queued[0].get("stage") != "planned":
                         raise RuntimeError(f"{name} fresh sample staged an invalid lifecycle record")
                 elif result.get("chain") != "off" or queued:

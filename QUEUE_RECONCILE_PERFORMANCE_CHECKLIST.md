@@ -766,6 +766,12 @@ Completion criteria:
 
 ## 15. Cleanup, Cutover, And Merge
 
+Section 15 pass 1 (2026-08-25): the multi-intent lifecycle path now requires
+the shared child-batch import plus child/parent verification operations; it no
+longer silently falls back to per-child imports when a staged runtime is
+incomplete. Single-intent recovery remains sequential by design. Full cleanup
+and cutover gates remain below.
+
 - [ ] Remove broad queue prefetch/postverification, serial reconcile execution,
   per-plan service construction, redundant postverification, and obsolete SQL
   helpers after all consumers use the new owners.

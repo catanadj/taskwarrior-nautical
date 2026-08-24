@@ -723,7 +723,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return outcomes
 
     def verify_lifecycle_children(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]:
-        """Verify imported children with one authoritative broad snapshot."""
+        """Verify imported children with one authoritative UUID-set snapshot."""
         pending = tuple(
             request
             for request in requests
@@ -766,7 +766,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         return outcomes
 
     def verify_lifecycle_parents(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]:
-        """Verify parent links with one authoritative broad snapshot."""
+        """Verify parent links with one authoritative UUID-set snapshot."""
         pending = tuple(
             request
             for request in requests

@@ -489,9 +489,10 @@ class LifecycleApplicationService:
         if any(not isinstance(record, LifecycleOutboxRecord) for record in claimed):
             raise LifecycleApplicationError("claimed lifecycle drain requires typed outbox records")
         batch_apply = getattr(self._mutations, "apply_lifecycle_unverified", None)
+        batch_children_apply = getattr(self._mutations, "apply_lifecycle_children_unverified", None)
         batch_children = getattr(self._mutations, "verify_lifecycle_children", None)
         batch_parents = getattr(self._mutations, "verify_lifecycle_parents", None)
-        if not all(callable(item) for item in (batch_apply, batch_children, batch_parents)):
+        if not all(callable(item) for item in (batch_apply, batch_children_apply, batch_children, batch_parents)):
             raise LifecycleApplicationError("claimed lifecycle drain requires batched mutation operations")
         session = getattr(self._outbox, "session", None)
         if not callable(session):
@@ -500,6 +501,7 @@ class LifecycleApplicationService:
                 configuration_fingerprint=configuration_fingerprint,
                 schedule_fingerprint=schedule_fingerprint,
                 apply_unverified=batch_apply,
+                apply_children=batch_children_apply,
                 verify_children=batch_children,
                 verify_parents=batch_parents,
                 progress=progress,
@@ -511,6 +513,7 @@ class LifecycleApplicationService:
                     configuration_fingerprint=configuration_fingerprint,
                     schedule_fingerprint=schedule_fingerprint,
                     apply_unverified=batch_apply,
+                    apply_children=batch_children_apply,
                     verify_children=batch_children,
                     verify_parents=batch_parents,
                     progress=progress,
@@ -673,15 +676,17 @@ class LifecycleApplicationService:
                 # UUID reads remain the correctness fallback.
                 pass
         batch_apply = getattr(self._mutations, "apply_lifecycle_unverified", None)
+        batch_children_apply = getattr(self._mutations, "apply_lifecycle_children_unverified", None)
         batch_children = getattr(self._mutations, "verify_lifecycle_children", None)
         batch_parents = getattr(self._mutations, "verify_lifecycle_parents", None)
-        if len(records) > 1 and all(callable(item) for item in (batch_apply, batch_children, batch_parents)):
+        if len(records) > 1 and all(callable(item) for item in (batch_apply, batch_children_apply, batch_children, batch_parents)):
             return self._drain_batched(
                 claim,
                 records,
                 configuration_fingerprint=config,
                 schedule_fingerprint=schedule,
                 apply_unverified=batch_apply,
+                apply_children=batch_children_apply,
                 verify_children=batch_children,
                 verify_parents=batch_parents,
                 progress=progress,
@@ -753,6 +758,7 @@ class LifecycleApplicationService:
         configuration_fingerprint: str,
         schedule_fingerprint: str,
         apply_unverified: Any,
+        apply_children: Any,
         verify_children: Any,
         verify_parents: Any,
         progress: LifecycleDrainProgressCallback | None = None,
@@ -900,9 +906,8 @@ class LifecycleApplicationService:
                 state.terminal = self._manual_review(state.record, "could not construct child-import mutation")
                 continue
             child_requests.append((state, request))
-        batch_children_apply = getattr(self._mutations, "apply_lifecycle_children_unverified", None)
-        if callable(batch_children_apply) and child_requests:
-            child_mutations = batch_children_apply(tuple(request for _state, request in child_requests))
+        if child_requests:
+            child_mutations = apply_children(tuple(request for _state, request in child_requests))
             for state, request in child_requests:
                 payload = cast(ChildImportPayload, request.payload)
                 outcome = child_mutations.get(payload.child_uuid.lower())
@@ -926,22 +931,6 @@ class LifecycleApplicationService:
                         state.stage = ExecutionStage.CHILD_PRESENT
                 else:
                     state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
-        else:
-            for state, request in child_requests:
-                outcome = apply_unverified(request)
-                state.mutations.append(outcome)
-                report_action(state, "child mutation")
-                if outcome.kind is MutationOutcomeKind.APPLIED:
-                    pending_children.append((state, request))
-                elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
-                    report_action(state, "child verified")
-                    settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
-                    state.terminal = settled
-                    if settled is None:
-                        state.stage = ExecutionStage.CHILD_PRESENT
-                else:
-                    state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
-
         verified_children: list[tuple[_BatchState, MutationRequest]] = []
         renew_batch([state for state, _request in pending_children], "child verification")
         for state, request in pending_children:

@@ -505,8 +505,8 @@ class LifecycleApplicationService:
         )
         config = str(configuration_fingerprint or "").strip()
         schedule = str(schedule_fingerprint or "").strip()
-        prefetch = getattr(self._mutations, "prefetch_lifecycle_batch", None)
-        if callable(prefetch):
+        preflight = getattr(self._mutations, "preflight_lifecycle_batch", None)
+        if callable(preflight):
             payloads = tuple(
                 payload
                 for record in records
@@ -521,7 +521,7 @@ class LifecycleApplicationService:
                 and str(record.plan.parent_patch_dict().get("nextLink") or "").strip()
             )
             try:
-                prefetch(payloads, parent_expectations=parent_expectations)
+                preflight(payloads, parent_expectations=parent_expectations)
             except Exception:
                 # Prefetch is an optimization only; normal authoritative
                 # UUID reads remain the correctness fallback.
@@ -670,7 +670,12 @@ class LifecycleApplicationService:
 
         def renew_batch(candidates: Sequence[_BatchState], step: str) -> None:
             """Renew all currently eligible leases in one CAS transaction."""
-            eligible = tuple(state for state in candidates if state.terminal is None)
+            eligible = tuple(
+                state
+                for state in candidates
+                if state.terminal is None
+                and _SPAWN_STAGE_ORDER[state.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]
+            )
             bulk = getattr(self._outbox, "renew_leases", None)
             if callable(bulk) and eligible:
                 overall, rows = bulk(

@@ -191,13 +191,13 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         self._prefetched_children: dict[str, TaskRead[TaskObservation]] = {}
         self._prefetched_parents: dict[str, TaskObservation] = {}
 
-    def prefetch_lifecycle_batch(
+    def preflight_lifecycle_batch(
         self,
         payloads: Sequence[ChildImportPayload],
         *,
         parent_expectations: Sequence[tuple[str, str]] = (),
     ) -> None:
-        """Preload safe child-absence decisions for one drain.
+        """Preload targeted child/parent evidence for one drain phase.
 
         A cached absence can only skip a redundant pre-import UUID read: the
         import command remains authoritative if another process creates the
@@ -233,7 +233,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             identity = payload.child_uuid.lower()
             if identity not in result.found:
                 self._prefetched_children[payload.child_uuid.lower()] = Absent(
-                    f"prefetch:uuid:{payload.child_uuid.lower()}", "prefetch snapshot contains no matching UUID"
+                    f"preflight:uuid:{payload.child_uuid.lower()}", "preflight snapshot contains no matching UUID"
                 )
         for parent_uuid, expected_next_link in parent_wanted:
             row = result.found.get(parent_uuid)

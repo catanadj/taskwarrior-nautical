@@ -4129,7 +4129,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
 
     uow = Uow()
     service = TaskwarriorMutationService(uow)
-    service.prefetch_lifecycle_batch((payload,), parent_expectations=((parent_uuid, child_uuid[:8]),))
+    service.preflight_lifecycle_batch((payload,), parent_expectations=((parent_uuid, child_uuid[:8]),))
     guard = MutationGuard(
         parent_uuid,
         "completed",
@@ -35715,12 +35715,15 @@ def test_lifecycle_application_happy_path_real_stack():
     class _Repo:
         def __init__(self, rows):
             self.rows = dict(rows)
+            self.set_calls = 0
+            self.broad_calls = 0
         def by_uuid(self, u, *, refresh=False):
             r = self.rows.get(str(u).lower())
             if r is None:
                 return Absent(f"uuid:{u}", "not found")
             return Found(_task_observation(r), f"uuid:{u}")
         def broad_snapshot(self, *, identity, **_kwargs):
+            self.broad_calls += 1
             rows = self.rows
             class _Snapshot:
                 def uuid_matches(self, value):
@@ -35729,6 +35732,7 @@ def test_lifecycle_application_happy_path_real_stack():
             return Found(_Snapshot(), identity)
         def read_uuid_set(self, request):
             from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+            self.set_calls += 1
             found = {
                 identity: _task_observation(self.rows[identity])
                 for identity in request.uuids
@@ -35842,6 +35846,8 @@ def test_lifecycle_application_happy_path_real_stack():
         expect(child_uuid_2.lower() in uow.repository.rows, "second child was not imported into task store")
         expect(uow.repository.rows[parent_uuid]["nextLink"] == child_uuid[:8], "parent nextLink not set")
         expect(uow.repository.rows[parent_uuid_2]["nextLink"] == child_uuid_2[:8], "second parent nextLink not set")
+        expect(uow.repository.set_calls >= 3, f"phase verification did not use targeted set reads: {uow.repository.set_calls}")
+        expect(uow.repository.broad_calls == 0, f"drain used broad history exports: {uow.repository.broad_calls}")
 
 
 def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():

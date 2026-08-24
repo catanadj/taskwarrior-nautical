@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPOSITORY="https://github.com/catanadj/taskwarrior-nautical.git"
-DEFAULT_VERSION="v7.0.0"
+DEFAULT_VERSION="v7.1.0"
 VERSION="${NAUTICAL_VERSION:-$DEFAULT_VERSION}"
 TASKDATA="${TASKDATA:-$HOME/.task}"
 LAUNCHER_PATH=""
@@ -36,7 +36,7 @@ Usage: bootstrap.sh [options]
 Download and install a pinned Nautical release.
 
 Options:
-  --version REF         Release tag or branch (default: v6.5.3)
+  --version REF         Release tag or branch (default: v7.1.0)
   --taskdata PATH       Taskwarrior data directory (default: TASKDATA or ~/.task)
   --launcher-path PATH  User-facing launcher path (use $PREFIX/bin/nautical on Termux)
   --hooks-dir PATH      Taskwarrior hooks directory override

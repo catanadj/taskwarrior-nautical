@@ -664,6 +664,14 @@ retry-budget, configuration-drift, mutation-epoch, concurrent outbox-open, and
 concurrent operator golden tests pass. Dedicated exhaustive failure matrices
 for every mutation boundary and shuffled multi-process convergence remain open
 for the final safety campaign.
+
+Pass 2 scope: keep failure injection in the test harness (scripted mutation,
+outbox, lease, and repository doubles), rather than adding a production fault
+injection switch. The next matrix must cover each persisted stage transition,
+both mutation postconditions, acknowledgement, compensation, and replay; each
+case must assert no duplicate child, no lost link, and a durable typed outcome.
+The shuffled campaign must use independent Taskdata directories and compare
+the final outbox/task snapshots, not merely process exit codes.
 - [ ] Shuffled and repeated failure campaigns converge to the same durable
   state and typed outcomes.
 

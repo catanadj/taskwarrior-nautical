@@ -678,7 +678,9 @@ database from two independent Python processes as well as four threads, and
 asserts both return typed success. A two-process claim race now asserts exactly
 one lease owner for one intent. Queue-vs-reconcile, simultaneous reconcile,
 and simultaneous reconcile exact-claim races now assert one winner and one
-conflict. Lease-expiry/stale-owner and user-edit race matrices remain open.
+conflict. A short-lease stale-owner process test now asserts an independent
+replacement claim succeeds after expiry. User-edit race and shuffled/repeated
+convergence matrices remain open.
 - [ ] Shuffled and repeated failure campaigns converge to the same durable
   state and typed outcomes.
 

@@ -36204,6 +36204,48 @@ def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
     expect(sorted(run_race(("exact", "exact"))) == ["applied", "conflict"], "reconcile/reconcile claim race was not exclusive")
 
 
+def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():
+    """An expired owner cannot retain a claim; the next process can recover it."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
+
+    parent_uuid = "00000000-0000-4000-8000-000000000931"
+    child_uuid = "00000000-0000-4000-8000-000000000932"
+    plan = _plan_from_values(
+        identity=LifecycleIdentity("stale-owner", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard("completed", "on", "stale-owner", 1, "rf-stale-owner", "20260101T000000Z"),
+        child_payload={"uuid": child_uuid, "chainID": "stale-owner", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+    with tempfile.TemporaryDirectory(prefix="nautical-stale-owner-") as td:
+        repo = LifecycleOutboxRepository(Path(td))
+        staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        expect(staged.ok, f"stale-owner fixture did not stage: {staged}")
+        first, records = repo.claim_batch(owner="stale-owner", lease_seconds=0.05, limit=1)
+        expect(first.ok and len(records) == 1, f"stale owner did not claim fixture: {first}, {records}")
+        time.sleep(0.08)
+        worker = (
+            "import sys; from pathlib import Path; "
+            "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
+            "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
+            "result = repo.claim_intent(owner='replacement', lease_seconds=5.0, intent_id=sys.argv[2]); "
+            "print(result.kind.value, flush=True); raise SystemExit(0 if result.ok else 1)"
+        )
+        process = subprocess.run(
+            [sys.executable, "-c", worker, td, staged.record.intent_id],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(process.returncode == 0 and process.stdout.strip() == OutboxResultKind.APPLIED.value,
+               f"replacement process could not reclaim stale owner: {process.stdout!r} {process.stderr!r}")
+
+
 def test_lifecycle_configuration_drift_blocks_mutation():
     """A plan persisted under one configuration cannot mutate under another."""
     import tempfile
@@ -36662,6 +36704,7 @@ TESTS.extend([
     test_lifecycle_application_stage_failure_matrix_resumes_idempotently,
     test_lifecycle_outbox_two_process_claims_are_exclusive,
     test_lifecycle_queue_and_reconcile_claims_are_exclusive,
+    test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process,
     test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,

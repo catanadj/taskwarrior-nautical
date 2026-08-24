@@ -371,6 +371,11 @@ class TaskObservation:
     def field(self, name: str) -> FieldState:
         return self.fields.get(str(name), FieldState.absent())
 
+    def get(self, name: str, default: Any = None) -> Any:
+        """Read a raw field value for typed consumers migrating from mappings."""
+        state = self.field(name)
+        return default if state.presence is FieldPresence.ABSENT else state.raw_value()
+
     @property
     def semantic_fingerprint(self) -> str:
         return self._fingerprint

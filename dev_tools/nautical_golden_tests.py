@@ -10982,7 +10982,8 @@ def test_on_modify_chain_cache_thread_safety_smoke():
             for _ in range(600):
                 s, _chain_id = mod._lifecycle_read_service().lookup_short("aaaaaaaa")
                 if s is not None:
-                    expect(isinstance(s, dict), f"short cache read should return dict, got {type(s)}")
+                    from nautical_core.task_models import TaskObservation
+                    expect(isinstance(s, TaskObservation), f"short cache read should return observation, got {type(s)}")
                     hits["short"] += 1
         except Exception as e:
             errs.append(f"reader:{e}")
@@ -11005,6 +11006,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     """Filtered chain reads should use the in-memory chain cache before falling back to Taskwarrior export."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
+    mod._reset_modify_runtime_state()
 
     mod._lifecycle_read_service().replace_chain_cache(
         "cid-1",
@@ -11028,6 +11030,7 @@ def test_on_modify_chain_cache_reads_through_typed_repository():
 
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_modify_repository_chain_cache_test")
+    mod._reset_modify_runtime_state()
     rows = (
         {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "chainID": "cid", "link": 1, "status": "completed", "modified": "20250101T090000Z"},
         {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "chainID": "cid", "link": 2, "status": "pending", "modified": "20250102T090000Z"},
@@ -11037,7 +11040,7 @@ def test_on_modify_chain_cache_reads_through_typed_repository():
     class Repository:
         def chain_snapshot(self, chain_id, **_kwargs):
             calls.append(chain_id)
-            return Found(rows, "chain:cid")
+            return Found(_task_observations(rows), "chain:cid")
 
     mod._modify_runtime_state().task_repository = Repository()
     selected = mod._lifecycle_read_service().get_chain_export("cid", extra="status:pending")
@@ -11102,15 +11105,19 @@ def test_lifecycle_read_service_indexes_and_merges_chain_rows():
         repository=object(),
         max_chain_walk=10,
     )
-    parent = {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1}
-    rows = [parent, {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2}]
+    rows = _task_observations([
+        {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1},
+        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2},
+    ])
+    parent = rows[0]
     indexes = service.build_indexes(rows)
-    expect(indexes.by_link[1][0] is parent, f"unexpected link index: {indexes.by_link}")
-    expect(indexes.by_short["bbbbbbbb"]["link"] == 2, f"unexpected short index: {indexes.by_short}")
+    expect(indexes.by_link[1][0].get("uuid") == parent.get("uuid"), f"unexpected link index: {indexes.by_link}")
+    expect(indexes.by_short["bbbbbbbb"].get("link") == 2, f"unexpected short index: {indexes.by_short}")
+    child = _task_observation({"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 3})
     merged = service.merge_spawned_child(
         rows,
         parent_task=parent,
-        child_task={"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 3},
+        child_task=child,
         child_short="cccccccc",
         short_uuid=lambda value: str(value)[:8],
     )
@@ -11170,10 +11177,10 @@ def test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed():
         max_chain_walk=10,
         cache_store=store,
     )
-    service.replace_chain_cache("cid", [{"uuid": "aaaaaaaa", "link": 1}])
+    service.replace_chain_cache("cid", _task_observations([{"uuid": "aaaaaaaa", "link": 1}]))
     rows = service.cached_chain_rows("cid")
     expect(rows and rows[0].get("link") == 1, f"cache store did not retain rows: {rows}")
-    expect(store.indexes and store.indexes.by_short["aaaaaaaa"]["link"] == 1, "cache indexes were not retained")
+    expect(store.indexes and store.indexes.by_short["aaaaaaaa"].get("link") == 1, "cache indexes were not retained")
     expect(service.cached_chain_rows("other") is None, "cache leaked across chain IDs")
 
 

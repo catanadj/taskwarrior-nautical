@@ -1706,8 +1706,8 @@ def _collect_prev_two(current_task: dict, chain_by_link=None):
     return list(read.value)
 
 
-def _cached_chain_token_match(task: dict, token: str) -> bool:
-    if not isinstance(task, dict) or not isinstance(token, str) or not token:
+def _cached_chain_token_match(task, token: str) -> bool:
+    if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
     if token.startswith("+"):
         want = token[1:].strip().lower()

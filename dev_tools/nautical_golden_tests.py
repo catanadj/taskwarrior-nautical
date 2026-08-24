@@ -661,7 +661,7 @@ def _carry_native_until(hook, parent, child, child_due, kind, **kwargs):
     )
 
 
-def _build_child_from_parent(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
+def _build_child_draft_for_test(hook, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
     from nautical_core.task_models import NauticalTask
     return _generation_service(hook).build_child_draft(
         NauticalTask.from_observation(_fixture_observation(parent)),
@@ -14949,7 +14949,7 @@ def test_on_modify_spawned_child_preserves_business_calendar():
         'chainID': 'calendar-chain',
         'link': 1,
     }
-    child = _build_child_from_parent(mod,
+    child = _build_child_draft_for_test(mod,
         parent,
         child_due,
         'due',
@@ -19335,7 +19335,7 @@ def test_on_modify_build_child_carries_until_across_dst():
             "chainID": "cid_until",
         }
 
-        child = _build_child_from_parent(mod,
+        child = _build_child_draft_for_test(mod,
             parent,
             child_due,
             "due",
@@ -19400,7 +19400,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
             parent.update({"anchor": "d:*@t=09:00,13:00", "anchor_mode": "skip"})
         else:
             parent.update({"anchor_file": "calendar.csv", "anchor_mode": "skip"})
-        return _build_child_from_parent(mod,
+        return _build_child_draft_for_test(mod,
             parent,
             child_due,
             "due",
@@ -19546,7 +19546,7 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
             "chainID": "cid_until_exact_dst",
         }
 
-        child = _build_child_from_parent(mod,
+        child = _build_child_draft_for_test(mod,
             parent,
             child_due,
             "due",
@@ -19710,7 +19710,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
         "chainID": "cid_until_slots",
     }
     try:
-        _build_child_from_parent(mod,
+        _build_child_draft_for_test(mod,
             invalid_parent,
             mod.core.build_local_datetime(anchor_day, (20, 0)),
             "due",
@@ -19743,7 +19743,7 @@ def test_on_modify_build_child_transitions_flex_to_all():
         "anchor_mode": "flex",
         "chainID": "flex140",
     }
-    child = _build_child_from_parent(mod,
+    child = _build_child_draft_for_test(mod,
         parent,
         child_due,
         "due",
@@ -20006,7 +20006,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
             "cp": "1d",
             "chainID": "cid12345",
         }
-        child = _build_child_from_parent(mod,
+        child = _build_child_draft_for_test(mod,
             parent,
             child_due_utc,
             "due",
@@ -26478,12 +26478,12 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
                 f"evaluator/file mode drifted from hook mode: {result!r} vs {child_due!r}",
             )
 
-            child = _build_child_from_parent(mod, parent, child_due, "due", 2, "beefcafe", "anchor_file", 0, None)
+            child = _build_child_draft_for_test(mod, parent, child_due, "due", 2, "beefcafe", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
 
             anchor_parent = dict(parent, anchor="w:mon@t=12:00", anchor_file="null")
-            anchor_child = _build_child_from_parent(
+            anchor_child = _build_child_draft_for_test(
                 mod, anchor_parent, child_due, "due", 2, "beefcafe", "anchor", 0, None
             )
             expect(not anchor_child.get("anchor_file"), f"literal null anchor_file leaked into anchor child: {anchor_child!r}")
@@ -27221,7 +27221,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         "chainID": "cid_sched",
     }
     child_due = mod.core.build_local_datetime(date(2025, 1, 2), (9, 0))
-    child = _build_child_from_parent(mod,
+    child = _build_child_draft_for_test(mod,
         parent,
         child_due,
         "scheduled",
@@ -32843,7 +32843,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
             "anchor_mode": "flex",
             "link": 1,
         }
-        child = _build_child_from_parent(mod,
+        child = _build_child_draft_for_test(mod,
             parent,
             flex_due,
             "due",

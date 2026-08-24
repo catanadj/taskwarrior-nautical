@@ -41,9 +41,9 @@ class LifecycleRecoveryOperations(Protocol):
     def apply_parent(self, parent: TaskPayload, *, taskdata: Path, lease_held: bool,
                      verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[Any, str]: ...
     def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
-    def next_child(self, parent: TaskPayload, child_short: str) -> TaskObservation: ...
+    def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation: ...
     def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
-    def terminal_error(self, child: TaskPayload, recovery_at: Any) -> str: ...
+    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str: ...
     def is_orphan_deleted(self, child: TaskObservation) -> bool: ...
     def recovery_error(self, parent: TaskPayload, reason: str) -> Any: ...
     def recovery_partial(self, parent: TaskPayload, reason: str) -> Any: ...
@@ -410,28 +410,33 @@ class LifecycleReconciliationService:
             child_short = applied_short or plan.child_short
             plan_parent = plan.parent.to_mapping()
             try:
-                child = operations.next_child(plan_parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
+                child = operations.next_child(plan.parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
                 if child is None:
                     virtual_child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
                     if child_error:
                         outcomes.append((operations.recovery_error(plan_parent, child_error), ""))
                         break
                     if virtual_child is None:
-                        terminal_error = operations.terminal_error(dict(plan.child or {}), recovery_at)
-                        if terminal_error:
-                            outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
+                        if plan.child:
+                            child = TaskObservation.from_mapping(
+                                plan.child,
+                                source_query="reconcile planned child verification",
+                            )
+                            terminal_error = operations.terminal_error(child, recovery_at)
+                            if terminal_error:
+                                outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                         break
-                    child = virtual_child.to_mapping()
+                    child = virtual_child.observation
             except Exception as exc:
                 outcomes.append((operations.recovery_from_exception(plan_parent, exc), ""))
                 break
-            terminal_error = operations.terminal_error(child.to_mapping(), recovery_at) if isinstance(child, TaskObservation) else operations.terminal_error(child, recovery_at)
+            terminal_error = operations.terminal_error(child, recovery_at)
             if terminal_error:
                 outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                 break
             if not operations.is_orphan_deleted(child):
                 break
-            current = child.to_mapping() if isinstance(child, TaskObservation) else child
+            current = child.to_mapping()
         return outcomes
 
 

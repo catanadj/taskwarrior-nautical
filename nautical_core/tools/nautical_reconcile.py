@@ -1247,10 +1247,17 @@ def _validate_recovery_child(parent: TaskPayload, child: TaskPayload) -> str:
     return child_error
 
 
-def _terminal_recovery_error(child: TaskPayload, hook: Any, recovery_at: Any) -> str:
-    if str(child.get("status") or "").strip().lower() != "pending":
+def _terminal_recovery_error(child: TaskObservation, hook: Any, recovery_at: Any) -> str:
+    if not isinstance(child, TaskObservation):
+        raise TypeError("terminal recovery validation requires a TaskObservation")
+
+    def value(field: str) -> Any:
+        state = child.field(field)
+        return state.raw_value() if state.presence is FieldPresence.VALUE else None
+
+    if str(value("status") or "").strip().lower() != "pending":
         return ""
-    until_raw = child.get("until")
+    until_raw = value("until")
     try:
         until_dt, until_err = _safe_parse_datetime(hook, until_raw)
     except Exception:
@@ -1258,8 +1265,8 @@ def _terminal_recovery_error(child: TaskPayload, hook: Any, recovery_at: Any) ->
     if until_err or until_dt is None:
         return f"live recovery child has no reliable native until: {until_err or 'missing until'}"
 
-    target_field = "due" if child.get("due") else "scheduled"
-    target_raw = child.get(target_field)
+    target_field = "due" if value("due") else "scheduled"
+    target_raw = value(target_field)
     try:
         target_dt, target_err = _safe_parse_datetime(hook, target_raw)
     except Exception:
@@ -1277,7 +1284,7 @@ def _terminal_recovery_error(child: TaskPayload, hook: Any, recovery_at: Any) ->
 
 
 def _next_recovery_child(
-    parent: TaskPayload,
+    parent: TaskObservation,
     child_short: str,
 ) -> TaskObservation:
     wanted = str(child_short or "").strip().lower()
@@ -1302,7 +1309,7 @@ def _next_recovery_child(
     if not isinstance(child_observation, TaskObservation):
         raise RuntimeError(f"recovery child {wanted} lookup returned an untyped task")
     child = child_observation.to_mapping()
-    validation_error = _validate_recovery_child(parent, child)
+    validation_error = _validate_recovery_child(parent.to_mapping(), child)
     if validation_error:
         raise RuntimeError(validation_error)
     return child_observation

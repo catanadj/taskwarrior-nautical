@@ -454,6 +454,100 @@ def _emit_exit_feedback(msg: str) -> None:
             stream.flush()
         except Exception:
             pass
+
+
+class _ExitDrainProgress:
+    """Small presentation adapter for the typed lifecycle drain events."""
+
+    def __init__(self) -> None:
+        self._progress: Any = None
+        self._task_id: Any = None
+        self._enabled = self._is_enabled()
+
+    @staticmethod
+    def _is_enabled() -> bool:
+        if not sys.stderr.isatty() or os.environ.get("TERM", "").strip().lower() == "dumb":
+            return False
+        raw = os.environ.get("NAUTICAL_EXIT_PROGRESS", "").strip().lower()
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        return bool(getattr(core, "EXIT_PROGRESS", True))
+
+    def _start(self, total: int) -> None:
+        if not self._enabled or total < 2 or self._progress is not None:
+            return
+        progress = None
+        try:
+            from rich.console import Console
+            from rich.progress import (
+                BarColumn,
+                Progress,
+                TaskProgressColumn,
+                TextColumn,
+                TimeElapsedColumn,
+            )
+
+            console = Console(file=sys.stderr, force_terminal=True)
+            progress = Progress(
+                TextColumn("[bold cyan]{task.description}[/]"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                console=console,
+                transient=True,
+                refresh_per_second=8,
+            )
+            progress.start()
+            task_id = progress.add_task("⚓ Nautical drain", total=total)
+            self._progress = progress
+            self._task_id = task_id
+        except Exception:
+            if progress is not None:
+                try:
+                    progress.stop()
+                except Exception:
+                    pass
+            self._progress = None
+            self._task_id = None
+
+    def on_event(self, event: object) -> None:
+        """Render an event; presentation failures are intentionally ignored."""
+        try:
+            stage = str(getattr(getattr(event, "stage", None), "value", getattr(event, "stage", "")))
+            total = max(0, int(getattr(event, "total", 0) or 0))
+            self._start(total if stage == "claimed" else 0)
+            if self._progress is None or self._task_id is None:
+                return
+            completed = max(0, int(getattr(event, "completed", 0) or 0))
+            outcome = str(getattr(event, "outcome", "") or "").replace("_", " ").strip()
+            description = "⚓ Nautical drain"
+            if stage == "processing":
+                description += " · processing"
+            elif outcome:
+                description += f" · {outcome}"
+            self._progress.update(
+                self._task_id,
+                completed=completed,
+                description=description,
+                refresh=True,
+            )
+        except Exception:
+            return
+
+    def close(self) -> None:
+        if self._progress is None:
+            return
+        try:
+            self._progress.stop()
+        except Exception:
+            pass
+        finally:
+            self._progress = None
+            self._task_id = None
+
+
 def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
     """Claim and execute one bounded batch of lifecycle intents.
 
@@ -488,13 +582,21 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
         lease_seconds=_OUTBOX_LEASE_SECONDS,
     )
 
-    configuration = _INTEGRATION_CONTEXT.configuration
+    integration_context = _INTEGRATION_CONTEXT
+    if integration_context is None:
+        raise RuntimeError("on-exit integration context is unavailable")
+    configuration = integration_context.configuration
     drain_t0 = time.perf_counter()
-    result = service.drain(
-        limit=_OUTBOX_BATCH_MAX_ITEMS,
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
+    progress = _ExitDrainProgress()
+    try:
+        result = service.drain(
+            limit=_OUTBOX_BATCH_MAX_ITEMS,
+            configuration_fingerprint=configuration.fingerprint,
+            schedule_fingerprint=configuration.scheduler_fingerprint,
+            progress=progress.on_event,
+        )
+    finally:
+        progress.close()
     drain_ms = round((time.perf_counter() - drain_t0) * 1000.0, 3)
 
     outcome_kind = lifecycle_application.LifecycleApplicationOutcomeKind

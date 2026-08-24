@@ -35469,7 +35469,7 @@ def test_lifecycle_application_happy_path_real_stack():
     import json, tempfile
     from pathlib import Path
     from nautical_core.lifecycle_models import (
-        LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
+        LifecycleAction, LifecycleDrainStage, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
     )
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     from nautical_core.lifecycle_application import (
@@ -35547,9 +35547,21 @@ def test_lifecycle_application_happy_path_real_stack():
         )
         staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(staged.ok, f"stage failed: {staged}")
-        result = service.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        progress = []
+        result = service.drain(
+            limit=10,
+            configuration_fingerprint="cfg",
+            schedule_fingerprint="sch",
+            progress=progress.append,
+        )
         expect(len(result.outcomes) == 1, f"expected 1 outcome: {result.outcomes}")
         expect(result.outcomes[0].kind is LifecycleApplicationOutcomeKind.APPLIED, f"outcome: {result.outcomes[0]}")
+        expect(
+            [event.stage for event in progress]
+            == [LifecycleDrainStage.CLAIMED, LifecycleDrainStage.PROCESSING, LifecycleDrainStage.COMPLETE],
+            f"unexpected lifecycle drain progress: {progress}",
+        )
+        expect(progress[-1].completed == 1 and progress[-1].total == 1, f"invalid final progress: {progress[-1]}")
         expect(child_uuid.lower() in uow.repository.rows, "child was not imported into task store")
         expect(uow.repository.rows[parent_uuid]["nextLink"] == child_uuid[:8], "parent nextLink not set")
 

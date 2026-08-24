@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import os
+import time
 from typing import Any, Mapping, Protocol, cast
 
 from .integration_models import (
@@ -48,6 +49,9 @@ from .integration_models import (
 from .lifecycle_models import (
     ExecutionStage,
     LifecycleAction,
+    LifecycleDrainProgress,
+    LifecycleDrainProgressCallback,
+    LifecycleDrainStage,
     LifecycleIdentity,
     LifecyclePlan,
 )
@@ -410,6 +414,7 @@ class LifecycleApplicationService:
         limit: int,
         configuration_fingerprint: str,
         schedule_fingerprint: str,
+        progress: LifecycleDrainProgressCallback | None = None,
     ) -> DrainResult:
         """Claim a bounded batch of ready spawn intents and execute each one.
 
@@ -430,6 +435,16 @@ class LifecycleApplicationService:
             return DrainResult(claim=claim, outcomes=())
         if not records:
             return DrainResult(claim=claim, outcomes=())
+        total = len(records)
+        self._report_drain_progress(
+            progress,
+            LifecycleDrainProgress(
+                stage=LifecycleDrainStage.CLAIMED,
+                completed=0,
+                total=total,
+                elapsed_seconds=0.0,
+            ),
+        )
         config = str(configuration_fingerprint or "").strip()
         schedule = str(schedule_fingerprint or "").strip()
         prefetch = getattr(self._mutations, "prefetch_lifecycle_batch", None)
@@ -465,12 +480,39 @@ class LifecycleApplicationService:
                 apply_unverified=batch_apply,
                 verify_children=batch_children,
                 verify_parents=batch_parents,
+                progress=progress,
             )
-        outcomes = tuple(
-            self._execute_claimed(record, configuration_fingerprint=config, schedule_fingerprint=schedule)
-            for record in records
-        )
-        return DrainResult(claim=claim, outcomes=outcomes)
+        outcomes: list[LifecycleApplicationOutcome] = []
+        drain_started = time.monotonic()
+        for index, record in enumerate(records, start=1):
+            self._report_drain_progress(
+                progress,
+                LifecycleDrainProgress(
+                    stage=LifecycleDrainStage.PROCESSING,
+                    completed=index - 1,
+                    total=total,
+                    intent_id=record.intent_id,
+                    elapsed_seconds=time.monotonic() - drain_started,
+                ),
+            )
+            outcome = self._execute_claimed(
+                record,
+                configuration_fingerprint=config,
+                schedule_fingerprint=schedule,
+            )
+            outcomes.append(outcome)
+            self._report_drain_progress(
+                progress,
+                LifecycleDrainProgress(
+                    stage=LifecycleDrainStage.COMPLETE,
+                    completed=index,
+                    total=total,
+                    intent_id=record.intent_id,
+                    outcome=outcome.kind.value,
+                    elapsed_seconds=time.monotonic() - drain_started,
+                ),
+            )
+        return DrainResult(claim=claim, outcomes=tuple(outcomes))
 
     def _drain_batched(
         self,
@@ -482,6 +524,7 @@ class LifecycleApplicationService:
         apply_unverified: Any,
         verify_children: Any,
         verify_parents: Any,
+        progress: LifecycleDrainProgressCallback | None = None,
     ) -> DrainResult:
         """Run multi-intent spawn work in two mutation/verification phases.
 
@@ -492,6 +535,19 @@ class LifecycleApplicationService:
         """
         states: list[_BatchState] = []
         outcomes: list[LifecycleApplicationOutcome] = []
+
+        def report_outcome(record: LifecycleOutboxRecord, outcome: LifecycleApplicationOutcome) -> None:
+            self._report_drain_progress(
+                progress,
+                LifecycleDrainProgress(
+                    stage=LifecycleDrainStage.COMPLETE,
+                    completed=len(outcomes),
+                    total=len(records),
+                    intent_id=record.intent_id,
+                    outcome=outcome.kind.value,
+                ),
+            )
+
         for record in records:
             plan = record.plan
             child_payload = _child_import_payload(plan)
@@ -503,7 +559,9 @@ class LifecycleApplicationService:
                 or child_payload is None
                 or link_payload is None
             ):
-                outcomes.append(self._manual_review(record, "outbox record is invalid for batched lifecycle execution"))
+                outcome = self._manual_review(record, "outbox record is invalid for batched lifecycle execution")
+                outcomes.append(outcome)
+                report_outcome(record, outcome)
                 continue
             states.append(_BatchState(record, plan, child_payload, link_payload, record.stage, []))
 
@@ -606,43 +664,62 @@ class LifecycleApplicationService:
 
         for state in states:
             if state.terminal is not None:
-                outcomes.append(
-                    LifecycleApplicationOutcome(
-                        state.terminal.kind,
-                        state.terminal.identity,
-                        reason=state.terminal.reason,
-                        intent_id=state.terminal.intent_id,
-                        mutations=tuple(state.mutations),
-                    )
+                outcome = LifecycleApplicationOutcome(
+                    state.terminal.kind,
+                    state.terminal.identity,
+                    reason=state.terminal.reason,
+                    intent_id=state.terminal.intent_id,
+                    mutations=tuple(state.mutations),
                 )
+                outcomes.append(outcome)
+                report_outcome(state.record, outcome)
                 continue
             lease_failure = self._renew_before_step(state.record, "verification", tuple(state.mutations))
             if lease_failure is not None:
                 outcomes.append(lease_failure)
+                report_outcome(state.record, lease_failure)
                 continue
             advance = self._outbox.advance_stage(
                 intent_id=state.record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED
             )
             if not advance.ok:
-                outcomes.append(self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations)))
+                outcome = self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations))
+                outcomes.append(outcome)
+                report_outcome(state.record, outcome)
                 continue
             lease_failure = self._renew_before_step(state.record, "acknowledgement", tuple(state.mutations))
             if lease_failure is not None:
                 outcomes.append(lease_failure)
+                report_outcome(state.record, lease_failure)
                 continue
             ack = self._outbox.acknowledge(intent_id=state.record.intent_id, owner=self._owner)
             if not ack.ok:
-                outcomes.append(self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations)))
+                outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))
+                outcomes.append(outcome)
+                report_outcome(state.record, outcome)
                 continue
-            outcomes.append(
-                LifecycleApplicationOutcome(
-                    LifecycleApplicationOutcomeKind.APPLIED,
-                    state.plan.identity,
-                    intent_id=state.record.intent_id,
-                    mutations=tuple(state.mutations),
-                )
+            outcome = LifecycleApplicationOutcome(
+                LifecycleApplicationOutcomeKind.APPLIED,
+                state.plan.identity,
+                intent_id=state.record.intent_id,
+                mutations=tuple(state.mutations),
             )
+            outcomes.append(outcome)
+            report_outcome(state.record, outcome)
         return DrainResult(claim=claim, outcomes=tuple(outcomes))
+
+    @staticmethod
+    def _report_drain_progress(
+        progress: LifecycleDrainProgressCallback | None,
+        event: LifecycleDrainProgress,
+    ) -> None:
+        """Notify an observer without allowing presentation to affect safety."""
+        if progress is None:
+            return
+        try:
+            progress(event)
+        except Exception:
+            return
 
     def execute_staged(
         self,

@@ -52,6 +52,47 @@ class LifecycleEvent(str, Enum):
     CHAIN_UNTIL = "chain_until"
 
 
+class LifecycleDrainStage(str, Enum):
+    """Observer-visible stages for one bounded lifecycle drain pass."""
+
+    CLAIMED = "claimed"
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleDrainProgress:
+    """Immutable progress event emitted by the lifecycle application service.
+
+    This is deliberately presentation-free: hooks may render it as a Rich
+    progress bar, while reconcile and tests can consume the same contract
+    without importing terminal UI code.
+    """
+
+    stage: LifecycleDrainStage
+    completed: int
+    total: int
+    intent_id: str = ""
+    outcome: str = ""
+    elapsed_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        try:
+            stage = LifecycleDrainStage(self.stage)
+        except (TypeError, ValueError) as exc:
+            raise LifecycleContractError("invalid lifecycle drain progress stage") from exc
+        total = int(self.total)
+        completed = int(self.completed)
+        if total < 0 or completed < 0 or completed > total:
+            raise LifecycleContractError("lifecycle drain progress counts are out of range")
+        object.__setattr__(self, "stage", stage)
+        object.__setattr__(self, "total", total)
+        object.__setattr__(self, "completed", completed)
+        object.__setattr__(self, "intent_id", str(self.intent_id or "").strip())
+        object.__setattr__(self, "outcome", str(self.outcome or "").strip())
+        object.__setattr__(self, "elapsed_seconds", max(0.0, float(self.elapsed_seconds or 0.0)))
+
+
 @dataclass(frozen=True, slots=True)
 class LifecycleRecoveryDecision:
     """Typed successor/expiration decision consumed by reconcile and UI."""
@@ -139,6 +180,7 @@ class DeletionEvidence:
 
 FrozenValue: TypeAlias = Any
 FrozenPairs: TypeAlias = tuple[tuple[str, FrozenValue], ...]
+LifecycleDrainProgressCallback: TypeAlias = Callable[[LifecycleDrainProgress], None]
 LIFECYCLE_PLAN_SCHEMA_VERSION = 2
 LIFECYCLE_DRAFT_PAYLOAD_SCHEMA = 1
 LIFECYCLE_PATCH_PAYLOAD_SCHEMA = 1
@@ -718,6 +760,9 @@ __all__ = (
     "DeletionDisposition",
     "DeletionEvidence",
     "ExecutionStage",
+    "LifecycleDrainProgress",
+    "LifecycleDrainProgressCallback",
+    "LifecycleDrainStage",
     "LIFECYCLE_PLAN_SCHEMA_VERSION",
     "LifecycleAction",
     "LifecycleContractError",

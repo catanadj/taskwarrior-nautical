@@ -1110,9 +1110,11 @@ def _check_reconcile_plans(
                 for child in existing_children
             )
             planned_until_elapsed = False
-            if plan.action == "spawn" and isinstance(plan.child, dict) and hook is not None:
+            if plan.action == "spawn" and plan.child_draft is not None and hook is not None:
                 try:
-                    until_dt, until_err = _safe_parse_datetime(hook, plan.child.get("until"))
+                    until_dt, until_err = _safe_parse_datetime(
+                        hook, plan.child_draft.field_value("until")
+                    )
                     now_utc = getattr(hook, "now_utc", None)
                     planned_until_elapsed = (
                         not until_err

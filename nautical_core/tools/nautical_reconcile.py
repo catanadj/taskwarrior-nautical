@@ -1321,7 +1321,9 @@ def _virtual_expired_child(
     hook: Any,
     recovery_at: Any,
 ) -> tuple[VirtualExpiredChild | None, str]:
-    child = dict(plan.child or {})
+    if plan.child_draft is None:
+        return None, "planned child draft is unavailable"
+    child = plan.child_draft.to_mapping()
     until_raw = child.get("until")
     try:
         until_dt, until_err = _safe_parse_datetime(hook, until_raw)
@@ -1419,8 +1421,7 @@ def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
 
 def _describe_plan(plan: lifecycle.LifecycleRecoveryDecision, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
     evidence = lifecycle.describe_plan(plan, fmt_dt_local=fmt_dt_local)
-    child = plan.child if isinstance(plan.child, dict) else {}
-    child_until = child.get("until")
+    child_until = plan.child_draft.field_value("until") if plan.child_draft is not None else None
     if not child_until:
         return evidence
     try:

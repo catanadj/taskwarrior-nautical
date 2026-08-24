@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 import os
 import time
-from typing import Any, Mapping, Protocol, cast
+from typing import Any, Callable, Mapping, Protocol, cast
 
 from .integration_models import (
     ChainDisablePayload,
@@ -132,6 +132,7 @@ class _BatchState:
     stage: ExecutionStage
     mutations: list[MutationOutcome]
     terminal: LifecycleApplicationOutcome | None = None
+    progress_completed: int = 0
 
 
 class _UnitOfWork(Protocol):
@@ -150,6 +151,18 @@ _SPAWN_STAGE_ORDER = {
     ExecutionStage.VERIFIED: 3,
     ExecutionStage.FINALIZED: 4,
 }
+
+
+def _remaining_drain_work(stage: ExecutionStage) -> int:
+    """Return observable work units remaining for one claimed spawn intent."""
+    stage_order = _SPAWN_STAGE_ORDER[stage]
+    if stage_order < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
+        return 6
+    if stage_order < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
+        return 4
+    if stage_order < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]:
+        return 2
+    return 1
 
 _TERMINAL_ACTIONS = (LifecycleAction.DISABLE_CHAIN, LifecycleAction.FINALIZE_CHAIN)
 
@@ -435,7 +448,7 @@ class LifecycleApplicationService:
             return DrainResult(claim=claim, outcomes=())
         if not records:
             return DrainResult(claim=claim, outcomes=())
-        total = len(records)
+        total = sum(_remaining_drain_work(record.stage) for record in records)
         self._report_drain_progress(
             progress,
             LifecycleDrainProgress(
@@ -484,14 +497,38 @@ class LifecycleApplicationService:
             )
         outcomes: list[LifecycleApplicationOutcome] = []
         drain_started = time.monotonic()
-        for index, record in enumerate(records, start=1):
+        completed = 0
+        for record in records:
+            record_total = _remaining_drain_work(record.stage)
+            record_completed = 0
+
+            def report_action(detail: str, units: int = 1) -> None:
+                nonlocal completed, record_completed
+                advance = min(max(0, int(units)), record_total - record_completed)
+                if not advance:
+                    return
+                completed += advance
+                record_completed += advance
+                self._report_drain_progress(
+                    progress,
+                    LifecycleDrainProgress(
+                        stage=LifecycleDrainStage.PROCESSING,
+                        completed=completed,
+                        total=total,
+                        intent_id=record.intent_id,
+                        detail=detail,
+                        elapsed_seconds=time.monotonic() - drain_started,
+                    ),
+                )
+
             self._report_drain_progress(
                 progress,
                 LifecycleDrainProgress(
                     stage=LifecycleDrainStage.PROCESSING,
-                    completed=index - 1,
+                    completed=completed,
                     total=total,
                     intent_id=record.intent_id,
+                    detail="starting intent",
                     elapsed_seconds=time.monotonic() - drain_started,
                 ),
             )
@@ -499,16 +536,19 @@ class LifecycleApplicationService:
                 record,
                 configuration_fingerprint=config,
                 schedule_fingerprint=schedule,
+                progress_action=report_action,
             )
             outcomes.append(outcome)
+            report_action("intent finished", record_total - record_completed)
             self._report_drain_progress(
                 progress,
                 LifecycleDrainProgress(
                     stage=LifecycleDrainStage.COMPLETE,
-                    completed=index,
+                    completed=completed,
                     total=total,
                     intent_id=record.intent_id,
                     outcome=outcome.kind.value,
+                    detail="intent finished",
                     elapsed_seconds=time.monotonic() - drain_started,
                 ),
             )
@@ -535,16 +575,51 @@ class LifecycleApplicationService:
         """
         states: list[_BatchState] = []
         outcomes: list[LifecycleApplicationOutcome] = []
+        total = sum(_remaining_drain_work(record.stage) for record in records)
+        completed = 0
+        drain_started = time.monotonic()
 
-        def report_outcome(record: LifecycleOutboxRecord, outcome: LifecycleApplicationOutcome) -> None:
+        def report_action(state: _BatchState, detail: str, units: int = 1) -> None:
+            nonlocal completed
+            remaining = _remaining_drain_work(state.record.stage) - state.progress_completed
+            advance = min(max(0, int(units)), remaining)
+            if not advance:
+                return
+            state.progress_completed += advance
+            completed += advance
+            self._report_drain_progress(
+                progress,
+                LifecycleDrainProgress(
+                    stage=LifecycleDrainStage.PROCESSING,
+                    completed=completed,
+                    total=total,
+                    intent_id=state.record.intent_id,
+                    detail=detail,
+                    elapsed_seconds=time.monotonic() - drain_started,
+                ),
+            )
+
+        def report_outcome(
+            record: LifecycleOutboxRecord,
+            outcome: LifecycleApplicationOutcome,
+            state: _BatchState | None = None,
+        ) -> None:
+            nonlocal completed
+            record_total = _remaining_drain_work(record.stage)
+            accounted = state.progress_completed if state is not None else 0
+            completed += max(0, record_total - accounted)
+            if state is not None:
+                state.progress_completed = record_total
             self._report_drain_progress(
                 progress,
                 LifecycleDrainProgress(
                     stage=LifecycleDrainStage.COMPLETE,
-                    completed=len(outcomes),
-                    total=len(records),
+                    completed=completed,
+                    total=total,
                     intent_id=record.intent_id,
                     outcome=outcome.kind.value,
+                    detail="intent finished",
+                    elapsed_seconds=time.monotonic() - drain_started,
                 ),
             )
 
@@ -579,9 +654,11 @@ class LifecycleApplicationService:
                 continue
             outcome = apply_unverified(request)
             state.mutations.append(outcome)
+            report_action(state, "child mutation")
             if outcome.kind is MutationOutcomeKind.APPLIED:
                 pending_children.append((state, request))
             elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
+                report_action(state, "child verified")
                 settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
                 state.terminal = settled
                 if settled is None:
@@ -609,6 +686,7 @@ class LifecycleApplicationService:
                     "child batch verification returned no result",
                 )
             state.mutations.append(outcome)
+            report_action(state, "child verified")
             settled = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
             state.terminal = settled
             if settled is None:
@@ -628,9 +706,11 @@ class LifecycleApplicationService:
                 continue
             outcome = apply_unverified(request)
             state.mutations.append(outcome)
+            report_action(state, "parent mutation")
             if outcome.kind is MutationOutcomeKind.APPLIED:
                 pending_parents.append((state, request))
             elif outcome.kind is MutationOutcomeKind.ALREADY_APPLIED:
+                report_action(state, "parent verified")
                 settled = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
                 state.terminal = settled
                 if settled is None:
@@ -657,6 +737,7 @@ class LifecycleApplicationService:
                     "parent batch verification returned no result",
                 )
             state.mutations.append(outcome)
+            report_action(state, "parent verified")
             settled = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
             state.terminal = settled
             if settled is None:
@@ -672,31 +753,33 @@ class LifecycleApplicationService:
                     mutations=tuple(state.mutations),
                 )
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome)
+                report_outcome(state.record, outcome, state)
                 continue
             lease_failure = self._renew_before_step(state.record, "verification", tuple(state.mutations))
             if lease_failure is not None:
                 outcomes.append(lease_failure)
-                report_outcome(state.record, lease_failure)
+                report_outcome(state.record, lease_failure, state)
                 continue
             advance = self._outbox.advance_stage(
                 intent_id=state.record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED
             )
+            report_action(state, "intent verified")
             if not advance.ok:
                 outcome = self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations))
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome)
+                report_outcome(state.record, outcome, state)
                 continue
             lease_failure = self._renew_before_step(state.record, "acknowledgement", tuple(state.mutations))
             if lease_failure is not None:
                 outcomes.append(lease_failure)
-                report_outcome(state.record, lease_failure)
+                report_outcome(state.record, lease_failure, state)
                 continue
             ack = self._outbox.acknowledge(intent_id=state.record.intent_id, owner=self._owner)
+            report_action(state, "intent acknowledged")
             if not ack.ok:
                 outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))
                 outcomes.append(outcome)
-                report_outcome(state.record, outcome)
+                report_outcome(state.record, outcome, state)
                 continue
             outcome = LifecycleApplicationOutcome(
                 LifecycleApplicationOutcomeKind.APPLIED,
@@ -705,7 +788,7 @@ class LifecycleApplicationService:
                 mutations=tuple(state.mutations),
             )
             outcomes.append(outcome)
-            report_outcome(state.record, outcome)
+            report_outcome(state.record, outcome, state)
         return DrainResult(claim=claim, outcomes=tuple(outcomes))
 
     @staticmethod
@@ -806,7 +889,12 @@ class LifecycleApplicationService:
         *,
         configuration_fingerprint: str,
         schedule_fingerprint: str,
+        progress_action: Callable[[str, int], None] | None = None,
     ) -> LifecycleApplicationOutcome:
+        def report_action(detail: str, units: int = 1) -> None:
+            if progress_action is not None:
+                progress_action(detail, units)
+
         plan = record.plan
         if (
             record.configuration_fingerprint != configuration_fingerprint
@@ -836,6 +924,7 @@ class LifecycleApplicationService:
             if outcome is None:
                 return self._manual_review(record, "could not construct a guarded child-import mutation request")
             mutations.append(outcome)
+            report_action("child mutation and verification", 2)
             lease_failure = self._renew_before_step(record, "child-import progress", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
@@ -854,6 +943,7 @@ class LifecycleApplicationService:
             if outcome is None:
                 return self._manual_review(record, "could not construct a guarded parent-link mutation request")
             mutations.append(outcome)
+            report_action("parent mutation and verification", 2)
             lease_failure = self._renew_before_step(record, "parent-link progress", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
@@ -872,6 +962,7 @@ class LifecycleApplicationService:
             if lease_failure is not None:
                 return lease_failure
             advance = self._outbox.advance_stage(intent_id=record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED)
+            report_action("intent verified")
             if not advance.ok:
                 return self._retry_or_review(record, advance, "could not persist verified lifecycle stage", tuple(mutations))
 
@@ -879,6 +970,7 @@ class LifecycleApplicationService:
         if lease_failure is not None:
             return lease_failure
         ack = self._outbox.acknowledge(intent_id=record.intent_id, owner=self._owner)
+        report_action("intent acknowledged")
         if not ack.ok:
             return self._retry_or_review(record, ack, "could not acknowledge finalized lifecycle intent", tuple(mutations))
         return LifecycleApplicationOutcome(

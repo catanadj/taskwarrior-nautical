@@ -498,6 +498,8 @@ class _ExitDrainProgress:
                 console=console,
                 transient=True,
                 refresh_per_second=8,
+                redirect_stdout=False,
+                redirect_stderr=False,
             )
             progress.start()
             task_id = progress.add_task("⚓ Nautical drain", total=total)
@@ -522,9 +524,10 @@ class _ExitDrainProgress:
                 return
             completed = max(0, int(getattr(event, "completed", 0) or 0))
             outcome = str(getattr(event, "outcome", "") or "").replace("_", " ").strip()
+            detail = str(getattr(event, "detail", "") or "").replace("_", " ").strip()
             description = "⚓ Nautical drain"
-            if stage == "processing":
-                description += " · processing"
+            if detail:
+                description += f" · {detail}"
             elif outcome:
                 description += f" · {outcome}"
             self._progress.update(

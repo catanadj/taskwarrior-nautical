@@ -74,6 +74,7 @@ class LifecycleDrainProgress:
     total: int
     intent_id: str = ""
     outcome: str = ""
+    detail: str = ""
     elapsed_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -90,6 +91,7 @@ class LifecycleDrainProgress:
         object.__setattr__(self, "completed", completed)
         object.__setattr__(self, "intent_id", str(self.intent_id or "").strip())
         object.__setattr__(self, "outcome", str(self.outcome or "").strip())
+        object.__setattr__(self, "detail", str(self.detail or "").strip())
         object.__setattr__(self, "elapsed_seconds", max(0.0, float(self.elapsed_seconds or 0.0)))
 
 

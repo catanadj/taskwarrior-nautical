@@ -35488,6 +35488,13 @@ def test_lifecycle_application_happy_path_real_stack():
             if r is None:
                 return Absent(f"uuid:{u}", "not found")
             return Found(_task_observation(r), f"uuid:{u}")
+        def broad_snapshot(self, *, identity, **_kwargs):
+            rows = self.rows
+            class _Snapshot:
+                def uuid_matches(self, value):
+                    row = rows.get(str(value).lower())
+                    return () if row is None else (_task_observation(row),)
+            return Found(_Snapshot(), identity)
 
     class _Client:
         def __init__(self, repo):
@@ -35519,9 +35526,13 @@ def test_lifecycle_application_happy_path_real_stack():
     from nautical_core.lifecycle_models import recurrence_fingerprint as _rfp
     parent_uuid = "00000000-0000-4000-8000-000000000101"
     child_uuid  = "00000000-0000-4000-8000-000000000102"
+    parent_uuid_2 = "00000000-0000-4000-8000-000000000201"
+    child_uuid_2 = "00000000-0000-4000-8000-000000000202"
     parent = {"uuid": parent_uuid, "status": "completed", "chain": "on",
               "chainID": "chain-s12", "link": 1, "modified": "20260101T000000Z", "cp": "1d"}
-    uow = _Uow({parent_uuid: parent})
+    parent_2 = {"uuid": parent_uuid_2, "status": "completed", "chain": "on",
+                "chainID": "chain-s12-2", "link": 1, "modified": "20260101T000000Z", "cp": "1d"}
+    uow = _Uow({parent_uuid: parent, parent_uuid_2: parent_2})
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
         service = LifecycleApplicationService(
@@ -35545,8 +35556,28 @@ def test_lifecycle_application_happy_path_real_stack():
             parent_patch={"nextLink": child_uuid[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
+        guard_2 = ParentGuard("completed", "on", "chain-s12-2", 1, _rfp(parent_2), "20260101T000000Z")
+        identity_2 = LifecycleIdentity("chain-s12-2", parent_uuid_2, 1, 2, LifecycleEvent.COMPLETE)
+        plan_2 = LifecyclePlan.from_draft(
+            identity=identity_2, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard_2,
+            draft=_task_draft({
+                "uuid": child_uuid_2,
+                "description": "child 2",
+                "chainID": "chain-s12-2",
+                "link": 2,
+                "prevLink": parent_uuid_2[:8],
+                "status": "pending",
+                "chain": "on",
+                "cp": "1d",
+                "due": "20260824T100000Z",
+            }),
+            parent_patch={"nextLink": child_uuid_2[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
         staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(staged.ok, f"stage failed: {staged}")
+        staged_2 = service.stage(plan_2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        expect(staged_2.ok, f"second stage failed: {staged_2}")
         progress = []
         result = service.drain(
             limit=10,
@@ -35554,16 +35585,17 @@ def test_lifecycle_application_happy_path_real_stack():
             schedule_fingerprint="sch",
             progress=progress.append,
         )
-        expect(len(result.outcomes) == 1, f"expected 1 outcome: {result.outcomes}")
-        expect(result.outcomes[0].kind is LifecycleApplicationOutcomeKind.APPLIED, f"outcome: {result.outcomes[0]}")
-        expect(
-            [event.stage for event in progress]
-            == [LifecycleDrainStage.CLAIMED, LifecycleDrainStage.PROCESSING, LifecycleDrainStage.COMPLETE],
-            f"unexpected lifecycle drain progress: {progress}",
-        )
-        expect(progress[-1].completed == 1 and progress[-1].total == 1, f"invalid final progress: {progress[-1]}")
+        expect(len(result.outcomes) == 2, f"expected 2 outcomes: {result.outcomes}")
+        expect(all(item.kind is LifecycleApplicationOutcomeKind.APPLIED for item in result.outcomes), f"outcomes: {result.outcomes}")
+        expect(progress[0].stage is LifecycleDrainStage.CLAIMED, f"missing claimed progress: {progress}")
+        expect(progress[-1].stage is LifecycleDrainStage.COMPLETE, f"missing final progress: {progress}")
+        processing = [event.completed for event in progress if event.stage is LifecycleDrainStage.PROCESSING]
+        expect(processing == list(range(1, 13)), f"drain did not advance per lifecycle action: {progress}")
+        expect(progress[-1].completed == 12 and progress[-1].total == 12, f"invalid final progress: {progress[-1]}")
         expect(child_uuid.lower() in uow.repository.rows, "child was not imported into task store")
+        expect(child_uuid_2.lower() in uow.repository.rows, "second child was not imported into task store")
         expect(uow.repository.rows[parent_uuid]["nextLink"] == child_uuid[:8], "parent nextLink not set")
+        expect(uow.repository.rows[parent_uuid_2]["nextLink"] == child_uuid_2[:8], "second parent nextLink not set")
 
 
 def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():

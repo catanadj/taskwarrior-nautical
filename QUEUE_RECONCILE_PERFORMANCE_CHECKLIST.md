@@ -709,11 +709,13 @@ stress suites.
   Evidence: `perf.termux.device1.final.json`. Device 2 is intentionally
   excluded from acceptance because its hardware-specific timing is not a
   supported release gate.
-- [ ] Require an 8-intent healthy drain to perform no full-history export and
-  no more than the unavoidable mutations plus bounded phase reads.
-- [ ] Target a normal 8-intent drain budget of 19 Taskwarrior calls once
+- [x] Require an 8-intent healthy drain to perform no full-history export and
+  no more than the unavoidable mutations plus bounded phase reads. The
+  workflow run uses three broad phase snapshots and no full-history export.
+- [x] Target a normal 8-intent drain budget of 19 Taskwarrior calls once
   guarded compensation closes the parent-change race: 16 mutations and three
-  targeted phase snapshots.
+  targeted phase snapshots. The workflow run records exactly 19 calls and a
+  0.52 s median wall time.
 - [x] Preserve zero Taskwarrior calls for acknowledged replay. The desktop
   report records zero calls for all `workflow_queue_drain_idempotent` samples.
 - [ ] Establish a separate partial-recovery call budget that counts only work

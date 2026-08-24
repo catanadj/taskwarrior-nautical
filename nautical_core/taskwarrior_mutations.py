@@ -241,11 +241,11 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         for parent_uuid, expected_next_link in parent_wanted:
             row = result.found.get(parent_uuid)
             if row is not None:
-                # A cached row that already has the requested link is not
-                # safe to trust across the batch; retain a fresh read for
-                # idempotent classification.
-                if _text(_observed_value(row, "nextLink")).casefold() != expected_next_link.casefold():
-                    self._prefetched_parents[parent_uuid] = row
+                # The snapshot is the batch guard for both child import and
+                # parent link.  Child import does not mutate the parent; the
+                # eventual guarded link command and phase verification still
+                # detect concurrent edits and trigger compensation/retry.
+                self._prefetched_parents[parent_uuid] = row
 
     def _outcome(
         self,
@@ -266,6 +266,16 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         )
 
     def _read_target(self, request: MutationRequest) -> tuple[TaskObservation | None, MutationOutcome | None]:
+        # Reuse the authoritative batch parent snapshot for child import. The
+        # import itself cannot change the parent; its guarded parent-link
+        # command and postcondition phase remain the concurrency boundary.
+        if request.operation is MutationOperation.CHILD_IMPORT:
+            cached_parent = self._prefetched_parents.get(request.guard.task_uuid.lower())
+            if cached_parent is not None:
+                mismatch = self._guard_mismatch(request.guard, cached_parent)
+                if mismatch:
+                    return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
+                return cached_parent, None
         if self._uow.mutation_epoch != request.guard.expected_mutation_epoch:
             return None, self._outcome(
                 request,
@@ -569,8 +579,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         cached_parent = self._prefetched_parents.pop(request.guard.task_uuid.lower(), None)
         parent: TaskObservation | None
         failure: MutationOutcome | None
-        if cached_parent is not None and _text(_observed_value(cached_parent, "nextLink")).casefold() != request.payload.child_short_uuid.casefold():
-            parent, failure = cached_parent, None
+        if cached_parent is not None:
+            mismatch = self._guard_mismatch(request.guard, cached_parent)
+            if mismatch:
+                parent, failure = None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
+            else:
+                parent, failure = cached_parent, None
         else:
             parent, failure = self._read_target(request)
         if failure is not None:

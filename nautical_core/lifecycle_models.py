@@ -62,10 +62,13 @@ class LifecycleRecoveryDecision:
     child_due: Any = None
     terminal_kind: str | None = None
     lifecycle_plan: "LifecyclePlan | None" = None
+    child_observation: TaskObservation | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.parent, TaskObservation):
             raise TypeError("lifecycle recovery decision requires a TaskObservation parent")
+        if self.child_observation is not None and not isinstance(self.child_observation, TaskObservation):
+            raise TypeError("lifecycle recovery child evidence requires a TaskObservation")
 
 
 class LifecycleAction(str, Enum):

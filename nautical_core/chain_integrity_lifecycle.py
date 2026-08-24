@@ -554,6 +554,7 @@ def _plan_recovery_decision_unscoped(
             child_short=child_short,
             child=existing_child.to_mapping(),
             lifecycle_plan=lifecycle_plan,
+            child_observation=existing_child,
         )
 
     try:

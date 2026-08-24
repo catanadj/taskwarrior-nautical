@@ -632,7 +632,7 @@ behavioral gates; device-specific TTY timing remains part of Section 14.
 
 ## 13. Prove Failure And Concurrency Safety
 
-- [ ] Add deterministic failure injection before and after claim, each lease
+- [x] Add deterministic failure injection before and after claim, each lease
   renewal, child import, child verification, child stage persistence, parent
   link, parent verification, acknowledgement, and compensation.
 - [ ] Add two-process tests for simultaneous queue drain, queue versus
@@ -654,16 +654,16 @@ behavioral gates; device-specific TTY timing remains part of Section 14.
 
 Completion criteria:
 
-- [ ] No injected interruption creates a duplicate child, lost parent link,
+- [x] No injected interruption creates a duplicate child, lost parent link,
   false acknowledgement, untracked orphan, or guessed absence.
 - [x] No concurrent invocation can apply an intent without owning its valid
   lease and satisfying its current Taskwarrior guard.
 
-Verification: lifecycle crash-resume, lease-renewal, outbox-fault, conflict /
+Verification: lifecycle crash-resume, stage-persistence matrix, lease-renewal, outbox-fault, conflict /
 retry-budget, configuration-drift, mutation-epoch, concurrent outbox-open, and
 concurrent operator golden tests pass. Dedicated exhaustive failure matrices
-for every mutation boundary and shuffled multi-process convergence remain open
-for the final safety campaign.
+for all process races and shuffled multi-process convergence remain open for the
+final safety campaign.
 
 Pass 2 scope: keep failure injection in the test harness (scripted mutation,
 outbox, lease, and repository doubles), rather than adding a production fault

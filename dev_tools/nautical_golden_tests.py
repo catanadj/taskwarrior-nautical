@@ -35994,6 +35994,102 @@ def test_lifecycle_application_outbox_faults_are_retryable():
                f"manual-review persistence failure was not retryable: {review}")
 
 
+def test_lifecycle_application_stage_failure_matrix_resumes_idempotently():
+    """Each persisted spawn boundary can fail once and resume without unsafe duplication."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import (
+        ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard,
+    )
+    from nautical_core.lifecycle_outbox import (
+        LifecycleOutboxRepository, OutboxResult, OutboxResultKind,
+    )
+    from nautical_core.lifecycle_application import LifecycleApplicationService, LifecycleApplicationOutcomeKind
+    from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
+
+    class _Uow:
+        mutation_epoch = 0
+
+    class _Mutations:
+        def __init__(self):
+            self.calls = []
+
+        def apply(self, request):
+            self.calls.append(request.operation)
+            postcondition = {
+                MutationOperation.CHILD_IMPORT: MutationPostcondition.CHILD_IMPORTED,
+                MutationOperation.PARENT_LINK: MutationPostcondition.PARENT_LINKED,
+            }.get(request.operation)
+            prior = sum(1 for operation in self.calls if operation is request.operation)
+            kind = MutationOutcomeKind.ALREADY_APPLIED if prior > 1 else MutationOutcomeKind.APPLIED
+            return MutationOutcome(
+                request.operation,
+                kind,
+                request.guard,
+                (postcondition,) if postcondition else (),
+                "already present" if kind is MutationOutcomeKind.ALREADY_APPLIED else "",
+            )
+
+    class _FailingOutbox(LifecycleOutboxRepository):
+        def __init__(self, path, *, fail_stage=None, fail_ack=False):
+            super().__init__(path)
+            self.fail_stage = fail_stage
+            self.fail_ack = fail_ack
+
+        def advance_stage(self, *, intent_id, owner, stage):
+            if self.fail_stage is stage:
+                self.fail_stage = None
+                return OutboxResult(OutboxResultKind.RETRYABLE, reason=f"injected {stage.value} persistence failure")
+            return super().advance_stage(intent_id=intent_id, owner=owner, stage=stage)
+
+        def acknowledge(self, *, intent_id, owner):
+            if self.fail_ack:
+                self.fail_ack = False
+                return OutboxResult(OutboxResultKind.RETRYABLE, reason="injected acknowledgement failure")
+            return super().acknowledge(intent_id=intent_id, owner=owner)
+
+    parent_uuid = "00000000-0000-4000-8000-000000000901"
+    child_uuid = "00000000-0000-4000-8000-000000000902"
+    plan = _plan_from_values(
+        identity=LifecycleIdentity("stage-matrix", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard("completed", "on", "stage-matrix", 1, "rf-stage-matrix", "20260101T000000Z"),
+        child_payload={"uuid": child_uuid, "chainID": "stage-matrix", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+
+    cases = (
+        ("child-stage", ExecutionStage.CHILD_PRESENT, False),
+        ("parent-stage", ExecutionStage.PARENT_LINKED, False),
+        ("verified-stage", ExecutionStage.VERIFIED, False),
+        ("acknowledgement", None, True),
+    )
+    for label, fail_stage, fail_ack in cases:
+        with tempfile.TemporaryDirectory(prefix=f"nautical-stage-{label}-") as td:
+            outbox = _FailingOutbox(Path(td), fail_stage=fail_stage, fail_ack=fail_ack)
+            mutations = _Mutations()
+            service = LifecycleApplicationService(
+                unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner=f"stage-{label}", lease_seconds=1.0,
+            )
+            staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            expect(staged.ok, f"{label}: staging failed: {staged}")
+            first = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            expect(first.outcomes and first.outcomes[0].kind is LifecycleApplicationOutcomeKind.RETRYABLE,
+                   f"{label}: injected failure was not retryable: {first.outcomes}")
+            time.sleep(1.05)
+            second = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            if not second.outcomes:
+                _, retry_status = outbox.status()
+                raise AssertionError(f"{label}: retry did not claim the intent: {retry_status}")
+            expect(second.outcomes[0].kind is LifecycleApplicationOutcomeKind.APPLIED,
+                   f"{label}: retry did not converge: {second.outcomes}")
+            _, status = outbox.status()
+            expect(status["states"].get("acknowledged") == 1, f"{label}: intent was not acknowledged: {status}")
+            expect(mutations.calls.count(MutationOperation.CHILD_IMPORT) <= 2,
+                   f"{label}: child mutation was repeated unsafely: {mutations.calls}")
+
+
 def test_lifecycle_configuration_drift_blocks_mutation():
     """A plan persisted under one configuration cannot mutate under another."""
     import tempfile
@@ -36449,6 +36545,7 @@ TESTS.extend([
     test_lifecycle_application_crash_at_each_stage_resumes_without_remutation,
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
     test_lifecycle_application_outbox_faults_are_retryable,
+    test_lifecycle_application_stage_failure_matrix_resumes_idempotently,
     test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,

@@ -143,7 +143,12 @@ def _scenario_cp(env: dict[str, str]) -> dict:
     delta = _parse_tw_datetime(child.get("due")) - _parse_tw_datetime(root.get("due"))
     if delta != timedelta(days=1):
         raise AssertionError(f"cp child delta was {delta}, expected 1 day")
-    return {"root": root["uuid"], "root_id": root["id"], "child": child["uuid"]}
+    return {
+        "root": root["uuid"],
+        "root_id": root["id"],
+        "child": child["uuid"],
+        "chainID": root["chainID"],
+    }
 
 
 def _scenario_navigator(env: dict[str, str], cp_result: dict) -> dict:
@@ -390,6 +395,101 @@ def _assert_clean_state(data_dir: Path) -> None:
         raise AssertionError(f"lifecycle outbox did not drain: {active}")
 
 
+def _scenario_operator_cutover(env: dict[str, str], data_dir: Path, cp_result: dict) -> dict:
+    """Exercise the installed operator surfaces against the disposable database."""
+    task_bin = shutil.which("task") or "task"
+    tools = {
+        "doctor": ROOT / "nautical_core" / "tools" / "nautical_doctor.py",
+        "query": ROOT / "nautical_core" / "tools" / "nautical_query.py",
+        "reconcile": ROOT / "nautical_core" / "tools" / "nautical_reconcile.py",
+        "queue": ROOT / "nautical_core" / "tools" / "nautical_queue_status.py",
+    }
+
+    def invoke(name: str, *args: str, allowed: tuple[int, ...] = (0,)) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(tools[name]), *args],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30.0,
+        )
+        if proc.returncode not in allowed:
+            raise AssertionError(
+                f"{name} failed ({proc.returncode}): stdout={proc.stdout!r} stderr={proc.stderr!r}"
+            )
+        try:
+            payload = json.loads((proc.stdout or "").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"{name} did not emit JSON: {proc.stdout!r}") from exc
+        if not isinstance(payload, dict):
+            raise AssertionError(f"{name} emitted a non-object payload: {payload!r}")
+        return payload
+
+    installation = invoke(
+        "doctor", "--taskdata", str(data_dir), "--task-bin", task_bin, "--json", "--installation-only"
+    )
+    if installation.get("status") != "ok":
+        raise AssertionError(f"installation Doctor was not healthy: {installation!r}")
+    full_doctor = invoke("doctor", "--taskdata", str(data_dir), "--task-bin", task_bin, "--json", allowed=(0, 1))
+    integrity = invoke("query", "integrity", "--all", allowed=(0, 3))
+    if integrity.get("status") not in {"ok", "found", "empty", "manual_review"}:
+        raise AssertionError(f"integrity query was unavailable: {integrity!r}")
+    chain_id = str(cp_result.get("chainID") or "")
+    if not chain_id:
+        raise AssertionError("cutover scenario lost the CP chain identity")
+    dry_run = invoke("reconcile", "--json", "--chain-id", chain_id, allowed=(0, 1, 2))
+    applied = invoke("reconcile", "--json", "--apply", "--chain-id", chain_id, allowed=(0, 1, 2))
+    queue = invoke("queue", "--taskdata", str(data_dir), "--json", allowed=(0, 1))
+    return {
+        "installation": installation.get("status"),
+        "doctor": full_doctor.get("status"),
+        "integrity": integrity.get("status"),
+        "reconcile_dry_run": dry_run.get("status"),
+        "reconcile_apply": applied.get("status"),
+        "queue": queue.get("status"),
+    }
+
+
+def _scenario_invalid_chain_isolation(env: dict[str, str], safe_result: dict) -> dict:
+    """An invalid unrelated chain must not suppress a safe scoped query."""
+    _task(
+        [
+            "rc.hooks=off",
+            "add",
+            "blackbox invalid chain",
+            "anchor:w:mon",
+            "chain:on",
+        ],
+        env,
+    )
+    safe_uuid = str(safe_result.get("child") or "")
+    if not safe_uuid:
+        raise AssertionError("safe scenario did not provide a child UUID")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "nautical_core" / "tools" / "nautical_query.py"),
+            "occurrences",
+            "--uuid",
+            safe_uuid,
+            "--from",
+            datetime.now(timezone.utc).date().isoformat(),
+            "--count",
+            "1",
+        ],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"safe scoped query failed: stdout={proc.stdout!r} stderr={proc.stderr!r}")
+    payload = json.loads((proc.stdout or "{}").strip() or "{}")
+    if payload.get("status") not in {"found", "empty"}:
+        raise AssertionError(f"invalid unrelated chain hid safe query: {payload!r}")
+    return {"invalid_added": True, "safe_status": payload.get("status")}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit a JSON result")
@@ -436,6 +536,8 @@ def main() -> int:
         scenarios["modify"] = _scenario_modify(env)
         scenarios["duplicate_guard"] = _scenario_duplicate_guard(env, scenarios["cp"])
         scenarios["no_nested_hooks"] = _scenario_no_nested_hooks(env, data_dir)
+        scenarios["invalid_chain_isolation"] = _scenario_invalid_chain_isolation(env, scenarios["preset"])
+        scenarios["operator_cutover"] = _scenario_operator_cutover(env, data_dir, scenarios["cp"])
         _assert_clean_state(data_dir)
         result["ok"] = True
     except Exception as exc:

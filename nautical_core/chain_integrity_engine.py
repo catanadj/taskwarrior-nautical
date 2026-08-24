@@ -113,7 +113,7 @@ class ChainIntegrityEngine:
         self,
         parent: TaskObservation,
         *,
-        existing_children: list[dict[str, object]],
+        existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
         hook: object,
         generation: object = None,
     ) -> object:

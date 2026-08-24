@@ -1462,7 +1462,7 @@ def _tw_get_cached(ref: str) -> str:
             cached, cache_chain_id = (
                 _lifecycle_read_service().lookup_short(short) if short else (None, "")
             )
-            if short and isinstance(cached, dict):
+            if short and hasattr(cached, "get"):
                 _diag_count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
             if short and cache_chain_id:
@@ -1779,7 +1779,7 @@ def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = N
     entry = task_obj.get("entry")
     if short and entry:
         _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
-    return task_obj
+    return task_obj.to_mapping()
 
 
 def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
@@ -2217,7 +2217,7 @@ def _end_summary_chain_id_row(actual_current: dict) -> str:
 
 
 def _end_summary_sorted_chain(chain_id: str, actual_current: dict) -> list[dict]:
-    chain = tw_export_chain_required(actual_current)
+    chain = [row.to_mapping() for row in tw_export_chain_required(actual_current)]
     if actual_current and chain:
         for i, task in enumerate(chain):
             if task.get("uuid") == actual_current.get("uuid"):
@@ -2440,13 +2440,12 @@ def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     with_links = [
         (core.coerce_int(row.get("link"), None), row)
         for row in rows
-        if isinstance(row, dict)
     ]
     with_links = [(link, row) for link, row in with_links if link is not None]
     if not with_links:
         return None
     with_links.sort(key=lambda item: item[0])
-    return dict(with_links[0 if direction == "first" else -1][1])
+    return with_links[0 if direction == "first" else -1][1].to_mapping()
 
 # ------------------------------------------------------------------------------
 # Main

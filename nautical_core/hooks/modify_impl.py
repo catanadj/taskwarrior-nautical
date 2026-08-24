@@ -1772,7 +1772,12 @@ def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = N
         return None
     short = uuid_str[:8]
     service = _lifecycle_read_service()
-    task_obj = service.seed_lookup_task(dict(task), short_uuid=short)
+    task_codec = _module("task_codec")
+    observation = task_codec.DEFAULT_TASK_CODEC.decode_row(
+        task,
+        source_query="on-modify lookup seed",
+    )
+    task_obj = service.seed_lookup_task(observation, short_uuid=short)
     requested_short = str(lookup_short or "").strip()
     if requested_short and requested_short != short:
         task_obj = service.seed_lookup_task(task_obj, short_uuid=requested_short)

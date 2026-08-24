@@ -207,9 +207,10 @@ class LifecycleReadService:
                 return len(self._cache_store.rows) if self._cache_store.chain_id == chain_id else 0
         return len(self.cached_chain_rows(chain_id) or [])
 
-    def seed_lookup_task(self, task: TaskRow | Mapping[str, Any], *, short_uuid: str) -> TaskRow:
+    def seed_lookup_task(self, task: TaskRow, *, short_uuid: str) -> TaskRow:
         """Merge one exported task into the service-owned lookup indexes."""
-        task = _observation(task, source_query="lifecycle lookup seed")
+        if not isinstance(task, TaskObservation):
+            raise TypeError("lifecycle lookup seed requires a TaskObservation")
         if self._cache_store is None:
             return task
         uuid_value = str(task.get("uuid") or "").strip()

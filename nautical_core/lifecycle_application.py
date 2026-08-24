@@ -889,9 +889,9 @@ class LifecycleApplicationService:
                 or child_payload is None
                 or link_payload is None
             ):
-                outcome = self._manual_review(record, "outbox record is invalid for batched lifecycle execution")
-                outcomes.append(outcome)
-                report_outcome(record, outcome)
+                review = self._manual_review(record, "outbox record is invalid for batched lifecycle execution")
+                outcomes.append(review)
+                report_outcome(record, review)
                 continue
             states.append(_BatchState(record, plan, child_payload, link_payload, record.stage, []))
 

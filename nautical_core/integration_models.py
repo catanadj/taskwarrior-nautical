@@ -170,7 +170,7 @@ class FailureEvidence:
         object.__setattr__(self, "detail", str(self.detail or "").strip())
 
 
-T = TypeVar("T")
+T = TypeVar("T", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)

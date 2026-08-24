@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re
 from types import MappingProxyType
-from typing import Mapping, Protocol, cast
+from typing import Mapping, Protocol, Sequence, cast
 from uuid import UUID
 
 from .integration_models import Absent, FailureEvidence, Found, TaskCommandResult, TaskRead, Unavailable
@@ -153,8 +153,8 @@ class _Repository(Protocol):
         self,
         *,
         identity: str,
-        filters: tuple[str, ...],
-        statuses: tuple[str, ...],
+        filters: Sequence[str],
+        statuses: Sequence[str],
         complete_chain_history: bool = False,
         refresh: bool = False,
     ) -> TaskRead[object]: ...

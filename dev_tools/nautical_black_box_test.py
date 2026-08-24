@@ -551,7 +551,7 @@ def _scenario_invalid_chain_isolation(env: dict[str, str], safe_result: dict) ->
 
 
 def _scenario_recovery_paths(env: dict[str, str]) -> dict:
-    """Exercise deletion, hookless completion recovery, and review reporting."""
+    """Exercise deletion, hookless completion, and multi-hop recovery."""
     delete_description = "blackbox deletion"
     _task(["add", delete_description, "anchor:w:mon", "due:today"], env)
     deleted = _one(env, f"description:{delete_description}", "status:pending")
@@ -610,10 +610,43 @@ def _scenario_recovery_paths(env: dict[str, str]) -> dict:
     after = _export(env, f"chainID:{recovery_chain}", "link:2", "status.not:deleted")
     if len(after) != 1:
         raise AssertionError(f"reconcile did not recover the hookless completion: {after!r}")
+
+    # Force two successive expired completions so the installed-layout test
+    # proves reconcile advances more than one missing successor.
+    past_due = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y%m%dT090000Z")
+    current = after[0]
+    for expected_link in (3, 4):
+        current_uuid = str(current.get("uuid") or "").strip()
+        _task(["rc.hooks=off", f"uuid:{current_uuid}", "done"], env)
+        _task(["rc.hooks=off", f"uuid:{current_uuid}", "modify", f"due:{past_due}"], env)
+        hop = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"),
+                "--json",
+                "--apply",
+                "--chain-id",
+                recovery_chain,
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30.0,
+        )
+        if hop.returncode not in (0, 1, 2):
+            raise AssertionError(f"multi-hop reconcile failed at link {expected_link - 1}: {hop.stderr!r}")
+        recovered = _export(env, f"chainID:{recovery_chain}", f"link:{expected_link}", "status.not:deleted")
+        if len(recovered) != 1:
+            raise AssertionError(
+                f"multi-hop reconcile did not recover link {expected_link}: {recovered!r}"
+            )
+        current = recovered[0]
     return {
         "deleted_chain_off": True,
         "partial_failure_exit": failed_reconcile.returncode,
         "recovered_child": after[0].get("uuid"),
+        "multi_hop_links": (3, 4),
+        "multi_hop_final_child": current.get("uuid"),
         "reconcile_exit": reconcile.returncode,
     }
 

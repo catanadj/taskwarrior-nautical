@@ -793,6 +793,13 @@ symbols. Benchmark counters and `NAUTICAL_BENCH_STATS_FILE` are retained as
 documented diagnostic contracts, and no shadow queue/query builder or stale
 environment toggle was found. No deletion was justified by this audit.
 
+Termux verification (2026-08-25, supported device 1): the report is valid and
+the queue/reconcile workflows pass (`queue_drain` median 1.13 s and reconcile
+apply median 5.05 s). The enforced report still flags cold imports,
+`next_after`, warm hint/cache/outbox paths, and seasonal lookup against the
+generic micro-budgets. Those device-sensitive checks remain open; no failure
+was observed in the queue/reconcile workflow budgets themselves.
+
 - [x] Remove broad queue prefetch/postverification, per-plan service
   construction, redundant postverification, and obsolete SQL helpers after all
   consumers use the new owners. Bounded serial handling remains only where the

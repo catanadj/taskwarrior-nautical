@@ -11,7 +11,7 @@ from functools import lru_cache, wraps
 from types import MappingProxyType
 from typing import Any, TypedDict
 
-from nautical_core import cache_support, config_schema, config_support, warnings
+from nautical_core import cache_support, config_schema, config_support, diagnostic_warnings
 
 _tomllib: Any = None
 try:
@@ -107,7 +107,7 @@ def _warn_env_config_missing(env_path: str) -> None:
 
 
 def _warn_missing_toml_parser(config_path: str) -> None:
-    warnings.warn_missing_toml_parser(
+    diagnostic_warnings.warn_missing_toml_parser(
         config_path,
         warn_once_per_day=warn_once_per_day,
         warn_once_per_day_any=warn_once_per_day_any,
@@ -115,7 +115,7 @@ def _warn_missing_toml_parser(config_path: str) -> None:
 
 
 def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
-    warnings.warn_toml_parse_error(
+    diagnostic_warnings.warn_toml_parse_error(
         config_path,
         err,
         warn_once_per_day=warn_once_per_day,
@@ -189,7 +189,7 @@ def nautical_cache_dir() -> str:
 
 
 def warn_once_per_day(key: str, message: str) -> None:
-    warnings.warn_once_per_day(
+    diagnostic_warnings.warn_once_per_day(
         key,
         message,
         cache_dir=nautical_cache_dir(),
@@ -198,7 +198,7 @@ def warn_once_per_day(key: str, message: str) -> None:
 
 
 def warn_once_per_day_any(key: str, message: str) -> None:
-    warnings.warn_once_per_day(
+    diagnostic_warnings.warn_once_per_day(
         key,
         message,
         cache_dir=nautical_cache_dir(),
@@ -207,7 +207,7 @@ def warn_once_per_day_any(key: str, message: str) -> None:
 
 
 def warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0) -> None:
-    warnings.warn_rate_limited_any(
+    diagnostic_warnings.warn_rate_limited_any(
         key,
         message,
         cache_dir=nautical_cache_dir(),

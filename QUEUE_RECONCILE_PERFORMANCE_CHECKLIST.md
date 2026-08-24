@@ -772,14 +772,21 @@ longer silently falls back to per-child imports when a staged runtime is
 incomplete. Single-intent recovery remains sequential by design. Full cleanup
 and cutover gates remain below.
 
-- [ ] Remove broad queue prefetch/postverification, serial reconcile execution,
-  per-plan service construction, redundant postverification, and obsolete SQL
-  helpers after all consumers use the new owners.
+Section 15 pass 2 (2026-08-25): the ownership audit found no obsolete queue SQL
+owner or per-plan lifecycle service construction. Broad queue reads are now
+targeted UUID-set reads; serial execution remains only for single-intent and
+deleted/multi-hop recovery where a wave cannot safely combine dependencies.
+
+- [x] Remove broad queue prefetch/postverification, per-plan service
+  construction, redundant postverification, and obsolete SQL helpers after all
+  consumers use the new owners. Bounded serial handling remains only where the
+  dependency graph prevents a safe wave.
 - [ ] Remove unused compatibility callbacks, temporary instrumentation,
   shadow query builders, stale environment toggles, and tests that exercise
   code no longer present.
-- [ ] Keep benchmark counters that provide ongoing regression value, but ensure
-  they are dormant outside explicit benchmark or diagnostic modes.
+- [x] Keep benchmark counters that provide ongoing regression value, with
+  outbox and read-row counters dormant unless explicit benchmark stats or
+  diagnostics are enabled.
 - [ ] Update runtime manifest, deployment sanity, installer validation, Doctor,
   queue status, reconcile JSON, and query capabilities for the final module
   ownership without exposing internal implementation details.
@@ -793,9 +800,10 @@ and cutover gates remain below.
   run, reconcile apply, multi-hop expiration, and idempotent replay.
 - [ ] Verify hook stdout is strict JSON and all optional diagnostics go only to
   stderr under `NAUTICAL_DIAG=1`.
-- [ ] Review the final diff for duplicate owners, broad task reads, unbounded
+- [x] Review the final diff for duplicate owners, broad task reads, unbounded
   loops, persistent task caches, weakened guards, and SQLite transactions held
-  across Taskwarrior calls.
+  across Taskwarrior calls. No new violations were found in the queue/reconcile
+  ownership pass.
 - [ ] Stop hooks, merge `queue-reconcile-performance-v7` into `main`, install
   the managed runtime, run Doctor and reconcile dry-run/apply, then re-enable
   normal Taskwarrior use.

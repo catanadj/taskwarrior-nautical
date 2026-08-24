@@ -145,9 +145,12 @@ def _bench_task_codec(rounds: int) -> float:
 
 
 def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
-    """Measure indexed reuse after one decode of a broad task snapshot."""
+    """Measure indexed and graph reuse after one decode of a broad snapshot."""
     from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
     from nautical_core.task_read_repository import AuthoritativeTaskSnapshot, TaskQueryKind, TaskSnapshotScope
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+    from nautical_core.chain_invariants import evaluate_invariants
 
     rows = [
         {
@@ -170,6 +173,17 @@ def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
     result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.0)
     scope = TaskSnapshotScope(TaskQueryKind.BROAD, "perf-snapshot", ("pending",))
     snapshot = AuthoritativeTaskSnapshot(scope, observations, result)
+    graph_snapshot = ChainSnapshot(
+        "perf-snapshot-graph",
+        SnapshotCoverage.COMPLETE,
+        "perf.snapshot",
+        tuple(
+            ChainNode.from_observation(row)
+            for row in observations
+        ),
+        complete_chain_history=True,
+    )
+    graph = ChainGraph.from_snapshot(graph_snapshot)
     started = time.perf_counter()
     for _ in range(max(1, int(rounds))):
         for index in range(0, len(observations), max(1, len(observations) // 20)):
@@ -186,6 +200,15 @@ def _bench_task_snapshot_reuse(rounds: int, row_count: int = 1000) -> float:
                 int(getattr(link_value, "value", link_value)),
             ):
                 raise RuntimeError("snapshot slot index lost a decoded row")
+        findings = evaluate_invariants(graph)
+        if findings:
+            raise RuntimeError(f"snapshot graph reuse produced findings: {findings[0].reason_code}")
+        observation_by_uuid = {
+            str(getattr(row.field("uuid").value, "value", row.field("uuid").value)): row
+            for row in observations
+        }
+        if any(node.observation is not observation_by_uuid.get(node.task_uuid) for node in graph.nodes):
+            raise RuntimeError("chain graph did not retain decoded observations")
     if any(snapshot.uuid_matches(str(getattr(row.field("uuid").value, "value", "")))[0] is not row for row in observations):
         raise RuntimeError("snapshot indexes did not reuse immutable observations")
     return time.perf_counter() - started

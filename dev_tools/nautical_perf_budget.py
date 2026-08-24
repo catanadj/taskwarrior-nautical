@@ -1260,6 +1260,32 @@ def _merge_task_timing_stats(*stats: dict[str, float]) -> dict[str, float]:
     return merged
 
 
+def _compact_reconcile_report(report: dict) -> dict:
+    """Keep the performance-relevant fields from one reconcile report."""
+    return {
+        key: report.get(key)
+        for key in (
+            "status",
+            "mode",
+            "export_calls",
+            "export_rows",
+            "task_command_calls",
+            "task_command_attempts",
+            "task_command_duration",
+            "task_command_by_purpose",
+            "task_command_budget_exceeded",
+            "integrity_seconds",
+            "integrity_application_seconds",
+        )
+        if key in report
+    }
+
+
+def _attach_reconcile_reports(result: dict, reports: list[dict]) -> None:
+    """Attach reconcile command, export, and phase metrics to a result."""
+    result["reconcile_reports"] = reports
+
+
 def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget: dict) -> None:
     """Attach and enforce per-workflow Taskwarrior call-count budgets."""
     if not isinstance(budget, dict) or not samples:
@@ -2093,6 +2119,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             raise RuntimeError(f"reconcile fixture import failed: {(import_proc.stderr or import_proc.stdout or '').strip()}")
         reconcile_cmd = [sys.executable, str(ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"), "--json"]
         reconcile_samples = []
+        reconcile_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=reconcile_env, timeout=30.0)
@@ -2111,13 +2138,15 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             ):
                 raise RuntimeError(f"healthy reconcile workflow bounded snapshot budget failed: {report!r}")
             for purpose, count in (report.get("task_command_by_purpose") or {}).items():
-                reconcile_call_purposes[str(purpose)] = max(
+                    reconcile_call_purposes[str(purpose)] = max(
                     reconcile_call_purposes.get(str(purpose), 0), int(count)
                 )
+            reconcile_reports.append(_compact_reconcile_report(report))
             reconcile_samples.append(time.perf_counter() - started)
         results["workflow_reconcile"] = _measure_workflow(
             "workflow_reconcile", reconcile_samples, float(budgets.get("workflow_reconcile", 3.0))
         )
+        _attach_reconcile_reports(results["workflow_reconcile"], reconcile_reports)
 
         # Keep an empty audit as a first-class workload.  This catches startup,
         # snapshot, and report overhead without accidentally measuring stale
@@ -2126,6 +2155,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         empty_data.mkdir()
         empty_env = dict(base_env, TASKDATA=str(empty_data))
         empty_samples = []
+        empty_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=empty_env, timeout=30.0)
@@ -2143,12 +2173,14 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 raise RuntimeError("empty reconcile workflow exceeded its bounded snapshot budget")
             if float(report.get("integrity_seconds", -1.0)) < 0.0:
                 raise RuntimeError("empty reconcile workflow omitted integrity timing")
+            empty_reports.append(_compact_reconcile_report(report))
             empty_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_empty"] = _measure_workflow(
             "workflow_reconcile_empty",
             empty_samples,
             float(budgets.get("workflow_reconcile_empty", budgets.get("workflow_reconcile", 3.0))),
         )
+        _attach_reconcile_reports(results["workflow_reconcile_empty"], empty_reports)
 
         # Candidate-heavy audits must prove that the benchmark contains
         # actionable integrity evidence.  A zero-candidate run would only
@@ -2184,6 +2216,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 f"{(candidate_import.stderr or candidate_import.stdout or '').strip()}"
             )
         candidate_samples = []
+        candidate_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=candidate_env, timeout=30.0)
@@ -2198,12 +2231,14 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             summary = report if isinstance(report, dict) else {}
             if int(summary.get("candidates", 0)) <= 0 and not summary.get("plans"):
                 raise RuntimeError("candidate reconcile workflow produced no integrity candidates or plans")
+            candidate_reports.append(_compact_reconcile_report(summary))
             candidate_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_candidates"] = _measure_workflow(
             "workflow_reconcile_candidates",
             candidate_samples,
             float(budgets.get("workflow_reconcile_candidates", budgets.get("workflow_reconcile", 3.0))),
         )
+        _attach_reconcile_reports(results["workflow_reconcile_candidates"], candidate_reports)
 
         candidate_apply_data = root / "reconcile-candidates-apply"
         candidate_apply_data.mkdir()
@@ -2245,6 +2280,10 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             [time.perf_counter() - apply_started],
             float(budgets.get("workflow_reconcile_candidates_apply", 12.0)),
         )
+        _attach_reconcile_reports(
+            results["workflow_reconcile_candidates_apply"],
+            [_compact_reconcile_report(apply_report)],
+        )
 
         long_data = root / "reconcile-long-history"
         long_data.mkdir()
@@ -2281,6 +2320,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 f"{(long_import.stderr or long_import.stdout or '').strip()}"
             )
         long_samples = []
+        long_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=long_env, timeout=60.0)
@@ -2300,12 +2340,14 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 or float(report.get("integrity_seconds", -1.0)) < 0.0
             ):
                 raise RuntimeError("long reconcile workflow exceeded its single-snapshot row budget")
+            long_reports.append(_compact_reconcile_report(report))
             long_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_long_history"] = _measure_workflow(
             "workflow_reconcile_long_history",
             long_samples,
             float(budgets.get("workflow_reconcile_long_history", budgets.get("workflow_reconcile", 3.0))),
         )
+        _attach_reconcile_reports(results["workflow_reconcile_long_history"], long_reports)
 
         corrupt_data = root / "reconcile-corrupted"
         corrupt_data.mkdir()
@@ -2343,6 +2385,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 f"{(corrupt_import.stderr or corrupt_import.stdout or '').strip()}"
             )
         corrupt_samples = []
+        corrupt_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=corrupt_env, timeout=30.0)
@@ -2357,12 +2400,14 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             audit = report.get("integrity_audit") if isinstance(report, dict) else None
             if not isinstance(audit, dict) or not audit.get("findings"):
                 raise RuntimeError("corrupted reconcile workflow hid its integrity findings")
+            corrupt_reports.append(_compact_reconcile_report(report))
             corrupt_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_corrupted"] = _measure_workflow(
             "workflow_reconcile_corrupted",
             corrupt_samples,
             float(budgets.get("workflow_reconcile_corrupted", budgets.get("workflow_reconcile", 3.0))),
         )
+        _attach_reconcile_reports(results["workflow_reconcile_corrupted"], corrupt_reports)
 
         mixed_data = root / "reconcile-mixed"
         mixed_data.mkdir()
@@ -2430,6 +2475,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 f"{(mixed_import.stderr or mixed_import.stdout or '').strip()}"
             )
         mixed_samples = []
+        mixed_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
             proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=mixed_env, timeout=30.0)
@@ -2442,12 +2488,14 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             audit = report.get("integrity_audit") if isinstance(report, dict) else None
             if not isinstance(audit, dict) or not audit.get("findings") or int(report.get("candidates", 0)) <= 0:
                 raise RuntimeError("mixed reconcile workflow did not preserve both candidate and integrity evidence")
+            mixed_reports.append(_compact_reconcile_report(report))
             mixed_samples.append(time.perf_counter() - started)
         results["workflow_reconcile_mixed"] = _measure_workflow(
             "workflow_reconcile_mixed",
             mixed_samples,
             float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
         )
+        _attach_reconcile_reports(results["workflow_reconcile_mixed"], mixed_reports)
         RESOURCE_DETAILS["reconcile_task_call_purposes"] = reconcile_call_purposes
         return results
 

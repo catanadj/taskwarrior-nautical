@@ -675,8 +675,9 @@ the final outbox/task snapshots, not merely process exit codes.
 
 Pass 3 verification: the outbox initialization regression now opens one fresh
 database from two independent Python processes as well as four threads, and
-asserts both return typed success. Queue-vs-reconcile, simultaneous reconcile,
-lease-owner, and user-edit race matrices remain open.
+asserts both return typed success. A two-process claim race now asserts exactly
+one lease owner for one intent. Queue-vs-reconcile, simultaneous reconcile,
+lease-expiry/stale-owner, and user-edit race matrices remain open.
 - [ ] Shuffled and repeated failure campaigns converge to the same durable
   state and typed outcomes.
 

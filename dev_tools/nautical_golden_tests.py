@@ -36111,6 +36111,49 @@ def test_lifecycle_application_stage_failure_matrix_resumes_idempotently():
                    f"{label}: child mutation was repeated unsafely: {mutations.calls}")
 
 
+def test_lifecycle_outbox_two_process_claims_are_exclusive():
+    """Two independent drain workers cannot claim the same lifecycle intent."""
+    import tempfile
+    from pathlib import Path
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    parent_uuid = "00000000-0000-4000-8000-000000000911"
+    child_uuid = "00000000-0000-4000-8000-000000000912"
+    plan = _plan_from_values(
+        identity=LifecycleIdentity("claim-race", parent_uuid, 1, 2, LifecycleEvent.COMPLETE),
+        action=LifecycleAction.SPAWN_CHILD,
+        parent_guard=ParentGuard("completed", "on", "claim-race", 1, "rf-claim-race", "20260101T000000Z"),
+        child_payload={"uuid": child_uuid, "chainID": "claim-race", "link": 2, "prevLink": parent_uuid[:8]},
+        parent_patch={"nextLink": child_uuid[:8]},
+        expected_postconditions=("child_present", "parent_linked", "verified"),
+    )
+    worker = (
+        "import json, sys; from pathlib import Path; "
+        "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
+        "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
+        "result, records = repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1); "
+        "print(json.dumps({'kind': result.kind.value, 'count': len(records)}), flush=True)"
+    )
+    with tempfile.TemporaryDirectory(prefix="nautical-claim-race-") as td:
+        repo = LifecycleOutboxRepository(Path(td))
+        staged = repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        expect(staged.ok, f"claim race fixture did not stage: {staged}")
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", worker, td, f"worker-{idx}"],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for idx in range(2)
+        ]
+        results = [process.communicate(timeout=10) for process in processes]
+        payloads = [json.loads(stdout.strip()) for _process, (stdout, _stderr) in zip(processes, results)]
+        expect(sorted(item["count"] for item in payloads) == [0, 1], f"claim race duplicated work: {payloads}")
+
+
 def test_lifecycle_configuration_drift_blocks_mutation():
     """A plan persisted under one configuration cannot mutate under another."""
     import tempfile
@@ -36567,6 +36610,7 @@ TESTS.extend([
     test_lifecycle_application_conflict_and_retry_budget_outcomes,
     test_lifecycle_application_outbox_faults_are_retryable,
     test_lifecycle_application_stage_failure_matrix_resumes_idempotently,
+    test_lifecycle_outbox_two_process_claims_are_exclusive,
     test_lifecycle_configuration_drift_blocks_mutation,
     test_lifecycle_application_renews_batch_leases_before_mutation,
     test_lifecycle_application_idempotency_and_duplicate_staging,

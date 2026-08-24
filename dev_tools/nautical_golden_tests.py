@@ -8740,7 +8740,7 @@ def test_doctor_reports_healthy_installation():
         _write_fake_task_for_doctor(fake_task)
         rows = [
             {
-                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "uuid": "aaaaaaaa-0000-4000-8000-000000000901",
                 "status": "completed",
                 "chain": "on",
                 "cp": "1d",
@@ -8753,7 +8753,7 @@ def test_doctor_reports_healthy_installation():
                 "nextLink": "bbbbbbbb",
             },
             {
-                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "uuid": "bbbbbbbb-0000-4000-8000-000000000902",
                 "status": "pending",
                 "chain": "on",
                 "cp": "1d",
@@ -9314,7 +9314,7 @@ def test_doctor_discovers_effective_taskdata_directory():
         _write_fake_task_for_doctor(fake_task)
         rows = [
             {
-                "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "uuid": "aaaaaaaa-0000-4000-8000-000000000903",
                 "status": "completed",
                 "chain": "on",
                 "cp": "1d",
@@ -9323,7 +9323,7 @@ def test_doctor_discovers_effective_taskdata_directory():
                 "nextLink": "bbbbbbbb",
             },
             {
-                "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "uuid": "bbbbbbbb-0000-4000-8000-000000000904",
                 "status": "pending",
                 "chain": "on",
                 "cp": "1d",
@@ -13546,10 +13546,13 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
         },
         timeout_s=20.0,
     )
-    expect(finite_proc.returncode == 0, f"finite large interval was rejected: {finite_proc.stderr!r}")
     expect(
-        "No further matching occurrences are representable" in finite_proc.stderr,
-        "finite large interval did not explain its date horizon",
+        finite_proc.returncode != 0,
+        "an unrepresentable finite conjunction must be rejected rather than creating an incomplete task",
+    )
+    expect(
+        "No matching anchor occurrences found" in finite_proc.stderr,
+        f"finite large interval rejection was not actionable: {finite_proc.stderr!r}",
     )
 
     hook = _find_hook_file("on-add.nautical")

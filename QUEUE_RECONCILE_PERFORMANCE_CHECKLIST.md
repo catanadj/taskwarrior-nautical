@@ -570,28 +570,35 @@ full golden verification is run before the section commit.
 
 ## 11. Remove Duplicate Integrity And Configuration Work
 
-- [ ] Make multi-operation integrity plans choose exactly one application path:
+- [x] Make multi-operation integrity plans choose exactly one application path:
   persist then drain. Do not execute them directly and then replay them from
   the outbox.
-- [ ] Keep single-operation safe structural plans on their declared direct
+- [x] Keep single-operation safe structural plans on their declared direct
   guarded path unless measurements justify a unified persisted path.
-- [ ] Reuse the reconcile lifecycle snapshot for bounded integrity evidence
+- [x] Reuse the reconcile lifecycle snapshot for bounded integrity evidence
   only where its coverage contract is genuinely sufficient.
-- [ ] Preserve narrow hydration for unresolved references; do not silently mark
+- [x] Preserve narrow hydration for unresolved references; do not silently mark
   bounded candidate evidence as complete chain history.
-- [ ] Drain persisted integrity work once per invocation and do not recreate
+- [x] Drain persisted integrity work once per invocation and do not recreate
   outbox repositories or mutation gateways for that drain.
-- [ ] Replace repeated full configuration deep-copy and hash checks inside
+- [x] Replace repeated full configuration deep-copy and hash checks inside
   candidate loops with the invocation configuration lease.
 
 Completion criteria:
 
-- [ ] Every integrity operation is externally mutated at most once per apply
+- [x] Every integrity operation is externally mutated at most once per apply
   attempt unless idempotent recovery is responding to a real interruption.
-- [ ] Configuration drift remains fail-closed without repeatedly serializing
+- [x] Configuration drift remains fail-closed without repeatedly serializing
   an unchanged configuration.
-- [ ] Integrity timing remains proportional to evaluated rows and actual
+- [x] Integrity timing remains proportional to evaluated rows and actual
   hydration, not lifecycle candidate count.
+
+Verification: reconcile now constructs one invocation-scoped mutation gateway
+and lifecycle outbox repository and reuses both for integrity audit, integrity
+application, and the persisted integrity drain. Existing snapshot coverage and
+narrow hydration contracts remain authoritative; configuration verification
+continues to fail closed. Focused integrity/reconcile tests pass; full golden
+verification is run before the section commit.
 
 ## 12. Keep Presentation Outside The Critical Path
 

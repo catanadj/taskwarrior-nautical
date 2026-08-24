@@ -887,13 +887,14 @@ def _integrity_request_factory(operation: Any) -> Any:
     return MutationRequest.metadata_repair(guard, patch, expected=expected)
 
 
-def _drain_integrity_work() -> tuple[Any, ...]:
+def _drain_integrity_work(*, outbox_repository: Any = None, executor: Any = None) -> tuple[Any, ...]:
     """Drain only integrity work through the chain engine's typed boundary."""
     if _UNIT_OF_WORK is None:
         raise RuntimeError("integrity drain requires an integration unit of work")
     from nautical_core.chain_integrity_engine import ChainIntegrityEngine
     from nautical_core.chain_snapshot import ChainSnapshotService
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 
     configuration = _UNIT_OF_WORK.context.configuration
     engine = ChainIntegrityEngine(
@@ -901,15 +902,17 @@ def _drain_integrity_work() -> tuple[Any, ...]:
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
     )
+    outbox = outbox_repository or LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
+    mutation_gateway = executor or TaskwarriorMutationService(_UNIT_OF_WORK)
     return engine.drain(
-        LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+        outbox,
         owner=f"reconcile-integrity-{os.getpid()}",
-        executor=TaskwarriorMutationService(_UNIT_OF_WORK),
+        executor=mutation_gateway,
         request_factory=_integrity_request_factory,
     )
 
 
-def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
+def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repository: Any = None) -> Any:
     """Audit the authoritative lifecycle export without issuing another export."""
     if _UNIT_OF_WORK is None:
         raise RuntimeError("integrity audit requires an integration unit of work")
@@ -941,9 +944,10 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...]) -> Any:
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
     )
+    outbox = outbox_repository or LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
     return engine, engine.audit_snapshot(
         snapshot,
-        outbox_repository=LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+        outbox_repository=outbox,
         mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
     )
 
@@ -1580,10 +1584,12 @@ def main(
     from nautical_core.lifecycle_application import LifecycleApplicationService
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+    mutation_gateway = TaskwarriorMutationService(_UNIT_OF_WORK)
+    integrity_outbox = LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
     lifecycle_application = LifecycleApplicationService(
         unit_of_work=_UNIT_OF_WORK,
-        mutations=TaskwarriorMutationService(_UNIT_OF_WORK),
-        outbox=LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+        mutations=mutation_gateway,
+        outbox=integrity_outbox,
         owner=f"reconcile-{os.getpid()}",
         lease_seconds=120.0,
     )
@@ -1606,11 +1612,10 @@ def main(
     integrity_seconds = 0.0
     integrity_application_seconds = 0.0
     try:
-        from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
         if snapshot._rows is not None:
             integrity_started = time.perf_counter()
             integrity_engine, integrity_audit_result = _audit_reconcile_integrity(
-                tuple(snapshot._rows)
+                tuple(snapshot._rows), outbox_repository=integrity_outbox,
             )
             integrity_seconds = time.perf_counter() - integrity_started
         if integrity_audit_result is not None and integrity_audit_result.status.value == "unavailable":
@@ -1620,9 +1625,9 @@ def main(
             application_started = time.perf_counter()
             integrity_application = integrity_engine.apply(
                 integrity_audit_result,
-                executor=TaskwarriorMutationService(_UNIT_OF_WORK),
+                executor=mutation_gateway,
                 request_factory=_integrity_request_factory,
-                outbox_repository=LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata),
+                outbox_repository=integrity_outbox,
                 owner=f"reconcile-integrity-{os.getpid()}",
             )
             integrity_application_results = integrity_application.applications
@@ -1647,7 +1652,10 @@ def main(
     integrity_drain_results: tuple[Any, ...] = ()
     if args.apply and configuration_status == "valid":
         try:
-            integrity_drain_results = _drain_integrity_work()
+            integrity_drain_results = _drain_integrity_work(
+                outbox_repository=integrity_outbox,
+                executor=mutation_gateway,
+            )
         except Exception as exc:
             configuration_status = "unavailable"
             configuration_drift_reason = f"integrity drain unavailable: {type(exc).__name__}: {exc}"

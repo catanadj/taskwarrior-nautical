@@ -698,8 +698,12 @@ stress suites.
 
 ## 14. Set And Enforce Performance Budgets
 
-- [ ] Establish direct-Taskwarrior desktop budgets after the truthful benchmark
-  pass; do not derive them from the failure-injection wrapper.
+- [x] Establish direct-Taskwarrior desktop budgets after the truthful benchmark
+  pass; do not derive them from the failure-injection wrapper. Evidence:
+  `perf.desktop.section14.json` (extended desktop run, 2026-08-24). The
+  wall-time budgets pass, while the purpose-specific broad-read sub-budgets
+  remain intentionally open (11 reads for healthy drain and 27 for partial
+  recovery versus the provisional target of three).
 - [ ] Establish separate Termux budgets from both devices using identical
   workload manifests and Taskwarrior-version metadata.
 - [ ] Require an 8-intent healthy drain to perform no full-history export and
@@ -707,7 +711,8 @@ stress suites.
 - [ ] Target a normal 8-intent drain budget of 19 Taskwarrior calls once
   guarded compensation closes the parent-change race: 16 mutations and three
   targeted phase snapshots.
-- [ ] Preserve zero Taskwarrior calls for acknowledged replay.
+- [x] Preserve zero Taskwarrior calls for acknowledged replay. The desktop
+  report records zero calls for all `workflow_queue_drain_idempotent` samples.
 - [ ] Establish a separate partial-recovery call budget that counts only work
   made necessary by the injected failure.
 - [ ] Require 32 independent one-hop reconcile candidates to use no more than

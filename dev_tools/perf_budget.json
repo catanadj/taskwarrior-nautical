@@ -100,6 +100,8 @@
       "workflow_ordinary_modify": 2.0,
       "workflow_expiration_recovery": 2.0,
       "workflow_queue_drain": 3.5,
+      "workflow_queue_drain_one_intent": 3.5,
+      "workflow_queue_drain_large_history": 10.0,
       "workflow_queue_drain_partial_recovery": 6.0,
       "workflow_reconcile": 3.0,
       "workflow_reconcile_empty": 3.0,
@@ -137,6 +139,8 @@
       }
     },
     "reconcile_candidate_chains": 32,
+    "reconcile_candidate_apply_counts": [1, 8, 32, 200],
+    "queue_background_history_rows": 5000,
     "reconcile_long_history_rows": 2048,
     "reconcile_corrupted_chains": 16,
     "reconcile_mixed_healthy_rows": 8,

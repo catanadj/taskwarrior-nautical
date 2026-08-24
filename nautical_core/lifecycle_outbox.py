@@ -298,8 +298,16 @@ class LifecycleOutboxRepository:
         self.connect_timeout = max(0.1, float(connect_timeout))
         self._clock = clock
         self._schema_identity: tuple[int, int, int] | None = None
+        self._benchmark_metrics: dict[str, float] | None = (
+            {} if os.environ.get("NAUTICAL_BENCH_STATS_FILE") else None
+        )
+
+    def _metric(self, key: str, value: float = 1.0) -> None:
+        if self._benchmark_metrics is not None:
+            self._benchmark_metrics[key] = self._benchmark_metrics.get(key, 0.0) + float(value)
 
     def _connect(self) -> sqlite3.Connection:
+        self._metric("outbox_connections")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.path.parent, 0o700)
         conn = sqlite3.connect(str(self.path), timeout=self.connect_timeout)
@@ -346,6 +354,7 @@ class LifecycleOutboxRepository:
                 last = exc
                 if not _busy(exc) or attempt + 1 >= _INIT_RETRIES:
                     return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
+                self._metric("outbox_busy_retries")
                 time.sleep(min(_MAX_INIT_BACKOFF_S, _INIT_BACKOFF_S * (2**attempt)))
             except Exception as exc:
                 return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
@@ -444,6 +453,8 @@ class LifecycleOutboxRepository:
 
     def _with_connection(self, operation: Callable[[sqlite3.Connection], OutboxResult]) -> OutboxResult:
         conn: sqlite3.Connection | None = None
+        started = time.perf_counter()
+        self._metric("outbox_operation_scopes")
         try:
             conn = self._connect()
             self._initialize(conn)
@@ -451,12 +462,15 @@ class LifecycleOutboxRepository:
             self._secure_state_files()
             return result
         except sqlite3.OperationalError as exc:
+            if _busy(exc):
+                self._metric("outbox_busy_failures")
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
         except LifecycleOutboxError as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
         except Exception as exc:
             return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}")
         finally:
+            self._metric("outbox_operation_seconds", time.perf_counter() - started)
             if conn is not None:
                 conn.close()
 
@@ -697,6 +711,7 @@ class LifecycleOutboxRepository:
         return self._with_connection(operation)
 
     def claim_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
+        self._metric("outbox_lease_claims")
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and limit"), ()
@@ -767,6 +782,7 @@ class LifecycleOutboxRepository:
                 conn.close()
 
     def claim_integrity_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[Any, ...]]:
+        self._metric("outbox_lease_claims")
         """Claim integrity work without exposing it to lifecycle executors."""
         from .integrity_outbox_envelope import IntegrityOutboxEnvelope, IntegrityOutboxRecord
 
@@ -1033,6 +1049,7 @@ class LifecycleOutboxRepository:
         return self._with_connection(run)
 
     def renew_lease(self, *, intent_id: str, owner: str, lease_seconds: float) -> OutboxResult:
+        self._metric("outbox_lease_renewals")
         if lease_seconds <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox lease must be positive")
 
@@ -1050,6 +1067,7 @@ class LifecycleOutboxRepository:
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
     def advance_stage(self, *, intent_id: str, owner: str, stage: ExecutionStage) -> OutboxResult:
+        self._metric("outbox_stage_advances")
         try:
             target = ExecutionStage(stage)
         except (TypeError, ValueError):
@@ -1075,6 +1093,7 @@ class LifecycleOutboxRepository:
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
     def acknowledge(self, *, intent_id: str, owner: str) -> OutboxResult:
+        self._metric("outbox_acknowledgements")
         def operation(conn: sqlite3.Connection, record: LifecycleOutboxRecord, now: float) -> OutboxResult:
             if record.stage is not ExecutionStage.VERIFIED:
                 return OutboxResult(OutboxResultKind.CONFLICT, record=record, reason="outbox acknowledgement requires verified stage")
@@ -1091,6 +1110,7 @@ class LifecycleOutboxRepository:
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
     def release_retry(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
+        self._metric("outbox_retry_releases")
         def operation(conn: sqlite3.Connection, record: LifecycleOutboxRecord, now: float) -> OutboxResult:
             if record.attempts >= record.plan.max_attempts:
                 self._quarantine_row(
@@ -1108,6 +1128,7 @@ class LifecycleOutboxRepository:
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
     def manual_review(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
+        self._metric("outbox_manual_reviews")
         def operation(conn: sqlite3.Connection, record: LifecycleOutboxRecord, now: float) -> OutboxResult:
             conn.execute(
                 "UPDATE lifecycle_outbox SET lifecycle_stage=?, processing_state=?, lease_owner='', lease_expires_at=0, "

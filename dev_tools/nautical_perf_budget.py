@@ -1230,6 +1230,26 @@ def _read_exit_task_timing_stats(path: Path) -> dict[str, float]:
     }
 
 
+def _read_exit_outbox_stats(path: Path) -> dict[str, float]:
+    """Read benchmark-only outbox counters and timing."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"queue drain benchmark stats were unavailable: {exc}") from exc
+    metrics = payload.get("outbox_metrics") if isinstance(payload, dict) else None
+    if not isinstance(metrics, dict):
+        raise RuntimeError("queue drain benchmark stats omitted outbox metrics")
+    result: dict[str, float] = {}
+    for key, value in metrics.items():
+        if not str(key).startswith("outbox_"):
+            continue
+        try:
+            result[str(key)] = max(0.0, float(value or 0.0))
+        except (TypeError, ValueError):
+            result[str(key)] = 0.0
+    return result
+
+
 def _attach_timing_breakdown(
     result: dict,
     wall_samples: list[float],
@@ -1438,6 +1458,23 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
         parents.append(parent)
         plans.append(plan)
     return parents, plans
+
+
+def _reconcile_candidate_tasks(prefix: str, count: int) -> list[dict]:
+    """Create independent completed roots for reconcile candidate scaling."""
+    return [
+        {
+            "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/{prefix}/{index}")),
+            "status": "completed",
+            "description": f"Reconcile candidate benchmark {index}",
+            "cp": "P1D",
+            "chain": "on",
+            "chainID": f"reconcile-candidate-{prefix}-{index}",
+            "link": 1,
+            "due": "20260101T090000Z",
+        }
+        for index in range(count)
+    ]
 
 
 def _merge_task_call_stats(*stats: dict[str, int]) -> dict[str, int]:
@@ -1822,6 +1859,9 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         queue_timing_stats: list[dict[str, float]] = []
         queue_idempotent_timing_stats: list[dict[str, float]] = []
         queue_partial_timing_stats: list[dict[str, float]] = []
+        queue_outbox_stats: list[dict[str, float]] = []
+        queue_idempotent_outbox_stats: list[dict[str, float]] = []
+        queue_partial_outbox_stats: list[dict[str, float]] = []
         for sample_index in range(repeats):
             queue_data = root / f"populated-queue-{sample_index}"
             _init_empty_outbox(queue_data)
@@ -1889,6 +1929,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             queue_samples.append(queue_elapsed)
             queue_call_stats.append(_read_exit_task_call_stats(stats_path))
             queue_timing_stats.append(_read_exit_task_timing_stats(stats_path))
+            queue_outbox_stats.append(_read_exit_outbox_stats(stats_path))
 
             if _workflow_outbox_pending(queue_data):
                 raise RuntimeError(
@@ -1911,6 +1952,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             queue_idempotent_samples.append(idem_elapsed)
             queue_idempotent_call_stats.append(_read_exit_task_call_stats(stats_path))
             queue_idempotent_timing_stats.append(_read_exit_task_timing_stats(stats_path))
+            queue_idempotent_outbox_stats.append(_read_exit_outbox_stats(stats_path))
             if _workflow_outbox_pending(queue_data):
                 raise RuntimeError(
                     "idempotent outbox drain left active intents: "
@@ -2011,6 +2053,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             first_partial_elapsed = time.perf_counter() - partial_t0
             first_partial_stats = _read_exit_task_call_stats(partial_stats_path)
             first_partial_timing = _read_exit_task_timing_stats(partial_stats_path)
+            first_partial_outbox = _read_exit_outbox_stats(partial_stats_path)
             pending_after_partial = _workflow_outbox_pending(partial_data)
             if not 1 <= len(pending_after_partial) <= 8:
                 raise RuntimeError(
@@ -2029,6 +2072,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             recovery_elapsed = time.perf_counter() - recovery_t0
             second_partial_stats = _read_exit_task_call_stats(partial_stats_path)
             second_partial_timing = _read_exit_task_timing_stats(partial_stats_path)
+            second_partial_outbox = _read_exit_outbox_stats(partial_stats_path)
             if _workflow_outbox_pending(partial_data):
                 raise RuntimeError(
                     "partial import recovery left active lifecycle intents: "
@@ -2039,11 +2083,13 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             queue_partial_samples.append(first_partial_elapsed + recovery_elapsed)
             queue_partial_call_stats.append(_merge_task_call_stats(first_partial_stats, second_partial_stats))
             queue_partial_timing_stats.append(_merge_task_timing_stats(first_partial_timing, second_partial_timing))
+            queue_partial_outbox_stats.append(_merge_task_timing_stats(first_partial_outbox, second_partial_outbox))
         queue_result = _measure_workflow(
             "workflow_queue_drain", queue_samples,
             float(budgets.get("workflow_queue_drain", 3.0)),
         )
         queue_result["task_call_stats"] = queue_call_stats
+        queue_result["outbox_stats"] = queue_outbox_stats
         _attach_timing_breakdown(queue_result, queue_samples, queue_timing_stats)
         call_budgets = workflow_cfg.get("task_call_budgets")
         if isinstance(call_budgets, dict):
@@ -2059,6 +2105,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             float(budgets.get("workflow_queue_drain_idempotent", 3.0)),
         )
         queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
+        queue_idempotent_result["outbox_stats"] = queue_idempotent_outbox_stats
         _attach_timing_breakdown(queue_idempotent_result, queue_idempotent_samples, queue_idempotent_timing_stats)
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
@@ -2077,6 +2124,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         queue_partial_result["recovery_samples_s"] = sorted(queue_partial_recovery_samples)
         queue_partial_result["recovery_median_s"] = float(statistics.median(queue_partial_recovery_samples))
         queue_partial_result["task_call_stats"] = queue_partial_call_stats
+        queue_partial_result["outbox_stats"] = queue_partial_outbox_stats
         _attach_timing_breakdown(queue_partial_result, queue_partial_samples, queue_partial_timing_stats)
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
@@ -2085,6 +2133,76 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
                 call_budgets.get("workflow_queue_drain_partial_recovery", {}),
             )
         results["workflow_queue_drain_partial_recovery"] = queue_partial_result
+
+        def run_queue_shape(name: str, background_rows: int) -> dict:
+            """Measure one healthy intent with an optional unrelated history set."""
+            shape_data = root / name
+            _init_empty_outbox(shape_data)
+            shape_stats_path = shape_data / "on-exit-task-stats.json"
+            shape_env = dict(
+                base_env,
+                TASKDATA=str(shape_data),
+                NAUTICAL_BENCH_STATS_FILE=str(shape_stats_path),
+                NAUTICAL_BENCH_TASK_BIN=str(real_task),
+            )
+            parents, plans = _outbox_lifecycle_fixture(name, 0, count=1)
+            background = [
+                {
+                    "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/{name}/background/{index}")),
+                    "status": "completed",
+                    "description": f"Unrelated background history {index}",
+                    "due": "20250101T090000Z",
+                }
+                for index in range(background_rows)
+            ]
+            imported = subprocess.run(
+                ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+                input="".join(json.dumps(row, ensure_ascii=False) + "\n" for row in [*background, *parents]),
+                text=True,
+                capture_output=True,
+                env=shape_env,
+                timeout=120.0,
+            )
+            if imported.returncode != 0:
+                raise RuntimeError(f"{name} fixture import failed: {(imported.stderr or imported.stdout or '').strip()}")
+            probe = subprocess.run(
+                ["task", f"rc.data.location={shape_data}", "rc.hooks=off", "rc.json.array=1", "rc.verbose=nothing", "chain:on", "export"],
+                text=True,
+                capture_output=True,
+                env=shape_env,
+                timeout=120.0,
+            )
+            if probe.returncode != 0:
+                raise RuntimeError(f"{name} fixture probe failed: {(probe.stderr or probe.stdout or '').strip()}")
+            plans = _bind_workflow_plans_to_parents(plans, json.loads(probe.stdout or "[]"))
+            _stage_workflow_plans(
+                shape_data,
+                plans,
+                configuration_fingerprint=config_fingerprint,
+                schedule_fingerprint=schedule_fingerprint,
+            )
+            started = time.perf_counter()
+            elapsed, _result, stderr = _run_workflow_hook_result(
+                ROOT / "on-exit.nautical", input_text="", env=shape_env, expect_output=False
+            )
+            if _workflow_outbox_pending(shape_data):
+                raise RuntimeError(f"{name} left active outbox work: {_workflow_outbox_pending(shape_data)!r}")
+            timing = _read_exit_task_timing_stats(shape_stats_path)
+            calls = _read_exit_task_call_stats(shape_stats_path)
+            outbox_stats = _read_exit_outbox_stats(shape_stats_path)
+            if not calls.get("run_task_calls"):
+                raise RuntimeError(f"{name} did not execute Taskwarrior commands: {stderr.strip()!r}")
+            result = _measure_workflow(name, [max(elapsed, time.perf_counter() - started)], float(budgets.get(name, 3.5)))
+            result["background_rows"] = background_rows
+            result["task_call_stats"] = [calls]
+            result["outbox_stats"] = [outbox_stats]
+            _attach_timing_breakdown(result, [elapsed], [timing])
+            return result
+
+        results["workflow_queue_drain_one_intent"] = run_queue_shape("queue-one-intent", 0)
+        results["workflow_queue_drain_large_history"] = run_queue_shape(
+            "queue-large-history", max(5000, int(workflow_cfg.get("queue_background_history_rows", 5000)))
+        )
 
         reconcile_data = root / "reconcile"
         reconcile_data.mkdir()
@@ -2189,19 +2307,7 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         candidate_data.mkdir()
         candidate_env = dict(base_env, TASKDATA=str(candidate_data))
         candidate_count = max(1, int(workflow_cfg.get("reconcile_candidate_chains", 32)))
-        candidate_tasks = [
-            {
-                "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/reconcile-candidate/{index}")),
-                "status": "completed",
-                "description": f"Reconcile candidate benchmark {index}",
-                "cp": "P1D",
-                "chain": "on",
-                "chainID": f"reconcile-candidate-{index}",
-                "link": 1,
-                "due": "20260101T090000Z",
-            }
-            for index in range(candidate_count)
-        ]
+        candidate_tasks = _reconcile_candidate_tasks("healthy", candidate_count)
         candidate_import = subprocess.run(
             ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
             input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in candidate_tasks),
@@ -2284,6 +2390,65 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
             results["workflow_reconcile_candidates_apply"],
             [_compact_reconcile_report(apply_report)],
         )
+
+        apply_scale_counts = tuple(
+            int(value)
+            for value in workflow_cfg.get("reconcile_candidate_apply_counts", (1, 8, 32, 200))
+            if int(value) > 0
+        )
+        apply_scale_samples: list[float] = []
+        apply_scale_reports: list[dict] = []
+        apply_scale_rows: list[dict] = []
+        for scale_count in apply_scale_counts:
+            scale_data = root / f"reconcile-candidates-apply-{scale_count}"
+            scale_data.mkdir()
+            scale_env = dict(base_env, TASKDATA=str(scale_data))
+            scale_tasks = _reconcile_candidate_tasks(f"apply-{scale_count}", scale_count)
+            scale_import = subprocess.run(
+                ["task", "rc.hooks=off", "rc.verbose=nothing", "import"],
+                input="".join(json.dumps(task, ensure_ascii=False) + "\n" for task in scale_tasks),
+                text=True,
+                capture_output=True,
+                env=scale_env,
+                timeout=120.0,
+            )
+            if scale_import.returncode != 0:
+                raise RuntimeError(
+                    f"candidate apply scale fixture import failed ({scale_count}): "
+                    f"{(scale_import.stderr or scale_import.stdout or '').strip()}"
+                )
+            scale_started = time.perf_counter()
+            scale_proc = subprocess.run(
+                [*reconcile_cmd, "--apply"],
+                text=True,
+                capture_output=True,
+                env=scale_env,
+                timeout=240.0,
+            )
+            elapsed = time.perf_counter() - scale_started
+            if scale_proc.returncode != 0:
+                raise RuntimeError(
+                    f"candidate apply scale failed ({scale_count}): "
+                    f"{(scale_proc.stderr or scale_proc.stdout or '').strip()}"
+                )
+            try:
+                scale_report = json.loads(scale_proc.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"candidate apply scale returned invalid JSON ({scale_count})") from exc
+            if int(scale_report.get("spawn", 0)) < scale_count or not scale_report.get("applied"):
+                raise RuntimeError(f"candidate apply scale did not converge ({scale_count}): {scale_report!r}")
+            apply_scale_samples.append(elapsed)
+            compact = _compact_reconcile_report(scale_report)
+            apply_scale_reports.append(compact)
+            apply_scale_rows.append({"candidate_count": scale_count, "elapsed_s": round(elapsed, 6), **compact})
+        results["workflow_reconcile_candidates_apply_scale"] = {
+            "name": "workflow_reconcile_candidates_apply_scale",
+            "candidate_counts": list(apply_scale_counts),
+            "samples_s": apply_scale_samples,
+            "rows": apply_scale_rows,
+            "reconcile_reports": apply_scale_reports,
+            "pass": bool(apply_scale_counts) and all(value >= 0.0 for value in apply_scale_samples),
+        }
 
         long_data = root / "reconcile-long-history"
         long_data.mkdir()

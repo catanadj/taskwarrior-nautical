@@ -632,6 +632,9 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
             run_task_seconds=max(0.0, float(getattr(commands, "duration", 0.0) or 0.0)),
             **purpose_stats,
         )
+    benchmark_metrics = getattr(outbox, "_benchmark_metrics", None)
+    if isinstance(benchmark_metrics, dict):
+        state.diag_stats.update(benchmark_metrics)
 
     return {
         "entries_total": len(outcomes),
@@ -853,6 +856,11 @@ def main() -> int:
                         "task_stats": dict(_exit_runtime_state().diag_stats),
                         "startup_stats": dict(_exit_runtime_state().startup_stats),
                         "drain_stats": dict(result.stats or {}),
+                        "outbox_metrics": {
+                            str(key): float(value)
+                            for key, value in _exit_runtime_state().diag_stats.items()
+                            if str(key).startswith("outbox_")
+                        },
                         "presentation_ms": presentation_ms,
                     },
                     ensure_ascii=False,

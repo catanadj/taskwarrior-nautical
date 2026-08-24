@@ -4936,6 +4936,27 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
+        worker = (
+            "import sys; from pathlib import Path; "
+            "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
+            "result = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=0.5).open(); "
+            "print(result.kind.value, flush=True); raise SystemExit(0 if result.ok else 1)"
+        )
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", worker, str(root)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for _ in range(2)
+        ]
+        process_results = [process.communicate(timeout=10) for process in processes]
+        expect(
+            all(process.returncode == 0 and stdout.strip() == "applied" for process, (stdout, _stderr) in zip(processes, process_results)),
+            f"concurrent process outbox initialization failed: {process_results}",
+        )
         barrier = threading.Barrier(4)
         outcomes = []
         outcomes_lock = threading.Lock()

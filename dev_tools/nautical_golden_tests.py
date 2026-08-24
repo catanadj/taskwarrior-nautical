@@ -3733,8 +3733,9 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             self.calls.append((args, purpose))
             command = TaskCommand(("task", *args), purpose, timeout, input_text)
             if "import" in args:
-                row = json.loads(input_text or "{}")
-                self.repo.rows[str(row["uuid"]).lower()] = row
+                for line in (input_text or "{}").splitlines():
+                    row = json.loads(line)
+                    self.repo.rows[str(row["uuid"]).lower()] = row
             elif "delete" in args:
                 uuid_token = next((item for item in args if item.startswith("uuid:")), "")
                 self.repo.rows.pop(uuid_token.split(":", 1)[1].lower(), None)
@@ -35837,8 +35838,9 @@ def test_lifecycle_application_happy_path_real_stack():
             args = list(args)
             command = TaskCommand(("task", *args), purpose, timeout, input_text)
             if "import" in args:
-                row = json.loads(input_text or "{}")
-                self.repo.rows[str(row["uuid"]).lower()] = row
+                for line in (input_text or "{}").splitlines():
+                    row = json.loads(line)
+                    self.repo.rows[str(row["uuid"]).lower()] = row
             elif "modify" in args:
                 uuid_token = next((a for a in args if a.startswith("uuid:")), "")
                 target = uuid_token.split(":", 1)[1].lower() if uuid_token else None

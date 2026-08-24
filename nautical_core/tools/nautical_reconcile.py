@@ -1819,6 +1819,12 @@ def main(
     outcome_groups: list[list[tuple[lifecycle.LifecycleRecoveryDecision, str]]] = []
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = IntegrityRecoveryService.ambiguous_candidate_slots(candidates)
+    if configuration_status == "valid":
+        try:
+            lifecycle_service.preflight_wave(candidates)
+        except Exception as exc:
+            configuration_status = "unavailable"
+            configuration_drift_reason = f"wave child-slot evidence unavailable: {type(exc).__name__}: {exc}"
     wave_results: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
     if args.apply and configuration_status == "valid" and taskdata is not None:
         wave_plans: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
@@ -1861,13 +1867,6 @@ def main(
             except Exception as exc:
                 if os.environ.get("NAUTICAL_DIAG") == "1":
                     print(f"[nautical] reconcile lifecycle wave deferred: {type(exc).__name__}: {exc}", file=sys.stderr)
-    if configuration_status == "valid":
-        try:
-            lifecycle_service.preflight_wave(candidates)
-        except Exception as exc:
-            configuration_status = "unavailable"
-            configuration_drift_reason = f"wave child-slot evidence unavailable: {type(exc).__name__}: {exc}"
-
     for parent_observation in candidates:
         parent = parent_observation.to_mapping()
         if configuration_status == "valid":

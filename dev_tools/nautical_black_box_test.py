@@ -187,9 +187,10 @@ def _scenario_anchor_preset(env: dict[str, str]) -> dict:
     # Keep the smoke test independent of the day it runs.  ``today`` can be
     # the omitted Monday and resolves to a past midnight timestamp, which
     # exercises a different recovery edge than preset/omit selection.
-    preset_due = (datetime.now(timezone.utc).date() + timedelta(days=2)).strftime(
-        "%Y%m%dT000000Z"
-    )
+    preset_day = datetime.now(timezone.utc).date() + timedelta(days=2)
+    while preset_day.weekday() >= 5 or preset_day.weekday() == 0:
+        preset_day += timedelta(days=1)
+    preset_due = preset_day.strftime("%Y%m%dT090000Z")
     _task(
         [
             "add",
@@ -363,7 +364,8 @@ def _scenario_no_nested_hooks(env: dict[str, str], data_dir: Path) -> dict:
     command_log = _install_task_command_shim(data_dir.parent, env)
 
     description = "blackbox hook recursion"
-    _task(["add", description, "cp:1d", "due:today"], env)
+    future_due = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y%m%dT090000Z")
+    _task(["add", description, "cp:1d", f"due:{future_due}"], env)
     root = _one(env, f"description:{description}", "status:pending")
     root_uuid = str(root.get("uuid") or "").strip()
     chain_id = str(root.get("chainID") or "").strip()

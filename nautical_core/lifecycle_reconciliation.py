@@ -331,7 +331,7 @@ class LifecycleReconciliationService:
                 safe_parse_datetime=safe_parse_datetime,
             )
             if evidence.disposition is not DeletionDisposition.EXPIRATION:
-                return []
+                return ()
         chain_id = str(getattr(parent.field("chainID").value, "value", parent.field("chainID").value) or "").strip()
         next_link = lifecycle.int_or_default(getattr(parent.field("link").value, "value", parent.field("link").value), 1) + 1
         if not chain_id:

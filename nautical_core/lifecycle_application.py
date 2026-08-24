@@ -467,6 +467,63 @@ class LifecycleApplicationService:
                 outcomes=(),
             )
 
+    def drain_claimed(
+        self,
+        records: Sequence[LifecycleOutboxRecord],
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+        progress: LifecycleDrainProgressCallback | None = None,
+    ) -> DrainResult:
+        """Execute exactly the records already claimed by this owner.
+
+        Reconcile waves must not use the FIFO ``drain()`` claim, because it
+        could consume unrelated hook work staged by another invocation. The
+        caller is responsible for exact ``claim_intent`` ownership; this API
+        only runs the shared batched lifecycle phases for those records.
+        """
+        self._require_execution_deps()
+        claimed = tuple(records)
+        if not claimed:
+            return DrainResult(claim=OutboxResult(OutboxResultKind.APPLIED), outcomes=())
+        if any(not isinstance(record, LifecycleOutboxRecord) for record in claimed):
+            raise LifecycleApplicationError("claimed lifecycle drain requires typed outbox records")
+        batch_apply = getattr(self._mutations, "apply_lifecycle_unverified", None)
+        batch_children = getattr(self._mutations, "verify_lifecycle_children", None)
+        batch_parents = getattr(self._mutations, "verify_lifecycle_parents", None)
+        if not all(callable(item) for item in (batch_apply, batch_children, batch_parents)):
+            raise LifecycleApplicationError("claimed lifecycle drain requires batched mutation operations")
+        session = getattr(self._outbox, "session", None)
+        if not callable(session):
+            return self._drain_batched(
+                OutboxResult(OutboxResultKind.APPLIED), claimed,
+                configuration_fingerprint=configuration_fingerprint,
+                schedule_fingerprint=schedule_fingerprint,
+                apply_unverified=batch_apply,
+                verify_children=batch_children,
+                verify_parents=batch_parents,
+                progress=progress,
+            )
+        try:
+            with session():
+                return self._drain_batched(
+                    OutboxResult(OutboxResultKind.APPLIED), claimed,
+                    configuration_fingerprint=configuration_fingerprint,
+                    schedule_fingerprint=schedule_fingerprint,
+                    apply_unverified=batch_apply,
+                    verify_children=batch_children,
+                    verify_parents=batch_parents,
+                    progress=progress,
+                )
+        except LifecycleOutboxError as exc:
+            return DrainResult(
+                claim=OutboxResult(
+                    OutboxResultKind.RETRYABLE,
+                    reason=f"outbox session failed: {str(exc).strip() or type(exc).__name__}",
+                ),
+                outcomes=(),
+            )
+
     def _drain_open(
         self,
         *,

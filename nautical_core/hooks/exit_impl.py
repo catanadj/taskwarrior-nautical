@@ -463,6 +463,19 @@ class _ExitDrainProgress:
         self._progress: Any = None
         self._task_id: Any = None
         self._enabled = self._is_enabled()
+        self._presentation_seconds = 0.0
+
+    @property
+    def presentation_ms(self) -> float:
+        """Return time spent in the optional presentation adapter."""
+        return round(self._presentation_seconds * 1000.0, 3)
+
+    @staticmethod
+    def _bound_label(value: object, *, limit: int = 72) -> str:
+        text = str(value or "").replace("_", " ").strip()
+        if len(text) <= limit:
+            return text
+        return text[: max(1, limit - 1)].rstrip() + "…"
 
     @staticmethod
     def _is_enabled() -> bool:
@@ -516,6 +529,7 @@ class _ExitDrainProgress:
 
     def on_event(self, event: object) -> None:
         """Render an event; presentation failures are intentionally ignored."""
+        started = time.perf_counter()
         try:
             stage = str(getattr(getattr(event, "stage", None), "value", getattr(event, "stage", "")))
             total = max(0, int(getattr(event, "total", 0) or 0))
@@ -523,8 +537,8 @@ class _ExitDrainProgress:
             if self._progress is None or self._task_id is None:
                 return
             completed = max(0, int(getattr(event, "completed", 0) or 0))
-            outcome = str(getattr(event, "outcome", "") or "").replace("_", " ").strip()
-            detail = str(getattr(event, "detail", "") or "").replace("_", " ").strip()
+            outcome = self._bound_label(getattr(event, "outcome", ""))
+            detail = self._bound_label(getattr(event, "detail", ""))
             description = "⚓ Nautical drain"
             if detail:
                 description += f" · {detail}"
@@ -534,10 +548,14 @@ class _ExitDrainProgress:
                 self._task_id,
                 completed=completed,
                 description=description,
-                refresh=True,
+                # Rich refreshes at its configured cadence; one forced redraw
+                # per event makes presentation compete with the drain itself.
+                refresh=False,
             )
         except Exception:
             return
+        finally:
+            self._presentation_seconds += time.perf_counter() - started
 
     def close(self) -> None:
         if self._progress is None:
@@ -601,6 +619,9 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
     finally:
         progress.close()
     drain_ms = round((time.perf_counter() - drain_t0) * 1000.0, 3)
+    presentation_ms = progress.presentation_ms
+    if presentation_ms:
+        _exit_runtime_state().diag_stats["presentation_ms"] = presentation_ms
 
     outcome_kind = lifecycle_application.LifecycleApplicationOutcomeKind
     outcomes = result.outcomes
@@ -700,6 +721,7 @@ def _emit_drain_stats_diag(stats: dict) -> None:
         ("outbox_lock_failures", stats.get("outbox_lock_failures", 0)),
         ("diagnostics_suppressed", stats.get("diagnostics_suppressed", 0)),
         ("drain_ms", stats.get("drain_ms", 0)),
+        ("presentation_ms", _exit_runtime_state().diag_stats.get("presentation_ms", 0)),
     ]
     _diag_block("on-exit drain", drain_items, columns=3)
     diag_stats = _exit_runtime_state().diag_stats

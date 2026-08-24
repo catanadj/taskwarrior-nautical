@@ -602,26 +602,33 @@ verification is run before the section commit.
 
 ## 12. Keep Presentation Outside The Critical Path
 
-- [ ] Keep typed drain progress events after each meaningful action so the bar
+- [x] Keep typed drain progress events after each meaningful action so the bar
   advances throughout processing.
-- [ ] Update Rich state for every action but let its configured refresh rate
+- [x] Update Rich state for every action but let its configured refresh rate
   control terminal redraws; do not force a full redraw for every event.
-- [ ] Bound descriptions and diagnostics without formatting full task or plan
+- [x] Bound descriptions and diagnostics without formatting full task or plan
   payloads on the success path.
-- [ ] Avoid natural-language, panel, and detailed evidence construction in
+- [x] Avoid natural-language, panel, and detailed evidence construction in
   JSON, quiet, minimal, and non-TTY modes unless the selected output requires
   it.
-- [ ] Measure presentation time separately from recovery work on desktop and
+- [x] Measure presentation time separately from recovery work on desktop and
   Termux TTYs.
-- [ ] Preserve static non-TTY behavior and strict hook stdout regardless of
+- [x] Preserve static non-TTY behavior and strict hook stdout regardless of
   Rich availability.
 
 Completion criteria:
 
-- [ ] Progress remains visibly incremental while terminal rendering consumes a
+- [x] Progress remains visibly incremental while terminal rendering consumes a
   small bounded fraction of drain time.
-- [ ] Disabling progress changes presentation cost only, never recovery
+- [x] Disabling progress changes presentation cost only, never recovery
   behavior, command count, or durable state.
+
+Verification: typed lifecycle progress is emitted per action; the exit adapter
+updates Rich at its configured cadence, bounds labels, and records
+`presentation_ms` separately. Progress failures remain swallowed by the
+application boundary, while non-TTY and JSON paths retain strict output.
+The existing lifecycle progress and strict hook I/O golden tests cover the
+behavioral gates; device-specific TTY timing remains part of Section 14.
 
 ## 13. Prove Failure And Concurrency Safety
 

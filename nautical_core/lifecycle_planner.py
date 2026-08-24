@@ -34,7 +34,7 @@ class LifecyclePlanningError(RuntimeError):
 
 def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
-    get = task.get if isinstance(task, TaskSnapshot) else task.observation.to_mapping().get
+    get = task.get if isinstance(task, TaskSnapshot) else lambda key: task.observation.field(key).raw_value()
     if TaskCodec.normalize_text(get("cp")):
         return "cp"
     if TaskCodec.normalize_text(get("anchor_file")):
@@ -152,7 +152,7 @@ class ChainGenerationPlanningService:
             return None
         meta = dict(metadata or {})
         until = None
-        raw_until = parent.observation.to_mapping().get("chainUntil")
+        raw_until = parent.observation.field("chainUntil").raw_value()
         if raw_until:
             until, error = self.generation.safe_parse_datetime(raw_until)
             if error or until is None:
@@ -175,10 +175,9 @@ class ChainGenerationPlanningService:
         parent = NauticalTask.from_observation(snapshot.observation)
         metadata = dict(candidate.metadata)
         child_field = str(metadata.get("target_field") or "due")
-        values = parent.observation.to_mapping()
         kind = _recurrence_kind(parent)
-        cpmax = self.generation.core.coerce_int(values.get("chainMax"), 0)
-        parent_short = str(values.get("uuid") or "").strip()[:8]
+        cpmax = self.generation.core.coerce_int(parent.observation.field("chainMax").raw_value(), 0)
+        parent_short = str(parent.observation.field("uuid").raw_value() or "").strip()[:8]
         return self.generation.build_child_draft(
             parent,
             candidate.child_due,

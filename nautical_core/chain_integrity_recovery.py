@@ -85,7 +85,7 @@ class IntegrityRecoveryService:
             status=str(_observation_value(row, "status") or ""),
             chain_id=chain_id,
             link=link,
-            recurrence_identity=recurrence_fingerprint(row.to_mapping()),
+            recurrence_identity=recurrence_fingerprint(row),
             timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
             expected_mutation_epoch=mutation_epoch,
             chain=str(_observation_value(row, "chain") or "on"),

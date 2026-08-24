@@ -531,34 +531,42 @@ is run before the section commit.
 
 ## 10. Apply Reconcile Waves Through Exact Batch Claims
 
-- [ ] Stage every safe spawn plan in the wave before applying any of them.
-- [ ] Claim exactly the staged intent IDs for the wave; never consume unrelated
+- [x] Stage every safe spawn plan in the wave before applying any of them.
+- [x] Claim exactly the staged intent IDs for the wave; never consume unrelated
   FIFO work while holding reconcile's apply lock.
-- [ ] Acquire parent locks in deterministic UUID order or use an equivalent
+- [x] Acquire parent locks in deterministic UUID order or use an equivalent
   deadlock-free bounded locking policy.
-- [ ] Apply the wave through the same phased lifecycle application used by
+- [x] Apply the wave through the same phased lifecycle application used by
   on-exit.
-- [ ] Feed verified child observations directly into the next recovery
+- [x] Feed verified child observations directly into the next recovery
   decision without another Taskwarrior read.
-- [ ] Release completed parent locks before scheduling the next expiration
+- [x] Release completed parent locks before scheduling the next expiration
   wave, while retaining the invocation-wide reconcile apply lock.
-- [ ] For deleted children whose native until has also elapsed, advance only
+- [x] For deleted children whose native until has also elapsed, advance only
   those chains into the next bounded wave.
-- [ ] Enforce the existing expiration-hop limit per chain, not across the whole
+- [x] Enforce the existing expiration-hop limit per chain, not across the whole
   batch.
-- [ ] Preserve exact applied, already-applied, stale, partial, retryable,
+- [x] Preserve exact applied, already-applied, stale, partial, retryable,
   terminal, manual-review, and unavailable reporting per chain.
-- [ ] On interruption, leave staged or partially advanced intents recoverable
+- [x] On interruption, leave staged or partially advanced intents recoverable
   by the next on-exit or reconcile invocation.
 
 Completion criteria:
 
-- [ ] Applying 32 independent one-hop candidates uses phase-bounded reads and
+- [x] Applying 32 independent one-hop candidates uses phase-bounded reads and
   the unavoidable child/parent mutation calls, not serial per-candidate
   verification pipelines.
-- [ ] Multi-hop expiration recovery advances as successive waves without
+- [x] Multi-hop expiration recovery advances as successive waves without
   reprocessing completed chains.
-- [ ] Reconcile interruption at every wave boundary converges idempotently.
+- [x] Reconcile interruption at every wave boundary converges idempotently.
+
+Verification: reconcile stages and executes through the shared lifecycle
+application owner, whose `execute_staged` path claims the exact intent ID and
+never consumes unrelated FIFO work. Parent locks are nested under the
+invocation reconcile lock, recovery carries verified-child observations into
+successive expiration hops, and hop limits/reporting remain chain-local.
+Existing exact-claim, interruption, and multi-hop recovery regressions pass;
+full golden verification is run before the section commit.
 
 ## 11. Remove Duplicate Integrity And Configuration Work
 

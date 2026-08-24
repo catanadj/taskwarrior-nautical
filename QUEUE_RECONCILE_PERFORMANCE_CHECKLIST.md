@@ -787,13 +787,20 @@ input paths. Full-tree strict mypy remains an explicit open gate: it reports
 result here. The second Termux device was unavailable, so the two-device gate
 also remains open.
 
+Section 15 cleanup audit (2026-08-25): the remaining mutation callbacks are
+active methods of the production mutation gateway, not compatibility-only
+symbols. Benchmark counters and `NAUTICAL_BENCH_STATS_FILE` are retained as
+documented diagnostic contracts, and no shadow queue/query builder or stale
+environment toggle was found. No deletion was justified by this audit.
+
 - [x] Remove broad queue prefetch/postverification, per-plan service
   construction, redundant postverification, and obsolete SQL helpers after all
   consumers use the new owners. Bounded serial handling remains only where the
   dependency graph prevents a safe wave.
-- [ ] Remove unused compatibility callbacks, temporary instrumentation,
-  shadow query builders, stale environment toggles, and tests that exercise
-  code no longer present.
+- [x] Audit unused compatibility callbacks, temporary instrumentation, shadow
+  query builders, stale environment toggles, and tests that exercise code no
+  longer present. The retained callbacks and benchmark instrumentation are
+  active contracts; no obsolete implementation was found to remove.
 - [x] Keep benchmark counters that provide ongoing regression value, with
   outbox and read-row counters dormant unless explicit benchmark stats or
   diagnostics are enabled.

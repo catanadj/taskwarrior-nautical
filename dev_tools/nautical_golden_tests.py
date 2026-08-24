@@ -4373,6 +4373,50 @@ def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
         plan = plan_for(1)
         first = repo.enqueue(plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
         expect(first.kind is OutboxResultKind.APPLIED, f"outbox enqueue failed: {first}")
+        # Verify durable plan decoding and claiming from a fresh interpreter,
+        # rather than only reopening the repository in-process.
+        restart_plan = plan_for(30)
+        restart = repo.enqueue(restart_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
+        expect(restart.ok, "process-restart lifecycle intent could not be staged")
+        restart_script = """
+import json
+import sys
+from pathlib import Path
+from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+repository = LifecycleOutboxRepository(Path(sys.argv[1]))
+result = repository.claim_intent(
+    owner="fresh-process",
+    lease_seconds=5,
+    intent_id=sys.argv[2],
+)
+if not result.ok or result.record is None:
+    raise SystemExit(f"fresh process could not claim lifecycle intent: {result!r}")
+record = result.record
+print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.stage.value}))
+"""
+        restart_process = subprocess.run(
+            [sys.executable, "-c", restart_script, td, restart_plan.identity.idempotency_key],
+            cwd=ROOT,
+            env={**os.environ, "PYTHONPATH": ROOT},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        expect(
+            restart_process.returncode == 0,
+            f"fresh lifecycle process failed: {restart_process.stderr!r}",
+        )
+        try:
+            restart_evidence = json.loads(restart_process.stdout)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                f"fresh lifecycle process returned invalid evidence: {restart_process.stdout!r}"
+            ) from exc
+        expect(
+            restart_evidence == {"semantic_key": restart_plan.semantic_key(), "stage": "planned"},
+            f"fresh lifecycle process changed the persisted plan: {restart_evidence!r}",
+        )
         duplicate = repo.enqueue(plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1")
         expect(duplicate.kind is OutboxResultKind.ALREADY_APPLIED, "outbox duplicate enqueue was not idempotent")
         fingerprint_drift = repo.enqueue(plan, configuration_fingerprint="cf2", schedule_fingerprint="sf1")

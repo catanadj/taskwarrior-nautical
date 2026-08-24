@@ -123,7 +123,7 @@ class CarryValidator(Protocol):
     def __call__(
         self,
         snapshot: TaskSnapshot,
-        child: TaskPayload,
+        child: TaskDraft,
         candidate: RecurrenceCandidate,
     ) -> str | None: ...
 
@@ -524,17 +524,15 @@ class LifecyclePlanner:
                 ) from exc
         if child is None:
             return terminal_plan_for_snapshot(snapshot, event)
-        if isinstance(child, TaskDraft):
-            child_values = child.to_mapping()
-        else:
+        if not isinstance(child, TaskDraft):
             raise LifecyclePlanningError("recurrence builder returned a non-TaskDraft successor")
-        if child_values.get("link") in (None, ""):
+        if child.identity.link.value <= 0:
             raise LifecyclePlanningError("child draft is missing its link")
         if carry_validator is not None:
             try:
                 carry_error = carry_validator(
                     snapshot,
-                    child_values,
+                    child,
                     candidate or RecurrenceCandidate(child_due=None),
                 )
             except Exception as exc:
@@ -543,7 +541,7 @@ class LifecyclePlanner:
                 ) from exc
             if carry_error:
                 raise LifecyclePlanningError(str(carry_error))
-        child_uuid = str(child_values.get("uuid") or "").strip()
+        child_uuid = child.identity.task_uuid.value
         parent_patch = {"nextLink": child_uuid[:8]} if child_uuid else {}
         return LifecyclePlan.from_draft(
             identity=identity,

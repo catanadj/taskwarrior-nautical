@@ -183,7 +183,7 @@ def native_until_target_field(task: TaskObservation) -> str:
 
 def invalid_relative_carry_reason(
     parent: TaskObservation,
-    child: TaskPayload,
+    child: TaskDraft,
     *,
     child_field: str,
     hook: Any = None,
@@ -203,13 +203,14 @@ def invalid_relative_carry_reason(
         parent_value_raw = _observation_value(parent, field)
         if not parent_value_raw:
             continue
-        if not child.get(field):
+        child_value_raw = child.field_value(field)
+        if not child_value_raw:
             return f"{field} carry is missing from the reconciled child"
         try:
             parent_target = core.parse_dt_any(_observation_value(parent, parent_field))
             parent_value = core.parse_dt_any(parent_value_raw)
-            child_target = core.parse_dt_any(child.get(child_field))
-            child_value = core.parse_dt_any(child.get(field))
+            child_target = core.parse_dt_any(child.field_value(child_field))
+            child_value = core.parse_dt_any(child_value_raw)
             if not all((parent_target, parent_value, child_target, child_value)):
                 return f"{field} carry contains an unparseable timestamp"
             parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
@@ -635,7 +636,7 @@ def _plan_recovery_decision_unscoped(
             ),
             "carry_validator": lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
                 snapshot.observation,
-                dict(candidate_child),
+                candidate_child,
                 child_field=child_field,
                 generation=generation,
             ),

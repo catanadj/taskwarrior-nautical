@@ -20,7 +20,7 @@ from .integration_models import (
 from .taskwarrior_uow import QueryScope, QueryScopeKind
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 from .task_models import FieldPresence, TaskObservation, TaskStatus
-from .task_set_reads import ChainSlotSetRequest, SetReadResult, UUIDSetRequest
+from .task_set_reads import AuthoritativeSetReadService, ChainSlot, ChainSlotSetRequest, SetReadResult, SetReadStatus, UUIDSetRequest
 
 if TYPE_CHECKING:
     from .taskwarrior_uow import TaskwarriorUnitOfWork
@@ -462,50 +462,85 @@ class TaskReadRepository:
         kind = TaskQueryKind.VERIFICATION if verification else TaskQueryKind.UUID
         scope = TaskSnapshotScope(kind, identity, tuple(statuses))
         query = self._query_name(scope)
-        snapshot = None if refresh else self._broad_for(statuses)
-        used_broad_snapshot = snapshot is not None
-        if snapshot is None:
-            read = self._export(scope, (f"uuid:{identity}",), empty_output_is_absent=True, refresh=refresh)
-            if not isinstance(read, Found):
-                return read
-            snapshot = read.value
-        matches = snapshot.uuid_matches(identity)
-        if not used_broad_snapshot and len(matches) != len(snapshot.rows):
+        # Reuse an already-authoritative broad export, including its prefix
+        # indexes.  New narrow reads below require a canonical UUID.
+        broad = None if refresh else self._broad_for(statuses)
+        if broad is not None:
+            matches = broad.uuid_matches(identity)
+            if len(matches) == 1:
+                return Found(matches[0], query)
+            if not matches:
+                return Absent(query, "authoritative snapshot contains no matching UUID")
             return self._failure(
-                snapshot.command_result,
-                query,
-                kind=CommandFailureKind.INVALID_RESPONSE,
-                detail=f"UUID export returned rows outside requested identity {identity}",
-            )
-        if not matches:
-            if snapshot.rows and not used_broad_snapshot:
-                return self._failure(
-                    snapshot.command_result,
-                    query,
-                    kind=CommandFailureKind.INVALID_RESPONSE,
-                    detail=f"UUID export returned a different task for {identity}",
-                )
-            return Absent(query, "authoritative snapshot contains no matching UUID")
-        if len(matches) != 1:
-            return self._failure(
-                snapshot.command_result,
+                broad.command_result,
                 query,
                 kind=CommandFailureKind.INVALID_RESPONSE,
                 detail=f"UUID query returned {len(matches)} exact or prefix matches",
             )
-        return Found(matches[0], query)
+        # Prefix reads remain accepted for operator-facing repository calls;
+        # they cannot be represented by UUIDSetRequest and are never used as
+        # absence evidence outside this narrow compatibility query.
+        if len(identity) < 32 or "-" not in identity:
+            read = self._export(scope, (f"uuid:{identity}",), empty_output_is_absent=True, refresh=refresh)
+            if not isinstance(read, Found):
+                return read
+            matches = read.value.uuid_matches(identity)
+            if len(matches) == 1:
+                return Found(matches[0], query)
+            if not matches:
+                return self._failure(
+                    read.value.command_result,
+                    query,
+                    kind=CommandFailureKind.INVALID_RESPONSE,
+                    detail=f"UUID export returned no matching task for {identity}",
+                ) if read.value.rows else Absent(query, "authoritative UUID export was empty")
+            return self._failure(
+                read.value.command_result,
+                query,
+                kind=CommandFailureKind.INVALID_RESPONSE,
+                detail=f"UUID query returned {len(matches)} exact or prefix matches",
+            )
+        try:
+            request = UUIDSetRequest(
+                (identity,),
+                statuses=tuple(statuses),
+                refresh=refresh,
+                expected_mutation_epoch=self.mutation_epoch,
+            )
+        except ValueError as exc:
+            return self._synthetic_unavailable(query, f"invalid UUID set request: {exc}")
+        result = self.read_uuid_set(request)
+        return self._single_set_read(result, request.uuids[0], query)
 
     def read_uuid_set(self, request: UUIDSetRequest) -> SetReadResult:
         """Read exactly the requested UUID set with explicit authority evidence."""
-        from .task_set_reads import AuthoritativeSetReadService
-
         return AuthoritativeSetReadService(self).read_uuids(request)
 
     def read_chain_slot_set(self, request: ChainSlotSetRequest) -> SetReadResult:
         """Read exactly the requested chain-slot set with explicit authority evidence."""
-        from .task_set_reads import AuthoritativeSetReadService
-
         return AuthoritativeSetReadService(self).read_slots(request)
+
+    def _synthetic_unavailable(self, query: str, detail: str) -> Unavailable:
+        command = TaskCommand(("task", "export"), query, self._timeout)
+        evidence = FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.0, False, detail)
+        return Unavailable(query, evidence)
+
+    def _single_set_read(
+        self,
+        result: SetReadResult,
+        identity: object,
+        query: str,
+    ) -> TaskRead[TaskRow]:
+        if result.status is SetReadStatus.COMPLETE:
+            row = result.found.get(identity)
+            if row is not None:
+                return Found(row, query)
+            if identity in result.absent:
+                return Absent(query, "authoritative set read contains no matching task")
+        if result.failures:
+            return Unavailable(query, result.failures[0])
+        detail = "; ".join(result.evidence) or f"authoritative set read failed: {result.status.value}"
+        return self._synthetic_unavailable(query, detail)
 
     def exact_child_slot(
         self,
@@ -565,13 +600,36 @@ class TaskReadRepository:
         link_no = int(link)
         scope = TaskSnapshotScope(kind, f"{chain}:{link_no}", tuple(statuses), require_complete_history)
         query = self._query_name(scope)
-        snapshot = None if refresh else self._chain_authority_for(
+        broad = None if refresh else self._chain_authority_for(
             chain,
             statuses,
             require_complete_history=require_complete_history,
         )
-        used_broad_snapshot = snapshot is not None
-        if snapshot is None:
+        if broad is not None:
+            matches = broad.slot_rows(chain, link_no)
+            if len(matches) == 1:
+                return Found(matches[0], query)
+            if not matches:
+                return Absent(query, "authoritative snapshot contains no matching chain slot")
+            return self._failure(
+                broad.command_result,
+                query,
+                kind=CommandFailureKind.INVALID_RESPONSE,
+                detail=f"exact chain slot returned {len(matches)} matches",
+            )
+        try:
+            slot = ChainSlot(chain, link_no)
+            request = ChainSlotSetRequest(
+                (slot,),
+                statuses=tuple(statuses),
+                refresh=refresh,
+                expected_mutation_epoch=self.mutation_epoch,
+                complete_chain_history=require_complete_history,
+            )
+        except (TypeError, ValueError) as exc:
+            # Keep malformed operator inputs unavailable, while allowing the
+            # repository's historical non-hex fixture IDs to be queried
+            # through the same strict export decoder.
             read = self._export(
                 scope,
                 (f"chainID:{chain}", f"link:{link_no}"),
@@ -580,32 +638,19 @@ class TaskReadRepository:
             )
             if not isinstance(read, Found):
                 return read
-            snapshot = read.value
-        matches = snapshot.slot_rows(chain, link_no)
-        if not used_broad_snapshot and len(matches) != len(snapshot.rows):
+            matches = read.value.slot_rows(chain, link_no)
+            if len(matches) == 1:
+                return Found(matches[0], query)
+            if not matches:
+                return Absent(query, "authoritative chain-slot export was empty")
             return self._failure(
-                snapshot.command_result,
+                read.value.command_result,
                 query,
                 kind=CommandFailureKind.INVALID_RESPONSE,
-                detail=f"chain slot export returned rows outside requested slot {chain}:{link_no}",
+                detail=f"exact chain slot returned {len(matches)} matches ({exc})",
             )
-        if not matches:
-            if snapshot.rows and not used_broad_snapshot:
-                return self._failure(
-                    snapshot.command_result,
-                    query,
-                    kind=CommandFailureKind.INVALID_RESPONSE,
-                    detail=f"chain slot export returned a different slot for {chain}:{link_no}",
-                )
-            return Absent(query, "authoritative snapshot contains no matching chain slot")
-        if len(matches) != 1:
-            return self._failure(
-                snapshot.command_result,
-                query,
-                kind=CommandFailureKind.INVALID_RESPONSE,
-                detail=f"exact chain slot returned {len(matches)} matches",
-            )
-        return Found(matches[0], query)
+        result = self.read_chain_slot_set(request)
+        return self._single_set_read(result, slot, query)
 
     def chain_snapshot(
         self,

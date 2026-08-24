@@ -39,10 +39,13 @@ from .lifecycle_models import recurrence_fingerprint
 from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import FieldPresence, TaskObservation
 from .task_changes import timestamp_equal
+from .task_set_reads import SetReadResult, SetReadStatus, UUIDSetRequest
 
 
 class _TaskRepository(Protocol):
     def by_uuid(self, uuid_value: str, *, refresh: bool = False) -> TaskRead[TaskObservation]: ...
+
+    def read_uuid_set(self, request: UUIDSetRequest) -> SetReadResult: ...
 
 
 class _TaskClient(Protocol):
@@ -212,45 +215,29 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         )
         if not wanted and not parent_wanted:
             return
-        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
-        if not callable(broad_snapshot):
-            return
-        try:
-            read = broad_snapshot(
-                identity="lifecycle-child-prefetch",
-                filters=("chain:on",),
-                statuses=("completed", "deleted", "pending", "recurring", "waiting"),
-                complete_chain_history=False,
-                refresh=True,
+        requested = tuple(
+            dict.fromkeys(
+                [payload.child_uuid.lower() for payload in wanted]
+                + [uuid_value for uuid_value, _ in parent_wanted]
             )
-        except Exception:
+        )
+        try:
+            result = self._uow.repository.read_uuid_set(
+                UUIDSetRequest(requested, refresh=True, expected_mutation_epoch=self._uow.mutation_epoch)
+            )
+        except (TypeError, ValueError):
             return
-        if isinstance(read, Absent):
-            for payload in wanted:
-                self._prefetched_children[payload.child_uuid.lower()] = read
-            return
-        if not isinstance(read, Found):
-            return
-        snapshot = read.value
-        uuid_matches = getattr(snapshot, "uuid_matches", None)
-        if not callable(uuid_matches):
+        if result.status is not SetReadStatus.COMPLETE:
             return
         for payload in wanted:
-            try:
-                matches = tuple(uuid_matches(payload.child_uuid))
-            except Exception:
-                continue
-            if not matches:
+            identity = payload.child_uuid.lower()
+            if identity not in result.found:
                 self._prefetched_children[payload.child_uuid.lower()] = Absent(
                     f"prefetch:uuid:{payload.child_uuid.lower()}", "prefetch snapshot contains no matching UUID"
                 )
         for parent_uuid, expected_next_link in parent_wanted:
-            try:
-                matches = tuple(uuid_matches(parent_uuid))
-            except Exception:
-                continue
-            if len(matches) == 1:
-                row = matches[0]
+            row = result.found.get(parent_uuid)
+            if row is not None:
                 # A cached row that already has the requested link is not
                 # safe to trust across the batch; retain a fresh read for
                 # idempotent classification.
@@ -580,68 +567,34 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         )
         if not pending:
             return {}
-        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
-        if not callable(broad_snapshot):
+        identities = tuple(cast(ChildImportPayload, request.payload).child_uuid for request in pending)
+        try:
+            result = self._uow.repository.read_uuid_set(
+                UUIDSetRequest(identities, refresh=True, expected_mutation_epoch=self._uow.mutation_epoch)
+            )
+        except (TypeError, ValueError) as exc:
+            result = None
+            failure_reason = str(exc)
+        if result is None or result.status is not SetReadStatus.COMPLETE:
+            evidence = result.failures[0] if result is not None and result.failures else None
+            reason = (evidence.detail if evidence is not None else ("child postcondition set read unavailable" if result is not None else failure_reason))
+            kind = MutationOutcomeKind.RETRYABLE if evidence is not None and evidence.retryable else MutationOutcomeKind.MANUAL_REVIEW
             return {
                 cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="child batch verification is unavailable"
-                )
-                for request in pending
-            }
-        read = broad_snapshot(
-            identity="lifecycle-child-postverify",
-            filters=("chain:on",),
-            statuses=("completed", "deleted", "pending", "recurring", "waiting"),
-            complete_chain_history=False,
-            refresh=True,
-        )
-        if isinstance(read, Unavailable):
-            kind = MutationOutcomeKind.RETRYABLE if read.retryable else MutationOutcomeKind.MANUAL_REVIEW
-            return {
-                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
-                    request, kind, reason=read.evidence.detail, failure=read.evidence
-                )
-                for request in pending
-            }
-        if isinstance(read, Absent):
-            return {
-                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="child postcondition snapshot is absent"
-                )
-                for request in pending
-            }
-        if not isinstance(read, Found):
-            return {
-                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid child postcondition snapshot"
-                )
-                for request in pending
-            }
-        snapshot = read.value
-        uuid_matches = getattr(snapshot, "uuid_matches", None)
-        if not callable(uuid_matches):
-            return {
-                cast(ChildImportPayload, request.payload).child_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed child postcondition snapshot"
+                    request, kind, reason=reason, failure=evidence
                 )
                 for request in pending
             }
         outcomes: dict[str, MutationOutcome] = {}
         for request in pending:
             assert isinstance(request.payload, ChildImportPayload)
-            try:
-                matches = tuple(uuid_matches(request.payload.child_uuid))
-            except Exception as exc:
-                outcomes[request.payload.child_uuid.lower()] = self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed child postcondition snapshot: {exc}"
-                )
-                continue
-            if len(matches) == 1 and _child_import_matches(matches[0], request.payload, request.guard.task_uuid):
+            match = result.found.get(request.payload.child_uuid.lower())
+            if match is not None and _child_import_matches(match, request.payload, request.guard.task_uuid):
                 outcomes[request.payload.child_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.CHILD_IMPORTED
                 )
             else:
-                reason = "child postcondition target is absent" if not matches else "child postcondition does not match"
+                reason = "child postcondition target is absent" if match is None else "child postcondition does not match"
                 outcomes[request.payload.child_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason=reason
                 )
@@ -657,68 +610,34 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         )
         if not pending:
             return {}
-        broad_snapshot = getattr(self._uow.repository, "broad_snapshot", None)
-        if not callable(broad_snapshot):
+        identities = tuple(request.guard.task_uuid for request in pending)
+        try:
+            result = self._uow.repository.read_uuid_set(
+                UUIDSetRequest(identities, refresh=True, expected_mutation_epoch=self._uow.mutation_epoch)
+            )
+        except (TypeError, ValueError) as exc:
+            result = None
+            failure_reason = str(exc)
+        if result is None or result.status is not SetReadStatus.COMPLETE:
+            evidence = result.failures[0] if result is not None and result.failures else None
+            reason = (evidence.detail if evidence is not None else ("parent postcondition set read unavailable" if result is not None else failure_reason))
+            kind = MutationOutcomeKind.RETRYABLE if evidence is not None and evidence.retryable else MutationOutcomeKind.MANUAL_REVIEW
             return {
                 request.guard.task_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="parent batch verification is unavailable"
-                )
-                for request in pending
-            }
-        read = broad_snapshot(
-            identity="lifecycle-parent-postverify",
-            filters=("chain:on",),
-            statuses=("completed", "deleted", "pending", "recurring", "waiting"),
-            complete_chain_history=False,
-            refresh=True,
-        )
-        if isinstance(read, Unavailable):
-            kind = MutationOutcomeKind.RETRYABLE if read.retryable else MutationOutcomeKind.MANUAL_REVIEW
-            return {
-                request.guard.task_uuid.lower(): self._outcome(
-                    request, kind, reason=read.evidence.detail, failure=read.evidence
-                )
-                for request in pending
-            }
-        if isinstance(read, Absent):
-            return {
-                request.guard.task_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="parent postcondition snapshot is absent"
-                )
-                for request in pending
-            }
-        if not isinstance(read, Found):
-            return {
-                request.guard.task_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="invalid parent postcondition snapshot"
-                )
-                for request in pending
-            }
-        snapshot = read.value
-        uuid_matches = getattr(snapshot, "uuid_matches", None)
-        if not callable(uuid_matches):
-            return {
-                request.guard.task_uuid.lower(): self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason="malformed parent postcondition snapshot"
+                    request, kind, reason=reason, failure=evidence
                 )
                 for request in pending
             }
         outcomes: dict[str, MutationOutcome] = {}
         for request in pending:
             assert isinstance(request.payload, ParentLinkPayload)
-            try:
-                matches = tuple(uuid_matches(request.guard.task_uuid))
-            except Exception as exc:
-                outcomes[request.guard.task_uuid.lower()] = self._outcome(
-                    request, MutationOutcomeKind.MANUAL_REVIEW, reason=f"malformed parent postcondition snapshot: {exc}"
-                )
-                continue
-            if len(matches) == 1 and _text(_observed_value(matches[0], "nextLink")).casefold() == request.payload.child_short_uuid.casefold():
+            match = result.found.get(request.guard.task_uuid.lower())
+            if match is not None and _text(_observed_value(match, "nextLink")).casefold() == request.payload.child_short_uuid.casefold():
                 outcomes[request.guard.task_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.APPLIED, postcondition=MutationPostcondition.PARENT_LINKED
                 )
             else:
-                reason = "parent postcondition target is absent" if not matches else "parent postcondition does not match"
+                reason = "parent postcondition target is absent" if match is None else "parent postcondition does not match"
                 outcomes[request.guard.task_uuid.lower()] = self._outcome(
                     request, MutationOutcomeKind.MANUAL_REVIEW, reason=reason
                 )

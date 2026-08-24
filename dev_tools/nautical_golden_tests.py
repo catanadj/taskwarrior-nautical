@@ -4226,6 +4226,34 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
             self_mode = self.mode
             return Found(Snapshot(), f"broad:{self.mode}")
 
+        def read_uuid_set(self, request):
+            from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+            command = TaskCommand(("task", "export"), "batch verification", 1.0)
+            if self.mode == "unavailable":
+                evidence = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.01, True, "lock active")
+                return SetReadResult(SetReadStatus.UNAVAILABLE, request.uuids, failures=(evidence,))
+            if self.mode == "malformed":
+                return SetReadResult(SetReadStatus.MALFORMED, request.uuids, evidence=("malformed set",))
+            child_row = child.to_dict()
+            parent_row = dict(parent)
+            if self.mode == "stale":
+                child_row["link"] = 99
+                parent_row["nextLink"] = "stale00"
+            if self.mode == "conflict":
+                return SetReadResult(
+                    SetReadStatus.DUPLICATE,
+                    request.uuids,
+                    found={child_uuid: child_row, parent_uuid: parent_row},
+                    evidence=("duplicate identity",),
+                )
+            return SetReadResult(
+                SetReadStatus.COMPLETE,
+                request.uuids,
+                found={child_uuid: child_row, parent_uuid: parent_row},
+                complete_for_requested_identities=True,
+            )
+
     class Uow:
         def __init__(self, mode):
             self.repository = Repo(mode)

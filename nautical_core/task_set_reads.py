@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re
 from types import MappingProxyType
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, TypeVar, cast
 from uuid import UUID
 
-from .integration_models import Absent, Found, TaskRead, Unavailable
+from .integration_models import Absent, FailureEvidence, Found, TaskCommandResult, TaskRead, Unavailable
 from .task_models import FieldPresence, TaskObservation
 
 
@@ -91,6 +91,7 @@ class ChainSlotSetRequest:
     slots: tuple[ChainSlot, ...]
     statuses: tuple[str, ...] = _DEFAULT_STATUSES
     expected_predecessors: Mapping[ChainSlot, str] = field(default_factory=dict)
+    complete_chain_history: bool = False
     refresh: bool = False
     expected_mutation_epoch: int | None = None
     max_chunk_size: int = 32
@@ -117,6 +118,7 @@ class ChainSlotSetRequest:
         object.__setattr__(self, "statuses", _statuses(self.statuses))
         object.__setattr__(self, "expected_predecessors", MappingProxyType(predecessors))
         object.__setattr__(self, "refresh", bool(self.refresh))
+        object.__setattr__(self, "complete_chain_history", bool(self.complete_chain_history))
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +130,7 @@ class SetReadResult:
     evidence: tuple[str, ...] = ()
     mutation_epoch: int = 0
     complete_for_requested_identities: bool = False
+    failures: tuple[FailureEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", SetReadStatus(self.status))
@@ -136,13 +139,31 @@ class SetReadResult:
         object.__setattr__(self, "absent", tuple(self.absent))
         object.__setattr__(self, "evidence", tuple(str(item) for item in self.evidence if str(item)))
         object.__setattr__(self, "complete_for_requested_identities", bool(self.complete_for_requested_identities))
+        failures = tuple(self.failures)
+        if any(not isinstance(item, FailureEvidence) for item in failures):
+            raise TypeError("set read failures require FailureEvidence")
+        object.__setattr__(self, "failures", failures)
 
 
 class _Repository(Protocol):
     @property
     def mutation_epoch(self) -> int: ...
 
-    def broad_snapshot(self, *, identity: str, filters: tuple[str, ...], statuses: tuple[str, ...], refresh: bool = False) -> TaskRead: ...
+    def broad_snapshot(
+        self,
+        *,
+        identity: str,
+        filters: tuple[str, ...],
+        statuses: tuple[str, ...],
+        complete_chain_history: bool = False,
+        refresh: bool = False,
+    ) -> TaskRead[object]: ...
+
+
+class _Snapshot(Protocol):
+    rows: tuple[TaskObservation, ...]
+    truncated: bool
+    command_result: TaskCommandResult
 
 
 def _row_text(row: TaskObservation, field_name: str) -> str:
@@ -160,6 +181,17 @@ def _or_filters(groups: tuple[tuple[str, ...], ...]) -> tuple[str, ...]:
         tokens.extend(("(", *group, ")"))
     tokens.append(")")
     return tuple(tokens)
+
+
+def uuid_set_filters(uuids: tuple[str, ...]) -> tuple[str, ...]:
+    """Build a bounded boolean Taskwarrior filter for canonical UUIDs."""
+    return _or_filters(tuple((f"uuid:{_uuid(value)}",) for value in uuids))
+
+
+def chain_slot_set_filters(slots: tuple[ChainSlot, ...]) -> tuple[str, ...]:
+    """Build a bounded boolean filter for typed chain/link slots."""
+    normalized = tuple(slot if isinstance(slot, ChainSlot) else ChainSlot(*slot) for slot in slots)
+    return _or_filters(tuple((f"chainID:{slot.chain_id}", f"link:{slot.link}") for slot in normalized))
 
 
 class AuthoritativeSetReadService:
@@ -193,29 +225,30 @@ class AuthoritativeSetReadService:
             raise TypeError("UUID set read requires UUIDSetRequest")
         if not self._epoch_ok(request.expected_mutation_epoch):
             return SetReadResult(SetReadStatus.STALE, request.uuids, evidence=("mutation epoch changed before read",), mutation_epoch=int(self._repository.mutation_epoch))
-        found: dict[str, TaskObservation] = {}
-        absent: list[str] = []
+        found: dict[object, TaskObservation] = {}
+        absent: list[object] = []
         evidence: list[str] = []
         chunks = self._chunks(request.uuids, request)
-        for index, chunk in enumerate(chunks):
+        for index, raw_chunk in enumerate(chunks):
+            chunk = tuple(str(value) for value in raw_chunk)
             read = self._repository.broad_snapshot(
                 identity=f"uuid-set:{index}:{len(chunk)}",
-                filters=_or_filters(tuple((f"uuid:{value}",) for value in chunk)),
+                filters=uuid_set_filters(tuple(str(value) for value in chunk)),
                 statuses=request.statuses,
                 refresh=request.refresh,
             )
             if isinstance(read, Unavailable):
                 evidence.append(f"chunk {index + 1}/{len(chunks)} unavailable: {read.evidence.detail}")
-                return SetReadResult(SetReadStatus.PARTIAL if found else SetReadStatus.UNAVAILABLE, request.uuids, found, tuple(absent), tuple(evidence), int(self._repository.mutation_epoch))
+                return SetReadResult(SetReadStatus.PARTIAL if found else SetReadStatus.UNAVAILABLE, request.uuids, found, tuple(absent), tuple(evidence), int(self._repository.mutation_epoch), False, (read.evidence,))
             if isinstance(read, Absent):
                 absent.extend(chunk)
                 continue
-            snapshot = read.value
+            snapshot = cast(_Snapshot, read.value)
             if snapshot.truncated:
                 return SetReadResult(SetReadStatus.TRUNCATED, request.uuids, found, tuple(absent), (f"chunk {index + 1} was truncated",), int(self._repository.mutation_epoch))
             for row in snapshot.rows:
                 identity = _row_text(row, "uuid").lower()
-                if not identity or identity not in chunk or row.issues:
+                if not identity or identity not in chunk:
                     return SetReadResult(SetReadStatus.MALFORMED, request.uuids, found, tuple(absent), ("set export contained a malformed or unrelated row",), int(self._repository.mutation_epoch))
                 if identity in found:
                     return SetReadResult(SetReadStatus.DUPLICATE, request.uuids, found, tuple(absent), (f"duplicate UUID {identity}",), int(self._repository.mutation_epoch))
@@ -230,25 +263,35 @@ class AuthoritativeSetReadService:
             raise TypeError("chain-slot set read requires ChainSlotSetRequest")
         if not self._epoch_ok(request.expected_mutation_epoch):
             return SetReadResult(SetReadStatus.STALE, request.slots, evidence=("mutation epoch changed before read",), mutation_epoch=int(self._repository.mutation_epoch))
-        found: dict[ChainSlot, TaskObservation] = {}
+        found: dict[object, TaskObservation] = {}
         absent: list[ChainSlot] = []
         slots = request.slots
         chunks = self._chunks(slots, request)
-        for index, chunk in enumerate(chunks):
-            filters = _or_filters(tuple((f"chainID:{slot.chain_id}", f"link:{slot.link}") for slot in chunk))
-            read = self._repository.broad_snapshot(
-                identity=f"slot-set:{index}:{len(chunk)}",
-                filters=filters,
-                statuses=request.statuses,
-                refresh=request.refresh,
-            )
+        for index, raw_chunk in enumerate(chunks):
+            chunk = tuple(value for value in raw_chunk if isinstance(value, ChainSlot))
+            filters = chain_slot_set_filters(tuple(slot for slot in chunk if isinstance(slot, ChainSlot)))
+            if request.complete_chain_history:
+                read = self._repository.broad_snapshot(
+                    identity=f"slot-set:{index}:{len(chunk)}",
+                    filters=filters,
+                    statuses=request.statuses,
+                    complete_chain_history=True,
+                    refresh=request.refresh,
+                )
+            else:
+                read = self._repository.broad_snapshot(
+                    identity=f"slot-set:{index}:{len(chunk)}",
+                    filters=filters,
+                    statuses=request.statuses,
+                    refresh=request.refresh,
+                )
             if isinstance(read, Unavailable):
                 detail = f"chunk {index + 1}/{len(chunks)} unavailable: {read.evidence.detail}"
-                return SetReadResult(SetReadStatus.PARTIAL if found else SetReadStatus.UNAVAILABLE, slots, found, tuple(absent), (detail,), int(self._repository.mutation_epoch))
+                return SetReadResult(SetReadStatus.PARTIAL if found else SetReadStatus.UNAVAILABLE, slots, found, tuple(absent), (detail,), int(self._repository.mutation_epoch), False, (read.evidence,))
             if isinstance(read, Absent):
                 absent.extend(chunk)
                 continue
-            snapshot = read.value
+            snapshot = cast(_Snapshot, read.value)
             if snapshot.truncated:
                 return SetReadResult(SetReadStatus.TRUNCATED, slots, found, tuple(absent), (f"chunk {index + 1} was truncated",), int(self._repository.mutation_epoch))
             for row in snapshot.rows:
@@ -258,7 +301,7 @@ class AuthoritativeSetReadService:
                 except ValueError:
                     link = 0
                 slot = ChainSlot(chain_id, link) if chain_id and link > 0 else None
-                if slot is None or slot not in chunk or row.issues:
+                if slot is None or slot not in chunk:
                     return SetReadResult(SetReadStatus.MALFORMED, slots, found, tuple(absent), ("set export contained a malformed or unrelated slot",), int(self._repository.mutation_epoch))
                 if slot in found:
                     return SetReadResult(SetReadStatus.DUPLICATE, slots, found, tuple(absent), (f"duplicate slot {slot.chain_id}:{slot.link}",), int(self._repository.mutation_epoch))
@@ -279,4 +322,6 @@ __all__ = [
     "SetReadResult",
     "SetReadStatus",
     "UUIDSetRequest",
+    "chain_slot_set_filters",
+    "uuid_set_filters",
 ]

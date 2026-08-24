@@ -2434,7 +2434,7 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
         out.append(f"{key}:{value}")
     return out
 
-def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
+def _export_chain_endpoint(chain_id: str, direction: str):
     """Return a chain endpoint from the invocation's authoritative snapshot."""
     rows = _lifecycle_read_service().get_chain_export(chain_id)
     if rows is None:
@@ -2447,7 +2447,7 @@ def _export_chain_endpoint(chain_id: str, direction: str) -> dict | None:
     if not with_links:
         return None
     with_links.sort(key=lambda item: item[0])
-    return with_links[0 if direction == "first" else -1][1].to_mapping()
+    return with_links[0 if direction == "first" else -1][1]
 
 # ------------------------------------------------------------------------------
 # Main

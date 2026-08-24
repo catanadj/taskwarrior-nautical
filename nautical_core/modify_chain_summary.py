@@ -19,11 +19,11 @@ def summary_chain_id(current: TaskPayload) -> str:
 
 def span_fields(
     chain_id: str,
-    chain: list[TaskPayload],
+    chain: list[TaskObservation],
     *,
     stop_at: datetime | None = None,
     stopped_by_delete: bool = False,
-    export_endpoint: Callable[[str, str], dict | None],
+    export_endpoint: Callable[[str, str], TaskObservation | None],
     parse_datetime: Callable[[Any], datetime | None],
     human_delta: Callable[..., str],
 ) -> tuple[datetime | None, datetime | None, str]:

@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 import os
 import time
-from typing import Any, Callable, Mapping, Protocol, cast
+from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from .integration_models import (
     ChainDisablePayload,
@@ -668,6 +668,59 @@ class LifecycleApplicationService:
                 ),
             )
 
+        def renew_batch(candidates: Sequence[_BatchState], step: str) -> None:
+            """Renew all currently eligible leases in one CAS transaction."""
+            eligible = tuple(state for state in candidates if state.terminal is None)
+            bulk = getattr(self._outbox, "renew_leases", None)
+            if callable(bulk) and eligible:
+                overall, rows = bulk(
+                    intent_ids=tuple(state.record.intent_id for state in eligible),
+                    owner=self._owner,
+                    lease_seconds=self._lease_seconds,
+                )
+                if overall.ok:
+                    for state in eligible:
+                        result = rows.get(state.record.intent_id)
+                        if result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
+                            state.terminal = self._retry_or_review(
+                                state.record,
+                                result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk lease result missing"),
+                                f"could not renew lifecycle lease before {step}",
+                                tuple(state.mutations),
+                            )
+                    return
+            for state in eligible:
+                state.terminal = self._renew_before_step(state.record, step, tuple(state.mutations))
+
+        def advance_batch(candidates: Sequence[_BatchState], target: ExecutionStage, detail: str) -> None:
+            eligible = tuple(state for state in candidates if state.terminal is None)
+            if not eligible:
+                return
+            bulk = getattr(self._outbox, "advance_stages", None)
+            if callable(bulk):
+                overall, rows = bulk(
+                    stages={state.record.intent_id: target for state in eligible}, owner=self._owner
+                )
+            else:
+                overall = OutboxResult(OutboxResultKind.APPLIED)
+                rows = {
+                    state.record.intent_id: self._outbox.advance_stage(
+                        intent_id=state.record.intent_id, owner=self._owner, stage=target
+                    )
+                    for state in eligible
+                }
+            for state in eligible:
+                result = rows.get(state.record.intent_id)
+                if not overall.ok or result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
+                    state.terminal = self._retry_or_review(
+                        state.record,
+                        result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk stage result missing"),
+                        detail,
+                        tuple(state.mutations),
+                    )
+                else:
+                    state.stage = target
+
         for record in records:
             plan = record.plan
             child_payload = _child_import_payload(plan)
@@ -686,12 +739,9 @@ class LifecycleApplicationService:
             states.append(_BatchState(record, plan, child_payload, link_payload, record.stage, []))
 
         pending_children: list[tuple[_BatchState, MutationRequest]] = []
+        renew_batch(states, "child import")
         for state in states:
             if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
-                continue
-            lease_failure = self._renew_before_step(state.record, "child import", tuple(state.mutations))
-            if lease_failure is not None:
-                state.terminal = lease_failure
                 continue
             request = self._request_for(MutationOperation.CHILD_IMPORT, state.plan, state.child_payload)
             if request is None:
@@ -712,13 +762,12 @@ class LifecycleApplicationService:
                 state.terminal = self._settle_step(state.record, outcome, ExecutionStage.CHILD_PRESENT)
 
         verified_children: list[tuple[_BatchState, MutationRequest]] = []
+        renew_batch([state for state, _request in pending_children], "child verification")
         for state, request in pending_children:
-            lease_failure = self._renew_before_step(state.record, "child verification", tuple(state.mutations))
-            if lease_failure is not None:
-                state.terminal = lease_failure
-                continue
-            verified_children.append((state, request))
+            if state.terminal is None:
+                verified_children.append((state, request))
         child_results = verify_children(tuple(request for _, request in verified_children))
+        child_stage_candidates: list[_BatchState] = []
         for state, request in verified_children:
             payload = cast(ChildImportPayload, request.payload)
             mutation_outcome = child_results.get(payload.child_uuid.lower())
@@ -732,18 +781,16 @@ class LifecycleApplicationService:
                 )
             state.mutations.append(mutation_outcome)
             report_action(state, "child verified")
-            settled = self._settle_step(state.record, mutation_outcome, ExecutionStage.CHILD_PRESENT)
-            state.terminal = settled
-            if settled is None:
-                state.stage = ExecutionStage.CHILD_PRESENT
+            if mutation_outcome.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
+                child_stage_candidates.append(state)
+            else:
+                state.terminal = self._settle_step(state.record, mutation_outcome, ExecutionStage.CHILD_PRESENT)
+        advance_batch(child_stage_candidates, ExecutionStage.CHILD_PRESENT, "could not persist child-present lifecycle stage")
 
         pending_parents: list[tuple[_BatchState, MutationRequest]] = []
+        renew_batch(states, "parent link")
         for state in states:
             if state.terminal is not None or _SPAWN_STAGE_ORDER[state.stage] >= _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
-                continue
-            lease_failure = self._renew_before_step(state.record, "parent link", tuple(state.mutations))
-            if lease_failure is not None:
-                state.terminal = lease_failure
                 continue
             request = self._request_for(MutationOperation.PARENT_LINK, state.plan, state.link_payload)
             if request is None:
@@ -764,13 +811,12 @@ class LifecycleApplicationService:
                 state.terminal = self._settle_step(state.record, outcome, ExecutionStage.PARENT_LINKED)
 
         verified_parents: list[tuple[_BatchState, MutationRequest]] = []
+        renew_batch([state for state, _request in pending_parents], "parent verification")
         for state, request in pending_parents:
-            lease_failure = self._renew_before_step(state.record, "parent verification", tuple(state.mutations))
-            if lease_failure is not None:
-                state.terminal = lease_failure
-                continue
-            verified_parents.append((state, request))
+            if state.terminal is None:
+                verified_parents.append((state, request))
         parent_results = verify_parents(tuple(request for _, request in verified_parents))
+        parent_stage_candidates: list[_BatchState] = []
         for state, request in verified_parents:
             mutation_outcome = parent_results.get(request.guard.task_uuid.lower())
             if mutation_outcome is None:
@@ -783,11 +829,28 @@ class LifecycleApplicationService:
                 )
             state.mutations.append(mutation_outcome)
             report_action(state, "parent verified")
-            settled = self._settle_step(state.record, mutation_outcome, ExecutionStage.PARENT_LINKED)
-            state.terminal = settled
-            if settled is None:
-                state.stage = ExecutionStage.PARENT_LINKED
+            if mutation_outcome.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
+                parent_stage_candidates.append(state)
+            else:
+                state.terminal = self._settle_step(state.record, mutation_outcome, ExecutionStage.PARENT_LINKED)
+        advance_batch(parent_stage_candidates, ExecutionStage.PARENT_LINKED, "could not persist parent-linked lifecycle stage")
 
+        renew_batch(states, "verification")
+        ready_for_stage = [state for state in states if state.terminal is None]
+        bulk_advance = getattr(self._outbox, "advance_stages", None)
+        if callable(bulk_advance) and ready_for_stage:
+            _advance_status, advance_rows = bulk_advance(
+                stages={state.record.intent_id: ExecutionStage.VERIFIED for state in ready_for_stage},
+                owner=self._owner,
+            )
+        else:
+            advance_rows = {
+                state.record.intent_id: self._outbox.advance_stage(
+                    intent_id=state.record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED
+                )
+                for state in ready_for_stage
+            }
+        advanced: list[_BatchState] = []
         for state in states:
             if state.terminal is not None:
                 outcome = LifecycleApplicationOutcome(
@@ -800,13 +863,9 @@ class LifecycleApplicationService:
                 outcomes.append(outcome)
                 report_outcome(state.record, outcome, state)
                 continue
-            lease_failure = self._renew_before_step(state.record, "verification", tuple(state.mutations))
-            if lease_failure is not None:
-                outcomes.append(lease_failure)
-                report_outcome(state.record, lease_failure, state)
-                continue
-            advance = self._outbox.advance_stage(
-                intent_id=state.record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED
+            advance = advance_rows.get(
+                state.record.intent_id,
+                OutboxResult(OutboxResultKind.CONFLICT, reason="bulk stage result missing"),
             )
             report_action(state, "intent verified")
             if not advance.ok:
@@ -814,12 +873,35 @@ class LifecycleApplicationService:
                 outcomes.append(outcome)
                 report_outcome(state.record, outcome, state)
                 continue
-            lease_failure = self._renew_before_step(state.record, "acknowledgement", tuple(state.mutations))
-            if lease_failure is not None:
-                outcomes.append(lease_failure)
-                report_outcome(state.record, lease_failure, state)
+            advanced.append(state)
+
+        renew_batch(advanced, "acknowledgement")
+        ack_candidates = [state for state in advanced if state.terminal is None]
+        bulk_ack = getattr(self._outbox, "acknowledge_many", None)
+        if callable(bulk_ack) and ack_candidates:
+            _ack_status, ack_rows = bulk_ack(
+                intent_ids=tuple(state.record.intent_id for state in ack_candidates), owner=self._owner
+            )
+        else:
+            ack_rows = {
+                state.record.intent_id: self._outbox.acknowledge(
+                    intent_id=state.record.intent_id, owner=self._owner
+                )
+                for state in ack_candidates
+            }
+        for state in advanced:
+            if state.terminal is not None:
+                outcome = LifecycleApplicationOutcome(
+                    state.terminal.kind, state.terminal.identity, reason=state.terminal.reason,
+                    intent_id=state.terminal.intent_id, mutations=tuple(state.mutations),
+                )
+                outcomes.append(outcome)
+                report_outcome(state.record, outcome, state)
                 continue
-            ack = self._outbox.acknowledge(intent_id=state.record.intent_id, owner=self._owner)
+            ack = ack_rows.get(
+                state.record.intent_id,
+                OutboxResult(OutboxResultKind.CONFLICT, reason="bulk acknowledgement result missing"),
+            )
             report_action(state, "intent acknowledged")
             if not ack.ok:
                 outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))

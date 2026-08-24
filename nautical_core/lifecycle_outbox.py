@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import sqlite3
 import time
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 import uuid
 
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleContractError, LifecyclePlan
@@ -529,6 +529,48 @@ class LifecycleOutboxRepository:
             if conn is not None:
                 conn.close()
 
+    def _with_bulk_connection(
+        self,
+        operation: Callable[[sqlite3.Connection], Mapping[str, OutboxResult]],
+    ) -> tuple[OutboxResult, Mapping[str, OutboxResult]]:
+        """Run one bulk CAS transaction on a session or short-lived connection."""
+        started = time.perf_counter()
+        if self._session_conn is not None:
+            if self._session_pid != os.getpid():
+                return (
+                    OutboxResult(OutboxResultKind.REJECTED, reason="outbox session cannot cross a process boundary"),
+                    {},
+                )
+            try:
+                return OutboxResult(OutboxResultKind.APPLIED), operation(self._session_conn)
+            except sqlite3.OperationalError as exc:
+                return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), {}
+            except LifecycleOutboxError as exc:
+                return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), {}
+            except Exception as exc:
+                return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), {}
+            finally:
+                self._metric("outbox_operation_seconds", time.perf_counter() - started)
+        conn: sqlite3.Connection | None = None
+        self._metric("outbox_operation_scopes")
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            return OutboxResult(OutboxResultKind.APPLIED), operation(conn)
+        except sqlite3.OperationalError as exc:
+            if _busy(exc):
+                self._metric("outbox_busy_failures")
+            return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), {}
+        except LifecycleOutboxError as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc)), {}
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{type(exc).__name__}: {exc}"), {}
+        finally:
+            self._metric("outbox_operation_seconds", time.perf_counter() - started)
+            if conn is not None:
+                self._secure_state_files()
+                conn.close()
+
     @staticmethod
     def _from_row(row: sqlite3.Row) -> LifecycleOutboxRecord:
         work_kind = str(row["work_kind"] or "lifecycle")
@@ -784,18 +826,15 @@ class LifecycleOutboxRepository:
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
                 )
                 candidates = conn.execute(
-                    "SELECT intent_id FROM lifecycle_outbox WHERE processing_state IN (?, ?) "
+                    "SELECT * FROM lifecycle_outbox WHERE processing_state IN (?, ?) "
                     "AND work_kind=? ORDER BY created_at, intent_id LIMIT ?",
                     (*_ACTIVE_STATES, "lifecycle", int(limit)),
                 ).fetchall()
                 records: list[LifecycleOutboxRecord] = []
                 for raw in candidates:
-                    intent_id = str(raw[0])
-                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
-                    if row is None:
-                        continue
+                    intent_id = str(raw["intent_id"])
                     try:
-                        candidate = self._from_row(row)
+                        candidate = self._from_row(raw)
                     except LifecycleOutboxError as exc:
                         self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
                         continue
@@ -814,19 +853,22 @@ class LifecycleOutboxRepository:
                             ),
                         )
                         continue
-                    conn.execute(
+                    changed = conn.execute(
                         "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
                         "attempts=attempts+1, failure_json='', updated_at=? "
                         "WHERE intent_id=? AND processing_state IN (?, ?)",
                         (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, *_ACTIVE_STATES),
-                    )
-                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
-                    if row is None:
-                        continue
-                    try:
-                        records.append(self._from_row(row))
-                    except LifecycleOutboxError as exc:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                    ).rowcount
+                    if changed == 1:
+                        records.append(replace(
+                            candidate,
+                            state=OutboxProcessingState.CLAIMED,
+                            lease_owner=owner,
+                            lease_expires_at=expires,
+                            attempts=candidate.attempts + 1,
+                            failure=None,
+                            updated_at=now,
+                        ))
                 return OutboxResult(OutboxResultKind.APPLIED), tuple(records)
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc)), ()
@@ -1121,6 +1163,56 @@ class LifecycleOutboxRepository:
 
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
+    def renew_leases(
+        self,
+        *,
+        intent_ids: Sequence[str],
+        owner: str,
+        lease_seconds: float,
+    ) -> tuple[OutboxResult, Mapping[str, OutboxResult]]:
+        """Renew a bounded intent set in one transaction with per-row CAS results."""
+        self._metric("outbox_bulk_lease_renewals")
+        ids = tuple(dict.fromkeys(str(item or "").strip() for item in intent_ids if str(item or "").strip()))
+        owner = str(owner or "").strip()
+        if not ids or not owner or lease_seconds <= 0:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk lease renewal requires intents, owner, and lease"), {}
+        now = self._clock()
+        expires = now + float(lease_seconds)
+
+        def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
+            results: dict[str, OutboxResult] = {}
+            with _transaction(conn):
+                for intent_id in ids:
+                    # Lease renewal only needs the CAS columns. Avoid
+                    # decoding plan/guard JSON on the healthy path.
+                    row = conn.execute(
+                        "SELECT processing_state, lease_owner, lease_expires_at "
+                        "FROM lifecycle_outbox WHERE intent_id=?",
+                        (intent_id,),
+                    ).fetchone()
+                    if row is None:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="outbox intent is absent")
+                        continue
+                    state = str(row["processing_state"] or "")
+                    if state in {item.value for item in _TERMINAL_STATES}:
+                        results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED)
+                        continue
+                    if state != OutboxProcessingState.CLAIMED.value or str(row["lease_owner"] or "") != owner or float(row["lease_expires_at"] or 0) <= now:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="outbox claim is not owned")
+                        continue
+                    changed = conn.execute(
+                        "UPDATE lifecycle_outbox SET lease_expires_at=?, updated_at=? WHERE intent_id=? "
+                        "AND processing_state=? AND lease_owner=? AND lease_expires_at>?",
+                        (expires, now, intent_id, OutboxProcessingState.CLAIMED.value, owner, now),
+                    ).rowcount
+                    if changed != 1:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="outbox claim changed during bulk renewal")
+                    else:
+                        results[intent_id] = OutboxResult(OutboxResultKind.APPLIED)
+            return results
+
+        return self._with_bulk_connection(operation)
+
     def advance_stage(self, *, intent_id: str, owner: str, stage: ExecutionStage) -> OutboxResult:
         self._metric("outbox_stage_advances")
         try:
@@ -1147,6 +1239,64 @@ class LifecycleOutboxRepository:
 
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
+    def advance_stages(
+        self,
+        *,
+        stages: Mapping[str, ExecutionStage],
+        owner: str,
+    ) -> tuple[OutboxResult, Mapping[str, OutboxResult]]:
+        """Advance independent claimed intents atomically, preserving row outcomes."""
+        self._metric("outbox_bulk_stage_advances")
+        owner = str(owner or "").strip()
+        normalized: dict[str, ExecutionStage] = {}
+        try:
+            for intent_id, stage in stages.items():
+                key = str(intent_id or "").strip()
+                if not key:
+                    continue
+                normalized[key] = ExecutionStage(stage)
+        except (TypeError, ValueError):
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk stage advancement contains an invalid stage"), {}
+        if not normalized or not owner:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk stage advancement requires intents and owner"), {}
+        now = self._clock()
+
+        def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
+            results: dict[str, OutboxResult] = {}
+            with _transaction(conn):
+                for intent_id, target in normalized.items():
+                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                    if row is None:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="outbox intent is absent")
+                        continue
+                    try:
+                        record = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason=f"outbox intent quarantined: {exc}")
+                        continue
+                    if record.state in _TERMINAL_STATES:
+                        results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+                    elif record.state is not OutboxProcessingState.CLAIMED or record.lease_owner != owner or record.lease_expires_at <= now:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=record, reason="outbox claim is not owned")
+                    elif target is ExecutionStage.FINALIZED or not _transition_allowed(record.stage, target):
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=record, reason=f"invalid lifecycle stage transition: {record.stage.value} -> {target.value}")
+                    elif target is record.stage:
+                        results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+                    else:
+                        changed = conn.execute(
+                            "UPDATE lifecycle_outbox SET lifecycle_stage=?, updated_at=? WHERE intent_id=? "
+                            "AND processing_state=? AND lease_owner=? AND lease_expires_at>?",
+                            (target.value, now, intent_id, OutboxProcessingState.CLAIMED.value, owner, now),
+                        ).rowcount
+                        results[intent_id] = OutboxResult(
+                            OutboxResultKind.APPLIED if changed == 1 else OutboxResultKind.CONFLICT,
+                            reason="" if changed == 1 else "outbox claim changed during bulk stage advancement",
+                        )
+            return results
+
+        return self._with_bulk_connection(operation)
+
     def acknowledge(self, *, intent_id: str, owner: str) -> OutboxResult:
         self._metric("outbox_acknowledgements")
         def operation(conn: sqlite3.Connection, record: LifecycleOutboxRecord, now: float) -> OutboxResult:
@@ -1163,6 +1313,54 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.APPLIED)
 
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
+
+    def acknowledge_many(
+        self,
+        *,
+        intent_ids: Sequence[str],
+        owner: str,
+    ) -> tuple[OutboxResult, Mapping[str, OutboxResult]]:
+        """Acknowledge verified claimed intents in one transaction."""
+        self._metric("outbox_bulk_acknowledgements")
+        ids = tuple(dict.fromkeys(str(item or "").strip() for item in intent_ids if str(item or "").strip()))
+        owner = str(owner or "").strip()
+        if not ids or not owner:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk acknowledgement requires intents and owner"), {}
+        now = self._clock()
+
+        def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
+            results: dict[str, OutboxResult] = {}
+            with _transaction(conn):
+                for intent_id in ids:
+                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                    if row is None:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="outbox intent is absent")
+                        continue
+                    try:
+                        record = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason=f"outbox intent quarantined: {exc}")
+                        continue
+                    if record.state is OutboxProcessingState.ACKNOWLEDGED:
+                        results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+                    elif record.state is not OutboxProcessingState.CLAIMED or record.lease_owner != owner or record.lease_expires_at <= now:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=record, reason="outbox claim is not owned")
+                    elif record.stage is not ExecutionStage.VERIFIED:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=record, reason="outbox acknowledgement requires verified stage")
+                    else:
+                        changed = conn.execute(
+                            "UPDATE lifecycle_outbox SET lifecycle_stage=?, processing_state=?, lease_owner='', lease_expires_at=0, "
+                            "acknowledged_at=?, updated_at=? WHERE intent_id=? AND processing_state=? AND lease_owner=? AND lease_expires_at>?",
+                            (ExecutionStage.FINALIZED.value, OutboxProcessingState.ACKNOWLEDGED.value, now, now, intent_id, OutboxProcessingState.CLAIMED.value, owner, now),
+                        ).rowcount
+                        results[intent_id] = OutboxResult(
+                            OutboxResultKind.APPLIED if changed == 1 else OutboxResultKind.CONFLICT,
+                            reason="" if changed == 1 else "outbox claim changed during bulk acknowledgement",
+                        )
+            return results
+
+        return self._with_bulk_connection(operation)
 
     def release_retry(self, *, intent_id: str, owner: str, failure: OutboxFailure) -> OutboxResult:
         self._metric("outbox_retry_releases")

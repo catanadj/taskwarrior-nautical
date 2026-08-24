@@ -5020,6 +5020,54 @@ def test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary():
         expect(standalone.ok and connects == 2, "standalone call did not use a short-lived connection")
 
 
+def test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows():
+    """Bulk lease, stage, and acknowledgement CAS operations retain row isolation."""
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard, ExecutionStage
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResultKind
+
+    with tempfile.TemporaryDirectory() as td:
+        repo = LifecycleOutboxRepository(Path(td))
+        plans = []
+        for index in (1, 2):
+            parent_uuid = f"00000000-0000-4000-8000-0000000007{index:02d}"
+            child_uuid = f"00000000-0000-4000-8000-0000000008{index:02d}"
+            guard = ParentGuard("completed", "on", "bulk-cas", index, f"rf-{index}", "20260101T000000Z")
+            identity = LifecycleIdentity("bulk-cas", parent_uuid, index, index + 1, LifecycleEvent.COMPLETE)
+            plans.append(_plan_from_values(
+                identity=identity,
+                action=LifecycleAction.SPAWN_CHILD,
+                parent_guard=guard,
+                child_payload={"uuid": child_uuid, "chainID": "bulk-cas", "link": index + 1, "prevLink": parent_uuid[:8]},
+                parent_patch={"nextLink": child_uuid[:8]},
+                expected_postconditions=("child_present", "parent_linked", "verified"),
+            ))
+        for plan in plans:
+            expect(repo.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").ok, "bulk CAS enqueue failed")
+        claimed, records = repo.claim_batch(owner="bulk-owner", lease_seconds=30, limit=10)
+        expect(claimed.ok and len(records) == 2, f"bulk CAS claim failed: {claimed} {records}")
+        ids = tuple(record.intent_id for record in records)
+        with repo.session():
+            renewed, renewal_rows = repo.renew_leases(intent_ids=ids, owner="bulk-owner", lease_seconds=30)
+            expect(renewed.ok and all(item.kind is OutboxResultKind.APPLIED for item in renewal_rows.values()), "bulk renewal failed")
+            advanced, stage_rows = repo.advance_stages(
+                stages={intent_id: ExecutionStage.CHILD_PRESENT for intent_id in ids}, owner="bulk-owner"
+            )
+            expect(advanced.ok and all(item.kind is OutboxResultKind.APPLIED for item in stage_rows.values()), "bulk stage advance failed")
+            # One invalid owner must be isolated from the valid row.
+            isolated, isolated_rows = repo.renew_leases(intent_ids=(ids[0], "missing-intent"), owner="wrong-owner", lease_seconds=30)
+            expect(isolated.ok and isolated_rows[ids[0]].kind is OutboxResultKind.CONFLICT, "bulk CAS did not isolate ownership conflict")
+            advanced, _ = repo.advance_stages(
+                stages={intent_id: ExecutionStage.PARENT_LINKED for intent_id in ids}, owner="bulk-owner"
+            )
+            expect(advanced.ok, "bulk parent stage advance failed")
+            advanced, _ = repo.advance_stages(
+                stages={intent_id: ExecutionStage.VERIFIED for intent_id in ids}, owner="bulk-owner"
+            )
+            expect(advanced.ok, "bulk verification stage advance failed")
+            acknowledged, ack_rows = repo.acknowledge_many(intent_ids=ids, owner="bulk-owner")
+            expect(acknowledged.ok and all(item.kind is OutboxResultKind.APPLIED for item in ack_rows.values()), "bulk acknowledgement failed")
+
+
 def test_shared_outbox_persists_integrity_work_without_lifecycle_claiming():
     """Integrity work uses the shared table but remains invisible to lifecycle claims."""
     from nautical_core.chain_integrity_models import IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety
@@ -33958,6 +34006,7 @@ TESTS = [
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
     test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary,
+    test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows,
     test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,

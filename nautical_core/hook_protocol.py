@@ -11,11 +11,16 @@ class _ProtocolCodecError(Exception):
     """Fallback error type used while the standalone gate is being loaded."""
 
 
+TaskCodecError: type[Exception]
+
+
 try:
-    from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
+    from .task_codec import DEFAULT_TASK_CODEC as _imported_codec, TaskCodecError as _imported_error
+    DEFAULT_TASK_CODEC = _imported_codec
+    TaskCodecError = _imported_error
 except ImportError:  # standalone hook bootstrap loader
-    DEFAULT_TASK_CODEC = None  # type: ignore[assignment]
-    TaskCodecError = _ProtocolCodecError  # type: ignore[assignment,misc]
+    DEFAULT_TASK_CODEC = None
+    TaskCodecError = _ProtocolCodecError
 
 
 def _codec():
@@ -23,15 +28,18 @@ def _codec():
     global DEFAULT_TASK_CODEC, TaskCodecError
     if DEFAULT_TASK_CODEC is None:
         try:
-            from .task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+            from .task_codec import DEFAULT_TASK_CODEC as _codec_a, TaskCodecError as _error_a
+            imported_codec, imported_error = _codec_a, _error_a
         except ImportError:  # dynamically loaded protocol test/hook wrapper
             try:
-                from nautical_core.task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+                from nautical_core.task_codec import DEFAULT_TASK_CODEC as _codec_b, TaskCodecError as _error_b
+                imported_codec, imported_error = _codec_b, _error_b
             except Exception:
-                from task_codec import DEFAULT_TASK_CODEC as codec, TaskCodecError as error
+                from task_codec import DEFAULT_TASK_CODEC as _codec_c, TaskCodecError as _error_c
+                imported_codec, imported_error = _codec_c, _error_c
 
-        DEFAULT_TASK_CODEC = codec
-        TaskCodecError = error
+        DEFAULT_TASK_CODEC = imported_codec
+        TaskCodecError = imported_error
     return DEFAULT_TASK_CODEC
 
 

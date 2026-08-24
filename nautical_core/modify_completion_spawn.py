@@ -19,12 +19,13 @@ def completion_build_and_spawn_child(
     until_dt: Any,
     services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
+    task_row = dict(new)
     build_child_draft = services.build_child_draft
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
     try:
         child_draft = build_child_draft(
-            new, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
+            task_row, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
         )
         if not isinstance(child_draft, TaskDraft):
             raise TypeError("child builder returned a non-TaskDraft value")
@@ -54,7 +55,7 @@ def completion_build_and_spawn_child(
             deferred_spawn,
             defer_reason,
             spawn_intent_id,
-        ) = spawn_child_atomic(child_draft or child, new)
+        ) = spawn_child_atomic(child_draft or child, task_row)
         if not verified and not deferred_spawn:
             review_reason = defer_reason or "Child spawn could not be verified; parent not updated"
             return CompletionSpawnResult(

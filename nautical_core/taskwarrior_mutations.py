@@ -525,7 +525,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if request.operation is not MutationOperation.PARENT_LINK or not isinstance(request.payload, ParentLinkPayload):
             raise TypeError("parent linking requires a parent-link request")
         cached_parent = self._prefetched_parents.pop(request.guard.task_uuid.lower(), None)
-        parent: Mapping[str, Any] | None
+        parent: TaskObservation | None
         failure: MutationOutcome | None
         if cached_parent is not None and _text(_observed_value(cached_parent, "nextLink")).casefold() != request.payload.child_short_uuid.casefold():
             parent, failure = cached_parent, None

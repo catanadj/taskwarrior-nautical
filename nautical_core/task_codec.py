@@ -13,7 +13,9 @@ from typing import Any, Mapping, Sequence
 try:
     from .task_models import TaskDraft, TaskObservation
 except ImportError:  # standalone hook helper loading
-    from task_models import TaskDraft, TaskObservation
+    from task_models import TaskDraft as _StandaloneTaskDraft, TaskObservation as _StandaloneTaskObservation
+    TaskDraft = _StandaloneTaskDraft  # type: ignore[misc]
+    TaskObservation = _StandaloneTaskObservation  # type: ignore[misc]
 
 
 TASK_CODEC_VERSION = 1

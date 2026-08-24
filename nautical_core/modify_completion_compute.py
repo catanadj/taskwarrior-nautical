@@ -64,13 +64,14 @@ def completion_compute_child_due(
     diag: DiagnosticCallback | None = None,
     on_terminal: Any | None = None,
 ) -> tuple[Any, Any, Any] | None:
+    task_row = dict(new)
     try:
         if kind in {"anchor", "anchor_file"}:
-            child_due, meta, dnf = compute_anchor_child_due(new)
+            child_due, meta, dnf = compute_anchor_child_due(task_row)
             if kind == "anchor_file" and dnf is None:
                 dnf = []
         else:
-            child_due, meta = compute_cp_child_due(new)
+            child_due, meta = compute_cp_child_due(task_row)
             dnf = None
         return child_due, meta, dnf
     except OccurrenceSearchExhausted as exc:
@@ -82,7 +83,7 @@ def completion_compute_child_due(
                 [("Scheduler", occurrence_exhaustion_message(exc))],
                 kind="error",
             )
-            print_task(new)
+            print_task(task_row)
         return None
     except ValueError as exc:
         panel(
@@ -90,7 +91,7 @@ def completion_compute_child_due(
             [("Reason", f"Invalid task field: {str(exc)}")],
             kind="error",
         )
-        print_task(new)
+        print_task(task_row)
         return None
     except Exception as exc:
         if callable(diag):
@@ -100,7 +101,7 @@ def completion_compute_child_due(
             [("Reason", "Could not compute next recurrence timestamp")],
             kind="error",
         )
-        print_task(new)
+        print_task(task_row)
         return None
 
 

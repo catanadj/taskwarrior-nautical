@@ -10,7 +10,7 @@ from dataclasses import dataclass
 try:
     from .task_codec import DEFAULT_TASK_CODEC
 except ImportError:  # standalone hook bootstrap loader
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC  # type: ignore[no-redef]
+    from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)

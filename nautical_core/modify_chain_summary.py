@@ -33,8 +33,8 @@ def span_fields(
         first_task = export_endpoint(chain_id, "first")
     if not last_task and chain_id:
         last_task = export_endpoint(chain_id, "last")
-    first = parse_datetime((first_task or {}).get("due")) if first_task else None
-    last = parse_datetime((last_task or {}).get("end")) if last_task else None
+    first = parse_datetime(first_task.get("due")) if first_task else None
+    last = parse_datetime(last_task.get("end")) if last_task else None
     span = "–"
     if first and last:
         span = human_delta(first, last, prefer_months=True).replace("in ", "").replace("overdue by ", "")

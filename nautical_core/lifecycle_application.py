@@ -1084,10 +1084,7 @@ class LifecycleApplicationService:
             lease_failure = self._renew_before_step(record, "parent-link progress", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
-            if outcome.kind is MutationOutcomeKind.RETRYABLE or not any(
-                item.operation is MutationOperation.CHILD_IMPORT and item.kind is MutationOutcomeKind.APPLIED
-                for item in mutations
-            ):
+            if outcome.kind in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED}:
                 settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
             else:
                 settled = self._parent_failure(record, plan, child_payload, outcome, mutations)
@@ -1212,11 +1209,14 @@ class LifecycleApplicationService:
             return settled
         compensation_method = getattr(self._mutations, "compensate_imported_child", None)
         compensation: MutationOutcome | None = None
-        if callable(compensation_method):
-            request = self._request_for(MutationOperation.CHILD_IMPORT, plan, child_payload)
-            if request is not None:
-                compensation = compensation_method(request)
-                mutations.append(compensation)
+        if not callable(compensation_method):
+            settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
+            assert settled is not None
+            return settled
+        request = self._request_for(MutationOperation.CHILD_IMPORT, plan, child_payload)
+        if request is not None:
+            compensation = compensation_method(request)
+            mutations.append(compensation)
         parent_reason = outcome.reason or outcome.kind.value
         if compensation is None:
             detail = "compensation could not be constructed"

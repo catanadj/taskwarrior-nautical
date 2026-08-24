@@ -62,6 +62,7 @@ from .lifecycle_outbox import (
     OutboxFailure,
     OutboxResult,
     OutboxResultKind,
+    LifecycleOutboxError,
 )
 
 
@@ -437,15 +438,26 @@ class LifecycleApplicationService:
         progress: LifecycleDrainProgressCallback | None = None,
     ) -> DrainResult:
         """Drain one bounded batch inside one invocation-scoped outbox session."""
+        session = getattr(self._outbox, "session", None)
+        if not callable(session):
+            # Test doubles and explicitly staging-only adapters may expose
+            # only the repository operations; preserve their original error
+            # contract while production repositories use the session path.
+            return self._drain_open(
+                limit=limit,
+                configuration_fingerprint=configuration_fingerprint,
+                schedule_fingerprint=schedule_fingerprint,
+                progress=progress,
+            )
         try:
-            with self._outbox.session():
+            with session():
                 return self._drain_open(
                     limit=limit,
                     configuration_fingerprint=configuration_fingerprint,
                     schedule_fingerprint=schedule_fingerprint,
                     progress=progress,
                 )
-        except Exception as exc:
+        except LifecycleOutboxError as exc:
             return DrainResult(
                 claim=OutboxResult(
                     OutboxResultKind.RETRYABLE,

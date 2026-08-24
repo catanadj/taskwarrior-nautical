@@ -340,9 +340,16 @@ class LifecycleOutboxRepository:
         conn: sqlite3.Connection | None = None
         pid = os.getpid()
         try:
-            conn = self._connect()
-            self._initialize(conn)
-            self._secure_state_files()
+            try:
+                conn = self._connect()
+                self._initialize(conn)
+                self._secure_state_files()
+            except LifecycleOutboxError:
+                raise
+            except Exception as exc:
+                raise LifecycleOutboxError(
+                    f"outbox session initialization failed: {str(exc).strip() or type(exc).__name__}"
+                ) from exc
             self._session_conn = conn
             self._session_pid = pid
             self._metric("outbox_sessions")

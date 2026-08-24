@@ -4091,6 +4091,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
         def __init__(self):
             self.uuid_calls = []
             self.broad_calls = 0
+            self.set_calls = 0
 
         def by_uuid(self, uuid_value, *, refresh=False):
             del refresh
@@ -4102,6 +4103,18 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
             self.broad_calls += 1
             del kwargs
             return Found(Snapshot(), "broad:lifecycle-child-prefetch")
+
+        def read_uuid_set(self, request):
+            from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+            self.set_calls += 1
+            return SetReadResult(
+                SetReadStatus.COMPLETE,
+                request.uuids,
+                found={parent_uuid: parent},
+                absent=tuple(identity for identity in request.uuids if identity != parent_uuid),
+                complete_for_requested_identities=True,
+            )
 
     class Uow:
         def __init__(self):
@@ -4135,7 +4148,8 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
         service._prefetched_parents.get(parent_uuid) == parent,
         "pre-mutation parent row was not retained for the guarded link decision",
     )
-    expect(uow.repository.broad_calls == 1, f"prefetch used {uow.repository.broad_calls} broad reads")
+    expect(uow.repository.set_calls == 1, f"prefetch used {uow.repository.set_calls} targeted set reads")
+    expect(uow.repository.broad_calls == 0, f"prefetch used {uow.repository.broad_calls} broad reads")
     expect(uow.repository.uuid_calls == [], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
 
 
@@ -35664,6 +35678,20 @@ def test_lifecycle_application_happy_path_real_stack():
                     row = rows.get(str(value).lower())
                     return () if row is None else (_task_observation(row),)
             return Found(_Snapshot(), identity)
+        def read_uuid_set(self, request):
+            from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+            found = {
+                identity: _task_observation(self.rows[identity])
+                for identity in request.uuids
+                if identity in self.rows
+            }
+            return SetReadResult(
+                SetReadStatus.COMPLETE,
+                request.uuids,
+                found=found,
+                absent=tuple(identity for identity in request.uuids if identity not in found),
+                complete_for_requested_identities=True,
+            )
 
     class _Client:
         def __init__(self, repo):

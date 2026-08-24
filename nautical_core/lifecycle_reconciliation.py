@@ -41,10 +41,10 @@ class LifecycleRecoveryOperations(Protocol):
     def apply_parent(self, parent: TaskPayload, *, taskdata: Path, lease_held: bool,
                      verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[Any, str]: ...
     def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
-    def next_child(self, parent: TaskPayload, child_short: str) -> dict[str, Any]: ...
+    def next_child(self, parent: TaskPayload, child_short: str) -> TaskObservation: ...
     def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
     def terminal_error(self, child: TaskPayload, recovery_at: Any) -> str: ...
-    def is_orphan_deleted(self, child: TaskPayload) -> bool: ...
+    def is_orphan_deleted(self, child: TaskObservation) -> bool: ...
     def recovery_error(self, parent: TaskPayload, reason: str) -> Any: ...
     def recovery_partial(self, parent: TaskPayload, reason: str) -> Any: ...
     def recovery_manual_review(self, parent: TaskPayload, reason: str) -> Any: ...
@@ -100,7 +100,7 @@ class CallbackLifecycleRecoveryOperations:
 
     apply_parent_callback: Callable[..., tuple[Any, str]]
     plan_parent_callback: Callable[..., Any]
-    next_child_callback: Callable[..., dict[str, Any]]
+    next_child_callback: Callable[..., TaskObservation]
     virtual_child_callback: Callable[..., tuple[VirtualExpiredChild | None, str]]
     terminal_error_callback: Callable[..., str]
     is_orphan_deleted_callback: Callable[..., bool]
@@ -425,13 +425,13 @@ class LifecycleReconciliationService:
             except Exception as exc:
                 outcomes.append((operations.recovery_from_exception(plan_parent, exc), ""))
                 break
-            terminal_error = operations.terminal_error(child, recovery_at)
+            terminal_error = operations.terminal_error(child.to_mapping(), recovery_at) if isinstance(child, TaskObservation) else operations.terminal_error(child, recovery_at)
             if terminal_error:
                 outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                 break
             if not operations.is_orphan_deleted(child):
                 break
-            current = child
+            current = child.to_mapping() if isinstance(child, TaskObservation) else child
         return outcomes
 
 

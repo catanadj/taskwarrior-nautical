@@ -1279,7 +1279,7 @@ def _terminal_recovery_error(child: TaskPayload, hook: Any, recovery_at: Any) ->
 def _next_recovery_child(
     parent: TaskPayload,
     child_short: str,
-) -> dict[str, Any]:
+) -> TaskObservation:
     wanted = str(child_short or "").strip().lower()
     if not wanted:
         raise RuntimeError("recovery action did not identify its child")
@@ -1305,7 +1305,7 @@ def _next_recovery_child(
     validation_error = _validate_recovery_child(parent, child)
     if validation_error:
         raise RuntimeError(validation_error)
-    return child
+    return child_observation
 
 
 def _virtual_expired_child(
@@ -1379,9 +1379,7 @@ def _reconcile_candidate(
             terminal_error_callback=lambda child, recovery_at: _terminal_recovery_error(
                 child, hook, recovery_at,
             ),
-            is_orphan_deleted_callback=lambda child: lifecycle.is_orphan_deleted_chain_candidate(
-                DEFAULT_TASK_CODEC.decode_row(child, source_query="reconcile recovery child")
-            ),
+            is_orphan_deleted_callback=lifecycle.is_orphan_deleted_chain_candidate,
             recovery_error_callback=_recovery_error,
             recovery_partial_callback=_recovery_partial,
             recovery_manual_review_callback=_recovery_manual_review,

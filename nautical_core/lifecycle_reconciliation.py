@@ -276,7 +276,11 @@ class LifecycleReconciliationService:
         child_short = lifecycle_plan.parent_patch_dict().get("nextLink") or resolved.child_short
         if not child_short:
             return staged, outcome, "", None
-        verified = verify_child(resolved.parent, child_short, strict_uuid=strict_uuid)
+        # ``LifecycleApplicationService.execute_staged`` has already
+        # authoritatively verified the imported child and parent link. Keep
+        # the verified payload for expiration-hop bookkeeping; reconcile's
+        # former UUID reread duplicated that proof for one-hop plans.
+        verified = lifecycle_plan.child_dict()
         if verified_children is not None:
             verified_children[str(child_short).strip().lower()] = verified
         return staged, outcome, str(child_short), verified

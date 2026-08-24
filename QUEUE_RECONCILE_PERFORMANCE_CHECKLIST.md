@@ -725,10 +725,10 @@ stress suites.
   preflight.
 - [ ] Require 32 independent one-hop reconcile candidates to use no more than
   72 Taskwarrior calls unless measured Taskwarrior semantics require a
-  documented additional guard read. Current desktop evidence is 353 calls
-  (192 broad reads, 64 child-slot reads, 32 imports, 32 parent links, and 32
-  UUID verifications); the remaining work is to batch lifecycle application
-  evidence across the reconcile wave.
+  documented additional guard read. Current desktop evidence after removing
+  the duplicate reconcile child verification is 321 calls (192 broad reads,
+  64 child-slot reads, 32 imports, and 32 parent links); the remaining work
+  is to batch lifecycle application evidence across the reconcile wave.
 - [ ] Require queue and reconcile wall time to improve by at least 50% from the
   recorded baseline on both Termux devices without relaxing correctness gates.
 - [ ] Require exported and decoded row counts to scale with affected identities

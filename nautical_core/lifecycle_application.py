@@ -524,6 +524,63 @@ class LifecycleApplicationService:
                 outcomes=(),
             )
 
+    def execute_wave(
+        self,
+        plans: Sequence[LifecyclePlan],
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+        progress: LifecycleDrainProgressCallback | None = None,
+    ) -> DrainResult:
+        """Stage, exact-claim, and batch-execute one reconcile wave.
+
+        Each intent is claimed by ID after staging, so an unrelated ready
+        lifecycle intent can never be consumed by this wave. A partial claim
+        leaves the unclaimed staged plans durable for the normal recovery
+        path; no absence or success is fabricated for them.
+        """
+        validated = tuple(plans)
+        if any(not isinstance(plan, LifecyclePlan) for plan in validated):
+            raise LifecycleApplicationError("lifecycle wave requires validated plans")
+        staged_records: list[LifecycleOutboxRecord] = []
+        staged_outcomes: list[LifecycleApplicationOutcome] = []
+        for plan in validated:
+            staged = self.stage(
+                plan,
+                configuration_fingerprint=configuration_fingerprint,
+                schedule_fingerprint=schedule_fingerprint,
+            )
+            staged_outcomes.append(staged)
+            if staged.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
+                continue
+            if not staged.ok or not staged.intent_id:
+                return DrainResult(
+                    claim=OutboxResult(OutboxResultKind.REJECTED, reason=staged.reason or "wave staging failed"),
+                    outcomes=tuple(staged_outcomes),
+                )
+            claimed = self._outbox.claim_intent(
+                owner=self._owner,
+                lease_seconds=self._lease_seconds,
+                intent_id=staged.intent_id,
+            )
+            if not claimed.ok or claimed.record is None:
+                return DrainResult(
+                    claim=claimed,
+                    outcomes=tuple(staged_outcomes),
+                )
+            staged_records.append(claimed.record)
+        if not staged_records:
+            return DrainResult(
+                claim=OutboxResult(OutboxResultKind.ALREADY_APPLIED),
+                outcomes=tuple(staged_outcomes),
+            )
+        return self.drain_claimed(
+            staged_records,
+            configuration_fingerprint=configuration_fingerprint,
+            schedule_fingerprint=schedule_fingerprint,
+            progress=progress,
+        )
+
     def _drain_open(
         self,
         *,

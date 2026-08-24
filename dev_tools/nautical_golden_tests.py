@@ -3820,6 +3820,40 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     replay = service.apply(request(MutationOperation.CHILD_IMPORT, child, 1))
     expect(replay.kind is MutationOutcomeKind.ALREADY_APPLIED, f"numeric child link replay was not normalized: {replay}")
     link_payload = ParentLinkPayload(parent_uuid, child_uuid[:8])
+    baseline_parent_link = request(MutationOperation.PARENT_LINK, link_payload, 1)
+
+    # User-edit race matrix: every guarded parent identity change must stop a
+    # stale mutation before it reaches Taskwarrior.
+    parent_guard_fields = (
+        ("status", "pending"),
+        ("chain", "off"),
+        ("chainID", "user-chain"),
+        ("link", 8),
+        ("anchor", "w:tue"),
+        ("cp", "2d"),
+        ("modified", "20260813T100002Z"),
+    )
+    for field, value in parent_guard_fields:
+        original = parent.get(field)
+        parent[field] = value
+        calls_before = len(uow.client.calls)
+        raced = service.apply(baseline_parent_link)
+        expect(raced.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
+               f"user edit of parent {field} was not rejected: {raced}")
+        expect(len(uow.client.calls) == calls_before, f"parent {field} race reached Taskwarrior")
+        if original is None:
+            parent.pop(field, None)
+        else:
+            parent[field] = original
+
+    parent["nextLink"] = "user-edit"
+    calls_before = len(uow.client.calls)
+    raced_link = service.apply(baseline_parent_link)
+    expect(raced_link.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
+           f"user edit of parent nextLink was not rejected: {raced_link}")
+    expect(len(uow.client.calls) == calls_before, "parent nextLink race reached Taskwarrior")
+    parent.pop("nextLink", None)
+
     linked = service.apply(request(MutationOperation.PARENT_LINK, link_payload, 1))
     expect(linked.kind is MutationOutcomeKind.APPLIED, f"parent link was not applied: {linked}")
     # Taskwarrior updates ``modified`` when the link succeeds.  Recovery can
@@ -3897,6 +3931,20 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
         6,
         "on",
     )
+    for field, value in (("status", "completed"), ("modified", "20260813T100002Z")):
+        original = child_row.get(field)
+        child_row[field] = value
+        calls_before = len(uow.client.calls)
+        raced_child = service.apply(
+            MutationRequest(MutationOperation.CHILD_COMPENSATION, child_guard, ChildCompensationPayload(child_uuid))
+        )
+        expect(raced_child.kind in {MutationOutcomeKind.CONFLICT, MutationOutcomeKind.RETRYABLE},
+               f"user edit of child {field} was not rejected: {raced_child}")
+        expect(len(uow.client.calls) == calls_before, f"child {field} race reached Taskwarrior")
+        if original is None:
+            child_row.pop(field, None)
+        else:
+            child_row[field] = original
     compensated = service.apply(
         MutationRequest(
             MutationOperation.CHILD_COMPENSATION,
@@ -36175,9 +36223,10 @@ def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
         "import json, sys; from pathlib import Path; "
         "from nautical_core.lifecycle_outbox import LifecycleOutboxRepository; "
         "repo = LifecycleOutboxRepository(Path(sys.argv[1]), connect_timeout=1.0); "
-        "result = (repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1)[0] "
-        "if sys.argv[3] == 'queue' else repo.claim_intent(owner=sys.argv[2], lease_seconds=5.0, intent_id=sys.argv[4])); "
-        "print(json.dumps({'kind': result.kind.value}), flush=True)"
+        "batch = repo.claim_batch(owner=sys.argv[2], lease_seconds=5.0, limit=1) if sys.argv[3] == 'queue' else None; "
+        "result = batch[0] if batch is not None else repo.claim_intent(owner=sys.argv[2], lease_seconds=5.0, intent_id=sys.argv[4]); "
+        "count = len(batch[1]) if batch is not None else int(result.ok); "
+        "print(json.dumps({'kind': result.kind.value, 'count': count}), flush=True)"
     )
 
     def run_race(modes):
@@ -36198,10 +36247,12 @@ def test_lifecycle_queue_and_reconcile_claims_are_exclusive():
             ]
             results = [process.communicate(timeout=10) for process in processes]
             payloads = [json.loads(stdout.strip()) for _process, (stdout, _stderr) in zip(processes, results)]
-            return [item["kind"] for item in payloads]
+            return payloads
 
-    expect(sorted(run_race(("queue", "exact"))) == ["applied", "conflict"], "queue/reconcile claim race was not exclusive")
-    expect(sorted(run_race(("exact", "exact"))) == ["applied", "conflict"], "reconcile/reconcile claim race was not exclusive")
+    queue_race = run_race(("queue", "exact"))
+    exact_race = run_race(("exact", "exact"))
+    expect(sum(item["count"] for item in queue_race) == 1, f"queue/reconcile claim race was not exclusive: {queue_race}")
+    expect(sum(item["count"] for item in exact_race) == 1, f"reconcile/reconcile claim race was not exclusive: {exact_race}")
 
 
 def test_lifecycle_stale_owner_lease_is_reclaimed_by_next_process():

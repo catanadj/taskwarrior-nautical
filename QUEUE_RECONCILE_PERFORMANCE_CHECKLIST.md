@@ -638,7 +638,7 @@ behavioral gates; device-specific TTY timing remains part of Section 14.
 - [ ] Add two-process tests for simultaneous queue drain, queue versus
   reconcile, two reconcile applies, lease expiration, stale lease owner,
   SQLite busy, and first-open schema initialization.
-- [ ] Add user-edit races for parent completion state, chain state, chainID,
+- [x] Add user-edit races for parent completion state, chain state, chainID,
   recurrence identity, modified timestamp, nextLink, child identity, and child
   status.
 - [x] Prove that a failed chunk does not manufacture authoritative absence for
@@ -681,6 +681,12 @@ and simultaneous reconcile exact-claim races now assert one winner and one
 conflict. A short-lease stale-owner process test now asserts an independent
 replacement claim succeeds after expiry. User-edit race and shuffled/repeated
 convergence matrices remain open.
+
+Pass 4 verification: the guarded mutation matrix now exercises parent status,
+chain state, chainID, link, recurrence fields, modified timestamp, nextLink,
+and child status/modified edits. Every stale edit returns a typed conflict or
+retryable outcome before issuing a Taskwarrior command. Child identity replacement
+and shuffled/repeated multi-process convergence remain open.
 - [ ] Shuffled and repeated failure campaigns converge to the same durable
   state and typed outcomes.
 

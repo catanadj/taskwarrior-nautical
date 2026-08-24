@@ -1969,7 +1969,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
     from nautical_core.chain_invariants import evaluate_invariants
 
     first = {
-        "uuid": "aaaaaaaa-0000-0000-0000-000000000921",
+        "uuid": "aaaaaaaa-0000-4000-8000-000000000921",
         "status": "pending",
         "chainID": "invariant-chain",
         "link": 1,
@@ -1977,7 +1977,7 @@ def test_chain_invariant_registry_is_pure_and_deterministic():
         "nextLink": "bbbbbbbb",
     }
     second = {
-        "uuid": "bbbbbbbb-0000-0000-0000-000000000922",
+        "uuid": "bbbbbbbb-0000-4000-8000-000000000922",
         "status": "pending",
         "chainID": "invariant-chain",
         "link": 2,

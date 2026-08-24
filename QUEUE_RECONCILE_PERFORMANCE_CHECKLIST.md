@@ -641,23 +641,29 @@ behavioral gates; device-specific TTY timing remains part of Section 14.
 - [ ] Add user-edit races for parent completion state, chain state, chainID,
   recurrence identity, modified timestamp, nextLink, child identity, and child
   status.
-- [ ] Prove that a failed chunk does not manufacture authoritative absence for
+- [x] Prove that a failed chunk does not manufacture authoritative absence for
   its unqueried or unavailable identities.
-- [ ] Prove that mutation epoch invalidation prevents reuse of every pre-
+- [x] Prove that mutation epoch invalidation prevents reuse of every pre-
   mutation set snapshot.
-- [ ] Prove that partial success is reported per intent and that later safe
+- [x] Prove that partial success is reported per intent and that later safe
   chunks remain eligible according to the explicit policy.
-- [ ] Preserve poison-row quarantine, retry budgets, manual-review durability,
+- [x] Preserve poison-row quarantine, retry budgets, manual-review durability,
   configuration drift, and Taskwarrior busy/timeout classification.
-- [ ] Run tests with Taskwarrior versions used by compatibility CI and the
+- [x] Run tests with Taskwarrior versions used by compatibility CI and the
   current development environment.
 
 Completion criteria:
 
 - [ ] No injected interruption creates a duplicate child, lost parent link,
   false acknowledgement, untracked orphan, or guessed absence.
-- [ ] No concurrent invocation can apply an intent without owning its valid
+- [x] No concurrent invocation can apply an intent without owning its valid
   lease and satisfying its current Taskwarrior guard.
+
+Verification: lifecycle crash-resume, lease-renewal, outbox-fault, conflict /
+retry-budget, configuration-drift, mutation-epoch, concurrent outbox-open, and
+concurrent operator golden tests pass. Dedicated exhaustive failure matrices
+for every mutation boundary and shuffled multi-process convergence remain open
+for the final safety campaign.
 - [ ] Shuffled and repeated failure campaigns converge to the same durable
   state and typed outcomes.
 

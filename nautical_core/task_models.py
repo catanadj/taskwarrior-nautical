@@ -586,7 +586,12 @@ class TaskDraft:
         # Keep the non-target temporal field so relative scheduled/wait carries
         # survive a due-target child (and vice versa).
         excluded.add(field)
-        values = task.observation.to_mapping()
+        values = {
+            key: state.raw_value()
+            for key, state in task.observation.fields.items()
+            if state.presence is FieldPresence.VALUE
+        }
+        values.update({key: _thaw(value) for key, value in task.observation.arbitrary.items()})
         return cls(
             identity=task.identity,
             description=task.description,

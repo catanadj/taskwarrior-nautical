@@ -83,8 +83,12 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                 f"Unknown business calendar {name!r}; configured calendars: {available}."
             ) from None
 
-    def business_calendar_for_task(task: dict | None):
-        raw_name = str((task or {}).get("bc") or "").strip()
+    def business_calendar_for_task(task: Any | None):
+        if task is not None and hasattr(task, "field"):
+            state = task.field("bc")
+            raw_name = str(getattr(state, "value", "") or "").strip()
+        else:
+            raw_name = str((task or {}).get("bc") or "").strip()
         if not raw_name:
             return core["_business_calendar"].DEFAULT_BUSINESS_CALENDAR
         return get_configured_business_calendar(core["_unwrap_quotes"](raw_name))

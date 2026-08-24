@@ -196,7 +196,7 @@ class OccurrenceQueryService:
         calendar = None
         resolver = getattr(self._core, "business_calendar_for_task", None)
         if callable(resolver):
-            calendar = resolver(task.to_mapping())
+            calendar = resolver(task)
         return RecurrenceContext(
             chain_id=chain_id,
             timezone=self._timezone,

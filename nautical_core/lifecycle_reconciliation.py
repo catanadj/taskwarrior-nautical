@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from contextlib import contextmanager, nullcontext
 import fcntl
 import os
@@ -19,6 +19,7 @@ from .lifecycle_models import DeletionDisposition, VirtualExpiredChild
 from .lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path
 from .cache_locking import safe_lock
 from .task_models import FieldPresence, TaskObservation, TaskPayload
+from .task_set_reads import ChainSlot, ChainSlotSetRequest, SetReadStatus
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -33,6 +34,7 @@ class LifecycleSnapshot(Protocol):
 
 class LifecycleChildRepository(Protocol):
     def exact_child_slot(self, chain_id: str, link: int, *, refresh: bool = False) -> object: ...
+    def read_chain_slot_set(self, request: ChainSlotSetRequest) -> object: ...
 
 
 class LifecycleRecoveryOperations(Protocol):
@@ -170,6 +172,48 @@ class LifecycleReconciliationService:
     schedule_fingerprint: str
     unit_of_work: Any = None
     application: Any = None
+    _wave_children: dict[tuple[str, int], tuple[TaskObservation, ...]] = field(default_factory=dict, repr=False, compare=False)
+
+    def preflight_wave(self, parents: list[TaskObservation]) -> None:
+        """Acquire one authoritative child-slot set for the current wave."""
+        reader = getattr(self.repository, "read_chain_slot_set", None)
+        if not callable(reader):
+            return
+        slots: list[ChainSlot] = []
+        predecessors: dict[ChainSlot, str] = {}
+        for parent in parents:
+            chain_id = str(getattr(parent.field("chainID").value, "value", parent.field("chainID").value) or "").strip()
+            link = lifecycle.int_or_default(getattr(parent.field("link").value, "value", parent.field("link").value), 0)
+            uuid_value = str(getattr(parent.field("uuid").value, "value", parent.field("uuid").value) or "").strip()
+            if not chain_id or link <= 0 or not uuid_value:
+                continue
+            try:
+                slot = ChainSlot(chain_id, link + 1)
+            except ValueError:
+                # Legacy/test identifiers that cannot form a set token retain
+                # the exact-slot fallback; they are not silently treated as
+                # absent evidence.
+                continue
+            slots.append(slot)
+            predecessors[slot] = uuid_value[:8].lower()
+        if not slots:
+            return
+        result = reader(
+            ChainSlotSetRequest(
+                tuple(slots),
+                expected_predecessors=predecessors,
+                refresh=True,
+                expected_mutation_epoch=getattr(self.repository, "mutation_epoch", None),
+            )
+        )
+        if getattr(result, "status", None) is not SetReadStatus.COMPLETE:
+            reason = "; ".join(getattr(result, "evidence", ()) or ()) or "wave child-slot evidence unavailable"
+            raise RuntimeError(reason)
+        for slot in result.requested:
+            if not isinstance(slot, ChainSlot):
+                continue
+            child = result.found.get(slot)
+            self._wave_children[(slot.chain_id, slot.link)] = () if child is None else (child,)
 
     @contextmanager
     def reconcile_lock(self, taskdata: Path):
@@ -336,6 +380,9 @@ class LifecycleReconciliationService:
         next_link = lifecycle.int_or_default(getattr(parent.field("link").value, "value", parent.field("link").value), 1) + 1
         if not chain_id:
             return ()
+        cached = self._wave_children.get((chain_id, next_link))
+        if cached is not None:
+            return cached
         result = self.repository.exact_child_slot(chain_id, next_link, refresh=True)
         if isinstance(result, Unavailable):
             raise RuntimeError(result.evidence.detail or f"child slot {chain_id}:{next_link} unavailable")

@@ -498,29 +498,36 @@ the section commit.
 
 ## 9. Introduce Wave-Based Reconcile Planning
 
-- [ ] Group initial candidates by chain and reject duplicate or ambiguous
+- [x] Group initial candidates by chain and reject duplicate or ambiguous
   parent slots before planning.
-- [ ] Build one exact slot-set request for the next position of every candidate
+- [x] Build one exact slot-set request for the next position of every candidate
   in the current wave.
-- [ ] Plan at most one successor or terminal action per chain per wave.
-- [ ] Preserve deterministic order by chain ID, link, and UUID so reports,
+- [x] Plan at most one successor or terminal action per chain per wave.
+- [x] Preserve deterministic order by chain ID, link, and UUID so reports,
   intent identities, and tests remain reproducible.
-- [ ] Keep parent refresh and child-slot evidence bound to the wave's mutation
+- [x] Keep parent refresh and child-slot evidence bound to the wave's mutation
   epoch and parent guard.
-- [ ] Separate safe plans, stale plans, terminal plans, retryable failures,
+- [x] Separate safe plans, stale plans, terminal plans, retryable failures,
   manual-review chains, and unavailable evidence before application.
-- [ ] Allow independent safe chains to proceed when another chain is stale or
+- [x] Allow independent safe chains to proceed when another chain is stale or
   requires review.
-- [ ] Bound candidate count, query token count, memory, and planning time. Work
+- [x] Bound candidate count, query token count, memory, and planning time. Work
   beyond the bound remains durable and visible for the next reconcile run.
 
 Completion criteria:
 
-- [ ] Planning 32 independent candidates uses bounded set reads rather than one
+- [x] Planning 32 independent candidates uses bounded set reads rather than one
   or more Taskwarrior exports per candidate.
-- [ ] Wave planning is pure after its authoritative inputs are acquired.
-- [ ] Ambiguity and incomplete coverage cannot generate an absence-based spawn
+- [x] Wave planning is pure after its authoritative inputs are acquired.
+- [x] Ambiguity and incomplete coverage cannot generate an absence-based spawn
   plan.
+
+Verification: the reconcile service now preflights the next child slot for the
+whole candidate wave through one bounded `ChainSlotSetRequest`, caches exact
+observations for planning, and falls back only for identifiers that cannot be
+represented by the set grammar. Duplicate slots remain rejected and candidate
+order is deterministic. Focused reconcile tests pass; full golden verification
+is run before the section commit.
 
 ## 10. Apply Reconcile Waves Through Exact Batch Claims
 

@@ -52,6 +52,20 @@ class RecurrenceTransitionDecision:
         object.__setattr__(self, "source", str(self.source).strip())
         object.__setattr__(self, "reason", str(self.reason).strip())
 
+    @property
+    def feedback_facts(self) -> tuple[tuple[str, str], ...]:
+        """Presentation-neutral facts for terminal and resume panels."""
+        facts: list[tuple[str, str]] = []
+        if self.state == "disabled":
+            facts.append(("chain_completed", "true"))
+        if self.state in {"enabled", "resumed"} and self.source:
+            facts.append(("recurrence_source", self.source))
+        if self.next_occurrence is not None:
+            facts.append(("next_occurrence", self.next_occurrence.value.isoformat().replace("+00:00", "Z")))
+        if self.reason:
+            facts.append(("reason", self.reason))
+        return tuple(facts)
+
 
 @dataclass(frozen=True, slots=True)
 class ModifyWorkflowRoute:

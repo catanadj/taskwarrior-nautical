@@ -95,6 +95,7 @@ class ModifyWorkflowTests(unittest.TestCase):
             RecurrenceTransitionDecision("disabled")
         decision = RecurrenceTransitionDecision("resumed", source="anchor", reason="chain resumed")
         self.assertEqual(decision.state, "resumed")
+        self.assertIn(("recurrence_source", "anchor"), decision.feedback_facts)
 
 
 if __name__ == "__main__":

@@ -788,7 +788,6 @@ def handle_anchor_file_preview_on_add(
     validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
     panel: Callable[..., None],
-    emit_task_json: Callable[..., None],
     fmt_local_for_task: Callable[[datetime], str],
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
@@ -971,7 +970,6 @@ def handle_anchor_file_preview_on_add(
         )
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
     panel("⚓︎ Anchor Preview", format_anchor_rows(rows), kind="preview_anchor", task=task)
-    emit_task_json(task, sanitize=True, prof=prof)
 
 
 def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_str: str) -> bool:
@@ -1064,7 +1062,6 @@ def handle_anchor_preview_on_add(
     fmt_local_for_task: Callable[[datetime], str],
     format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
     panel: Callable[..., None],
-    emit_task_json: Callable[..., None],
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
     validate_native_until_after_target: Callable[[dict[str, Any], datetime, str], None],
@@ -1521,5 +1518,3 @@ def handle_anchor_preview_on_add(
     _t_panel = time.perf_counter()
     panel("⚓︎ Anchor Preview", formatted_rows, kind="preview_anchor", task=task)
     prof.add_ms("render:anchor_panel", (time.perf_counter() - _t_panel) * 1000.0)
-
-    emit_task_json(task, sanitize=True, prof=prof)

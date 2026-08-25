@@ -17847,9 +17847,6 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
             AssertionError("legacy scheduler fallback was called")
         )
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        mod._emit_task_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("failed preview must not emit task JSON")
-        )
         try:
             mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
@@ -17935,7 +17932,6 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
         mod._anchor_next_occurrence_after_local_dt,
         mod._fmt_local_for_task,
         mod._panel,
-        mod._emit_task_json,
     )
 
     def fail_legacy(*_args, **_kwargs):
@@ -17946,7 +17942,6 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
         mod._anchor_next_occurrence_after_local_dt = fail_legacy
         mod._fmt_local_for_task = mod.core.fmt_isoz
         mod._panel = lambda title, rows, **kwargs: captured.update({"title": title, "rows": list(rows)})
-        mod._emit_task_json = lambda value, **_kwargs: captured.update({"task": dict(value)})
         mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
     finally:
         (
@@ -17954,10 +17949,9 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
             mod._anchor_next_occurrence_after_local_dt,
             mod._fmt_local_for_task,
             mod._panel,
-            mod._emit_task_json,
         ) = original
 
-    expect(captured.get("task", {}).get("due"), f"evaluator preview did not assign due: {captured!r}")
+    expect(task.get("due"), f"evaluator preview did not assign due: {captured!r}")
     expect(captured.get("title") == "⚓︎ Anchor Preview", f"evaluator preview did not render: {captured!r}")
 
 
@@ -17983,12 +17977,9 @@ def test_on_add_native_until_checks_generated_anchor_due():
     }
     ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
     panels = []
-    original = (mod._panel, mod._emit_task_json)
+    original = mod._panel
     try:
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        mod._emit_task_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("invalid generated anchor due must not emit JSON")
-        )
         try:
             mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
@@ -17996,7 +17987,7 @@ def test_on_add_native_until_checks_generated_anchor_due():
         else:
             raise AssertionError("until before generated anchor due was accepted")
     finally:
-        mod._panel, mod._emit_task_json = original
+        mod._panel = original
 
     expect(task.get("due"), f"anchor target was not finalized before validation: {task!r}")
     expect(panels and "Invalid expiration window" in panels[-1][0], f"missing guard panel: {panels!r}")
@@ -18038,12 +18029,9 @@ def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
     }
     ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
     panels = []
-    original = (mod._panel, mod._emit_task_json)
+    original = mod._panel
     try:
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
-        mod._emit_task_json = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("chainUntil-before-first must not emit JSON")
-        )
         try:
             mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
@@ -18051,7 +18039,7 @@ def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
         else:
             raise AssertionError("chainUntil before first anchor occurrence was accepted")
     finally:
-        mod._panel, mod._emit_task_json = original
+        mod._panel = original
     expect(
         panels and any(label == "Invalid chainUntil" for label, _value in panels[-1][1]),
         f"missing chainUntil guard panel: {panels!r}",
@@ -18503,10 +18491,8 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
 
     captured = {}
     orig_panel = mod._panel
-    orig_emit = mod._emit_task_json
     try:
         mod._panel = lambda title, rows, **_k: captured.update({"title": title, "rows": list(rows)})
-        mod._emit_task_json = lambda *_a, **_k: None
         mod._handle_anchor_preview_on_add(
             task,
             ctx.anchor_str,
@@ -18525,7 +18511,6 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
         )
     finally:
         mod._panel = orig_panel
-        mod._emit_task_json = orig_emit
 
     expected_due = mod._fmt_local_for_task(mod.core.build_local_datetime(date(2026, 4, 13), (9, 0)).astimezone(timezone.utc))
     expect(task.get("due") == expected_due, f"expected implicit entry due to auto-assign first anchor match: {task!r}")
@@ -26696,16 +26681,13 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
 
             captured = {}
             saved_panel = mod._panel
-            saved_emit = mod._emit_task_json
             try:
                 mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
-                mod._emit_task_json = lambda task_obj, **_kwargs: captured.setdefault("task", dict(task_obj))
                 mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
             finally:
                 mod._panel = saved_panel
-                mod._emit_task_json = saved_emit
 
-            due_val = captured.get("task", {}).get("due") or task.get("due")
+            due_val = task.get("due")
             expect(str(due_val).startswith("2026-04-27T12:00:00"), f"unexpected auto-assigned due for anchor_file preview: {due_val!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
@@ -26738,15 +26720,12 @@ def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
             ctx = mod._build_on_add_context(task, now_utc, now_local)
             captured = {}
             saved_panel = mod._panel
-            saved_emit = mod._emit_task_json
             try:
                 mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
-                mod._emit_task_json = lambda task_obj, **_kwargs: captured.setdefault("task", dict(task_obj))
                 mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
             finally:
                 mod._panel = saved_panel
-                mod._emit_task_json = saved_emit
-            due_val = captured.get("task", {}).get("due") or task.get("due")
+            due_val = task.get("due")
             expect(str(due_val).startswith("2026-04-14T12:00:00"), f"unexpected merged due preview: {due_val!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir

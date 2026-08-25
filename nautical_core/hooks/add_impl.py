@@ -1473,7 +1473,6 @@ def _handle_cp_preview_on_add(
         kind="preview_cp",
         task=task,
     )
-    _emit_task_json(task, sanitize=True, prof=prof)
 
 
 def _anchor_preview_prepare_dnf(task: dict[str, object], anchor_str: str, due_dt: datetime, rows: list[tuple[str, str]], prof) -> tuple[list[list[dict]], str]:
@@ -1647,7 +1646,6 @@ def _handle_anchor_preview_on_add(
             fmt_local_for_task=_fmt_local_for_task,
             format_anchor_rows=_format_anchor_rows,
             panel=_panel,
-            emit_task_json=_emit_task_json,
             human_delta=_human_delta,
             error_and_exit=_error_and_exit,
             validate_native_until_after_target=_validate_native_until_after_target_or_fail,
@@ -1746,11 +1744,6 @@ def _read_on_add_task(prof) -> dict:
     return task
 
 
-def _emit_task_json(task: dict, *, sanitize: bool = False, prof=None) -> None:
-    hook_results = _module("hook_results")
-    hook_results.emit_task_json(task, sanitize=sanitize, core=core, prof=prof)
-
-
 def _build_hook_runtime_context(task=None):
     hook_runtime = _hook_runtime_module()
     business_calendar = None
@@ -1821,6 +1814,7 @@ def _apply_description_uda_aliases(task: dict) -> None:
     """Expand opt-in short UDA directives before normal on-add validation."""
     if not bool(getattr(core, "ENABLE_UDA_ALIASES", False)):
         return
+
     description = task.get("description")
     if not isinstance(description, str) or not description:
         return

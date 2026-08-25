@@ -1760,8 +1760,13 @@ def _emit_task_json(task: dict, *, sanitize: bool = False, prof=None) -> None:
     hook_results.emit_task_json(task, sanitize=sanitize, core=core, prof=prof)
 
 
-def _build_hook_runtime_context():
+def _build_hook_runtime_context(task=None):
     hook_runtime = _hook_runtime_module()
+    business_calendar = None
+    if task is not None:
+        resolver = getattr(core, "business_calendar_for_task", None)
+        if callable(resolver):
+            business_calendar = resolver(task)
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
         hook_name="on-add",
@@ -1769,6 +1774,7 @@ def _build_hook_runtime_context():
         hook_dir=str(HOOK_DIR),
         profile_level=_PROFILE_LEVEL,
         import_ms=_IMPORT_MS,
+        business_calendar=business_calendar,
     )
 
 
@@ -2033,7 +2039,7 @@ def main():
         return
     hook_context = _module("hook_context")
     hook_engine = _module("hook_engine")
-    runtime = _build_hook_runtime_context()
+    runtime = _build_hook_runtime_context(task)
     request = hook_context.build_on_add_request(
         runtime=runtime,
         task=task,

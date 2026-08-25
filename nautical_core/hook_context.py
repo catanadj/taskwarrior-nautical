@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .integration_context import IntegrationContext
-from .hook_workflow_context import SnapshotLease, WorkflowInvocationContext
+from .hook_workflow_context import BusinessCalendar, SnapshotLease, WorkflowInvocationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
@@ -79,12 +79,14 @@ def build_hook_runtime_context(
     profile_level: int = 0,
     import_ms: float | None = None,
     workflow: WorkflowInvocationContext | None = None,
+    business_calendar: BusinessCalendar | None = None,
 ) -> HookRuntimeContext:
     if workflow is None:
         workflow = WorkflowInvocationContext.capture(
             integration,
             configuration_lease=SnapshotLease(integration.configuration.fingerprint),
             task_lease=SnapshotLease(f"{integration.taskdata_source}:{integration.taskdata}"),
+            business_calendar=business_calendar,
         )
     return HookRuntimeContext(
         hook_name=hook_name,

@@ -771,14 +771,20 @@ def _module(name: str, *, required: bool = True):
     return _hook_module_access().module(name, required=required)
 
 
-def _build_hook_runtime_context():
+def _build_hook_runtime_context(task=None):
     hook_runtime = _hook_runtime_module()
+    business_calendar = None
+    if task is not None:
+        resolver = getattr(core, "business_calendar_for_task", None)
+        if callable(resolver):
+            business_calendar = resolver(task)
     return hook_runtime.build_hook_runtime_context(
         module_access=_hook_module_access(),
         hook_name="on-modify",
         integration_context=_INTEGRATION_CONTEXT,
         hook_dir=str(HOOK_DIR),
         import_ms=_IMPORT_MS,
+        business_calendar=business_calendar,
     )
 
 
@@ -3524,7 +3530,7 @@ def main():
         return
     request_t0 = _ptime.perf_counter()
     _seed_runtime_lookup_tasks(old, new)
-    runtime = _build_hook_runtime_context()
+    runtime = _build_hook_runtime_context(new)
     request = hook_context.build_on_modify_request(
         runtime=runtime,
         old=old,

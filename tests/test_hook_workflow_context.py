@@ -28,6 +28,13 @@ class _FixedClock:
         return datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
 
 
+class _Calendar:
+    name = "weekday"
+
+    def is_business_day(self, value) -> bool:
+        return value.weekday() < 5
+
+
 class WorkflowContextTests(unittest.TestCase):
     def _integration(self, clock: _FixedClock, taskdata: Path) -> IntegrationContext:
         config = ValidatedNauticalConfiguration(
@@ -57,11 +64,13 @@ class WorkflowContextTests(unittest.TestCase):
                 self._integration(clock, Path(directory)),
                 configuration_lease=SnapshotLease("config-1"),
                 task_lease=SnapshotLease("taskdata-1"),
+                business_calendar=_Calendar(),
             )
             self.assertEqual(clock.calls, 1)
             self.assertEqual(context.now_utc.hour, 12)
             self.assertEqual(context.now_local.hour, 15)
             self.assertEqual(context.configuration_lease.source_identity, "config-1")
+            self.assertEqual(context.business_calendar_name, "weekday")
 
     def test_cache_is_bounded_and_cleared_on_close(self) -> None:
         caches = InvocationCaches(max_entries=2)

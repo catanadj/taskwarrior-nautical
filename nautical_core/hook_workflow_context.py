@@ -10,7 +10,14 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Protocol
 from .integration_context import IntegrationContext
+
+
+class BusinessCalendar(Protocol):
+    name: str
+
+    def is_business_day(self, value) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +102,7 @@ class WorkflowInvocationContext:
     now_local: datetime
     configuration_lease: SnapshotLease
     task_lease: SnapshotLease
-    business_calendar: str = ""
+    business_calendar: BusinessCalendar | None = None
     caches: InvocationCaches = field(default_factory=InvocationCaches, compare=False)
     repository: object | None = field(default=None, compare=False)
     scheduler_session: object | None = field(default=None, compare=False)
@@ -113,7 +120,10 @@ class WorkflowInvocationContext:
         object.__setattr__(self, "now_local", local)
         if not isinstance(self.configuration_lease, SnapshotLease) or not isinstance(self.task_lease, SnapshotLease):
             raise TypeError("workflow context leases are required")
-        object.__setattr__(self, "business_calendar", str(self.business_calendar or "").strip())
+        if self.business_calendar is not None and not callable(
+            getattr(self.business_calendar, "is_business_day", None)
+        ):
+            raise TypeError("workflow business calendar is invalid")
 
     @classmethod
     def capture(
@@ -122,7 +132,7 @@ class WorkflowInvocationContext:
         *,
         configuration_lease: SnapshotLease,
         task_lease: SnapshotLease,
-        business_calendar: str = "",
+        business_calendar: BusinessCalendar | None = None,
         caches: InvocationCaches | None = None,
         repository: object | None = None,
         scheduler_session: object | None = None,
@@ -142,6 +152,10 @@ class WorkflowInvocationContext:
             scheduler_session=scheduler_session,
             lifecycle_application=lifecycle_application,
         )
+
+    @property
+    def business_calendar_name(self) -> str:
+        return str(getattr(self.business_calendar, "name", "") or "").strip()
 
     def close(self) -> None:
         """Clear invocation-local evidence and make the context unusable."""

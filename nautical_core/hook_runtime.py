@@ -64,6 +64,7 @@ def build_hook_runtime_context(
     hook_dir: str,
     profile_level: int = 0,
     import_ms: float | None = None,
+    business_calendar=None,
 ):
     hook_context = module_access.module("hook_context")
     uow = build_taskwarrior_uow(integration_context, env=os.environ)
@@ -74,6 +75,7 @@ def build_hook_runtime_context(
         hook_dir=hook_dir,
         profile_level=profile_level,
         import_ms=import_ms,
+        business_calendar=business_calendar,
     )
 
 

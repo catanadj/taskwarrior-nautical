@@ -1641,7 +1641,9 @@ def _lifecycle_read_service():
 
     service = lifecycle_read_service.LifecycleReadService(
         coerce_int=core.coerce_int,
-        parse_extra_tokens=_parse_extra_tokens,
+        parse_extra_tokens=lambda extra: read_effects.parse_extra_tokens(
+            _module("modify_composition").hook_host(globals(), __name__), extra
+        ),
         token_matcher=lambda task, token: read_effects._token_match(core, task, token),
         read_query_get=_read_query_get,
         chain_cache_get=lambda _chain_id: None,
@@ -1787,40 +1789,6 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
 # ------------------------------------------------------------------------------
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
-
-def _parse_extra_tokens(extra: str | None) -> list[str] | None:
-    """Parse extra Taskwarrior filters in strict token form: key:value."""
-    hook_support = _module("hook_support", required=False)
-    if hook_support is not None:
-        return hook_support.parse_extra_tokens(extra)
-    if extra is None:
-        return []
-    if not isinstance(extra, str):
-        return None
-    s = extra.strip()
-    if not s:
-        return []
-    out: list[str] = []
-    for tok in s.split():
-        if tok.startswith("+"):
-            tag = tok[1:]
-            if not tag or re.fullmatch(r"[A-Za-z0-9_.-]+", tag) is None:
-                return None
-            out.append(tok)
-            continue
-        if tok.startswith("-"):
-            return None
-        if ":" not in tok:
-            return None
-        key, value = tok.split(":", 1)
-        if not key or not value:
-            return None
-        if re.fullmatch(r"[A-Za-z0-9_.-]+", key) is None:
-            return None
-        if re.fullmatch(r"[A-Za-z0-9_.:@%+,-]+", value) is None:
-            return None
-        out.append(f"{key}:{value}")
-    return out
 
 def main():
     _module("modify_composition").run_on_modify(

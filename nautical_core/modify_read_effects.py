@@ -26,6 +26,10 @@ def _token_match(core: Any, task: Any, token: str) -> bool:
     return (not matched) if negate else matched
 
 
+def parse_extra_tokens(host: Any, extra: str | None) -> list[str] | None:
+    return host._module("hook_support", required=False).parse_extra_tokens(extra)
+
+
 def lifecycle_read_service(host: Any):
     state = host._modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)
@@ -41,7 +45,7 @@ def lifecycle_read_service(host: Any):
         state.chain_cache_store = module.ChainCacheStore()
     service = module.LifecycleReadService(
         coerce_int=host.core.coerce_int,
-        parse_extra_tokens=host._parse_extra_tokens,
+        parse_extra_tokens=lambda extra: parse_extra_tokens(host, extra),
         token_matcher=lambda task, token: _token_match(host.core, task, token),
         read_query_get=host._read_query_get,
         chain_cache_get=lambda _chain_id: None,
@@ -101,4 +105,4 @@ def collect_prev_two(host: Any, current_task: dict, chain_by_link=None):
     return list(read.value)
 
 
-__all__ = ("lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two")
+__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two")

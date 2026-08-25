@@ -11214,14 +11214,14 @@ def test_tw_export_chain_extra_validation():
     """Chain snapshot filters should reject shell-like extra arguments."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_test")
-    expect(mod._parse_extra_tokens("status:pending; rm -rf /") is None, "unsafe filter was accepted")
+    expect(mod._module("modify_read_effects").parse_extra_tokens(mod, "status:pending; rm -rf /") is None, "unsafe filter was accepted")
 
 
 def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
     """tw_export_chain extra parser should reject dash-prefixed tokens."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_dash_test")
-    expect(mod._parse_extra_tokens("status:pending -rc.hooks=on") is None, "dash-prefixed token was accepted")
+    expect(mod._module("modify_read_effects").parse_extra_tokens(mod, "status:pending -rc.hooks=on") is None, "dash-prefixed token was accepted")
 
 
 def test_on_modify_diag_blocks_pretty_print():

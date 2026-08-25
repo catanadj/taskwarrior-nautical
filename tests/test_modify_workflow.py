@@ -7,6 +7,7 @@ from nautical_core.modify_workflow import ChainCompletionDecision, ModifyRouteKi
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 from nautical_core.task_models import TaskTimestamp
+from nautical_core.modify_models import CompletionLifecycleResult
 
 
 def transition(old: dict[str, object], new: dict[str, object]) -> TaskTransition:
@@ -135,6 +136,12 @@ class ModifyWorkflowTests(unittest.TestCase):
         disabled = RecurrenceTransitionDecision("disabled", reason="recurrence removed")
         self.assertIn(("recurrence_source", "cp"), enabled.feedback_facts)
         self.assertIn(("chain_completed", "true"), disabled.feedback_facts)
+
+    def test_completion_result_preserves_replay_and_stale_states(self) -> None:
+        self.assertEqual(CompletionLifecycleResult("already_applied").state, "already_applied")
+        self.assertEqual(CompletionLifecycleResult("stale").state, "stale")
+        with self.assertRaises(ValueError):
+            CompletionLifecycleResult("stale", deferred_spawn=True)
 
     def test_recurring_intent_matrix_keeps_local_edits_scheduler_free(self) -> None:
         root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

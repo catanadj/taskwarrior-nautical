@@ -175,8 +175,13 @@ def finalize_completion_modify(
         return lifecycle_result
     spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
     if spawn_state != "applied":
+        result_state = {
+            "already_applied": "already_applied",
+            "stale": "stale",
+            "manual_review": "manual_review",
+        }.get(spawn_state, "retryable")
         lifecycle_result = CompletionLifecycleResult(
-            state="manual_review" if spawn_state == "manual_review" else "retryable",
+            state=result_state,
             child_short=getattr(spawned, "child_short", ""),
             spawn_intent_id=getattr(spawned, "spawn_intent_id", None),
             reason=getattr(spawned, "reason", "") or "child spawn could not be completed",

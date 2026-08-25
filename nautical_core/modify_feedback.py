@@ -763,7 +763,7 @@ def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result)
     if intent_id and state == "queued":
         value += f" · intent {intent_id}"
     reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
-    if reason and state in {"terminal", "retryable", "manual_review"}:
+    if reason and state in {"terminal", "retryable", "manual_review", "stale"}:
         value += f" · {reason}"
     fb.append(("Result", value))
 

@@ -358,9 +358,15 @@ CompletionCapGuardCallback: TypeAlias = Callable[
 BuildChildDraftCallback: TypeAlias = Callable[
     [TaskRow, Any, str, int, str, str, int, Any], Any
 ]
-SpawnChildCallback: TypeAlias = Callable[
-    [TaskDraft | TaskRow, TaskRow], tuple[str, Any, bool, bool, str | None, str | None]
-]
+class SpawnChildCallback(Protocol):
+    def __call__(
+        self,
+        child: TaskDraft | TaskRow,
+        parent: TaskRow,
+        *,
+        lifecycle_plan: Any = None,
+    ) -> tuple[str, Any, bool, bool, str | None, str | None]:
+        ...
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
 DiagnosticSummaryCallback: TypeAlias = Callable[[], Any]
@@ -653,11 +659,19 @@ class CompletionLifecycleResult:
 
     def __post_init__(self) -> None:
         state = str(self.state or "").strip().lower()
-        if state not in {"applied", "queued", "terminal", "manual_review", "retryable"}:
+        if state not in {
+            "applied",
+            "already_applied",
+            "queued",
+            "terminal",
+            "manual_review",
+            "retryable",
+            "stale",
+        }:
             raise ValueError(f"unsupported completion lifecycle state: {self.state!r}")
         if state == "queued" and (not self.deferred_spawn or not str(self.spawn_intent_id or "").strip()):
             raise ValueError("queued completion result requires deferred spawn and an intent ID")
-        if state in {"applied", "terminal", "manual_review"} and self.deferred_spawn:
+        if state in {"applied", "already_applied", "terminal", "manual_review", "stale"} and self.deferred_spawn:
             raise ValueError("applied completion result cannot be deferred")
         object.__setattr__(self, "state", state)
         object.__setattr__(self, "child_short", str(self.child_short or "").strip())

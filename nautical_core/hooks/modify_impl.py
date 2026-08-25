@@ -1630,21 +1630,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _validate_shared_anchor_on_modify(expr: str) -> None:
-    core._import_sibling("hook_validation_pipeline").validate_anchor_expression(
-        expr,
-        parse_anchor_expr=core.parse_anchor_expr_to_dnf,
-        validate_anchor_expr=_validate_anchor_expr_cached,
-    )
-
-
-def _validate_shared_omit_on_modify(expr: str) -> None:
-    core._import_sibling("hook_validation_pipeline").validate_omit_expression(
-        expr,
-        validate_omit_expr=_validate_omit_expr_cached,
-    )
-
-
 def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
     add_validation = core._import_sibling("add_validation")
     return _module("modify_validation").validate_cp_on_modify(

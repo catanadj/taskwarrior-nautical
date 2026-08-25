@@ -129,7 +129,7 @@ def validate_completion_cp_and_anchor(host: Any, old: TaskPayload, new: TaskPayl
                 if transition is not None
                 else host._field_changed
             ),
-            validate_anchor=host._validate_shared_anchor_on_modify,
+            validate_anchor=lambda expr: validation_effects.validate_shared_anchor(host, expr),
             validate_cp=host._validate_cp_on_modify,
             apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
                 old_task,

@@ -48,7 +48,7 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
 
 def validate_omit(host: Any, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
     try:
-        host._validate_shared_omit_on_modify(omit_expr)
+        validate_shared_omit(host, omit_expr)
         findings = host.core._import_sibling("hook_validation_pipeline").validate_recurrence_files(
             anchor_expr,
             anchor_file_expr,
@@ -65,8 +65,28 @@ def validate_omit(host: Any, anchor_expr: str, anchor_file_expr: str, omit_expr:
         host._fail_and_exit(f"Invalid {finding.field}", finding.reason)
 
 
+def validate_shared_anchor(host: Any, expr: str) -> None:
+    pipeline = host.core._import_sibling("hook_validation_pipeline")
+    pipeline.validate_anchor_expression(
+        expr,
+        parse_anchor_expr=host.core.parse_anchor_expr_to_dnf,
+        validate_anchor_expr=host._validate_anchor_expr_cached,
+    )
+
+
+def validate_shared_omit(host: Any, expr: str) -> None:
+    pipeline = host.core._import_sibling("hook_validation_pipeline")
+    pipeline.validate_omit_expression(
+        expr,
+        validate_omit_expr=host._validate_omit_expr_cached,
+    )
+
+
 def semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
 
-__all__ = ("validate_anchor", "validate_omit", "semantic_diff_value")
+__all__ = (
+    "validate_anchor", "validate_omit", "validate_shared_anchor",
+    "validate_shared_omit", "semantic_diff_value",
+)

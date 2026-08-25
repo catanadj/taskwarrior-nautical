@@ -18493,22 +18493,7 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
     orig_panel = mod._panel
     try:
         mod._panel = lambda title, rows, **_k: captured.update({"title": title, "rows": list(rows)})
-        mod._handle_anchor_preview_on_add(
-            task,
-            ctx.anchor_str,
-            "",
-            ctx.chain_state,
-            ctx.now_utc,
-            ctx.now_local,
-            ctx.user_provided_due,
-            ctx.recurrence_field,
-            ctx.due_dt,
-            ctx.due_day,
-            ctx.due_hhmm,
-            ctx.until_dt,
-            ctx.past_due_warning,
-            mod._NoopProfiler(),
-        )
+        mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
     finally:
         mod._panel = orig_panel
 

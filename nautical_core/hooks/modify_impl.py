@@ -844,6 +844,12 @@ _MODULE_SPECS = {
         "modify_task_fields.py",
         "nautical_core.modify_task_fields",
     ),
+    "modify_time_effects": (
+        "_MODIFY_TIME_EFFECTS",
+        "_MODIFY_TIME_EFFECTS_LOAD_FAILED",
+        "modify_time_effects.py",
+        "nautical_core.modify_time_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -1695,19 +1701,6 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
-
-def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
-    """Normalize various core representations of @t into a sorted list of (hh, mm)."""
-    if v is None:
-        return []
-    time_slots = core._import_sibling("time_slots")
-    return time_slots.resolve_time_slots(
-        v,
-        target_date,
-        config=getattr(core, "ASTRONOMY_CONFIG", {}),
-        to_local=core.to_local,
-    )
-
 
 def _human_delta(a, b, prefer_months=True):
     try:

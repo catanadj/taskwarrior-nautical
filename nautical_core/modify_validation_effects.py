@@ -114,7 +114,7 @@ def validate_chain_limits(host: Any, task: dict) -> None:
         task,
         parse_chain_max=add_validation.parse_chain_max,
         parse_datetime=host.core.parse_dt_any,
-        validate_until_not_past=host._validate_until_not_past,
+        validate_until_not_past=lambda until_dt, now: until_not_past(host, until_dt, now),
         now_utc=host.core.now_utc,
         fail=host._fail_and_exit,
     )
@@ -157,6 +157,26 @@ def validate_native_until_slots(host: Any, task: dict) -> None:
     )
 
 
+def until_not_past(host: Any, until_dt, now_utc) -> tuple[bool, str | None]:
+    if not until_dt:
+        return True, None
+    grace = host.timedelta(minutes=1)
+    if host._compare_datetimes(until_dt, now_utc - grace) < 0:
+        past_s = host.core.humanize_delta(until_dt, now_utc, use_months_days=False)
+        return False, f"chainUntil is in the past (was {past_s} ago)"
+    return True, None
+
+
+def chain_duration_reasonable(host: Any, child_due, until_dt, now_utc) -> tuple[bool, str | None]:
+    if not until_dt:
+        return True, None
+    days = (until_dt - now_utc).days
+    if days > host._MIN_FUTURE_WARN:
+        years = days / 365.25
+        return True, f"Chain extends {years:.1f} years into future (until {host.core.fmt_dt_local(until_dt)})"
+    return True, None
+
+
 def semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
@@ -164,5 +184,6 @@ def semantic_diff_value(old_text: str, new_text: str) -> str:
 __all__ = (
     "validate_anchor", "validate_omit", "validate_shared_anchor",
     "validate_shared_omit", "validate_cp", "validate_chain_limits",
-    "validate_native_until", "validate_native_until_slots", "semantic_diff_value",
+    "validate_native_until", "validate_native_until_slots", "until_not_past",
+    "chain_duration_reasonable", "semantic_diff_value",
 )

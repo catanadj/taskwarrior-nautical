@@ -144,7 +144,7 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
     return compute.completion_until_or_fail(
         new, now_utc,
         safe_parse_datetime=host._safe_parse_datetime,
-        validate_until_not_past=host._validate_until_not_past,
+        validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(host, until_dt, now),
         panel=host._panel,
         print_task=host._print_task,
     )
@@ -167,7 +167,7 @@ def require_child_due_or_fail(host: Any, new: TaskPayload, child_due) -> bool:
 def warn_unreasonable_duration(host: Any, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> None:
     host._module("modify_completion_compute").completion_warn_unreasonable_duration(
         new, child_due, until_dt, now_utc,
-        validate_chain_duration_reasonable=host._validate_chain_duration_reasonable,
+        validate_chain_duration_reasonable=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(host, child_due, until_dt, now),
         panel=host._panel,
     )
 

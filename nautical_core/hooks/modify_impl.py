@@ -1949,42 +1949,9 @@ def _anchor_included_occurrences(
     )
 
 
-# Helper to validate chainUntil is in the future
-def _validate_until_not_past(
-    until_dt: datetime, now_utc: datetime
-) -> tuple[bool, str | None]:
-    """
-    Check if chainUntil is in the past.
-    Returns (is_valid, error_msg).
-    """
-    if not until_dt:
-        return (True, None)
-
-    # Allow small grace period (1 minute) for race conditions
-    grace = timedelta(minutes=1)
-    if _compare_datetimes(until_dt, now_utc - grace) < 0:
-        past_by = now_utc - until_dt
-        past_s = core.humanize_delta(until_dt, now_utc, use_months_days=False)
-        return (False, f"chainUntil is in the past (was {past_s} ago)")
-
-    return (True, None)
-
-
 # ------------------------------------------------------------------------------
 # Child build (copy almost everything; override minimal set)
 # ------------------------------------------------------------------------------
-def _validate_chain_duration_reasonable(
-    child_due: datetime, until_dt: datetime, now_utc: datetime
-) -> tuple[bool, str | None]:
-    if not until_dt:
-        return (True, None)
-    days = (until_dt - now_utc).days
-    if days > _MIN_FUTURE_WARN:
-        years = days / 365.25
-        return (True, f"Chain extends {years:.1f} years into future (until {core.fmt_dt_local(until_dt)})")
-    return (True, None)
-
-
 _RESERVED_DROP = {
     "id",
     "uuid",

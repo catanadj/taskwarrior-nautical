@@ -203,6 +203,12 @@ _MODULE_SPECS = {
         "exit_diagnostics.py",
         "nautical_core.exit_diagnostics",
     ),
+    "exit_models": (
+        "_EXIT_MODELS",
+        "_EXIT_MODELS_LOAD_FAILED",
+        "exit_models.py",
+        "nautical_core.exit_models",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
@@ -474,7 +480,7 @@ def _emit_exit_feedback(msg: str) -> None:
             pass
 
 
-def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
+def _drain_outbox_result(unit_of_work):
     """Claim and execute one bounded batch of lifecycle intents.
 
     All staging, mutation, verification, and recovery logic lives in
@@ -569,21 +575,21 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
     if isinstance(benchmark_metrics, dict):
         state.diag_stats.update(benchmark_metrics)
 
-    return {
-        "entries_total": len(outcomes),
-        "processed": processed,
-        "errors": errors,
-        "retry_released": retry_released,
-        "manual_reviewed": manual_reviewed,
-        "quarantined": quarantined,
-        "conflicted": conflicted,
-        "outbox_lock_failures": outbox_lock_failures,
-        "diagnostics_suppressed": suppressed_diagnostics,
-        "drain_ms": drain_ms,
-    }
+    return _module("exit_models").ExitDrainStats(
+        entries_total=len(outcomes),
+        processed=processed,
+        errors=errors,
+        retry_released=retry_released,
+        manual_reviewed=manual_reviewed,
+        quarantined=quarantined,
+        conflicted=conflicted,
+        outbox_lock_failures=outbox_lock_failures,
+        diagnostics_suppressed=suppressed_diagnostics,
+        drain_ms=drain_ms,
+    )
 
 
-def _drain_outbox(unit_of_work) -> dict:
+def _drain_outbox(unit_of_work):
     return _drain_outbox_result(unit_of_work)
 
 
@@ -599,10 +605,10 @@ def _command_purpose_stat_key(purpose: object) -> str:
     return f"run_task_calls_purpose_{token or 'unknown'}"
 
 
-def _strict_exit_feedback_message(stats: dict) -> str | None:
-    errors = stats.get("errors", 0)
-    manual_reviewed = stats.get("manual_reviewed", 0)
-    outbox_lock_failures = stats.get("outbox_lock_failures", 0)
+def _strict_exit_feedback_message(stats: Any) -> str | None:
+    errors = stats.errors
+    manual_reviewed = stats.manual_reviewed
+    outbox_lock_failures = stats.outbox_lock_failures
     if not (_EXIT_STRICT and (errors > 0 or manual_reviewed > 0 or outbox_lock_failures > 0)):
         return None
     return (
@@ -649,7 +655,10 @@ def main() -> int:
         _exit_runtime_state().startup_stats = startup_stats
         stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
         presentation_t0 = time.perf_counter()
-        _module("exit_presentation").render_drain_failure_panel(core, result.stats or {})
+        _module("exit_presentation").render_drain_failure_panel(
+            core,
+            result.stats.to_mapping() if result.stats is not None else {},
+        )
         exit_code = hook_results.emit_exit_result(
             result,
             emit_exit_feedback=_emit_exit_feedback,
@@ -668,7 +677,7 @@ def main() -> int:
                         {
                             "task_stats": dict(_exit_runtime_state().diag_stats),
                             "startup_stats": dict(_exit_runtime_state().startup_stats),
-                            "drain_stats": dict(result.stats or {}),
+                            "drain_stats": result.stats.to_mapping() if result.stats is not None else {},
                             "outbox_metrics": {
                                 str(key): float(value)
                                 for key, value in _exit_runtime_state().diag_stats.items()

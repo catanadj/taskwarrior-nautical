@@ -118,6 +118,11 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIsNone(plan.limits)
         self.assertEqual(bounded.limits, limits)
 
+    def test_limits_accept_temporal_carry_fields(self) -> None:
+        timestamp = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
+        limits = AddScheduleLimits(wait=timestamp, scheduled=timestamp)
+        self.assertEqual(limits.wait, timestamp)
+
     def test_compact_preview_is_bounded_to_one_occurrence(self) -> None:
         policy = preview_policy(panel_mode="quiet", requested_limit=6, hard_cap=32)
         self.assertTrue(policy.enabled)

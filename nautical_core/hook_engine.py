@@ -105,6 +105,9 @@ def handle_on_add(
     record_schedule = getattr(services, "record_schedule", None)
     if workflow_plan is not None and callable(record_schedule):
         workflow_plan = record_schedule(workflow_plan, task, ctx.recurrence_field)
+    record_limits = getattr(services, "record_limits", None)
+    if workflow_plan is not None and callable(record_limits):
+        workflow_plan = record_limits(workflow_plan, task, ctx)
     record_preview = getattr(services, "record_preview", None)
     if workflow_plan is not None and callable(record_preview):
         workflow_plan = record_preview(workflow_plan)

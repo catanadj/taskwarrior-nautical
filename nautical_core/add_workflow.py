@@ -59,9 +59,11 @@ class AddScheduleLimits:
     chain_until: TaskTimestamp | None = None
     chain_max: int | None = None
     expiration_hops: int | None = None
+    wait: TaskTimestamp | None = None
+    scheduled: TaskTimestamp | None = None
 
     def __post_init__(self) -> None:
-        for name in ("native_until", "chain_until"):
+        for name in ("native_until", "chain_until", "wait", "scheduled"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, TaskTimestamp):
                 raise TypeError(f"{name} must be a TaskTimestamp or None")

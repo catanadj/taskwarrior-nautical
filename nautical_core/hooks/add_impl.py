@@ -1913,6 +1913,26 @@ class _OnAddServices:
         )
         return workflow.record_preview(plan, policy)
 
+    def record_limits(self, plan, task, context):
+        workflow = core._import_sibling("add_workflow")
+        TaskTimestamp = core._import_sibling("task_models").TaskTimestamp
+
+        def timestamp(field):
+            raw = task.get(field)
+            if not raw:
+                return None
+            return TaskTimestamp(core.parse_dt_any(raw))
+
+        chain_max = core.coerce_int(task.get("chainMax"), 0)
+        limits = workflow.AddScheduleLimits(
+            native_until=timestamp("until"),
+            chain_until=timestamp("chainUntil"),
+            chain_max=chain_max if chain_max > 0 else None,
+            wait=timestamp("wait"),
+            scheduled=timestamp("scheduled"),
+        )
+        return workflow.record_limits(plan, limits)
+
     def stamp_chain_id(self, task):
         _stamp_chain_id_on_add(task)
 

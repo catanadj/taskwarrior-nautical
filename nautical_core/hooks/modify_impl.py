@@ -3536,7 +3536,8 @@ def main():
     )
     if validation_report.status is not validation.ValidationStatus.VALID:
         finding = validation_report.findings[0]
-        _fail_and_exit("Invalid Nautical task", f"{finding.reason} {finding.correction}")
+        title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid Nautical task"
+        _fail_and_exit(title, f"{finding.reason} {finding.correction}")
     if _PARSED_OLD_OBSERVATION is not None and _PARSED_NEW_OBSERVATION is not None:
         transition_report = validation.validate_task_transition(
             _PARSED_OLD_OBSERVATION,
@@ -3546,7 +3547,8 @@ def main():
         )
         if transition_report.status is not validation.ValidationStatus.VALID:
             finding = transition_report.findings[0]
-            _fail_and_exit("Invalid recurrence transition", f"{finding.reason} {finding.correction}")
+            title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid recurrence transition"
+            _fail_and_exit(title, f"{finding.reason} {finding.correction}")
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(old, new):
         _fail_and_exit(

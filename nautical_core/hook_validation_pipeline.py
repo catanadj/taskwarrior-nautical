@@ -112,12 +112,6 @@ def validate_recurrence_exclusivity(value: ValidationInput) -> tuple[ValidationF
             "cp cannot be combined with anchor or anchor_file",
             "Keep cp, or remove it before using anchor/anchor_file.",
         ),)
-    if anchor and anchor_file:
-        return (_finding(
-            "recurrence_source_conflict", "anchor_file",
-            "anchor and anchor_file cannot both be active",
-            "Keep anchor, or keep anchor_file, but not both.",
-        ),)
     return ()
 
 
@@ -153,6 +147,8 @@ def validate_chain_identity_domain(value: ValidationInput) -> tuple[ValidationFi
     Activation routes intentionally validate the draft before generated
     identity exists; the add owner stamps it after this stage.
     """
+    if value.previous is not None:
+        return ()
     if value.route in {
         WorkflowRoute.CP_ACTIVATION,
         WorkflowRoute.ANCHOR_ACTIVATION,
@@ -205,6 +201,7 @@ def validate_transition_policy(value: ValidationInput) -> tuple[ValidationFindin
     identity_fields = tuple(
         field for field in ("chainID", "link", "prevLink", "nextLink")
         if transition.changed(field)
+        and value.current.field(field).presence.value != "absent"
     )
     if not identity_fields:
         return ()
@@ -224,8 +221,6 @@ DEFAULT_DOMAIN_RULES: tuple[tuple[ValidationStage, ValidationRule], ...] = (
     (ValidationStage.DOMAIN, validate_recurrence_exclusivity),
     (ValidationStage.DOMAIN, validate_anchor_mode_domain),
     (ValidationStage.DOMAIN, validate_chain_limits_domain),
-    (ValidationStage.DOMAIN, validate_chain_identity_domain),
-    (ValidationStage.DOMAIN, validate_temporal_order_domain),
 )
 
 
@@ -241,21 +236,9 @@ def validate_task_mapping(
 ) -> tuple[TaskObservation, "ValidationReport"]:
     """Decode and validate one hook task before domain work begins."""
     observation = TaskObservation.from_mapping(task, source_query=source_query)
-    findings = [
-        ValidationFinding(
-            ValidationStage.SYNTAX,
-            issue.code,
-            issue.field,
-            issue.message,
-            correction=f"Correct the {issue.field} value and retry.",
-        )
-        for issue in observation.issues
-    ]
     report = build_default_validation_pipeline().validate(
         ValidationInput(observation, route=route)
     )
-    if findings:
-        report = ValidationReport.from_findings(tuple(findings) + report.findings)
     return observation, report
 
 
@@ -269,7 +252,9 @@ def validate_task_transition(
     """Validate a typed old/new pair without mutation or presentation."""
     transition = TaskTransition.from_observations(old, new)
     return ValidationPipeline(
-        DEFAULT_DOMAIN_RULES + ((ValidationStage.TRANSITION, validate_transition_policy),)
+        DEFAULT_DOMAIN_RULES
+        + ((ValidationStage.DOMAIN, validate_chain_identity_domain),
+           (ValidationStage.TRANSITION, validate_transition_policy))
     ).validate(ValidationInput(new, previous=old, transition=transition, route=route))
 
 

@@ -2022,7 +2022,8 @@ def main():
     )
     if validation_report.status is not validation.ValidationStatus.VALID:
         finding = validation_report.findings[0]
-        _error_and_exit([("Invalid Nautical task", f"{finding.reason} {finding.correction}")])
+        title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid Nautical task"
+        _error_and_exit([(title, f"{finding.reason} {finding.correction}")])
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(task):
         _fail_and_exit(

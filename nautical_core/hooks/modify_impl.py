@@ -1689,35 +1689,6 @@ def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     )
 
 
-def _next_occurrence_after_local_dt(
-    dnf,
-    after_local_dt: datetime,
-    default_seed_date,
-    seed_base: str,
-    omit_dnf=None,
-    fallback_hhmm: tuple[int, int] | None = None,
-):
-    """Return the next occurrence using the shared add-side scheduler.
-
-    Keep this adapter while completion/evaluator callers migrate to the
-    evaluator-owned service.  The stable callback signature avoids changing
-    the completion orchestration in the same pass.
-    """
-    if not dnf:
-        return None
-    scheduler = _module("add_anchor_compute")
-    return scheduler.anchor_next_occurrence_after_local_dt(
-        dnf,
-        after_local_dt,
-        fallback_hhmm=fallback_hhmm or (0, 0),
-        interval_seed=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        default_seed_date=default_seed_date,
-        core=core,
-    )
-
-
 def _human_delta(a, b, prefer_months=True):
     try:
         return core.humanize_delta(a, b, use_months_days=bool(prefer_months))

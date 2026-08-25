@@ -43,6 +43,16 @@ def sequence_period_for_link(host: Any, tokens: list[dict], cp_str: str, link_no
     ) or timedelta()
 
 
+def next_occurrence_after_local_dt(host: Any, dnf, after_local_dt: datetime, default_seed_date, seed_base: str, omit_dnf=None, fallback_hhmm: tuple[int, int] | None = None):
+    if not dnf:
+        return None
+    return host._module("add_anchor_compute").anchor_next_occurrence_after_local_dt(
+        dnf, after_local_dt, fallback_hhmm=fallback_hhmm or (0, 0),
+        interval_seed=default_seed_date, seed_base=seed_base,
+        omit_dnf=omit_dnf, default_seed_date=default_seed_date, core=host.core,
+    )
+
+
 def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any):
     return host._module("modify_completion_compute").estimate_cp_final_by_max(
         task,

@@ -12647,7 +12647,7 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
         mod.core._LOCAL_TZ = zone
         dnf = mod.core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
         cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-        result = mod._next_occurrence_after_local_dt(
+        result = mod._module("modify_schedule_effects").next_occurrence_after_local_dt(mod,
             dnf,
             cursor,
             default_seed_date=date(2026, 10, 24),
@@ -15489,7 +15489,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
             cap_no=None,
             to_local_cached=modify_mod._to_local_cached,
             safe_parse_datetime=modify_mod._safe_parse_datetime,
-            next_occurrence_after_local_dt=modify_mod._next_occurrence_after_local_dt,
+            next_occurrence_after_local_dt=lambda *args, **kwargs: modify_mod._module("modify_schedule_effects").next_occurrence_after_local_dt(modify_mod, *args, **kwargs),
             omit_dnf=None,
             omit_expr_fires_on_date=None,
             omit_description_for_date=None,

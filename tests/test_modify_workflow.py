@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 
 from nautical_core.modify_workflow import ChainCompletionDecision, ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition, recurring_edit_intent
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
+from nautical_core.task_models import TaskTimestamp
 
 
 def transition(old: dict[str, object], new: dict[str, object]) -> TaskTransition:
@@ -107,6 +109,26 @@ class ModifyWorkflowTests(unittest.TestCase):
     def test_chain_completion_decision_has_terminal_fact(self) -> None:
         decision = ChainCompletionDecision("recurrence removed", "manual_off")
         self.assertIn(("chain_completed", "true"), decision.feedback_facts)
+
+    def test_chain_completion_facts_are_validated_and_deduplicated(self) -> None:
+        decision = ChainCompletionDecision(
+            "recurrence removed",
+            "manual_off",
+            (("chain_completed", "true"), ("reason", "manual")),
+        )
+        self.assertEqual(decision.feedback_facts.count(("chain_completed", "true")), 1)
+        with self.assertRaises(ValueError):
+            ChainCompletionDecision("recurrence removed", "manual_off", (("", "bad"),))
+
+    def test_resume_decision_exposes_recovery_facts(self) -> None:
+        next_occurrence = TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc))
+        decision = RecurrenceTransitionDecision(
+            "resumed",
+            source="anchor",
+            reason="chain resumed",
+            next_occurrence=next_occurrence,
+        )
+        self.assertIn(("next_occurrence", "2026-08-31T09:00:00Z"), decision.feedback_facts)
 
     def test_recurring_intent_matrix_keeps_local_edits_scheduler_free(self) -> None:
         root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

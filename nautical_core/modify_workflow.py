@@ -101,7 +101,17 @@ class ChainCompletionDecision:
             raise ValueError("chain completion requires a reason and source")
         object.__setattr__(self, "reason", str(self.reason).strip())
         object.__setattr__(self, "source", str(self.source).strip())
-        object.__setattr__(self, "feedback_facts", tuple(self.feedback_facts) + (("chain_completed", "true"),))
+        facts = tuple(self.feedback_facts) + (("chain_completed", "true"),)
+        if any(
+            not isinstance(fact, tuple)
+            or len(fact) != 2
+            or not str(fact[0]).strip()
+            or not str(fact[1]).strip()
+            for fact in facts
+        ):
+            raise ValueError("chain completion feedback facts must be non-empty pairs")
+        unique = tuple(dict.fromkeys((str(key).strip(), str(value).strip()) for key, value in facts))
+        object.__setattr__(self, "feedback_facts", unique)
 
 
 @dataclass(frozen=True, slots=True)

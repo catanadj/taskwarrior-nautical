@@ -17,6 +17,7 @@ from nautical_core.integration_models import (
     IntegrationContractError,
 )
 from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
+from nautical_core.modify_feedback import lifecycle_result_feedback_facts
 from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
@@ -133,6 +134,16 @@ class EffectBoundaryTests(unittest.TestCase):
         ).apply_immediate(plan)
         self.assertEqual(outcome.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
         self.assertFalse(outcome.ok)
+
+    def test_lifecycle_feedback_is_immutable_and_presentation_only(self) -> None:
+        class Result:
+            state = "retryable"
+            reason = "link verification unavailable"
+
+        facts = lifecycle_result_feedback_facts(Result())
+        self.assertEqual(facts.warnings, ("link verification unavailable",))
+        self.assertTrue(facts.recovery_guidance)
+        self.assertFalse(facts.chain_completed)
 
 
 if __name__ == "__main__":

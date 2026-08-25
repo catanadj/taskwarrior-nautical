@@ -7,6 +7,7 @@ from typing import Any
 
 from .task_models import TaskPayload
 from .modify_models import TaskView
+from .hook_workflow_models import FeedbackFacts
 
 
 def append_next_wait_sched_rows(
@@ -743,9 +744,24 @@ def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: TaskPayload,
         fb.append(("Chain end point", core.fmt_dt_local(until_dt)))
 
 
-def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result) -> None:
-    """Expose the mutation outcome without making panels part of orchestration."""
+def lifecycle_result_feedback_facts(lifecycle_result) -> FeedbackFacts:
+    """Convert an application result to immutable presentation facts."""
     state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
+    recovery = ()
+    if state in {"retryable", "manual_review", "stale"}:
+        recovery = ("Run nautical reconcile --apply if recovery remains pending.",)
+    return FeedbackFacts(
+        chain_completed=state == "terminal",
+        warnings=(reason,) if state in {"retryable", "manual_review", "stale"} and reason else (),
+        recovery_guidance=recovery,
+    )
+
+
+def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result) -> None:
+    """Render immutable lifecycle facts without changing application state."""
+    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    facts = lifecycle_result_feedback_facts(lifecycle_result)
     if not state:
         return
     labels = {
@@ -762,9 +778,8 @@ def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result)
     intent_id = str(getattr(lifecycle_result, "spawn_intent_id", "") or "").strip()
     if intent_id and state == "queued":
         value += f" · intent {intent_id}"
-    reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
-    if reason and state in {"terminal", "retryable", "manual_review", "stale"}:
-        value += f" · {reason}"
+    if facts.warnings:
+        value += f" · {facts.warnings[0]}"
     fb.append(("Result", value))
 
 

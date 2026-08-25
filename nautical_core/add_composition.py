@@ -44,6 +44,11 @@ class AddCompositionServices:
     def fail_and_exit(self, title: str, message: str) -> None:
         self._host._fail_and_exit(title, message)
 
+    def validate_task(self, task):
+        """Validate and classify the add request before workflow construction."""
+        return validate_task(self._host, task)
+
+
     def build_context(self, task, now_utc, now_local, *, observation=None, prof):
         host = self._host
         core = host.core
@@ -157,7 +162,30 @@ class AddCompositionServices:
         )
 
 
-__all__ = ("AddCompositionServices",)
+def validate_task(host: Any, task):
+    """Validate and classify an add request without constructing services."""
+    core = host.core
+    validation = core._import_sibling("hook_validation_pipeline")
+    route = (
+        validation.WorkflowRoute.CP_ACTIVATION
+        if str(task.get("cp") or "").strip()
+        else validation.WorkflowRoute.ANCHOR_FILE_ACTIVATION
+        if str(task.get("anchor_file") or "").strip()
+        else validation.WorkflowRoute.ANCHOR_ACTIVATION
+        if str(task.get("anchor") or "").strip()
+        else validation.WorkflowRoute.ORDINARY
+    )
+    observation, report = validation.validate_task_mapping(
+        task, route=route, source_query="on-add validation"
+    )
+    if report.status is not validation.ValidationStatus.VALID:
+        finding = report.findings[0]
+        title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid Nautical task"
+        host._error_and_exit([(title, f"{finding.reason} {finding.correction}")])
+    return observation
+
+
+__all__ = ("AddCompositionServices", "validate_task")
 
 
 def build_on_add_context(host: Any, task, now_utc, now_local, *, observation=None, prof=None):

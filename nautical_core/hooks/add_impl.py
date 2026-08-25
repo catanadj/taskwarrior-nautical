@@ -1308,25 +1308,11 @@ def main():
     # the request has reached the full lifecycle path.
     _load_core()
     _apply_description_uda_aliases(task)
-    validation = core._import_sibling("hook_validation_pipeline")
-    _validated_observation, validation_report = validation.validate_task_mapping(
-        task,
-        route=(
-            validation.WorkflowRoute.CP_ACTIVATION
-            if str(task.get("cp") or "").strip()
-            else validation.WorkflowRoute.ANCHOR_FILE_ACTIVATION
-            if str(task.get("anchor_file") or "").strip()
-            else validation.WorkflowRoute.ANCHOR_ACTIVATION
-            if str(task.get("anchor") or "").strip()
-            else validation.WorkflowRoute.ORDINARY
-        ),
-        source_query="on-add validation",
+    hook_results = _module("hook_results")
+    composition = _module("add_composition")
+    _PARSED_OBSERVATION = composition.validate_task(
+        sys.modules.get(__name__, SimpleNamespace(**globals())), task
     )
-    if validation_report.status is not validation.ValidationStatus.VALID:
-        finding = validation_report.findings[0]
-        title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid Nautical task"
-        _error_and_exit([(title, f"{finding.reason} {finding.correction}")])
-    _PARSED_OBSERVATION = _validated_observation
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(task):
         _fail_and_exit(
@@ -1338,7 +1324,6 @@ def main():
     except Exception as exc:
         _error_and_exit([("Invalid business calendar", str(exc))])
         return
-    hook_results = _module("hook_results")
     displacement_context = (
         core.capture_business_calendar_displacements()
         if str(task.get("bc") or "").strip()
@@ -1355,9 +1340,12 @@ def main():
                 hook_results.TaskHookResponse(task=task, sanitize=False, prof=prof), core=core
             )
         return
+    services = composition.AddCompositionServices(
+        sys.modules.get(__name__, SimpleNamespace(**globals())),
+        hook_results.TaskHookResponse,
+    )
     hook_context = _module("hook_context")
     hook_engine = _module("hook_engine")
-    composition = _module("add_composition")
     runtime = _build_hook_runtime_context(task)
     request = hook_context.build_on_add_request(
         runtime=runtime,
@@ -1369,10 +1357,7 @@ def main():
         with calendar_context, displacement_context:
             result = hook_engine.handle_on_add(
                 request,
-                services=composition.AddCompositionServices(
-                    sys.modules.get(__name__, SimpleNamespace(**globals())),
-                    hook_results.TaskHookResponse,
-                ),
+                services=services,
             )
         if result is not None:
             hook_results.emit_json_result(result, core=core)

@@ -68,8 +68,13 @@ def handle_on_add(
 
     with prof.section('clock:now'):
         core = services.core()
-        now_utc = core.now_utc()
-        now_local = core.to_local(now_utc)
+        workflow = getattr(runtime, "workflow", None)
+        if workflow is not None:
+            now_utc = workflow.now_utc
+            now_local = workflow.now_local
+        else:
+            now_utc = core.now_utc()
+            now_local = core.to_local(now_utc)
 
     ctx = services.build_context(
         task,

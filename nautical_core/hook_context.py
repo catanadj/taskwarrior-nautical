@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .integration_context import IntegrationContext
+from .hook_workflow_context import SnapshotLease, WorkflowInvocationContext
 from .taskwarrior_uow import TaskwarriorUnitOfWork
 from .task_models import TaskObservation, TaskPayload
 from .task_changes import TaskTransition
@@ -19,6 +20,7 @@ class HookRuntimeContext:
     profile_level: int = 0
     import_ms: float | None = None
     lifecycle_result: Any | None = None
+    workflow: WorkflowInvocationContext | None = None
 
 
 @dataclass(slots=True)
@@ -72,7 +74,14 @@ def build_hook_runtime_context(
     hook_dir: str,
     profile_level: int = 0,
     import_ms: float | None = None,
+    workflow: WorkflowInvocationContext | None = None,
 ) -> HookRuntimeContext:
+    if workflow is None:
+        workflow = WorkflowInvocationContext.capture(
+            integration,
+            configuration_lease=SnapshotLease(integration.configuration.fingerprint),
+            task_lease=SnapshotLease(f"{integration.taskdata_source}:{integration.taskdata}"),
+        )
     return HookRuntimeContext(
         hook_name=hook_name,
         integration=integration,
@@ -80,6 +89,7 @@ def build_hook_runtime_context(
         hook_dir=hook_dir,
         profile_level=int(profile_level or 0),
         import_ms=float(import_ms) if import_ms is not None else None,
+        workflow=workflow,
     )
 
 

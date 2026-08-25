@@ -3372,67 +3372,6 @@ def _completion_build_and_spawn_child(
     )
 
 
-def _expiration_services():
-    modify_expiration = _module("modify_expiration")
-    generation = _chain_generation_service()
-    task_codec = _module("task_codec")
-    task_models = _module("task_models")
-
-    def typed_task(task: dict):
-        return task_models.NauticalTask.from_observation(
-            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify expiration")
-        )
-
-    def compute_anchor(task: dict):
-        return generation.compute_anchor_child_due(typed_task(task))
-
-    def compute_cp(task: dict):
-        return generation.compute_cp_child_due(typed_task(task))
-
-    def build_child_draft(task: dict, *args, **kwargs):
-        return generation.build_child_draft(typed_task(task), *args, **kwargs)
-
-    def stage_recovery_plan(plan):
-        return _enqueue_spawn_intent(plan)
-
-    return modify_expiration.ExpirationServices(
-        core=core,
-        reconcile=_module("chain_integrity_lifecycle"),
-        safe_parse_datetime=_safe_parse_datetime,
-        compute_anchor_child_due=compute_anchor,
-        compute_cp_child_due=compute_cp,
-        build_child_draft=build_child_draft,
-        stage_recovery_plan=stage_recovery_plan,
-        panel=_panel,
-        short=_short,
-        diag=_diag,
-    )
-
-
-def _expiration_recovery_warning(new: dict, reason: str) -> None:
-    modify_expiration = _module("modify_expiration", required=False)
-    if modify_expiration is not None:
-        try:
-            modify_expiration.render_recovery_warning(new, reason, services=_expiration_services())
-            return
-        except Exception as exc:
-            _diag(f"expiration recovery warning render failed: {exc}")
-    _panel(
-        "⚠ Nautical expiration recovery deferred",
-        [
-            ("Task", _short(new.get("uuid")) or "–"),
-            ("Reason", reason or "The next occurrence could not be prepared."),
-            ("Action", "Run nautical reconcile --apply."),
-        ],
-        kind="warning",
-    )
-
-
-def _handle_expired_deleted_modify(new: dict) -> bool:
-    modify_expiration = _module("modify_expiration")
-    return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
-
-
 def main():
     _module("modify_composition").run_on_modify(
         _module("modify_composition").hook_host(globals(), __name__)

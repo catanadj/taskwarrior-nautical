@@ -8445,7 +8445,7 @@ def test_on_modify_expiration_panel_explains_carry():
         expiration._render_recovery_panel(
             parent,
             plan,
-            services=mod._expiration_services(),
+            services=_modify_effect(mod, "expiration_services"),
             result="[green]Next occurrence created[/]",
             child_short="22222222",
         )
@@ -8474,7 +8474,7 @@ def test_on_modify_expiration_delegates_to_extracted_orchestration():
 
         expiration.handle_expired_deleted_modify = handle
         task = {"uuid": "00000000-0000-4000-8000-000000000411"}
-        expect(mod._handle_expired_deleted_modify(task), "extracted expiration handler result was lost")
+        expect(_modify_effect(mod, "handle_expired_deleted", task), "extracted expiration handler result was lost")
     finally:
         expiration.handle_expired_deleted_modify = original
 

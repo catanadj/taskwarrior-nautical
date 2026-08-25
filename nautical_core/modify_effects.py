@@ -106,10 +106,10 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
     host._modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = host._module("modify_expiration", required=False)
     if modify_expiration is None:
-        host._expiration_recovery_warning(new, "Expiration recovery module is unavailable; deletion was not classified.")
+        expiration_recovery_warning(host, new, "Expiration recovery module is unavailable; deletion was not classified.")
         return
     services = modify_expiration.DeletedModifyServices(
-        expiration=host._expiration_services(),
+        expiration=expiration_services(host),
         terminal_chain_off=host._ensure_terminal_chain_off,
         now_utc=host.core.now_utc,
         end_chain_summary=host._end_chain_summary,
@@ -117,11 +117,62 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         short=host._short,
         panel=host._panel,
         diag=host._diag,
-        recovery_warning=host._expiration_recovery_warning,
+        recovery_warning=lambda task, reason: expiration_recovery_warning(host, task, reason),
     )
+
+
+def expiration_services(host: Any):
+    modify_expiration = host._module("modify_expiration")
+    generation = host._chain_generation_service()
+    task_codec = host._module("task_codec")
+    task_models = host._module("task_models")
+
+    def typed_task(task):
+        return task_models.NauticalTask.from_observation(
+            task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify expiration")
+        )
+
+    return modify_expiration.ExpirationServices(
+        core=host.core,
+        reconcile=host._module("chain_integrity_lifecycle"),
+        safe_parse_datetime=host._safe_parse_datetime,
+        compute_anchor_child_due=lambda task: generation.compute_anchor_child_due(typed_task(task)),
+        compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
+        build_child_draft=lambda task, *args, **kwargs: generation.build_child_draft(typed_task(task), *args, **kwargs),
+        stage_recovery_plan=host._enqueue_spawn_intent,
+        panel=host._panel,
+        short=host._short,
+        diag=host._diag,
+    )
+
+
+def expiration_recovery_warning(host: Any, new: TaskPayload, reason: str) -> None:
+    modify_expiration = host._module("modify_expiration", required=False)
+    if modify_expiration is not None:
+        try:
+            modify_expiration.render_recovery_warning(new, reason, services=expiration_services(host))
+            return
+        except Exception as exc:
+            host._diag(f"expiration recovery warning render failed: {exc}")
+    host._panel(
+        "⚠ Nautical expiration recovery deferred",
+        [("Task", host._short(new.get("uuid")) or "–"), ("Reason", reason or "The next occurrence could not be prepared."), ("Action", "Run nautical reconcile --apply.")],
+        kind="warning",
+    )
+
+
+def handle_expired_deleted(host: Any, new: TaskPayload) -> bool:
+    modify_expiration = host._module("modify_expiration")
+    return modify_expiration.handle_expired_deleted_modify(new, services=expiration_services(host))
     modify_expiration.handle_deleted_modify(
         old, new, services=services, transition=transition, terminal_decision=terminal_decision
     )
 
 
-__all__ = ("handle_non_completion", "handle_completion", "handle_deleted")
+__all__ = (
+    "handle_non_completion",
+    "handle_completion",
+    "handle_deleted",
+    "expiration_services",
+    "handle_expired_deleted",
+)

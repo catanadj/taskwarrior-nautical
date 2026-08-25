@@ -541,6 +541,8 @@ _MODIFY_COMPOSITION = None
 _MODIFY_COMPOSITION_LOAD_FAILED = False
 _MODIFY_EFFECTS = None
 _MODIFY_EFFECTS_LOAD_FAILED = False
+_MODIFY_COMPLETION_EFFECTS = None
+_MODIFY_COMPLETION_EFFECTS_LOAD_FAILED = False
 _ASTRONOMY_VALIDATION = None
 _ASTRONOMY_VALIDATION_LOAD_FAILED = False
 _MODULE_SPECS = {
@@ -771,6 +773,12 @@ _MODULE_SPECS = {
         "_MODIFY_EFFECTS_LOAD_FAILED",
         "modify_effects.py",
         "nautical_core.modify_effects",
+    ),
+    "modify_completion_effects": (
+        "_MODIFY_COMPLETION_EFFECTS",
+        "_MODIFY_COMPLETION_EFFECTS_LOAD_FAILED",
+        "modify_completion_effects.py",
+        "nautical_core.modify_completion_effects",
     ),
     "modify_validation": (
         "_MODIFY_VALIDATION",

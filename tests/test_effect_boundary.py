@@ -17,6 +17,8 @@ from nautical_core.integration_models import (
     IntegrationContractError,
 )
 from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
+from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
+from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_WORKFLOW_MODULES = (
@@ -86,6 +88,51 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertIsNotNone(cache.get(scope, mutation_epoch=0))
         cache.invalidate()
         self.assertIsNone(cache.get(scope, mutation_epoch=0))
+
+    def test_application_boundary_does_not_report_failed_mutation_as_success(self) -> None:
+        identity = LifecycleIdentity(
+            chain_id="abcd1234",
+            parent_uuid="11111111-1111-4111-8111-111111111111",
+            source_link=1,
+            target_link=None,
+            event=LifecycleEvent.COMPLETE,
+        )
+        plan = LifecyclePlan(
+            identity=identity,
+            action=LifecycleAction.FINALIZE_CHAIN,
+            parent_guard=ParentGuard(
+                status="completed",
+                chain="on",
+                chain_id="abcd1234",
+                link=1,
+                recurrence_fingerprint="identity",
+                modified="20260825T120000Z",
+                end="20260825T120100Z",
+            ),
+        )
+
+        class UnitOfWork:
+            mutation_epoch = 0
+
+            def record_mutation(self, *, uncertain: bool = False) -> None:
+                self.mutation_epoch += 1
+
+        class RejectingGateway:
+            def apply(self, request):
+                return MutationOutcome(
+                    request.operation,
+                    MutationOutcomeKind.REJECTED,
+                    request.guard,
+                    reason="guard conflict",
+                )
+
+        outcome = LifecycleApplicationService(
+            unit_of_work=UnitOfWork(),
+            mutations=RejectingGateway(),
+            outbox=object(),
+        ).apply_immediate(plan)
+        self.assertEqual(outcome.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
+        self.assertFalse(outcome.ok)
 
 
 if __name__ == "__main__":

@@ -1400,6 +1400,8 @@ def _lifecycle_spawn_identity(parent: dict, child: dict):
 def _spawn_child_atomic(
     child_task,
     parent_task_with_nextlink: dict,
+    *,
+    lifecycle_plan=None,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     modify_spawn = _module("modify_spawn")
     if hasattr(child_task, "to_mapping"):
@@ -1407,6 +1409,7 @@ def _spawn_child_atomic(
     return modify_spawn.spawn_child_atomic(
         child_task,
         parent_task_with_nextlink,
+        lifecycle_plan=lifecycle_plan,
         services=modify_spawn.SpawnServices(
             prepare_spawn_child_payload=_module("modify_spawn_prep").prepare_spawn_child_payload,
             child_uuid_for_spawn=_child_uuid_for_spawn,

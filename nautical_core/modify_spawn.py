@@ -24,6 +24,7 @@ def spawn_child_atomic(
     child_task: dict,
     parent_task_with_nextlink: dict,
     *,
+    lifecycle_plan: Any = None,
     services: SpawnServices,
 ) -> tuple[str, set[str], bool, bool, str | None, str | None]:
     """Queue a child spawn intent for on-exit processing.
@@ -31,6 +32,34 @@ def spawn_child_atomic(
     The parent update is still applied by Taskwarrior through on-modify's JSON
     response; this function only stages the immutable child plan.
     """
+    if lifecycle_plan is not None:
+        child_draft = lifecycle_plan.child_draft()
+        if child_draft is None:
+            return ("", set(), False, False, "lifecycle plan has no child draft", None)
+        child_obj = child_draft.to_mapping()
+        child_short = str(child_obj.get("uuid") or "")[:8]
+        if not child_short:
+            return ("", set(), False, False, "lifecycle plan child has no UUID", None)
+        queued, queue_reason = services.enqueue_spawn_intent(lifecycle_plan)
+        if not queued:
+            return (
+                child_short,
+                set(),
+                False,
+                False,
+                f"Spawn intent queue failed: {queue_reason}",
+                getattr(getattr(lifecycle_plan, "identity", None), "idempotency_key", None),
+            )
+        services.diag_count("spawn_deferred")
+        return (
+            child_short,
+            set(),
+            False,
+            True,
+            "Spawn intent queued for on-exit processing",
+            getattr(getattr(lifecycle_plan, "identity", None), "idempotency_key", None),
+        )
+
     env = os.environ.copy()
     child_draft, _child_uuid, child_short = services.prepare_spawn_child_payload(
         child_task,

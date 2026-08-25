@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from nautical_core.chain_generation import CarryFieldError
@@ -56,6 +57,24 @@ def completion_build_and_spawn_child(
     deferred_spawn = False
     spawn_intent_id = None
     try:
+        accepts_plan = False
+        try:
+            parameters = inspect.signature(spawn_child_atomic).parameters.values()
+            accepts_plan = any(
+                parameter.name == "lifecycle_plan"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_plan = lifecycle_plan is not None
+        if lifecycle_plan is None or not accepts_plan:
+            spawn_result = spawn_child_atomic(child_draft or child, task_row)
+        else:
+            spawn_result = spawn_child_atomic(
+                child_draft or child,
+                task_row,
+                lifecycle_plan=lifecycle_plan,
+            )
         (
             child_short,
             stripped_attrs,
@@ -63,7 +82,7 @@ def completion_build_and_spawn_child(
             deferred_spawn,
             defer_reason,
             spawn_intent_id,
-        ) = spawn_child_atomic(child_draft or child, task_row)
+        ) = spawn_result
         if not verified and not deferred_spawn:
             review_reason = defer_reason or "Child spawn could not be verified; parent not updated"
             return CompletionSpawnResult(

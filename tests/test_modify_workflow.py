@@ -8,7 +8,11 @@ from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 from nautical_core.task_models import TaskTimestamp
 from nautical_core.modify_models import CompletionLifecycleResult
-from nautical_core.hook_validation_pipeline import recurrence_kind_conflict, reject_recurrence_kind_conflict
+from nautical_core.hook_validation_pipeline import (
+    recurrence_kind_conflict,
+    reject_recurrence_kind_conflict,
+    validate_recurrence_limits,
+)
 
 
 def transition(old: dict[str, object], new: dict[str, object]) -> TaskTransition:
@@ -162,6 +166,18 @@ class ModifyWorkflowTests(unittest.TestCase):
         self.assertIn("cp", reason or "")
         with self.assertRaisesRegex(ValueError, "anchor_file"):
             reject_recurrence_kind_conflict("", "dates.txt", "P1D")
+
+    def test_recurrence_limit_parsing_is_shared(self) -> None:
+        cpmax, until_dt, findings = validate_recurrence_limits(
+            "P1D", "3", "20260830T090000Z",
+            parse_cp_sequence=lambda value: [value],
+            cp_sequence_parse_error=lambda _value: None,
+            parse_chain_max=lambda value: (int(value), None),
+            parse_datetime=lambda value: value,
+        )
+        self.assertEqual(cpmax, 3)
+        self.assertEqual(until_dt, "20260830T090000Z")
+        self.assertEqual(findings, ())
 
     def test_recurring_intent_matrix_keeps_local_edits_scheduler_free(self) -> None:
         root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, MutableMapping, Protocol, cast
+from typing import Mapping, MutableMapping, Protocol, cast, Any, Callable
 
 from .hook_workflow_models import WorkflowRoute
 from .task_changes import TaskTransition
@@ -148,6 +148,42 @@ def reject_recurrence_kind_conflict(
     valid, reason = recurrence_kind_conflict(cp_value, anchor_value, anchor_file_value)
     if not valid:
         raise ValueError(reason or "recurrence sources conflict")
+
+
+def validate_recurrence_limits(
+    cp_value: object,
+    chain_max_value: object,
+    chain_until_value: object,
+    *,
+    parse_cp_sequence: Callable[[str], Any],
+    cp_sequence_parse_error: Callable[[str], str | None],
+    parse_chain_max: Callable[[object], tuple[int | None, str | None]],
+    parse_datetime: Callable[[object], Any],
+) -> tuple[int | None, Any, tuple[ValidationFinding, ...]]:
+    """Share CP/chain-limit parsing while leaving route policy to callers."""
+    findings: list[ValidationFinding] = []
+    # CP syntax retains its parser-specific diagnostics and is validated by
+    # the route that owns the CP transition. This shared stage only handles
+    # fields whose normalization contract is identical across routes.
+
+    cpmax, chain_max_error = parse_chain_max(chain_max_value)
+    if chain_max_error:
+        findings.append(_finding(
+            "chain_max_invalid", "chainMax", chain_max_error,
+            "Set chainMax to a positive whole number or clear it.",
+        ))
+
+    until_dt = None
+    chain_until = str(chain_until_value or "").strip()
+    if chain_until:
+        until_dt = parse_datetime(chain_until)
+        if until_dt is None:
+            findings.append(_finding(
+                "chain_until_invalid", "chainUntil",
+                f"Unrecognized datetime format '{chain_until}'",
+                "Use Taskwarrior's datetime format or clear chainUntil.",
+            ))
+    return cpmax, until_dt, tuple(findings)
 
 
 def validate_anchor_mode_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
@@ -364,6 +400,7 @@ __all__ = (
     "validate_recurrence_exclusivity",
     "recurrence_kind_conflict",
     "reject_recurrence_kind_conflict",
+    "validate_recurrence_limits",
     "validate_temporal_order_domain",
     "validate_task_mapping",
     "validate_task_transition",

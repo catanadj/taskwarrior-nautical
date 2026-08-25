@@ -1965,15 +1965,19 @@ def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_f
 
 def _validate_chain_limits_on_add(task: dict, now_utc: datetime) -> datetime | None:
     add_validation = _module("add_validation")
-    cpmax, err = add_validation.parse_chain_max(task.get("chainMax"))
-    if err:
-        _error_and_exit([("Invalid chainMax", err)])
+    pipeline = core._import_sibling("hook_validation_pipeline")
+    cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
+        task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
+        parse_cp_sequence=core.parse_cp_sequence,
+        cp_sequence_parse_error=core.cp_sequence_parse_error,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=core.parse_dt_any,
+    )
+    if findings:
+        finding = findings[0]
+        _error_and_exit([(f"Invalid {finding.field}", finding.reason)])
     if cpmax is not None:
         task["chainMax"] = cpmax
-
-    until_dt, err = _safe_parse_datetime(task.get("chainUntil"), "chainUntil")
-    if err:
-        _error_and_exit([("Invalid chainUntil", err)])
     if until_dt:
         is_valid, err = _validate_until_not_past(until_dt, now_utc)
         if not is_valid:

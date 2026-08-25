@@ -315,42 +315,20 @@ def _task_cmd_prefix() -> list[str]:
 
 
 def _initialize_integration_context() -> None:
-    global core, _CORE_IMPORT_TARGET, _INTEGRATION_CONTEXT
-    global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
-    if _INTEGRATION_CONTEXT is not None:
-        return
-    hook_runtime = _hook_runtime_module()
-    core, target, context = hook_runtime.initialize_integration_context(
-        module_access=_hook_module_access(),
-        hook_bootstrap=hook_bootstrap,
-        core_base=_CORE_BASE,
-        argv=tuple(sys.argv[1:]),
-        tw_dir=str(TW_DIR),
-        access="read_only",
-    )
-    _CORE_IMPORT_TARGET = target
-    _INTEGRATION_CONTEXT = context
-    TW_DATA_DIR = context.taskdata
-    _TASKDATA_RAW = str(context.taskdata)
-    _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
+    host = SimpleNamespace(**globals())
+    _module("add_composition").initialize_core(host)
+    for name in ("core", "_CORE_IMPORT_TARGET", "_INTEGRATION_CONTEXT", "TW_DATA_DIR", "_TASKDATA_RAW", "_USE_RC_DATA_LOCATION"):
+        if hasattr(host, name):
+            globals()[name] = getattr(host, name)
 
 
 
 def _load_core() -> None:
-    global core, _IMPORT_MS, _MAX_JSON_BYTES, _CORE_READY
-    if core is not None and _CORE_READY:
-        return
-    _initialize_integration_context()
-    try:
-        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
-    except Exception:
-        pass
-    try:
-        _MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", _MAX_JSON_BYTES))
-    except Exception:
-        pass
-    _IMPORT_MS = (time.perf_counter() - _IMPORT_T0) * 1000.0
-    _CORE_READY = True
+    host = SimpleNamespace(**globals())
+    _module("add_composition").load_core(host)
+    for name in ("core", "_CORE_IMPORT_TARGET", "_INTEGRATION_CONTEXT", "TW_DATA_DIR", "_TASKDATA_RAW", "_USE_RC_DATA_LOCATION", "_MAX_JSON_BYTES", "_IMPORT_MS", "_CORE_READY"):
+        if hasattr(host, name):
+            globals()[name] = getattr(host, name)
 
 class _Profiler:
     """Minimal, low-risk profiler for hook execution (stderr-only)."""

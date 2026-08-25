@@ -5,6 +5,45 @@ from __future__ import annotations
 from typing import Any
 
 
+def initialize_core(host: Any) -> None:
+    """Own installed-layout integration context construction for on-add."""
+    if getattr(host, "_INTEGRATION_CONTEXT", None) is not None:
+        return
+    hook_runtime = host._hook_runtime_module()
+    core, target, context = hook_runtime.initialize_integration_context(
+        module_access=host._hook_module_access(),
+        hook_bootstrap=host.hook_bootstrap,
+        core_base=host._CORE_BASE,
+        argv=tuple(host.sys.argv[1:]),
+        tw_dir=str(host.TW_DIR),
+        access="read_only",
+    )
+    host.core = core
+    host._CORE_IMPORT_TARGET = target
+    host._INTEGRATION_CONTEXT = context
+    host.TW_DATA_DIR = context.taskdata
+    host._TASKDATA_RAW = str(context.taskdata)
+    host._USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
+
+
+def load_core(host: Any) -> None:
+    """Load and finalize the on-add core exactly once."""
+    if getattr(host, "core", None) is not None and getattr(host, "_CORE_READY", False):
+        return
+    initialize_core(host)
+    core = host.core
+    try:
+        core._warn_once_per_day_any("core_path", f"[nautical] core loaded: {getattr(core, '__file__', 'unknown')}")
+    except Exception:
+        pass
+    try:
+        host._MAX_JSON_BYTES = int(getattr(core, "MAX_JSON_BYTES", host._MAX_JSON_BYTES))
+    except Exception:
+        pass
+    host._IMPORT_MS = (host.time.perf_counter() - host._IMPORT_T0) * 1000.0
+    host._CORE_READY = True
+
+
 class AddCompositionServices:
     """Bind add workflow infrastructure without owning recurrence decisions."""
 
@@ -185,7 +224,7 @@ def validate_task(host: Any, task):
     return observation
 
 
-__all__ = ("AddCompositionServices", "validate_task")
+__all__ = ("AddCompositionServices", "initialize_core", "load_core", "validate_task")
 
 
 def build_on_add_context(host: Any, task, now_utc, now_local, *, observation=None, prof=None):

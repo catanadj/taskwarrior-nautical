@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import nullcontext
 from typing import Any, Callable
 
@@ -74,20 +75,27 @@ def hook_host(values: dict[str, Any], name: str) -> Any:
 
 def run_on_modify(host: Any) -> None:
     """Run the validated on-modify composition root for ``host``."""
-    host._load_core()
     host._reset_modify_runtime_state()
     state = host._modify_runtime_state()
     startup_t0 = host._ptime.perf_counter()
     module_t0 = host._ptime.perf_counter()
-    hook_context = host._module("hook_context")
     hook_results = host._module("hook_results")
-    hook_engine = host._module("hook_engine")
-    composition = host._module("modify_composition")
     state.diag_stats["startup_module_ms"] = round(
         (host._ptime.perf_counter() - module_t0) * 1000.0, 3
     )
     read_t0 = host._ptime.perf_counter()
     old, new = host._read_two()
+    alias_candidate = re.search(
+        r"(?:^|\s)(?:a|af|am|o|of|cm|cu):",
+        str(new.get("description") or ""),
+    ) is not None
+    if not host._task_has_nautical_fields(old, new) and not alias_candidate:
+        hook_results.emit_passthrough_json(new)
+        host._write_bench_stats()
+        return
+    host._load_core()
+    hook_context = host._module("hook_context")
+    hook_engine = host._module("hook_engine")
     host._apply_description_uda_aliases(old, new)
     validation = host.core._import_sibling("hook_validation_pipeline")
     _validated_observation, validation_report = validation.validate_task_mapping(

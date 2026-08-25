@@ -792,6 +792,12 @@ _MODULE_SPECS = {
         "modify_presentation_effects.py",
         "nautical_core.modify_presentation_effects",
     ),
+    "modify_diagnostics_effects": (
+        "_MODIFY_DIAGNOSTICS_EFFECTS",
+        "_MODIFY_DIAGNOSTICS_EFFECTS_LOAD_FAILED",
+        "modify_diagnostics_effects.py",
+        "nautical_core.modify_diagnostics_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",

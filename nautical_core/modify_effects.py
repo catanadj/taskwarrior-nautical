@@ -17,6 +17,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     modify_lifecycle = host._module("modify_lifecycle")
     transition_effects = host._module("modify_transition_effects")
     presentation = host._module("modify_presentation_effects")
+    diagnostics = host._module("modify_diagnostics_effects")
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
@@ -70,14 +71,15 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     completion = host._module("modify_completion_effects")
     transition_effects = host._module("modify_transition_effects")
     presentation = host._module("modify_presentation_effects")
+    diagnostics = host._module("modify_diagnostics_effects")
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
         seed_runtime_lookup_tasks=host._seed_runtime_lookup_tasks,
         modify_chain_state=host._modify_chain_state,
         lifecycle_read_service=host._lifecycle_read_service(),
-        chain_health_advice=host._chain_health_advice,
-        chain_integrity_warnings=host._chain_integrity_warnings,
+        chain_health_advice=lambda chain, kind, task, tol_secs, style: diagnostics.chain_health_advice(host, chain, kind, task, tol_secs, style),
+        chain_integrity_warnings=lambda chain, expected=None: diagnostics.chain_integrity_warnings(host, chain, expected),
         render_anchor_completion_feedback=lambda **kwargs: presentation.render_anchor_completion_feedback(host, **kwargs),
         render_cp_completion_feedback=lambda **kwargs: presentation.render_cp_completion_feedback(host, **kwargs),
         render_lifecycle_result=lambda result, task: presentation.render_lifecycle_result(host, result, task),
@@ -119,6 +121,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
 def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None, terminal_decision=None) -> None:
     host._modify_runtime_state().task_repository = unit_of_work.repository
     presentation = host._module("modify_presentation_effects")
+    diagnostics = host._module("modify_diagnostics_effects")
     modify_expiration = host._module("modify_expiration", required=False)
     if modify_expiration is None:
         expiration_recovery_warning(host, new, "Expiration recovery module is unavailable; deletion was not classified.")
@@ -127,7 +130,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         expiration=expiration_services(host),
         terminal_chain_off=lambda task, event=None: presentation.ensure_terminal_chain_off(host, task, event),
         now_utc=host.core.now_utc,
-        end_chain_summary=host._end_chain_summary,
+        end_chain_summary=lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(host, task, reason, now, current_task),
         format_root_and_age=host._format_root_and_age,
         short=host._short,
         panel=host._panel,

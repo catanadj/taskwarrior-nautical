@@ -118,7 +118,7 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
         if exc.is_date_limit:
             host._module("modify_presentation_effects").ensure_terminal_chain_off(host, new, "complete")
             try:
-                host._end_chain_summary(new, message, host._workflow_now_utc(), current_task=new)
+                host._module("modify_diagnostics_effects").end_chain_summary(host, new, message, host._workflow_now_utc(), current_task=new)
             except Exception as summary_exc:
                 host._diag(f"terminal chain summary failed: {summary_exc}")
                 host._panel("⛔ Nautical chain stopped", [("Reason", message), ("Task", host._short(new.get("uuid")) or "–")], kind="summary")
@@ -153,7 +153,7 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
 def until_guard_or_stop(host: Any, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> bool:
     return host._module("modify_completion_compute").completion_until_guard_or_stop(
         new, child_due, until_dt, now_utc,
-        end_chain_summary=host._end_chain_summary,
+        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
         print_task=host._print_task,
     )
 
@@ -186,7 +186,9 @@ def caps(host: Any, kind: str, new: TaskPayload, child_due, dnf):
 
 def cap_guard_or_stop(host: Any, new: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
     return host._module("modify_completion_compute").completion_cap_guard_or_stop(
-        new, next_no, cap_no, now_utc, end_chain_summary=host._end_chain_summary, print_task=host._print_task
+        new, next_no, cap_no, now_utc,
+        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
+        print_task=host._print_task
     )
 
 
@@ -220,7 +222,7 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         lifecycle_planner=host._module("lifecycle_planner"),
         lifecycle_models=host._module("lifecycle_models"),
         modify_models=host._module("modify_models"),
-        end_chain_summary=host._end_chain_summary,
+        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
         ensure_terminal_chain_off=lambda task, event=None: host._module("modify_presentation_effects").ensure_terminal_chain_off(host, task, event),
         panel=host._panel,
         print_task=host._print_task,

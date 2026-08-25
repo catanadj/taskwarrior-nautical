@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, TypeAlias
 
-from .lifecycle_models import LifecyclePlan
+from .lifecycle_models import LifecyclePlan, TaskLifecycleState
 from .task_models import FrozenValue, TaskObservation, TaskTimestamp
 
 
@@ -331,6 +331,35 @@ class LifecycleEffectRef:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskPatchEffect:
+    """A task patch returned to the single workflow application boundary."""
+
+    patch: TaskPatch
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.patch, TaskPatch):
+            raise TypeError("task patch effect requires a TaskPatch")
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalStateEffect:
+    """A terminal lifecycle state to record after guarded application."""
+
+    task: TaskObservation
+    state: TaskLifecycleState
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.task, TaskObservation):
+            raise TypeError("terminal state effect requires a TaskObservation")
+        object.__setattr__(self, "state", TaskLifecycleState(self.state))
+        object.__setattr__(self, "reason", str(self.reason or "").strip())
+
+
+WorkflowEffect: TypeAlias = TaskPatchEffect | LifecycleEffectRef | TerminalStateEffect
+
+
+@dataclass(frozen=True, slots=True)
 class FeedbackFacts:
     """Presentation-neutral facts shared by panels, diagnostics, and tools."""
 
@@ -380,7 +409,7 @@ class WorkflowOperationalResult:
 
     task: TaskObservation
     outcome: WorkflowOutcome
-    effects: tuple[LifecycleEffectRef, ...] = ()
+    effects: tuple[WorkflowEffect, ...] = ()
     feedback: FeedbackFacts = FeedbackFacts()
 
     def __post_init__(self) -> None:
@@ -389,8 +418,8 @@ class WorkflowOperationalResult:
         if not isinstance(self.outcome, WorkflowOutcome):
             raise TypeError("workflow result requires a WorkflowOutcome")
         effects = tuple(self.effects)
-        if any(not isinstance(effect, LifecycleEffectRef) for effect in effects):
-            raise TypeError("workflow effects must be LifecycleEffectRef values")
+        if any(not isinstance(effect, (TaskPatchEffect, LifecycleEffectRef, TerminalStateEffect)) for effect in effects):
+            raise TypeError("workflow effects must be TaskPatchEffect, LifecycleEffectRef, or TerminalStateEffect values")
         if not isinstance(self.feedback, FeedbackFacts):
             raise TypeError("workflow result feedback must be FeedbackFacts")
         object.__setattr__(self, "effects", effects)
@@ -414,6 +443,9 @@ __all__ = [
     "ROUTE_PRECEDENCE",
     "TaskPatch",
     "TaskPatchOperation",
+    "TaskPatchEffect",
+    "TerminalStateEffect",
+    "WorkflowEffect",
     "WorkflowOperationalResult",
     "WorkflowOutcome",
     "WorkflowFailureCategory",

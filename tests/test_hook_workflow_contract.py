@@ -15,7 +15,13 @@ from nautical_core.hook_workflow_models import (
     WorkflowOutcomeKind,
     WorkflowRoute,
     WorkflowOperationalResult,
+    TaskPatchEffect,
+    TerminalStateEffect,
+    TaskPatch,
+    TaskPatchOperation,
+    PatchOperation,
 )
+from nautical_core.lifecycle_models import TaskLifecycleState
 from nautical_core.task_models import TaskObservation
 
 
@@ -85,6 +91,28 @@ class HookWorkflowContractTests(unittest.TestCase):
     def test_lifecycle_effect_rejects_non_plan_values(self) -> None:
         with self.assertRaises(TypeError):
             LifecycleEffectRef(object())
+
+    def test_operational_result_accepts_only_closed_effect_set(self) -> None:
+        outcome = WorkflowOutcome(
+            kind=WorkflowOutcomeKind.PASSTHROUGH,
+            disposition=OutcomeDisposition.EMIT_TASK,
+            route=WorkflowRoute.ORDINARY,
+        )
+        task = self._observation()
+        patch = TaskPatch((TaskPatchOperation("value", PatchOperation.SET, 3),))
+        result = WorkflowOperationalResult(
+            task,
+            outcome,
+            effects=(TaskPatchEffect(patch), TerminalStateEffect(task, TaskLifecycleState.ACTIVE)),
+        )
+        self.assertEqual(len(result.effects), 2)
+        with self.assertRaises(TypeError):
+            WorkflowOperationalResult(task, outcome, effects=(object(),))
+
+    def test_terminal_state_effect_normalizes_state_and_reason(self) -> None:
+        effect = TerminalStateEffect(self._observation(), "terminal", "  completed  ")
+        self.assertIs(effect.state, TaskLifecycleState.TERMINAL)
+        self.assertEqual(effect.reason, "completed")
 
     def test_rejection_requires_nonzero_exit(self) -> None:
         with self.assertRaises(ValueError):

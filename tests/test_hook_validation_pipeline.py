@@ -52,11 +52,11 @@ class ValidationPipelineTests(unittest.TestCase):
         )
         self.assertEqual(report.status, ValidationStatus.VALID)
 
-    def test_mapping_validation_exposes_decode_findings(self) -> None:
+    def test_mapping_validation_exposes_domain_findings(self) -> None:
         _observation_value, report = __import__(
             "nautical_core.hook_validation_pipeline", fromlist=["validate_task_mapping"]
         ).validate_task_mapping(
-            {"status": "pending", "chain": "on", "chainID": "bad", "link": 0},
+            {"status": "pending", "chain": "on", "chainID": "abcd1234", "link": 1, "chainMax": 0},
             route=WorkflowRoute.RECURRING_EDIT,
             source_query="mapping-test",
         )

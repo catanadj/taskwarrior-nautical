@@ -114,6 +114,14 @@ class HookWorkflowContractTests(unittest.TestCase):
         self.assertIs(effect.state, TaskLifecycleState.TERMINAL)
         self.assertEqual(effect.reason, "completed")
 
+    def test_feedback_facts_deduplicate_repeated_messages(self) -> None:
+        facts = FeedbackFacts(
+            warnings=("same warning", "same warning", "different warning"),
+            recovery_guidance=("retry", "retry"),
+        )
+        self.assertEqual(facts.warnings, ("same warning", "different warning"))
+        self.assertEqual(facts.recovery_guidance, ("retry",))
+
     def test_rejection_requires_nonzero_exit(self) -> None:
         with self.assertRaises(ValueError):
             WorkflowOutcome(

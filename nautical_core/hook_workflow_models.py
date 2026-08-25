@@ -409,7 +409,13 @@ class FeedbackFacts:
 
 
 def _normalized_texts(values: tuple[str, ...]) -> tuple[str, ...]:
-    return tuple(text for text in (str(value).strip() for value in values) if text)
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for text in (str(value).strip() for value in values):
+        if text and text not in seen:
+            seen.add(text)
+            normalized.append(text)
+    return tuple(normalized)
 
 
 def _normalized_pairs(values: tuple[tuple[str, str], ...], name: str) -> tuple[tuple[str, str], ...]:

@@ -6,7 +6,21 @@ import sys
 from typing import Any
 
 
+def _test_override(host: Any, name: str):
+    values = getattr(host, "_values", None)
+    if values is None and hasattr(host, "__dict__"):
+        values = vars(host)
+    override = values.get(name) if isinstance(values, dict) else None
+    is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
+        getattr(getattr(override, "__code__", None), "co_filename", "") == values.get("__file__")
+    )
+    return override if callable(override) and not is_root_delegate else None
+
+
 def print_task(host: Any, task) -> None:
+    override = _test_override(host, "_print_task")
+    if override is not None:
+        return override(task)
     hook_results = host._module("hook_results")
     if host.core is None:
         try:
@@ -26,6 +40,9 @@ def panel(
     title_style: str | None = None,
     label_style: str | None = None,
 ):
+    override = _test_override(host, "_panel")
+    if override is not None:
+        return override(title, rows, kind=kind)
     if host.core is None:
         try:
             host._load_core()
@@ -35,7 +52,8 @@ def panel(
             except Exception:
                 pass
             return
-    themes = host.core.panel_themes()
+    ui = host.core._import_sibling("ui")
+    themes = ui.panel_themes()
     theme = dict(themes.get(kind, themes.get("info", {})))
     if border_style:
         theme["border"] = border_style
@@ -61,7 +79,10 @@ def panel(
 
 
 def panel_line(host: Any, title: str, line: str, *, kind: str = "info", border_style=None, title_style=None, markup_body=False) -> None:
-    host.core.panel_line(
+    override = _test_override(host, "_panel_line")
+    if override is not None:
+        return override(title, line, kind=kind, border_style=border_style, title_style=title_style, markup_body=markup_body)
+    host.core._import_sibling("ui").panel_line(
         title,
         line,
         kind=kind,
@@ -73,7 +94,10 @@ def panel_line(host: Any, title: str, line: str, *, kind: str = "info", border_s
 
 
 def text_line(host: Any, line: str, *, kind: str = "info", markup_body: bool = False) -> None:
-    host.core.text_line(line, kind=kind, markup_body=markup_body)
+    override = _test_override(host, "_text_line")
+    if override is not None:
+        return override(line, kind=kind, markup_body=markup_body)
+    host.core._import_sibling("ui").text_line(line, kind=kind, markup_body=markup_body)
 
 
 __all__ = ("print_task", "panel", "panel_line", "text_line")

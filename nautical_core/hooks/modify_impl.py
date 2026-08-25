@@ -1265,33 +1265,6 @@ def _panel(
     )
 
 
-def _panel_line(
-    title: str,
-    line: str,
-    *,
-    kind: str = "info",
-    border_style: str | None = None,
-    title_style: str | None = None,
-    markup_body: bool = False,
-) -> None:
-    host = _module("modify_composition").hook_host(globals(), __name__)
-    return _module("modify_ui_effects").panel_line(
-        host, title, line, kind=kind, border_style=border_style,
-        title_style=title_style, markup_body=markup_body,
-    )
-
-
-def _text_line(
-    line: str,
-    *,
-    kind: str = "info",
-    markup_body: bool = False,
-) -> None:
-    host = _module("modify_composition").hook_host(globals(), __name__)
-    return _module("modify_ui_effects").text_line(
-        host, line, kind=kind, markup_body=markup_body,
-    )
-
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
 # ------------------------------------------------------------------------------

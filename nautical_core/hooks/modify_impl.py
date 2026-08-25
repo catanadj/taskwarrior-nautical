@@ -1524,7 +1524,8 @@ def tw_export_chain_required(seed_task, env=None):
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
-        read_service = _lifecycle_read_service()
+        host = _module("modify_composition").hook_host(globals(), __name__)
+        read_service = _module("modify_read_effects").lifecycle_read_service(host)
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
             cached, cache_chain_id = (
@@ -1603,23 +1604,11 @@ def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
 
 
 def _collect_prev_two(current_task: dict, chain_by_link=None):
-    from nautical_core.integration_models import Absent, Found, Unavailable
-
-    service = _lifecycle_read_service()
-    read = service.collect_prev_two(
+    return _module("modify_read_effects").collect_prev_two(
+        _module("modify_composition").hook_host(globals(), __name__),
         current_task,
-        get_chain_read=lambda chain_id: service.get_chain_read(chain_id),
-        panel_chain_by_link=_modify_runtime_state().panel_chain_by_link,
-        panel_chain_snapshot_loaded=_modify_runtime_state().panel_chain_snapshot_loaded,
-        chain_by_link=chain_by_link,
+        chain_by_link,
     )
-    if isinstance(read, Unavailable):
-        raise RuntimeError(read.evidence.detail or "lifecycle predecessor read unavailable")
-    if isinstance(read, Absent):
-        return []
-    if not isinstance(read, Found):
-        raise RuntimeError("lifecycle predecessor read returned an invalid result")
-    return list(read.value)
 
 
 def _lifecycle_read_service():

@@ -92,7 +92,9 @@ def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload,
     new_view = models.TaskView.from_mapping(new)
     now_utc = host._workflow_now_utc()
     try:
-        host._end_chain_summary(old_view, reason, now_utc, current_task=new_view)
+        host._module("modify_diagnostics_effects").end_chain_summary(
+            host, old_view, reason, now_utc, current_task=new_view
+        )
     except Exception as exc:
         host._diag(f"removed recurrence chain summary failed: {exc}")
         host._panel(

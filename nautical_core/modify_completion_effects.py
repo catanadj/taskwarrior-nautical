@@ -24,7 +24,7 @@ def kind_or_stop(host: Any, new: TaskPayload, now_utc: datetime):
         now_utc,
         panel=host._panel,
         print_task=host._print_task,
-        end_chain_summary=host._end_chain_summary,
+        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
     )
 
 

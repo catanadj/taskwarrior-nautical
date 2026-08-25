@@ -53,6 +53,15 @@ def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
     )
 
 
+def span_fields(host: Any, chain_id: str, chain, *, stop_at=None, stopped_by_delete: bool = False):
+    return host._module("modify_chain_summary").span_fields(
+        chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
+        export_endpoint=host._export_chain_endpoint,
+        parse_datetime=host._dtparse,
+        human_delta=host._human_delta,
+    )
+
+
 def _fmt_secs_delta(host: Any, secs: float | None) -> str:
     if secs is None:
         return "—"
@@ -149,4 +158,4 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
     )
 
 
-__all__ = ("chain_health_advice", "chain_integrity_warnings", "end_chain_summary")
+__all__ = ("chain_health_advice", "chain_integrity_warnings", "span_fields", "end_chain_summary")

@@ -617,6 +617,7 @@ def _load_hook_module(path: str, module_name: str):
         mod._completion_effects = _BoundCompletionEffects(mod)
         mod._transition_effects = _BoundTransitionEffects(mod)
         mod._presentation_effects = _BoundPresentationEffects(mod)
+        mod._diagnostics_effects = _BoundDiagnosticsEffects(mod)
         def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
             return mod._presentation_effects.timeline_lines(
                 kind, task, child_due_utc, child_short, dnf, **kwargs
@@ -682,6 +683,21 @@ class _BoundPresentationEffects:
     def __init__(self, hook):
         object.__setattr__(self, "_hook", hook)
         object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_presentation_effects"))
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundDiagnosticsEffects:
+    """Test-only bound view of the extracted diagnostics-effects module."""
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_diagnostics_effects"))
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)
@@ -8387,7 +8403,7 @@ def test_delete_chain_summary_span_uses_stop_time_without_last_end():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    first, last, span = mod._end_summary_span_fields(
+    first, last, span = mod._diagnostics_effects.span_fields(
         "cid",
         [{"uuid": "root", "due": "20260101T000000Z"}, {"uuid": "tail", "status": "deleted"}],
         stop_at=datetime(2026, 1, 11, tzinfo=timezone.utc),
@@ -8406,7 +8422,7 @@ def test_end_summary_history_marks_deleted_pending_tail():
     if hasattr(mod, "_load_core"):
         mod._load_core()
 
-    lines = mod._last_n_timeline(
+    lines = mod._diagnostics_effects.last_n_timeline(
         [
             {
                 "uuid": "00000000-0000-4000-8000-000000000111",
@@ -8463,7 +8479,7 @@ def test_delete_chain_summary_uses_stopped_title():
     try:
         mod._panel = lambda title, rows, kind=None: captured.update({"title": title, "rows": rows, "kind": kind})
         mod.tw_export_chain_required = lambda _task: list(chain)
-        mod._end_chain_summary(
+        mod._diagnostics_effects.end_chain_summary(
             task,
             "Pending task deleted.",
             datetime(2026, 1, 3, tzinfo=timezone.utc),
@@ -8574,16 +8590,16 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
     panels = []
     stopped = []
     expiration = mod._module("modify_expiration")
-    original = (expiration.handle_expired_deleted_modify, mod._panel, mod._end_chain_summary)
+    original = (expiration.handle_expired_deleted_modify, mod._panel, mod._diagnostics_effects.end_chain_summary)
     try:
         expiration.handle_expired_deleted_modify = (
             lambda _task, *, services: (_ for _ in ()).throw(RuntimeError("missing module"))
         )
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
+        mod._diagnostics_effects.end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
         _modify_effect(mod, "handle_deleted", old, new, _test_operator_uow())
     finally:
-        expiration.handle_expired_deleted_modify, mod._panel, mod._end_chain_summary = original
+        expiration.handle_expired_deleted_modify, mod._panel, mod._diagnostics_effects.end_chain_summary = original
 
     expect(not stopped, "internal expiration failure must not be treated as an intentional deletion")
     expect(new.get("chain") == "on" and not new.get("nextLink"), f"recovery evidence was lost: {new!r}")
@@ -31409,7 +31425,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
         spawn_intent_id=None,
     )
     mod._presentation_effects.render_cp_completion_feedback = lambda **_k: None
-    mod._chain_health_advice = lambda *_a, **_k: None
+    mod._diagnostics_effects.chain_health_advice = lambda *_a, **_k: None
     mod._append_next_wait_sched_rows = lambda *_a, **_k: None
     mod._module("lifecycle_read_service").clear_cached_chain_exports()
     mod._reset_modify_runtime_state()

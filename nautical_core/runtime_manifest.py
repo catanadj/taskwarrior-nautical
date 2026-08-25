@@ -72,6 +72,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_time_effects",
         "modify_read_effects",
         "modify_format_effects",
+        "modify_command_effects",
         "modify_generation_effects",
         "modify_runtime",
         "modify_timeline",

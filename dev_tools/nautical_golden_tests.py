@@ -19343,10 +19343,11 @@ def test_hook_task_runner_handles_nonzero():
     """Hook typed command runner handles success and non-zero exits."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_test")
-    result = mod._run_task_result([sys.executable, "-c", "print('ok')"], timeout=2, retries=1)
+    result = mod._module("modify_command_effects").run_task_result(mod, [sys.executable, "-c", "print('ok')"], timeout=2, retries=1)
     expect(result.ok and result.stdout.strip() == "ok", f"typed hook command failed: {result}")
 
-    failed = mod._run_task_result(
+    failed = mod._module("modify_command_effects").run_task_result(
+        mod,
         [sys.executable, "-c", "import sys; sys.exit(2)"],
         timeout=2,
         retries=1,
@@ -19387,7 +19388,7 @@ def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_fallback_test")
-    result = mod._run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
+    result = mod._module("modify_command_effects").run_task_result(mod, [sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
     expect(result.ok, f"typed on-modify command failed: {result}")
     expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
 
@@ -19396,7 +19397,7 @@ def test_on_add_run_task_falls_back_when_core_load_fails():
     """on-add uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_fallback_test")
-    result = mod._run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
+    result = mod._module("modify_command_effects").run_task_result(mod, [sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
     expect(result.ok, f"typed on-add command failed: {result}")
     expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
 
@@ -31713,7 +31714,8 @@ def test_on_add_run_task_timeout():
     """on-add typed command execution reports timeouts."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_timeout_test")
-    result = mod._run_task_result(
+    result = mod._module("modify_command_effects").run_task_result(
+        mod,
         [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
     )
     expect(not result.ok and result.kind.value == "timeout", f"on-add timeout changed: {result}")
@@ -31723,7 +31725,8 @@ def test_on_modify_run_task_timeout():
     """on-modify typed command execution reports timeouts."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_timeout_test")
-    result = mod._run_task_result(
+    result = mod._module("modify_command_effects").run_task_result(
+        mod,
         [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
     )
     expect(not result.ok and result.kind.value == "timeout", f"on-modify timeout changed: {result}")

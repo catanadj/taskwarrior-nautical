@@ -862,6 +862,12 @@ _MODULE_SPECS = {
         "modify_format_effects.py",
         "nautical_core.modify_format_effects",
     ),
+    "modify_command_effects": (
+        "_MODIFY_COMMAND_EFFECTS",
+        "_MODIFY_COMMAND_EFFECTS_LOAD_FAILED",
+        "modify_command_effects.py",
+        "nautical_core.modify_command_effects",
+    ),
     "modify_generation_effects": (
         "_MODIFY_GENERATION_EFFECTS",
         "_MODIFY_GENERATION_EFFECTS_LOAD_FAILED",
@@ -1343,46 +1349,11 @@ def _text_line(
         markup_body=markup_body,
     )
 
-# ------------------------------------------------------------------------------
-# Taskwarrior integration
-# ------------------------------------------------------------------------------
-def _run_task_result(
-    cmd: list[str],
-    *,
-    env: dict | None = None,
-    input_text: str | None = None,
-    timeout: float = 3.0,
-    retries: int = 2,
-    retry_delay: float = 0.15,
-    use_tempfiles: bool = False,
-):
-    """Execute one on-modify Taskwarrior command through the shared client."""
-    from nautical_core.runtime_command import run_task_result
-
-    started = _ptime.perf_counter()
-    result = run_task_result(
-        cmd,
-        env=env,
-        input_text=input_text,
-        timeout=timeout,
-        retries=retries,
-        retry_delay=retry_delay,
-        use_tempfiles=use_tempfiles,
-        purpose=f"on-modify {_run_task_diag_bucket(cmd)}",
-    )
-    elapsed = _ptime.perf_counter() - started
-    _diag_count("run_task_calls")
-    _diag_count("run_task_seconds", elapsed)
-    _diag_record_run_task(cmd, ok=result.ok, elapsed=elapsed)
-    if not result.ok:
-        _diag_count("run_task_failures")
-    return result
-
-
 def _reserve_child_uuid(env: dict) -> str:
     candidate = str(uuid.uuid4())
     while True:
-        result = _run_task_result(
+        result = _module("modify_command_effects").run_task_result(
+            _module("modify_composition").hook_host(globals(), __name__),
             _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{candidate}", "count"],
             env=env,
             timeout=2.5,
@@ -1418,38 +1389,6 @@ def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env
         reserve_child_uuid=_reserve_child_uuid,
     )
 
-
-# --- Chain export: chainID is mandatory --------------------------------------
-def _task(args, env=None) -> str:
-    """
-    Thin wrapper around 'task' returning stdout as text.
-    Always disables hooks; caller should provide rc.json.array flag when needed.
-    """
-    cache_key = None
-    if env is None and _task_args_cacheable(args):
-        try:
-            cache_key = tuple(str(a) for a in args)
-        except Exception:
-            cache_key = None
-        if cache_key is not None:
-            cached = _query_ctx_get("task_text", cache_key)
-            if isinstance(cached, str):
-                _diag_count("task_text_cache_hits")
-                return cached
-            _diag_count("task_text_cache_misses")
-    modify_queries = _module("modify_queries")
-    out = modify_queries.task_text(
-        args,
-        run_task=_run_task_result,
-        task_cmd_prefix=_task_cmd_prefix(),
-        env=(env or os.environ.copy()),
-        timeout=3.0,
-        retries=2,
-        diag=_diag,
-    )
-    if cache_key is not None:
-        _query_ctx_set("task_text", cache_key, out or "")
-    return out
 
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers

@@ -138,7 +138,7 @@ def tw_get_cached(host: Any, ref: str) -> str:
         host._diag_count("tw_get_cache_misses")
         out = host._module("modify_queries").tw_get(
             ref,
-            task_text=lambda args: host._task(args, env=None),
+            task_text=lambda args: host._module("modify_command_effects").task_text(host, args),
         )
         host._query_ctx_set("tw_get", ref, out or "")
         return out

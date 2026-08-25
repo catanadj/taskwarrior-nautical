@@ -537,6 +537,8 @@ _MODIFY_CHAIN_SUMMARY = None
 _MODIFY_CHAIN_SUMMARY_LOAD_FAILED = False
 _MODIFY_WORKFLOW = None
 _MODIFY_WORKFLOW_LOAD_FAILED = False
+_MODIFY_COMPOSITION = None
+_MODIFY_COMPOSITION_LOAD_FAILED = False
 _ASTRONOMY_VALIDATION = None
 _ASTRONOMY_VALIDATION_LOAD_FAILED = False
 _MODULE_SPECS = {
@@ -755,6 +757,12 @@ _MODULE_SPECS = {
         "_MODIFY_WORKFLOW_LOAD_FAILED",
         "modify_workflow.py",
         "nautical_core.modify_workflow",
+    ),
+    "modify_composition": (
+        "_MODIFY_COMPOSITION",
+        "_MODIFY_COMPOSITION_LOAD_FAILED",
+        "modify_composition.py",
+        "nautical_core.modify_composition",
     ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
@@ -3554,45 +3562,6 @@ def _handle_deleted_modify(
     )
 
 
-class _OnModifyServices:
-    """Concrete adapter passed to the shared hook router."""
-
-    def __init__(self, result_cls):
-        self._result_cls = result_cls
-
-    typed_transition_handlers = True
-
-    def result(self, task, *, sanitize: bool):
-        return self._result_cls(task=task, sanitize=sanitize)
-
-    def has_nautical_fields(self, task):
-        return _task_has_nautical_fields(task, task)
-
-    def load_core(self):
-        _load_core()
-
-    def diag(self, message: str):
-        _diag(message)
-
-    def fail_and_exit(self, title: str, message: str):
-        _fail_and_exit(title, message)
-
-    def handle_non_completion(self, old, new, unit_of_work, transition=None):
-        _handle_non_completion_modify(old, new, unit_of_work, transition=transition)
-
-    def handle_completion(self, old, new, unit_of_work, transition=None):
-        return _handle_completion_modify(old, new, unit_of_work, transition=transition)
-
-    def handle_deleted(self, old, new, unit_of_work, transition=None, terminal_decision=None):
-        _handle_deleted_modify(
-            old,
-            new,
-            unit_of_work,
-            transition=transition,
-            terminal_decision=terminal_decision,
-        )
-
-
 def main():
     # Keep module import cheap while preserving the existing full-hook
     # contract: all mutation decisions run with the validated core loaded.
@@ -3604,6 +3573,7 @@ def main():
     hook_context = _module("hook_context")
     hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
+    composition = _module("modify_composition")
     state.diag_stats["startup_module_ms"] = round((_ptime.perf_counter() - module_t0) * 1000.0, 3)
     read_t0 = _ptime.perf_counter()
     old, new = _read_two()
@@ -3665,7 +3635,9 @@ def main():
         with calendar_context, displacement_context:
             result = hook_engine.handle_on_modify(
                 request,
-                services=_OnModifyServices(hook_results.TaskHookResponse),
+                services=composition.ModifyCompositionServices(
+                    sys.modules[__name__], hook_results.TaskHookResponse
+                ),
             )
         if result is not None:
             hook_results.emit_json_result(result, core=core)

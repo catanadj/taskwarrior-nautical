@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from nautical_core.modify_carry_workflow import (
     NativeUntilDecision,
@@ -61,6 +62,22 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "verification failed"):
             verify_temporal_carry_task({}, decision)
+
+    def test_dst_transition_keeps_typed_values_in_utc(self) -> None:
+        zone = ZoneInfo("Europe/Bucharest")
+        before = TaskTimestamp(datetime(2026, 10, 25, 9, tzinfo=zone))
+        after = TaskTimestamp(datetime(2026, 10, 26, 9, tzinfo=zone))
+        decision = TemporalCarryDecision(
+            "adjusted",
+            (TemporalCarryAdjustment("scheduled", before, after, (after.value - before.value).total_seconds()),),
+        )
+        self.assertEqual(before.value.tzinfo, timezone.utc)
+        self.assertEqual(after.value.tzinfo, timezone.utc)
+        self.assertGreater(decision.adjustments[0].offset_seconds, 0)
+
+    def test_malformed_cp_result_fails_closed(self) -> None:
+        with self.assertRaises((TypeError, ValueError)):
+            decision_from_cp_adjustments(("bad",))
 
     def test_adjusted_decision_applies_one_typed_patch(self) -> None:
         task = {"uuid": "11111111-1111-4111-8111-111111111111"}

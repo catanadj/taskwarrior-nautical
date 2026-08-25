@@ -780,6 +780,12 @@ _MODULE_SPECS = {
         "modify_completion_effects.py",
         "nautical_core.modify_completion_effects",
     ),
+    "modify_transition_effects": (
+        "_MODIFY_TRANSITION_EFFECTS",
+        "_MODIFY_TRANSITION_EFFECTS_LOAD_FAILED",
+        "modify_transition_effects.py",
+        "nautical_core.modify_transition_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -2902,128 +2908,6 @@ def _ensure_terminal_chain_off(task: dict, event: str | None = None) -> bool:
             lifecycle_models.LifecycleEvent(event),
         )
     return _module("modify_lifecycle").ensure_terminal_chain_off(task)
-
-
-def _preserve_cp_relative_offsets_on_due_change(
-    old: dict,
-    new: dict,
-    new_cp: str,
-    *,
-    transition=None,
-) :
-    result = _module("modify_carry").preserve_cp_relative_offsets_on_due_change(
-        old,
-        new,
-        new_cp,
-        field_changed=(
-            (lambda _old, _new, field: transition.changed(field))
-            if transition is not None
-            else _field_changed
-        ),
-        parse_datetime=core.parse_dt_any,
-        utc_to_local_naive=_utc_to_local_naive,
-        local_naive_to_utc=_local_naive_to_utc,
-        format_datetime=core.fmt_isoz,
-        carry_error=_module("chain_generation").CarryFieldError,
-    )
-    workflow = _module("modify_carry_workflow")
-    decision = workflow.decision_from_cp_adjustments(result)
-    workflow.apply_temporal_carry_patch(new, decision)
-    workflow.verify_temporal_carry_task(new, decision)
-    return decision
-
-
-def _reject_native_until_carry(
-    old: dict,
-    new: dict,
-    new_target: datetime | None,
-    old_target_field: str,
-    exc: Exception,
-) -> None:
-    """Reject a target edit when its native expiration cannot be carried."""
-    carry = None
-    try:
-        add_validation = core._import_sibling("add_validation")
-        carry = add_validation.describe_native_until_carry(
-            core.parse_dt_any(old.get("until")),
-            core.parse_dt_any(old.get(old_target_field)),
-            to_local=core.to_local,
-        )
-    except Exception:
-        pass
-    target_label = (
-        core.fmt_dt_local(new_target)
-        if isinstance(new_target, datetime)
-        else str(new.get(_recurrence_anchor_field(new)) or "–")
-    )
-    rows = [("Target", target_label), ("Required", str(exc))]
-    if carry:
-        rows.insert(1, ("Carry", carry))
-    _panel("❌ Invalid expiration window", rows, kind="error")
-    sys.exit(1)
-
-
-def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, transition=None):
-    carried = _module("modify_carry").preserve_native_until_on_target_change(
-        old,
-        new,
-        kind,
-        field_changed=(
-            (lambda _old, _new, field: transition.changed(field))
-            if transition is not None
-            else _field_changed
-        ),
-        recurrence_anchor_field=_recurrence_anchor_field,
-        parse_datetime=core.parse_dt_any,
-        native_until=core._import_sibling("native_until"),
-        generation_service=_chain_generation_service,
-        reject_carry=_reject_native_until_carry,
-        diagnostic=_diag,
-    )
-    if not carried:
-        return _module("modify_carry_workflow").NativeUntilDecision("unchanged")
-    value = core.parse_dt_any(new.get("until"))
-    if value is None:
-        return _module("modify_carry_workflow").NativeUntilDecision(
-            "rejected", reason="native-until carry produced no parseable value"
-        )
-    decision = _module("modify_carry_workflow").NativeUntilDecision(
-        "carried", value=_module("task_models").TaskTimestamp(value)
-    )
-    _module("modify_carry_workflow").apply_native_until_patch(new, decision)
-    _module("modify_carry_workflow").verify_native_until_task(new, decision)
-    return decision
-
-
-def _completion_validate_cp_and_anchor(old: dict, new: dict, *, transition=None) -> tuple[str, str, str]:
-    modify_validation = _module("modify_validation")
-    modify_lifecycle = _module("modify_lifecycle")
-    return modify_validation.validate_completion_cp_and_anchor(
-        old,
-        new,
-        services=modify_validation.CompletionValidationServices(
-            strip_quotes=_strip_quotes,
-            reject_conflicting_types=core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
-            validate_omit=_validate_omit_for_anchor_or_fail,
-            validate_chain_limits=_validate_chain_limits_on_modify,
-            parse_cp_sequence=core.parse_cp_sequence,
-            cp_sequence_parse_error=core.cp_sequence_parse_error,
-            field_changed=(
-                (lambda _old, _new, field: transition.changed(field))
-                if transition is not None
-                else _field_changed
-            ),
-            validate_anchor=_validate_shared_anchor_on_modify,
-            validate_cp=_validate_cp_on_modify,
-            apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
-                old_task,
-                new_task,
-                short_uuid=core.short_uuid,
-            ),
-            fail=_fail_and_exit,
-            diagnostic=_diag,
-        ),
-    )
 
 
 def main():

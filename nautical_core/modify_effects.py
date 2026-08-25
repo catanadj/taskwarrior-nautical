@@ -15,6 +15,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     host._modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = host._module("modify_ordinary")
     modify_lifecycle = host._module("modify_lifecycle")
+    transition_effects = host._module("modify_transition_effects")
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
@@ -27,11 +28,13 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         validate_omit=host._validate_omit_for_anchor_or_fail,
         reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
         validate_chain_limits=host._validate_chain_limits_on_modify,
-        preserve_cp_offsets=lambda old_task, new_task, cp: host._preserve_cp_relative_offsets_on_due_change(
+        preserve_cp_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
+            host,
             old_task, new_task, cp, transition=transition,
         ),
         task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
-        preserve_native_until=lambda old_task, new_task, kind: host._preserve_native_until_on_target_change(
+        preserve_native_until=lambda old_task, new_task, kind: transition_effects.preserve_native_until_on_target_change(
+            host,
             old_task, new_task, kind, transition=transition,
         ),
         validate_native_until=host._validate_native_until_after_target_or_fail,
@@ -64,6 +67,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
 def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None):
     host._modify_runtime_state().task_repository = unit_of_work.repository
     completion = host._module("modify_completion_effects")
+    transition_effects = host._module("modify_transition_effects")
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
@@ -83,11 +87,16 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     )
     flow_services = modify_completion_flow.CompletionFlowServices(
         runtime_state=host._modify_runtime_state,
-        prepare_recurrence=lambda old_task, new_task: host._completion_validate_cp_and_anchor(
+        prepare_recurrence=lambda old_task, new_task: transition_effects.validate_completion_cp_and_anchor(
+            host,
             old_task, new_task, transition=transition,
         ),
-        preserve_cp_relative_offsets=host._preserve_cp_relative_offsets_on_due_change,
-        preserve_native_until=host._preserve_native_until_on_target_change,
+        preserve_cp_relative_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
+            host, old_task, new_task, cp, transition=transition
+        ),
+        preserve_native_until=lambda old_task, new_task, kind: transition_effects.preserve_native_until_on_target_change(
+            host, old_task, new_task, kind, transition=transition
+        ),
         validate_native_until=host._validate_native_until_after_target_or_fail,
         validate_native_until_slots=host._validate_native_until_anchor_slots_or_fail,
         now_utc=host.core.now_utc,

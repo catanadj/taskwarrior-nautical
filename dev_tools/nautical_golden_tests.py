@@ -615,6 +615,7 @@ def _load_hook_module(path: str, module_name: str):
         load_core()
     if os.path.basename(path) == "modify_impl.py":
         mod._completion_effects = _BoundCompletionEffects(mod)
+        mod._transition_effects = _BoundTransitionEffects(mod)
     return mod
 
 
@@ -645,6 +646,21 @@ class _BoundCompletionEffects:
         else:
             for name, fn in originals.items():
                 setattr(self._module, name, fn)
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundTransitionEffects:
+    """Test-only bound view of the extracted transition-effects module."""
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_transition_effects"))
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)
@@ -18216,7 +18232,7 @@ def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
             **recurrence,
         }
         new = {**old, "due": mod.core.fmt_isoz(child_target)}
-        expect(mod._preserve_native_until_on_target_change(old, new, kind), f"{kind} carry was skipped")
+        expect(mod._transition_effects.preserve_native_until_on_target_change(old, new, kind), f"{kind} carry was skipped")
         carried = mod.core.to_local(mod.core.parse_dt_any(new.get("until")))
         expect(
             carried.date() == date(2026, 8, 2)
@@ -19653,7 +19669,7 @@ def test_on_modify_build_child_carries_until_across_dst():
         pending_parent = dict(parent, status="pending")
         moved_parent = dict(pending_parent, due=mod.core.fmt_isoz(child_due))
         expect(
-            mod._preserve_native_until_on_target_change(pending_parent, moved_parent, "cp"),
+            mod._transition_effects.preserve_native_until_on_target_change(pending_parent, moved_parent, "cp"),
             "ordinary target move skipped native-until carry across DST",
         )
         moved_until_local = mod.core.to_local(mod.core.parse_dt_any(moved_parent.get("until")))
@@ -20919,8 +20935,8 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
     )
     original = {
         "validate": mod._completion_effects.validate_cp_and_anchor,
-        "preserve_cp": mod._preserve_cp_relative_offsets_on_due_change,
-        "preserve_until": mod._preserve_native_until_on_target_change,
+        "preserve_cp": mod._transition_effects.preserve_cp_relative_offsets_on_due_change,
+        "preserve_until": mod._transition_effects.preserve_native_until_on_target_change,
         "validate_until": mod._validate_native_until_after_target_or_fail,
         "validate_slots": mod._validate_native_until_anchor_slots_or_fail,
         "preflight": mod._completion_effects.preflight_context,
@@ -20929,8 +20945,8 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
     }
     try:
         mod._completion_effects.validate_cp_and_anchor = lambda *_a, **_k: ("", "w:mon", "")
-        mod._preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
-        mod._preserve_native_until_on_target_change = lambda *_a, **_k: None
+        mod._transition_effects.preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
+        mod._transition_effects.preserve_native_until_on_target_change = lambda *_a, **_k: None
         mod._validate_native_until_after_target_or_fail = lambda *_a, **_k: None
         mod._validate_native_until_anchor_slots_or_fail = lambda *_a, **_k: None
         mod._completion_effects.preflight_context = lambda *_a, **_k: ctx
@@ -20949,8 +20965,8 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         )
     finally:
         mod._completion_effects.validate_cp_and_anchor = original["validate"]
-        mod._preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
-        mod._preserve_native_until_on_target_change = original["preserve_until"]
+        mod._transition_effects.preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
+        mod._transition_effects.preserve_native_until_on_target_change = original["preserve_until"]
         mod._validate_native_until_after_target_or_fail = original["validate_until"]
         mod._validate_native_until_anchor_slots_or_fail = original["validate_slots"]
         mod._completion_effects.preflight_context = original["preflight"]

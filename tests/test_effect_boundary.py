@@ -19,6 +19,7 @@ from nautical_core.integration_models import (
 from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
 from nautical_core.modify_feedback import lifecycle_result_feedback_facts
 from nautical_core.hook_workflow_models import FeedbackFactKind
+from nautical_core.feedback_renderer import PanelView, panel_view_from_facts, render_panel_view
 from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
@@ -146,6 +147,27 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertTrue(facts.recovery_guidance)
         self.assertEqual(facts.fact_kinds, (FeedbackFactKind.RECOVERY,))
         self.assertFalse(facts.chain_completed)
+
+    def test_all_renderers_consume_the_same_deterministic_view(self) -> None:
+        facts = FeedbackFacts(
+            task_uuid="task-1",
+            chain_id="chain-1",
+            natural_explanation="Every Monday",
+            warnings=("needs review",),
+            recovery_guidance=("run reconcile",),
+            next_action="retry",
+        )
+        first = panel_view_from_facts(facts)
+        second = panel_view_from_facts(facts)
+        self.assertEqual(first, second)
+        self.assertEqual(first.to_diagnostic(), second.to_diagnostic())
+        rendered: list[tuple[str, list[tuple[str, str]], str]] = []
+        self.assertTrue(render_panel_view(first, lambda title, rows, *, kind: rendered.append((title, rows, kind))))
+        self.assertEqual(rendered[0][1], list(first.rows))
+
+    def test_rendering_failure_is_contained(self) -> None:
+        view = PanelView("Nautical workflow", "note", (("Warning", "x"),))
+        self.assertFalse(render_panel_view(view, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ui"))))
 
 
 if __name__ == "__main__":

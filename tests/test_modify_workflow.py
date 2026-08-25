@@ -59,6 +59,22 @@ class ModifyWorkflowTests(unittest.TestCase):
         )
         self.assertIn("volatile_only", route.evidence)
 
+    def test_route_matrix_is_mutually_exclusive_and_deterministic(self) -> None:
+        root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        cases = (
+            (root, dict(root, description="edit"), ModifyRouteKind.RECURRING_EDIT),
+            (root, dict(root, status="completed"), ModifyRouteKind.COMPLETION),
+            (root, dict(root, status="deleted"), ModifyRouteKind.DELETION),
+            (root, dict(root, chain="off"), ModifyRouteKind.MANUAL_CHAIN_OFF),
+            (dict(root, chain="off"), root, ModifyRouteKind.RESUME),
+            (root, {"status": "pending"}, ModifyRouteKind.RECURRENCE_REMOVAL),
+        )
+        for old, new, expected in cases:
+            first = classify_modify_transition(transition(old, new))
+            second = classify_modify_transition(transition(old, new))
+            self.assertEqual(first.kind, expected)
+            self.assertEqual(first, second)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -835,23 +835,25 @@ def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
 
 
 def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[list[dict]] | None, str | None]:
-    add_validation = _module("add_validation")
-    return add_validation.validate_anchor_syntax_strict(
-        expr,
-        validate_anchor_expr_cached=_validate_anchor_expr_cached,
-        core=core,
-        diag=_diag,
-    )
+    try:
+        pipeline = core._import_sibling("hook_validation_pipeline")
+        dnf = _validate_anchor_expr_cached(str(expr))
+        pipeline.validate_anchor_expression(
+            expr,
+            parse_anchor_expr=core.parse_anchor_expr_to_dnf,
+            validate_anchor_expr=_validate_anchor_expr_cached,
+        )
+        return dnf, None
+    except Exception as exc:
+        return None, str(exc)
 
 
 def _validate_omit_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[list[dict]] | None, str | None]:
-    add_validation = _module("add_validation")
-    return add_validation.validate_omit_syntax_strict(
-        expr,
-        validate_omit_expr_cached=_validate_omit_expr_cached,
-        core=core,
-        diag=_diag,
-    )
+    try:
+        dnf = _validate_omit_expr_cached(str(expr))
+        return dnf, None
+    except Exception as exc:
+        return None, str(exc)
 
 
 def _load_omit_file_dates(name: str):
@@ -1786,16 +1788,21 @@ def _build_on_add_context(
         omit_expr = _strip_quotes((task.get("omit") or "").strip())
         if omit_expr:
             task["omit"] = omit_expr
-            if not (((ctx.anchor_str or "").strip()) or ((ctx.anchor_file_str or "").strip())):
-                _error_and_exit([("Invalid omit", "omit requires anchor or anchor_file")])
         anchor_file = _strip_quotes((task.get("anchor_file") or "").strip())
         if anchor_file:
             task["anchor_file"] = anchor_file
-            _validate_anchor_file_or_fail(anchor_file)
         omit_file = _strip_quotes((task.get("omit_file") or "").strip())
         if omit_file:
             task["omit_file"] = omit_file
-        _validate_omit_file_for_anchor_or_fail(ctx.anchor_str or "", ctx.anchor_file_str or "", omit_file)
+        pipeline = core._import_sibling("hook_validation_pipeline")
+        findings = pipeline.validate_recurrence_files(
+            ctx.anchor_str, anchor_file, omit_expr, omit_file,
+            load_anchor_file=_load_anchor_file_dates,
+            load_omit_file=_load_omit_file_dates,
+        )
+        if findings:
+            finding = findings[0]
+            _error_and_exit([(f"Invalid {finding.field}", finding.reason)])
         return ctx
     except ValueError as exc:
         _error_and_exit([('Invalid chain config', str(exc))])

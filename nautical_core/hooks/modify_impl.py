@@ -1617,16 +1617,16 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _validate_anchor_on_modify(expr: str):
-    return _module("modify_validation").validate_anchor_on_modify(
+def _validate_shared_anchor_on_modify(expr: str) -> None:
+    core._import_sibling("hook_validation_pipeline").validate_anchor_expression(
         expr,
         parse_anchor_expr=core.parse_anchor_expr_to_dnf,
         validate_anchor_expr=_validate_anchor_expr_cached,
     )
 
 
-def _validate_omit_on_modify(expr: str):
-    return _module("modify_validation").validate_omit_on_modify(
+def _validate_shared_omit_on_modify(expr: str) -> None:
+    core._import_sibling("hook_validation_pipeline").validate_omit_expression(
         expr,
         validate_omit_expr=_validate_omit_expr_cached,
     )
@@ -2721,25 +2721,19 @@ def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> No
 
 
 def _validate_omit_for_anchor_or_fail(anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
-    if omit_expr and not (anchor_expr or anchor_file_expr):
-        _fail_and_exit("Invalid omit", "omit requires anchor or anchor_file")
-    if omit_file and not (anchor_expr or anchor_file_expr):
-        _fail_and_exit("Invalid omit_file", "omit_file requires anchor or anchor_file")
-    if omit_expr:
-        try:
-            _validate_omit_on_modify(omit_expr)
-        except Exception as e:
-            _fail_and_exit("Invalid omit", str(e))
-    if anchor_file_expr:
-        try:
-            _load_anchor_file_dates(anchor_file_expr)
-        except Exception as e:
-            _fail_and_exit("Invalid anchor_file", str(e))
-    if omit_file:
-        try:
-            _load_omit_file_dates(omit_file)
-        except Exception as e:
-            _fail_and_exit("Invalid omit_file", str(e))
+    try:
+        _validate_shared_omit_on_modify(omit_expr)
+        findings = core._import_sibling("hook_validation_pipeline").validate_recurrence_files(
+            anchor_expr, anchor_file_expr, omit_expr, omit_file,
+            load_anchor_file=_load_anchor_file_dates,
+            load_omit_file=_load_omit_file_dates,
+        )
+    except Exception as exc:
+        _fail_and_exit("Invalid omit", str(exc))
+        return
+    if findings:
+        finding = findings[0]
+        _fail_and_exit(f"Invalid {finding.field}", finding.reason)
 
 
 def _semantic_diff_value(old_text: str, new_text: str) -> str:
@@ -3016,7 +3010,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict, *, transition=None)
                 if transition is not None
                 else _field_changed
             ),
-            validate_anchor=_validate_anchor_on_modify,
+            validate_anchor=_validate_shared_anchor_on_modify,
             validate_cp=_validate_cp_on_modify,
             apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
                 old_task,

@@ -186,6 +186,77 @@ def validate_recurrence_limits(
     return cpmax, until_dt, tuple(findings)
 
 
+def validate_anchor_expression(
+    expr: str | list[list[dict[str, Any]]],
+    *,
+    parse_anchor_expr: Callable[[str], Any],
+    validate_anchor_expr: Callable[[str | list[list[dict[str, Any]]]], Any],
+) -> None:
+    """Validate one anchor expression for every workflow route."""
+    if not str(expr or "").strip():
+        raise ValueError("anchor is required if chaining by anchor")
+    try:
+        parse_anchor_expr(str(expr))
+        validate_anchor_expr(expr)
+    except Exception as exc:
+        raise ValueError(f"anchor syntax error: {exc}") from exc
+
+
+def validate_omit_expression(
+    expr: str,
+    *,
+    validate_omit_expr: Callable[[str], Any],
+) -> None:
+    """Validate an optional omission expression at the shared boundary."""
+    if not str(expr or "").strip():
+        return
+    try:
+        validate_omit_expr(expr)
+    except Exception as exc:
+        raise ValueError(f"omit validation failed: {exc}") from exc
+
+
+def validate_recurrence_files(
+    anchor: object,
+    anchor_file: object,
+    omit: object,
+    omit_file: object,
+    *,
+    load_anchor_file: Callable[[str], Any],
+    load_omit_file: Callable[[str], Any],
+) -> tuple[ValidationFinding, ...]:
+    """Validate file-backed recurrence inputs without rendering or mutation."""
+    anchor_text = str(anchor or "").strip()
+    anchor_file_text = str(anchor_file or "").strip()
+    omit_text = str(omit or "").strip()
+    omit_file_text = str(omit_file or "").strip()
+    findings: list[ValidationFinding] = []
+    if omit_text and not (anchor_text or anchor_file_text):
+        findings.append(_finding(
+            "omit_without_anchor", "omit", "omit requires anchor or anchor_file",
+            "Add an anchor/anchor_file or clear omit.",
+        ))
+    if omit_file_text and not (anchor_text or anchor_file_text):
+        findings.append(_finding(
+            "omit_file_without_anchor", "omit_file", "omit_file requires anchor or anchor_file",
+            "Add an anchor/anchor_file or clear omit_file.",
+        ))
+    for field, value, loader in (
+        ("anchor_file", anchor_file_text, load_anchor_file),
+        ("omit_file", omit_file_text, load_omit_file),
+    ):
+        if not value:
+            continue
+        try:
+            loader(value)
+        except Exception as exc:
+            findings.append(_finding(
+                f"{field}_invalid", field, str(exc) or f"invalid {field}",
+                f"Check the configured {field} path and file contents.",
+            ))
+    return tuple(findings)
+
+
 def validate_anchor_mode_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
     task = value.current
     if not str(task.get("anchor") or task.get("anchor_file") or "").strip():
@@ -401,6 +472,9 @@ __all__ = (
     "recurrence_kind_conflict",
     "reject_recurrence_kind_conflict",
     "validate_recurrence_limits",
+    "validate_anchor_expression",
+    "validate_omit_expression",
+    "validate_recurrence_files",
     "validate_temporal_order_domain",
     "validate_task_mapping",
     "validate_task_transition",

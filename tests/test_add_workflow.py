@@ -60,12 +60,15 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertIsNone(plan.schedule)
         self.assertEqual(scheduled.schedule.target_field, "due")
         self.assertEqual(scheduled.schedule.first_occurrence, timestamp)
+        self.assertEqual(scheduled.feedback.first_occurrence, timestamp)
+        self.assertEqual(scheduled.feedback.recurrence_kind, "anchor")
         self.assertEqual(task.get("due"), None)
 
     def test_scheduler_unavailable_is_explicit(self) -> None:
         plan = plan_add(observation({"cp": "P1D"}))
         scheduled = record_schedule(plan, first_occurrence=None, status="unavailable")
         self.assertEqual(scheduled.schedule.status, "unavailable")
+        self.assertTrue(scheduled.feedback.warnings)
 
 
 if __name__ == "__main__":

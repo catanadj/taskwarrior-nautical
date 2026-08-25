@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .hook_workflow_models import AddWorkflowRequest, PatchOperation, TaskPatch, TaskPatchOperation, WorkflowRoute
+from .hook_workflow_models import (
+    AddWorkflowRequest,
+    FeedbackFacts,
+    PatchOperation,
+    TaskPatch,
+    TaskPatchOperation,
+    WorkflowRoute,
+)
 from .task_models import TaskObservation, TaskTimestamp
 
 
@@ -41,6 +48,7 @@ class AddWorkflowPlan:
     target_field: str = "due"
     target_explicit: bool = False
     schedule: AddScheduleSelection | None = None
+    feedback: FeedbackFacts = FeedbackFacts()
 
     @property
     def ordinary(self) -> bool:
@@ -109,6 +117,12 @@ def record_schedule(
         first_occurrence=first_occurrence,
         status=status,
     )
+    warnings = () if status == "found" else (f"scheduler result unavailable: {status}",)
+    feedback = FeedbackFacts(
+        recurrence_kind=plan.recurrence_kind,
+        first_occurrence=selection.first_occurrence,
+        warnings=warnings,
+    )
     return AddWorkflowPlan(
         request=plan.request,
         patch=plan.patch,
@@ -116,6 +130,7 @@ def record_schedule(
         target_field=plan.target_field,
         target_explicit=plan.target_explicit,
         schedule=selection,
+        feedback=feedback,
     )
 
 

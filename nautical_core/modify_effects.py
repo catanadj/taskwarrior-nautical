@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .task_models import TaskPayload
 
-def handle_non_completion(host: Any, old: dict, new: dict, unit_of_work, *, transition=None) -> None:
+
+def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None) -> None:
     host._modify_runtime_state().task_repository = unit_of_work.repository
     modify_ordinary = host._module("modify_ordinary")
     modify_lifecycle = host._module("modify_lifecycle")
@@ -59,7 +61,7 @@ def handle_non_completion(host: Any, old: dict, new: dict, unit_of_work, *, tran
         host._fail_and_exit("Nautical recurrence activation failed", str(exc))
 
 
-def handle_completion(host: Any, old: dict, new: dict, unit_of_work, *, transition=None):
+def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None):
     host._modify_runtime_state().task_repository = unit_of_work.repository
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
@@ -100,7 +102,7 @@ def handle_completion(host: Any, old: dict, new: dict, unit_of_work, *, transiti
     return modify_completion_flow.handle_completion_modify(old, new, unit_of_work, services=flow_services)
 
 
-def handle_deleted(host: Any, old: dict, new: dict, unit_of_work, *, transition=None, terminal_decision=None) -> None:
+def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None, terminal_decision=None) -> None:
     host._modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = host._module("modify_expiration", required=False)
     if modify_expiration is None:

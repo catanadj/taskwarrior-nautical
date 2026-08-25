@@ -42,8 +42,8 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
     except Exception as exc:
         astronomy = host.core._import_sibling("astronomy")
         if astronomy.is_astronomy_error(exc):
-            host._got_anchor_invalid(astronomy.scheduling_error_message(exc))
-        host._got_anchor_invalid(anchor_error_message(anchor_expr, str(exc)))
+            host._fail_and_exit("Invalid anchor", astronomy.scheduling_error_message(exc))
+        host._fail_and_exit("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
 
 
 def validate_omit(host: Any, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:

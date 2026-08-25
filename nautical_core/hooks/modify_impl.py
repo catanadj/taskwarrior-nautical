@@ -2082,22 +2082,6 @@ def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
         return (None, "Unexpected error parsing datetime")
 
 
-def _validate_anchor_mode(mode_str: str) -> tuple[str, str | None]:
-    """
-    Validate and normalize anchor_mode. Returns (normalized_mode, error_msg).
-    """
-    raw = (mode_str or "").strip()
-    if not raw:
-        return ("", None)
-    mode = raw.lower()
-    if mode not in ("skip", "all", "flex"):
-        return (
-            "skip",
-            f"anchor_mode must be 'skip', 'all', or 'flex' (got '{raw}'). Defaulting to 'skip'.",
-        )
-    return (mode, None)
-
-
 def _omit_dnf_from_parent(parent: dict):
     expr_str = (parent.get("omit") or "").strip()
     omit_file = (parent.get("omit_file") or "").strip()
@@ -2460,10 +2444,6 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
 
-def _got_anchor_invalid(msg: str) -> None:
-    _fail_and_exit("Invalid anchor", msg)
-
-
 # chainUntil -> numeric cap and final permitted occurrence
 def _cap_from_until_cp(task, next_due_utc):
     return _module("modify_completion_compute").cap_from_until_cp(
@@ -2551,23 +2531,6 @@ def _export_chain_endpoint(chain_id: str, direction: str):
         return None
     with_links.sort(key=lambda item: item[0])
     return with_links[0 if direction == "first" else -1][1]
-
-def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:
-    has_type_colon = bool(
-        re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE)
-    )
-    if has_type_colon:
-        return default_msg
-    if re.match(r"^(mon|tue|wed|thu|fri|sat|sun)\b", anchor_expr, re.IGNORECASE):
-        return (
-            "Weekly anchors must start with 'w:'. "
-            "Examples: 'w:mon..fri' or 'w:mon,tue,wed,thu,fri'."
-        )
-    return (
-        "Anchors must start with 'w:', 'm:' or 'y:'. "
-        "Examples: 'w:mon', 'm:-1', 'y:06-01'."
-    )
-
 
 def main():
     _module("modify_composition").run_on_modify(

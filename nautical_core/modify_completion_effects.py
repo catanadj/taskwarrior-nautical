@@ -8,6 +8,26 @@ from typing import Any
 from .task_models import TaskPayload
 
 
+def link_numbers_or_fail(host: Any, new: TaskPayload):
+    return host._module("modify_completion_preflight").completion_link_numbers_or_fail(
+        new,
+        coerce_int=host.core.coerce_int,
+        max_link_number=host.core.MAX_LINK_NUMBER,
+        panel=host._panel,
+        print_task=host._print_task,
+    )
+
+
+def kind_or_stop(host: Any, new: TaskPayload, now_utc: datetime):
+    return host._module("modify_completion_preflight").completion_kind_or_stop(
+        new,
+        now_utc,
+        panel=host._panel,
+        print_task=host._print_task,
+        end_chain_summary=host._end_chain_summary,
+    )
+
+
 def chain_id_or_fail(host: Any, new: TaskPayload) -> str | None:
     preflight = host._module("modify_completion_preflight")
     return preflight.completion_chain_id_or_fail(
@@ -73,8 +93,8 @@ def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository
     runtime = host._module("modify_runtime")
     services = runtime.build_preflight_services(
         short=host._short,
-        completion_link_numbers_or_fail=host._completion_link_numbers_or_fail,
-        completion_kind_or_stop=host._completion_kind_or_stop,
+        completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(host, task),
+        completion_kind_or_stop=lambda task, clock: kind_or_stop(host, task, clock),
         completion_chain_id_or_fail=lambda task: chain_id_or_fail(host, task),
         completion_chain_snapshot=lambda chain_id, base_no, next_no: chain_snapshot(host, chain_id, base_no, next_no, repository),
         completion_existing_next_or_fail=lambda task, next_no, snapshot: existing_next_or_fail(host, task, next_no, snapshot, repository),
@@ -232,7 +252,7 @@ def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
 
 
 __all__ = (
-    "chain_id_or_fail", "existing_next_or_fail", "chain_snapshot", "preflight_context",
+    "link_numbers_or_fail", "kind_or_stop", "chain_id_or_fail", "existing_next_or_fail", "chain_snapshot", "preflight_context",
     "compute_child_due", "until_or_fail", "until_guard_or_stop", "require_child_due_or_fail",
     "warn_unreasonable_duration", "caps", "cap_guard_or_stop",
     "compute_next_and_limits", "build_and_spawn_child",

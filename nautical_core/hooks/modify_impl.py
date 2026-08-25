@@ -3026,28 +3026,6 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict, *, transition=None)
     )
 
 
-def _completion_link_numbers_or_fail(new: dict) -> tuple[int, int] | None:
-    modify_completion_preflight = _module("modify_completion_preflight")
-    return modify_completion_preflight.completion_link_numbers_or_fail(
-        new,
-        coerce_int=core.coerce_int,
-        max_link_number=core.MAX_LINK_NUMBER,
-        panel=_panel,
-        print_task=_print_task,
-    )
-
-
-def _completion_kind_or_stop(new: dict, now_utc: datetime) -> str | None:
-    modify_completion_preflight = _module("modify_completion_preflight")
-    return modify_completion_preflight.completion_kind_or_stop(
-        new,
-        now_utc,
-        panel=_panel,
-        print_task=_print_task,
-        end_chain_summary=_end_chain_summary,
-    )
-
-
 def main():
     _module("modify_composition").run_on_modify(
         _module("modify_composition").hook_host(globals(), __name__)

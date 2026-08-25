@@ -810,6 +810,12 @@ _MODULE_SPECS = {
         "modify_diagnostics_effects.py",
         "nautical_core.modify_diagnostics_effects",
     ),
+    "modify_validation_effects": (
+        "_MODIFY_VALIDATION_EFFECTS",
+        "_MODIFY_VALIDATION_EFFECTS_LOAD_FAILED",
+        "modify_validation_effects.py",
+        "nautical_core.modify_validation_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",

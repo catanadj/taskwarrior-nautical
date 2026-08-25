@@ -18,6 +18,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     transition_effects = host._module("modify_transition_effects")
     presentation = host._module("modify_presentation_effects")
     diagnostics = host._module("modify_diagnostics_effects")
+    validation = host._module("modify_validation_effects")
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
@@ -26,8 +27,8 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     services = modify_ordinary.OrdinaryModifyServices(
         field_changed=field_changed,
         strip_quotes=host._strip_quotes,
-        validate_anchor=host._non_completion_validate_anchor,
-        validate_omit=host._validate_omit_for_anchor_or_fail,
+        validate_anchor=lambda old_task, new_task, expr: validation.validate_anchor(host, old_task, new_task, expr),
+        validate_omit=lambda anchor, anchor_file, omit, omit_file: validation.validate_omit(host, anchor, anchor_file, omit, omit_file),
         reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
         validate_chain_limits=host._validate_chain_limits_on_modify,
         preserve_cp_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
@@ -50,7 +51,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         recurrence_enabled_rows=lambda task, source: presentation.recurrence_enabled_rows(host, task, source),
         panel=host._panel,
         render_disabled_summary=lambda old_task, new_task, decision: presentation.render_disabled_chain_summary(host, old_task, new_task, decision),
-        semantic_diff_value=host._semantic_diff_value,
+        semantic_diff_value=validation.semantic_diff_value,
         first_recurrence_target=lambda task, source: presentation.first_recurrence_target(host, task, source),
         fmtlocal=host._fmtlocal,
         render_recurrence_updated=lambda changes, task: presentation.render_recurrence_updated_panel(host, changes, task),

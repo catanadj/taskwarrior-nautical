@@ -45,4 +45,22 @@ class TemporalCarryDecision:
         object.__setattr__(self, "reason", str(self.reason).strip())
 
 
-__all__ = ("TemporalCarryAdjustment", "TemporalCarryDecision")
+def decision_from_cp_adjustments(result, *, timestamp_factory=TaskTimestamp) -> TemporalCarryDecision:
+    """Normalize the established CP carry result into the typed decision."""
+    if result is None:
+        return TemporalCarryDecision("unchanged")
+    _old_due, _new_due, adjustments = result
+    typed: list[TemporalCarryAdjustment] = []
+    for field, old_value, new_value, offset in adjustments:
+        typed.append(
+            TemporalCarryAdjustment(
+                field,
+                timestamp_factory(old_value),
+                timestamp_factory(new_value),
+                offset,
+            )
+        )
+    return TemporalCarryDecision("adjusted", tuple(typed)) if typed else TemporalCarryDecision("unchanged")
+
+
+__all__ = ("TemporalCarryAdjustment", "TemporalCarryDecision", "decision_from_cp_adjustments")

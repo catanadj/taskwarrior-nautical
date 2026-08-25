@@ -1524,6 +1524,7 @@ def tw_export_chain_required(seed_task, env=None):
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:
+        read_service = _lifecycle_read_service()
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
             cached, cache_chain_id = (
@@ -1621,31 +1622,6 @@ def _collect_prev_two(current_task: dict, chain_by_link=None):
     return list(read.value)
 
 
-def _cached_chain_token_match(task, token: str) -> bool:
-    if not hasattr(task, "get") or not isinstance(token, str) or not token:
-        return False
-    if token.startswith("+"):
-        want = token[1:].strip().lower()
-        tags = task.get("tags")
-        if isinstance(tags, (list, tuple, set)):
-            return want in {str(t).strip().lower() for t in tags}
-        return False
-    if ":" not in token:
-        return False
-    key, value = token.split(":", 1)
-    negate = False
-    if key.endswith(".not"):
-        negate = True
-        key = key[:-4]
-    actual = task.get(key)
-    matched = False
-    if key in {"link", "id"}:
-        matched = str(core.coerce_int(actual, None) if actual is not None else "") == value
-    else:
-        matched = str(actual or "").strip().lower() == value.strip().lower()
-    return (not matched) if negate else matched
-
-
 def _lifecycle_read_service():
     """Build the focused chain-read service for this hook invocation."""
     state = _modify_runtime_state()
@@ -1658,6 +1634,7 @@ def _lifecycle_read_service():
                 bind_repository(repository)
         return existing
     lifecycle_read_service = _module("lifecycle_read_service")
+    read_effects = _module("modify_read_effects")
     if getattr(state, "chain_cache_store", None) is None:
         state.chain_cache_store = lifecycle_read_service.ChainCacheStore()
     repository = getattr(_modify_runtime_state(), "task_repository", None)
@@ -1665,7 +1642,7 @@ def _lifecycle_read_service():
     service = lifecycle_read_service.LifecycleReadService(
         coerce_int=core.coerce_int,
         parse_extra_tokens=_parse_extra_tokens,
-        token_matcher=_cached_chain_token_match,
+        token_matcher=lambda task, token: read_effects._token_match(core, task, token),
         read_query_get=_read_query_get,
         chain_cache_get=lambda _chain_id: None,
         repository=repository,

@@ -493,6 +493,16 @@ def _anchor_preview_details(
             },
             source_query="navigator expression preview",
         )
+        from nautical_core.hook_validation_pipeline import ValidationStatus, validate_task_mapping
+        from nautical_core.hook_workflow_models import WorkflowRoute
+        _validated, validation_report = validate_task_mapping(
+            observation.to_mapping(),
+            route=WorkflowRoute.ANCHOR_ACTIVATION,
+            source_query="navigator validation",
+        )
+        if validation_report.status is not ValidationStatus.VALID:
+            finding = validation_report.findings[0]
+            raise ValueError(f"{finding.reason} {finding.correction}".strip())
         service = SchedulerService.from_observation(
             observation,
             context=context,

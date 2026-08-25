@@ -3528,6 +3528,15 @@ def main():
     read_t0 = _ptime.perf_counter()
     old, new = _read_two()
     _apply_description_uda_aliases(old, new)
+    validation = core._import_sibling("hook_validation_pipeline")
+    _validated_observation, validation_report = validation.validate_task_mapping(
+        new,
+        route=validation.WorkflowRoute.RECURRING_EDIT,
+        source_query="on-modify validation",
+    )
+    if validation_report.status is not validation.ValidationStatus.VALID:
+        finding = validation_report.findings[0]
+        _fail_and_exit("Invalid Nautical task", f"{finding.reason} {finding.correction}")
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(old, new):
         _fail_and_exit(

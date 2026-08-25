@@ -51,6 +51,17 @@ class ValidationPipelineTests(unittest.TestCase):
         )
         self.assertEqual(report.status, ValidationStatus.VALID)
 
+    def test_mapping_validation_exposes_decode_findings(self) -> None:
+        _observation_value, report = __import__(
+            "nautical_core.hook_validation_pipeline", fromlist=["validate_task_mapping"]
+        ).validate_task_mapping(
+            {"status": "pending", "chain": "on", "chainID": "bad", "link": 0},
+            route=WorkflowRoute.RECURRING_EDIT,
+            source_query="mapping-test",
+        )
+        self.assertEqual(report.status, ValidationStatus.INVALID)
+        self.assertTrue(report.findings)
+
     def test_alias_normalization_preserves_empty_clear_syntax(self) -> None:
         task = {"description": "review am:"}
         self.assertTrue(normalize_description_uda_aliases(task, enabled=True))

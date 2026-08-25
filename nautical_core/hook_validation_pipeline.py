@@ -210,6 +210,32 @@ def build_default_validation_pipeline() -> "ValidationPipeline":
     return ValidationPipeline(DEFAULT_DOMAIN_RULES)
 
 
+def validate_task_mapping(
+    task: Mapping[str, object],
+    *,
+    route: WorkflowRoute,
+    source_query: str,
+) -> tuple[TaskObservation, "ValidationReport"]:
+    """Decode and validate one hook task before domain work begins."""
+    observation = TaskObservation.from_mapping(task, source_query=source_query)
+    findings = [
+        ValidationFinding(
+            ValidationStage.SYNTAX,
+            issue.code,
+            issue.field,
+            issue.message,
+            correction=f"Correct the {issue.field} value and retry.",
+        )
+        for issue in observation.issues
+    ]
+    report = build_default_validation_pipeline().validate(
+        ValidationInput(observation, route=route)
+    )
+    if findings:
+        report = ValidationReport.from_findings(tuple(findings) + report.findings)
+    return observation, report
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
     status: ValidationStatus
@@ -275,5 +301,6 @@ __all__ = (
     "validate_chain_limits_domain",
     "validate_recurrence_exclusivity",
     "validate_temporal_order_domain",
+    "validate_task_mapping",
     "normalize_description_uda_aliases",
 )

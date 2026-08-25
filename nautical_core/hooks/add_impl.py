@@ -2012,6 +2012,23 @@ def main():
     # the request has reached the full lifecycle path.
     _load_core()
     _apply_description_uda_aliases(task)
+    validation = core._import_sibling("hook_validation_pipeline")
+    _validated_observation, validation_report = validation.validate_task_mapping(
+        task,
+        route=(
+            validation.WorkflowRoute.CP_ACTIVATION
+            if str(task.get("cp") or "").strip()
+            else validation.WorkflowRoute.ANCHOR_FILE_ACTIVATION
+            if str(task.get("anchor_file") or "").strip()
+            else validation.WorkflowRoute.ANCHOR_ACTIVATION
+            if str(task.get("anchor") or "").strip()
+            else validation.WorkflowRoute.ORDINARY
+        ),
+        source_query="on-add validation",
+    )
+    if validation_report.status is not validation.ValidationStatus.VALID:
+        finding = validation_report.findings[0]
+        _error_and_exit([("Invalid Nautical task", f"{finding.reason} {finding.correction}")])
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(task):
         _fail_and_exit(

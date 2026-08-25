@@ -45,6 +45,20 @@ task_codec = importlib.import_module("nautical_core.task_codec")
 IMPORT_PROFILES: dict[str, int] = {}
 RESOURCE_DETAILS: dict[str, object] = {}
 
+_BENCH_PANEL_MODES = {
+    "disabled": "quiet",
+    "static": "fast",
+    "live": "live",
+    "minimal": "minimal",
+}
+
+
+def _panel_mode_config(mode: str) -> str:
+    try:
+        return _BENCH_PANEL_MODES[str(mode).strip().lower()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported benchmark panel mode: {mode!r}") from exc
+
 
 def _load_budget_config(path: Path) -> dict:
     try:
@@ -1018,7 +1032,7 @@ def _measure_managed_hook_latency(
     }
 
 
-def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
+def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[str, dict]:
     hook_cfg = cfg.get("hook_fast_path")
     if not isinstance(hook_cfg, dict) or not hook_cfg.get("enabled", True):
         return {}
@@ -1038,7 +1052,10 @@ def _bench_hook_fast_paths(cfg: dict) -> dict[str, dict]:
     with tempfile.TemporaryDirectory(prefix="nautical-hook-perf-") as td:
         temp_root = Path(td)
         config_path = temp_root / "config-nautical.toml"
-        config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
+        config_path.write_text(
+            f'tz = "UTC"\npanel_mode = "{_panel_mode_config(panel_mode)}"\n',
+            encoding="utf-8",
+        )
         base_env = os.environ.copy()
         base_env.update(
             {
@@ -1574,7 +1591,12 @@ def _import_workflow_rows(rows: Sequence[dict], *, env: dict[str, str]) -> None:
         raise RuntimeError(f"workflow parent fixture import failed: {(proc.stderr or proc.stdout or '').strip()}")
 
 
-def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[str, dict]:
+def _bench_expensive_workflows(
+    cfg: dict,
+    *,
+    slow_device: bool = False,
+    panel_mode: str = "minimal",
+) -> dict[str, dict]:
     """Exercise completion, queue-drain, and reconcile paths in isolation."""
     workflow_cfg = cfg.get("workflow_perf")
     if not isinstance(workflow_cfg, dict) or not workflow_cfg.get("enabled", True):
@@ -1618,7 +1640,10 @@ def _bench_expensive_workflows(cfg: dict, *, slow_device: bool = False) -> dict[
         )
         task_wrapper.chmod(0o700)
         config_path = root / "config-nautical.toml"
-        config_path.write_text('tz = "UTC"\npanel_mode = "minimal"\n', encoding="utf-8")
+        config_path.write_text(
+            f'tz = "UTC"\npanel_mode = "{_panel_mode_config(panel_mode)}"\n',
+            encoding="utf-8",
+        )
         taskrc_path = root / "taskrc"
         taskrc_path.write_text(
             "uda.chainID.type=string\n"
@@ -2689,6 +2714,12 @@ def main() -> int:
         action="store_true",
         help="run only expensive completion, queue, and reconcile workflows",
     )
+    ap.add_argument(
+        "--panel-mode",
+        choices=tuple(_BENCH_PANEL_MODES),
+        default="minimal",
+        help="panel configuration for hook/workflow baselines (disabled, static, live, or minimal)",
+    )
     args = ap.parse_args()
 
     cfg = _load_budget_config(Path(args.budget_file))
@@ -2931,13 +2962,17 @@ def main() -> int:
         if args.enforce and not r["pass"]:
             failures.append(name)
 
-    hook_results = {} if args.workflows_only else _bench_hook_fast_paths(cfg)
+    hook_results = {} if args.workflows_only else _bench_hook_fast_paths(cfg, panel_mode=args.panel_mode)
     for name, result in hook_results.items():
         results[name] = result
         if args.enforce and not result["pass"]:
             failures.append(name)
 
-    workflow_results = _bench_expensive_workflows(cfg, slow_device=args.slow_device)
+    workflow_results = _bench_expensive_workflows(
+        cfg,
+        slow_device=args.slow_device,
+        panel_mode=args.panel_mode,
+    )
     for name, result in workflow_results.items():
         results[name] = result
         if args.enforce and not result["pass"]:
@@ -2950,6 +2985,7 @@ def main() -> int:
         "cwd": os.getcwd(),
         "results": results,
         "enforced": bool(args.enforce),
+        "panel_mode": args.panel_mode,
         "ok": len(failures) == 0,
         "failed_checks": failures,
     }

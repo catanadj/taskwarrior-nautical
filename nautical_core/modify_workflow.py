@@ -1,0 +1,96 @@
+"""Pure typed route classification for modify workflow transitions."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+
+from .task_changes import TaskTransition
+
+
+class ModifyRouteKind(str, Enum):
+    ORDINARY = "ordinary"
+    RECURRING_EDIT = "recurring_edit"
+    ACTIVATION = "activation"
+    COMPLETION = "completion"
+    IDEMPOTENT_COMPLETION = "idempotent_completion"
+    DELETION = "deletion"
+    DISABLE = "disable"
+    RECURRENCE_REMOVAL = "recurrence_removal"
+    RESUME = "resume"
+    MANUAL_CHAIN_OFF = "manual_chain_off"
+
+
+_RECURRENCE_FIELDS = frozenset({"anchor", "anchor_file", "cp", "omit", "omit_file"})
+_CHAIN_FIELDS = frozenset({"chainID", "link", "prevLink", "nextLink", "chain"})
+
+
+@dataclass(frozen=True, slots=True)
+class ModifyWorkflowRoute:
+    """One mutually exclusive route and its local evidence summary."""
+
+    kind: ModifyRouteKind
+    has_nautical_fields: bool
+    changed_fields: tuple[str, ...]
+    evidence: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", ModifyRouteKind(self.kind))
+        object.__setattr__(self, "changed_fields", tuple(sorted(set(self.changed_fields))))
+        object.__setattr__(self, "evidence", tuple(sorted(set(str(item) for item in self.evidence))))
+
+
+def _value(transition: TaskTransition, side: str, field: str) -> str:
+    observation = transition.old if side == "old" else transition.new
+    return str(observation.field(field).raw_value() or "").strip().lower()
+
+
+def _has_recurrence(transition: TaskTransition, side: str) -> bool:
+    observation = transition.old if side == "old" else transition.new
+    return any(str(observation.field(field).raw_value() or "").strip() for field in _RECURRENCE_FIELDS)
+
+
+def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRoute:
+    """Classify a typed old/new transition without callbacks or side effects."""
+    if not isinstance(transition, TaskTransition):
+        raise TypeError("modify route classification requires a TaskTransition")
+    old_status = _value(transition, "old", "status")
+    new_status = _value(transition, "new", "status")
+    old_recurrence = _has_recurrence(transition, "old")
+    new_recurrence = _has_recurrence(transition, "new")
+    old_chain = _value(transition, "old", "chain")
+    new_chain = _value(transition, "new", "chain")
+    has_nautical = old_recurrence or new_recurrence or any(
+        transition.old.field(field).raw_value() or transition.new.field(field).raw_value()
+        for field in _CHAIN_FIELDS
+    )
+    evidence: list[str] = []
+
+    if not has_nautical:
+        kind = ModifyRouteKind.ORDINARY
+    elif new_status == "deleted":
+        kind = ModifyRouteKind.DELETION
+    elif old_status != "completed" and new_status == "completed":
+        kind = ModifyRouteKind.COMPLETION
+    elif old_status == "completed" and new_status == "completed":
+        kind = ModifyRouteKind.IDEMPOTENT_COMPLETION
+        evidence.append("already_completed")
+    elif not old_recurrence and new_recurrence:
+        kind = ModifyRouteKind.ACTIVATION
+    elif old_recurrence and not new_recurrence:
+        kind = ModifyRouteKind.RECURRENCE_REMOVAL
+    elif old_chain == "off" and new_chain == "on":
+        kind = ModifyRouteKind.RESUME
+    elif old_chain != "off" and new_chain == "off" and new_recurrence:
+        kind = ModifyRouteKind.MANUAL_CHAIN_OFF
+    else:
+        kind = ModifyRouteKind.RECURRING_EDIT
+
+    if old_status == new_status:
+        evidence.append("status_unchanged")
+    if transition.changed_fields and set(transition.changed_fields).issubset(_CHAIN_FIELDS):
+        evidence.append("chain_identity_edit")
+    return ModifyWorkflowRoute(kind, has_nautical, transition.changed_fields, tuple(evidence))
+
+
+__all__ = ("ModifyRouteKind", "ModifyWorkflowRoute", "classify_modify_transition")

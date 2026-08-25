@@ -5,7 +5,7 @@ import importlib
 from typing import Any, NoReturn, Protocol
 
 from .task_models import TaskPayload
-from .exit_models import ExitDrainStats
+from .on_exit_models import ExitDrainStats
 
 
 class OnAddServices(Protocol):

@@ -8,6 +8,11 @@ from typing import Any
 from .task_models import TaskPayload
 
 
+def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
+    """Return the stable one-argument callbacks used by projection services."""
+    return host._recurrence_evaluator_for_task, host._scheduler_service_for_task
+
+
 def recurrence_seed_base(_host: Any, task: TaskPayload) -> str:
     return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
@@ -44,6 +49,7 @@ def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any):
 
 
 def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any):
+    evaluator_callback, _service_callback = scheduler_callbacks(host)
     return host._module("modify_completion_compute").estimate_anchor_final_by_max(
         task,
         next_due_utc,
@@ -54,7 +60,7 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
         safe_parse_datetime=host._safe_parse_datetime,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
         omit_dnf_from_parent=host._omit_dnf_from_parent,
-        recurrence_evaluator_for_task=host._recurrence_evaluator_for_task,
+        recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
         anchor_included_occurrences=host._anchor_included_occurrences,
         diagnostic=host._diag,
@@ -76,6 +82,7 @@ def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any):
 
 
 def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any):
+    evaluator_callback, _service_callback = scheduler_callbacks(host)
     return host._module("modify_completion_compute").cap_from_until_anchor(
         task,
         next_due_utc,
@@ -87,7 +94,7 @@ def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: 
         safe_parse_datetime=host._safe_parse_datetime,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
         omit_dnf_from_parent=host._omit_dnf_from_parent,
-        recurrence_evaluator_for_task=host._recurrence_evaluator_for_task,
+        recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
         anchor_included_occurrences=host._anchor_included_occurrences,
         compare_datetimes=host._compare_datetimes,

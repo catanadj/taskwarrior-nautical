@@ -192,6 +192,7 @@ def render_lifecycle_result(host: Any, result, task) -> None:
 def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, dnf, **kwargs) -> list[str]:
     if not host._require_core():
         return []
+    evaluator_callback, service_callback = host._module("modify_schedule_effects").scheduler_callbacks(host)
     return host._module("modify_timeline").timeline_lines_for_task(
         kind, task, child_due_utc, child_short, dnf, **kwargs,
         core=host.core, max_iterations=host._MAX_ITERATIONS,
@@ -203,8 +204,8 @@ def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, 
         to_local_cached=host._to_local_cached, safe_parse_datetime=host._safe_parse_datetime,
         format_gap=host._module("modify_timeline").format_gap,
         module_loader=host._module, omit_dnf_from_parent=host._omit_dnf_from_parent,
-        recurrence_evaluator_for_task=host._recurrence_evaluator_for_task,
-        scheduler_service_for_task=host._scheduler_service_for_task,
+        recurrence_evaluator_for_task=evaluator_callback,
+        scheduler_service_for_task=service_callback,
     )
 
 

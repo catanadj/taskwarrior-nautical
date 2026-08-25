@@ -23324,7 +23324,9 @@ def test_modify_inclusion_collection_uses_shared_progress_guard():
     )
     try:
         try:
-            _hook._anchor_included_occurrences(
+            import nautical_core.modify_schedule_effects as schedule_effects
+            schedule_effects.anchor_included_occurrences(
+                _hook,
                 {
                     "uuid": "00000000-0000-4000-8000-000000000960",
                     "status": "pending",
@@ -23356,7 +23358,8 @@ def test_modify_until_projection_reuses_anchor_file_provider():
     builders = []
     providers = []
     original_builder = anchor_inclusion._build_anchor_file_provider
-    original_included = _hook._anchor_included_occurrences
+    schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
+    original_included = schedule_effects.anchor_included_occurrences
 
     def build_provider(*_args, **_kwargs):
         provider = object()
@@ -23368,7 +23371,7 @@ def test_modify_until_projection_reuses_anchor_file_provider():
         return [after_local_dt + timedelta(days=1)]
 
     anchor_inclusion._build_anchor_file_provider = build_provider
-    _hook._anchor_included_occurrences = included
+    schedule_effects.anchor_included_occurrences = lambda _host, task, **kwargs: included(task, **kwargs)
     try:
         task = {
             "uuid": "00000000-0000-4000-8000-000000000961",
@@ -23379,7 +23382,6 @@ def test_modify_until_projection_reuses_anchor_file_provider():
             "chainUntil": "20260805T090000Z",
             "anchor_file": "calendar.csv",
         }
-        schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
         final_no, final_dt = schedule_effects.cap_from_until_anchor(
             _hook, task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None
         )
@@ -23389,7 +23391,7 @@ def test_modify_until_projection_reuses_anchor_file_provider():
         expect(providers and all(value is builders[0] for value in providers), "projection did not reuse the provider")
     finally:
         anchor_inclusion._build_anchor_file_provider = original_builder
-        _hook._anchor_included_occurrences = original_included
+        schedule_effects.anchor_included_occurrences = original_included
 
 
 def test_modify_until_projection_fails_closed_at_iteration_limit():

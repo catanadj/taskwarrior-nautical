@@ -1615,29 +1615,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 # ------------------------------------------------------------------------------
 
 
-def _anchor_included_occurrences(
-    parent: dict,
-    *,
-    after_local_dt: datetime,
-    inclusive: bool,
-    limit: int,
-    fallback_hhmm: tuple[int, int],
-    omit_dnf,
-    seed_base: str,
-    default_seed_date,
-    dnf,
-    anchor_file_provider: Any | None = None,
-) -> list[datetime]:
-    host = _module("modify_composition").hook_host(globals(), __name__)
-    _evaluator, service_for_task = _module("modify_schedule_effects").scheduler_callbacks(host)
-    service = service_for_task(parent)
-    return service.included_occurrences_after(
-        after_local_dt,
-        inclusive=inclusive,
-        limit=limit,
-    )
-
-
 # ------------------------------------------------------------------------------
 # Child build (copy almost everything; override minimal set)
 # ------------------------------------------------------------------------------

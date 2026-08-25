@@ -1777,7 +1777,7 @@ def _build_on_add_context(
             task,
             now_utc,
             now_local,
-            validate_kind_not_conflicting=_module("add_validation").validate_kind_not_conflicting,
+            validate_kind_not_conflicting=core._import_sibling("hook_validation_pipeline").recurrence_kind_conflict,
             kind_and_defaults_on_add=_kind_and_defaults_on_add,
             validate_chain_limits_on_add=_validate_chain_limits_on_add,
             due_context_on_add=_due_context_on_add,

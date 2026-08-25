@@ -123,6 +123,33 @@ def validate_recurrence_exclusivity(value: ValidationInput) -> tuple[ValidationF
     return ()
 
 
+def recurrence_kind_conflict(
+    cp_value: object,
+    anchor_value: object,
+    anchor_file_value: object = None,
+) -> tuple[bool, str | None]:
+    """Validate recurrence source exclusivity for pre-observation callers."""
+    cp = bool(str(cp_value or "").strip())
+    anchor = bool(str(anchor_value or "").strip())
+    anchor_file = bool(str(anchor_file_value or "").strip())
+    if cp and anchor:
+        return False, "Cannot set both 'cp' and 'anchor'. Choose one."
+    if cp and anchor_file:
+        return False, "Cannot set both 'cp' and 'anchor_file'. Choose one."
+    return True, None
+
+
+def reject_recurrence_kind_conflict(
+    anchor_value: str,
+    anchor_file_value: str,
+    cp_value: str,
+) -> None:
+    """Raise the shared validation error used by modify route services."""
+    valid, reason = recurrence_kind_conflict(cp_value, anchor_value, anchor_file_value)
+    if not valid:
+        raise ValueError(reason or "recurrence sources conflict")
+
+
 def validate_anchor_mode_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
     task = value.current
     if not str(task.get("anchor") or task.get("anchor_file") or "").strip():
@@ -335,6 +362,8 @@ __all__ = (
     "validate_chain_identity_domain",
     "validate_chain_limits_domain",
     "validate_recurrence_exclusivity",
+    "recurrence_kind_conflict",
+    "reject_recurrence_kind_conflict",
     "validate_temporal_order_domain",
     "validate_task_mapping",
     "validate_task_transition",

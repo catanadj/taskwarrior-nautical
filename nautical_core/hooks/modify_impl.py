@@ -2729,13 +2729,6 @@ def _validate_omit_for_anchor_or_fail(anchor_expr: str, anchor_file_expr: str, o
             _fail_and_exit("Invalid omit_file", str(e))
 
 
-def _non_completion_reject_conflicting_types(new_anchor: str, new_anchor_file: str, new_cp: str) -> None:
-    if new_anchor and new_cp:
-        _fail_and_exit("Invalid chain config", "anchor and cp cannot both be set; clear one")
-    if new_anchor_file and new_cp:
-        _fail_and_exit("Invalid chain config", "anchor_file and cp cannot both be set; clear one")
-
-
 def _semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
@@ -2950,7 +2943,7 @@ def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transit
         strip_quotes=_strip_quotes,
         validate_anchor=_non_completion_validate_anchor,
         validate_omit=_validate_omit_for_anchor_or_fail,
-        reject_conflicting_types=_non_completion_reject_conflicting_types,
+        reject_conflicting_types=core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
         validate_chain_limits=_validate_chain_limits_on_modify,
         preserve_cp_offsets=lambda old_task, new_task, cp: _preserve_cp_relative_offsets_on_due_change(
             old_task, new_task, cp, transition=transition,
@@ -3000,7 +2993,7 @@ def _completion_validate_cp_and_anchor(old: dict, new: dict, *, transition=None)
         new,
         services=modify_validation.CompletionValidationServices(
             strip_quotes=_strip_quotes,
-            reject_conflicting_types=_non_completion_reject_conflicting_types,
+            reject_conflicting_types=core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
             validate_omit=_validate_omit_for_anchor_or_fail,
             validate_chain_limits=_validate_chain_limits_on_modify,
             parse_cp_sequence=core.parse_cp_sequence,

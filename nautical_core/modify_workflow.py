@@ -68,6 +68,29 @@ class RecurrenceTransitionDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class RecurringEditIntent:
+    changed_fields: tuple[str, ...]
+    scheduler_required: bool
+    carry_required: bool
+
+    def __post_init__(self) -> None:
+        fields = tuple(sorted(set(str(field).strip() for field in self.changed_fields if str(field).strip())))
+        object.__setattr__(self, "changed_fields", fields)
+        object.__setattr__(self, "scheduler_required", bool(self.scheduler_required))
+        object.__setattr__(self, "carry_required", bool(self.carry_required))
+
+
+def recurring_edit_intent(route: ModifyWorkflowRoute) -> RecurringEditIntent:
+    """Declare scheduler/carry work for a classified recurring edit."""
+    if route.kind is not ModifyRouteKind.RECURRING_EDIT:
+        return RecurringEditIntent((), False, False)
+    fields = set(route.changed_fields)
+    scheduler = bool(fields.intersection({"anchor", "anchor_file", "cp", "anchor_mode", "bc", "chainMax", "chainUntil"}))
+    carry = bool(fields.intersection({"due", "scheduled", "wait", "until"}))
+    return RecurringEditIntent(route.changed_fields, scheduler, carry)
+
+
+@dataclass(frozen=True, slots=True)
 class ModifyWorkflowRoute:
     """One mutually exclusive route and its local evidence summary."""
 
@@ -191,5 +214,7 @@ __all__ = (
     "ModifyTransitionError",
     "ModifyWorkflowRoute",
     "RecurrenceTransitionDecision",
+    "RecurringEditIntent",
     "classify_modify_transition",
+    "recurring_edit_intent",
 )

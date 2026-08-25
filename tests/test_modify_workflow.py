@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.modify_workflow import ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition
+from nautical_core.modify_workflow import ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition, recurring_edit_intent
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 
@@ -96,6 +96,13 @@ class ModifyWorkflowTests(unittest.TestCase):
         decision = RecurrenceTransitionDecision("resumed", source="anchor", reason="chain resumed")
         self.assertEqual(decision.state, "resumed")
         self.assertIn(("recurrence_source", "anchor"), decision.feedback_facts)
+
+    def test_recurring_edit_intent_separates_scheduler_and_carry_work(self) -> None:
+        root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        route = classify_modify_transition(transition(root, dict(root, due="20260826T090000Z", anchor="w:tue")))
+        intent = recurring_edit_intent(route)
+        self.assertTrue(intent.scheduler_required)
+        self.assertTrue(intent.carry_required)
 
 
 if __name__ == "__main__":

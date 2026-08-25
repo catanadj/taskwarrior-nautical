@@ -4,7 +4,7 @@ import unittest
 
 from datetime import datetime, timezone
 
-from nautical_core.add_workflow import classify_add_route, plan_add, record_schedule
+from nautical_core.add_workflow import classify_add_route, plan_add, record_schedule, schedule_patch
 from nautical_core.hook_workflow_models import PatchOperation, WorkflowRoute
 from nautical_core.task_models import TaskObservation, TaskTimestamp
 
@@ -69,6 +69,19 @@ class AddWorkflowTests(unittest.TestCase):
         scheduled = record_schedule(plan, first_occurrence=None, status="unavailable")
         self.assertEqual(scheduled.schedule.status, "unavailable")
         self.assertTrue(scheduled.feedback.warnings)
+
+    def test_explicit_target_is_preserved_after_scheduler_result(self) -> None:
+        plan = plan_add(observation({"anchor": "w:mon", "due": "20260831T060000Z"}))
+        timestamp = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
+        patch = schedule_patch(plan, first_occurrence=timestamp, encode_timestamp=str)
+        self.assertEqual(patch.operations, ())
+
+    def test_auto_target_receives_only_scheduler_timestamp(self) -> None:
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        timestamp = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
+        patch = schedule_patch(plan, first_occurrence=timestamp, encode_timestamp=lambda value: value.value.strftime("%Y%m%dT%H%M%SZ"))
+        self.assertEqual(patch.operations[0].field, "due")
+        self.assertEqual(patch.operations[0].value, "20260831T060000Z")
 
 
 if __name__ == "__main__":

@@ -134,4 +134,32 @@ def record_schedule(
     )
 
 
-__all__ = ("AddScheduleSelection", "AddWorkflowPlan", "classify_add_route", "plan_add", "record_schedule")
+def schedule_patch(
+    plan: AddWorkflowPlan,
+    *,
+    first_occurrence: TaskTimestamp,
+    encode_timestamp,
+) -> TaskPatch:
+    """Build the target-field patch after a successful scheduler decision.
+
+    Explicit due/scheduled input is preserved.  Auto-assignment is the only
+    path allowed to add a temporal field here.
+    """
+    if plan.target_explicit:
+        return TaskPatch(())
+    if not isinstance(first_occurrence, TaskTimestamp):
+        raise TypeError("scheduler target must be a TaskTimestamp")
+    encoded = encode_timestamp(first_occurrence)
+    if not isinstance(encoded, str) or not encoded.strip():
+        raise ValueError("scheduler timestamp encoder returned an empty value")
+    return TaskPatch((TaskPatchOperation(plan.target_field, PatchOperation.SET, encoded),))
+
+
+__all__ = (
+    "AddScheduleSelection",
+    "AddWorkflowPlan",
+    "classify_add_route",
+    "plan_add",
+    "record_schedule",
+    "schedule_patch",
+)

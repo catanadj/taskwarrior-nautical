@@ -181,8 +181,70 @@ def cap_guard_or_stop(host: Any, new: TaskPayload, next_no: int, cap_no: int | N
     )
 
 
+def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int, now_utc: datetime, *, preflight=None):
+    compute = host._module("modify_completion_compute")
+    runtime = host._module("modify_runtime")
+    services = runtime.build_compute_services(
+        completion_compute_child_due=lambda value, value_kind: compute_child_due(host, value, value_kind),
+        completion_until_or_fail=lambda value, clock: until_or_fail(host, value, clock),
+        completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(host, value, due, until, clock),
+        completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(host, value, due),
+        completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(host, value, due, until, clock),
+        completion_caps=lambda value_kind, value, due, dnf: caps(host, value_kind, value, due, dnf),
+        completion_cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(host, value, number, cap, clock),
+    )
+    computed = compute.completion_compute_next_and_limits(new, kind, next_no, now_utc, services=services)
+    if computed is None:
+        return None
+    if isinstance(computed, host._module("modify_models").CompletionLifecycleResult):
+        return computed
+    if not str(new.get("uuid") or "").strip() or not str(new.get("chainID") or "").strip():
+        return computed
+    fingerprint_fn = getattr(host.core, "scheduler_config_fingerprint", None)
+    return compute.attach_lifecycle_plan(
+        new, computed, next_no, now_utc,
+        preflight=preflight,
+        generation=host._chain_generation_service(),
+        scheduler_fingerprint=fingerprint_fn() if callable(fingerprint_fn) else "",
+        compare_datetimes=host._compare_datetimes,
+        invalid_relative_carry_reason=host._module("chain_integrity_lifecycle").invalid_relative_carry_reason,
+        lifecycle_planner=host._module("lifecycle_planner"),
+        lifecycle_models=host._module("lifecycle_models"),
+        modify_models=host._module("modify_models"),
+        end_chain_summary=host._end_chain_summary,
+        ensure_terminal_chain_off=host._ensure_terminal_chain_off,
+        panel=host._panel,
+        print_task=host._print_task,
+        diag=host._diag,
+    )
+
+
+def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
+    spawn = host._module("modify_completion_spawn")
+    runtime = host._module("modify_runtime")
+    generation = host._chain_generation_service()
+    codec = host._module("task_codec")
+    models = host._module("task_models")
+
+    def build_child_draft(task, *args, **inner_kwargs):
+        typed_task = models.NauticalTask.from_observation(
+            codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
+        )
+        return generation.build_child_draft(typed_task, *args, **inner_kwargs)
+
+    services = runtime.build_spawn_services(
+        build_child_draft=build_child_draft,
+        spawn_child_atomic=host._spawn_child_atomic,
+        panel=host._panel,
+        print_task=host._print_task,
+        diag=host._diag,
+    )
+    return spawn.completion_build_and_spawn_child(new, services=services, **kwargs)
+
+
 __all__ = (
     "chain_id_or_fail", "existing_next_or_fail", "chain_snapshot", "preflight_context",
     "compute_child_due", "until_or_fail", "until_guard_or_stop", "require_child_due_or_fail",
     "warn_unreasonable_duration", "caps", "cap_guard_or_stop",
+    "compute_next_and_limits", "build_and_spawn_child",
 )

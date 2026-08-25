@@ -66,7 +66,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     completion = host._module("modify_completion_effects")
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
-        build_and_spawn_child=host._completion_build_and_spawn_child,
+        build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
         seed_runtime_lookup_tasks=host._seed_runtime_lookup_tasks,
         modify_chain_state=host._modify_chain_state,
         lifecycle_read_service=host._lifecycle_read_service(),
@@ -92,7 +92,9 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         validate_native_until_slots=host._validate_native_until_anchor_slots_or_fail,
         now_utc=host.core.now_utc,
         preflight_context=lambda task, now, repository: completion.preflight_context(host, task, now, repository),
-        compute_next_and_limits=host._completion_compute_next_and_limits,
+        compute_next_and_limits=lambda task, kind, next_no, now, preflight=None: completion.compute_next_and_limits(
+            host, task, kind, next_no, now, preflight=preflight
+        ),
         lifecycle_read_service=host._lifecycle_read_service(),
         diag_count=host._diag_count,
         diag_lifecycle_result=host._diag_lifecycle_result,

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .hook_context import HookRuntimeContext
 from .on_exit_models import ExitDrainStats
 
 
@@ -16,7 +17,7 @@ class ExitServices:
         result_cls: type,
         *,
         redirect_stdout: Callable[[], None],
-        drain_outbox: Callable[[Any], ExitDrainStats],
+        drain_outbox: Callable[[HookRuntimeContext], ExitDrainStats],
         strict_feedback: Callable[[ExitDrainStats], str | None],
     ) -> None:
         self._result_cls = result_cls
@@ -27,8 +28,8 @@ class ExitServices:
     def redirect_stdout(self) -> None:
         self._redirect_stdout()
 
-    def drain_outbox(self, unit_of_work: Any) -> ExitDrainStats:
-        return self._drain_outbox(unit_of_work)
+    def drain_outbox(self, runtime: HookRuntimeContext) -> ExitDrainStats:
+        return self._drain_outbox(runtime)
 
     def strict_feedback(self, stats: ExitDrainStats) -> str | None:
         return self._strict_feedback(stats)

@@ -152,7 +152,6 @@ OPERATOR_RUNTIME_FILES = (
 REMOVED_RUNTIME_FILES = (
     "nautical_core/exit_drain_flow.py",
     "nautical_core/exit_entry_flow.py",
-    "nautical_core/on_exit_models.py",
     "nautical_core/exit_side_effects.py",
 )
 REMOVED_RECONCILE_SYMBOLS = (

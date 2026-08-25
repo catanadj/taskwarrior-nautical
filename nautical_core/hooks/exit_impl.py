@@ -480,7 +480,7 @@ def _emit_exit_feedback(msg: str) -> None:
             pass
 
 
-def _drain_outbox_result(unit_of_work):
+def _drain_outbox_result(runtime):
     """Claim and execute one bounded batch of lifecycle intents.
 
     All staging, mutation, verification, and recovery logic lives in
@@ -490,6 +490,7 @@ def _drain_outbox_result(unit_of_work):
     """
     _reset_exit_runtime_state()
     state = _exit_runtime_state()
+    unit_of_work = runtime.uow
     state.unit_of_work = unit_of_work
     state.repository = unit_of_work.repository
     _reset_exit_diag_stats()

@@ -5,6 +5,7 @@ import importlib
 from typing import Any, NoReturn, Protocol
 
 from .task_models import TaskPayload
+from .hook_context import HookRuntimeContext
 from .on_exit_models import ExitDrainStats
 
 
@@ -48,7 +49,7 @@ class OnExitServices(Protocol):
     """Typed services owned by the on-exit implementation."""
 
     def redirect_stdout(self) -> None: ...
-    def drain_outbox(self, unit_of_work: Any) -> ExitDrainStats: ...
+    def drain_outbox(self, runtime: HookRuntimeContext) -> ExitDrainStats: ...
     def strict_feedback(self, stats: ExitDrainStats) -> str | None: ...
     def result(self, *, exit_code: int, feedback_message: str | None, stats: ExitDrainStats) -> object: ...
 
@@ -126,7 +127,7 @@ def handle_on_exit(
 ):
     _ = request.runtime
     services.redirect_stdout()
-    stats = services.drain_outbox(request.runtime.uow)
+    stats = services.drain_outbox(request.runtime)
     strict_msg = services.strict_feedback(stats)
     if strict_msg:
         return services.result(exit_code=1, feedback_message=strict_msg, stats=stats)

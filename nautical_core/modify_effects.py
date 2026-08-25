@@ -118,6 +118,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
 
 def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None, terminal_decision=None) -> None:
     host._modify_runtime_state().task_repository = unit_of_work.repository
+    presentation = host._module("modify_presentation_effects")
     modify_expiration = host._module("modify_expiration", required=False)
     if modify_expiration is None:
         expiration_recovery_warning(host, new, "Expiration recovery module is unavailable; deletion was not classified.")

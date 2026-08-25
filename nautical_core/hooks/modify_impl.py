@@ -1349,30 +1349,6 @@ def _text_line(
         markup_body=markup_body,
     )
 
-def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
-    modify_spawn_prep = _module("modify_spawn_prep")
-    return modify_spawn_prep.stable_child_uuid(
-        parent_task,
-        child_task,
-        task_uuid_or_empty=_task_uuid_or_empty,
-        coerce_int=core.coerce_int,
-        stable_child_uuid_namespace=_STABLE_CHILD_UUID_NAMESPACE,
-    )
-
-
-def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env: dict) -> str:
-    modify_spawn_prep = _module("modify_spawn_prep")
-    return modify_spawn_prep.child_uuid_for_spawn(
-        parent_task,
-        child_task,
-        env,
-        stable_child_uuid=_stable_child_uuid,
-        reserve_child_uuid=lambda env: _module("modify_command_effects").reserve_child_uuid(
-            _module("modify_composition").hook_host(globals(), __name__), env
-        ),
-    )
-
-
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
 # ------------------------------------------------------------------------------

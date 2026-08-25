@@ -20415,9 +20415,14 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
     child_b = {"chainID": "cid12345", "link": 2}
     child_c = {"chainID": "cid12345", "link": 3}
 
-    uuid_a = mod._stable_child_uuid(parent, child_a)
-    uuid_b = mod._stable_child_uuid(parent, child_b)
-    uuid_c = mod._stable_child_uuid(parent, child_c)
+    prep = mod._module("modify_spawn_prep")
+    uuid_fn = lambda value: prep.stable_child_uuid(
+        value[0], value[1], task_uuid_or_empty=mod._task_uuid_or_empty,
+        coerce_int=mod.core.coerce_int, stable_child_uuid_namespace=mod._STABLE_CHILD_UUID_NAMESPACE,
+    )
+    uuid_a = uuid_fn((parent, child_a))
+    uuid_b = uuid_fn((parent, child_b))
+    uuid_c = uuid_fn((parent, child_c))
 
     expect(bool(uuid_a), "stable child uuid should not be empty")
     expect(uuid_a == uuid_b, "same chain slot should yield same stable uuid")

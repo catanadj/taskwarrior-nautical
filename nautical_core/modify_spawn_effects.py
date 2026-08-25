@@ -63,7 +63,7 @@ def spawn_child_atomic(host: Any, child_task, parent_task_with_nextlink: dict, *
         lifecycle_plan=lifecycle_plan,
         services=spawn.SpawnServices(
             prepare_spawn_child_payload=host._module("modify_spawn_prep").prepare_spawn_child_payload,
-            child_uuid_for_spawn=host._child_uuid_for_spawn,
+            child_uuid_for_spawn=lambda parent, child, env: child_uuid_for_spawn(host, parent, child, env),
             fmt_isoz=host.core.fmt_isoz,
             now_utc=host.core.now_utc,
             lifecycle_models=host._module("lifecycle_models"),
@@ -75,4 +75,22 @@ def spawn_child_atomic(host: Any, child_task, parent_task_with_nextlink: dict, *
     )
 
 
-__all__ = ("enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic")
+def child_uuid_for_spawn(host: Any, parent_task: dict | None, child_task: dict | None, env: dict) -> str:
+    prep = host._module("modify_spawn_prep")
+    command = host._module("modify_command_effects")
+    return prep.child_uuid_for_spawn(
+        parent_task,
+        child_task,
+        env,
+        stable_child_uuid=lambda parent, child: prep.stable_child_uuid(
+            parent,
+            child,
+            task_uuid_or_empty=host._task_uuid_or_empty,
+            coerce_int=host.core.coerce_int,
+            stable_child_uuid_namespace=host._STABLE_CHILD_UUID_NAMESPACE,
+        ),
+        reserve_child_uuid=lambda value: command.reserve_child_uuid(host, value),
+    )
+
+
+__all__ = ("enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic", "child_uuid_for_spawn")

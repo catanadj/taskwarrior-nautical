@@ -19,10 +19,12 @@ class ModifyRouteKind(str, Enum):
     RECURRENCE_REMOVAL = "recurrence_removal"
     RESUME = "resume"
     MANUAL_CHAIN_OFF = "manual_chain_off"
+    INVALID_IDENTITY_EDIT = "invalid_identity_edit"
 
 
 _RECURRENCE_FIELDS = frozenset({"anchor", "anchor_file", "cp", "omit", "omit_file"})
 _CHAIN_FIELDS = frozenset({"chainID", "link", "prevLink", "nextLink", "chain"})
+_IDENTITY_FIELDS = frozenset({"chainID", "link", "prevLink", "nextLink"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +68,11 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
     )
     evidence: list[str] = []
 
-    if not has_nautical:
+    identity_edit = bool(_IDENTITY_FIELDS.intersection(transition.changed_fields))
+    if identity_edit and old_recurrence and new_recurrence:
+        kind = ModifyRouteKind.INVALID_IDENTITY_EDIT
+        evidence.append("identity_mutation")
+    elif not has_nautical:
         kind = ModifyRouteKind.ORDINARY
     elif new_status == "deleted":
         kind = ModifyRouteKind.DELETION

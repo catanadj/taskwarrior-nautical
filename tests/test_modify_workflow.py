@@ -42,6 +42,7 @@ class ModifyWorkflowTests(unittest.TestCase):
         self.assertEqual(route.kind, ModifyRouteKind.DELETION)
         edited = dict(active, chainID="ffff0000")
         route = classify_modify_transition(transition(active, edited))
+        self.assertEqual(route.kind, ModifyRouteKind.INVALID_IDENTITY_EDIT)
         self.assertIn("chain_identity_edit", route.evidence)
 
 

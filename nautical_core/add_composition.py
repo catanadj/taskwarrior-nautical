@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from .task_models import TaskPayload
+
 
 def initialize_core(host: Any) -> None:
     """Own installed-layout integration context construction for on-add."""
@@ -45,7 +47,7 @@ def load_core(host: Any) -> None:
     host._CORE_READY = True
 
 
-def apply_description_uda_aliases(host: Any, task: dict) -> None:
+def apply_description_uda_aliases(host: Any, task: TaskPayload) -> None:
     if not bool(getattr(host.core, "ENABLE_UDA_ALIASES", False)):
         return
     description = task.get("description")
@@ -58,7 +60,7 @@ def apply_description_uda_aliases(host: Any, task: dict) -> None:
         host._error_and_exit([("Invalid UDA alias", str(exc))])
 
 
-def kind_and_defaults(host: Any, task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
+def kind_and_defaults(host: Any, task: TaskPayload, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
     has_cp, has_anchor, has_anchor_file = bool(cp_str), bool(anchor_str), bool(anchor_file_str)
     kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
     ch = (task.get("chain") or "").strip().lower()
@@ -71,7 +73,7 @@ def kind_and_defaults(host: Any, task: dict, cp_str: str, anchor_str: str, ancho
     return kind, ch
 
 
-def validate_chain_limits(host: Any, task: dict, now_utc: datetime) -> datetime | None:
+def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> datetime | None:
     add_validation = host._module("add_validation")
     pipeline = host.core._import_sibling("hook_validation_pipeline")
     cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
@@ -93,7 +95,7 @@ def validate_chain_limits(host: Any, task: dict, now_utc: datetime) -> datetime 
     return until_dt
 
 
-def due_context(host: Any, task: dict, now_utc: datetime):
+def due_context(host: Any, task: TaskPayload, now_utc: datetime):
     has_due, has_scheduled = bool(task.get("due")), bool(task.get("scheduled"))
     implicit_due = has_due and _due_matches_entry(host, task)
     if has_scheduled and (not has_due or implicit_due):
@@ -121,7 +123,7 @@ def due_context(host: Any, task: dict, now_utc: datetime):
     return user_provided_due, recurrence_field, due_dt, past_due_warning, due_local.date(), (due_local.hour, due_local.minute)
 
 
-def _due_matches_entry(host: Any, task: dict) -> bool:
+def _due_matches_entry(host: Any, task: TaskPayload) -> bool:
     if not task.get("due") or not task.get("entry"):
         return False
     due_dt, due_err = host._safe_parse_datetime(task.get("due"), "due")

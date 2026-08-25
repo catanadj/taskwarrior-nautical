@@ -258,7 +258,9 @@ def _scenario_duplicate_guard(env: dict[str, str], cp_result: dict) -> dict:
     old = dict(parent)
     old["status"] = "pending"
     old.pop("end", None)
-    old.pop("nextLink", None)
+    # Replay the same completion after the durable successor link exists.
+    # Removing nextLink would model a forbidden manual chain edit rather than
+    # an idempotent completion retry.
     hook = Path(env["TASKDATA"]) / "hooks" / "on-modify"
     replay = subprocess.run(
         [str(hook)],

@@ -91,8 +91,10 @@ class WorkflowContextTests(unittest.TestCase):
                 task_lease=SnapshotLease("taskdata-1"),
             )
             context.caches.store("evidence").put("row", object())
-            context.close()
-            self.assertTrue(context.closed)
+        context.close()
+        self.assertTrue(context.closed)
+        with self.assertRaises(RuntimeError):
+            context.caches.store("after-close")
             self.assertEqual(context.caches.names(), ())
 
 

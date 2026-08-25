@@ -73,8 +73,11 @@ class InvocationCaches:
 
     max_entries: int = 128
     _stores: dict[str, InvocationCache] = field(default_factory=dict, init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
 
     def store(self, name: str) -> InvocationCache:
+        if self._closed:
+            raise RuntimeError("invocation caches are closed")
         key = str(name or "").strip()
         if not key:
             raise ValueError("invocation cache name is required")
@@ -88,6 +91,7 @@ class InvocationCaches:
         for cache in self._stores.values():
             cache.clear()
         self._stores.clear()
+        self._closed = True
 
     def names(self) -> tuple[str, ...]:
         return tuple(self._stores)

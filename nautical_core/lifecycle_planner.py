@@ -32,6 +32,24 @@ class LifecyclePlanningError(RuntimeError):
     """Raised when a lifecycle plan cannot be constructed safely."""
 
 
+def _terminal_kind_for(event: LifecycleEvent, reason: str = "") -> str | None:
+    """Normalize terminal provenance into the durable plan vocabulary."""
+    if event is LifecycleEvent.CHAIN_MAX:
+        return "chain_max"
+    if event is LifecycleEvent.CHAIN_UNTIL:
+        return "chain_until"
+    normalized = str(reason or "").strip().lower().replace("-", "_")
+    if "chain_max" in normalized or "chainmax" in normalized:
+        return "chain_max"
+    if "chain_until" in normalized or "chainuntil" in normalized:
+        return "chain_until"
+    if "search_limit" in normalized or "scheduler_exhaust" in normalized:
+        return "search_limit"
+    if "date_limit" in normalized or "until" in normalized:
+        return "date_limit"
+    return None
+
+
 def _recurrence_kind(task: TaskSnapshot | NauticalTask) -> str:
     """Return the active recurrence kind, treating Taskwarrior null as unset."""
     def raw_value(key: str) -> Any:
@@ -423,7 +441,7 @@ def terminal_plan_for_snapshot(
         parent_guard=guard,
         parent_patch=(("chain", "off"),),
         expected_postconditions=postconditions,
-        terminal_kind=terminal_kind,
+        terminal_kind=terminal_kind or _terminal_kind_for(event),
     )
 
 
@@ -497,11 +515,22 @@ class LifecyclePlanner:
         if self.recurrence_service is not None:
             kind = _recurrence_kind(snapshot)
             if not any(TaskCodec.normalize_text(snapshot.get(field)) for field in ("cp", "anchor", "anchor_file")):
-                return terminal_plan_for_snapshot(snapshot, event)
+                return terminal_plan_for_snapshot(
+                    snapshot,
+                    event,
+                    terminal_kind=_terminal_kind_for(event),
+                )
             try:
                 candidate = self.recurrence_service.next_candidate(snapshot, event, kind, target_link or 0)
                 if candidate is None or candidate.terminal_reason:
-                    return terminal_plan_for_snapshot(snapshot, event)
+                    return terminal_plan_for_snapshot(
+                        snapshot,
+                        event,
+                        terminal_kind=_terminal_kind_for(
+                            event,
+                            candidate.terminal_reason if candidate is not None else "",
+                        ),
+                    )
                 if self.successor_limit_policy is not None:
                     try:
                         limit_reason = self.successor_limit_policy(
@@ -515,7 +544,11 @@ class LifecyclePlanner:
                             f"successor limit evaluation failed: {type(exc).__name__}: {exc}"
                         ) from exc
                     if limit_reason:
-                        return terminal_plan_for_snapshot(snapshot, event)
+                        return terminal_plan_for_snapshot(
+                            snapshot,
+                            event,
+                            terminal_kind=_terminal_kind_for(event, limit_reason),
+                        )
                 child = self.recurrence_service.build_child(
                     snapshot,
                     event,
@@ -527,7 +560,11 @@ class LifecyclePlanner:
                     f"could not build {event.value} successor: {type(exc).__name__}: {exc}"
                 ) from exc
         if child is None:
-            return terminal_plan_for_snapshot(snapshot, event)
+            return terminal_plan_for_snapshot(
+                snapshot,
+                event,
+                terminal_kind=_terminal_kind_for(event),
+            )
         if not isinstance(child, TaskDraft):
             raise LifecyclePlanningError("recurrence builder returned a non-TaskDraft successor")
         if child.identity.link.value <= 0:

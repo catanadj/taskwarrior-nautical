@@ -1904,6 +1904,15 @@ class _OnAddServices:
             _fail_and_exit("Scheduler unavailable", f"Could not record first {target_field}: {exc}")
             raise
 
+    def record_preview(self, plan):
+        workflow = core._import_sibling("add_workflow")
+        policy = workflow.preview_policy(
+            panel_mode=getattr(core, "PANEL_MODE", "rich"),
+            requested_limit=UPCOMING_PREVIEW,
+            hard_cap=_PREVIEW_HARD_CAP,
+        )
+        return workflow.record_preview(plan, policy)
+
     def stamp_chain_id(self, task):
         _stamp_chain_id_on_add(task)
 

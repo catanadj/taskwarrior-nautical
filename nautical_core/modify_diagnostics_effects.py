@@ -99,7 +99,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
     summary = host._module("modify_chain_summary")
 
     def export_sorted_chain(chain_id: str, actual_current: dict) -> list:
-        chain = host.tw_export_chain_required(actual_current)
+        chain = host._module("modify_read_effects").export_chain_required(host, actual_current)
         if actual_current and chain:
             for index, task in enumerate(chain):
                 if task.get("uuid") == actual_current.get("uuid"):

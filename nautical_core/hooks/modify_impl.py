@@ -1517,26 +1517,6 @@ def _task(args, env=None) -> str:
         _query_ctx_set("task_text", cache_key, out or "")
     return out
 
-def tw_export_chain_required(seed_task, env=None):
-    """Return full chain export for a task.
-
-    Policy: chainID is mandatory.
-    """
-    chain_id = seed_task.get('chainID')
-    if not chain_id:
-        raise RuntimeError(
-            "ChainID is required (legacy chain traversal removed). "
-            "Run dev_tools/nautical_backfill_chainid.py, then retry."
-        )
-    if env is not None:
-        raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
-    read_service = _module("modify_read_effects").lifecycle_read_service(
-        _module("modify_composition").hook_host(globals(), __name__)
-    )
-    rows = read_service.get_chain_export(chain_id)
-    if rows is None:
-        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
-    return rows
 def _tw_get_cached(ref: str) -> str:
     """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
     try:

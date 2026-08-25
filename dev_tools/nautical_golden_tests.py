@@ -8487,10 +8487,11 @@ def test_delete_chain_summary_uses_stopped_title():
     ]
 
     prev_panel = mod._panel
-    prev_export = mod.tw_export_chain_required
+    read_effects = mod._module("modify_read_effects")
+    prev_export = read_effects.export_chain_required
     try:
         mod._panel = lambda title, rows, kind=None: captured.update({"title": title, "rows": rows, "kind": kind})
-        mod.tw_export_chain_required = lambda _task: list(chain)
+        read_effects.export_chain_required = lambda _host, _task: list(chain)
         mod._diagnostics_effects.end_chain_summary(
             task,
             "Pending task deleted.",
@@ -8499,7 +8500,7 @@ def test_delete_chain_summary_uses_stopped_title():
         )
     finally:
         mod._panel = prev_panel
-        mod.tw_export_chain_required = prev_export
+        read_effects.export_chain_required = prev_export
 
     expect(captured.get("title") == "⛔ Chain stopped – summary", f"unexpected delete summary title: {captured!r}")
 

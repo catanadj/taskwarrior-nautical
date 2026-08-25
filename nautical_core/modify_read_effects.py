@@ -105,4 +105,17 @@ def collect_prev_two(host: Any, current_task: dict, chain_by_link=None):
     return list(read.value)
 
 
-__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two")
+def export_chain_required(host: Any, seed_payload: dict, env=None):
+    chain_id = seed_payload.get("chainID")
+    if not chain_id:
+        raise RuntimeError("ChainID is required (legacy chain traversal removed). Run chainID backfill, then retry.")
+    if env is not None:
+        raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
+    service = lifecycle_read_service(host)
+    rows = service.get_chain_export(chain_id)
+    if rows is None:
+        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
+    return rows
+
+
+__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "export_chain_required")

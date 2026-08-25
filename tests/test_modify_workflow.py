@@ -51,6 +51,7 @@ class ModifyWorkflowTests(unittest.TestCase):
         route = classify_modify_transition(transition(active, edited))
         self.assertEqual(route.kind, ModifyRouteKind.INVALID_IDENTITY_EDIT)
         self.assertIn("chain_identity_edit", route.evidence)
+        self.assertTrue(route.identity_mutation)
 
     def test_volatile_only_reentry_is_marked_as_evidence(self) -> None:
         active = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
@@ -58,6 +59,8 @@ class ModifyWorkflowTests(unittest.TestCase):
             transition(active, dict(active, modified="20260825T100000Z", urgency=4.0))
         )
         self.assertIn("volatile_only", route.evidence)
+        self.assertEqual(route.volatile_fields, ("modified",))
+        self.assertEqual(route.user_changed_fields, ())
 
     def test_route_matrix_is_mutually_exclusive_and_deterministic(self) -> None:
         root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

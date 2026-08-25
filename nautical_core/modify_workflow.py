@@ -38,9 +38,28 @@ class ModifyWorkflowRoute:
     evidence: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "kind", ModifyRouteKind(self.kind))
-        object.__setattr__(self, "changed_fields", tuple(sorted(set(self.changed_fields))))
-        object.__setattr__(self, "evidence", tuple(sorted(set(str(item) for item in self.evidence))))
+        kind = ModifyRouteKind(self.kind)
+        changed = tuple(sorted(set(self.changed_fields)))
+        evidence = tuple(sorted(set(str(item) for item in self.evidence)))
+        if kind is ModifyRouteKind.ORDINARY and self.has_nautical_fields:
+            raise ValueError("ordinary modify route cannot contain Nautical fields")
+        if kind is ModifyRouteKind.INVALID_IDENTITY_EDIT and "identity_mutation" not in evidence:
+            raise ValueError("invalid identity route requires identity mutation evidence")
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "changed_fields", changed)
+        object.__setattr__(self, "evidence", evidence)
+
+    @property
+    def volatile_fields(self) -> tuple[str, ...]:
+        return tuple(sorted(set(self.changed_fields).intersection(VOLATILE_TASK_FIELDS)))
+
+    @property
+    def user_changed_fields(self) -> tuple[str, ...]:
+        return tuple(sorted(set(self.changed_fields).difference(VOLATILE_TASK_FIELDS)))
+
+    @property
+    def identity_mutation(self) -> bool:
+        return "identity_mutation" in self.evidence
 
     @property
     def requires_spawn_evidence(self) -> bool:

@@ -71,24 +71,13 @@ def chain_snapshot(host: Any, chain_id: str, base_no: int, next_no: int, reposit
 def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository):
     preflight = host._module("modify_completion_preflight")
     runtime = host._module("modify_runtime")
-    chain_id_fn = getattr(host, "_completion_chain_id_or_fail", None)
-    snapshot_fn = getattr(host, "_completion_chain_snapshot", None)
-    existing_fn = getattr(host, "_completion_existing_next_or_fail", None)
     services = runtime.build_preflight_services(
         short=host._short,
         completion_link_numbers_or_fail=host._completion_link_numbers_or_fail,
         completion_kind_or_stop=host._completion_kind_or_stop,
-        completion_chain_id_or_fail=chain_id_fn or (lambda task: chain_id_or_fail(host, task)),
-        completion_chain_snapshot=(
-            (lambda chain_id, base_no, next_no: snapshot_fn(chain_id, base_no, next_no, repository))
-            if snapshot_fn is not None
-            else (lambda chain_id, base_no, next_no: chain_snapshot(host, chain_id, base_no, next_no, repository))
-        ),
-        completion_existing_next_or_fail=(
-            (lambda task, next_no, snapshot: existing_fn(task, next_no, snapshot, repository))
-            if existing_fn is not None
-            else (lambda task, next_no, snapshot: existing_next_or_fail(host, task, next_no, snapshot, repository))
-        ),
+        completion_chain_id_or_fail=lambda task: chain_id_or_fail(host, task),
+        completion_chain_snapshot=lambda chain_id, base_no, next_no: chain_snapshot(host, chain_id, base_no, next_no, repository),
+        completion_existing_next_or_fail=lambda task, next_no, snapshot: existing_next_or_fail(host, task, next_no, snapshot, repository),
     )
     return preflight.completion_preflight_context(new, now_utc, services=services)
 

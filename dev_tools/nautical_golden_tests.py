@@ -613,6 +613,8 @@ def _load_hook_module(path: str, module_name: str):
     load_core = getattr(mod, "_load_core", None)
     if callable(load_core) and os.path.basename(path) in {"add_impl.py", "modify_impl.py", "exit_impl.py"}:
         load_core()
+    if os.path.basename(path) == "modify_impl.py":
+        mod._completion_effects = _BoundCompletionEffects(mod)
     return mod
 
 
@@ -620,6 +622,36 @@ def _modify_effect(hook, name, *args, **kwargs):
     """Invoke an extracted typed modify effect for focused behavior tests."""
     effects = importlib.import_module("nautical_core.modify_effects")
     return getattr(effects, name)(hook, *args, **kwargs)
+
+
+class _BoundCompletionEffects:
+    """Test-only bound view of the extracted completion-effects module."""
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_completion_effects"))
+        originals = getattr(type(self), "_originals", None)
+        if originals is None:
+            originals = {
+                name: getattr(self._module, name)
+                for name in (
+                    "chain_snapshot", "existing_next_or_fail", "preflight_context",
+                    "compute_child_due", "until_or_fail", "until_guard_or_stop",
+                    "require_child_due_or_fail", "warn_unreasonable_duration", "caps",
+                    "cap_guard_or_stop", "compute_next_and_limits", "build_and_spawn_child",
+                )
+            }
+            setattr(type(self), "_originals", originals)
+        else:
+            for name, fn in originals.items():
+                setattr(self._module, name, fn)
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
 
 
 def _generation_service(hook):
@@ -18269,14 +18301,14 @@ def test_on_modify_completion_reschedule_carries_native_until():
             "2026-08-02T23:00:00Z",
         ),
     )
-    original_preflight = mod._completion_preflight_context
+    original_preflight = mod._completion_effects.preflight_context
     try:
-        mod._completion_preflight_context = lambda *_args, **_kwargs: None
+        mod._completion_effects.preflight_context = lambda *_args, **_kwargs: None
         for new, expected_until in cases:
             _modify_effect(mod, "handle_completion", old, new, _test_operator_uow())
             expect(new.get("until") == expected_until, f"completion reschedule lost expiration carry: {new!r}")
     finally:
-        mod._completion_preflight_context = original_preflight
+        mod._completion_effects.preflight_context = original_preflight
 
 
 def test_on_modify_native_until_accepts_valid_window_change():
@@ -20072,7 +20104,7 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
     }
 
     orig_print_task = mod._print_task
-    orig_preflight = mod._completion_preflight_context
+    orig_preflight = mod._completion_effects.preflight_context
     orig_panel = mod._panel
     panels = []
     try:
@@ -20093,11 +20125,11 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
                 expect(exc.code == 1, f"carry failure exited with unexpected status: {exc.code!r}")
             else:
                 raise AssertionError(f"malformed carry was accepted: {invalid!r}")
-        mod._completion_preflight_context = lambda *_args, **_kwargs: None
+        mod._completion_effects.preflight_context = lambda *_args, **_kwargs: None
         _modify_effect(mod, "handle_completion", old, completed, _test_operator_uow())
     finally:
         mod._print_task = orig_print_task
-        mod._completion_preflight_context = orig_preflight
+        mod._completion_effects.preflight_context = orig_preflight
         mod._panel = orig_panel
 
     expect(
@@ -20388,7 +20420,7 @@ def test_on_modify_completion_preflight_context_happy_path():
         mod._load_core()
 
     models = core._import_sibling("modify_models")
-    mod._completion_chain_snapshot = lambda *_a, **_k: models.CompletionChainSnapshot(
+    mod._completion_effects.chain_snapshot = lambda *_a, **_k: models.CompletionChainSnapshot(
         mode="recent", rows=[], loaded=True
     )
     new = {
@@ -20404,7 +20436,7 @@ def test_on_modify_completion_preflight_context_happy_path():
     repository = SimpleNamespace(
         exact_child_slot=lambda *_args, **_kwargs: Absent("child-slot", "no existing child")
     )
-    ctx = mod._completion_preflight_context(new, mod.core.now_utc(), repository)
+    ctx = mod._completion_effects.preflight_context(new, mod.core.now_utc(), repository)
     expect(bool(ctx), f"expected preflight context, got {ctx}")
     expect(ctx.parent_short == "00000000", f"unexpected parent_short: {ctx}")
     expect(ctx.base_no == 2 and ctx.next_no == 3, f"unexpected link numbers: {ctx}")
@@ -20446,15 +20478,15 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     until_dt = child_due + timedelta(days=10)
     finals = [("max", child_due + timedelta(days=5))]
 
-    mod._completion_compute_child_due = lambda _new, _kind: (child_due, {"basis": "stub"}, None)
-    mod._completion_until_or_fail = lambda _new, _now: until_dt
-    mod._completion_until_guard_or_stop = lambda _new, _child_due, _until_dt, _now: True
-    mod._completion_require_child_due_or_fail = lambda _new, _child_due: True
-    mod._completion_warn_unreasonable_duration = lambda *_a, **_k: None
-    mod._completion_caps = lambda _kind, _new, _child_due, _dnf: (3, until_dt, 3, finals, 3)
-    mod._completion_cap_guard_or_stop = lambda _new, _next_no, _cap_no, _now: True
+    mod._completion_effects.compute_child_due = lambda _new, _kind: (child_due, {"basis": "stub"}, None)
+    mod._completion_effects.until_or_fail = lambda _new, _now: until_dt
+    mod._completion_effects.until_guard_or_stop = lambda _new, _child_due, _until_dt, _now: True
+    mod._completion_effects.require_child_due_or_fail = lambda _new, _child_due: True
+    mod._completion_effects.warn_unreasonable_duration = lambda *_a, **_k: None
+    mod._completion_effects.caps = lambda _kind, _new, _child_due, _dnf: (3, until_dt, 3, finals, 3)
+    mod._completion_effects.cap_guard_or_stop = lambda _new, _next_no, _cap_no, _now: True
 
-    out = mod._completion_compute_next_and_limits({"chainUntil": "ignored"}, "cp", 2, mod.core.now_utc())
+    out = mod._completion_effects.compute_next_and_limits({"chainUntil": "ignored"}, "cp", 2, mod.core.now_utc())
     expect(bool(out), f"expected computed payload, got {out}")
     expect(out.child_due == child_due, f"unexpected child_due: {out}")
     expect(out.meta == {"basis": "stub"}, f"unexpected meta: {out}")
@@ -20466,14 +20498,14 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     def stop_at_until(task, *_args):
         task["chain"] = "off"
         return False
-    mod._completion_until_guard_or_stop = stop_at_until
-    terminal = mod._completion_compute_next_and_limits(terminal_task, "cp", 2, mod.core.now_utc())
+    mod._completion_effects.until_guard_or_stop = stop_at_until
+    terminal = mod._completion_effects.compute_next_and_limits(terminal_task, "cp", 2, mod.core.now_utc())
     expect(terminal.state == "terminal", f"terminal completion result was not exposed: {terminal!r}")
     expect("chainUntil" in terminal.reason, f"terminal result lost boundary reason: {terminal!r}")
     expect(terminal.diagnostic is not None and terminal.diagnostic.failure_kind == "chain_until", f"terminal result lost diagnostic kind: {terminal!r}")
 
-    mod._completion_compute_child_due = lambda *_args, **_kwargs: None
-    retryable = mod._completion_compute_next_and_limits({"chain": "on", "chainID": "diag01", "link": 1}, "cp", 2, mod.core.now_utc())
+    mod._completion_effects.compute_child_due = lambda *_args, **_kwargs: None
+    retryable = mod._completion_effects.compute_next_and_limits({"chain": "on", "chainID": "diag01", "link": 1}, "cp", 2, mod.core.now_utc())
     expect(retryable.state == "retryable", f"scheduler failure was not typed: {retryable!r}")
     expect(retryable.diagnostic.failure_kind == "scheduler_error", f"scheduler failure lost diagnostic kind: {retryable!r}")
 
@@ -20886,23 +20918,23 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         handle_completion_modify=lambda *_args, **_kwargs: expected,
     )
     original = {
-        "validate": mod._completion_validate_cp_and_anchor,
+        "validate": mod._completion_effects.validate_cp_and_anchor,
         "preserve_cp": mod._preserve_cp_relative_offsets_on_due_change,
         "preserve_until": mod._preserve_native_until_on_target_change,
         "validate_until": mod._validate_native_until_after_target_or_fail,
         "validate_slots": mod._validate_native_until_anchor_slots_or_fail,
-        "preflight": mod._completion_preflight_context,
-        "compute": mod._completion_compute_next_and_limits,
+        "preflight": mod._completion_effects.preflight_context,
+        "compute": mod._completion_effects.compute_next_and_limits,
         "import_module": mod.importlib.import_module,
     }
     try:
-        mod._completion_validate_cp_and_anchor = lambda *_a, **_k: ("", "w:mon", "")
+        mod._completion_effects.validate_cp_and_anchor = lambda *_a, **_k: ("", "w:mon", "")
         mod._preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
         mod._preserve_native_until_on_target_change = lambda *_a, **_k: None
         mod._validate_native_until_after_target_or_fail = lambda *_a, **_k: None
         mod._validate_native_until_anchor_slots_or_fail = lambda *_a, **_k: None
-        mod._completion_preflight_context = lambda *_a, **_k: ctx
-        mod._completion_compute_next_and_limits = lambda *_a, **_k: computed
+        mod._completion_effects.preflight_context = lambda *_a, **_k: ctx
+        mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: computed
 
         def fake_import(name):
             if name == "nautical_core.modify_completion_flow":
@@ -20916,13 +20948,13 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
             _test_operator_uow(),
         )
     finally:
-        mod._completion_validate_cp_and_anchor = original["validate"]
+        mod._completion_effects.validate_cp_and_anchor = original["validate"]
         mod._preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
         mod._preserve_native_until_on_target_change = original["preserve_until"]
         mod._validate_native_until_after_target_or_fail = original["validate_until"]
         mod._validate_native_until_anchor_slots_or_fail = original["validate_slots"]
-        mod._completion_preflight_context = original["preflight"]
-        mod._completion_compute_next_and_limits = original["compute"]
+        mod._completion_effects.preflight_context = original["preflight"]
+        mod._completion_effects.compute_next_and_limits = original["compute"]
         mod.importlib.import_module = original["import_module"]
 
     expect(result is expected, f"completion helper dropped finalized result: {result!r}")
@@ -20947,15 +20979,15 @@ def test_on_modify_completion_chain_snapshot_modes_and_query():
         mod._SHOW_ANALYTICS = False
         mod._CHECK_CHAIN_INTEGRITY = False
         mod.core.PANEL_MODE = "line"
-        next_only = mod._completion_chain_snapshot("cid", 5, 6, repository)
+        next_only = mod._completion_effects.chain_snapshot("cid", 5, 6, repository)
         expect(next_only.mode == "next" and next_only.loaded, f"unexpected line snapshot: {next_only}")
 
         mod.core.PANEL_MODE = "rich"
-        recent = mod._completion_chain_snapshot("cid", 5, 6, repository)
+        recent = mod._completion_effects.chain_snapshot("cid", 5, 6, repository)
         expect(recent.mode == "recent" and recent.loaded, f"unexpected recent snapshot: {recent}")
 
         mod._CHECK_CHAIN_INTEGRITY = True
-        full = mod._completion_chain_snapshot("cid", 5, 6, repository)
+        full = mod._completion_effects.chain_snapshot("cid", 5, 6, repository)
         expect(full.mode == "full" and full.loaded, f"unexpected full snapshot: {full}")
         expect(calls == ["cid", "cid", "cid"], f"completion bypassed repository chain reads: {calls!r}")
     finally:
@@ -20982,13 +21014,13 @@ def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
         mod.core.PANEL_MODE = "line"
         mod._SHOW_ANALYTICS = False
         mod._CHECK_CHAIN_INTEGRITY = False
-        snapshot = mod._completion_chain_snapshot("malformed01", 1, 2, repository)
+        snapshot = mod._completion_effects.chain_snapshot("malformed01", 1, 2, repository)
         expect(snapshot.is_unavailable, f"malformed snapshot was accepted: {snapshot!r}")
         expect(not snapshot.loaded and snapshot.rows == [], f"malformed snapshot changed lookup state: {snapshot!r}")
         panels = []
         mod._panel = lambda title, rows, **_kwargs: panels.append((title, rows))
         mod._print_task = lambda _task: None
-        allowed = mod._completion_existing_next_or_fail({}, 2, snapshot, repository)
+        allowed = mod._completion_effects.existing_next_or_fail({}, 2, snapshot, repository)
         expect(not allowed and panels and "unavailable" in panels[0][0].lower(), "unavailable snapshot did not stop spawn")
     finally:
         mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
@@ -21018,9 +21050,9 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
         mod._load_core()
 
     called = {"chain_export": 0}
-    mod._completion_validate_cp_and_anchor = lambda *_a, **_k: ("P1D", "", "")
-    mod._completion_preflight_context = lambda *_a, **_k: None
-    mod._completion_compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
+    mod._completion_effects.validate_cp_and_anchor = lambda *_a, **_k: ("P1D", "", "")
+    mod._completion_effects.preflight_context = lambda *_a, **_k: None
+    mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
     mod._SHOW_ANALYTICS = True
     mod._SHOW_TIMELINE_GAPS = False
     mod._CHECK_CHAIN_INTEGRITY = False
@@ -27344,7 +27376,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
     mod._spawn_child_atomic = lambda _child, _parent: ("beeswax", set(), True, False, None, "si_test")
     try:
-        out = mod._completion_build_and_spawn_child(
+        out = mod._completion_effects.build_and_spawn_child(
             new,
             child_due=mod.core.now_utc(),
             child_field="due",
@@ -27406,7 +27438,7 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
         mod._spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Taskwarrior lock busy"))
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
-        result = mod._completion_build_and_spawn_child(
+        result = mod._completion_effects.build_and_spawn_child(
             parent,
             child_due=mod.core.now_utc(),
             child_field="due",
@@ -27455,7 +27487,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
         mod._spawn_child_atomic = lambda *_args, **_kwargs: spawned.append(True)
-        result = mod._completion_build_and_spawn_child(
+        result = mod._completion_effects.build_and_spawn_child(
             dict(parent),
             child_due=child_due,
             child_field="due",
@@ -29708,14 +29740,14 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     modify_models = mod._module("modify_models")
-    mod._completion_chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
+    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
         mode="recent", rows=[], loaded=False, chain_id=str(chain_id)
     )
     def _existing_next_guard(task, *_args, **_kwargs):
         mod._print_task(task)
         return False
 
-    mod._completion_existing_next_or_fail = _existing_next_guard
+    mod._completion_effects.existing_next_or_fail = _existing_next_guard
 
     def _get_chain_export_stub(chain_id, since=None, extra=None, env=None):
         if chain_id == "abcd1234" and extra and "link:2" in extra:
@@ -31313,7 +31345,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     ]
 
     modify_models = mod._module("modify_models")
-    mod._completion_compute_next_and_limits = lambda *_a, **_k: modify_models.CompletionComputeResult(
+    mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: modify_models.CompletionComputeResult(
         child_due=child_due,
         meta={},
         dnf=None,
@@ -31323,7 +31355,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
         finals=[],
         until_cap_no=None,
     )
-    mod._completion_build_and_spawn_child = lambda *_a, **_k: modify_models.CompletionSpawnResult(
+    mod._completion_effects.build_and_spawn_child = lambda *_a, **_k: modify_models.CompletionSpawnResult(
         child={
             "uuid": child_uuid,
             "status": "pending",
@@ -31412,7 +31444,7 @@ def test_on_modify_completion_snapshot_reuses_full_chain_read():
 
     uow.client = Client()
     try:
-        snapshot = mod._completion_chain_snapshot("reuse01", 1, 2, uow.repository)
+        snapshot = mod._completion_effects.chain_snapshot("reuse01", 1, 2, uow.repository)
         expect(snapshot.loaded and snapshot.coverage == "full", f"unexpected full snapshot: {snapshot!r}")
         reused = uow.repository.exact_child_slot("reuse01", 2)
         expect(isinstance(reused, Found), f"full snapshot did not satisfy child-slot read: {reused!r}")
@@ -31452,7 +31484,7 @@ def test_on_modify_lifecycle_export_reuses_completion_chain_snapshot():
     try:
         rows = mod._lifecycle_read_service().get_chain_export("reuse02")
         expect(len(rows) == 1, f"lifecycle chain export returned unexpected rows: {rows!r}")
-        snapshot = mod._completion_chain_snapshot("reuse02", 1, 2, uow.repository)
+        snapshot = mod._completion_effects.chain_snapshot("reuse02", 1, 2, uow.repository)
         expect(snapshot.loaded and snapshot.rows, f"completion snapshot did not reuse chain rows: {snapshot!r}")
         expect(calls["count"] == 1, f"lifecycle and completion repeated chain export: {calls}")
     finally:
@@ -31476,10 +31508,10 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     mod._spawn_child_atomic = _spawn_child_atomic_stub
     modify_models = mod._module("modify_models")
-    mod._completion_chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
+    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
         mode="next", rows=[], loaded=True, chain_id=str(chain_id)
     )
-    mod._completion_existing_next_or_fail = lambda *_a, **_k: True
+    mod._completion_effects.existing_next_or_fail = lambda *_a, **_k: True
     # A confirmed empty chain is distinct from an unavailable Taskwarrior
     # export; keep this spawn-path test deterministic and network-free.
     mod._lifecycle_read_service().get_chain_export = lambda *_a, **_k: []

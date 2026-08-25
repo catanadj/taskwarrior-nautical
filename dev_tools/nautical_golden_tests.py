@@ -616,6 +616,7 @@ def _load_hook_module(path: str, module_name: str):
     if os.path.basename(path) == "modify_impl.py":
         mod._completion_effects = _BoundCompletionEffects(mod)
         mod._transition_effects = _BoundTransitionEffects(mod)
+        mod._presentation_effects = _BoundPresentationEffects(mod)
     return mod
 
 
@@ -661,6 +662,21 @@ class _BoundTransitionEffects:
     def __init__(self, hook):
         object.__setattr__(self, "_hook", hook)
         object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_transition_effects"))
+
+    def __getattr__(self, name):
+        fn = getattr(self._module, name)
+        return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
+
+    def __setattr__(self, name, value):
+        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+
+
+class _BoundPresentationEffects:
+    """Test-only bound view of the extracted presentation-effects module."""
+
+    def __init__(self, hook):
+        object.__setattr__(self, "_hook", hook)
+        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_presentation_effects"))
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)
@@ -27596,7 +27612,7 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
         mod.core.SHOW_ANALYTICS = False
         mod.core.ANCHOR_PRESETS = {"payday": "m:15,-1bd"}
         mod.core.OMIT_PRESETS = {"wed": "w:wed"}
-        mod._render_anchor_completion_feedback(
+        mod._presentation_effects.render_anchor_completion_feedback(
             new={"anchor": "@payday", "omit": "@wed", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
@@ -27662,7 +27678,7 @@ def test_on_modify_reports_business_calendar_displacement():
                 date(2026, 4, 20),
             )
             child_due = mod.core.build_local_datetime(child_date, (9, 0))
-            mod._render_anchor_completion_feedback(
+            mod._presentation_effects.render_anchor_completion_feedback(
                 new={
                     "anchor": "y:04-24@nbd@t=09:00",
                     "anchor_mode": "skip",
@@ -27722,7 +27738,7 @@ def test_on_modify_anchor_feedback_warns_when_timed_anchor_uses_utc_fallback():
     try:
         mod.core._LOCAL_TZ = None
         mod.core.PANEL_MODE = "panel"
-        mod._render_anchor_completion_feedback(
+        mod._presentation_effects.render_anchor_completion_feedback(
             new={"anchor": "w:mon", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
@@ -27773,7 +27789,7 @@ def test_on_modify_render_anchor_file_completion_feedback_wrapper():
     prev_panel_mode = mod.core.PANEL_MODE
     try:
         mod.core.PANEL_MODE = "panel"
-        mod._render_anchor_completion_feedback(
+        mod._presentation_effects.render_anchor_completion_feedback(
             new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000333", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000444"},
             child_due=mod.core.now_utc(),
@@ -27868,7 +27884,7 @@ def test_on_modify_render_cp_completion_feedback_wrapper():
     prev_panel_mode = mod.core.PANEL_MODE
     try:
         mod.core.PANEL_MODE = "panel"
-        mod._render_cp_completion_feedback(
+        mod._presentation_effects.render_cp_completion_feedback(
             new={"cp": "3d,20d,7d", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
@@ -27922,7 +27938,7 @@ def test_on_modify_completion_panel_distinguishes_expiration_and_chain_boundarie
     previous_mode = mod.core.PANEL_MODE
     try:
         mod.core.PANEL_MODE = "panel"
-        mod._render_cp_completion_feedback(
+        mod._presentation_effects.render_cp_completion_feedback(
             new={
                 "cp": "7d",
                 "chainMax": 10,
@@ -27997,7 +28013,7 @@ def test_on_modify_render_cp_completion_feedback_random_selected_interval():
     chain_id = "abcd1234"
     try:
         mod.core.PANEL_MODE = "panel"
-        mod._render_cp_completion_feedback(
+        mod._presentation_effects.render_cp_completion_feedback(
             new={"cp": cp, "link": 2, "uuid": "00000000-0000-4000-8000-000000000111", "chainID": chain_id},
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
@@ -28052,7 +28068,7 @@ def test_on_modify_render_cp_completion_feedback_jitter_selected_interval():
     prev_panel_mode = mod.core.PANEL_MODE
     try:
         mod.core.PANEL_MODE = "panel"
-        mod._render_cp_completion_feedback(
+        mod._presentation_effects.render_cp_completion_feedback(
             new={"cp": "15d~0d", "link": 2, "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
@@ -28102,7 +28118,7 @@ def test_on_modify_render_cp_completion_feedback_text_mode():
     prev_panel_mode = mod.core.PANEL_MODE
     try:
         mod.core.PANEL_MODE = "text"
-        mod._render_cp_completion_feedback(
+        mod._presentation_effects.render_cp_completion_feedback(
             new={"cp": "P1D", "uuid": "00000000-0000-4000-8000-000000000111", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_due=mod.core.now_utc(),
@@ -31387,7 +31403,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
         deferred_spawn=False,
         spawn_intent_id=None,
     )
-    mod._render_cp_completion_feedback = lambda **_k: None
+    mod._presentation_effects.render_cp_completion_feedback = lambda **_k: None
     mod._chain_health_advice = lambda *_a, **_k: None
     mod._append_next_wait_sched_rows = lambda *_a, **_k: None
     mod._module("lifecycle_read_service").clear_cached_chain_exports()

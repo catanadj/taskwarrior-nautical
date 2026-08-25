@@ -169,6 +169,13 @@ class EffectBoundaryTests(unittest.TestCase):
         view = PanelView("Nautical workflow", "note", (("Warning", "x"),))
         self.assertFalse(render_panel_view(view, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ui"))))
 
+    def test_production_feedback_paths_use_shared_renderer(self) -> None:
+        import inspect
+        from nautical_core import modify_feedback
+
+        source = inspect.getsource(modify_feedback)
+        self.assertGreaterEqual(source.count("render_panel_view("), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

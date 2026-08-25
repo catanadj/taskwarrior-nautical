@@ -8,6 +8,7 @@ from typing import Any
 from .task_models import TaskPayload
 from .modify_models import TaskView
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
+from .feedback_renderer import PanelView, render_panel_view
 
 
 def append_next_wait_sched_rows(
@@ -99,7 +100,7 @@ def render_cp_schedule_adjusted_panel(
         for field, _old_value, _new_value, offset in field_adjustments
     )
     rows.append(("Offset" if len(field_adjustments) == 1 else "Offsets", offset_text))
-    panel("⚓ Nautical schedule adjusted", rows, kind="note")
+    render_panel_view(PanelView("⚓ Nautical schedule adjusted", "note", tuple(rows)), panel)
 
 
 def render_explicit_timing_order_warning(
@@ -142,7 +143,7 @@ def render_explicit_timing_order_warning(
     ]
     rows.extend(("Problem", issue) for issue in issues)
     rows.append(("Action", action))
-    panel("⚠ Nautical timing order", rows, kind="warning")
+    render_panel_view(PanelView("⚠ Nautical timing order", "warning", tuple(rows)), panel)
 
 
 def _recurrence_update_label(field: str) -> str:
@@ -306,7 +307,7 @@ def render_recurrence_updated_panel(
         panel_mode=panel_mode,
         strip_markup=strip_markup,
     )
-    panel("⚓ Nautical recurrence updated", rows, kind="note")
+    render_panel_view(PanelView("⚓ Nautical recurrence updated", "note", tuple(rows)), panel)
 
 
 def recurrence_enabled_rows(

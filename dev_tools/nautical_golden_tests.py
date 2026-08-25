@@ -13332,8 +13332,7 @@ def test_year_ordinals_hooks_modes_calendar_and_timeline():
     expect(mod.core.to_local(child_due).date() == date(2027, 5, 17), f"completion lost ISO-week weekday: {child_due}")
 
     saved_collect = getattr(mod, "_collect_prev_two", None)
-    if saved_collect is not None:
-        mod._collect_prev_two = lambda _task: []
+    mod._collect_prev_two = lambda _task: []
     try:
         lines = _call_with_supported_kwargs(
             mod._timeline_lines,
@@ -13356,6 +13355,8 @@ def test_year_ordinals_hooks_modes_calendar_and_timeline():
     finally:
         if saved_collect is not None:
             mod._collect_prev_two = saved_collect
+        else:
+            delattr(mod, "_collect_prev_two")
     timeline = _strip_markup("\n".join(lines))
     expect("2027-05-17" in timeline, f"timeline omitted ordinal child: {timeline}")
     expect("2028-05-15" in timeline, f"timeline omitted future ordinal occurrence: {timeline}")
@@ -18942,8 +18943,7 @@ def test_hook_on_modify_timeline_multitime_includes_all_slots():
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate timeline stepping.")
     # Avoid external calls for prev collection in unit context.
-    if hasattr(mod, "_collect_prev_two"):
-        setattr(mod, "_collect_prev_two", lambda _task: [])
+    setattr(mod, "_collect_prev_two", lambda _task: [])
     expr = "w:mon..sun@t=06:00,12:00,22:00"
     dnf = core.validate_anchor_expr_strict(expr)
     # Simulate a chain where the next due is at 22:00 on a given day.
@@ -18987,8 +18987,7 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_sequence_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp sequence timeline.")
-    if hasattr(mod, "_collect_prev_two"):
-        setattr(mod, "_collect_prev_two", lambda _task: [])
+    setattr(mod, "_collect_prev_two", lambda _task: [])
     evaluator_calls = {"count": 0}
     schedule = mod._module("modify_schedule_effects")
     original_callbacks = schedule.scheduler_callbacks
@@ -32317,11 +32316,8 @@ def test_position_selection_on_add_and_modify_completion():
 def test_position_selection_modify_timeline_projects_future_dates():
     """Modify timelines should project future positional-selection occurrences."""
     mod = _hook
-    if hasattr(mod, "_collect_prev_two"):
-        saved_collect = mod._collect_prev_two
-        mod._collect_prev_two = lambda _task: []
-    else:
-        saved_collect = None
+    saved_collect = getattr(mod, "_collect_prev_two", None)
+    mod._collect_prev_two = lambda _task: []
     expr = "(w:tue | w:thu)@in-month=last"
     dnf = core.validate_anchor_expr_strict(expr)
     task = {
@@ -32349,6 +32345,8 @@ def test_position_selection_modify_timeline_projects_future_dates():
     finally:
         if saved_collect is not None:
             mod._collect_prev_two = saved_collect
+        else:
+            delattr(mod, "_collect_prev_two")
     text = _strip_markup("\n".join(lines))
     expect("2026-08-27" in text, f"timeline omitted next positional date: {text}")
     expect("2026-09-29" in text, f"timeline omitted future positional date: {text}")
@@ -32473,8 +32471,7 @@ def test_position_selection_post_modifiers_modify_completion():
     expect(child_dnf[0][0].get("mods", {}).get("day_offset") == 2, "completion lost selector mods")
 
     saved_collect = getattr(mod, "_collect_prev_two", None)
-    if saved_collect is not None:
-        mod._collect_prev_two = lambda _task: []
+    mod._collect_prev_two = lambda _task: []
     try:
         lines = _call_with_supported_kwargs(
             mod._timeline_lines,
@@ -32497,6 +32494,8 @@ def test_position_selection_post_modifiers_modify_completion():
     finally:
         if saved_collect is not None:
             mod._collect_prev_two = saved_collect
+        else:
+            delattr(mod, "_collect_prev_two")
     timeline = _strip_markup("\n".join(lines))
     expect("2026-08-29" in timeline, f"timeline omitted transformed child: {timeline}")
     expect("2026-10-01" in timeline, f"timeline omitted next transformed date: {timeline}")
@@ -33287,8 +33286,7 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         expect(child.get("chainID") == "season123", f"child lost chain identity: {child}")
 
         saved_collect = getattr(mod, "_collect_prev_two", None)
-        if saved_collect is not None:
-            mod._collect_prev_two = lambda _task: []
+        mod._collect_prev_two = lambda _task: []
         try:
             lines = _call_with_supported_kwargs(
                 mod._timeline_lines,
@@ -33304,6 +33302,8 @@ def test_seasonal_selection_modify_modes_times_and_timeline():
         finally:
             if saved_collect is not None:
                 mod._collect_prev_two = saved_collect
+            else:
+                delattr(mod, "_collect_prev_two")
         timeline = _strip_markup("\n".join(lines))
         expect("2027-03-01" in timeline, f"timeline omitted seasonal child: {timeline}")
         expect("2027-05-31" in timeline, f"timeline omitted later spring slot: {timeline}")

@@ -1658,34 +1658,6 @@ def _lifecycle_read_service():
     return service
 
 
-def _seed_runtime_lookup_task(task: dict | None, *, lookup_short: str | None = None) -> dict | None:
-    if not isinstance(task, dict):
-        return None
-    uuid_str = str(task.get("uuid") or "").strip()
-    if not uuid_str:
-        return None
-    short = uuid_str[:8]
-    service = _lifecycle_read_service()
-    task_codec = _module("task_codec")
-    observation = task_codec.DEFAULT_TASK_CODEC.decode_row(
-        task,
-        source_query="on-modify lookup seed",
-    )
-    task_obj = service.seed_lookup_task(observation, short_uuid=short)
-    requested_short = str(lookup_short or "").strip()
-    if requested_short and requested_short != short:
-        task_obj = service.seed_lookup_task(task_obj, short_uuid=requested_short)
-    entry = task_obj.get("entry")
-    if short and entry:
-        _query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
-    return task_obj.to_mapping()
-
-
-def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
-    for task in tasks:
-        _seed_runtime_lookup_task(task)
-
-
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------

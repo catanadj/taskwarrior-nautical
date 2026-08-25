@@ -108,6 +108,14 @@ class ModifyWorkflowTests(unittest.TestCase):
         decision = ChainCompletionDecision("recurrence removed", "manual_off")
         self.assertIn(("chain_completed", "true"), decision.feedback_facts)
 
+    def test_recurring_intent_matrix_keeps_local_edits_scheduler_free(self) -> None:
+        root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        local = classify_modify_transition(transition(root, dict(root, description="note")))
+        carry = classify_modify_transition(transition(root, dict(root, due="20260826T090000Z")))
+        self.assertFalse(recurring_edit_intent(local).scheduler_required)
+        self.assertFalse(recurring_edit_intent(local).carry_required)
+        self.assertTrue(recurring_edit_intent(carry).carry_required)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,7 @@ class OnModifyRequest:
     old_observation: TaskObservation | None = None
     new_observation: TaskObservation | None = None
     transition: TaskTransition | None = None
+    terminal_decision: Any | None = None
 
 
 @dataclass(slots=True)

@@ -8,6 +8,7 @@ from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 from nautical_core.task_models import TaskTimestamp
 from nautical_core.modify_models import CompletionLifecycleResult
+from nautical_core.hook_context import OnModifyRequest
 from nautical_core.hook_validation_pipeline import (
     recurrence_kind_conflict,
     reject_recurrence_kind_conflict,
@@ -76,6 +77,14 @@ class ModifyWorkflowTests(unittest.TestCase):
             self.assertEqual(decision.event, event)
             self.assertEqual(decision.durable_state, "disabled")
             self.assertIn(("terminal_route", kind.value), decision.feedback_facts)
+
+    def test_modify_request_can_carry_terminal_decision(self) -> None:
+        active = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        route = classify_modify_transition(transition(active, dict(active, chain="off")))
+        decision = terminal_decision_for_route(route)
+        request = OnModifyRequest(runtime=None, old=active, new=dict(active, chain="off"))
+        request.terminal_decision = decision
+        self.assertEqual(request.terminal_decision, decision)
 
     def test_volatile_only_reentry_is_marked_as_evidence(self) -> None:
         active = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

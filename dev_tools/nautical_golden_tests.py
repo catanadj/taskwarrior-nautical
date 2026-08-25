@@ -15337,6 +15337,17 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
         ("w:sun@t=09:00", "w:sun", date(2026, 3, 22), date(2026, 3, 29)),
     ]
     chain_id = "modifier-boundary"
+    def next_preview(dnf, current_local, fallback_hhmm, interval_seed):
+        return add_mod._module("add_anchor_compute").anchor_next_occurrence_after_local_dt(
+            dnf,
+            current_local,
+            fallback_hhmm,
+            interval_seed,
+            chain_id,
+            core=add_mod.core,
+            norm_t_mod=add_mod._norm_t_mod,
+            resolve_time_slots=add_mod._resolve_time_slots,
+        )
 
     for expr, omit_expr, current_day, expected_next_day in cases:
         dnf = add_mod.core.validate_anchor_expr_strict(expr)
@@ -15348,13 +15359,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
         current_utc = add_mod.core.build_local_datetime(current_day, first_slot).astimezone(timezone.utc)
         current_local = add_mod.core.to_local(current_utc)
 
-        preview_next = add_mod._anchor_next_occurrence_after_local_dt(
-            dnf,
-            current_local,
-            first_slot,
-            current_day,
-            chain_id,
-        )
+        preview_next = next_preview(dnf, current_local, first_slot, current_day)
         expect(preview_next is not None, f"{expr}: preview did not find the next occurrence")
         expect(preview_next > current_local, f"{expr}: preview did not advance strictly: {preview_next}")
         expect(preview_next.date() == expected_next_day, f"{expr}: unexpected preview date {preview_next.date()}")
@@ -15373,13 +15378,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
         completion_next = modify_mod.core.to_local(child_due)
         expect(completion_next == preview_next, f"{expr}: completion {completion_next} != preview {preview_next}")
 
-        preview_after_child = add_mod._anchor_next_occurrence_after_local_dt(
-            dnf,
-            preview_next,
-            expected_hhmm,
-            current_day,
-            chain_id,
-        )
+        preview_after_child = next_preview(dnf, preview_next, expected_hhmm, current_day)
         timeline_items = modify_timeline._timeline_future_anchor_items(
             parent,
             completion_dnf,
@@ -15412,13 +15411,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
 
     dst_dnf = add_mod.core.validate_anchor_expr_strict("w:sun@t=09:00")
     before_dst = add_mod.core.to_local(add_mod.core.build_local_datetime(date(2026, 3, 22), (9, 0)))
-    after_dst = add_mod._anchor_next_occurrence_after_local_dt(
-        dst_dnf,
-        before_dst,
-        (9, 0),
-        date(2026, 3, 22),
-        chain_id,
-    )
+    after_dst = next_preview(dst_dnf, before_dst, (9, 0), date(2026, 3, 22))
     expect((after_dst.hour, after_dst.minute) == (9, 0), f"DST transition changed anchor wall clock: {after_dst}")
 
 
@@ -16742,7 +16735,8 @@ def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
         ("rand(12h..36h)", 5),
     ):
         tokens = core.parse_cp_sequence_tokens(cp)
-        add_td = add_mod._cp_sequence_period_for_link(tokens, cp, link_no, chain_id)
+        add_preview = add_mod._module("add_preview_composition")
+        add_td = add_preview.cp_sequence_period_for_link(add_mod, tokens, cp, link_no, chain_id)
         modify_td = modify_mod._cp_sequence_period_for_link(tokens, cp, link_no, chain_id)
         core_td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
         expect(add_td == modify_td == core_td, f"cp interval mismatch for {cp!r} link {link_no}: add={add_td}, modify={modify_td}, core={core_td}")
@@ -17836,16 +17830,11 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
     panels = []
     service_cls = importlib.import_module("nautical_core.scheduler_service").SchedulerService
     original_from_task = service_cls.__dict__["from_task"]
-    original_next = mod._anchor_next_occurrence_after_local_dt
-
     def fail_from_task(cls, *args, **kwargs):
         raise RuntimeError("astronomy profile is unavailable")
 
     try:
         service_cls.from_task = classmethod(fail_from_task)
-        mod._anchor_next_occurrence_after_local_dt = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("legacy scheduler fallback was called")
-        )
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
         try:
             mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
@@ -17855,7 +17844,6 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
             raise AssertionError("evaluator initialization failure was accepted")
     finally:
         service_cls.from_task = original_from_task
-        mod._anchor_next_occurrence_after_local_dt = original_next
 
     expect(panels and panels[-1][0] == "❌ Invalid Chain", f"missing evaluator error panel: {panels!r}")
     rows = panels[-1][1]
@@ -17927,29 +17915,13 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
     }
     ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
     captured = {}
-    original = (
-        mod._anchor_pick_occurrence_local,
-        mod._anchor_next_occurrence_after_local_dt,
-        mod._fmt_local_for_task,
-        mod._panel,
-    )
-
-    def fail_legacy(*_args, **_kwargs):
-        raise AssertionError("legacy occurrence callback was called")
-
+    original = (mod._fmt_local_for_task, mod._panel)
     try:
-        mod._anchor_pick_occurrence_local = fail_legacy
-        mod._anchor_next_occurrence_after_local_dt = fail_legacy
         mod._fmt_local_for_task = mod.core.fmt_isoz
         mod._panel = lambda title, rows, **kwargs: captured.update({"title": title, "rows": list(rows)})
         mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
     finally:
-        (
-            mod._anchor_pick_occurrence_local,
-            mod._anchor_next_occurrence_after_local_dt,
-            mod._fmt_local_for_task,
-            mod._panel,
-        ) = original
+        mod._fmt_local_for_task, mod._panel = original
 
     expect(task.get("due"), f"evaluator preview did not assign due: {captured!r}")
     expect(captured.get("title") == "⚓︎ Anchor Preview", f"evaluator preview did not render: {captured!r}")
@@ -20661,7 +20633,8 @@ def test_cap_from_until_cp_includes_exact_deadline():
         mod._load_core()
 
     next_due = mod.core.build_local_datetime(date(2026, 1, 2), (9, 0)).astimezone(timezone.utc)
-    exact_until = mod._cp_add_td(next_due, timedelta(days=1))
+    add_preview = mod._module("add_preview_composition")
+    exact_until = add_preview.cp_add_td(mod, next_due, timedelta(days=1))
     task = {
         "cp": "1d",
         "link": 1,
@@ -21426,6 +21399,21 @@ def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
     ]
 
     chain_id = "agree1234"
+    anchor_compute = add_mod._module("add_anchor_compute")
+
+    def compute_preview_next(dnf, current, fallback_hhmm, interval_seed, seed_base, omit_dnf):
+        return anchor_compute.anchor_next_occurrence_after_local_dt(
+            dnf,
+            current,
+            fallback_hhmm,
+            interval_seed,
+            seed_base,
+            omit_dnf=omit_dnf,
+            core=add_mod.core,
+            norm_t_mod=add_mod._norm_t_mod,
+            resolve_time_slots=add_mod._resolve_time_slots,
+        )
+
     for expr, omit_expr, due_day, fallback_hhmm in cases:
         due_utc = modify_mod.core.build_local_datetime(due_day, fallback_hhmm).astimezone(timezone.utc)
         due_local = modify_mod.core.to_local(due_utc)
@@ -21441,7 +21429,7 @@ def test_on_add_preview_and_completion_skip_choose_same_next_anchor():
         preview_current = due_local
         completion_current = due_local
         for step in range(4):
-            preview_next = add_mod._anchor_next_occurrence_after_local_dt(
+            preview_next = compute_preview_next(
                 dnf,
                 preview_current,
                 fallback_hhmm,

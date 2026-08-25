@@ -616,6 +616,12 @@ def _load_hook_module(path: str, module_name: str):
     return mod
 
 
+def _modify_effect(hook, name, *args, **kwargs):
+    """Invoke an extracted typed modify effect for focused behavior tests."""
+    effects = importlib.import_module("nautical_core.modify_effects")
+    return getattr(effects, name)(hook, *args, **kwargs)
+
+
 def _generation_service(hook):
     """Return the public chain-generation service used by hook tests."""
     from nautical_core.chain_generation import ChainGenerationService
@@ -7626,7 +7632,7 @@ def test_on_modify_promotes_chain_emits_upgrade_panel():
 
         mod._panel = fake_panel
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -7662,7 +7668,7 @@ def test_on_modify_promotes_cp_emits_period_explanation():
             title=title, rows=list(rows), kind=kind
         )
         mod._print_task = lambda task: None
-        mod._handle_non_completion_modify(old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
     finally:
         mod._panel = original_panel
         mod._print_task = original_print_task
@@ -7722,7 +7728,7 @@ def test_on_modify_disables_chain_emits_disabled_panel():
 
             mod._panel = fake_panel
             mod._print_task = lambda task: captured.setdefault("task", dict(task))
-            mod._handle_non_completion_modify(old, new, _test_operator_uow())
+            _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
         finally:
             mod._panel = orig_panel
             mod._print_task = orig_print_task
@@ -7779,7 +7785,7 @@ def test_on_modify_resumes_chain_emits_resumed_panel():
 
         mod._panel = fake_panel
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -7850,7 +7856,7 @@ def test_on_modify_recurrence_update_emits_ack_panel():
 
         mod._panel = fake_panel
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -7929,7 +7935,7 @@ def test_on_modify_native_until_update_explains_carry():
     try:
         mod._panel = lambda title, rows, *, kind=None: captured.update(title=title, rows=list(rows), kind=kind)
         mod._print_task = lambda task: captured.setdefault("task", dict(task))
-        mod._handle_non_completion_modify(old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -7968,8 +7974,8 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     try:
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
-        mod._handle_non_completion_modify(old, new, _test_operator_uow())
-        mod._handle_non_completion_modify(new, cleared, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", new, cleared, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -8506,7 +8512,7 @@ def test_on_modify_expiration_internal_failure_remains_recoverable():
         )
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._end_chain_summary = lambda *_args, **_kwargs: stopped.append(True)
-        mod._handle_deleted_modify(old, new, _test_operator_uow())
+        _modify_effect(mod, "handle_deleted", old, new, _test_operator_uow())
     finally:
         expiration.handle_expired_deleted_modify, mod._panel, mod._end_chain_summary = original
 
@@ -18267,7 +18273,7 @@ def test_on_modify_completion_reschedule_carries_native_until():
     try:
         mod._completion_preflight_context = lambda *_args, **_kwargs: None
         for new, expected_until in cases:
-            mod._handle_completion_modify(old, new, _test_operator_uow())
+            _modify_effect(mod, "handle_completion", old, new, _test_operator_uow())
             expect(new.get("until") == expected_until, f"completion reschedule lost expiration carry: {new!r}")
     finally:
         mod._completion_preflight_context = original_preflight
@@ -20072,23 +20078,23 @@ def test_on_modify_cp_due_edit_preserves_relative_offsets():
     try:
         mod._print_task = lambda _task: None
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
-        mod._handle_non_completion_modify(old, due_only, _test_operator_uow())
-        mod._handle_non_completion_modify(old, explicit_scheduled, _test_operator_uow())
-        mod._handle_non_completion_modify(old, explicit_wait, _test_operator_uow())
-        mod._handle_non_completion_modify(old, explicit_both, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, due_only, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, explicit_scheduled, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, explicit_wait, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, explicit_both, _test_operator_uow())
         for invalid_old, invalid in (
             (old, malformed),
             (malformed_scheduled_old, malformed_scheduled),
             (malformed_wait_old, malformed_wait),
         ):
             try:
-                mod._handle_non_completion_modify(invalid_old, invalid, _test_operator_uow())
+                _modify_effect(mod, "handle_non_completion", invalid_old, invalid, _test_operator_uow())
             except SystemExit as exc:
                 expect(exc.code == 1, f"carry failure exited with unexpected status: {exc.code!r}")
             else:
                 raise AssertionError(f"malformed carry was accepted: {invalid!r}")
         mod._completion_preflight_context = lambda *_args, **_kwargs: None
-        mod._handle_completion_modify(old, completed, _test_operator_uow())
+        _modify_effect(mod, "handle_completion", old, completed, _test_operator_uow())
     finally:
         mod._print_task = orig_print_task
         mod._completion_preflight_context = orig_preflight
@@ -20190,8 +20196,8 @@ def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
         mod._print_task = lambda _task: None
         for changed, _expected, _problem in cases:
             base = scheduled_only if "due" not in changed else old
-            mod._handle_non_completion_modify(base, changed, _test_operator_uow())
-        mod._handle_non_completion_modify(old, valid, _test_operator_uow())
+            _modify_effect(mod, "handle_non_completion", base, changed, _test_operator_uow())
+        _modify_effect(mod, "handle_non_completion", old, valid, _test_operator_uow())
     finally:
         mod._panel = orig_panel
         mod._print_task = orig_print_task
@@ -20904,7 +20910,7 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
             return original["import_module"](name)
 
         mod.importlib.import_module = fake_import
-        result = mod._handle_completion_modify(
+        result = _modify_effect(mod, "handle_completion", 
             {"uuid": "parent", "status": "pending"},
             {"uuid": "parent", "status": "completed"},
             _test_operator_uow(),
@@ -21033,7 +21039,7 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
     try:
         sys.stdin = io.TextIOWrapper(io.BytesIO(stdin_raw.encode("utf-8")), encoding="utf-8")
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            mod._handle_completion_modify(old, new, _test_operator_uow())
+            _modify_effect(mod, "handle_completion", old, new, _test_operator_uow())
     finally:
         sys.stdin = orig_stdin
 
@@ -31372,7 +31378,7 @@ def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
     uow.client = Client()
 
     try:
-        mod._handle_completion_modify(old, new, uow)
+        _modify_effect(mod, "handle_completion", old, new, uow)
     finally:
         mod.core.PANEL_MODE = prev_panel_mode
 

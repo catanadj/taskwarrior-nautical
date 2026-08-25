@@ -17832,7 +17832,7 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
         "chain": "on",
         "chainID": "00000000",
     }
-    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
     panels = []
     service_cls = importlib.import_module("nautical_core.scheduler_service").SchedulerService
     original_from_task = service_cls.__dict__["from_task"]
@@ -17848,7 +17848,7 @@ def test_on_add_preview_fails_closed_when_evaluator_initialization_fails():
         )
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
         try:
-            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
             expect(exc.code == 1, f"unexpected evaluator failure exit code: {exc.code!r}")
         else:
@@ -17878,7 +17878,7 @@ def test_on_add_preview_reports_scheduler_exhaustion_actionably():
         "chain": "on",
         "chainID": "00000000",
     }
-    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
     panels = []
     preview = mod._module("add_anchor_preview")
     original_preview = preview.handle_anchor_preview_on_add
@@ -17893,7 +17893,7 @@ def test_on_add_preview_reports_scheduler_exhaustion_actionably():
         preview.handle_anchor_preview_on_add = fail_preview
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
         try:
-            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
             expect(exc.code == 1, f"unexpected scheduler exhaustion exit code: {exc.code!r}")
         else:
@@ -17925,7 +17925,7 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
         "chain": "on",
         "chainID": "00000000",
     }
-    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
     captured = {}
     original = (
         mod._anchor_pick_occurrence_local,
@@ -17942,7 +17942,7 @@ def test_on_add_preview_uses_evaluator_for_first_due_and_upcoming_rows():
         mod._anchor_next_occurrence_after_local_dt = fail_legacy
         mod._fmt_local_for_task = mod.core.fmt_isoz
         mod._panel = lambda title, rows, **kwargs: captured.update({"title": title, "rows": list(rows)})
-        mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+        mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
     finally:
         (
             mod._anchor_pick_occurrence_local,
@@ -17975,13 +17975,13 @@ def test_on_add_native_until_checks_generated_anchor_due():
         "link": 1,
         "until": mod.core.fmt_isoz(first_due - timedelta(seconds=1)),
     }
-    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
     panels = []
     original = mod._panel
     try:
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
         try:
-            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
             expect(exc.code == 1, f"unexpected generated-anchor rejection code: {exc.code!r}")
         else:
@@ -18027,13 +18027,13 @@ def test_on_add_chain_until_rejects_before_first_anchor_occurrence():
         "link": 1,
         "chainUntil": mod.core.fmt_isoz(now_utc + timedelta(hours=12)),
     }
-    ctx = mod._build_on_add_context(task, now_utc, mod.core.to_local(now_utc))
+    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, mod.core.to_local(now_utc))
     panels = []
     original = mod._panel
     try:
         mod._panel = lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs))
         try:
-            mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+            mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
         except SystemExit as exc:
             expect(exc.code == 1, f"unexpected chainUntil rejection code: {exc.code!r}")
         else:
@@ -18486,14 +18486,14 @@ def test_on_add_anchor_preview_auto_assigns_when_due_matches_entry():
     }
     now_utc = mod.core.parse_dt_any(task["entry"])
     now_local = mod.core.to_local(now_utc)
-    ctx = mod._build_on_add_context(task, now_utc, now_local)
+    ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
     expect(not ctx.user_provided_due, f"build_on_add_context should treat due==entry as implicit: {ctx!r}")
 
     captured = {}
     orig_panel = mod._panel
     try:
         mod._panel = lambda title, rows, **_k: captured.update({"title": title, "rows": list(rows)})
-        mod._handle_anchor_preview_on_add_context(ctx, prof=mod._NoopProfiler())
+        mod._module("add_composition").render_anchor_preview(mod, ctx, prof=mod._NoopProfiler())
     finally:
         mod._panel = orig_panel
 
@@ -26582,7 +26582,7 @@ def test_on_add_anchor_and_anchor_file_can_coexist():
             }
             now_utc = mod.core.now_utc()
             now_local = mod.core.to_local(now_utc)
-            ctx = mod._build_on_add_context(task, now_utc, now_local)
+            ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
             expect(ctx.kind == "anchor", f"expected combined anchor kind, got {ctx.kind!r}")
         finally:
             mod.core.ANCHOR_FILE_DIR = old_dir
@@ -26660,7 +26660,7 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
             }
             now_utc = mod.core.parse_dt_any("2026-04-12T09:00:00Z")
             now_local = mod.core.to_local(now_utc)
-            ctx = mod._build_on_add_context(task, now_utc, now_local)
+            ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
             expect(ctx.kind == "anchor_file", f"expected anchor_file kind, got {ctx.kind!r}")
             expect(not ctx.user_provided_due, f"expected implicit due, got {ctx!r}")
 
@@ -26668,7 +26668,7 @@ def test_hook_on_add_anchor_file_preview_auto_assigns_first_match():
             saved_panel = mod._panel
             try:
                 mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
-                mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
+                mod._module("add_composition").render_anchor_preview(mod, ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
             finally:
                 mod._panel = saved_panel
 
@@ -26702,12 +26702,12 @@ def test_hook_on_add_anchor_and_anchor_file_preview_uses_earliest_union_match():
             }
             now_utc = mod.core.parse_dt_any("2026-04-12T09:00:00Z")
             now_local = mod.core.to_local(now_utc)
-            ctx = mod._build_on_add_context(task, now_utc, now_local)
+            ctx = mod._module("add_composition").build_on_add_context(mod, task, now_utc, now_local)
             captured = {}
             saved_panel = mod._panel
             try:
                 mod._panel = lambda _title, rows, **_kwargs: captured.setdefault("rows", rows)
-                mod._handle_anchor_preview_on_add_context(ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
+                mod._module("add_composition").render_anchor_preview(mod, ctx, prof=type("P", (), {"add_ms": lambda *_a, **_k: None})())
             finally:
                 mod._panel = saved_panel
             due_val = task.get("due")

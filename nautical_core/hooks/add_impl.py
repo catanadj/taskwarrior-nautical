@@ -1450,28 +1450,6 @@ def _anchor_preview_lint_and_validate(anchor_str: str, prof) -> None:
     )
 
 
-def _anchor_preview_limit_rows(
-    rows: list[tuple[str, str]],
-    *,
-    cpmax: int,
-    until_dt: datetime | None,
-    exact_until_count: int | None,
-    final_until_dt: datetime | None,
-    now_utc: datetime,
-) -> None:
-    add_anchor_preview = _module("add_anchor_preview")
-    add_anchor_preview.anchor_preview_limit_rows(
-        rows,
-        cpmax=cpmax,
-        until_dt=until_dt,
-        exact_until_count=exact_until_count,
-        final_until_dt=final_until_dt,
-        now_utc=now_utc,
-        core=core,
-        human_delta=_human_delta,
-    )
-
-
 class _NoopProfiler:
     enabled = False
 
@@ -1576,33 +1554,6 @@ def _apply_description_uda_aliases(task: dict) -> None:
     except ValueError as exc:
         _error_and_exit([("Invalid UDA alias", str(exc))])
         return
-
-
-def _build_on_add_context(task, now_utc, now_local, *, observation=None, prof=None):
-    """Compatibility entry point for focused tests; logic lives in composition."""
-    composition = _module("add_composition")
-    return composition.build_on_add_context(
-        sys.modules.get(__name__, SimpleNamespace(**globals())),
-        task,
-        now_utc,
-        now_local,
-        observation=observation,
-        prof=prof,
-    )
-
-
-def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
-    composition = _module("add_composition")
-    composition.render_anchor_preview(
-        sys.modules.get(__name__, SimpleNamespace(**globals())), ctx, prof=prof
-    )
-
-
-def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
-    composition = _module("add_composition")
-    composition.render_cp_preview(
-        sys.modules.get(__name__, SimpleNamespace(**globals())), ctx, prof=prof
-    )
 
 
 def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:

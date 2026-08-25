@@ -173,14 +173,15 @@ def warn_unreasonable_duration(host: Any, new: TaskPayload, child_due, until_dt,
 
 
 def caps(host: Any, kind: str, new: TaskPayload, child_due, dnf):
+    schedule = host._module("modify_schedule_effects")
     return host._module("modify_completion_compute").completion_caps(
         kind, new, child_due, dnf,
         coerce_int=host.core.coerce_int,
         dtparse=host._dtparse,
-        estimate_cp_final_by_max=host._estimate_cp_final_by_max,
-        estimate_anchor_final_by_max=host._estimate_anchor_final_by_max,
-        cap_from_until_cp=host._cap_from_until_cp,
-        cap_from_until_anchor=host._cap_from_until_anchor,
+        estimate_cp_final_by_max=lambda task, due: schedule.estimate_cp_final_by_max(host, task, due),
+        estimate_anchor_final_by_max=lambda task, due, expression: schedule.estimate_anchor_final_by_max(host, task, due, expression),
+        cap_from_until_cp=lambda task, due: schedule.cap_from_until_cp(host, task, due),
+        cap_from_until_anchor=lambda task, due, expression: schedule.cap_from_until_anchor(host, task, due, expression),
     )
 
 

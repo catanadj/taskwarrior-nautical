@@ -816,6 +816,12 @@ _MODULE_SPECS = {
         "modify_validation_effects.py",
         "nautical_core.modify_validation_effects",
     ),
+    "modify_schedule_effects": (
+        "_MODIFY_SCHEDULE_EFFECTS",
+        "_MODIFY_SCHEDULE_EFFECTS_LOAD_FAILED",
+        "modify_schedule_effects.py",
+        "nautical_core.modify_schedule_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -2147,38 +2153,6 @@ def _anchor_included_occurrences(
     )
 
 
-def _estimate_cp_final_by_max(task: dict, next_due_utc):
-    return _module("modify_completion_compute").estimate_cp_final_by_max(
-        task,
-        next_due_utc,
-        coerce_int=core.coerce_int,
-        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
-        sequence_period_for_link=_cp_sequence_period_for_link,
-        add_period=_cp_add_td,
-        max_iterations=_MAX_ITERATIONS,
-        diagnostic=_diag,
-    )
-
-
-def _estimate_anchor_final_by_max(task: dict, next_due_utc, dnf):
-    return _module("modify_completion_compute").estimate_anchor_final_by_max(
-        task,
-        next_due_utc,
-        dnf,
-        coerce_int=core.coerce_int,
-        recurrence_seed_base=_recurrence_seed_base,
-        to_local_cached=_to_local_cached,
-        safe_parse_datetime=_safe_parse_datetime,
-        anchor_file_fallback_hhmm=_anchor_file_fallback_hhmm,
-        omit_dnf_from_parent=_omit_dnf_from_parent,
-        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
-        anchor_file_provider_for=_anchor_file_provider_for,
-        anchor_included_occurrences=_anchor_included_occurrences,
-        diagnostic=_diag,
-        max_iterations=_MAX_ITERATIONS,
-    )
-
-
 # Helper to validate chainUntil is in the future
 def _validate_until_not_past(
     until_dt: datetime, now_utc: datetime
@@ -2264,39 +2238,6 @@ def _recurrence_anchor_field(task: dict | None) -> str:
 # ------------------------------------------------------------------------------
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
-
-# chainUntil -> numeric cap and final permitted occurrence
-def _cap_from_until_cp(task, next_due_utc):
-    return _module("modify_completion_compute").cap_from_until_cp(
-        task,
-        next_due_utc,
-        parse_datetime=_dtparse,
-        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
-        coerce_int=core.coerce_int,
-        sequence_period_for_link=_cp_sequence_period_for_link,
-        add_period=_cp_add_td,
-        max_iterations=_MAX_ITERATIONS,
-    )
-
-
-def _cap_from_until_anchor(task, next_due_utc, dnf):
-    return _module("modify_completion_compute").cap_from_until_anchor(
-        task,
-        next_due_utc,
-        dnf,
-        parse_datetime=_dtparse,
-        coerce_int=core.coerce_int,
-        recurrence_seed_base=_recurrence_seed_base,
-        to_local_cached=_to_local_cached,
-        safe_parse_datetime=_safe_parse_datetime,
-        anchor_file_fallback_hhmm=_anchor_file_fallback_hhmm,
-        omit_dnf_from_parent=_omit_dnf_from_parent,
-        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
-        anchor_file_provider_for=_anchor_file_provider_for,
-        anchor_included_occurrences=_anchor_included_occurrences,
-        compare_datetimes=_compare_datetimes,
-        max_iterations=_MAX_ITERATIONS,
-    )
 
 def _safe_dt(v):
     try:

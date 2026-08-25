@@ -618,6 +618,11 @@ def _load_hook_module(path: str, module_name: str):
         mod._transition_effects = _BoundTransitionEffects(mod)
         mod._presentation_effects = _BoundPresentationEffects(mod)
         mod._diagnostics_effects = _BoundDiagnosticsEffects(mod)
+        schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
+        mod._estimate_cp_final_by_max = lambda task, due: schedule_effects.estimate_cp_final_by_max(mod, task, due)
+        mod._estimate_anchor_final_by_max = lambda task, due, dnf: schedule_effects.estimate_anchor_final_by_max(mod, task, due, dnf)
+        mod._cap_from_until_cp = lambda task, due: schedule_effects.cap_from_until_cp(mod, task, due)
+        mod._cap_from_until_anchor = lambda task, due, dnf: schedule_effects.cap_from_until_anchor(mod, task, due, dnf)
         def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
             return mod._presentation_effects.timeline_lines(
                 kind, task, child_due_utc, child_short, dnf, **kwargs
@@ -23354,7 +23359,10 @@ def test_modify_until_projection_reuses_anchor_file_provider():
             "chainUntil": "20260805T090000Z",
             "anchor_file": "calendar.csv",
         }
-        final_no, final_dt = _hook._cap_from_until_anchor(task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None)
+        schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
+        final_no, final_dt = schedule_effects.cap_from_until_anchor(
+            _hook, task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None
+        )
         expect(final_no == 6, f"unexpected capped link number: {final_no!r}")
         expect(final_dt is not None, "until projection did not produce a final occurrence")
         expect(len(builders) == 1, f"anchor file provider was rebuilt {len(builders)} times")
@@ -23386,7 +23394,10 @@ def test_modify_until_projection_fails_closed_at_iteration_limit():
             "chainUntil": "20350801T090000Z",
         }
         try:
-            _hook._cap_from_until_anchor(task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None)
+            schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
+            schedule_effects.cap_from_until_anchor(
+                _hook, task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None
+            )
         except ValueError as exc:
             expect("projection exceeded" in str(exc), f"unexpected iteration-limit error: {exc}")
         else:

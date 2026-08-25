@@ -30,6 +30,8 @@ from .query_models import (
     TaskOccurrenceResult,
 )
 from .parser_models import ParseError
+from .hook_validation_pipeline import ValidationStatus, validate_task_mapping
+from .hook_workflow_models import WorkflowRoute
 
 
 class QueryServiceError(RuntimeError):
@@ -400,6 +402,23 @@ class OccurrenceQueryService:
                 ),
             )
         try:
+            _validated, validation_report = validate_task_mapping(
+                task.to_mapping(),
+                route=WorkflowRoute.RECURRING_EDIT,
+                source_query="query validation",
+            )
+            if validation_report.status is not ValidationStatus.VALID:
+                finding = validation_report.findings[0]
+                return TaskOccurrenceResult(
+                    task=None,
+                    status="invalid" if validation_report.status.value == "invalid" else "unavailable",
+                    failure=_failure(
+                        finding.code,
+                        f"{finding.reason} {finding.correction}".strip(),
+                        task_uuid=str(_task_value(task, "uuid") or "") or None,
+                        retryable=validation_report.status is ValidationStatus.UNAVAILABLE,
+                    ),
+                )
             identity = _task_identity(task)
             if identity.recurrence_kind == "cp":
                 return self._query_cp_task(task, identity, request)

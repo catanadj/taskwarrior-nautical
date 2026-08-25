@@ -17,6 +17,17 @@ from .hook_workflow_models import (
 from .task_models import TaskObservation, TaskTimestamp
 
 
+class AddScheduleFailure(RuntimeError):
+    """Fail-closed error for terminal or unavailable add scheduling."""
+
+    def __init__(self, status: str) -> None:
+        normalized = str(status).strip().lower()
+        if normalized not in {"terminal", "unavailable"}:
+            raise ValueError("invalid add schedule failure status")
+        self.status = normalized
+        super().__init__(f"add scheduler result is {normalized}")
+
+
 @dataclass(frozen=True, slots=True)
 class AddScheduleSelection:
     """Validated scheduler output consumed by the add planner."""
@@ -261,8 +272,19 @@ def record_preview(plan: AddWorkflowPlan, policy: AddPreviewPolicy) -> AddWorkfl
     )
 
 
+def require_schedule(plan: AddWorkflowPlan) -> AddScheduleSelection:
+    """Return a usable schedule or reject an incomplete planner decision."""
+    selection = plan.schedule
+    if selection is None:
+        raise AddScheduleFailure("unavailable")
+    if selection.status != "found":
+        raise AddScheduleFailure(selection.status)
+    return selection
+
+
 __all__ = (
     "AddPreviewPolicy",
+    "AddScheduleFailure",
     "AddScheduleLimits",
     "AddScheduleSelection",
     "AddWorkflowPlan",
@@ -273,4 +295,5 @@ __all__ = (
     "record_limits",
     "preview_policy",
     "record_preview",
+    "require_schedule",
 )

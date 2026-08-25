@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 
 from nautical_core.add_workflow import (
     AddScheduleLimits,
+    AddScheduleFailure,
     classify_add_route,
     plan_add,
     record_limits,
     record_schedule,
+    require_schedule,
     schedule_patch,
     preview_policy,
     record_preview,
@@ -83,6 +85,12 @@ class AddWorkflowTests(unittest.TestCase):
         scheduled = record_schedule(plan, first_occurrence=None, status="unavailable")
         self.assertEqual(scheduled.schedule.status, "unavailable")
         self.assertTrue(scheduled.feedback.warnings)
+        with self.assertRaisesRegex(AddScheduleFailure, "unavailable"):
+            require_schedule(scheduled)
+
+    def test_schedule_is_required_before_consumption(self) -> None:
+        with self.assertRaisesRegex(AddScheduleFailure, "unavailable"):
+            require_schedule(plan_add(observation({"anchor": "w:mon"})))
 
     def test_explicit_target_is_preserved_after_scheduler_result(self) -> None:
         plan = plan_add(observation({"anchor": "w:mon", "due": "20260831T060000Z"}))

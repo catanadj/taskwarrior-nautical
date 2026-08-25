@@ -2846,6 +2846,7 @@ def _preserve_cp_relative_offsets_on_due_change(
     workflow = _module("modify_carry_workflow")
     decision = workflow.decision_from_cp_adjustments(result)
     workflow.apply_temporal_carry_patch(new, decision)
+    workflow.verify_temporal_carry_task(new, decision)
     return decision
 
 
@@ -2907,6 +2908,7 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, 
         "carried", value=_module("task_models").TaskTimestamp(value)
     )
     _module("modify_carry_workflow").apply_native_until_patch(new, decision)
+    _module("modify_carry_workflow").verify_native_until_task(new, decision)
     return decision
 
 

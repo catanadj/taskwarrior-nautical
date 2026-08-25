@@ -10,6 +10,8 @@ from nautical_core.modify_carry_workflow import (
     apply_temporal_carry_patch,
     apply_native_until_patch,
     decision_from_cp_adjustments,
+    verify_native_until_task,
+    verify_temporal_carry_task,
 )
 from nautical_core.task_models import TaskTimestamp
 
@@ -49,6 +51,16 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         stamp = TaskTimestamp(datetime(2026, 8, 30, 20, tzinfo=timezone.utc))
         apply_native_until_patch(task, NativeUntilDecision("carried", value=stamp))
         self.assertEqual(task["until"], "2026-08-30T20:00:00Z")
+        verify_native_until_task(task, NativeUntilDecision("carried", value=stamp))
+
+    def test_temporal_carry_verification_rejects_lost_field(self) -> None:
+        stamp = TaskTimestamp(datetime(2026, 8, 25, 9, tzinfo=timezone.utc))
+        decision = TemporalCarryDecision(
+            "adjusted",
+            (TemporalCarryAdjustment("scheduled", stamp, stamp, 0),),
+        )
+        with self.assertRaisesRegex(ValueError, "verification failed"):
+            verify_temporal_carry_task({}, decision)
 
     def test_adjusted_decision_applies_one_typed_patch(self) -> None:
         task = {"uuid": "11111111-1111-4111-8111-111111111111"}

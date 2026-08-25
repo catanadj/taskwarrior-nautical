@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from .task_changes import TaskPatch
+from .task_changes import TaskPatch, timestamp_equal
 from .task_models import TaskTimestamp
 
 
@@ -146,10 +146,30 @@ def apply_native_until_patch(task: dict, decision: NativeUntilDecision) -> None:
         task[field] = value
 
 
+def verify_temporal_carry_task(task: dict, decision: TemporalCarryDecision) -> None:
+    """Reject a payload that did not retain every typed carry adjustment."""
+    if decision.status != "adjusted":
+        return
+    for field, expected in decision.serialized_changes:
+        if not timestamp_equal(task.get(field), expected):
+            raise ValueError(f"temporal carry verification failed for {field}")
+
+
+def verify_native_until_task(task: dict, decision: NativeUntilDecision) -> None:
+    """Reject a payload that did not retain the carried native-until value."""
+    if decision.status != "carried" or decision.value is None:
+        return
+    expected = decision.value.value.isoformat().replace("+00:00", "Z")
+    if not timestamp_equal(task.get("until"), expected):
+        raise ValueError("native-until carry verification failed")
+
+
 __all__ = (
     "NativeUntilDecision",
     "TemporalCarryAdjustment",
     "TemporalCarryDecision",
     "apply_temporal_carry_patch",
+    "verify_native_until_task",
+    "verify_temporal_carry_task",
     "decision_from_cp_adjustments",
 )

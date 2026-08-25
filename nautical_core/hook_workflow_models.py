@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .task_models import TaskObservation
+from .lifecycle_models import LifecyclePlan
+from .task_models import TaskObservation, TaskTimestamp
 
 
 class HookKind(str, Enum):
@@ -318,6 +319,83 @@ class TaskPatch:
         object.__setattr__(self, "operations", operations)
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleEffectRef:
+    """Typed reference to one lifecycle plan owned by lifecycle application."""
+
+    plan: LifecyclePlan
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan, LifecyclePlan):
+            raise TypeError("lifecycle effect requires a LifecyclePlan")
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackFacts:
+    """Presentation-neutral facts shared by panels, diagnostics, and tools."""
+
+    recurrence_kind: str = ""
+    natural_explanation: str = ""
+    first_occurrence: TaskTimestamp | None = None
+    next_occurrence: TaskTimestamp | None = None
+    carry_changes: tuple[tuple[str, str], ...] = ()
+    limits: tuple[tuple[str, str], ...] = ()
+    chain_completed: bool = False
+    warnings: tuple[str, ...] = ()
+    recovery_guidance: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("first_occurrence", "next_occurrence"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, TaskTimestamp):
+                raise TypeError(f"{name} must be a TaskTimestamp or None")
+        object.__setattr__(self, "recurrence_kind", str(self.recurrence_kind or "").strip())
+        object.__setattr__(self, "natural_explanation", str(self.natural_explanation or "").strip())
+        object.__setattr__(self, "carry_changes", _normalized_pairs(self.carry_changes, "carry_changes"))
+        object.__setattr__(self, "limits", _normalized_pairs(self.limits, "limits"))
+        object.__setattr__(self, "warnings", _normalized_texts(self.warnings))
+        object.__setattr__(self, "recovery_guidance", _normalized_texts(self.recovery_guidance))
+        object.__setattr__(self, "chain_completed", bool(self.chain_completed))
+
+
+def _normalized_texts(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(text for text in (str(value).strip() for value in values) if text)
+
+
+def _normalized_pairs(values: tuple[tuple[str, str], ...], name: str) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for pair in values:
+        if not isinstance(pair, tuple) or len(pair) != 2:
+            raise TypeError(f"{name} entries must be (name, value) tuples")
+        key, value = (str(item).strip() for item in pair)
+        if not key:
+            raise ValueError(f"{name} keys cannot be empty")
+        pairs.append((key, value))
+    return tuple(pairs)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowOperationalResult:
+    """Final typed workflow result without rendered strings or JSON mappings."""
+
+    task: TaskObservation
+    outcome: WorkflowOutcome
+    effects: tuple[LifecycleEffectRef, ...] = ()
+    feedback: FeedbackFacts = FeedbackFacts()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.task, TaskObservation):
+            raise TypeError("workflow result requires a final TaskObservation")
+        if not isinstance(self.outcome, WorkflowOutcome):
+            raise TypeError("workflow result requires a WorkflowOutcome")
+        effects = tuple(self.effects)
+        if any(not isinstance(effect, LifecycleEffectRef) for effect in effects):
+            raise TypeError("workflow effects must be LifecycleEffectRef values")
+        if not isinstance(self.feedback, FeedbackFacts):
+            raise TypeError("workflow result feedback must be FeedbackFacts")
+        object.__setattr__(self, "effects", effects)
+
+
 __all__ = [
     "HookKind",
     "HookOutputContract",
@@ -328,12 +406,15 @@ __all__ = [
     "EvidenceRequest",
     "EvidenceResult",
     "EvidenceStatus",
+    "FeedbackFacts",
+    "LifecycleEffectRef",
     "ModifyWorkflowRequest",
     "OutcomeDisposition",
     "PatchOperation",
     "ROUTE_PRECEDENCE",
     "TaskPatch",
     "TaskPatchOperation",
+    "WorkflowOperationalResult",
     "WorkflowOutcome",
     "WorkflowFailureCategory",
     "WorkflowOutcomeKind",

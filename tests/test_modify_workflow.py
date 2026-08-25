@@ -27,6 +27,13 @@ class ModifyWorkflowTests(unittest.TestCase):
         self.assertEqual(classify_modify_transition(transition(root, dict(root, status="completed"))).kind, ModifyRouteKind.COMPLETION)
         self.assertEqual(classify_modify_transition(transition(dict(root, status="completed"), dict(root, status="completed", modified="20260825T100000Z"))).kind, ModifyRouteKind.IDEMPOTENT_COMPLETION)
 
+    def test_completion_with_existing_successor_is_idempotent(self) -> None:
+        root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        route = classify_modify_transition(transition(root, dict(root, status="completed", nextLink="22222222")))
+        self.assertEqual(route.kind, ModifyRouteKind.IDEMPOTENT_COMPLETION)
+        self.assertFalse(route.requires_spawn_evidence)
+        self.assertIn("chain_slot", route.required_evidence)
+
     def test_activation_disable_resume_and_removal(self) -> None:
         plain = {"status": "pending"}
         active = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

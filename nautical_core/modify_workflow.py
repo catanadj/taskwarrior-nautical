@@ -42,6 +42,18 @@ class ModifyWorkflowRoute:
         object.__setattr__(self, "changed_fields", tuple(sorted(set(self.changed_fields))))
         object.__setattr__(self, "evidence", tuple(sorted(set(str(item) for item in self.evidence))))
 
+    @property
+    def requires_spawn_evidence(self) -> bool:
+        return self.kind is ModifyRouteKind.COMPLETION and "already_linked" not in self.evidence
+
+    @property
+    def required_evidence(self) -> tuple[str, ...]:
+        if self.kind in {ModifyRouteKind.ORDINARY, ModifyRouteKind.INVALID_IDENTITY_EDIT}:
+            return ()
+        if self.kind in {ModifyRouteKind.COMPLETION, ModifyRouteKind.IDEMPOTENT_COMPLETION}:
+            return ("chain_slot", "parent_snapshot")
+        return ("task_snapshot",)
+
 
 def _value(transition: TaskTransition, side: str, field: str) -> str:
     observation = transition.old if side == "old" else transition.new
@@ -69,7 +81,13 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
     )
     evidence: list[str] = []
 
-    identity_edit = bool(_IDENTITY_FIELDS.intersection(transition.changed_fields))
+    linking_successor = (
+        transition.changed("nextLink")
+        and not _value(transition, "old", "nextLink")
+        and bool(_value(transition, "new", "nextLink"))
+        and new_status == "completed"
+    )
+    identity_edit = bool(_IDENTITY_FIELDS.intersection(transition.changed_fields)) and not linking_successor
     if identity_edit and old_recurrence and new_recurrence:
         kind = ModifyRouteKind.INVALID_IDENTITY_EDIT
         evidence.append("identity_mutation")
@@ -77,9 +95,9 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
         kind = ModifyRouteKind.ORDINARY
     elif new_status == "deleted":
         kind = ModifyRouteKind.DELETION
-    elif old_status != "completed" and new_status == "completed":
+    elif old_status != "completed" and new_status == "completed" and not _value(transition, "new", "nextLink"):
         kind = ModifyRouteKind.COMPLETION
-    elif old_status == "completed" and new_status == "completed":
+    elif new_status == "completed":
         kind = ModifyRouteKind.IDEMPOTENT_COMPLETION
         evidence.append("already_completed")
     elif not old_recurrence and new_recurrence:
@@ -99,6 +117,8 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
         evidence.append("volatile_only")
     if transition.changed_fields and set(transition.changed_fields).issubset(_CHAIN_FIELDS):
         evidence.append("chain_identity_edit")
+    if _value(transition, "new", "nextLink"):
+        evidence.append("already_linked")
     return ModifyWorkflowRoute(kind, has_nautical, transition.changed_fields, tuple(evidence))
 
 

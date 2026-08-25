@@ -45,7 +45,7 @@ def existing_next_or_fail(host: Any, new: TaskPayload, next_no: int, chain_snaps
         existing_next_lookup=lambda task, link: repository.exact_child_slot(
             str(task.get("chainID") or ""), link
         ),
-        short=host._short,
+        short=host.core.short_uuid,
         panel=host._panel,
         print_task=host._print_task,
     )
@@ -92,7 +92,7 @@ def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository
     preflight = host._module("modify_completion_preflight")
     runtime = host._module("modify_runtime")
     services = runtime.build_preflight_services(
-        short=host._short,
+        short=host.core.short_uuid,
         completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(host, task),
         completion_kind_or_stop=lambda task, clock: kind_or_stop(host, task, clock),
         completion_chain_id_or_fail=lambda task: chain_id_or_fail(host, task),
@@ -121,7 +121,7 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
                 host._module("modify_diagnostics_effects").end_chain_summary(host, new, message, host._workflow_now_utc(), current_task=new)
             except Exception as summary_exc:
                 host._diag(f"terminal chain summary failed: {summary_exc}")
-                host._panel("⛔ Nautical chain stopped", [("Reason", message), ("Task", host._short(new.get("uuid")) or "–")], kind="summary")
+                host._panel("⛔ Nautical chain stopped", [("Reason", message), ("Task", host.core.short_uuid(new.get("uuid")) or "–")], kind="summary")
             host._print_task(new)
             return
         host._panel("⛔ Chain error", [("Scheduler", message), ("Fix", "Use a less sparse rule or adjust its search limits.")], kind="error")

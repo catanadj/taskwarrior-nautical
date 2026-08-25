@@ -134,7 +134,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         now_utc=host.core.now_utc,
         end_chain_summary=lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(host, task, reason, now, current_task),
         format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(host, task, now),
-        short=host._short,
+        short=host.core.short_uuid,
         panel=host._panel,
         diag=host._diag,
         recovery_warning=lambda task, reason: expiration_recovery_warning(host, task, reason),
@@ -164,7 +164,7 @@ def expiration_services(host: Any):
         build_child_draft=lambda task, *args, **kwargs: generation.build_child_draft(typed_task(task), *args, **kwargs),
         stage_recovery_plan=lambda plan: host._module("modify_spawn_effects").enqueue_spawn_intent(host, plan),
         panel=host._panel,
-        short=host._short,
+        short=host.core.short_uuid,
         diag=host._diag,
     )
 
@@ -179,7 +179,7 @@ def expiration_recovery_warning(host: Any, new: TaskPayload, reason: str) -> Non
             host._diag(f"expiration recovery warning render failed: {exc}")
     host._panel(
         "⚠ Nautical expiration recovery deferred",
-        [("Task", host._short(new.get("uuid")) or "–"), ("Reason", reason or "The next occurrence could not be prepared."), ("Action", "Run nautical reconcile --apply.")],
+        [("Task", host.core.short_uuid(new.get("uuid")) or "–"), ("Reason", reason or "The next occurrence could not be prepared."), ("Action", "Run nautical reconcile --apply.")],
         kind="warning",
     )
 

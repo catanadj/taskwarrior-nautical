@@ -11624,7 +11624,7 @@ def test_chain_integrity_warnings_detects_issues():
         chain,
         expected_chain_id="cid",
         coerce_int=mod.core.coerce_int,
-        short=mod._short,
+        short=mod.core.short_uuid,
     )
     expect(any("missing link(s): 2" in w for w in warnings), f"expected link gap warning, got {warnings}")
     expect(any("missing chainID" in w for w in warnings), f"expected chainID warning, got {warnings}")

@@ -25,7 +25,7 @@ def chain_integrity_warnings(host: Any, chain, expected_chain_id: str | None = N
         chain,
         expected_chain_id=expected_chain_id,
         coerce_int=host.core.coerce_int,
-        short=host._short,
+        short=host.core.short_uuid,
     )
 
 
@@ -65,7 +65,7 @@ def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
         parse_datetime=host._dtparse,
         format_local=host._fmtlocal,
         format_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol),
-        short_uuid=host._short,
+        short_uuid=host.core.short_uuid,
     )
 
 
@@ -158,7 +158,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         current_task,
         export_sorted_chain=export_sorted_chain,
         root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload),
-        short_uuid=host._short,
+        short_uuid=host.core.short_uuid,
         format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(host, task, now),
         kind_rows=kind_rows,
         span_fields=span_fields,

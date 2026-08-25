@@ -18990,13 +18990,18 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     if hasattr(mod, "_collect_prev_two"):
         setattr(mod, "_collect_prev_two", lambda _task: [])
     evaluator_calls = {"count": 0}
-    original_evaluator = mod._recurrence_evaluator_for_task
+    schedule = mod._module("modify_schedule_effects")
+    original_callbacks = schedule.scheduler_callbacks
+    original_evaluator = original_callbacks(mod)[0]
 
     def _shared_evaluator(task):
         evaluator_calls["count"] += 1
         return original_evaluator(task)
 
-    mod._recurrence_evaluator_for_task = _shared_evaluator
+    def _callbacks(host):
+        _evaluator, service = original_callbacks(host)
+        return _shared_evaluator, service
+    schedule.scheduler_callbacks = _callbacks
     child_due_utc = datetime(2026, 1, 4, 9, 0, tzinfo=timezone.utc)
     task = {
         "uuid": "00000000-0000-4000-8000-000000000224",
@@ -25822,8 +25827,10 @@ def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
     }
     mod._reset_modify_runtime_state()
     try:
-        first = mod._recurrence_evaluator_for_task(task)
-        second = mod._recurrence_evaluator_for_task(dict(task))
+        schedule = mod._module("modify_schedule_effects")
+        evaluator, _service = schedule.scheduler_callbacks(mod)
+        first = evaluator(task)
+        second = evaluator(dict(task))
         expect(first is second, "equivalent task copies rebuilt the evaluator within one hook session")
         binding_a = first._get_cached("scheduler_binding", first._build_scheduler_binding)
         binding_b = first._get_cached("scheduler_binding", first._build_scheduler_binding)

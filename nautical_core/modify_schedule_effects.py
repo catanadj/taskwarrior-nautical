@@ -10,7 +10,15 @@ from .task_models import TaskPayload
 
 def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
     """Return the stable one-argument callbacks used by projection services."""
-    return host._recurrence_evaluator_for_task, host._scheduler_service_for_task
+    def service_for_task(task: TaskPayload):
+        return host._module("modify_runtime").scheduler_service_for_task(
+            task,
+            state=host._modify_runtime_state(),
+            core=host.core,
+            recurrence_seed_base=lambda value: recurrence_seed_base(host, value),
+        )
+
+    return lambda task: service_for_task(task).session.evaluator, service_for_task
 
 
 def recurrence_seed_base(_host: Any, task: TaskPayload) -> str:

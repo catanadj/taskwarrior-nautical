@@ -1776,19 +1776,6 @@ def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
         return (None, "Unexpected error parsing datetime")
 
 
-def _recurrence_evaluator_for_task(task: dict):
-    return _scheduler_service_for_task(task).session.evaluator
-
-
-def _scheduler_service_for_task(task: dict):
-    return _module("modify_runtime").scheduler_service_for_task(
-        task,
-        state=_modify_runtime_state(),
-        core=core,
-        recurrence_seed_base=lambda value: _module("modify_schedule_effects").recurrence_seed_base(None, value),
-    )
-
-
 def _omit_dnf_from_parent(parent: dict):
     expr_str = (parent.get("omit") or "").strip()
     omit_file = (parent.get("omit_file") or "").strip()
@@ -1832,7 +1819,9 @@ def _anchor_included_occurrences(
     dnf,
     anchor_file_provider: Any | None = None,
 ) -> list[datetime]:
-    service = _scheduler_service_for_task(parent)
+    host = _module("modify_composition").hook_host(globals(), __name__)
+    _evaluator, service_for_task = _module("modify_schedule_effects").scheduler_callbacks(host)
+    service = service_for_task(parent)
     return service.included_occurrences_after(
         after_local_dt,
         inclusive=inclusive,

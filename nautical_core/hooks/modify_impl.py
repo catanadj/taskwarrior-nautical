@@ -2279,21 +2279,6 @@ def _parse_extra_tokens(extra: str | None) -> list[str] | None:
         out.append(f"{key}:{value}")
     return out
 
-def _export_chain_endpoint(chain_id: str, direction: str):
-    """Return a chain endpoint from the invocation's authoritative snapshot."""
-    rows = _lifecycle_read_service().get_chain_export(chain_id)
-    if rows is None:
-        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
-    with_links = [
-        (core.coerce_int(row.get("link"), None), row)
-        for row in rows
-    ]
-    with_links = [(link, row) for link, row in with_links if link is not None]
-    if not with_links:
-        return None
-    with_links.sort(key=lambda item: item[0])
-    return with_links[0 if direction == "first" else -1][1]
-
 def main():
     _module("modify_composition").run_on_modify(
         _module("modify_composition").hook_host(globals(), __name__)

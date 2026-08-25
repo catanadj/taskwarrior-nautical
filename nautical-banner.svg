@@ -14,6 +14,38 @@
       <stop offset="100%" stop-color="#6d7f8c"/>
     </linearGradient>
 
+    <!-- Enhanced anchor gradient: wider contrast for a 3D read -->
+    <linearGradient id="metalGradEnhanced" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#e4ebef"/>
+      <stop offset="45%" stop-color="#9aabb7"/>
+      <stop offset="100%" stop-color="#57646d"/>
+    </linearGradient>
+
+    <!-- Dark extrusion layer, sits just behind/below the main shape -->
+    <linearGradient id="metalShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a5760"/>
+      <stop offset="100%" stop-color="#262d32"/>
+    </linearGradient>
+
+    <!-- Glossy highlight sweep -->
+    <radialGradient id="anchorHighlight" cx="35%" cy="20%" r="55%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="45%" stop-color="#ffffff" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Deepened shadow side -->
+    <linearGradient id="anchorShadowOverlay" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1218" stop-opacity="0"/>
+      <stop offset="60%" stop-color="#0a1218" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#0a1218" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <!-- Anchor silhouette, reused to clip the highlight/shadow overlays -->
+    <clipPath id="anchorClip">
+      <path d="M46,31.07a.26.26,0,0,0-.34-.21A11.59,11.59,0,0,0,39.31,36a.26.26,0,0,0,.29.37l1.8-.44a.26.26,0,0,1,.24.44L41,37c-3.78,3.4-4.58,4-8.09,4a3.61,3.61,0,0,1-3.31-2.11,6.93,6.93,0,0,1-.49-2.71c-.05-2.26-.1-4.52-.1-6.77l-.15-10.65H34.1a2.13,2.13,0,1,0,0-2.25H28.85c0-1,0-2,0-3a4.84,4.84,0,1,0-3,0c0,1,0,2,0,3H20.47a2.13,2.13,0,1,0,0,2.25H25.7l-.15,10.65c0,2.26-.05,4.51-.09,6.77a6.94,6.94,0,0,1-.5,2.71A3.59,3.59,0,0,1,21.66,41c-3.52,0-4.32-.6-8.1-4l-.62-.6a.26.26,0,0,1,.24-.44l1.8.44a.26.26,0,0,0,.29-.37,11.55,11.55,0,0,0-6.38-5.12.25.25,0,0,0-.33.21c-.16,1.18-.6,5.56,1,8A.26.26,0,0,0,10,39l.55-1.38a.26.26,0,0,1,.49,0c.56,1.64,2.62,5.74,9.56,8.8h0c.25.09,5.21,1.81,6.42,4.37a.29.29,0,0,0,.52,0c1.22-2.56,6.18-4.28,6.42-4.37h0c6.95-3.06,9-7.16,9.57-8.8a.26.26,0,0,1,.48,0c.18.44.4,1,.55,1.38a.26.26,0,0,0,.46,0C46.62,36.63,46.18,32.25,46,31.07ZM27.29,10.88a2,2,0,1,1,2-2A2,2,0,0,1,27.29,10.88Z"/>
+    </clipPath>
+
     <!-- Chain gradient -->
     <linearGradient id="chainGrad" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#9dadb8"/>
@@ -426,9 +458,27 @@
     </g>
   </g>
 
-  <!-- CENTER: Main Anchor (The Hook System) - Large and centered -->
+  <!-- CENTER: Main Anchor (The Hook System) - Large and centered, with 3D depth -->
   <g filter="url(#dropShadow)" transform="translate(640, 240) scale(5.1)">
-    <path fill="url(#metalGrad)" d="M46,31.07a.26.26,0,0,0-.34-.21A11.59,11.59,0,0,0,39.31,36a.26.26,0,0,0,.29.37l1.8-.44a.26.26,0,0,1,.24.44L41,37c-3.78,3.4-4.58,4-8.09,4a3.61,3.61,0,0,1-3.31-2.11,6.93,6.93,0,0,1-.49-2.71c-.05-2.26-.1-4.52-.1-6.77l-.15-10.65H34.1a2.13,2.13,0,1,0,0-2.25H28.85c0-1,0-2,0-3a4.84,4.84,0,1,0-3,0c0,1,0,2,0,3H20.47a2.13,2.13,0,1,0,0,2.25H25.7l-.15,10.65c0,2.26-.05,4.51-.09,6.77a6.94,6.94,0,0,1-.5,2.71A3.59,3.59,0,0,1,21.66,41c-3.52,0-4.32-.6-8.1-4l-.62-.6a.26.26,0,0,1,.24-.44l1.8.44a.26.26,0,0,0,.29-.37,11.55,11.55,0,0,0-6.38-5.12.25.25,0,0,0-.33.21c-.16,1.18-.6,5.56,1,8A.26.26,0,0,0,10,39l.55-1.38a.26.26,0,0,1,.49,0c.56,1.64,2.62,5.74,9.56,8.8h0c.25.09,5.21,1.81,6.42,4.37a.29.29,0,0,0,.52,0c1.22-2.56,6.18-4.28,6.42-4.37h0c6.95-3.06,9-7.16,9.57-8.8a.26.26,0,0,1,.48,0c.18.44.4,1,.55,1.38a.26.26,0,0,0,.46,0C46.62,36.63,46.18,32.25,46,31.07ZM27.29,10.88a2,2,0,1,1,2-2A2,2,0,0,1,27.29,10.88Z" transform="translate(-25.38 -35.01)"/>
+    <g transform="translate(-25.38 -35.01)">
+      <!-- Extrusion layer: dark offset copy gives the shape physical thickness -->
+      <path fill="url(#metalShade)" transform="translate(1.1, 1.6)" d="M46,31.07a.26.26,0,0,0-.34-.21A11.59,11.59,0,0,0,39.31,36a.26.26,0,0,0,.29.37l1.8-.44a.26.26,0,0,1,.24.44L41,37c-3.78,3.4-4.58,4-8.09,4a3.61,3.61,0,0,1-3.31-2.11,6.93,6.93,0,0,1-.49-2.71c-.05-2.26-.1-4.52-.1-6.77l-.15-10.65H34.1a2.13,2.13,0,1,0,0-2.25H28.85c0-1,0-2,0-3a4.84,4.84,0,1,0-3,0c0,1,0,2,0,3H20.47a2.13,2.13,0,1,0,0,2.25H25.7l-.15,10.65c0,2.26-.05,4.51-.09,6.77a6.94,6.94,0,0,1-.5,2.71A3.59,3.59,0,0,1,21.66,41c-3.52,0-4.32-.6-8.1-4l-.62-.6a.26.26,0,0,1,.24-.44l1.8.44a.26.26,0,0,0,.29-.37,11.55,11.55,0,0,0-6.38-5.12.25.25,0,0,0-.33.21c-.16,1.18-.6,5.56,1,8A.26.26,0,0,0,10,39l.55-1.38a.26.26,0,0,1,.49,0c.56,1.64,2.62,5.74,9.56,8.8h0c.25.09,5.21,1.81,6.42,4.37a.29.29,0,0,0,.52,0c1.22-2.56,6.18-4.28,6.42-4.37h0c6.95-3.06,9-7.16,9.57-8.8a.26.26,0,0,1,.48,0c.18.44.4,1,.55,1.38a.26.26,0,0,0,.46,0C46.62,36.63,46.18,32.25,46,31.07ZM27.29,10.88a2,2,0,1,1,2-2A2,2,0,0,1,27.29,10.88Z"/>
+
+      <!-- Main shape with wider-contrast metal gradient -->
+      <path fill="url(#metalGradEnhanced)" d="M46,31.07a.26.26,0,0,0-.34-.21A11.59,11.59,0,0,0,39.31,36a.26.26,0,0,0,.29.37l1.8-.44a.26.26,0,0,1,.24.44L41,37c-3.78,3.4-4.58,4-8.09,4a3.61,3.61,0,0,1-3.31-2.11,6.93,6.93,0,0,1-.49-2.71c-.05-2.26-.1-4.52-.1-6.77l-.15-10.65H34.1a2.13,2.13,0,1,0,0-2.25H28.85c0-1,0-2,0-3a4.84,4.84,0,1,0-3,0c0,1,0,2,0,3H20.47a2.13,2.13,0,1,0,0,2.25H25.7l-.15,10.65c0,2.26-.05,4.51-.09,6.77a6.94,6.94,0,0,1-.5,2.71A3.59,3.59,0,0,1,21.66,41c-3.52,0-4.32-.6-8.1-4l-.62-.6a.26.26,0,0,1,.24-.44l1.8.44a.26.26,0,0,0,.29-.37,11.55,11.55,0,0,0-6.38-5.12.25.25,0,0,0-.33.21c-.16,1.18-.6,5.56,1,8A.26.26,0,0,0,10,39l.55-1.38a.26.26,0,0,1,.49,0c.56,1.64,2.62,5.74,9.56,8.8h0c.25.09,5.21,1.81,6.42,4.37a.29.29,0,0,0,.52,0c1.22-2.56,6.18-4.28,6.42-4.37h0c6.95-3.06,9-7.16,9.57-8.8a.26.26,0,0,1,.48,0c.18.44.4,1,.55,1.38a.26.26,0,0,0,.46,0C46.62,36.63,46.18,32.25,46,31.07ZM27.29,10.88a2,2,0,1,1,2-2A2,2,0,0,1,27.29,10.88Z"/>
+
+      <!-- Glossy highlight sweep, clipped exactly to the anchor silhouette -->
+      <g clip-path="url(#anchorClip)">
+        <ellipse cx="22" cy="17" rx="9" ry="16" fill="url(#anchorHighlight)"/>
+        <ellipse cx="14" cy="39" rx="6" ry="9" fill="url(#anchorHighlight)" opacity="0.55"/>
+        <ellipse cx="38" cy="34" rx="5" ry="8" fill="url(#anchorHighlight)" opacity="0.4"/>
+      </g>
+
+      <!-- Deepened shadow side, clipped exactly to the anchor silhouette -->
+      <g clip-path="url(#anchorClip)">
+        <rect x="0" y="0" width="55" height="55" fill="url(#anchorShadowOverlay)"/>
+      </g>
+    </g>
   </g>
 
   <!-- RIGHT SIDE: Clock (Completion-based Recurrence) -->
@@ -454,12 +504,22 @@
       <text x="-43" y="8" dy="0.3em">9</text>
     </g>
 
-    <!-- Clock hands showing approximately 10:10 -->
+    <!-- Clock hands: cycle through 3 "random" times, 30s each, looping every 90s -->
     <g stroke-linecap="round">
       <!-- Hour hand -->
-      <line x1="0" y1="0" x2="-18" y2="-35" stroke="#4a90e2" stroke-width="6"/>
-      <!-- Minute hand -->
-      <line x1="0" y1="0" x2="15" y2="-52" stroke="#4a90e2" stroke-width="4"/>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" calcMode="discrete"
+                           keyTimes="0;0.3333;0.6667;1" values="305;85;227.5;305"
+                           dur="90s" repeatCount="indefinite"/>
+        <line x1="0" y1="0" x2="0" y2="-35" stroke="#4a90e2" stroke-width="6"/>
+      </g>
+      <!-- Minute hand (synced to the same 3 times) -->
+      <g>
+        <animateTransform attributeName="transform" type="rotate" calcMode="discrete"
+                           keyTimes="0;0.3333;0.6667;1" values="60;300;210;60"
+                           dur="90s" repeatCount="indefinite"/>
+        <line x1="0" y1="0" x2="0" y2="-52" stroke="#4a90e2" stroke-width="4"/>
+      </g>
       <!-- Second hand (ticking in real time, one discrete step per second) -->
       <g>
         <animateTransform attributeName="transform" type="rotate"

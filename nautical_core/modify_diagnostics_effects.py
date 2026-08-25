@@ -41,6 +41,22 @@ def sort_chain_for_analytics(host: Any, chain):
     )
 
 
+def export_chain_endpoint(host: Any, chain_id: str, direction: str):
+    """Return a chain endpoint from the invocation's authoritative snapshot."""
+    rows = host._lifecycle_read_service().get_chain_export(chain_id)
+    if rows is None:
+        raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
+    with_links = [
+        (host.core.coerce_int(row.get("link"), None), row)
+        for row in rows
+    ]
+    with_links = [(link, row) for link, row in with_links if link is not None]
+    if not with_links:
+        return None
+    with_links.sort(key=lambda item: item[0])
+    return with_links[0 if direction == "first" else -1][1]
+
+
 def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
     return host._module("modify_chain_summary").last_n_timeline(
         chain,
@@ -56,7 +72,7 @@ def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
 def span_fields(host: Any, chain_id: str, chain, *, stop_at=None, stopped_by_delete: bool = False):
     return host._module("modify_chain_summary").span_fields(
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
-        export_endpoint=host._export_chain_endpoint,
+        export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
         parse_datetime=host._dtparse,
         human_delta=host._human_delta,
     )
@@ -102,7 +118,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             chain,
             stop_at=stop_at,
             stopped_by_delete=stopped_by_delete,
-            export_endpoint=host._export_chain_endpoint,
+            export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
             parse_datetime=host._dtparse,
             human_delta=host._human_delta,
         )

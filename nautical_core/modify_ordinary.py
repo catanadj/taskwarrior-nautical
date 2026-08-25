@@ -8,16 +8,22 @@ UI callbacks explicitly so it can be loaded only when that lifecycle runs.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any, Callable
 
 from .task_changes import TaskTransition
 from .task_models import TaskPayload, TaskTimestamp
 from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
-from .modify_workflow import ChainCompletionDecision
+from .modify_workflow import ChainCompletionDecision, RecurrenceTransitionDecision
 
 
 class RecurrenceActivationError(RuntimeError):
     """Raised when a recurrence transition cannot be applied safely."""
+
+
+class _LifecyclePolicy:
+    def recurrence_setting_changes(self, old: dict, new: dict, *, transition: TaskTransition | None = None) -> list[tuple[str, str, str]]:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,17 +39,17 @@ class OrdinaryModifyServices:
     preserve_native_until: Callable[[dict, dict, str], NativeUntilDecision]
     validate_native_until: Callable[[dict], None]
     validate_native_until_slots: Callable[[dict], None]
-    render_cp_adjustment: Callable[[Any], None]
+    render_cp_adjustment: Callable[[TemporalCarryDecision], None]
     render_timing_warning: Callable[[dict, tuple[str, ...]], None]
-    apply_transition: Callable[[dict, dict], Any]
-    short_uuid: Callable[[Any], str]
+    apply_transition: Callable[[dict, dict], RecurrenceTransitionDecision]
+    short_uuid: Callable[[str], str]
     recurrence_enabled_rows: Callable[[dict, str], list[tuple[str, str]]]
     panel: Callable[..., None]
     render_disabled_summary: Callable[[dict, dict, str], None]
     semantic_diff_value: Callable[[str, str], str]
-    first_recurrence_target: Callable[[dict, str], Any]
-    fmtlocal: Callable[[Any], str]
-    render_recurrence_updated: Callable[[Any, dict], None]
+    first_recurrence_target: Callable[[dict, str], datetime | None]
+    fmtlocal: Callable[[datetime], str]
+    render_recurrence_updated: Callable[[list[tuple[str, str, str]], dict], None]
     print_task: Callable[[dict], None]
 
 
@@ -52,7 +58,7 @@ def handle_non_completion_modify(
     new: TaskPayload,
     *,
     services: OrdinaryModifyServices,
-    lifecycle: Any,
+    lifecycle: _LifecyclePolicy,
     transition: TaskTransition | None = None,
 ) -> None:
     """Apply ordinary edit validation, carry-forward, and feedback policy."""

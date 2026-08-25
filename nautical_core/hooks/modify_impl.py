@@ -860,6 +860,12 @@ _MODULE_SPECS = {
         "modify_value_effects.py",
         "nautical_core.modify_value_effects",
     ),
+    "modify_ui_effects": (
+        "_MODIFY_UI_EFFECTS",
+        "_MODIFY_UI_EFFECTS_LOAD_FAILED",
+        "modify_ui_effects.py",
+        "nautical_core.modify_ui_effects",
+    ),
     "modify_generation_effects": (
         "_MODIFY_GENERATION_EFFECTS",
         "_MODIFY_GENERATION_EFFECTS_LOAD_FAILED",
@@ -1238,14 +1244,8 @@ def _panic_passthrough() -> None:
 
 
 def _print_task(task):
-    hook_results = _module("hook_results")
-    if core is None:
-        try:
-            _load_core()
-        except Exception:
-            hook_results.emit_passthrough_json(task)
-            return
-    hook_results.emit_task_json(task, sanitize=True, core=core)
+    host = _module("modify_composition").hook_host(globals(), __name__)
+    return _module("modify_ui_effects").print_task(host, task)
 
 
 
@@ -1258,37 +1258,10 @@ def _panel(
     title_style: str | None = None,
     label_style: str | None = None,
 ):
-    if core is None:
-        try:
-            _load_core()
-        except Exception:
-            try:
-                sys.stderr.write(f"[nautical] {title}\n")
-            except Exception:
-                pass
-            return
-    themes = core.panel_themes()
-    theme = dict(themes.get(kind, themes.get("info", {})))
-    if border_style:
-        theme["border"] = border_style
-    if title_style:
-        theme["title"] = title_style
-    if label_style:
-        theme["label"] = label_style
-    themes[kind] = theme
-    core.render_panel(
-        title,
-        rows,
-        kind=kind,
-        panel_mode=core.PANEL_MODE,
-        live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
-        live_footer=getattr(core, "LIVE_PANEL_FOOTER", "NAUTICAL"),
-        fast_color=core.FAST_COLOR,
-        themes=themes,
-        allow_line=True,
-        line_force_rich_kinds={"summary"},
-        label_width_min=6,
-        label_width_max=14,
+    host = _module("modify_composition").hook_host(globals(), __name__)
+    return _module("modify_ui_effects").panel(
+        host, title, rows, kind=kind, border_style=border_style,
+        title_style=title_style, label_style=label_style,
     )
 
 
@@ -1301,14 +1274,10 @@ def _panel_line(
     title_style: str | None = None,
     markup_body: bool = False,
 ) -> None:
-    core.panel_line(
-        title,
-        line,
-        kind=kind,
-        themes=core.panel_themes(),
-        border_style=border_style,
-        title_style=title_style,
-        markup_body=markup_body,
+    host = _module("modify_composition").hook_host(globals(), __name__)
+    return _module("modify_ui_effects").panel_line(
+        host, title, line, kind=kind, border_style=border_style,
+        title_style=title_style, markup_body=markup_body,
     )
 
 
@@ -1318,10 +1287,9 @@ def _text_line(
     kind: str = "info",
     markup_body: bool = False,
 ) -> None:
-    core.text_line(
-        line,
-        kind=kind,
-        markup_body=markup_body,
+    host = _module("modify_composition").hook_host(globals(), __name__)
+    return _module("modify_ui_effects").text_line(
+        host, line, kind=kind, markup_body=markup_body,
     )
 
 # ------------------------------------------------------------------------------

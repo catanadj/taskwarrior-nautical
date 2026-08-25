@@ -63,6 +63,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
 
 def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None):
     host._modify_runtime_state().task_repository = unit_of_work.repository
+    completion = host._module("modify_completion_effects")
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=host._completion_build_and_spawn_child,
@@ -90,7 +91,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         validate_native_until=host._validate_native_until_after_target_or_fail,
         validate_native_until_slots=host._validate_native_until_anchor_slots_or_fail,
         now_utc=host.core.now_utc,
-        preflight_context=host._completion_preflight_context,
+        preflight_context=lambda task, now, repository: completion.preflight_context(host, task, now, repository),
         compute_next_and_limits=host._completion_compute_next_and_limits,
         lifecycle_read_service=host._lifecycle_read_service(),
         diag_count=host._diag_count,
@@ -118,6 +119,9 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         panel=host._panel,
         diag=host._diag,
         recovery_warning=lambda task, reason: expiration_recovery_warning(host, task, reason),
+    )
+    modify_expiration.handle_deleted_modify(
+        old, new, services=services, transition=transition, terminal_decision=terminal_decision
     )
 
 
@@ -164,9 +168,6 @@ def expiration_recovery_warning(host: Any, new: TaskPayload, reason: str) -> Non
 def handle_expired_deleted(host: Any, new: TaskPayload) -> bool:
     modify_expiration = host._module("modify_expiration")
     return modify_expiration.handle_expired_deleted_modify(new, services=expiration_services(host))
-    modify_expiration.handle_deleted_modify(
-        old, new, services=services, transition=transition, terminal_decision=terminal_decision
-    )
 
 
 __all__ = (

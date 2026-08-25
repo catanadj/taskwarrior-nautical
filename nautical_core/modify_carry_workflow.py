@@ -42,6 +42,8 @@ class NativeUntilDecision:
             raise ValueError("carried native-until decision requires a value")
         if status == "rejected" and not str(self.reason).strip():
             raise ValueError("rejected native-until decision requires a reason")
+        if status != "carried" and self.value is not None:
+            raise ValueError(f"{status} native-until decision cannot carry a value")
         if self.value is not None and not isinstance(self.value, TaskTimestamp):
             raise TypeError("native-until decision value must be a TaskTimestamp")
         object.__setattr__(self, "status", status)

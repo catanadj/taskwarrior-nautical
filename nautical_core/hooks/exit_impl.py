@@ -589,10 +589,6 @@ def _drain_outbox_result(unit_of_work):
     )
 
 
-def _drain_outbox(unit_of_work):
-    return _drain_outbox_result(unit_of_work)
-
-
 def _redirect_stdout_to_devnull() -> None:
     hook_results = _module("hook_results")
     hook_results.redirect_stdout_to_devnull()
@@ -603,19 +599,6 @@ def _command_purpose_stat_key(purpose: object) -> str:
     token = "".join(char if char.isalnum() else "_" for char in str(purpose).strip().lower())
     token = "_".join(part for part in token.split("_") if part)
     return f"run_task_calls_purpose_{token or 'unknown'}"
-
-
-def _strict_exit_feedback_message(stats: Any) -> str | None:
-    errors = stats.errors
-    manual_reviewed = stats.manual_reviewed
-    outbox_lock_failures = stats.outbox_lock_failures
-    if not (_EXIT_STRICT and (errors > 0 or manual_reviewed > 0 or outbox_lock_failures > 0)):
-        return None
-    return (
-        f"[nautical] on-exit: {manual_reviewed} manual-review intents, {errors} errors, "
-        f"{outbox_lock_failures} outbox lock failures. Check nautical queue-status "
-        "(set NAUTICAL_EXIT_STRICT=0 to disable)"
-    )
 
 
 def main() -> int:
@@ -646,8 +629,10 @@ def main() -> int:
             services=_module("exit_composition").ExitServices(
                 hook_results.ExitHookResponse,
                 redirect_stdout=_redirect_stdout_to_devnull,
-                drain_outbox=_drain_outbox,
-                strict_feedback=_strict_exit_feedback_message,
+                drain_outbox=_drain_outbox_result,
+                strict_feedback=lambda stats: _module("exit_diagnostics").strict_feedback(
+                    stats, enabled=_EXIT_STRICT
+                ),
             ),
         )
         # The drain owns and resets its invocation state; restore the startup

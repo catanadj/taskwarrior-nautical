@@ -71,4 +71,20 @@ def emit_drain_stats_diag(
     diagnostic_block("on-exit task stats", task_stats.items(), columns=3)
 
 
-__all__ = ("emit_outcome_diagnostics", "emit_drain_stats_diag")
+def strict_feedback(stats: Any, *, enabled: bool) -> str | None:
+    """Return the optional Taskwarrior-facing failure message for a drain."""
+    if not enabled:
+        return None
+    errors = int(getattr(stats, "errors", 0) or 0)
+    manual_reviewed = int(getattr(stats, "manual_reviewed", 0) or 0)
+    outbox_lock_failures = int(getattr(stats, "outbox_lock_failures", 0) or 0)
+    if not (errors or manual_reviewed or outbox_lock_failures):
+        return None
+    return (
+        f"[nautical] on-exit: {manual_reviewed} manual-review intents, {errors} errors, "
+        f"{outbox_lock_failures} outbox lock failures. Check nautical queue-status "
+        "(set NAUTICAL_EXIT_STRICT=0 to disable)"
+    )
+
+
+__all__ = ("emit_outcome_diagnostics", "emit_drain_stats_diag", "strict_feedback")

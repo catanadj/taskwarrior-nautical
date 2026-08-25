@@ -11367,7 +11367,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     mod = _load_hook_module(hook, "_nautical_chain_cache_thread_safety_test")
 
     full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    mod._lifecycle_read_service().replace_chain_cache(
+    mod._module("modify_read_effects").lifecycle_read_service(mod).replace_chain_cache(
         "cid-a",
         [{"uuid": full_uuid, "link": 1, "entry": "2026-01-01T00:00:00Z"}],
     )
@@ -11379,7 +11379,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     def _writer(chain_id: str):
         try:
             for i in range(300):
-                mod._lifecycle_read_service().replace_chain_cache(
+                mod._module("modify_read_effects").lifecycle_read_service(mod).replace_chain_cache(
                     chain_id,
                     [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{i % 60:02d}Z"}],
                 )
@@ -11389,7 +11389,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     def _reader():
         try:
             for _ in range(600):
-                s, _chain_id = mod._lifecycle_read_service().lookup_short("aaaaaaaa")
+                s, _chain_id = mod._module("modify_read_effects").lifecycle_read_service(mod).lookup_short("aaaaaaaa")
                 if s is not None:
                     from nautical_core.task_models import TaskObservation
                     expect(isinstance(s, TaskObservation), f"short cache read should return observation, got {type(s)}")
@@ -11417,7 +11417,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
     mod._reset_modify_runtime_state()
 
-    mod._lifecycle_read_service().replace_chain_cache(
+    mod._module("modify_read_effects").lifecycle_read_service(mod).replace_chain_cache(
         "cid-1",
         [
             {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed", "entry": "2026-01-01T00:00:00Z"},
@@ -11426,7 +11426,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
         ],
     )
 
-    rows = mod._lifecycle_read_service().get_chain_export(
+    rows = mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export(
         "cid-1", extra="link:2 status.not:deleted"
     )
     expect(len(rows) == 1, f"expected exactly one filtered cached row, got {rows}")
@@ -11452,7 +11452,7 @@ def test_on_modify_chain_cache_reads_through_typed_repository():
             return Found(_task_observations(rows), "chain:cid")
 
     mod._modify_runtime_state().task_repository = Repository()
-    selected = mod._lifecycle_read_service().get_chain_export("cid", extra="status:pending")
+    selected = mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export("cid", extra="status:pending")
     expect(calls == ["cid"], f"expected one repository read, got {calls!r}")
     expect([row.get("link") for row in selected] == [2], f"repository rows were not filtered: {selected!r}")
 
@@ -11472,7 +11472,7 @@ def test_on_modify_chain_cache_preserves_repository_unavailability():
 
     mod._modify_runtime_state().task_repository = Repository()
     try:
-        mod._lifecycle_read_service().get_chain_export("cid")
+        mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export("cid")
     except RuntimeError as exc:
         expect("malformed JSON" in str(exc), f"unavailable detail was lost: {exc}")
     else:
@@ -11494,7 +11494,7 @@ def test_on_modify_predecessor_read_preserves_repository_unavailability():
 
     mod._modify_runtime_state().task_repository = Repository()
     try:
-        mod._collect_prev_two({"chainID": "cid", "link": 3})
+        mod._module("modify_read_effects").collect_prev_two(mod, {"chainID": "cid", "link": 3})
     except RuntimeError as exc:
         expect("malformed JSON" in str(exc), f"predecessor failure detail was lost: {exc}")
     else:
@@ -12756,7 +12756,7 @@ def test_on_modify_collect_prev_two_prefers_live_statuses():
         ],
     }
 
-    prevs = mod._collect_prev_two(current, chain_by_link=chain_by_link)
+    prevs = mod._module("modify_read_effects").collect_prev_two(mod, current, chain_by_link=chain_by_link)
     expect([t.get("uuid") for t in prevs] == ["pending-2", "completed-3"], f"unexpected prevs: {prevs}")
 
 def test_weekly_and_unsat():
@@ -29846,7 +29846,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
             ]
         return []
 
-    mod._lifecycle_read_service().get_chain_export = _get_chain_export_stub
+    mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export = _get_chain_export_stub
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",
@@ -31568,7 +31568,7 @@ def test_on_modify_lifecycle_export_reuses_completion_chain_snapshot():
     uow.client = Client()
     mod._modify_runtime_state().task_repository = uow.repository
     try:
-        rows = mod._lifecycle_read_service().get_chain_export("reuse02")
+        rows = mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export("reuse02")
         expect(len(rows) == 1, f"lifecycle chain export returned unexpected rows: {rows!r}")
         snapshot = mod._completion_effects.chain_snapshot("reuse02", 1, 2, uow.repository)
         expect(snapshot.loaded and snapshot.rows, f"completion snapshot did not reuse chain rows: {snapshot!r}")
@@ -31602,7 +31602,7 @@ def test_on_modify_cp_completion_spawns_next_link():
     mod._completion_effects.existing_next_or_fail = lambda *_a, **_k: True
     # A confirmed empty chain is distinct from an unavailable Taskwarrior
     # export; keep this spawn-path test deterministic and network-free.
-    mod._lifecycle_read_service().get_chain_export = lambda *_a, **_k: []
+    mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export = lambda *_a, **_k: []
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",

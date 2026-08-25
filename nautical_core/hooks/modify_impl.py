@@ -1611,42 +1611,6 @@ def _collect_prev_two(current_task: dict, chain_by_link=None):
     )
 
 
-def _lifecycle_read_service():
-    """Build the focused chain-read service for this hook invocation."""
-    state = _modify_runtime_state()
-    existing = getattr(state, "lifecycle_read_service", None)
-    if existing is not None:
-        repository = getattr(_modify_runtime_state(), "task_repository", None)
-        if repository is not None:
-            bind_repository = getattr(existing, "bind_repository", None)
-            if callable(bind_repository):
-                bind_repository(repository)
-        return existing
-    lifecycle_read_service = _module("lifecycle_read_service")
-    read_effects = _module("modify_read_effects")
-    if getattr(state, "chain_cache_store", None) is None:
-        state.chain_cache_store = lifecycle_read_service.ChainCacheStore()
-    repository = getattr(_modify_runtime_state(), "task_repository", None)
-
-    service = lifecycle_read_service.LifecycleReadService(
-        coerce_int=core.coerce_int,
-        parse_extra_tokens=lambda extra: read_effects.parse_extra_tokens(
-            _module("modify_composition").hook_host(globals(), __name__), extra
-        ),
-        token_matcher=lambda task, token: read_effects._token_match(core, task, token),
-        read_query_get=_read_query_get,
-        chain_cache_get=lambda _chain_id: None,
-        repository=repository,
-        max_chain_walk=_MAX_CHAIN_WALK,
-        diag=_diag,
-        record_stat=_record_chain_snapshot_stat,
-        cache_store=state.chain_cache_store,
-        read_query_missing=_READ_QUERY_MISSING,
-    )
-    state.lifecycle_read_service = service
-    return service
-
-
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------

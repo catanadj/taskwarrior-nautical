@@ -180,6 +180,14 @@ def _reset_modify_runtime_state() -> None:
     _MODIFY_RUNTIME_STATE = modify_runtime.new_runtime_state()
 
 
+def _workflow_now_utc() -> datetime:
+    workflow = getattr(_modify_runtime_state(), "workflow_context", None)
+    value = getattr(workflow, "now_utc", None)
+    if isinstance(value, datetime):
+        return value
+    return core.now_utc()
+
+
 def _anchor_file_provider_for(
     anchor_file: str,
     *,
@@ -2792,7 +2800,7 @@ def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
     modify_models = _module("modify_models")
     old_view = modify_models.TaskView.from_mapping(old)
     new_view = modify_models.TaskView.from_mapping(new)
-    now_utc = core.now_utc()
+    now_utc = _workflow_now_utc()
     try:
         _end_chain_summary(old_view, reason, now_utc, current_task=new_view)
     except Exception as exc:
@@ -3125,7 +3133,7 @@ def _completion_compute_child_due(new: dict, kind: str):
         if exc.is_date_limit:
             _ensure_terminal_chain_off(new, "complete")
             try:
-                _end_chain_summary(new, message, core.now_utc(), current_task=new)
+                _end_chain_summary(new, message, _workflow_now_utc(), current_task=new)
             except Exception as summary_exc:
                 _diag(f"terminal chain summary failed: {summary_exc}")
                 _panel(
@@ -3531,6 +3539,7 @@ def main():
     request_t0 = _ptime.perf_counter()
     _seed_runtime_lookup_tasks(old, new)
     runtime = _build_hook_runtime_context(new)
+    _modify_runtime_state().workflow_context = runtime.workflow
     request = hook_context.build_on_modify_request(
         runtime=runtime,
         old=old,

@@ -46,6 +46,7 @@ from nautical_core.modify_models import (
 
 @dataclass(slots=True)
 class ModifyRuntimeState:
+    workflow_context: Any = None
     task_repository: Any = None
     scheduler_services: dict[Any, Any] = field(default_factory=dict)
     chain_generation_service: Any = None

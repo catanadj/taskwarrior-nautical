@@ -15,6 +15,8 @@ class AddWorkflowPlan:
     request: AddWorkflowRequest
     patch: TaskPatch
     recurrence_kind: str = ""
+    target_field: str = "due"
+    target_explicit: bool = False
 
     @property
     def ordinary(self) -> bool:
@@ -40,8 +42,16 @@ def plan_add(task: TaskObservation) -> AddWorkflowPlan:
     """Return recurrence defaults and root identity as a typed patch."""
     route = classify_add_route(task)
     request = AddWorkflowRequest(task=task, route=route)
+    has_due = bool(_text(task, "due"))
+    has_scheduled = bool(_text(task, "scheduled"))
+    target_field = "scheduled" if has_scheduled and not has_due else "due"
     if route is WorkflowRoute.ORDINARY:
-        return AddWorkflowPlan(request=request, patch=TaskPatch(()))
+        return AddWorkflowPlan(
+            request=request,
+            patch=TaskPatch(()),
+            target_field=target_field,
+            target_explicit=has_due or has_scheduled,
+        )
 
     operations: list[TaskPatchOperation] = []
     if _text(task, "chain").lower() not in {"on", "true", "1"}:
@@ -58,6 +68,8 @@ def plan_add(task: TaskObservation) -> AddWorkflowPlan:
         request=request,
         patch=TaskPatch(tuple(operations)),
         recurrence_kind="cp" if route is WorkflowRoute.CP_ACTIVATION else "anchor",
+        target_field=target_field,
+        target_explicit=has_due or has_scheduled,
     )
 
 

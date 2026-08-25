@@ -2040,13 +2040,16 @@ def main():
         observation=_PARSED_OBSERVATION,
         prof=prof,
     )
-    with calendar_context, displacement_context:
-        result = hook_engine.handle_on_add(
-            request,
-            services=_OnAddServices(hook_results.TaskHookResponse),
-        )
-    if result is not None:
-        hook_results.emit_json_result(result, core=core)
+    try:
+        with calendar_context, displacement_context:
+            result = hook_engine.handle_on_add(
+                request,
+                services=_OnAddServices(hook_results.TaskHookResponse),
+            )
+        if result is not None:
+            hook_results.emit_json_result(result, core=core)
+    finally:
+        runtime.close()
 
 
 def run_hook(

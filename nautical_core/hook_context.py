@@ -22,6 +22,10 @@ class HookRuntimeContext:
     lifecycle_result: Any | None = None
     workflow: WorkflowInvocationContext | None = None
 
+    def close(self) -> None:
+        if self.workflow is not None:
+            self.workflow.close()
+
 
 @dataclass(slots=True)
 class OnAddRequest:

@@ -847,56 +847,60 @@ def main() -> int:
     hook_results = _module("hook_results")
     hook_engine = _module("hook_engine")
     module_ms = round((time.perf_counter() - module_t0) * 1000.0, 3)
-    request_t0 = time.perf_counter()
-    request = hook_context.build_on_exit_request(runtime=_build_hook_runtime_context())
-    request_ms = round((time.perf_counter() - request_t0) * 1000.0, 3)
-    _exit_runtime_state().startup_stats = {
-        "startup_import_ms": round(float(_IMPORT_MS or 0.0), 3),
-        "startup_module_ms": module_ms,
-        "startup_request_ms": request_ms,
-        "startup_total_ms": round((time.perf_counter() - startup_t0) * 1000.0, 3),
-    }
-    startup_stats = dict(_exit_runtime_state().startup_stats)
-    result = hook_engine.handle_on_exit(
-        request,
-        services=_OnExitServices(hook_results.ExitHookResponse),
-    )
-    # The drain owns and resets its invocation state; restore the startup
-    # timings so benchmark-only reporting retains the complete breakdown.
-    _exit_runtime_state().startup_stats = startup_stats
-    stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
-    presentation_t0 = time.perf_counter()
-    _render_exit_drain_failure_panel(result.stats or {})
-    exit_code = hook_results.emit_exit_result(
-        result,
-        emit_exit_feedback=_emit_exit_feedback,
-        emit_stats_diag=_emit_drain_stats_diag,
-    )
-    presentation_ms = round((time.perf_counter() - presentation_t0) * 1000.0, 3)
-    if stats_path:
-        try:
-            Path(stats_path).write_text(
-                json.dumps(
-                    {
-                        "task_stats": dict(_exit_runtime_state().diag_stats),
-                        "startup_stats": dict(_exit_runtime_state().startup_stats),
-                        "drain_stats": dict(result.stats or {}),
-                        "outbox_metrics": {
-                            str(key): float(value)
-                            for key, value in _exit_runtime_state().diag_stats.items()
-                            if str(key).startswith("outbox_")
+    runtime = _build_hook_runtime_context()
+    try:
+        request_t0 = time.perf_counter()
+        request = hook_context.build_on_exit_request(runtime=runtime)
+        request_ms = round((time.perf_counter() - request_t0) * 1000.0, 3)
+        _exit_runtime_state().startup_stats = {
+            "startup_import_ms": round(float(_IMPORT_MS or 0.0), 3),
+            "startup_module_ms": module_ms,
+            "startup_request_ms": request_ms,
+            "startup_total_ms": round((time.perf_counter() - startup_t0) * 1000.0, 3),
+        }
+        startup_stats = dict(_exit_runtime_state().startup_stats)
+        result = hook_engine.handle_on_exit(
+            request,
+            services=_OnExitServices(hook_results.ExitHookResponse),
+        )
+        # The drain owns and resets its invocation state; restore the startup
+        # timings so benchmark-only reporting retains the complete breakdown.
+        _exit_runtime_state().startup_stats = startup_stats
+        stats_path = (os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
+        presentation_t0 = time.perf_counter()
+        _render_exit_drain_failure_panel(result.stats or {})
+        exit_code = hook_results.emit_exit_result(
+            result,
+            emit_exit_feedback=_emit_exit_feedback,
+            emit_stats_diag=_emit_drain_stats_diag,
+        )
+        presentation_ms = round((time.perf_counter() - presentation_t0) * 1000.0, 3)
+        if stats_path:
+            try:
+                Path(stats_path).write_text(
+                    json.dumps(
+                        {
+                            "task_stats": dict(_exit_runtime_state().diag_stats),
+                            "startup_stats": dict(_exit_runtime_state().startup_stats),
+                            "drain_stats": dict(result.stats or {}),
+                            "outbox_metrics": {
+                                str(key): float(value)
+                                for key, value in _exit_runtime_state().diag_stats.items()
+                                if str(key).startswith("outbox_")
+                            },
+                            "presentation_ms": presentation_ms,
                         },
-                        "presentation_ms": presentation_ms,
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
-                + "\n",
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            _diag(f"benchmark stats write failed: {type(exc).__name__}: {exc}")
-    return exit_code
+            except Exception as exc:
+                _diag(f"benchmark stats write failed: {type(exc).__name__}: {exc}")
+        return exit_code
+    finally:
+        runtime.close()
 
 
 def run_hook(

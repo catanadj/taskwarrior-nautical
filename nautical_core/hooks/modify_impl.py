@@ -3524,8 +3524,9 @@ def main():
         return
     request_t0 = _ptime.perf_counter()
     _seed_runtime_lookup_tasks(old, new)
+    runtime = _build_hook_runtime_context()
     request = hook_context.build_on_modify_request(
-        runtime=_build_hook_runtime_context(),
+        runtime=runtime,
         old=old,
         new=new,
         old_observation=_PARSED_OLD_OBSERVATION,
@@ -3540,13 +3541,16 @@ def main():
         if str(new.get("bc") or "").strip()
         else nullcontext()
     )
-    with calendar_context, displacement_context:
-        result = hook_engine.handle_on_modify(
-            request,
-            services=_OnModifyServices(hook_results.TaskHookResponse),
-        )
-    if result is not None:
-        hook_results.emit_json_result(result, core=core)
+    try:
+        with calendar_context, displacement_context:
+            result = hook_engine.handle_on_modify(
+                request,
+                services=_OnModifyServices(hook_results.TaskHookResponse),
+            )
+        if result is not None:
+            hook_results.emit_json_result(result, core=core)
+    finally:
+        runtime.close()
 
 
 def run_hook(

@@ -2079,33 +2079,21 @@ def _validate_until_not_past(
     return (True, None)
 
 
-# Helper to warn if chain extends too far into future
-def _validate_chain_duration_reasonable(
-    child_due: datetime, until_dt: datetime, now_utc: datetime
-) -> tuple[bool, str | None]:
-    """
-    Warn if chain will extend unreasonably far into the future.
-    Returns (is_reasonable, warning_msg).
-    """
-    if not until_dt:
-        return (True, None)
-
-    span = until_dt - now_utc
-    days = span.days
-
-    if days > _MIN_FUTURE_WARN:
-        years = days / 365.25
-        return (
-            True,
-            f"Chain extends {years:.1f} years into future (until {core.fmt_dt_local(until_dt)})",
-        )
-
-    return (True, None)
-
-
 # ------------------------------------------------------------------------------
 # Child build (copy almost everything; override minimal set)
 # ------------------------------------------------------------------------------
+def _validate_chain_duration_reasonable(
+    child_due: datetime, until_dt: datetime, now_utc: datetime
+) -> tuple[bool, str | None]:
+    if not until_dt:
+        return (True, None)
+    days = (until_dt - now_utc).days
+    if days > _MIN_FUTURE_WARN:
+        years = days / 365.25
+        return (True, f"Chain extends {years:.1f} years into future (until {core.fmt_dt_local(until_dt)})")
+    return (True, None)
+
+
 _RESERVED_DROP = {
     "id",
     "uuid",

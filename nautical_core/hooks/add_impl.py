@@ -823,21 +823,11 @@ def _validate_chain_duration_reasonable(
     )
 
 
-# Helper to validate chainMax > 0
-def _validate_cpmax_positive(cpmax) -> tuple[bool, str | None]:
-    add_validation = _module("add_validation")
-    return add_validation.validate_cpmax_positive(cpmax)
-
-
 # Helper to safely parse with context
 def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
     add_validation = _module("add_validation")
     return add_validation.safe_parse_datetime(s, field_name, core=core, diag=_diag)
 
-
-def _validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:
-    add_validation = _module("add_validation")
-    return add_validation.validate_no_legacy_colon_ranges(expr)
 
 def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
     add_validation = _module("add_validation")

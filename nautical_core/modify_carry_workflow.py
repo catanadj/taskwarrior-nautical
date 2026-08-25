@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from .task_changes import TaskPatch
 from .task_models import TaskTimestamp
@@ -21,7 +22,10 @@ class TemporalCarryAdjustment:
         if not isinstance(self.old_value, TaskTimestamp) or not isinstance(self.new_value, TaskTimestamp):
             raise TypeError("temporal carry values must be TaskTimestamp values")
         object.__setattr__(self, "field", str(self.field).strip())
-        object.__setattr__(self, "offset_seconds", float(self.offset_seconds))
+        offset = float(self.offset_seconds)
+        if not math.isfinite(offset):
+            raise ValueError("temporal carry offset must be finite")
+        object.__setattr__(self, "offset_seconds", offset)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +63,9 @@ class TemporalCarryDecision:
         adjustments = tuple(self.adjustments)
         if any(not isinstance(item, TemporalCarryAdjustment) for item in adjustments):
             raise TypeError("temporal carry adjustments must be typed")
+        fields = tuple(item.field for item in adjustments)
+        if len(fields) != len(set(fields)):
+            raise ValueError("temporal carry cannot adjust one field more than once")
         if (self.target_old is None) != (self.target_new is None):
             raise ValueError("temporal carry target must include both values")
         if self.target_old is not None and not isinstance(self.target_old, TaskTimestamp):
@@ -129,7 +136,10 @@ def apply_native_until_patch(task: dict, decision: NativeUntilDecision) -> None:
         return
     from .task_models import TaskUUID
 
-    patch = TaskPatch.ordinary_carry(TaskUUID(str(task.get("uuid") or "")), until=decision.value.value.isoformat().replace("+00:00", "Z"))
+    patch = TaskPatch.ordinary_carry(
+        TaskUUID(str(task.get("uuid") or "")),
+        until=decision.value.value.isoformat().replace("+00:00", "Z"),
+    )
     for field, value in patch.set_values().items():
         task[field] = value
 

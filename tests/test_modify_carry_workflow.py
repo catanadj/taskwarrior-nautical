@@ -49,6 +49,23 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         apply_temporal_carry_patch(task, decision)
         self.assertEqual(task["scheduled"], "2026-08-25T09:00:00Z")
 
+    def test_duplicate_adjustments_are_rejected_before_application(self) -> None:
+        stamp = TaskTimestamp(datetime(2026, 8, 25, 9, tzinfo=timezone.utc))
+        adjustment = TemporalCarryAdjustment("scheduled", stamp, stamp, 0)
+        with self.assertRaisesRegex(ValueError, "more than once"):
+            TemporalCarryDecision("adjusted", (adjustment, adjustment))
+
+    def test_invalid_patch_target_does_not_partially_apply(self) -> None:
+        task = {"uuid": "not-a-uuid", "scheduled": "original"}
+        stamp = TaskTimestamp(datetime(2026, 8, 25, 9, tzinfo=timezone.utc))
+        decision = TemporalCarryDecision(
+            "adjusted",
+            (TemporalCarryAdjustment("scheduled", stamp, stamp, 0),),
+        )
+        with self.assertRaises(ValueError):
+            apply_temporal_carry_patch(task, decision)
+        self.assertEqual(task["scheduled"], "original")
+
 
 if __name__ == "__main__":
     unittest.main()

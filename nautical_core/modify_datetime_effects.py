@@ -25,4 +25,11 @@ def safe_parse_datetime(host: Any, dt_str: str) -> tuple[Any | None, str | None]
         return None, "Unexpected error parsing datetime"
 
 
-__all__ = ("safe_parse_datetime",)
+def safe_dt(host: Any, value: Any):
+    try:
+        return host._dtparse(value) if isinstance(value, str) else value
+    except Exception:
+        return None
+
+
+__all__ = ("safe_parse_datetime", "safe_dt")

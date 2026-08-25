@@ -32,7 +32,7 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
         if warns:
             host._panel("ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note")
         mode = anchor_mode(host, old, new)
-        due = host._safe_dt(new.get("due") or old.get("due"))
+        due = host._module("modify_datetime_effects").safe_dt(host, new.get("due") or old.get("due"))
         if host.core.ENABLE_ANCHOR_CACHE:
             host.core.build_and_cache_hints(anchor_expr, mode, default_due_dt=due, include_per_year=False)
         else:

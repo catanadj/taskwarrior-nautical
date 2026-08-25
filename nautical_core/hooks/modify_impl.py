@@ -1809,12 +1809,6 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
 
-def _safe_dt(v):
-    try:
-        return _dtparse(v) if isinstance(v, str) else v
-    except Exception:
-        return None
-
 def _parse_extra_tokens(extra: str | None) -> list[str] | None:
     """Parse extra Taskwarrior filters in strict token form: key:value."""
     hook_support = _module("hook_support", required=False)

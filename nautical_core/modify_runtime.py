@@ -155,10 +155,14 @@ def scheduler_service_for_task(
 
     observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify scheduler")
     domain_task = NauticalTask.from_observation(observation)
+    workflow = state.workflow_context
+    business_calendar = getattr(workflow, "business_calendar", None)
+    if business_calendar is None:
+        business_calendar = core.business_calendar_for_task(task)
     context = RecurrenceContext.from_observation(
         observation,
         timezone=core._LOCAL_TZ,
-        business_calendar=core.business_calendar_for_task(task),
+        business_calendar=business_calendar,
         astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
     )

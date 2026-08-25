@@ -21599,7 +21599,10 @@ def test_on_modify_omit_dnf_accepts_configured_preset():
     prev_omit_presets = getattr(mod.core, "OMIT_PRESETS", {})
     try:
         mod.core.OMIT_PRESETS = {"april": "y:apr"}
-        expr, omit_dnf = mod._omit_dnf_from_parent({"omit": "@april"})
+        host = mod._module("modify_composition").hook_host(mod.__dict__, mod.__name__)
+        expr, omit_dnf = mod._module("modify_anchor_effects").omit_dnf_from_parent(
+            host, {"omit": "@april"}
+        )
     finally:
         mod.core.OMIT_PRESETS = prev_omit_presets
 

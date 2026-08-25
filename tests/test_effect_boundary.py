@@ -6,6 +6,16 @@ import ast
 from pathlib import Path
 import unittest
 
+from nautical_core.integration_models import (
+    GuardTimestamp,
+    GuardTimestampField,
+    MutationGuard,
+    MutationOperation,
+    MutationOutcome,
+    MutationOutcomeKind,
+    MutationPostcondition,
+)
+from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_WORKFLOW_MODULES = (
@@ -41,6 +51,32 @@ class EffectBoundaryTests(unittest.TestCase):
                 or any(name.startswith(prefix + ".") for prefix in FORBIDDEN_IMPORTS if prefix != "subprocess")
             )
             self.assertEqual(forbidden, [], f"{relative} imports external effect owners: {forbidden}")
+
+    def test_mutation_contract_requires_guard_and_postcondition(self) -> None:
+        guard = MutationGuard(
+            task_uuid="11111111-1111-4111-8111-111111111111",
+            status="pending",
+            chain_id="abcd1234",
+            link=1,
+            recurrence_identity="identity",
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, "20260825T120000Z"),),
+            expected_mutation_epoch=0,
+        )
+        outcome = MutationOutcome(
+            MutationOperation.CHAIN_DISABLE,
+            MutationOutcomeKind.ALREADY_APPLIED,
+            guard,
+            (MutationPostcondition.CHAIN_DISABLED,),
+        )
+        self.assertEqual(outcome.postconditions, (MutationPostcondition.CHAIN_DISABLED,))
+
+    def test_snapshot_cache_is_invalidated_by_mutation_epoch(self) -> None:
+        cache = InvocationReadCache()
+        scope = QueryScope(QueryScopeKind.UUID, "11111111-1111-4111-8111-111111111111")
+        cache.put(scope, object(), mutation_epoch=0, command_count=1)
+        self.assertIsNotNone(cache.get(scope, mutation_epoch=0))
+        cache.invalidate()
+        self.assertIsNone(cache.get(scope, mutation_epoch=0))
 
 
 if __name__ == "__main__":

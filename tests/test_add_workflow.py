@@ -43,6 +43,12 @@ class AddWorkflowTests(unittest.TestCase):
         second = plan_add(observation({"anchor": "w:mon"}))
         self.assertEqual(first.deterministic_fingerprint, second.deterministic_fingerprint)
 
+    def test_resolved_fingerprint_changes_with_scheduler_result(self) -> None:
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        timestamp = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
+        resolved = record_schedule(plan, first_occurrence=timestamp)
+        self.assertNotEqual(plan.resolved_fingerprint, resolved.resolved_fingerprint)
+
     def test_cp_add_emits_root_defaults_without_mutation(self) -> None:
         task = observation({"cp": "P1D"})
         plan = plan_add(task)

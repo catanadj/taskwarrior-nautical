@@ -120,6 +120,29 @@ class AddWorkflowPlan:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
+    @property
+    def resolved_fingerprint(self) -> str:
+        """Stable identity including attached scheduler and limit decisions."""
+        payload = {
+            "base": self.deterministic_fingerprint,
+            "schedule": (
+                None
+                if self.schedule is None
+                else {
+                    "field": self.schedule.target_field,
+                    "status": self.schedule.status,
+                    "first": (
+                        self.schedule.first_occurrence.value.isoformat()
+                        if self.schedule.first_occurrence is not None
+                        else None
+                    ),
+                }
+            ),
+            "limits": repr(self.limits),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
 
 def _text(task: TaskObservation, field: str) -> str:
     return str(task.get(field) or "").strip()

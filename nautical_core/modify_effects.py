@@ -77,9 +77,9 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
-        seed_runtime_lookup_tasks=host._seed_runtime_lookup_tasks,
+        seed_runtime_lookup_tasks=lambda *tasks: host._module("modify_read_effects").seed_runtime_lookup_tasks(host, *tasks),
         modify_chain_state=host._modify_runtime_state,
-        lifecycle_read_service=host._lifecycle_read_service(),
+        lifecycle_read_service=host._module("modify_read_effects").lifecycle_read_service(host),
         chain_health_advice=lambda chain, kind, task, tol_secs, style: diagnostics.chain_health_advice(host, chain, kind, task, tol_secs, style),
         chain_integrity_warnings=lambda chain, expected=None: diagnostics.chain_integrity_warnings(host, chain, expected),
         render_anchor_completion_feedback=lambda **kwargs: presentation.render_anchor_completion_feedback(host, **kwargs),
@@ -110,7 +110,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         compute_next_and_limits=lambda task, kind, next_no, now, preflight=None: completion.compute_next_and_limits(
             host, task, kind, next_no, now, preflight=preflight
         ),
-        lifecycle_read_service=host._lifecycle_read_service(),
+        lifecycle_read_service=host._module("modify_read_effects").lifecycle_read_service(host),
         diag_count=host._diag_count,
         diag_lifecycle_result=host._diag_lifecycle_result,
         finalize_completion=modify_completion_flow.finalize_completion_modify,

@@ -850,6 +850,12 @@ _MODULE_SPECS = {
         "modify_time_effects.py",
         "nautical_core.modify_time_effects",
     ),
+    "modify_read_effects": (
+        "_MODIFY_READ_EFFECTS",
+        "_MODIFY_READ_EFFECTS_LOAD_FAILED",
+        "modify_read_effects.py",
+        "nautical_core.modify_read_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -1508,7 +1514,10 @@ def tw_export_chain_required(seed_task, env=None):
         )
     if env is not None:
         raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
-    rows = _lifecycle_read_service().get_chain_export(chain_id)
+    read_service = _module("modify_read_effects").lifecycle_read_service(
+        _module("modify_composition").hook_host(globals(), __name__)
+    )
+    rows = read_service.get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
     return rows
@@ -1518,7 +1527,7 @@ def _tw_get_cached(ref: str) -> str:
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
             cached, cache_chain_id = (
-                _lifecycle_read_service().lookup_short(short) if short else (None, "")
+                read_service.lookup_short(short) if short else (None, "")
             )
             if short and hasattr(cached, "get"):
                 _diag_count("tw_get_cache_hits")

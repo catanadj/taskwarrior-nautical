@@ -43,7 +43,7 @@ def sort_chain_for_analytics(host: Any, chain):
 
 def export_chain_endpoint(host: Any, chain_id: str, direction: str):
     """Return a chain endpoint from the invocation's authoritative snapshot."""
-    rows = host._lifecycle_read_service().get_chain_export(chain_id)
+    rows = host._module("modify_read_effects").lifecycle_read_service(host).get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
     with_links = [

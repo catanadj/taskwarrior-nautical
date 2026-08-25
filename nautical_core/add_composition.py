@@ -45,9 +45,51 @@ class AddCompositionServices:
         self._host._fail_and_exit(title, message)
 
     def build_context(self, task, now_utc, now_local, *, observation=None, prof):
-        return self._host._build_on_add_context(
-            task, now_utc, now_local, observation=observation, prof=prof
-        )
+        host = self._host
+        core = host.core
+        hook_context = host._module("hook_context")
+        started = host.time.perf_counter()
+        try:
+            ctx = hook_context.build_on_add_context(
+                task,
+                now_utc,
+                now_local,
+                validate_kind_not_conflicting=core._import_sibling(
+                    "hook_validation_pipeline"
+                ).recurrence_kind_conflict,
+                kind_and_defaults_on_add=host._kind_and_defaults_on_add,
+                validate_chain_limits_on_add=host._validate_chain_limits_on_add,
+                due_context_on_add=host._due_context_on_add,
+                observation=observation,
+            )
+            omit_expr = host._strip_quotes(str(task.get("omit") or "").strip())
+            anchor_file = host._strip_quotes(str(task.get("anchor_file") or "").strip())
+            omit_file = host._strip_quotes(str(task.get("omit_file") or "").strip())
+            if omit_expr:
+                task["omit"] = omit_expr
+            if anchor_file:
+                task["anchor_file"] = anchor_file
+            if omit_file:
+                task["omit_file"] = omit_file
+            pipeline = core._import_sibling("hook_validation_pipeline")
+            findings = pipeline.validate_recurrence_files(
+                ctx.anchor_str,
+                anchor_file,
+                omit_expr,
+                omit_file,
+                load_anchor_file=host._load_anchor_file_dates,
+                load_omit_file=host._load_omit_file_dates,
+            )
+            if findings:
+                finding = findings[0]
+                host._error_and_exit([(f"Invalid {finding.field}", finding.reason)])
+            return ctx
+        except ValueError as exc:
+            host._error_and_exit([("Invalid chain config", str(exc))])
+            raise
+        finally:
+            if prof is not None:
+                prof.add_ms("validate:cp_vs_anchor", (host.time.perf_counter() - started) * 1000.0)
 
     def record_schedule(self, plan, task, target_field):
         core = self._host.core
@@ -96,10 +138,51 @@ class AddCompositionServices:
         self._host._stamp_chain_id_on_add(task)
 
     def render_anchor_preview(self, context, *, prof) -> None:
-        self._host._handle_anchor_preview_on_add_context(context, prof=prof)
+        host = self._host
+        host._handle_anchor_preview_on_add(
+            task=context.task,
+            anchor_str=context.anchor_str,
+            anchor_file_str=context.anchor_file_str,
+            ch=context.chain_state,
+            now_utc=context.now_utc,
+            now_local=context.now_local,
+            user_provided_due=context.user_provided_due,
+            recurrence_field=context.recurrence_field,
+            due_dt=context.due_dt,
+            due_day=context.due_day,
+            due_hhmm=context.due_hhmm,
+            until_dt=context.until_dt,
+            past_due_warning=context.past_due_warning,
+            prof=prof,
+        )
 
     def render_cp_preview(self, context, *, prof) -> None:
-        self._host._handle_cp_preview_on_add_context(context, prof=prof)
+        host = self._host
+        host._handle_cp_preview_on_add(
+            task=context.task,
+            cp_str=context.cp_str,
+            ch=context.chain_state,
+            now_utc=context.now_utc,
+            user_provided_due=context.user_provided_due,
+            recurrence_field=context.recurrence_field,
+            due_dt=context.due_dt,
+            until_dt=context.until_dt,
+        )
 
 
 __all__ = ("AddCompositionServices",)
+
+
+def build_on_add_context(host: Any, task, now_utc, now_local, *, observation=None, prof=None):
+    """Build recurrence context through the installed composition boundary."""
+    return AddCompositionServices(host, object()).build_context(
+        task, now_utc, now_local, observation=observation, prof=prof
+    )
+
+
+def render_anchor_preview(host: Any, context, *, prof) -> None:
+    AddCompositionServices(host, object()).render_anchor_preview(context, prof=prof)
+
+
+def render_cp_preview(host: Any, context, *, prof) -> None:
+    AddCompositionServices(host, object()).render_cp_preview(context, prof=prof)

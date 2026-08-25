@@ -1769,102 +1769,45 @@ def _build_hook_runtime_context(task=None):
     )
 
 
-def _build_on_add_context(
-    task: dict,
-    now_utc: datetime,
-    now_local: datetime,
-    *,
-    observation=None,
-    prof=None,
-):
-    hook_context = _module("hook_context")
-    _t_conf = time.perf_counter()
-    try:
-        ctx = hook_context.build_on_add_context(
-            task,
-            now_utc,
-            now_local,
-            validate_kind_not_conflicting=core._import_sibling("hook_validation_pipeline").recurrence_kind_conflict,
-            kind_and_defaults_on_add=_kind_and_defaults_on_add,
-            validate_chain_limits_on_add=_validate_chain_limits_on_add,
-            due_context_on_add=_due_context_on_add,
-            observation=observation,
-        )
-        omit_expr = _strip_quotes((task.get("omit") or "").strip())
-        if omit_expr:
-            task["omit"] = omit_expr
-        anchor_file = _strip_quotes((task.get("anchor_file") or "").strip())
-        if anchor_file:
-            task["anchor_file"] = anchor_file
-        omit_file = _strip_quotes((task.get("omit_file") or "").strip())
-        if omit_file:
-            task["omit_file"] = omit_file
-        pipeline = core._import_sibling("hook_validation_pipeline")
-        findings = pipeline.validate_recurrence_files(
-            ctx.anchor_str, anchor_file, omit_expr, omit_file,
-            load_anchor_file=_load_anchor_file_dates,
-            load_omit_file=_load_omit_file_dates,
-        )
-        if findings:
-            finding = findings[0]
-            _error_and_exit([(f"Invalid {finding.field}", finding.reason)])
-        return ctx
-    except ValueError as exc:
-        _error_and_exit([('Invalid chain config', str(exc))])
-        raise
-    finally:
-        if prof is not None:
-            prof.add_ms('validate:cp_vs_anchor', (time.perf_counter() - _t_conf) * 1000.0)
-
-
 def _apply_description_uda_aliases(task: dict) -> None:
     """Expand opt-in short UDA directives before normal on-add validation."""
     if not bool(getattr(core, "ENABLE_UDA_ALIASES", False)):
         return
-
     description = task.get("description")
     if not isinstance(description, str) or not description:
         return
     try:
         validation = core._import_sibling("hook_validation_pipeline")
-        validation.normalize_description_uda_aliases(
-            task,
-            enabled=True,
-        )
+        validation.normalize_description_uda_aliases(task, enabled=True)
     except ValueError as exc:
         _error_and_exit([("Invalid UDA alias", str(exc))])
         return
 
 
-def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
-    _handle_anchor_preview_on_add(
-        task=ctx.task,
-        anchor_str=ctx.anchor_str,
-        anchor_file_str=ctx.anchor_file_str,
-        ch=ctx.chain_state,
-        now_utc=ctx.now_utc,
-        now_local=ctx.now_local,
-        user_provided_due=ctx.user_provided_due,
-        recurrence_field=ctx.recurrence_field,
-        due_dt=ctx.due_dt,
-        due_day=ctx.due_day,
-        due_hhmm=ctx.due_hhmm,
-        until_dt=ctx.until_dt,
-        past_due_warning=ctx.past_due_warning,
+def _build_on_add_context(task, now_utc, now_local, *, observation=None, prof=None):
+    """Compatibility entry point for focused tests; logic lives in composition."""
+    composition = _module("add_composition")
+    return composition.build_on_add_context(
+        sys.modules.get(__name__, SimpleNamespace(**globals())),
+        task,
+        now_utc,
+        now_local,
+        observation=observation,
         prof=prof,
     )
 
 
+def _handle_anchor_preview_on_add_context(ctx, *, prof) -> None:
+    composition = _module("add_composition")
+    composition.render_anchor_preview(
+        sys.modules.get(__name__, SimpleNamespace(**globals())), ctx, prof=prof
+    )
+
+
 def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
-    _handle_cp_preview_on_add(
-        task=ctx.task,
-        cp_str=ctx.cp_str,
-        ch=ctx.chain_state,
-        now_utc=ctx.now_utc,
-        user_provided_due=ctx.user_provided_due,
-        recurrence_field=ctx.recurrence_field,
-        due_dt=ctx.due_dt,
-        until_dt=ctx.until_dt,
+    composition = _module("add_composition")
+    composition.render_cp_preview(
+        sys.modules.get(__name__, SimpleNamespace(**globals())), ctx, prof=prof
     )
 
 

@@ -203,11 +203,11 @@ _MODULE_SPECS = {
         "exit_diagnostics.py",
         "nautical_core.exit_diagnostics",
     ),
-    "exit_models": (
-        "_EXIT_MODELS",
-        "_EXIT_MODELS_LOAD_FAILED",
-        "exit_models.py",
-        "nautical_core.exit_models",
+    "on_exit_models": (
+        "_ON_EXIT_MODELS",
+        "_ON_EXIT_MODELS_LOAD_FAILED",
+        "on_exit_models.py",
+        "nautical_core.on_exit_models",
     ),
     "hook_context": (
         "_HOOK_CONTEXT",
@@ -575,7 +575,7 @@ def _drain_outbox_result(unit_of_work):
     if isinstance(benchmark_metrics, dict):
         state.diag_stats.update(benchmark_metrics)
 
-    return _module("exit_models").ExitDrainStats(
+    return _module("on_exit_models").ExitDrainStats(
         entries_total=len(outcomes),
         processed=processed,
         errors=errors,

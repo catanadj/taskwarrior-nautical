@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .exit_models import ExitDrainStats
+from .on_exit_models import ExitDrainStats
 
 
 class ExitServices:

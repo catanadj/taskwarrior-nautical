@@ -412,8 +412,35 @@ class FeedbackFacts:
         kinds = tuple(FeedbackFactKind(item) for item in self.fact_kinds)
         if len(kinds) != len(set(kinds)):
             raise ValueError("feedback fact kinds must be unique")
+        if FeedbackFactKind.MANUAL_REVIEW in kinds and not (
+            self.warnings or self.recovery_guidance or self.next_action
+        ):
+            raise ValueError("manual-review feedback requires an explanation or next action")
+        if FeedbackFactKind.RECOVERY in kinds and not (
+            self.recovery_guidance or self.next_action
+        ):
+            raise ValueError("recovery feedback requires guidance or a next action")
         object.__setattr__(self, "fact_kinds", kinds)
         object.__setattr__(self, "chain_completed", bool(self.chain_completed))
+
+    def to_contract(self) -> dict[str, Any]:
+        """Return a stable, JSON-ready representation for diagnostics/tools."""
+        return {
+            "recurrence_kind": self.recurrence_kind,
+            "natural_explanation": self.natural_explanation,
+            "first_occurrence": self.first_occurrence.value.isoformat() if self.first_occurrence else None,
+            "next_occurrence": self.next_occurrence.value.isoformat() if self.next_occurrence else None,
+            "carry_changes": [{"field": key, "value": value} for key, value in self.carry_changes],
+            "limits": [{"field": key, "value": value} for key, value in self.limits],
+            "chain_completed": self.chain_completed,
+            "warnings": list(self.warnings),
+            "recovery_guidance": list(self.recovery_guidance),
+            "fact_kinds": [kind.value for kind in self.fact_kinds],
+            "task_uuid": self.task_uuid,
+            "chain_id": self.chain_id,
+            "changed_fields": list(self.changed_fields),
+            "next_action": self.next_action,
+        }
 
 
 def _normalized_texts(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -427,6 +454,7 @@ def _normalized_texts(values: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _normalized_pairs(values: tuple[tuple[str, str], ...], name: str) -> tuple[tuple[str, str], ...]:
+    seen: set[tuple[str, str]] = set()
     pairs: list[tuple[str, str]] = []
     for pair in values:
         if not isinstance(pair, tuple) or len(pair) != 2:
@@ -434,7 +462,10 @@ def _normalized_pairs(values: tuple[tuple[str, str], ...], name: str) -> tuple[t
         key, value = (str(item).strip() for item in pair)
         if not key:
             raise ValueError(f"{name} keys cannot be empty")
-        pairs.append((key, value))
+        pair_value = (key, value)
+        if pair_value not in seen:
+            seen.add(pair_value)
+            pairs.append(pair_value)
     return tuple(pairs)
 
 

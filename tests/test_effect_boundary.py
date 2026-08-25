@@ -148,6 +148,18 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(facts.fact_kinds, (FeedbackFactKind.RECOVERY,))
         self.assertFalse(facts.chain_completed)
 
+    def test_feedback_fact_contract_requires_actionable_failures(self) -> None:
+        with self.assertRaises(ValueError):
+            FeedbackFacts(fact_kinds=(FeedbackFactKind.MANUAL_REVIEW,))
+        facts = FeedbackFacts(
+            fact_kinds=(FeedbackFactKind.RECOVERY,),
+            recovery_guidance=("Run reconcile",),
+            task_uuid="task-1",
+        )
+        contract = facts.to_contract()
+        self.assertEqual(contract["fact_kinds"], ["recovery"])
+        self.assertEqual(contract["recovery_guidance"], ["Run reconcile"])
+
     def test_all_renderers_consume_the_same_deterministic_view(self) -> None:
         facts = FeedbackFacts(
             task_uuid="task-1",

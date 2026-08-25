@@ -1432,45 +1432,6 @@ def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
     return _module("modify_spawn_prep").sanitize_unknown_attrs(stderr, payload)
 
 
-def _format_line_preview(
-    link_no: int,
-    task: dict,
-    child_due_utc: datetime,
-    child_short: str,
-    now_utc: datetime,
-    child_field: str = "due",
-    cap_no: int | None = None,
-    until_dt: datetime | None = None,
-    until_no: int | None = None,
-    child_until_dt: datetime | None = None,
-    kind: str = "cp",
-    minimal: bool = False,
-) -> str:
-    task = _module("modify_models").TaskView.from_mapping(task)
-    return _module("modify_feedback").format_line_preview(
-        link_no,
-        task,
-        child_due_utc,
-        child_short,
-        now_utc,
-        child_field=child_field,
-        cap_no=cap_no,
-        until_dt=until_dt,
-        until_no=until_no,
-        child_until_dt=child_until_dt,
-        kind=kind,
-        minimal=minimal,
-        core=core,
-        format_local=_fmtlocal,
-        on_time_delta=lambda due, end, tol=60: _module("modify_format_effects").on_time_delta(
-            _module("modify_composition").hook_host(globals(), __name__), due, end, tol
-        ),
-        human_delta=lambda start, end, prefer=True: _module("modify_format_effects").human_delta(
-            _module("modify_composition").hook_host(globals(), __name__), start, end, prefer
-        ),
-    )
-
-
 # Helper to categorize subprocess failures
 def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
     return _module("modify_spawn_prep").categorize_spawn_error(returncode, stderr)

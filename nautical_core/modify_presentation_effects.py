@@ -229,7 +229,7 @@ def build_runtime_services(host: Any):
         root_uuid_from=host._root_uuid_from, short=host._short,
         format_next_anchor_rows=host._module("modify_feedback").format_next_anchor_rows,
         format_next_cp_rows=host._module("modify_feedback").format_next_cp_rows,
-        format_line_preview=host._format_line_preview,
+        format_line_preview=lambda *args, **kwargs: host._module("modify_format_effects").line_preview(host, *args, **kwargs),
         panel_line=host._panel_line, text_line=host._text_line,
         panel=host._panel, print_task=host._print_task, diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,

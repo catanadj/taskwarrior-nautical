@@ -39,6 +39,26 @@ class AddScheduleSelection:
 
 
 @dataclass(frozen=True, slots=True)
+class AddScheduleLimits:
+    """Validated bounds produced alongside a recurrence selection."""
+
+    native_until: TaskTimestamp | None = None
+    chain_until: TaskTimestamp | None = None
+    chain_max: int | None = None
+    expiration_hops: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("native_until", "chain_until"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, TaskTimestamp):
+                raise TypeError(f"{name} must be a TaskTimestamp or None")
+        for name in ("chain_max", "expiration_hops"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
+                raise ValueError(f"{name} must be a positive integer or None")
+
+
+@dataclass(frozen=True, slots=True)
 class AddWorkflowPlan:
     """Typed add decision before patch application or presentation."""
 
@@ -48,6 +68,7 @@ class AddWorkflowPlan:
     target_field: str = "due"
     target_explicit: bool = False
     schedule: AddScheduleSelection | None = None
+    limits: AddScheduleLimits | None = None
     feedback: FeedbackFacts = FeedbackFacts()
 
     @property
@@ -130,6 +151,7 @@ def record_schedule(
         target_field=plan.target_field,
         target_explicit=plan.target_explicit,
         schedule=selection,
+        limits=plan.limits,
         feedback=feedback,
     )
 
@@ -155,11 +177,29 @@ def schedule_patch(
     return TaskPatch((TaskPatchOperation(plan.target_field, PatchOperation.SET, encoded),))
 
 
+def record_limits(plan: AddWorkflowPlan, limits: AddScheduleLimits) -> AddWorkflowPlan:
+    """Attach validated recurrence bounds without applying or rendering them."""
+    if not isinstance(limits, AddScheduleLimits):
+        raise TypeError("add schedule limits must be AddScheduleLimits")
+    return AddWorkflowPlan(
+        request=plan.request,
+        patch=plan.patch,
+        recurrence_kind=plan.recurrence_kind,
+        target_field=plan.target_field,
+        target_explicit=plan.target_explicit,
+        schedule=plan.schedule,
+        limits=limits,
+        feedback=plan.feedback,
+    )
+
+
 __all__ = (
+    "AddScheduleLimits",
     "AddScheduleSelection",
     "AddWorkflowPlan",
     "classify_add_route",
     "plan_add",
     "record_schedule",
     "schedule_patch",
+    "record_limits",
 )

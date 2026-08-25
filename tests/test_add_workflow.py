@@ -4,7 +4,14 @@ import unittest
 
 from datetime import datetime, timezone
 
-from nautical_core.add_workflow import classify_add_route, plan_add, record_schedule, schedule_patch
+from nautical_core.add_workflow import (
+    AddScheduleLimits,
+    classify_add_route,
+    plan_add,
+    record_limits,
+    record_schedule,
+    schedule_patch,
+)
 from nautical_core.hook_workflow_models import PatchOperation, WorkflowRoute
 from nautical_core.task_models import TaskObservation, TaskTimestamp
 
@@ -82,6 +89,13 @@ class AddWorkflowTests(unittest.TestCase):
         patch = schedule_patch(plan, first_occurrence=timestamp, encode_timestamp=lambda value: value.value.strftime("%Y%m%dT%H%M%SZ"))
         self.assertEqual(patch.operations[0].field, "due")
         self.assertEqual(patch.operations[0].value, "20260831T060000Z")
+
+    def test_limits_are_typed_and_attached_without_mutation(self) -> None:
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        limits = AddScheduleLimits(chain_max=3, expiration_hops=2)
+        bounded = record_limits(plan, limits)
+        self.assertIsNone(plan.limits)
+        self.assertEqual(bounded.limits, limits)
 
 
 if __name__ == "__main__":

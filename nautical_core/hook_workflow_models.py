@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any
 
 from .lifecycle_models import LifecyclePlan
-from .task_models import TaskObservation, TaskTimestamp
+from .task_models import FrozenValue, TaskObservation, TaskTimestamp
 
 
 class HookKind(str, Enum):
@@ -287,8 +287,8 @@ class TaskPatchOperation:
 
     field: str
     operation: PatchOperation
-    value: Any = None
-    expected_current: Any = None
+    value: FrozenValue = None
+    expected_current: FrozenValue = None
 
     def __post_init__(self) -> None:
         field = str(self.field).strip()

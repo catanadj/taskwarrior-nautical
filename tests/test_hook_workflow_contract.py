@@ -42,6 +42,7 @@ class HookWorkflowContractTests(unittest.TestCase):
         self.assertEqual(set(HOOK_OUTPUT_CONTRACTS), set(HookKind))
         self.assertFalse(HOOK_OUTPUT_CONTRACTS[HookKind.ADD].ensure_ascii)
         self.assertEqual(HOOK_OUTPUT_CONTRACTS[HookKind.EXIT].stdout, "empty")
+        self.assertTrue(all(contract.diagnostics_stderr_only_when_enabled for contract in HOOK_OUTPUT_CONTRACTS.values()))
 
     def test_deferred_failure_preserves_input(self) -> None:
         result = WorkflowOutcome(

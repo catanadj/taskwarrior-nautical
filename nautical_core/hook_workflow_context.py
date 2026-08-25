@@ -10,8 +10,13 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from .integration_context import IntegrationContext
+
+if TYPE_CHECKING:
+    from .evaluation_session import EvaluationSession
+    from .lifecycle_application import LifecycleApplicationService
+    from .task_read_repository import TaskReadRepository
 
 
 class BusinessCalendar(Protocol):
@@ -108,9 +113,9 @@ class WorkflowInvocationContext:
     task_lease: SnapshotLease
     business_calendar: BusinessCalendar | None = None
     caches: InvocationCaches = field(default_factory=InvocationCaches, compare=False)
-    repository: object | None = field(default=None, compare=False)
-    scheduler_session: object | None = field(default=None, compare=False)
-    lifecycle_application: object | None = field(default=None, compare=False)
+    repository: "TaskReadRepository | None" = field(default=None, compare=False)
+    scheduler_session: "EvaluationSession | None" = field(default=None, compare=False)
+    lifecycle_application: "LifecycleApplicationService | None" = field(default=None, compare=False)
     closed: bool = field(default=False, init=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -138,9 +143,9 @@ class WorkflowInvocationContext:
         task_lease: SnapshotLease,
         business_calendar: BusinessCalendar | None = None,
         caches: InvocationCaches | None = None,
-        repository: object | None = None,
-        scheduler_session: object | None = None,
-        lifecycle_application: object | None = None,
+        repository: "TaskReadRepository | None" = None,
+        scheduler_session: "EvaluationSession | None" = None,
+        lifecycle_application: "LifecycleApplicationService | None" = None,
     ) -> "WorkflowInvocationContext":
         """Sample the clock exactly once and derive the local timestamp."""
         now_utc = integration.clock.now_utc()

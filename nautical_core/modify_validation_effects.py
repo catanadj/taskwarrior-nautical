@@ -82,11 +82,24 @@ def validate_shared_omit(host: Any, expr: str) -> None:
     )
 
 
+def validate_cp(host: Any, cp_value: str, chain_max_value: Any, chain_until_value: Any) -> None:
+    add_validation = host.core._import_sibling("add_validation")
+    host._module("modify_validation").validate_cp_on_modify(
+        cp_value,
+        chain_max_value,
+        chain_until_value,
+        parse_cp_sequence=host.core.parse_cp_sequence,
+        cp_sequence_parse_error=host.core.cp_sequence_parse_error,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=host.core.parse_dt_any,
+    )
+
+
 def semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
 
 __all__ = (
     "validate_anchor", "validate_omit", "validate_shared_anchor",
-    "validate_shared_omit", "semantic_diff_value",
+    "validate_shared_omit", "validate_cp", "semantic_diff_value",
 )

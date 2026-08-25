@@ -1630,19 +1630,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _validate_cp_on_modify(cp_str: str, chain_max_val, chain_until_val):
-    add_validation = core._import_sibling("add_validation")
-    return _module("modify_validation").validate_cp_on_modify(
-        cp_str,
-        chain_max_val,
-        chain_until_val,
-        parse_cp_sequence=core.parse_cp_sequence,
-        cp_sequence_parse_error=core.cp_sequence_parse_error,
-        parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=core.parse_dt_any,
-    )
-
-
 def _validate_chain_limits_on_modify(task: dict) -> None:
     add_validation = core._import_sibling("add_validation")
     pipeline = core._import_sibling("hook_validation_pipeline")

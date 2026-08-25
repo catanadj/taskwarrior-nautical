@@ -20,6 +20,11 @@ class OnAddServices(Protocol):
     def stamp_chain_id(self, task: TaskPayload) -> None: ...
     def render_anchor_preview(self, context: Any, *, prof: Any) -> None: ...
     def render_cp_preview(self, context: Any, *, prof: Any) -> None: ...
+    def plan_add(self, observation: Any) -> Any: ...
+    def apply_add_plan(self, task: TaskPayload, plan: Any) -> None: ...
+    def record_schedule(self, plan: Any, task: TaskPayload, target_field: str) -> Any: ...
+    def record_limits(self, plan: Any, task: TaskPayload, context: Any) -> Any: ...
+    def record_preview(self, plan: Any) -> Any: ...
 
 
 class OnModifyServices(Protocol):
@@ -82,13 +87,11 @@ def handle_on_add(
             now_local = core.to_local(now_utc)
 
     observation = getattr(request, "observation", None)
-    plan_add = getattr(services, "plan_add", None)
-    apply_add_plan = getattr(services, "apply_add_plan", None)
     planned_add = False
     workflow_plan = None
-    if observation is not None and callable(plan_add) and callable(apply_add_plan):
-        workflow_plan = plan_add(observation)
-        apply_add_plan(task, workflow_plan)
+    if observation is not None:
+        workflow_plan = services.plan_add(observation)
+        services.apply_add_plan(task, workflow_plan)
         planned_add = True
 
     ctx = services.build_context(
@@ -107,15 +110,10 @@ def handle_on_add(
         services.render_anchor_preview(ctx, prof=prof)
     else:
         services.render_cp_preview(ctx, prof=prof)
-    record_schedule = getattr(services, "record_schedule", None)
-    if workflow_plan is not None and callable(record_schedule):
-        workflow_plan = record_schedule(workflow_plan, task, ctx.recurrence_field)
-    record_limits = getattr(services, "record_limits", None)
-    if workflow_plan is not None and callable(record_limits):
-        workflow_plan = record_limits(workflow_plan, task, ctx)
-    record_preview = getattr(services, "record_preview", None)
-    if workflow_plan is not None and callable(record_preview):
-        workflow_plan = record_preview(workflow_plan)
+    if workflow_plan is not None:
+        workflow_plan = services.record_schedule(workflow_plan, task, ctx.recurrence_field)
+        workflow_plan = services.record_limits(workflow_plan, task, ctx)
+        workflow_plan = services.record_preview(workflow_plan)
     if workflow_plan is not None:
         request.workflow_plan = workflow_plan
     return None

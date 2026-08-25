@@ -1872,6 +1872,15 @@ class _OnAddServices:
 
     def __init__(self, result_cls):
         self._result_cls = result_cls
+        workflow = core._import_sibling("add_workflow")
+        self._workflow_application = workflow.AddWorkflowApplication(
+            record_schedule_fn=self.record_schedule,
+            record_limits_fn=self.record_limits,
+            record_preview_fn=self.record_preview,
+        )
+
+    def workflow_application(self):
+        return self._workflow_application
 
     def result(self, task, *, sanitize: bool, prof):
         return self._result_cls(task=task, sanitize=sanitize, prof=prof)

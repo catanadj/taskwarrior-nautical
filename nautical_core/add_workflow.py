@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from typing import Any, MutableMapping
+from typing import Any, Callable, MutableMapping
 
 from .hook_workflow_models import (
     AddWorkflowRequest,
@@ -145,6 +145,29 @@ class AddWorkflowPlan:
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+@dataclass(frozen=True, slots=True)
+class AddWorkflowApplication:
+    """Typed coordinator for one add decision and its presentation metadata."""
+
+    record_schedule_fn: Callable[[AddWorkflowPlan, MutableMapping[str, Any], str], AddWorkflowPlan]
+    record_limits_fn: Callable[[AddWorkflowPlan, MutableMapping[str, Any], Any], AddWorkflowPlan]
+    record_preview_fn: Callable[[AddWorkflowPlan], AddWorkflowPlan]
+
+    def prepare(self, task: MutableMapping[str, Any], observation: TaskObservation) -> AddWorkflowPlan:
+        plan = plan_add(observation)
+        apply_task_patch(task, plan.patch)
+        return plan
+
+    def record_schedule(self, plan: AddWorkflowPlan, task: MutableMapping[str, Any], target_field: str) -> AddWorkflowPlan:
+        return self.record_schedule_fn(plan, task, target_field)
+
+    def record_limits(self, plan: AddWorkflowPlan, task: MutableMapping[str, Any], context: Any) -> AddWorkflowPlan:
+        return self.record_limits_fn(plan, task, context)
+
+    def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
+        return self.record_preview_fn(plan)
 
 
 def _text(task: TaskObservation, field: str) -> str:
@@ -332,6 +355,7 @@ __all__ = (
     "AddScheduleLimits",
     "AddScheduleSelection",
     "AddWorkflowPlan",
+    "AddWorkflowApplication",
     "classify_add_route",
     "plan_add",
     "apply_task_patch",

@@ -20,11 +20,7 @@ class OnAddServices(Protocol):
     def stamp_chain_id(self, task: TaskPayload) -> None: ...
     def render_anchor_preview(self, context: Any, *, prof: Any) -> None: ...
     def render_cp_preview(self, context: Any, *, prof: Any) -> None: ...
-    def plan_add(self, observation: Any) -> Any: ...
-    def apply_add_plan(self, task: TaskPayload, plan: Any) -> None: ...
-    def record_schedule(self, plan: Any, task: TaskPayload, target_field: str) -> Any: ...
-    def record_limits(self, plan: Any, task: TaskPayload, context: Any) -> Any: ...
-    def record_preview(self, plan: Any) -> Any: ...
+    def workflow_application(self) -> Any: ...
 
 
 class OnModifyServices(Protocol):
@@ -90,8 +86,7 @@ def handle_on_add(
     planned_add = False
     workflow_plan = None
     if observation is not None:
-        workflow_plan = services.plan_add(observation)
-        services.apply_add_plan(task, workflow_plan)
+        workflow_plan = services.workflow_application().prepare(task, observation)
         planned_add = True
 
     ctx = services.build_context(
@@ -111,9 +106,10 @@ def handle_on_add(
     else:
         services.render_cp_preview(ctx, prof=prof)
     if workflow_plan is not None:
-        workflow_plan = services.record_schedule(workflow_plan, task, ctx.recurrence_field)
-        workflow_plan = services.record_limits(workflow_plan, task, ctx)
-        workflow_plan = services.record_preview(workflow_plan)
+        application = services.workflow_application()
+        workflow_plan = application.record_schedule(workflow_plan, task, ctx.recurrence_field)
+        workflow_plan = application.record_limits(workflow_plan, task, ctx)
+        workflow_plan = application.record_preview(workflow_plan)
     if workflow_plan is not None:
         request.workflow_plan = workflow_plan
     return None

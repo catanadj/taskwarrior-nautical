@@ -43,19 +43,22 @@ class ModifyCompositionServices:
         self._host._fail_and_exit(title, message)
 
     def handle_non_completion(self, old, new, unit_of_work, transition=None):
-        self._host._handle_non_completion_modify(
+        self._host._module("modify_effects").handle_non_completion(
+            self._host,
             old, new, unit_of_work, transition=transition
         )
 
     def handle_completion(self, old, new, unit_of_work, transition=None):
-        return self._host._handle_completion_modify(
+        return self._host._module("modify_effects").handle_completion(
+            self._host,
             old, new, unit_of_work, transition=transition
         )
 
     def handle_deleted(
         self, old, new, unit_of_work, transition=None, terminal_decision=None
     ):
-        return self._host._handle_deleted_modify(
+        return self._host._module("modify_effects").handle_deleted(
+            self._host,
             old,
             new,
             unit_of_work,

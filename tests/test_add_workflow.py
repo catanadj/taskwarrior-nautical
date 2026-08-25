@@ -107,9 +107,20 @@ class AddWorkflowTests(unittest.TestCase):
     def test_auto_target_receives_only_scheduler_timestamp(self) -> None:
         plan = plan_add(observation({"anchor": "w:mon"}))
         timestamp = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
-        patch = schedule_patch(plan, first_occurrence=timestamp, encode_timestamp=lambda value: value.value.strftime("%Y%m%dT%H%M%SZ"))
+        with self.assertRaisesRegex(AddScheduleFailure, "unavailable"):
+            schedule_patch(plan, first_occurrence=timestamp, encode_timestamp=str)
+        resolved = record_schedule(plan, first_occurrence=timestamp)
+        patch = schedule_patch(resolved, first_occurrence=timestamp, encode_timestamp=lambda value: value.value.strftime("%Y%m%dT%H%M%SZ"))
         self.assertEqual(patch.operations[0].field, "due")
         self.assertEqual(patch.operations[0].value, "20260831T060000Z")
+
+    def test_auto_target_rejects_mismatched_scheduler_timestamp(self) -> None:
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        selected = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
+        other = TaskTimestamp(datetime(2026, 9, 7, 6, tzinfo=timezone.utc))
+        resolved = record_schedule(plan, first_occurrence=selected)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            schedule_patch(resolved, first_occurrence=other, encode_timestamp=str)
 
     def test_limits_are_typed_and_attached_without_mutation(self) -> None:
         plan = plan_add(observation({"anchor": "w:mon"}))

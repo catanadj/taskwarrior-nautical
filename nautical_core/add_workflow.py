@@ -242,6 +242,11 @@ def schedule_patch(
         return TaskPatch(())
     if not isinstance(first_occurrence, TaskTimestamp):
         raise TypeError("scheduler target must be a TaskTimestamp")
+    selection = plan.schedule
+    if selection is None or selection.status != "found":
+        raise AddScheduleFailure("unavailable")
+    if selection.first_occurrence != first_occurrence:
+        raise ValueError("scheduler target does not match the recorded add selection")
     encoded = encode_timestamp(first_occurrence)
     if not isinstance(encoded, str) or not encoded.strip():
         raise ValueError("scheduler timestamp encoder returned an empty value")

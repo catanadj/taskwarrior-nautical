@@ -225,10 +225,6 @@ def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int
     return default_local.hour, default_local.minute
 
 
-def _modify_chain_state():
-    return _modify_runtime_state()
-
-
 def _diag_count(key: str, inc: int = 1) -> None:
     try:
         state = _modify_runtime_state()
@@ -392,7 +388,7 @@ def _invalidate_read_query_cache() -> None:
     except Exception:
         pass
     try:
-        service = getattr(_modify_chain_state(), "lifecycle_read_service", None)
+        service = getattr(_modify_runtime_state(), "lifecycle_read_service", None)
         clear_cache = getattr(service, "clear_cache", None)
         if callable(clear_cache):
             clear_cache()
@@ -1577,8 +1573,8 @@ def _collect_prev_two(current_task: dict, chain_by_link=None):
     read = service.collect_prev_two(
         current_task,
         get_chain_read=lambda chain_id: service.get_chain_read(chain_id),
-        panel_chain_by_link=_modify_chain_state().panel_chain_by_link,
-        panel_chain_snapshot_loaded=_modify_chain_state().panel_chain_snapshot_loaded,
+        panel_chain_by_link=_modify_runtime_state().panel_chain_by_link,
+        panel_chain_snapshot_loaded=_modify_runtime_state().panel_chain_snapshot_loaded,
         chain_by_link=chain_by_link,
     )
     if isinstance(read, Unavailable):
@@ -1617,7 +1613,7 @@ def _cached_chain_token_match(task, token: str) -> bool:
 
 def _lifecycle_read_service():
     """Build the focused chain-read service for this hook invocation."""
-    state = _modify_chain_state()
+    state = _modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)
     if existing is not None:
         repository = getattr(_modify_runtime_state(), "task_repository", None)

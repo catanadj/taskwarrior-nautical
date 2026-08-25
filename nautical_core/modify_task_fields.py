@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 
-def recurrence_anchor_field(task: dict[str, Any] | None) -> str:
-    if isinstance(task, dict):
-        if task.get("due"):
+def recurrence_anchor_field(payload: dict[str, Any] | None) -> str:
+    if isinstance(payload, dict):
+        if payload.get("due"):
             return "due"
-        if task.get("scheduled"):
+        if payload.get("scheduled"):
             return "scheduled"
     return "due"
 

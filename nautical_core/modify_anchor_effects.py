@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 
-def omit_dnf_from_parent(host: Any, parent: dict[str, Any]):
-    expr_str = (parent.get("omit") or "").strip()
-    omit_file = (parent.get("omit_file") or "").strip()
+def omit_dnf_from_parent(host: Any, task_mapping: dict[str, Any]):
+    expr_str = (task_mapping.get("omit") or "").strip()
+    omit_file = (task_mapping.get("omit_file") or "").strip()
     omit_dnf = None
     omit_dates: frozenset[Any] = frozenset()
     omit_descriptions: dict[Any, str] = {}

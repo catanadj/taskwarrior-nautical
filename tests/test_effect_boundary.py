@@ -14,6 +14,7 @@ from nautical_core.integration_models import (
     MutationOutcome,
     MutationOutcomeKind,
     MutationPostcondition,
+    IntegrationContractError,
 )
 from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
 
@@ -69,6 +70,14 @@ class EffectBoundaryTests(unittest.TestCase):
             (MutationPostcondition.CHAIN_DISABLED,),
         )
         self.assertEqual(outcome.postconditions, (MutationPostcondition.CHAIN_DISABLED,))
+        with self.assertRaises(IntegrationContractError):
+            MutationOutcome(
+                MutationOperation.CHAIN_DISABLE,
+                MutationOutcomeKind.REJECTED,
+                guard,
+                (MutationPostcondition.CHAIN_DISABLED,),
+                reason="guard conflict",
+            )
 
     def test_snapshot_cache_is_invalidated_by_mutation_epoch(self) -> None:
         cache = InvocationReadCache()

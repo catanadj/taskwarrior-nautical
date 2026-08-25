@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .task_changes import TaskTransition
+from .task_field_policy import VOLATILE_TASK_FIELDS
 
 
 class ModifyRouteKind(str, Enum):
@@ -94,6 +95,8 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
 
     if old_status == new_status:
         evidence.append("status_unchanged")
+    if transition.changed_fields and set(transition.changed_fields).issubset(VOLATILE_TASK_FIELDS):
+        evidence.append("volatile_only")
     if transition.changed_fields and set(transition.changed_fields).issubset(_CHAIN_FIELDS):
         evidence.append("chain_identity_edit")
     return ModifyWorkflowRoute(kind, has_nautical, transition.changed_fields, tuple(evidence))

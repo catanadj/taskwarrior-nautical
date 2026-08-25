@@ -106,6 +106,8 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
         transition.old.field(field).raw_value() or transition.new.field(field).raw_value()
         for field in _CHAIN_FIELDS
     )
+    if has_nautical and (not old_uuid or not new_uuid):
+        raise ModifyTransitionError("Nautical modify transition requires a task UUID")
     evidence: list[str] = []
 
     linking_successor = (

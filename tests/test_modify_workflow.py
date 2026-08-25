@@ -84,6 +84,12 @@ class ModifyWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ModifyTransitionError, "two task UUIDs"):
             classify_modify_transition(transition(old, new))
 
+    def test_nautical_transition_without_uuid_is_rejected(self) -> None:
+        old = {"status": "pending", "anchor": "w:mon", "uuid": ""}
+        new = {"status": "pending", "anchor": "w:tue", "uuid": ""}
+        with self.assertRaisesRegex(ModifyTransitionError, "requires a task UUID"):
+            classify_modify_transition(transition(old, new))
+
 
 if __name__ == "__main__":
     unittest.main()

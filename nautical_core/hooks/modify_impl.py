@@ -1302,26 +1302,6 @@ def _strip_quotes(s: str) -> str:
     return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
 
 
-def _format_chain_summary_rows(
-    rows: list[tuple[str, str]]
-) -> list[tuple[str | None, str]]:
-    return _module("modify_feedback").format_chain_summary_rows(rows)
-
-
-
-def _format_next_anchor_rows(
-    rows: list[tuple[str, str]]
-) -> list[tuple[str | None, str]]:
-    return _module("modify_feedback").format_next_anchor_rows(rows)
-
-def _format_next_cp_rows(
-    rows: list[tuple[str, str]]
-) -> list[tuple[str | None, str]]:
-    return _module("modify_feedback").format_next_cp_rows(rows)
-
-
-
-
 # ------------------------------------------------------------------------------
 # Taskwarrior integration
 # ------------------------------------------------------------------------------

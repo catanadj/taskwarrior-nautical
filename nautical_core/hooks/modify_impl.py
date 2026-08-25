@@ -1349,25 +1349,6 @@ def _text_line(
         markup_body=markup_body,
     )
 
-def _reserve_child_uuid(env: dict) -> str:
-    candidate = str(uuid.uuid4())
-    while True:
-        result = _module("modify_command_effects").run_task_result(
-            _module("modify_composition").hook_host(globals(), __name__),
-            _task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{candidate}", "count"],
-            env=env,
-            timeout=2.5,
-            retries=2,
-        )
-        if result.ok:
-            if (result.stdout or "").strip() == "0":
-                return candidate
-            candidate = str(uuid.uuid4())
-            continue
-        _diag(f"uuid availability check failed (uuid={candidate[:8]}): {result.stderr.strip()}")
-        return candidate
-
-
 def _stable_child_uuid(parent_task: dict | None, child_task: dict | None) -> str:
     modify_spawn_prep = _module("modify_spawn_prep")
     return modify_spawn_prep.stable_child_uuid(
@@ -1386,7 +1367,9 @@ def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env
         child_task,
         env,
         stable_child_uuid=_stable_child_uuid,
-        reserve_child_uuid=_reserve_child_uuid,
+        reserve_child_uuid=lambda env: _module("modify_command_effects").reserve_child_uuid(
+            _module("modify_composition").hook_host(globals(), __name__), env
+        ),
     )
 
 

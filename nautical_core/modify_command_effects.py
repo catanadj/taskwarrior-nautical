@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
 
@@ -46,4 +47,23 @@ def task_text(host: Any, args, *, env=None) -> str:
     return output
 
 
-__all__ = ("run_task_result", "task_text")
+def reserve_child_uuid(host: Any, env: dict) -> str:
+    candidate = str(uuid.uuid4())
+    while True:
+        result = run_task_result(
+            host,
+            host._task_cmd_prefix() + ["rc.hooks=off", "rc.json.array=off", f"uuid:{candidate}", "count"],
+            env=env,
+            timeout=2.5,
+            retries=2,
+        )
+        if result.ok:
+            if (result.stdout or "").strip() == "0":
+                return candidate
+            candidate = str(uuid.uuid4())
+            continue
+        host._diag(f"uuid availability check failed (uuid={candidate[:8]}): {result.stderr.strip()}")
+        return candidate
+
+
+__all__ = ("run_task_result", "task_text", "reserve_child_uuid")

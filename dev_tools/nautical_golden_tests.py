@@ -31656,7 +31656,8 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     """_spawn_child_atomic should report queue failure instead of claiming deferred success."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_queue_failure_test")
-    mod._reserve_child_uuid = lambda _env: "00000000-0000-4000-8000-00000000abcd"
+    command_effects = mod._module("modify_command_effects")
+    command_effects.reserve_child_uuid = lambda _host, _env: "00000000-0000-4000-8000-00000000abcd"
     spawn_effects = mod._module("modify_spawn_effects")
     original_enqueue = spawn_effects.enqueue_spawn_intent
     spawn_effects.enqueue_spawn_intent = lambda _host, _entry: (False, "queue lock busy")

@@ -95,11 +95,37 @@ def validate_cp(host: Any, cp_value: str, chain_max_value: Any, chain_until_valu
     )
 
 
+def validate_chain_limits(host: Any, task: dict) -> None:
+    add_validation = host.core._import_sibling("add_validation")
+    pipeline = host.core._import_sibling("hook_validation_pipeline")
+    cpmax, _until_dt, findings = pipeline.validate_recurrence_limits(
+        task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
+        parse_cp_sequence=host.core.parse_cp_sequence,
+        cp_sequence_parse_error=host.core.cp_sequence_parse_error,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=host.core.parse_dt_any,
+    )
+    if findings:
+        finding = findings[0]
+        host._fail_and_exit(f"Invalid {finding.field}", finding.reason)
+    if cpmax is not None:
+        task["chainMax"] = cpmax
+    return host._module("modify_validation").validate_chain_limits_on_modify(
+        task,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=host.core.parse_dt_any,
+        validate_until_not_past=host._validate_until_not_past,
+        now_utc=host.core.now_utc,
+        fail=host._fail_and_exit,
+    )
+
+
 def semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
 
 
 __all__ = (
     "validate_anchor", "validate_omit", "validate_shared_anchor",
-    "validate_shared_omit", "validate_cp", "semantic_diff_value",
+    "validate_shared_omit", "validate_cp", "validate_chain_limits",
+    "semantic_diff_value",
 )

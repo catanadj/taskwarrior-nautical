@@ -1630,31 +1630,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _validate_chain_limits_on_modify(task: dict) -> None:
-    add_validation = core._import_sibling("add_validation")
-    pipeline = core._import_sibling("hook_validation_pipeline")
-    cpmax, _until_dt, findings = pipeline.validate_recurrence_limits(
-        task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
-        parse_cp_sequence=core.parse_cp_sequence,
-        cp_sequence_parse_error=core.cp_sequence_parse_error,
-        parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=core.parse_dt_any,
-    )
-    if findings:
-        finding = findings[0]
-        _fail_and_exit(f"Invalid {finding.field}", finding.reason)
-    if cpmax is not None:
-        task["chainMax"] = cpmax
-    return _module("modify_validation").validate_chain_limits_on_modify(
-        task,
-        parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=core.parse_dt_any,
-        validate_until_not_past=_validate_until_not_past,
-        now_utc=core.now_utc,
-        fail=_fail_and_exit,
-    )
-
-
 def _validate_native_until_after_target_or_fail(task: dict) -> None:
     add_validation = core._import_sibling("add_validation")
     _module("modify_validation").validate_native_until_after_target_or_fail(

@@ -121,7 +121,7 @@ def validate_completion_cp_and_anchor(host: Any, old: TaskPayload, new: TaskPayl
             strip_quotes=host._strip_quotes,
             reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
             validate_omit=lambda anchor, anchor_file, omit, omit_file: validation_effects.validate_omit(host, anchor, anchor_file, omit, omit_file),
-            validate_chain_limits=host._validate_chain_limits_on_modify,
+            validate_chain_limits=lambda task: validation_effects.validate_chain_limits(host, task),
             parse_cp_sequence=host.core.parse_cp_sequence,
             cp_sequence_parse_error=host.core.cp_sequence_parse_error,
             field_changed=(

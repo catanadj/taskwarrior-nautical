@@ -30,7 +30,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         validate_anchor=lambda old_task, new_task, expr: validation.validate_anchor(host, old_task, new_task, expr),
         validate_omit=lambda anchor, anchor_file, omit, omit_file: validation.validate_omit(host, anchor, anchor_file, omit, omit_file),
         reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
-        validate_chain_limits=host._validate_chain_limits_on_modify,
+        validate_chain_limits=lambda task: validation.validate_chain_limits(host, task),
         preserve_cp_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
             host,
             old_task, new_task, cp, transition=transition,

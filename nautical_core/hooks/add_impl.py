@@ -139,6 +139,8 @@ _ADD_FORMATTING = None
 _ADD_FORMATTING_LOAD_FAILED = False
 _ADD_VALIDATION = None
 _ADD_VALIDATION_LOAD_FAILED = False
+_ASTRONOMY_VALIDATION = None
+_ASTRONOMY_VALIDATION_LOAD_FAILED = False
 _ADD_ANCHOR_COMPUTE = None
 _ADD_ANCHOR_COMPUTE_LOAD_FAILED = False
 _ADD_ANCHOR_PREVIEW = None
@@ -185,6 +187,12 @@ _MODULE_SPECS = {
         "_ADD_VALIDATION_LOAD_FAILED",
         "add_validation.py",
         "nautical_core.add_validation",
+    ),
+    "astronomy_validation": (
+        "_ASTRONOMY_VALIDATION",
+        "_ASTRONOMY_VALIDATION_LOAD_FAILED",
+        "astronomy_validation.py",
+        "nautical_core.astronomy_validation",
     ),
     "add_anchor_compute": (
         "_ADD_ANCHOR_COMPUTE",
@@ -762,20 +770,23 @@ def _validate_native_until_anchor_slots_or_fail(
     until_raw = task.get("until")
     if not until_raw or not (dnf or anchor_file_value):
         return
-    add_validation = _module("add_validation")
     until_dt, until_err = _safe_parse_datetime(until_raw, "until")
     if until_err or until_dt is None:
         return
     try:
-        slots = add_validation.collect_anchor_time_slots(
-            dnf,
-            anchor_file_value,
-            fallback_hhmm,
+        valid, reason, slots = core._import_sibling("astronomy_validation").validate_native_until_slots(
+            until_dt=until_dt,
+            target_dt=target_dt,
+            dnf=dnf,
+            anchor_file_value=anchor_file_value,
+            fallback_hhmm=fallback_hhmm,
+            collect_time_slots=core._import_sibling("add_validation").collect_anchor_time_slots,
             normalize_time_slots=_norm_t_mod,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            target_date=core.to_local(target_dt).date(),
             resolve_time_slots=_resolve_time_slots,
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             recurrence_context=recurrence_spec.context,
+            to_local=core.to_local,
+            validate_time_slots=core._import_sibling("native_until").validate_calendar_slots,
         )
     except Exception as exc:
         astronomy = core._import_sibling("astronomy")
@@ -783,13 +794,7 @@ def _validate_native_until_anchor_slots_or_fail(
             _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
             sys.exit(1)
         return
-    is_valid, reason = add_validation.validate_native_until_calendar_slots(
-        until_dt,
-        target_dt,
-        slots,
-        to_local=core.to_local,
-    )
-    if is_valid:
+    if valid:
         return
     _panel(
         "❌ Invalid expiration window",

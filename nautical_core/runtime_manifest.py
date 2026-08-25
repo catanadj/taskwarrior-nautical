@@ -20,6 +20,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "hook_support",
         "add_formatting",
         "add_validation",
+        "astronomy_validation",
         "add_anchor_compute",
         "add_anchor_preview",
         "anchor_omit",
@@ -68,6 +69,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_protocol",
         "modify_chain_summary",
         "modify_validation",
+        "astronomy_validation",
         "modify_carry",
         "modify_carry_workflow",
         # These are imported directly in the completion path rather than via

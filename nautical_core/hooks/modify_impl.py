@@ -535,6 +535,10 @@ _MODIFY_PROTOCOL = None
 _MODIFY_PROTOCOL_LOAD_FAILED = False
 _MODIFY_CHAIN_SUMMARY = None
 _MODIFY_CHAIN_SUMMARY_LOAD_FAILED = False
+_MODIFY_WORKFLOW = None
+_MODIFY_WORKFLOW_LOAD_FAILED = False
+_ASTRONOMY_VALIDATION = None
+_ASTRONOMY_VALIDATION_LOAD_FAILED = False
 _MODULE_SPECS = {
     "hook_runtime": (
         "_HOOK_RUNTIME",
@@ -746,11 +750,23 @@ _MODULE_SPECS = {
         "modify_chain_summary.py",
         "nautical_core.modify_chain_summary",
     ),
+    "modify_workflow": (
+        "_MODIFY_WORKFLOW",
+        "_MODIFY_WORKFLOW_LOAD_FAILED",
+        "modify_workflow.py",
+        "nautical_core.modify_workflow",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
         "modify_validation.py",
         "nautical_core.modify_validation",
+    ),
+    "astronomy_validation": (
+        "_ASTRONOMY_VALIDATION",
+        "_ASTRONOMY_VALIDATION_LOAD_FAILED",
+        "astronomy_validation.py",
+        "nautical_core.astronomy_validation",
     ),
     "modify_carry": (
         "_MODIFY_CARRY",
@@ -1689,22 +1705,41 @@ def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
     astronomy = core._import_sibling("astronomy")
     native_until = core._import_sibling("native_until")
     recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext
-    _module("modify_validation").validate_native_until_anchor_slots_or_fail(
-        task,
-        safe_parse_datetime=_safe_parse_datetime,
-        validate_anchor=_validate_anchor_expr_cached,
-        collect_time_slots=add_validation.collect_anchor_time_slots,
-        validate_time_slots=native_until.validate_calendar_slots,
-        normalize_time_slots=_norm_hhmm_list,
-        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        recurrence_context=recurrence_context.from_task,
-        to_local=_tolocal,
-        format_local=core.fmt_dt_local,
-        astronomy_is_error=astronomy.is_astronomy_error,
-        astronomy_error_message=astronomy.scheduling_error_message,
-        panel=_panel,
-        abort=sys.exit,
+    until_dt, until_err = _safe_parse_datetime(task.get("until"))
+    if until_err or until_dt is None:
+        return
+    anchor = str(task.get("anchor") or "").strip()
+    dnf = _validate_anchor_expr_cached(anchor) if anchor else None
+    try:
+        valid, reason, slots = core._import_sibling("astronomy_validation").validate_native_until_slots(
+            until_dt=until_dt,
+            target_dt=core.parse_dt_any(task.get("due") or task.get("scheduled")),
+            dnf=dnf,
+            anchor_file_value=str(task.get("anchor_file") or "").strip(),
+            fallback_hhmm=(0, 0),
+            collect_time_slots=add_validation.collect_anchor_time_slots,
+            normalize_time_slots=_norm_hhmm_list,
+            resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+            recurrence_context=recurrence_context.from_task(task),
+            to_local=_tolocal,
+            validate_time_slots=native_until.validate_calendar_slots,
+        )
+    except Exception as exc:
+        if astronomy.is_astronomy_error(exc):
+            _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
+            sys.exit(1)
+        return
+    if valid:
+        return
+    _panel(
+        "❌ Invalid expiration window",
+        [("Expires", core.fmt_dt_local(until_dt)),
+         ("Anchor slots", ", ".join(f"{hh:02d}:{mm:02d}" for hh, mm in slots) or "none"),
+         ("Required", reason or "calendar expiration must be later than every anchor slot")],
+        kind="error",
     )
+    sys.exit(1)
 
 
 # ------------------------------------------------------------------------------

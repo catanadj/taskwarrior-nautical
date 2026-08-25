@@ -20,6 +20,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "hook_support",
         "add_formatting",
         "add_validation",
+        "add_composition",
         "astronomy_validation",
         "add_anchor_compute",
         "add_anchor_preview",

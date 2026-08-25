@@ -443,6 +443,7 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
 
     typed_domain_modules = {
         "nautical_core/add_anchor_preview.py",
+        "nautical_core/add_composition.py",
         "nautical_core/lifecycle_planner.py",
         "nautical_core/chain_integrity_lifecycle.py",
         "nautical_core/lifecycle_reconciliation.py",

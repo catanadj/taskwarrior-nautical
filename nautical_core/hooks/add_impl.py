@@ -17,6 +17,7 @@ Features:
 from __future__ import annotations
 
 import sys, json, os, importlib, importlib.util, time
+from types import SimpleNamespace
 from pathlib import Path
 
 _IMPL_CORE_DIR = Path(__file__).resolve().parent.parent
@@ -187,6 +188,12 @@ _MODULE_SPECS = {
         "_ADD_VALIDATION_LOAD_FAILED",
         "add_validation.py",
         "nautical_core.add_validation",
+    ),
+    "add_composition": (
+        "_ADD_COMPOSITION",
+        "_ADD_COMPOSITION_LOAD_FAILED",
+        "add_composition.py",
+        "nautical_core.add_composition",
     ),
     "astronomy_validation": (
         "_ASTRONOMY_VALIDATION",
@@ -1861,99 +1868,6 @@ def _handle_cp_preview_on_add_context(ctx, *, prof) -> None:
     )
 
 
-class _OnAddServices:
-    """Concrete adapter passed to the shared hook router."""
-
-    def __init__(self, result_cls):
-        self._result_cls = result_cls
-        workflow = core._import_sibling("add_workflow")
-        self._workflow_application = workflow.AddWorkflowApplication(
-            record_schedule_fn=self.record_schedule,
-            record_limits_fn=self.record_limits,
-            record_preview_fn=self.record_preview,
-            build_context_fn=self.build_context,
-            stamp_chain_id_fn=self.stamp_chain_id,
-            render_anchor_preview_fn=self.render_anchor_preview,
-            render_cp_preview_fn=self.render_cp_preview,
-        )
-
-    def workflow_application(self):
-        return self._workflow_application
-
-    def result(self, task, *, sanitize: bool, prof):
-        return self._result_cls(task=task, sanitize=sanitize, prof=prof)
-
-    def has_nautical_fields(self, task):
-        return _task_has_nautical_fields(task)
-
-    def load_core(self):
-        _load_core()
-
-    def core(self):
-        return core
-
-    def diag(self, message: str):
-        _diag(message)
-
-    def fail_and_exit(self, title: str, message: str):
-        _fail_and_exit(title, message)
-
-    def build_context(self, task, now_utc, now_local, *, observation=None, prof):
-        return _build_on_add_context(task, now_utc, now_local, observation=observation, prof=prof)
-
-    def record_schedule(self, plan, task, target_field):
-        workflow = core._import_sibling("add_workflow")
-        raw = task.get(target_field)
-        try:
-            value = core.parse_dt_any(raw)
-            TaskTimestamp = core._import_sibling("task_models").TaskTimestamp
-            return workflow.record_schedule(
-                plan,
-                first_occurrence=TaskTimestamp(value),
-            )
-        except Exception as exc:
-            _fail_and_exit("Scheduler unavailable", f"Could not record first {target_field}: {exc}")
-            raise
-
-    def record_preview(self, plan):
-        workflow = core._import_sibling("add_workflow")
-        policy = workflow.preview_policy(
-            panel_mode=getattr(core, "PANEL_MODE", "rich"),
-            requested_limit=UPCOMING_PREVIEW,
-            hard_cap=_PREVIEW_HARD_CAP,
-        )
-        return workflow.record_preview(plan, policy)
-
-    def record_limits(self, plan, task, context):
-        workflow = core._import_sibling("add_workflow")
-        TaskTimestamp = core._import_sibling("task_models").TaskTimestamp
-
-        def timestamp(field):
-            raw = task.get(field)
-            if not raw:
-                return None
-            return TaskTimestamp(core.parse_dt_any(raw))
-
-        chain_max = core.coerce_int(task.get("chainMax"), 0)
-        limits = workflow.AddScheduleLimits(
-            native_until=timestamp("until"),
-            chain_until=timestamp("chainUntil"),
-            chain_max=chain_max if chain_max > 0 else None,
-            wait=timestamp("wait"),
-            scheduled=timestamp("scheduled"),
-        )
-        return workflow.record_limits(plan, limits)
-
-    def stamp_chain_id(self, task):
-        _stamp_chain_id_on_add(task)
-
-    def render_anchor_preview(self, context, *, prof):
-        _handle_anchor_preview_on_add_context(context, prof=prof)
-
-    def render_cp_preview(self, context, *, prof):
-        _handle_cp_preview_on_add_context(context, prof=prof)
-
-
 def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
     has_cp = bool(cp_str)
     has_anchor = bool(anchor_str)
@@ -2112,6 +2026,7 @@ def main():
         return
     hook_context = _module("hook_context")
     hook_engine = _module("hook_engine")
+    composition = _module("add_composition")
     runtime = _build_hook_runtime_context(task)
     request = hook_context.build_on_add_request(
         runtime=runtime,
@@ -2123,7 +2038,10 @@ def main():
         with calendar_context, displacement_context:
             result = hook_engine.handle_on_add(
                 request,
-                services=_OnAddServices(hook_results.TaskHookResponse),
+                services=composition.AddCompositionServices(
+                    sys.modules.get(__name__, SimpleNamespace(**globals())),
+                    hook_results.TaskHookResponse,
+                ),
             )
         if result is not None:
             hook_results.emit_json_result(result, core=core)

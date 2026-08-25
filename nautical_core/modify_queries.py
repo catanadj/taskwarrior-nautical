@@ -59,3 +59,50 @@ def format_root_and_age(task: TaskPayload, now_utc, *, chain_root_and_age) -> st
     if age_days is not None and age_days > 0:
         return f"{root_short} ▻ {age_days}d"
     return root_short
+
+
+def cached_chain_root_and_age(host, task: TaskPayload, now_utc) -> tuple[str, int | None]:
+    """Resolve and cache chain root age within the current modify invocation."""
+    try:
+        cache_key = (host._root_uuid_from(task), str(host._tolocal(now_utc).date()))
+    except Exception:
+        cache_key = None
+    if cache_key is not None:
+        cached = host._query_ctx_get("chain_root_age", cache_key)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            host._diag_count("chain_root_age_cache_hits")
+            return cached
+        host._diag_count("chain_root_age_cache_misses")
+    result = chain_root_and_age(
+        task,
+        now_utc,
+        root_uuid_from=host._root_uuid_from,
+        tw_get_cached=host._tw_get_cached,
+        dtparse=host._dtparse,
+        tolocal=host._tolocal,
+    )
+    if cache_key is not None:
+        host._query_ctx_set("chain_root_age", cache_key, result)
+    return result
+
+
+def cached_format_root_and_age(host, task: TaskPayload, now_utc) -> str:
+    """Format a cached chain root/age value for presentation consumers."""
+    try:
+        cache_key = (host._root_uuid_from(task), str(host._tolocal(now_utc).date()))
+    except Exception:
+        cache_key = None
+    if cache_key is not None:
+        cached = host._query_ctx_get("format_root_age", cache_key)
+        if isinstance(cached, str):
+            host._diag_count("format_root_age_cache_hits")
+            return cached
+        host._diag_count("format_root_age_cache_misses")
+    result = format_root_and_age(
+        task,
+        now_utc,
+        chain_root_and_age=lambda value, at: cached_chain_root_and_age(host, value, at),
+    )
+    if cache_key is not None:
+        host._query_ctx_set("format_root_age", cache_key, result)
+    return result

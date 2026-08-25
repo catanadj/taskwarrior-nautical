@@ -159,7 +159,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         export_sorted_chain=export_sorted_chain,
         root_uuid_from=host._root_uuid_from,
         short_uuid=host._short,
-        format_root_and_age=host._format_root_and_age,
+        format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(host, task, now),
         kind_rows=kind_rows,
         span_fields=span_fields,
         stats_rows=stats_rows,

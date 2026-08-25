@@ -1612,55 +1612,6 @@ def _tw_get_cached(ref: str) -> str:
     except Exception:
         return ""
 
-def _chain_root_and_age(task: dict, now_utc: datetime) -> tuple[str, int | None]:
-    """Get chain root (chainID) and age in days.
-    Returns (root_short, age_days). age_days is None if unavailable."""
-    try:
-        cache_key = (_root_uuid_from(task), str(_tolocal(now_utc).date()))
-    except Exception:
-        cache_key = None
-    if cache_key is not None:
-        cached = _query_ctx_get("chain_root_age", cache_key)
-        if isinstance(cached, tuple) and len(cached) == 2:
-            _diag_count("chain_root_age_cache_hits")
-            return cached
-        _diag_count("chain_root_age_cache_misses")
-    modify_queries = _module("modify_queries")
-    result = modify_queries.chain_root_and_age(
-        task,
-        now_utc,
-        root_uuid_from=_root_uuid_from,
-        tw_get_cached=_tw_get_cached,
-        dtparse=_dtparse,
-        tolocal=_tolocal,
-    )
-    if cache_key is not None:
-        _query_ctx_set("chain_root_age", cache_key, result)
-    return result
-
-def _format_root_and_age(task: dict, now_utc: datetime) -> str:
-    """Format root and age as a single string.
-    Returns root (age) or just root if age is 0 or unavailable."""
-    try:
-        cache_key = (_root_uuid_from(task), str(_tolocal(now_utc).date()))
-    except Exception:
-        cache_key = None
-    if cache_key is not None:
-        cached = _query_ctx_get("format_root_age", cache_key)
-        if isinstance(cached, str):
-            _diag_count("format_root_age_cache_hits")
-            return cached
-        _diag_count("format_root_age_cache_misses")
-    modify_queries = _module("modify_queries")
-    result = modify_queries.format_root_and_age(
-        task,
-        now_utc,
-        chain_root_and_age=_chain_root_and_age,
-    )
-    if cache_key is not None:
-        _query_ctx_set("format_root_age", cache_key, result)
-    return result
-
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
 # ------------------------------------------------------------------------------

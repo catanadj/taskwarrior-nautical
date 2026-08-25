@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.modify_workflow import ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition, recurring_edit_intent
+from nautical_core.modify_workflow import ChainCompletionDecision, ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition, recurring_edit_intent
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 
@@ -103,6 +103,10 @@ class ModifyWorkflowTests(unittest.TestCase):
         intent = recurring_edit_intent(route)
         self.assertTrue(intent.scheduler_required)
         self.assertTrue(intent.carry_required)
+
+    def test_chain_completion_decision_has_terminal_fact(self) -> None:
+        decision = ChainCompletionDecision("recurrence removed", "manual_off")
+        self.assertIn(("chain_completed", "true"), decision.feedback_facts)
 
 
 if __name__ == "__main__":

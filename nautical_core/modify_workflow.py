@@ -91,6 +91,20 @@ def recurring_edit_intent(route: ModifyWorkflowRoute) -> RecurringEditIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class ChainCompletionDecision:
+    reason: str
+    source: str
+    feedback_facts: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        if not str(self.reason).strip() or not str(self.source).strip():
+            raise ValueError("chain completion requires a reason and source")
+        object.__setattr__(self, "reason", str(self.reason).strip())
+        object.__setattr__(self, "source", str(self.source).strip())
+        object.__setattr__(self, "feedback_facts", tuple(self.feedback_facts) + (("chain_completed", "true"),))
+
+
+@dataclass(frozen=True, slots=True)
 class ModifyWorkflowRoute:
     """One mutually exclusive route and its local evidence summary."""
 
@@ -213,6 +227,7 @@ __all__ = (
     "ModifyRouteKind",
     "ModifyTransitionError",
     "ModifyWorkflowRoute",
+    "ChainCompletionDecision",
     "RecurrenceTransitionDecision",
     "RecurringEditIntent",
     "classify_modify_transition",

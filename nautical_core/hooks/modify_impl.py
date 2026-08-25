@@ -2783,8 +2783,9 @@ def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, 
     )
 
 
-def _render_disabled_chain_summary(old: dict, new: dict, reason: str) -> None:
+def _render_disabled_chain_summary(old: dict, new: dict, decision) -> None:
     """Show the normal finished-chain summary when an active chain is stopped."""
+    reason = str(getattr(decision, "reason", decision))
     if not (old.get("chainID") or new.get("chainID")):
         return
     modify_models = _module("modify_models")

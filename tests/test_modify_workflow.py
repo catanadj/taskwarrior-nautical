@@ -130,6 +130,12 @@ class ModifyWorkflowTests(unittest.TestCase):
         )
         self.assertIn(("next_occurrence", "2026-08-31T09:00:00Z"), decision.feedback_facts)
 
+    def test_transition_states_expose_presentation_facts(self) -> None:
+        enabled = RecurrenceTransitionDecision("enabled", source="cp", reason="activated")
+        disabled = RecurrenceTransitionDecision("disabled", reason="recurrence removed")
+        self.assertIn(("recurrence_source", "cp"), enabled.feedback_facts)
+        self.assertIn(("chain_completed", "true"), disabled.feedback_facts)
+
     def test_recurring_intent_matrix_keeps_local_edits_scheduler_free(self) -> None:
         root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
         local = classify_modify_transition(transition(root, dict(root, description="note")))

@@ -45,7 +45,7 @@ class OrdinaryModifyServices:
     short_uuid: Callable[[str], str]
     recurrence_enabled_rows: Callable[[dict, str], list[tuple[str, str]]]
     panel: Callable[..., None]
-    render_disabled_summary: Callable[[dict, dict, str], None]
+    render_disabled_summary: Callable[[dict, dict, ChainCompletionDecision], None]
     semantic_diff_value: Callable[[str, str], str]
     first_recurrence_target: Callable[[dict, str], datetime | None]
     fmtlocal: Callable[[datetime], str]
@@ -191,7 +191,7 @@ def handle_non_completion_modify(
                 reason=reason,
                 source="recurrence_removal" if recurrence_removed else "manual_chain_off",
             )
-            services.render_disabled_summary(old, new, completion.reason)
+            services.render_disabled_summary(old, new, completion)
     elif lifecycle_transition and lifecycle_transition.state == "resumed":
         rows = [
             ("Reason", lifecycle_transition.reason or "This task's Nautical recurrence was resumed.")

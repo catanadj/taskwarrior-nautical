@@ -55,7 +55,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         first_recurrence_target=lambda task, source: presentation.first_recurrence_target(host, task, source),
         fmtlocal=host._fmtlocal,
         render_recurrence_updated=lambda changes, task: presentation.render_recurrence_updated_panel(host, changes, task),
-        print_task=host._print_task,
+        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
     )
     try:
         modify_ordinary.handle_non_completion_modify(
@@ -85,7 +85,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         render_anchor_completion_feedback=lambda **kwargs: presentation.render_anchor_completion_feedback(host, **kwargs),
         render_cp_completion_feedback=lambda **kwargs: presentation.render_cp_completion_feedback(host, **kwargs),
         render_lifecycle_result=lambda result, task: presentation.render_lifecycle_result(host, result, task),
-        print_task=host._print_task,
+        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
         diag_summary=host._diag_summary,
         show_analytics=host._SHOW_ANALYTICS,
         check_integrity=host._CHECK_CHAIN_INTEGRITY,

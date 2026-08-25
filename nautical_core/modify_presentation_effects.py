@@ -233,7 +233,7 @@ def build_runtime_services(host: Any):
         format_line_preview=lambda *args, **kwargs: host._module("modify_format_effects").line_preview(host, *args, **kwargs),
         panel_line=lambda title, line, **kwargs: host._module("modify_ui_effects").panel_line(host, title, line, **kwargs),
         text_line=lambda line, **kwargs: host._module("modify_ui_effects").text_line(host, line, **kwargs),
-        panel=host._panel, print_task=host._print_task, diag=host._diag,
+        panel=host._panel, print_task=lambda task: host._module("modify_ui_effects").print_task(host, task), diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
         chain_colour_for_task=lambda task, kind: chain_colour_for_task(host, task, kind),
         strip_quotes=host._module("modify_task_fields").strip_quotes,

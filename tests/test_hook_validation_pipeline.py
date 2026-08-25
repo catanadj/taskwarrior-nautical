@@ -6,6 +6,7 @@ from nautical_core.hook_validation_pipeline import (
     ValidationFinding,
     ValidationInput,
     ValidationPipeline,
+    ValidationReport,
     ValidationStage,
     ValidationStatus,
     build_default_validation_pipeline,
@@ -128,6 +129,31 @@ class ValidationPipelineTests(unittest.TestCase):
             ValidationInput(_observation())
         )
         self.assertEqual(report.status, ValidationStatus.INVALID)
+
+    def test_findings_are_stably_ordered_by_stage_and_code(self) -> None:
+        findings = (
+            ValidationFinding(ValidationStage.DOMAIN, "z_code", "z", "z"),
+            ValidationFinding(ValidationStage.SYNTAX, "b_code", "b", "b"),
+            ValidationFinding(ValidationStage.DOMAIN, "a_code", "a", "a"),
+        )
+        report = ValidationReport.from_findings(findings)
+        self.assertEqual(
+            [(item.stage, item.code) for item in report.findings],
+            [
+                (ValidationStage.SYNTAX, "b_code"),
+                (ValidationStage.DOMAIN, "a_code"),
+                (ValidationStage.DOMAIN, "z_code"),
+            ],
+        )
+
+    def test_pipeline_rejects_stage_regression(self) -> None:
+        with self.assertRaises(ValueError):
+            ValidationPipeline(
+                (
+                    (ValidationStage.DOMAIN, lambda _value: ()),
+                    (ValidationStage.SYNTAX, lambda _value: ()),
+                )
+            )
 
 
 if __name__ == "__main__":

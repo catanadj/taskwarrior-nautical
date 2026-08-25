@@ -51,6 +51,14 @@ class ValidationStatus(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+_STAGE_ORDER = {
+    ValidationStage.SYNTAX: 0,
+    ValidationStage.DOMAIN: 1,
+    ValidationStage.SATISFIABILITY: 2,
+    ValidationStage.TRANSITION: 3,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationFinding:
     """One actionable, presentation-free validation finding."""
@@ -274,7 +282,10 @@ class ValidationReport:
 
     @classmethod
     def from_findings(cls, findings: tuple[ValidationFinding, ...]) -> "ValidationReport":
-        findings = tuple(findings)
+        findings = tuple(sorted(
+            findings,
+            key=lambda item: (_STAGE_ORDER[item.stage], item.code, item.field, item.reason),
+        ))
         if any(item.retryable for item in findings):
             status = ValidationStatus.UNAVAILABLE
         elif findings:
@@ -296,6 +307,8 @@ class ValidationPipeline:
             stage_value = ValidationStage(stage)
             if not callable(rule):
                 raise TypeError("validation rule must be callable")
+            if normalized and _STAGE_ORDER[stage_value] < _STAGE_ORDER[normalized[-1][0]]:
+                raise ValueError("validation stages must be declared in pipeline order")
             normalized.append((stage_value, rule))
         object.__setattr__(self, "rules", tuple(normalized))
 

@@ -1877,6 +1877,10 @@ class _OnAddServices:
             record_schedule_fn=self.record_schedule,
             record_limits_fn=self.record_limits,
             record_preview_fn=self.record_preview,
+            build_context_fn=self.build_context,
+            stamp_chain_id_fn=self.stamp_chain_id,
+            render_anchor_preview_fn=self.render_anchor_preview,
+            render_cp_preview_fn=self.render_cp_preview,
         )
 
     def workflow_application(self):

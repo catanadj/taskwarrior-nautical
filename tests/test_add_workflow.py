@@ -39,6 +39,10 @@ class AddWorkflowTests(unittest.TestCase):
             record_schedule_fn=lambda plan, _task, _field: plan,
             record_limits_fn=lambda plan, _task, _context: plan,
             record_preview_fn=lambda plan: plan,
+            build_context_fn=lambda task, _now, _local, **_kwargs: task,
+            stamp_chain_id_fn=lambda _task: None,
+            render_anchor_preview_fn=lambda _context, **_kwargs: None,
+            render_cp_preview_fn=lambda _context, **_kwargs: None,
         )
         task = {"description": "test"}
         plan = application.prepare(task, observation({"anchor": "w:mon"}))

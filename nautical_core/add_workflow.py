@@ -154,6 +154,10 @@ class AddWorkflowApplication:
     record_schedule_fn: Callable[[AddWorkflowPlan, MutableMapping[str, Any], str], AddWorkflowPlan]
     record_limits_fn: Callable[[AddWorkflowPlan, MutableMapping[str, Any], Any], AddWorkflowPlan]
     record_preview_fn: Callable[[AddWorkflowPlan], AddWorkflowPlan]
+    build_context_fn: Callable[..., Any]
+    stamp_chain_id_fn: Callable[[MutableMapping[str, Any]], None]
+    render_anchor_preview_fn: Callable[..., None]
+    render_cp_preview_fn: Callable[..., None]
 
     def prepare(self, task: MutableMapping[str, Any], observation: TaskObservation) -> AddWorkflowPlan:
         plan = plan_add(observation)
@@ -168,6 +172,18 @@ class AddWorkflowApplication:
 
     def record_preview(self, plan: AddWorkflowPlan) -> AddWorkflowPlan:
         return self.record_preview_fn(plan)
+
+    def build_context(self, task: MutableMapping[str, Any], now_utc: Any, now_local: Any, *, observation: TaskObservation, prof: Any) -> Any:
+        return self.build_context_fn(task, now_utc, now_local, observation=observation, prof=prof)
+
+    def stamp_chain_id(self, task: MutableMapping[str, Any]) -> None:
+        self.stamp_chain_id_fn(task)
+
+    def render_anchor_preview(self, context: Any, *, prof: Any) -> None:
+        self.render_anchor_preview_fn(context, prof=prof)
+
+    def render_cp_preview(self, context: Any, *, prof: Any) -> None:
+        self.render_cp_preview_fn(context, prof=prof)
 
 
 def _text(task: TaskObservation, field: str) -> str:

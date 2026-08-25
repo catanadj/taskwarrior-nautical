@@ -16,10 +16,6 @@ class OnAddServices(Protocol):
     def core(self) -> Any: ...
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
-    def build_context(self, task: TaskPayload, now_utc: datetime, now_local: datetime, *, observation: Any, prof: Any) -> Any: ...
-    def stamp_chain_id(self, task: TaskPayload) -> None: ...
-    def render_anchor_preview(self, context: Any, *, prof: Any) -> None: ...
-    def render_cp_preview(self, context: Any, *, prof: Any) -> None: ...
     def workflow_application(self) -> Any: ...
 
 
@@ -89,7 +85,8 @@ def handle_on_add(
         workflow_plan = services.workflow_application().prepare(task, observation)
         planned_add = True
 
-    ctx = services.build_context(
+    application = services.workflow_application()
+    ctx = application.build_context(
         task,
         now_utc,
         now_local,
@@ -100,13 +97,12 @@ def handle_on_add(
         return services.result(task, sanitize=True, prof=prof)
 
     if not planned_add:
-        services.stamp_chain_id(task)
+        application.stamp_chain_id(task)
     if ctx.kind in {'anchor', 'anchor_file'}:
-        services.render_anchor_preview(ctx, prof=prof)
+        application.render_anchor_preview(ctx, prof=prof)
     else:
-        services.render_cp_preview(ctx, prof=prof)
+        application.render_cp_preview(ctx, prof=prof)
     if workflow_plan is not None:
-        application = services.workflow_application()
         workflow_plan = application.record_schedule(workflow_plan, task, ctx.recurrence_field)
         workflow_plan = application.record_limits(workflow_plan, task, ctx)
         workflow_plan = application.record_preview(workflow_plan)

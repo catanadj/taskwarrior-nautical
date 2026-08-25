@@ -7,6 +7,18 @@ from typing import Any
 from .task_models import TaskPayload
 
 
+def _task_view(models: Any, value: Any):
+    """Use typed views for real tasks while keeping panel-only fixtures permissive."""
+    if isinstance(value, models.TaskView):
+        return value
+    if isinstance(value, dict):
+        payload = dict(value)
+        payload.setdefault("status", "pending")
+        payload.setdefault("link", 1)
+        return models.TaskView.from_mapping(payload)
+    return value
+
+
 def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str]], new: TaskPayload) -> None:
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
@@ -116,15 +128,15 @@ def render_anchor_completion_feedback(host: Any, **kwargs) -> None:
     feedback.orchestrate_anchor_completion_feedback(
         **{
             **kwargs,
-            "new": models.TaskView.from_mapping(kwargs["new"]),
-            "child": models.TaskView.from_mapping(kwargs["child"]),
+            "new": _task_view(models, kwargs["new"]),
+            "child": _task_view(models, kwargs["child"]),
             "core": host.core,
             "panel": host._panel,
             "calendar_feedback": calendar_feedback,
             "panel_diagnostics": host._module("panel_diagnostics"),
             "modify_models": models,
             "modify_runtime": host._module("modify_runtime"),
-            "build_runtime_services": host._modify_runtime_services,
+            "build_runtime_services": lambda: build_runtime_services(host),
         }
     )
 
@@ -135,13 +147,13 @@ def render_cp_completion_feedback(host: Any, **kwargs) -> None:
     feedback.orchestrate_cp_completion_feedback(
         **{
             **kwargs,
-            "new": models.TaskView.from_mapping(kwargs["new"]),
-            "child": models.TaskView.from_mapping(kwargs["child"]),
+            "new": _task_view(models, kwargs["new"]),
+            "child": _task_view(models, kwargs["child"]),
             "core": host.core,
             "panel_diagnostics": host._module("panel_diagnostics"),
             "modify_models": models,
             "modify_runtime": host._module("modify_runtime"),
-            "build_runtime_services": host._modify_runtime_services,
+            "build_runtime_services": lambda: build_runtime_services(host),
         }
     )
 
@@ -163,9 +175,52 @@ def render_lifecycle_result(host: Any, result, task) -> None:
     host._panel(title, rows, kind="warning" if state == "manual_review" else "error")
 
 
+def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, dnf, **kwargs) -> list[str]:
+    if not host._require_core():
+        return []
+    return host._module("modify_timeline").timeline_lines_for_task(
+        kind, task, child_due_utc, child_short, dnf, **kwargs,
+        core=host.core, max_iterations=host._MAX_ITERATIONS,
+        future_style_for_chain=host._future_style_for_chain,
+        collect_prev_two=host._collect_prev_two, dtparse=host._dtparse,
+        fmt_on_time_delta=host._fmt_on_time_delta, fmtlocal=host._fmtlocal,
+        short=host._short, tolocal=host._tolocal,
+        next_occurrence_after_local_dt=host._next_occurrence_after_local_dt,
+        to_local_cached=host._to_local_cached, safe_parse_datetime=host._safe_parse_datetime,
+        format_gap=host._module("modify_timeline").format_gap,
+        module_loader=host._module, omit_dnf_from_parent=host._omit_dnf_from_parent,
+        recurrence_evaluator_for_task=host._recurrence_evaluator_for_task,
+        scheduler_service_for_task=host._scheduler_service_for_task,
+    )
+
+
+def build_runtime_services(host: Any):
+    runtime = host._module("modify_runtime")
+    return runtime.ModifyRuntimeServices(
+        state=host._modify_runtime_state(), core=host.core,
+        debug_wait_sched=host._DEBUG_WAIT_SCHED,
+        last_wait_sched_debug=host._LAST_WAIT_SCHED_DEBUG,
+        diag_enabled=host.os.environ.get("NAUTICAL_DIAG") == "1",
+        format_root_and_age=host._format_root_and_age,
+        append_next_wait_sched_rows=host._append_next_wait_sched_rows,
+        timeline_lines=getattr(host, "_timeline_lines", lambda *args, **kwargs: timeline_lines(host, *args, **kwargs)),
+        show_timeline_gaps=host._SHOW_TIMELINE_GAPS,
+        root_uuid_from=host._root_uuid_from, short=host._short,
+        format_next_anchor_rows=host._format_next_anchor_rows,
+        format_next_cp_rows=host._format_next_cp_rows,
+        format_line_preview=host._format_line_preview,
+        panel_line=host._panel_line, text_line=host._text_line,
+        panel=host._panel, print_task=host._print_task, diag=host._diag,
+        chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
+        chain_colour_for_task=host._chain_colour_for_task,
+        strip_quotes=host._strip_quotes, human_delta=host._human_delta,
+    )
+
+
 __all__ = (
     "render_recurrence_updated_panel", "first_recurrence_target", "recurrence_enabled_rows",
     "render_cp_schedule_adjusted_panel", "render_explicit_timing_order_warning",
     "render_disabled_chain_summary", "ensure_terminal_chain_off",
     "render_anchor_completion_feedback", "render_cp_completion_feedback", "render_lifecycle_result",
+    "timeline_lines", "build_runtime_services",
 )

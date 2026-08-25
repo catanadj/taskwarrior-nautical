@@ -617,6 +617,11 @@ def _load_hook_module(path: str, module_name: str):
         mod._completion_effects = _BoundCompletionEffects(mod)
         mod._transition_effects = _BoundTransitionEffects(mod)
         mod._presentation_effects = _BoundPresentationEffects(mod)
+        def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
+            return mod._presentation_effects.timeline_lines(
+                kind, task, child_due_utc, child_short, dnf, **kwargs
+            )
+        mod._timeline_lines = _timeline_lines
     return mod
 
 

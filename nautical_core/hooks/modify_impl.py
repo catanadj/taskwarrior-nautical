@@ -120,6 +120,18 @@ if TYPE_CHECKING:
 
 
 # set config show_analytics=false to disable analytics panel entry.
+# Test and diagnostic callers may request the extracted timeline adapter without
+# making it part of the production route surface.
+def __getattr__(name: str):
+    if name == "_timeline_lines":
+        host = _module("modify_composition").hook_host(globals(), __name__)
+        def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
+            return _module("modify_presentation_effects").timeline_lines(
+                host, kind, task, child_due_utc, child_short, dnf, **kwargs
+            )
+        return _timeline_lines
+    raise AttributeError(name)
+
 
 # ------------------------------------------------------------------------------
 # Constants
@@ -2442,51 +2454,6 @@ def _end_chain_summary(current: dict, reason: str, now_utc, current_task: dict =
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------
 
-def _timeline_lines(
-    kind: str,
-    task: dict,
-    child_due_utc,
-    child_short: str,
-    dnf,
-    next_count: int = 3,
-    cap_no: int | None = None,
-    cur_no: int | None = None,
-    show_gaps: bool = True,
-    round_anchor_gaps: bool = True,
-) -> list[str]:
-    """Compatibility adapter for task-scoped timeline presentation."""
-    if not _require_core():
-        return []
-    return _module("modify_timeline").timeline_lines_for_task(
-        kind,
-        task,
-        child_due_utc,
-        child_short,
-        dnf,
-        next_count=next_count,
-        cap_no=cap_no,
-        cur_no=cur_no,
-        show_gaps=show_gaps,
-        round_anchor_gaps=round_anchor_gaps,
-        core=core,
-        max_iterations=_MAX_ITERATIONS,
-        future_style_for_chain=_future_style_for_chain,
-        collect_prev_two=_collect_prev_two,
-        dtparse=_dtparse,
-        fmt_on_time_delta=_fmt_on_time_delta,
-        fmtlocal=_fmtlocal,
-        short=_short,
-        tolocal=_tolocal,
-        next_occurrence_after_local_dt=_next_occurrence_after_local_dt,
-        to_local_cached=_to_local_cached,
-        safe_parse_datetime=_safe_parse_datetime,
-        format_gap=_module("modify_timeline").format_gap,
-        module_loader=_module,
-        omit_dnf_from_parent=_omit_dnf_from_parent,
-        recurrence_evaluator_for_task=_recurrence_evaluator_for_task,
-        scheduler_service_for_task=_scheduler_service_for_task,
-    )
-
 def _got_anchor_invalid(msg: str) -> None:
     _fail_and_exit("Invalid anchor", msg)
 
@@ -2578,38 +2545,6 @@ def _export_chain_endpoint(chain_id: str, direction: str):
         return None
     with_links.sort(key=lambda item: item[0])
     return with_links[0 if direction == "first" else -1][1]
-
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
-def _modify_runtime_services():
-    modify_runtime = _module("modify_runtime")
-    return modify_runtime.ModifyRuntimeServices(
-        state=_modify_runtime_state(),
-        core=core,
-        debug_wait_sched=_DEBUG_WAIT_SCHED,
-        last_wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
-        diag_enabled=os.environ.get("NAUTICAL_DIAG") == "1",
-        format_root_and_age=_format_root_and_age,
-        append_next_wait_sched_rows=_append_next_wait_sched_rows,
-        timeline_lines=_timeline_lines,
-        show_timeline_gaps=_SHOW_TIMELINE_GAPS,
-        root_uuid_from=_root_uuid_from,
-        short=_short,
-        format_next_anchor_rows=_format_next_anchor_rows,
-        format_next_cp_rows=_format_next_cp_rows,
-        format_line_preview=_format_line_preview,
-        panel_line=_panel_line,
-        text_line=_text_line,
-        panel=_panel,
-        print_task=_print_task,
-        diag=_diag,
-        chain_color_per_chain=_CHAIN_COLOR_PER_CHAIN,
-        chain_colour_for_task=_chain_colour_for_task,
-        strip_quotes=_strip_quotes,
-        human_delta=_human_delta,
-    )
-
 
 def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     has_type_colon = bool(
@@ -2704,7 +2639,7 @@ def run_hook(
     protocol=None,
     probe=_PROBE_UNSET,
     protocol_error=None,
-) -> int:
+    ) -> int:
     """Run the extracted implementation with context captured by the wrapper."""
     global HOOK_DIR, TW_DIR, _CORE_BASE, _EARLY_PROTOCOL_RESULT, _PROTOCOL
     global _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR

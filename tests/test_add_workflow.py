@@ -11,6 +11,8 @@ from nautical_core.add_workflow import (
     record_limits,
     record_schedule,
     schedule_patch,
+    preview_policy,
+    record_preview,
 )
 from nautical_core.hook_workflow_models import PatchOperation, WorkflowRoute
 from nautical_core.task_models import TaskObservation, TaskTimestamp
@@ -96,6 +98,22 @@ class AddWorkflowTests(unittest.TestCase):
         bounded = record_limits(plan, limits)
         self.assertIsNone(plan.limits)
         self.assertEqual(bounded.limits, limits)
+
+    def test_compact_preview_is_bounded_to_one_occurrence(self) -> None:
+        policy = preview_policy(panel_mode="quiet", requested_limit=6, hard_cap=32)
+        self.assertTrue(policy.enabled)
+        self.assertEqual(policy.occurrence_limit, 1)
+
+    def test_preview_policy_honors_cap_for_rich_mode(self) -> None:
+        policy = preview_policy(panel_mode="rich", requested_limit=20, hard_cap=4)
+        self.assertEqual(policy.occurrence_limit, 4)
+
+    def test_preview_policy_is_attached_separately(self) -> None:
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        policy = preview_policy(panel_mode="minimal", requested_limit=5, hard_cap=32)
+        rendered = record_preview(plan, policy)
+        self.assertIsNone(plan.preview)
+        self.assertEqual(rendered.preview, policy)
 
 
 if __name__ == "__main__":

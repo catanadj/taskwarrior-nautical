@@ -59,6 +59,22 @@ class AddScheduleLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class AddPreviewPolicy:
+    """Presentation-only occurrence request limits."""
+
+    mode: str
+    enabled: bool
+    occurrence_limit: int
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode).strip().lower() or "rich"
+        if self.occurrence_limit < 0:
+            raise ValueError("preview occurrence limit cannot be negative")
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "enabled", bool(self.enabled))
+
+
+@dataclass(frozen=True, slots=True)
 class AddWorkflowPlan:
     """Typed add decision before patch application or presentation."""
 
@@ -69,6 +85,7 @@ class AddWorkflowPlan:
     target_explicit: bool = False
     schedule: AddScheduleSelection | None = None
     limits: AddScheduleLimits | None = None
+    preview: AddPreviewPolicy | None = None
     feedback: FeedbackFacts = FeedbackFacts()
 
     @property
@@ -152,6 +169,7 @@ def record_schedule(
         target_explicit=plan.target_explicit,
         schedule=selection,
         limits=plan.limits,
+        preview=plan.preview,
         feedback=feedback,
     )
 
@@ -189,11 +207,45 @@ def record_limits(plan: AddWorkflowPlan, limits: AddScheduleLimits) -> AddWorkfl
         target_explicit=plan.target_explicit,
         schedule=plan.schedule,
         limits=limits,
+        preview=plan.preview,
+        feedback=plan.feedback,
+    )
+
+
+def preview_policy(
+    *,
+    panel_mode: str,
+    requested_limit: int,
+    hard_cap: int,
+) -> AddPreviewPolicy:
+    """Return a bounded presentation policy without touching scheduler state."""
+    mode = str(panel_mode).strip().lower() or "rich"
+    cap = max(0, int(hard_cap))
+    requested = max(0, int(requested_limit))
+    compact = mode in {"quiet", "minimal", "line", "text"}
+    limit = min(cap, 1 if compact else requested)
+    return AddPreviewPolicy(mode=mode, enabled=mode not in {"off", "none"}, occurrence_limit=limit)
+
+
+def record_preview(plan: AddWorkflowPlan, policy: AddPreviewPolicy) -> AddWorkflowPlan:
+    """Attach presentation policy without changing scheduling or task fields."""
+    if not isinstance(policy, AddPreviewPolicy):
+        raise TypeError("add preview policy must be AddPreviewPolicy")
+    return AddWorkflowPlan(
+        request=plan.request,
+        patch=plan.patch,
+        recurrence_kind=plan.recurrence_kind,
+        target_field=plan.target_field,
+        target_explicit=plan.target_explicit,
+        schedule=plan.schedule,
+        limits=plan.limits,
+        preview=policy,
         feedback=plan.feedback,
     )
 
 
 __all__ = (
+    "AddPreviewPolicy",
     "AddScheduleLimits",
     "AddScheduleSelection",
     "AddWorkflowPlan",
@@ -202,4 +254,6 @@ __all__ = (
     "record_schedule",
     "schedule_patch",
     "record_limits",
+    "preview_policy",
+    "record_preview",
 )

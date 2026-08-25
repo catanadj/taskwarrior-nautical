@@ -108,7 +108,9 @@ def handle_on_add(
         workflow_plan = application.record_preview(workflow_plan)
     if workflow_plan is not None:
         request.workflow_plan = workflow_plan
-    return None
+    # The composition root emits this result once.  Keeping response creation
+    # here makes every full add route converge on the same strict JSON boundary.
+    return services.result(task, sanitize=True, prof=prof)
 
 
 

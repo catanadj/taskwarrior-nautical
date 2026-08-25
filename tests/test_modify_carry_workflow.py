@@ -25,6 +25,8 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
         result = decision_from_cp_adjustments((old, new, [("scheduled", old, new, 86400)]))
         self.assertEqual(result.status, "adjusted")
         self.assertEqual(result.adjustments[0].field, "scheduled")
+        self.assertTrue(result)
+        self.assertEqual(result.serialized_changes[0][0], "scheduled")
 
 
 if __name__ == "__main__":

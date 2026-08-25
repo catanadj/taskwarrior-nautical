@@ -44,6 +44,16 @@ class TemporalCarryDecision:
         object.__setattr__(self, "adjustments", adjustments)
         object.__setattr__(self, "reason", str(self.reason).strip())
 
+    def __bool__(self) -> bool:
+        return self.status == "adjusted"
+
+    @property
+    def serialized_changes(self) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (item.field, item.new_value.value.isoformat().replace("+00:00", "Z"))
+            for item in self.adjustments
+        )
+
 
 def decision_from_cp_adjustments(result, *, timestamp_factory=TaskTimestamp) -> TemporalCarryDecision:
     """Normalize the established CP carry result into the typed decision."""

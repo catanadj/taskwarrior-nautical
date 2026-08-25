@@ -77,7 +77,7 @@ def cached_chain_root_and_age(host, task: TaskPayload, now_utc) -> tuple[str, in
         task,
         now_utc,
         root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload),
-        tw_get_cached=host._tw_get_cached,
+        tw_get_cached=lambda ref: host._module("modify_read_effects").tw_get_cached(host, ref),
         dtparse=host._dtparse,
         tolocal=host._tolocal,
     )

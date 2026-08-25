@@ -1460,37 +1460,6 @@ def _task(args, env=None) -> str:
         _query_ctx_set("task_text", cache_key, out or "")
     return out
 
-def _tw_get_cached(ref: str) -> str:
-    """Return `task _get <ref>` stdout stripped. Cached within one hook run."""
-    try:
-        host = _module("modify_composition").hook_host(globals(), __name__)
-        read_service = _module("modify_read_effects").lifecycle_read_service(host)
-        if ref.endswith(".entry"):
-            short = ref[:-6].strip()
-            cached, cache_chain_id = (
-                read_service.lookup_short(short) if short else (None, "")
-            )
-            if short and hasattr(cached, "get"):
-                _diag_count("tw_get_cache_hits")
-                return (str(cached.get("entry") or "")).strip()
-            if short and cache_chain_id:
-                _diag_count("unexpected_cache_misses")
-                _diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        cached = _query_ctx_get("tw_get", ref)
-        if isinstance(cached, str):
-            _diag_count("tw_get_cache_hits")
-            return cached
-        _diag_count("tw_get_cache_misses")
-        modify_queries = _module("modify_queries")
-        out = modify_queries.tw_get(
-            ref,
-            task_text=lambda args: _task(args, env=None),
-        )
-        _query_ctx_set("tw_get", ref, out or "")
-        return out
-    except Exception:
-        return ""
-
 # ------------------------------------------------------------------------------
 # On modify-without-completion helpers
 # ------------------------------------------------------------------------------

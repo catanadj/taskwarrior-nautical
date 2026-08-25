@@ -118,4 +118,32 @@ def export_chain_required(host: Any, seed_payload: dict, env=None):
     return rows
 
 
-__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "export_chain_required")
+def tw_get_cached(host: Any, ref: str) -> str:
+    """Return one cached Taskwarrior ``_get`` value for the current hook."""
+    try:
+        service = lifecycle_read_service(host)
+        if ref.endswith(".entry"):
+            short = ref[:-6].strip()
+            cached, cache_chain_id = service.lookup_short(short) if short else (None, "")
+            if short and hasattr(cached, "get"):
+                host._diag_count("tw_get_cache_hits")
+                return (str(cached.get("entry") or "")).strip()
+            if short and cache_chain_id:
+                host._diag_count("unexpected_cache_misses")
+                host._diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
+        cached = host._query_ctx_get("tw_get", ref)
+        if isinstance(cached, str):
+            host._diag_count("tw_get_cache_hits")
+            return cached
+        host._diag_count("tw_get_cache_misses")
+        out = host._module("modify_queries").tw_get(
+            ref,
+            task_text=lambda args: host._task(args, env=None),
+        )
+        host._query_ctx_set("tw_get", ref, out or "")
+        return out
+    except Exception:
+        return ""
+
+
+__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "export_chain_required", "tw_get_cached")

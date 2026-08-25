@@ -832,6 +832,12 @@ _MODULE_SPECS = {
         "modify_datetime_effects.py",
         "nautical_core.modify_datetime_effects",
     ),
+    "modify_anchor_effects": (
+        "_MODIFY_ANCHOR_EFFECTS",
+        "_MODIFY_ANCHOR_EFFECTS_LOAD_FAILED",
+        "modify_anchor_effects.py",
+        "nautical_core.modify_anchor_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -1728,36 +1734,6 @@ def _chain_generation_service():
         )
         state.chain_generation_service = service
     return service
-
-
-def _omit_dnf_from_parent(parent: dict):
-    expr_str = (parent.get("omit") or "").strip()
-    omit_file = (parent.get("omit_file") or "").strip()
-    omit_dnf = None
-    omit_dates: frozenset[Any] = frozenset()
-    omit_descriptions: dict[Any, str] = {}
-    if expr_str:
-        try:
-            omit_dnf = _validate_omit_expr_cached(expr_str)
-        except Exception as e:
-            raise ValueError(f"Invalid omit expression '{expr_str}': {str(e)}")
-    if omit_file:
-        try:
-            omit_files = core._import_sibling("omit_files")
-            omit_dates, omit_descriptions = omit_files.load_omit_file_data(
-                omit_file,
-                getattr(core, "OMIT_FILE_DIR", ""),
-            )
-        except Exception as e:
-            raise ValueError(f"Invalid omit_file '{omit_file}': {str(e)}")
-    if not omit_dnf and not omit_dates and not omit_descriptions:
-        return "", None
-    anchor_omit = _module("anchor_omit")
-    return expr_str, anchor_omit.combine_omit_state(
-        omit_dnf=omit_dnf,
-        omit_dates=omit_dates,
-        omit_descriptions=omit_descriptions,
-    )
 
 
 def _anchor_included_occurrences(

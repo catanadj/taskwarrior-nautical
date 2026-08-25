@@ -60,15 +60,15 @@ def lifecycle_read_service(host: Any):
     return service
 
 
-def seed_runtime_lookup_task(host: Any, task: dict | None, *, lookup_short: str | None = None):
-    if not isinstance(task, dict):
+def seed_runtime_lookup_task(host: Any, payload: dict | None, *, lookup_short: str | None = None):
+    if not isinstance(payload, dict):
         return None
-    uuid_str = str(task.get("uuid") or "").strip()
+    uuid_str = str(payload.get("uuid") or "").strip()
     if not uuid_str:
         return None
     short = uuid_str[:8]
     service = lifecycle_read_service(host)
-    observation = host._module("task_codec").DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify lookup seed")
+    observation = host._module("task_codec").DEFAULT_TASK_CODEC.decode_row(payload, source_query="on-modify lookup seed")
     task_obj = service.seed_lookup_task(observation, short_uuid=short)
     requested_short = str(lookup_short or "").strip()
     if requested_short and requested_short != short:

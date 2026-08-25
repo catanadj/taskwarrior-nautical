@@ -7,12 +7,13 @@ UI callbacks explicitly so it can be loaded only when that lifecycle runs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from .task_changes import TaskTransition
-from .task_models import TaskPayload
+from .task_models import TaskPayload, TaskTimestamp
 from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
+from .modify_workflow import ChainCompletionDecision
 
 
 class RecurrenceActivationError(RuntimeError):
@@ -93,8 +94,8 @@ def handle_non_completion_modify(
                 for field in ("cp", "anchor", "anchor_file")
             )
 
-        old_has_recurrence = observation_has_recurrence(input_transition.old)
-        new_has_recurrence = observation_has_recurrence(input_transition.new)
+        old_has_recurrence = observation_has_recurrence(transition.old)
+        new_has_recurrence = observation_has_recurrence(transition.new)
     else:
         old_has_recurrence = services.task_has_recurrence(old)
         new_has_recurrence = services.task_has_recurrence(new)
@@ -106,6 +107,8 @@ def handle_non_completion_modify(
         native_until_decision = services.preserve_native_until(old, new, recurrence_kind)
     else:
         native_until_decision = NativeUntilDecision("unchanged")
+    if native_until_decision.status == "rejected":
+        raise RecurrenceActivationError(native_until_decision.reason)
     native_window_changed = any(
         services.field_changed(old, new, field)
         for field in ("due", "scheduled", "until", "anchor", "anchor_file", "anchor_mode")
@@ -123,6 +126,16 @@ def handle_non_completion_modify(
         raise RecurrenceActivationError(
             f"Nautical recurrence transition failed: {type(exc).__name__}: {exc}"
         ) from exc
+    if lifecycle_transition and lifecycle_transition.state in {"enabled", "resumed"}:
+        source = lifecycle_transition.source or (
+            "anchor_file" if new_anchor_file else "anchor" if new_anchor else "cp"
+        )
+        first = services.first_recurrence_target(new, source)
+        if first is not None and getattr(lifecycle_transition, "next_occurrence", None) is None:
+            lifecycle_transition = replace(
+                lifecycle_transition,
+                next_occurrence=TaskTimestamp(first),
+            )
     recurrence_removed = (
         old_has_recurrence
         and not new_has_recurrence
@@ -168,7 +181,11 @@ def handle_non_completion_modify(
                 if recurrence_removed
                 else "Chain manually disabled."
             )
-            services.render_disabled_summary(old, new, reason)
+            completion = ChainCompletionDecision(
+                reason=reason,
+                source="recurrence_removal" if recurrence_removed else "manual_chain_off",
+            )
+            services.render_disabled_summary(old, new, completion.reason)
     elif lifecycle_transition and lifecycle_transition.state == "resumed":
         rows = [
             ("Reason", lifecycle_transition.reason or "This task's Nautical recurrence was resumed.")
@@ -177,7 +194,7 @@ def handle_non_completion_modify(
             rows.append(("Source", lifecycle_transition.source))
         rows.append(("Chain", services.semantic_diff_value("off", "on")))
         source = "anchor" if new.get("anchor") else "anchor_file" if new.get("anchor_file") else "cp"
-        first = services.first_recurrence_target(new, source)
+        first = lifecycle_transition.next_occurrence.value if lifecycle_transition.next_occurrence else None
         if first:
             rows.append(("Next", services.fmtlocal(first)))
         services.panel("⚓ Nautical resumed", rows, kind="note")

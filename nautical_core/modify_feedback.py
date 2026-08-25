@@ -411,7 +411,7 @@ def format_chain_summary_rows(rows: list[tuple[str, str]]) -> list[tuple[str | N
         if out:
             out.append((None, ""))
         out.extend(group)
-    return out or rows
+    return out if out else [(key, value) for key, value in rows]
 
 
 def format_next_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
@@ -443,7 +443,7 @@ def format_next_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | Non
         if out:
             out.append((None, ""))
         out.extend(group)
-    return out or rows
+    return out if out else [(key, value) for key, value in rows]
 
 
 def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
@@ -474,7 +474,7 @@ def format_next_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, s
         if out:
             out.append((None, ""))
         out.extend(group)
-    return out or rows
+    return out if out else [(key, value) for key, value in rows]
 
 
 def format_line_preview(

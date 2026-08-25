@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from .task_changes import TaskTransition
 from .task_models import TaskPayload
+from .modify_workflow import RecurrenceTransitionDecision
 
 RECURRENCE_SETTING_FIELDS = (
     "anchor",
@@ -25,13 +26,6 @@ class ModifyLifecycleRoute:
     is_deleted: bool
     has_nautical_fields: bool
     is_non_completion: bool
-
-
-@dataclass(slots=True)
-class ModifyNauticalTransition:
-    state: str
-    source: str = ""
-    reason: str = ""
 
 
 def task_has_nautical_recurrence_fields(task: TaskPayload | None) -> bool:
@@ -185,9 +179,9 @@ def apply_nautical_transition(
     new: TaskPayload | None,
     *,
     short_uuid: Callable[[Any], str],
-) -> ModifyNauticalTransition:
+) -> RecurrenceTransitionDecision:
     if not isinstance(old, dict) or not isinstance(new, dict):
-        return ModifyNauticalTransition(state="unchanged")
+        return RecurrenceTransitionDecision(state="unchanged")
 
     old_has_recurrence = task_has_nautical_recurrence_fields(old)
     new_has_recurrence = task_has_nautical_recurrence_fields(new)
@@ -216,7 +210,7 @@ def apply_nautical_transition(
         elif (new.get("cp") or "").strip():
             source = "cp"
         else:
-            return ModifyNauticalTransition(state="unchanged")
+            return RecurrenceTransitionDecision(state="unchanged")
 
         if new_chain != "on":
             new["chain"] = "on"
@@ -235,7 +229,7 @@ def apply_nautical_transition(
                 raise ValueError("recurrence activation requires root link 1") from exc
         else:
             new["link"] = 1
-        return ModifyNauticalTransition(
+        return RecurrenceTransitionDecision(
             state="enabled",
             source=source,
             reason="This task just gained Nautical recurrence and was promoted to chain:on.",
@@ -243,7 +237,7 @@ def apply_nautical_transition(
 
     if old_has_recurrence and not new_has_recurrence:
         ensure_terminal_chain_off(new)
-        return ModifyNauticalTransition(
+        return RecurrenceTransitionDecision(
             state="disabled",
             reason="This task no longer has Nautical recurrence fields.",
         )
@@ -257,7 +251,7 @@ def apply_nautical_transition(
             source = "cp"
         else:
             source = ""
-        return ModifyNauticalTransition(
+        return RecurrenceTransitionDecision(
             state="resumed",
             source=source,
             reason="This task's Nautical recurrence was resumed with chain:on.",
@@ -272,18 +266,17 @@ def apply_nautical_transition(
             source = "cp"
         else:
             source = ""
-        return ModifyNauticalTransition(
+        return RecurrenceTransitionDecision(
             state="disabled",
             source=source,
             reason="This task's Nautical recurrence is disabled because chain:off is set.",
         )
 
-    return ModifyNauticalTransition(state="unchanged")
+    return RecurrenceTransitionDecision(state="unchanged")
 
 
 __all__ = (
     "ModifyLifecycleRoute",
-    "ModifyNauticalTransition",
     "RECURRENCE_SETTING_FIELDS",
     "apply_terminal_transition",
     "apply_nautical_transition",

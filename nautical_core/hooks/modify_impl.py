@@ -2843,7 +2843,10 @@ def _preserve_cp_relative_offsets_on_due_change(
         format_datetime=core.fmt_isoz,
         carry_error=_module("chain_generation").CarryFieldError,
     )
-    return _module("modify_carry_workflow").decision_from_cp_adjustments(result)
+    workflow = _module("modify_carry_workflow")
+    decision = workflow.decision_from_cp_adjustments(result)
+    workflow.apply_temporal_carry_patch(new, decision)
+    return decision
 
 
 def _reject_native_until_carry(
@@ -2900,9 +2903,11 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, 
         return _module("modify_carry_workflow").NativeUntilDecision(
             "rejected", reason="native-until carry produced no parseable value"
         )
-    return _module("modify_carry_workflow").NativeUntilDecision(
+    decision = _module("modify_carry_workflow").NativeUntilDecision(
         "carried", value=_module("task_models").TaskTimestamp(value)
     )
+    _module("modify_carry_workflow").apply_native_until_patch(new, decision)
+    return decision
 
 
 def _handle_non_completion_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:

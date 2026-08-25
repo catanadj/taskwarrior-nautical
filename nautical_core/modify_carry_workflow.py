@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .task_changes import TaskPatch
 from .task_models import TaskTimestamp
 
 
@@ -107,4 +108,36 @@ def decision_from_cp_adjustments(result, *, timestamp_factory=TaskTimestamp) -> 
     )
 
 
-__all__ = ("NativeUntilDecision", "TemporalCarryAdjustment", "TemporalCarryDecision", "decision_from_cp_adjustments")
+def apply_temporal_carry_patch(task: dict, decision: TemporalCarryDecision) -> None:
+    """Apply a validated carry decision as one ordinary-carry patch."""
+    if decision.status != "adjusted":
+        return
+    uuid = str(task.get("uuid") or "").strip()
+    from .task_models import TaskUUID
+
+    patch = TaskPatch.ordinary_carry(
+        TaskUUID(uuid),
+        **dict(decision.serialized_changes),
+    )
+    for field, value in patch.set_values().items():
+        task[field] = value
+
+
+def apply_native_until_patch(task: dict, decision: NativeUntilDecision) -> None:
+    """Apply a carried native-until value through the same typed patch path."""
+    if decision.status != "carried" or decision.value is None:
+        return
+    from .task_models import TaskUUID
+
+    patch = TaskPatch.ordinary_carry(TaskUUID(str(task.get("uuid") or "")), until=decision.value.value.isoformat().replace("+00:00", "Z"))
+    for field, value in patch.set_values().items():
+        task[field] = value
+
+
+__all__ = (
+    "NativeUntilDecision",
+    "TemporalCarryAdjustment",
+    "TemporalCarryDecision",
+    "apply_temporal_carry_patch",
+    "decision_from_cp_adjustments",
+)

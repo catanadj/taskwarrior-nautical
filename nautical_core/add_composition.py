@@ -138,35 +138,22 @@ class AddCompositionServices:
         self._host._stamp_chain_id_on_add(task)
 
     def render_anchor_preview(self, context, *, prof) -> None:
-        host = self._host
-        host._handle_anchor_preview_on_add(
-            task=context.task,
-            anchor_str=context.anchor_str,
-            anchor_file_str=context.anchor_file_str,
-            ch=context.chain_state,
-            now_utc=context.now_utc,
-            now_local=context.now_local,
+        self._host._module("add_preview_composition").render_anchor(
+            self._host, task=context.task, anchor_str=context.anchor_str,
+            anchor_file_str=context.anchor_file_str, ch=context.chain_state,
+            now_utc=context.now_utc, now_local=context.now_local,
             user_provided_due=context.user_provided_due,
-            recurrence_field=context.recurrence_field,
-            due_dt=context.due_dt,
-            due_day=context.due_day,
-            due_hhmm=context.due_hhmm,
-            until_dt=context.until_dt,
-            past_due_warning=context.past_due_warning,
+            recurrence_field=context.recurrence_field, due_dt=context.due_dt,
+            due_day=context.due_day, due_hhmm=context.due_hhmm,
+            until_dt=context.until_dt, past_due_warning=context.past_due_warning,
             prof=prof,
         )
 
     def render_cp_preview(self, context, *, prof) -> None:
-        host = self._host
-        host._handle_cp_preview_on_add(
-            task=context.task,
-            cp_str=context.cp_str,
-            ch=context.chain_state,
-            now_utc=context.now_utc,
-            user_provided_due=context.user_provided_due,
-            recurrence_field=context.recurrence_field,
-            due_dt=context.due_dt,
-            until_dt=context.until_dt,
+        self._host._module("add_preview_composition").render_cp(
+            self._host, context.task, context.cp_str, context.chain_state,
+            context.now_utc, context.user_provided_due,
+            context.recurrence_field, context.due_dt, context.until_dt, prof=prof,
         )
 
 

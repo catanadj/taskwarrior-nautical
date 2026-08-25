@@ -21,6 +21,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "add_formatting",
         "add_validation",
         "add_composition",
+        "add_preview_composition",
         "astronomy_validation",
         "add_anchor_compute",
         "add_anchor_preview",

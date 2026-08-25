@@ -195,6 +195,12 @@ _MODULE_SPECS = {
         "add_composition.py",
         "nautical_core.add_composition",
     ),
+    "add_preview_composition": (
+        "_ADD_PREVIEW_COMPOSITION",
+        "_ADD_PREVIEW_COMPOSITION_LOAD_FAILED",
+        "add_preview_composition.py",
+        "nautical_core.add_preview_composition",
+    ),
     "astronomy_validation": (
         "_ASTRONOMY_VALIDATION",
         "_ASTRONOMY_VALIDATION_LOAD_FAILED",

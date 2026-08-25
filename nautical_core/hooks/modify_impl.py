@@ -856,6 +856,12 @@ _MODULE_SPECS = {
         "modify_read_effects.py",
         "nautical_core.modify_read_effects",
     ),
+    "modify_format_effects": (
+        "_MODIFY_FORMAT_EFFECTS",
+        "_MODIFY_FORMAT_EFFECTS_LOAD_FAILED",
+        "modify_format_effects.py",
+        "nautical_core.modify_format_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -1450,8 +1456,12 @@ def _format_line_preview(
         minimal=minimal,
         core=core,
         format_local=_fmtlocal,
-        on_time_delta=_fmt_on_time_delta,
-        human_delta=_human_delta,
+        on_time_delta=lambda due, end, tol=60: _module("modify_format_effects").on_time_delta(
+            _module("modify_composition").hook_host(globals(), __name__), due, end, tol
+        ),
+        human_delta=lambda start, end, prefer=True: _module("modify_format_effects").human_delta(
+            _module("modify_composition").hook_host(globals(), __name__), start, end, prefer
+        ),
     )
 
 
@@ -1590,19 +1600,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
-    if not (due_dt and end_dt):
-        return ""
-    diff = (end_dt - due_dt).total_seconds()
-    if diff > tol_secs:
-        human = core.humanize_delta(due_dt, end_dt, use_months_days=False)
-        return f"[yellow](+{human.replace('overdue by ','').replace('in ','')} late)[/]"
-    if diff < -tol_secs:
-        human = core.humanize_delta(end_dt, due_dt, use_months_days=False)
-        return f"[cyan](-{human.replace('in ','')} early)[/]"
-    return "[green](on time)[/]"
-
-
 def _collect_prev_two(current_task: dict, chain_by_link=None):
     return _module("modify_read_effects").collect_prev_two(
         _module("modify_composition").hook_host(globals(), __name__),
@@ -1614,13 +1611,6 @@ def _collect_prev_two(current_task: dict, chain_by_link=None):
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
-
-def _human_delta(a, b, prefer_months=True):
-    try:
-        return core.humanize_delta(a, b, use_months_days=bool(prefer_months))
-    except TypeError:
-        return core.humanize_delta(a, b)
-
 
 # ------------------------------------------------------------------------------
 # Due calculators

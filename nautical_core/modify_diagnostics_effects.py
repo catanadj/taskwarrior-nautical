@@ -64,7 +64,7 @@ def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
         coerce_int=host.core.coerce_int,
         parse_datetime=host._dtparse,
         format_local=host._fmtlocal,
-        format_on_time_delta=host._fmt_on_time_delta,
+        format_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol),
         short_uuid=host._short,
     )
 
@@ -74,7 +74,7 @@ def span_fields(host: Any, chain_id: str, chain, *, stop_at=None, stopped_by_del
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
         export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
         parse_datetime=host._dtparse,
-        human_delta=host._human_delta,
+        human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
     )
 
 
@@ -120,7 +120,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             stopped_by_delete=stopped_by_delete,
             export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
             parse_datetime=host._dtparse,
-            human_delta=host._human_delta,
+        human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
         )
 
     def kind_rows(rows, kind: str, task: Any) -> None:

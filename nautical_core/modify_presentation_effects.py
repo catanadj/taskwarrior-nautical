@@ -203,7 +203,7 @@ def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, 
         core=host.core, max_iterations=host._MAX_ITERATIONS,
         future_style_for_chain=lambda task, kind: future_style_for_chain(host, task, kind),
         collect_prev_two=collect_prev_two, dtparse=host._dtparse,
-        fmt_on_time_delta=host._fmt_on_time_delta, fmtlocal=host._fmtlocal,
+        fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol), fmtlocal=host._fmtlocal,
         short=host._short, tolocal=host._tolocal,
         next_occurrence_after_local_dt=lambda *args, **kwargs: host._module("modify_schedule_effects").next_occurrence_after_local_dt(host, *args, **kwargs),
         to_local_cached=host._to_local_cached,
@@ -235,7 +235,8 @@ def build_runtime_services(host: Any):
         panel=host._panel, print_task=host._print_task, diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
         chain_colour_for_task=lambda task, kind: chain_colour_for_task(host, task, kind),
-        strip_quotes=host._strip_quotes, human_delta=host._human_delta,
+        strip_quotes=host._strip_quotes,
+        human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
     )
 
 

@@ -244,9 +244,16 @@ def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
         )
         return generation.build_child_draft(typed_task, *args, **inner_kwargs)
 
+    spawn_effects = host._module("modify_spawn_effects")
     services = runtime.build_spawn_services(
         build_child_draft=build_child_draft,
-        spawn_child_atomic=host._spawn_child_atomic,
+        spawn_child_atomic=getattr(
+            host,
+            "_spawn_child_atomic",
+            lambda child, parent, *, lifecycle_plan=None: spawn_effects.spawn_child_atomic(
+                host, child, parent, lifecycle_plan=lifecycle_plan
+            ),
+        ),
         panel=host._panel,
         print_task=host._print_task,
         diag=host._diag,

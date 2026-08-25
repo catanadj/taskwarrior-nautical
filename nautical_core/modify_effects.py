@@ -162,7 +162,11 @@ def expiration_services(host: Any):
         compute_anchor_child_due=lambda task: generation.compute_anchor_child_due(typed_task(task)),
         compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
         build_child_draft=lambda task, *args, **kwargs: generation.build_child_draft(typed_task(task), *args, **kwargs),
-        stage_recovery_plan=host._enqueue_spawn_intent,
+        stage_recovery_plan=getattr(
+            host,
+            "_enqueue_spawn_intent",
+            lambda plan: host._module("modify_spawn_effects").enqueue_spawn_intent(host, plan),
+        ),
         panel=host._panel,
         short=host._short,
         diag=host._diag,

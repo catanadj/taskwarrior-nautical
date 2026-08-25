@@ -505,6 +505,8 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "nautical_core/modify_ordinary.py",
         "nautical_core/modify_protocol.py",
         "nautical_core/modify_runtime.py",
+        "nautical_core/modify_spawn_effects.py",
+        "nautical_core/modify_validation_effects.py",
         "nautical_core/natural_language.py",
         "nautical_core/natural_language_api.py",
         "nautical_core/recurrence_context.py",

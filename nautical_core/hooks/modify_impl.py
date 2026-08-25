@@ -630,6 +630,12 @@ _MODULE_SPECS = {
         "modify_completion_spawn.py",
         "nautical_core.modify_completion_spawn",
     ),
+    "modify_spawn_effects": (
+        "_MODIFY_SPAWN_EFFECTS",
+        "_MODIFY_SPAWN_EFFECTS_LOAD_FAILED",
+        "modify_spawn_effects.py",
+        "nautical_core.modify_spawn_effects",
+    ),
     "modify_models": (
         "_MODIFY_MODELS",
         "_MODIFY_MODELS_LOAD_FAILED",
@@ -1426,86 +1432,6 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
     return _module("modify_spawn_prep").categorize_spawn_error(returncode, stderr)
 
 
-def _enqueue_spawn_intent(plan) -> tuple[bool, str]:
-    """Stage one immutable lifecycle plan through the shared application service."""
-    if _INTEGRATION_CONTEXT is None:
-        return False, "validated integration context is unavailable"
-    lifecycle_models = _module("lifecycle_models")
-    if not isinstance(plan, lifecycle_models.LifecyclePlan):
-        return False, "invalid lifecycle plan"
-    configuration = _INTEGRATION_CONTEXT.configuration
-    lifecycle_application = _module("lifecycle_application")
-    outbox = _module("lifecycle_outbox").LifecycleOutboxRepository(TW_DATA_DIR)
-    # Staging-only: no unit_of_work/mutations here by design. On-modify must
-    # not construct a command-capable unit of work, to avoid re-entering
-    # Taskwarrior while it still holds the datastore lock for this task.
-    service = lifecycle_application.LifecycleApplicationService(outbox=outbox, owner="on-modify")
-    result = service.stage(
-        plan,
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
-    if result.ok:
-        return True, ""
-    return False, result.reason or "lifecycle outbox staging failed"
-
-
-def _lifecycle_spawn_identity(parent: dict, child: dict):
-    """Build one retry-stable transition identity for a child slot."""
-    lifecycle_models = _module("lifecycle_models")
-    chain_id = str(parent.get("chainID") or "").strip()
-    parent_uuid = str(parent.get("uuid") or "").strip()
-    try:
-        source_link = int(parent.get("link"))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("lifecycle transition requires a numeric parent link") from exc
-    try:
-        target_link = int(child.get("link") or (source_link + 1))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("lifecycle transition requires a numeric child link") from exc
-    status = str(parent.get("status") or "").strip().lower()
-    event = (
-        lifecycle_models.LifecycleEvent.EXPIRE
-        if status == "deleted"
-        else lifecycle_models.LifecycleEvent.COMPLETE
-    )
-    identity = lifecycle_models.LifecycleIdentity(
-        chain_id=chain_id,
-        parent_uuid=parent_uuid,
-        source_link=source_link,
-        target_link=target_link,
-        event=event,
-    )
-    return identity
-
-
-def _spawn_child_atomic(
-    child_task,
-    parent_task_with_nextlink: dict,
-    *,
-    lifecycle_plan=None,
-) -> tuple[str, set[str], bool, bool, str | None, str | None]:
-    modify_spawn = _module("modify_spawn")
-    if hasattr(child_task, "to_mapping"):
-        child_task = child_task.to_mapping()
-    return modify_spawn.spawn_child_atomic(
-        child_task,
-        parent_task_with_nextlink,
-        lifecycle_plan=lifecycle_plan,
-        services=modify_spawn.SpawnServices(
-            prepare_spawn_child_payload=_module("modify_spawn_prep").prepare_spawn_child_payload,
-            child_uuid_for_spawn=_child_uuid_for_spawn,
-            fmt_isoz=core.fmt_isoz,
-            now_utc=core.now_utc,
-            lifecycle_models=_module("lifecycle_models"),
-            lifecycle_spawn_identity=_lifecycle_spawn_identity,
-            enqueue_spawn_intent=_enqueue_spawn_intent,
-            parse_datetime=getattr(core, "parse_dt_any", None),
-            diag_count=_diag_count,
-        ),
-    )
-
-
 
 def _root_uuid_from(task: dict) -> str:
     """Return the stable chain seed.
@@ -1513,6 +1439,25 @@ def _root_uuid_from(task: dict) -> str:
     ChainID is the only source of truth.
     """
     return (task.get("chainID") or "").strip()
+
+
+# Explicit test/tooling aliases while fixtures migrate to modify_spawn_effects.
+class _ModuleHost:
+    def __getattr__(self, name):
+        return globals()[name]
+
+
+_MODULE_HOST = _ModuleHost()
+
+
+def _enqueue_spawn_intent(plan):
+    return _module("modify_spawn_effects").enqueue_spawn_intent(_MODULE_HOST, plan)
+
+
+def _spawn_child_atomic(child_task, parent_task_with_nextlink, *, lifecycle_plan=None):
+    return _module("modify_spawn_effects").spawn_child_atomic(
+        _MODULE_HOST, child_task, parent_task_with_nextlink, lifecycle_plan=lifecycle_plan
+    )
 
 # --- Chain export: chainID is mandatory --------------------------------------
 def _task(args, env=None) -> str:

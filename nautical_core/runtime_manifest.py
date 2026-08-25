@@ -46,6 +46,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_completion_preflight",
         "modify_completion_compute",
         "modify_completion_spawn",
+        "modify_spawn_effects",
         "modify_models",
         "task_codec",
         "task_models",

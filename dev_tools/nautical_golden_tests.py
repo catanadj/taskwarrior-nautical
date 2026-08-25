@@ -12555,7 +12555,7 @@ def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
     try:
         mod.core.LOCAL_TZ_NAME = "Australia/Lord_Howe"
         mod.core._LOCAL_TZ = zone
-        carried = mod._local_naive_to_utc(datetime(2026, 10, 4, 2, 15))
+        carried = mod._module("modify_datetime_effects").local_naive_to_utc(mod, datetime(2026, 10, 4, 2, 15))
     finally:
         mod.core.LOCAL_TZ_NAME = old_name
         mod.core._LOCAL_TZ = old_tz
@@ -18302,8 +18302,8 @@ def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
             parent_until,
             late_target,
             "anchor",
-            utc_to_local_naive=mod._utc_to_local_naive,
-            local_naive_to_utc=mod._local_naive_to_utc,
+            utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
+            local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
         )
     except native_until.NativeUntilCarryError as exc:
         expect(exc.code == native_until.CARRY_CONFLICT, f"unexpected carry error code: {exc.code!r}")
@@ -33446,8 +33446,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         kind="anchor",
         safe_parse_datetime=mod._safe_parse_datetime,
         fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=mod._utc_to_local_naive,
-        local_naive_to_utc=mod._local_naive_to_utc,
+        utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
+        local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
     )
     expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
     fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
@@ -33458,8 +33458,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         }),
         safe_parse_datetime=mod._safe_parse_datetime,
         fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=mod._utc_to_local_naive,
-        local_naive_to_utc=mod._local_naive_to_utc,
+        utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
+        local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
     )
     expect(
         not fallback_error and fallback == stamp(date(2026, 7, 23), (23, 0)),
@@ -33473,8 +33473,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         }),
         safe_parse_datetime=mod._safe_parse_datetime,
         fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=mod._utc_to_local_naive,
-        local_naive_to_utc=mod._local_naive_to_utc,
+        utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
+        local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
     )
     expect(
         late_fallback is None and "at or after local 23:00" in (late_error or ""),

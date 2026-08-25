@@ -32,4 +32,16 @@ def safe_dt(host: Any, value: Any):
         return None
 
 
-__all__ = ("safe_parse_datetime", "safe_dt")
+def utc_to_local_naive(host: Any, value):
+    if not hasattr(value, "tzinfo"):
+        raise TypeError("dt_utc must be datetime")
+    return host.core.utc_to_local_naive(value)
+
+
+def local_naive_to_utc(host: Any, value):
+    if not hasattr(value, "tzinfo"):
+        raise TypeError("dt_local_naive must be datetime")
+    return host.core.local_naive_to_utc(value.replace(microsecond=0))
+
+
+__all__ = ("safe_parse_datetime", "safe_dt", "utc_to_local_naive", "local_naive_to_utc")

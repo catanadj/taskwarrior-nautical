@@ -26,8 +26,8 @@ def preserve_cp_relative_offsets_on_due_change(
             else host._field_changed
         ),
         parse_datetime=host.core.parse_dt_any,
-        utc_to_local_naive=host._utc_to_local_naive,
-        local_naive_to_utc=host._local_naive_to_utc,
+        utc_to_local_naive=lambda value: host._module("modify_datetime_effects").utc_to_local_naive(host, value),
+        local_naive_to_utc=lambda value: host._module("modify_datetime_effects").local_naive_to_utc(host, value),
         format_datetime=host.core.fmt_isoz,
         carry_error=host._module("chain_generation").CarryFieldError,
     )

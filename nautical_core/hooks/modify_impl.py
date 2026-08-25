@@ -1640,21 +1640,6 @@ _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
 # ------------------------------------------------------------------------------
 # wait/scheduled carry-forward (relative to due)
 # ------------------------------------------------------------------------------
-def _utc_to_local_naive(dt_utc: datetime) -> datetime:
-    """UTC -> local naive (wall-clock)."""
-    if not isinstance(dt_utc, datetime):
-        raise TypeError("dt_utc must be datetime")
-    return core.utc_to_local_naive(dt_utc)
-
-
-def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
-    """Local naive (wall-clock) -> UTC using the shared DST policy."""
-    if not isinstance(dt_local_naive, datetime):
-        raise TypeError("dt_local_naive must be datetime")
-    naive = dt_local_naive.replace(microsecond=0)
-    return core.local_naive_to_utc(naive)
-
-
 # ------------------------------------------------------------------------------
 # Timeline (capped) — no dependency on core.next_anchor_after
 # ------------------------------------------------------------------------------

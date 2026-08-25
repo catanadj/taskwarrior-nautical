@@ -219,9 +219,9 @@ class LifecycleReadService:
             existing = None
             if short_uuid and self._cache_store.indexes:
                 existing = self._cache_store.indexes.by_short.get(short_uuid)
-            if not isinstance(existing, dict) and uuid_value and self._cache_store.indexes:
+            if not isinstance(existing, TaskObservation) and uuid_value and self._cache_store.indexes:
                 existing = self._cache_store.indexes.by_uuid.get(uuid_value)
-            if isinstance(existing, dict):
+            if isinstance(existing, TaskObservation):
                 if existing.semantic_fingerprint != task.semantic_fingerprint:
                     task_obj = task
             by_short = dict(self._cache_store.indexes.by_short) if self._cache_store.indexes else {}

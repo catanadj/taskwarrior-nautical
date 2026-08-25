@@ -3480,6 +3480,9 @@ def _expiration_services():
     def build_child_draft(task: dict, *args, **kwargs):
         return generation.build_child_draft(typed_task(task), *args, **kwargs)
 
+    def stage_recovery_plan(plan):
+        return _enqueue_spawn_intent(plan)
+
     return modify_expiration.ExpirationServices(
         core=core,
         reconcile=_module("chain_integrity_lifecycle"),
@@ -3487,7 +3490,7 @@ def _expiration_services():
         compute_anchor_child_due=compute_anchor,
         compute_cp_child_due=compute_cp,
         build_child_draft=build_child_draft,
-        spawn_child_atomic=_spawn_child_atomic,
+        stage_recovery_plan=stage_recovery_plan,
         panel=_panel,
         short=_short,
         diag=_diag,

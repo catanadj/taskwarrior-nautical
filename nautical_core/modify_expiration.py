@@ -7,8 +7,7 @@ from typing import Any
 from .task_models import TaskPayload
 
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle_models import DeletionEvidence, LifecycleEvent
-from nautical_core.modify_lifecycle import apply_terminal_transition
+from nautical_core.lifecycle_models import DeletionEvidence
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
@@ -20,7 +19,7 @@ class ExpirationServices:
     compute_anchor_child_due: Any
     compute_cp_child_due: Any
     build_child_draft: Any
-    spawn_child_atomic: Any
+    stage_recovery_plan: Any
     panel: Any
     short: Any
     diag: Any
@@ -151,41 +150,34 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
     plan = reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook)
 
     if plan.action == "legitimate_final":
-        apply_terminal_transition(task, LifecycleEvent.EXPIRE)
-        _render_recovery_panel(
+        render_recovery_warning(
             task,
-            plan,
+            "The expired chain reached its terminal bound; lifecycle drain will finalize it.",
             services=services,
-            result="[yellow]Chain finished at configured limit[/]",
         )
         return True
-    if plan.action != "spawn" or plan.child_draft is None:
+    if plan.action != "spawn" or plan.lifecycle_plan is None or plan.child_draft is None:
         render_recovery_warning(task, plan.reason, services=services)
         return True
 
     try:
-        child_short, _stripped, verified, deferred, reason, _intent_id = services.spawn_child_atomic(
-            plan.child_draft.to_mapping(),
-            task,
-        )
+        staged, reason = services.stage_recovery_plan(plan.lifecycle_plan)
     except Exception as exc:
-        services.diag(f"expiration child queue failed: {exc}")
-        render_recovery_warning(task, "The next occurrence could not be queued.", services=services)
+        services.diag(f"expiration lifecycle staging failed: {exc}")
+        render_recovery_warning(task, "The expired successor could not be staged for lifecycle drain.", services=services)
         return True
-    if verified or deferred:
-        task["nextLink"] = child_short
-    if verified:
+    if staged:
         _render_recovery_panel(
             task,
             plan,
             services=services,
-            result="[green]Next occurrence created[/]",
-            child_short=child_short,
+            result="[yellow]Next occurrence queued for lifecycle drain[/]",
+            child_short=plan.child_short,
         )
-    elif not deferred:
+    else:
         render_recovery_warning(
             task,
-            reason or "The next occurrence could not be queued.",
+            reason or "The next occurrence could not be staged for lifecycle drain.",
             services=services,
         )
     return True

@@ -8474,7 +8474,10 @@ def test_on_modify_expiration_delegates_to_extracted_orchestration():
 
     expect(captured.get("task") is task, f"expiration task was not delegated unchanged: {captured!r}")
     services = captured.get("services")
-    expect(services is not None and services.spawn_child_atomic is mod._spawn_child_atomic, "expiration services were not wired")
+    expect(
+        services is not None and callable(services.stage_recovery_plan),
+        "expiration services were not wired to lifecycle staging",
+    )
 
 
 def test_on_modify_expiration_internal_failure_remains_recoverable():

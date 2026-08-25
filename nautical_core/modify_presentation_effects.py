@@ -81,7 +81,7 @@ def render_cp_schedule_adjusted_panel(host: Any, adjustment) -> None:
         adjustment,
         format_local=host._fmtlocal,
         semantic_diff_value=host._module("modify_validation_effects").semantic_diff_value,
-        format_offset=host._fmt_td_dd_hhmm,
+        format_offset=host._module("modify_value_effects").format_delta,
         panel=host._panel,
     )
 
@@ -91,7 +91,7 @@ def render_explicit_timing_order_warning(host: Any, new: TaskPayload, changed_fi
     host._module("modify_feedback").render_explicit_timing_order_warning(
         task,
         changed_fields,
-        format_offset=host._fmt_td_dd_hhmm,
+        format_offset=host._module("modify_value_effects").format_delta,
         panel=host._panel,
     )
 

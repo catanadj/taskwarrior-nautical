@@ -218,7 +218,7 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         preflight=preflight,
         generation=host._module("modify_generation_effects").chain_generation_service(host),
         scheduler_fingerprint=fingerprint_fn() if callable(fingerprint_fn) else "",
-        compare_datetimes=host._compare_datetimes,
+        compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(host, left, right),
         invalid_relative_carry_reason=host._module("chain_integrity_lifecycle").invalid_relative_carry_reason,
         lifecycle_planner=host._module("lifecycle_planner"),
         lifecycle_models=host._module("lifecycle_models"),

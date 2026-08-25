@@ -459,21 +459,6 @@ def _diag_lifecycle_result(result) -> None:
 atexit.register(_dump_diag_stats)
 
 
-def _fmt_td_dd_hhmm(delta: timedelta) -> str:
-    """Format a timedelta as ±Dd HHh:MMm (UTC-seconds based; seconds omitted)."""
-    try:
-        total = int(delta.total_seconds())
-    except Exception:
-        return str(delta)
-    sign = "-" if total < 0 else "+"
-    total = abs(total)
-    # truncate seconds
-    total_minutes = total // 60
-    dd, rem_m = divmod(total_minutes, 1440)  # 24*60
-    hh, mm = divmod(rem_m, 60)
-    return f"{sign}{dd}d {hh:02}h:{mm:02}m"
-
-
 def _append_next_wait_sched_rows(
     fb: list[tuple[str, str]],
     nxt: dict,
@@ -488,12 +473,13 @@ def _append_next_wait_sched_rows(
         nxt_due_utc,
         anchor_field=anchor_field,
         format_local=core.fmt_dt_local,
-        compare_datetimes=_compare_datetimes,
-        format_delta=_fmt_td_dd_hhmm,
+        compare_datetimes=lambda left, right: _module("modify_value_effects").compare_datetimes(
+            _module("modify_composition").hook_host(globals(), __name__), left, right
+        ),
+        format_delta=_module("modify_value_effects").format_delta,
     )
 
 core = None
-_DATETIME_COMPARATOR = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
@@ -868,6 +854,12 @@ _MODULE_SPECS = {
         "modify_command_effects.py",
         "nautical_core.modify_command_effects",
     ),
+    "modify_value_effects": (
+        "_MODIFY_VALUE_EFFECTS",
+        "_MODIFY_VALUE_EFFECTS_LOAD_FAILED",
+        "modify_value_effects.py",
+        "nautical_core.modify_value_effects",
+    ),
     "modify_generation_effects": (
         "_MODIFY_GENERATION_EFFECTS",
         "_MODIFY_GENERATION_EFFECTS_LOAD_FAILED",
@@ -1093,14 +1085,6 @@ def _fmtlocal(dt):
 
 def _tolocal(dt):
     return _to_local_cached(dt)
-
-
-def _compare_datetimes(left: datetime, right: datetime) -> int:
-    """Compare aware datetimes by instant, preserving DST fold ordering."""
-    global _DATETIME_COMPARATOR
-    if _DATETIME_COMPARATOR is None:
-        _DATETIME_COMPARATOR = core._import_sibling("timeutil").compare_datetimes
-    return _DATETIME_COMPARATOR(left, right)
 
 
 # ------------------------------------------------------------------------------

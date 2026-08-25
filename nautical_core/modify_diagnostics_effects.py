@@ -13,7 +13,7 @@ def chain_health_advice(host: Any, chain, kind: str, task, tol_secs: int, style:
         task,
         core=host.core,
         parse_datetime=host._dtparse,
-        format_delta=host._fmt_td_dd_hhmm,
+        format_delta=host._module("modify_value_effects").format_delta,
         coerce_int=host.core.coerce_int,
         tol_secs=tol_secs,
         style=style,

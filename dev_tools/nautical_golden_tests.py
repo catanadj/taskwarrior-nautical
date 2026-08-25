@@ -11647,7 +11647,7 @@ def test_chain_health_advice_coach_healthy_streak():
         {"cp": "3d"},
         core=mod.core,
         parse_datetime=mod._dtparse,
-        format_delta=mod._fmt_td_dd_hhmm,
+        format_delta=mod._module("modify_value_effects").format_delta,
         coerce_int=mod.core.coerce_int,
         tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
         style="coach",
@@ -11675,7 +11675,7 @@ def test_chain_health_advice_coach_low_ontime_issue():
         {"cp": "1d"},
         core=mod.core,
         parse_datetime=mod._dtparse,
-        format_delta=mod._fmt_td_dd_hhmm,
+        format_delta=mod._module("modify_value_effects").format_delta,
         coerce_int=mod.core.coerce_int,
         tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
         style="coach",
@@ -11703,7 +11703,7 @@ def test_chain_health_advice_clinical_drift_and_style_normalization():
         {},
         core=mod.core,
         parse_datetime=mod._dtparse,
-        format_delta=mod._fmt_td_dd_hhmm,
+        format_delta=mod._module("modify_value_effects").format_delta,
         coerce_int=mod.core.coerce_int,
         tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
         style=" Clinical ",
@@ -12584,11 +12584,12 @@ def test_hook_datetime_comparator_resolves_once():
             return original_import(name)
 
         mod.core._import_sibling = counted_import
-        mod._DATETIME_COMPARATOR = None
+        value_effects = mod._module("modify_value_effects")
+        value_effects._COMPARATOR = None
         instant = datetime(2026, 1, 1, tzinfo=timezone.utc)
         try:
-            mod._compare_datetimes(instant, instant)
-            mod._compare_datetimes(instant, instant)
+            value_effects.compare_datetimes(mod, instant, instant)
+            value_effects.compare_datetimes(mod, instant, instant)
         finally:
             mod.core._import_sibling = original_import
         expect(len(calls) == 1, f"{hook_name} resolved comparator {len(calls)} times")

@@ -120,7 +120,7 @@ def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: 
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
         anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(host, *args, **kwargs),
-        compare_datetimes=host._compare_datetimes,
+        compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(host, left, right),
         max_iterations=host._MAX_ITERATIONS,
     )
 

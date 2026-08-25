@@ -161,7 +161,7 @@ def until_not_past(host: Any, until_dt, now_utc) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     grace = host.timedelta(minutes=1)
-    if host._compare_datetimes(until_dt, now_utc - grace) < 0:
+    if host._module("modify_value_effects").compare_datetimes(host, until_dt, now_utc - grace) < 0:
         past_s = host.core.humanize_delta(until_dt, now_utc, use_months_days=False)
         return False, f"chainUntil is in the past (was {past_s} ago)"
     return True, None

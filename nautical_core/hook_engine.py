@@ -30,7 +30,6 @@ class OnModifyServices(Protocol):
     def load_core(self) -> None: ...
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
-    def is_non_completion(self, old: TaskPayload, new: TaskPayload) -> bool: ...
     def handle_non_completion(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> None: ...
     def handle_completion(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> Any: ...
     def handle_deleted(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> None: ...
@@ -137,86 +136,42 @@ def handle_on_modify(
 ):
     old, new = request.old, request.new
     transition = getattr(request, "transition", None)
-    if transition is not None:
-        workflow = importlib.import_module("nautical_core.modify_workflow")
-        typed_route = workflow.classify_modify_transition(transition)
-        typed_handlers = bool(getattr(services, "typed_transition_handlers", False))
-
-        def invoke_typed(handler_name):
-            handler = getattr(services, handler_name)
-            if typed_handlers:
-                return handler(old, new, request.runtime.uow, transition)
-            return handler(old, new, request.runtime.uow)
-
-        if typed_route.kind is workflow.ModifyRouteKind.INVALID_IDENTITY_EDIT:
-            services.fail_and_exit(
-                "Invalid Nautical edit",
-                "chain identity fields are immutable; restore chainID/link/prevLink/nextLink",
-            )
-        if typed_route.kind is workflow.ModifyRouteKind.DELETION:
-            if typed_route.has_nautical_fields:
-                services.load_core()
-                invoke_typed("handle_deleted")
-                return services.result(task=new, sanitize=False)
-            return services.result(task=new, sanitize=False)
-        if not typed_route.has_nautical_fields or typed_route.kind is workflow.ModifyRouteKind.ORDINARY:
-            return services.result(task=new, sanitize=False)
-        if typed_route.kind in {
-            workflow.ModifyRouteKind.IDEMPOTENT_COMPLETION,
-        }:
-            return services.result(task=new, sanitize=False)
-        if typed_route.kind is workflow.ModifyRouteKind.COMPLETION:
-            services.load_core()
-            lifecycle_result = invoke_typed("handle_completion")
-            request.runtime.lifecycle_result = lifecycle_result
-            return None
-        services.load_core()
-        invoke_typed("handle_non_completion")
-        return None
-    modify_lifecycle = importlib.import_module("nautical_core.modify_lifecycle")
-
-    route = modify_lifecycle.classify_modify_route(
-        old,
-        new,
-        is_non_completion_modify=services.is_non_completion,
-        transition=getattr(request, "transition", None),
-    )
+    if transition is None:
+        from .task_changes import TaskTransition
+        from .task_models import TaskObservation
+        transition = TaskTransition.from_observations(
+            TaskObservation.from_mapping(old, source_query="modify workflow"),
+            TaskObservation.from_mapping(new, source_query="modify workflow"),
+        )
+    workflow = importlib.import_module("nautical_core.modify_workflow")
+    typed_route = workflow.classify_modify_transition(transition)
     typed_handlers = bool(getattr(services, "typed_transition_handlers", False))
-    def invoke(handler_name, *args):
+
+    def invoke_typed(handler_name):
         handler = getattr(services, handler_name)
-        if typed_handlers and transition is not None:
-            return handler(*args, transition)
-        return handler(*args)
+        if typed_handlers:
+            return handler(old, new, request.runtime.uow, transition)
+        return handler(old, new, request.runtime.uow)
 
-    if route.is_deleted and route.has_nautical_fields:
-        try:
+    if typed_route.kind is workflow.ModifyRouteKind.INVALID_IDENTITY_EDIT:
+        services.fail_and_exit(
+            "Invalid Nautical edit",
+            "chain identity fields are immutable; restore chainID/link/prevLink/nextLink",
+        )
+    if typed_route.kind is workflow.ModifyRouteKind.DELETION:
+        if typed_route.has_nautical_fields:
             services.load_core()
-        except Exception as exc:
-            services.diag(f'core load failed: {exc}')
-            services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-        invoke("handle_deleted", old, new, request.runtime.uow)
+            invoke_typed("handle_deleted")
         return services.result(task=new, sanitize=False)
-
-    if route.is_deleted:
+    if not typed_route.has_nautical_fields or typed_route.kind is workflow.ModifyRouteKind.ORDINARY:
         return services.result(task=new, sanitize=False)
-
-    if not route.has_nautical_fields:
+    if typed_route.kind is workflow.ModifyRouteKind.IDEMPOTENT_COMPLETION:
         return services.result(task=new, sanitize=False)
-
-    try:
+    if typed_route.kind is workflow.ModifyRouteKind.COMPLETION:
         services.load_core()
-    except Exception as exc:
-        services.diag(f'core load failed: {exc}')
-        services.fail_and_exit('Hook misconfigured', 'Failed to initialize nautical core')
-
-    if route.is_non_completion:
-        invoke("handle_non_completion", old, new, request.runtime.uow)
-        return None
-
-    lifecycle_result = invoke("handle_completion", old, new, request.runtime.uow)
-    try:
+        lifecycle_result = invoke_typed("handle_completion")
         request.runtime.lifecycle_result = lifecycle_result
-    except Exception:
-        # Minimal test/request adapters may not expose runtime state.
-        pass
+        return None
+    services.load_core()
+    invoke_typed("handle_non_completion")
     return None

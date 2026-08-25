@@ -2463,10 +2463,6 @@ def _export_chain_endpoint(chain_id: str, direction: str):
 # ------------------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------------------
-def _is_non_completion_modify(old: dict, new: dict) -> bool:
-    return (old.get("status") == new.get("status")) or (new.get("status") != "completed")
-
-
 def _modify_runtime_services():
     modify_runtime = _module("modify_runtime")
     return modify_runtime.ModifyRuntimeServices(
@@ -3487,9 +3483,6 @@ class _OnModifyServices:
 
     def fail_and_exit(self, title: str, message: str):
         _fail_and_exit(title, message)
-
-    def is_non_completion(self, old, new):
-        return _is_non_completion_modify(old, new)
 
     def handle_non_completion(self, old, new, unit_of_work, transition=None):
         _handle_non_completion_modify(old, new, unit_of_work, transition=transition)

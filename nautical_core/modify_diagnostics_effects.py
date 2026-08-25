@@ -98,7 +98,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             human_delta=host._human_delta,
         )
 
-    def kind_rows(rows, kind: str, task: dict) -> None:
+    def kind_rows(rows, kind: str, task: Any) -> None:
         summary.kind_rows(
             rows,
             kind,

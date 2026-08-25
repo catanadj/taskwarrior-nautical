@@ -7,6 +7,7 @@ from enum import Enum
 
 from .task_changes import TaskTransition
 from .task_field_policy import VOLATILE_TASK_FIELDS
+from .task_models import TaskTimestamp
 
 
 class ModifyRouteKind(str, Enum):
@@ -30,6 +31,26 @@ _IDENTITY_FIELDS = frozenset({"chainID", "link", "prevLink", "nextLink"})
 
 class ModifyTransitionError(ValueError):
     """A typed modify transition cannot be safely classified."""
+
+
+@dataclass(frozen=True, slots=True)
+class RecurrenceTransitionDecision:
+    state: str
+    source: str = ""
+    reason: str = ""
+    next_occurrence: TaskTimestamp | None = None
+
+    def __post_init__(self) -> None:
+        state = str(self.state).strip().lower()
+        if state not in {"unchanged", "enabled", "disabled", "resumed"}:
+            raise ValueError("invalid recurrence transition state")
+        if self.next_occurrence is not None and not isinstance(self.next_occurrence, TaskTimestamp):
+            raise TypeError("next occurrence must be a TaskTimestamp")
+        if state in {"enabled", "disabled", "resumed"} and not str(self.reason).strip():
+            raise ValueError("recurrence transition decisions require a reason")
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "source", str(self.source).strip())
+        object.__setattr__(self, "reason", str(self.reason).strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,4 +172,10 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
     return ModifyWorkflowRoute(kind, has_nautical, transition.changed_fields, tuple(evidence))
 
 
-__all__ = ("ModifyRouteKind", "ModifyTransitionError", "ModifyWorkflowRoute", "classify_modify_transition")
+__all__ = (
+    "ModifyRouteKind",
+    "ModifyTransitionError",
+    "ModifyWorkflowRoute",
+    "RecurrenceTransitionDecision",
+    "classify_modify_transition",
+)

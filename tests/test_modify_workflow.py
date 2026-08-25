@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.modify_workflow import ModifyRouteKind, ModifyTransitionError, classify_modify_transition
+from nautical_core.modify_workflow import ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 
@@ -89,6 +89,12 @@ class ModifyWorkflowTests(unittest.TestCase):
         new = {"status": "pending", "anchor": "w:tue", "uuid": ""}
         with self.assertRaisesRegex(ModifyTransitionError, "requires a task UUID"):
             classify_modify_transition(transition(old, new))
+
+    def test_recurrence_transition_decision_requires_reason(self) -> None:
+        with self.assertRaises(ValueError):
+            RecurrenceTransitionDecision("disabled")
+        decision = RecurrenceTransitionDecision("resumed", source="anchor", reason="chain resumed")
+        self.assertEqual(decision.state, "resumed")
 
 
 if __name__ == "__main__":

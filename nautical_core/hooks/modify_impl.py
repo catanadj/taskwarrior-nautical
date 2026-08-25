@@ -1496,38 +1496,6 @@ def _tw_get_cached(ref: str) -> str:
 # ------------------------------------------------------------------------------
 
 
-def _canon_for_compare(v):
-    """Canonicalize values so 5 == 5.0, strings are trimmed, and
-    dict/list comparisons are stable."""
-    from decimal import Decimal, InvalidOperation
-    if v is None:
-        return None
-    # Booleans/numbers
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return Decimal(str(v))  # 5 and 5.0 normalize equal
-    # Strings that might be numeric
-    if isinstance(v, str):
-        s = v.strip()
-        try:
-            return Decimal(s)  # if numeric string, compare numerically
-        except (InvalidOperation, ValueError):
-            return s  # non-numeric string
-    # Collections → stable JSON
-    try:
-        return json.dumps(v, sort_keys=True, ensure_ascii=False)
-    except Exception:
-        return str(v)
-
-def _field_changed(old: dict, new: dict, key: str) -> bool:
-    ov = old.get(key)
-    nv = new.get(key)
-    return _canon_for_compare(ov) != _canon_for_compare(nv)
-
-
-
-
 
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)

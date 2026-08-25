@@ -22,7 +22,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
-        else host._field_changed
+        else host._module("modify_task_fields").field_changed
     )
     services = modify_ordinary.OrdinaryModifyServices(
         field_changed=field_changed,

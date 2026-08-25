@@ -23,7 +23,7 @@ def preserve_cp_relative_offsets_on_due_change(
         field_changed=(
             (lambda _old, _new, field: transition.changed(field))
             if transition is not None
-            else host._field_changed
+            else host._module("modify_task_fields").field_changed
         ),
         parse_datetime=host.core.parse_dt_any,
         utc_to_local_naive=lambda value: host._module("modify_datetime_effects").utc_to_local_naive(host, value),
@@ -84,7 +84,7 @@ def preserve_native_until_on_target_change(
         field_changed=(
             (lambda _old, _new, field: transition.changed(field))
             if transition is not None
-            else host._field_changed
+            else host._module("modify_task_fields").field_changed
         ),
         recurrence_anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
         parse_datetime=host.core.parse_dt_any,
@@ -127,7 +127,7 @@ def validate_completion_cp_and_anchor(host: Any, old: TaskPayload, new: TaskPayl
             field_changed=(
                 (lambda _old, _new, field: transition.changed(field))
                 if transition is not None
-                else host._field_changed
+                else host._module("modify_task_fields").field_changed
             ),
             validate_anchor=lambda expr: validation_effects.validate_shared_anchor(host, expr),
             validate_cp=lambda cp, chain_max, chain_until: validation_effects.validate_cp(

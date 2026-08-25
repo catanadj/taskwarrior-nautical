@@ -1130,7 +1130,7 @@ def _validate_modify_pair(old: dict, new: dict) -> tuple[dict, dict]:
         return protocol.validate_modify_pair(
             old,
             new,
-            has_nautical_fields=_task_has_nautical_fields,
+            has_nautical_fields=lambda old, new: _module("modify_lifecycle").task_has_nautical_fields(old) or _module("modify_lifecycle").task_has_nautical_fields(new),
         )
     except protocol.ModifyProtocolError as exc:
         _fail_protocol_error(str(exc))
@@ -1141,7 +1141,7 @@ def _validate_single_modify_task(task: dict) -> tuple[dict, dict]:
     try:
         return protocol.validate_single_modify_task(
             task,
-            has_nautical_fields=_task_has_nautical_fields,
+            has_nautical_fields=lambda old, new: _module("modify_lifecycle").task_has_nautical_fields(old) or _module("modify_lifecycle").task_has_nautical_fields(new),
         )
     except protocol.ModifyProtocolError as exc:
         _fail_protocol_error(str(exc))
@@ -1251,11 +1251,6 @@ def _panic_passthrough() -> None:
         _RAW_INPUT_TEXT,
         _PARSED_NEW,
     )
-
-
-def _task_has_nautical_fields(old: dict, new: dict) -> bool:
-    modify_lifecycle = _module("modify_lifecycle")
-    return modify_lifecycle.task_has_nautical_fields(old) or modify_lifecycle.task_has_nautical_fields(new)
 
 
 def _print_task(task):

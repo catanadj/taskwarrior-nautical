@@ -32,7 +32,8 @@ class ModifyCompositionServices:
         return self._result_cls(task=task, sanitize=sanitize)
 
     def has_nautical_fields(self, task):
-        return self._host._task_has_nautical_fields(task, task)
+        lifecycle = self._host._module("modify_lifecycle")
+        return lifecycle.task_has_nautical_fields(task)
 
     def load_core(self):
         self._host._load_core()
@@ -89,7 +90,9 @@ def run_on_modify(host: Any) -> None:
         r"(?:^|\s)(?:a|af|am|o|of|cm|cu):",
         str(new.get("description") or ""),
     ) is not None
-    if not host._task_has_nautical_fields(old, new) and not alias_candidate:
+    lifecycle = host._module("modify_lifecycle")
+    has_nautical_fields = lifecycle.task_has_nautical_fields(old) or lifecycle.task_has_nautical_fields(new)
+    if not has_nautical_fields and not alias_candidate:
         hook_results.emit_passthrough_json(new)
         host._write_bench_stats()
         return
@@ -119,7 +122,7 @@ def run_on_modify(host: Any) -> None:
             title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid recurrence transition"
             host._fail_and_exit(title, f"{finding.reason} {finding.correction}")
     config_error = str(getattr(host.core, "scheduling_configuration_error", lambda: "")() or "")
-    if config_error and host._task_has_nautical_fields(old, new):
+    if config_error and has_nautical_fields:
         host._fail_and_exit(
             "Invalid Nautical configuration",
             f"{config_error}. Fix Nautical configuration before modifying a recurring task.",

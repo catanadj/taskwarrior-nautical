@@ -8198,11 +8198,11 @@ def test_on_add_lowercase_chainid_does_not_mark_nautical():
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_chainid_alias_test")
     expect(
-        not mod._task_has_nautical_fields({"chainid": "legacy-1234"}),
+        not mod._module("modify_lifecycle").task_has_nautical_fields({"chainid": "legacy-1234"}),
         "lowercase chainid should not mark a task Nautical on add",
     )
     expect(
-        mod._task_has_nautical_fields({"chainID": "abcd1234"}),
+        mod._module("modify_lifecycle").task_has_nautical_fields({"chainID": "abcd1234"}),
         "canonical chainID should still mark a task Nautical on add",
     )
 

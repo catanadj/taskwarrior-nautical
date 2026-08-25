@@ -4,11 +4,38 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Mapping, MutableMapping, Protocol, cast
 
 from .hook_workflow_models import WorkflowRoute
 from .task_changes import TaskTransition
 from .task_models import TaskObservation
+
+
+def normalize_description_uda_aliases(
+    task: MutableMapping[str, object],
+    *,
+    previous: Mapping[str, object] | None = None,
+    enabled: bool,
+) -> bool:
+    """Apply description aliases at the single typed-validation boundary.
+
+    The parser remains responsible for the Taskwarrior-standard empty-value
+    clear syntax.  This function only owns the enablement and error boundary
+    shared by add and modify consumers.
+    """
+    if not enabled:
+        return False
+    from . import description_aliases
+
+    task_dict = cast(dict[str, object], task)
+    if previous is None:
+        return bool(description_aliases.apply_description_aliases(task_dict))
+    return bool(
+        description_aliases.apply_description_aliases(
+            task_dict,
+            previous=cast(dict[str, object], dict(previous)),
+        )
+    )
 
 
 class ValidationStage(str, Enum):
@@ -127,4 +154,5 @@ __all__ = (
     "ValidationRule",
     "ValidationStage",
     "ValidationStatus",
+    "normalize_description_uda_aliases",
 )

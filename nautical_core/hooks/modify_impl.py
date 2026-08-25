@@ -1078,9 +1078,13 @@ def _apply_description_uda_aliases(old: dict, new: dict) -> None:
     description = new.get("description")
     if not isinstance(description, str) or not description:
         return
-    aliases = core._import_sibling("description_aliases")
     try:
-        aliases.apply_description_aliases(new, previous=old)
+        validation = core._import_sibling("hook_validation_pipeline")
+        validation.normalize_description_uda_aliases(
+            new,
+            previous=old,
+            enabled=True,
+        )
     except ValueError as exc:
         _fail_and_exit("Invalid UDA alias", str(exc))
 

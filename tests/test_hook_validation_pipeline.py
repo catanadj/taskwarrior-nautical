@@ -8,6 +8,7 @@ from nautical_core.hook_validation_pipeline import (
     ValidationPipeline,
     ValidationStage,
     ValidationStatus,
+    normalize_description_uda_aliases,
 )
 from nautical_core.hook_workflow_models import WorkflowRoute
 from nautical_core.task_models import TaskObservation
@@ -28,6 +29,17 @@ def _observation() -> TaskObservation:
 
 
 class ValidationPipelineTests(unittest.TestCase):
+    def test_alias_normalization_preserves_empty_clear_syntax(self) -> None:
+        task = {"description": "review am:"}
+        self.assertTrue(normalize_description_uda_aliases(task, enabled=True))
+        self.assertEqual(task["description"], "review")
+        self.assertNotIn("anchor_mode", task)
+
+    def test_alias_normalization_is_disabled_without_mutation(self) -> None:
+        task = {"description": "review am:all"}
+        self.assertFalse(normalize_description_uda_aliases(task, enabled=False))
+        self.assertEqual(task, {"description": "review am:all"})
+
     def test_rules_run_in_declared_order_and_return_valid(self) -> None:
         seen: list[str] = []
 

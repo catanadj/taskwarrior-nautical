@@ -1828,9 +1828,12 @@ def _apply_description_uda_aliases(task: dict) -> None:
     description = task.get("description")
     if not isinstance(description, str) or not description:
         return
-    aliases = core._import_sibling("description_aliases")
     try:
-        aliases.apply_description_aliases(task)
+        validation = core._import_sibling("hook_validation_pipeline")
+        validation.normalize_description_uda_aliases(
+            task,
+            enabled=True,
+        )
     except ValueError as exc:
         _error_and_exit([("Invalid UDA alias", str(exc))])
         return

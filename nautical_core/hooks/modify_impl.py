@@ -1124,10 +1124,6 @@ def _fail_invalid_input(msg: str) -> None:
     _fail_and_exit("Invalid input", msg)
 
 
-def _task_uuid_or_empty(task: dict) -> str:
-    return _module("modify_protocol").task_uuid_or_empty(task)
-
-
 def _validate_modify_pair(old: dict, new: dict) -> tuple[dict, dict]:
     protocol = _module("modify_protocol")
     try:

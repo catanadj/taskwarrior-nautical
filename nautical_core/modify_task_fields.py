@@ -53,4 +53,10 @@ def strip_quotes(value: str) -> str:
     return text
 
 
-__all__ = ("recurrence_anchor_field", "root_uuid", "field_changed", "strip_quotes")
+def task_uuid_or_empty(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("uuid") or "").strip()
+
+
+__all__ = ("recurrence_anchor_field", "root_uuid", "field_changed", "strip_quotes", "task_uuid_or_empty")

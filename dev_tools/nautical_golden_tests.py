@@ -20417,7 +20417,7 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
 
     prep = mod._module("modify_spawn_prep")
     uuid_fn = lambda value: prep.stable_child_uuid(
-        value[0], value[1], task_uuid_or_empty=mod._task_uuid_or_empty,
+        value[0], value[1], task_uuid_or_empty=mod._module("modify_task_fields").task_uuid_or_empty,
         coerce_int=mod.core.coerce_int, stable_child_uuid_namespace=mod._STABLE_CHILD_UUID_NAMESPACE,
     )
     uuid_a = uuid_fn((parent, child_a))

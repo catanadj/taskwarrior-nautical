@@ -85,7 +85,7 @@ def child_uuid_for_spawn(host: Any, parent_task: dict | None, child_task: dict |
         stable_child_uuid=lambda parent, child: prep.stable_child_uuid(
             parent,
             child,
-            task_uuid_or_empty=host._task_uuid_or_empty,
+            task_uuid_or_empty=host._module("modify_task_fields").task_uuid_or_empty,
             coerce_int=host.core.coerce_int,
             stable_child_uuid_namespace=host._STABLE_CHILD_UUID_NAMESPACE,
         ),

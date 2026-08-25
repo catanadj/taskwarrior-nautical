@@ -88,6 +88,22 @@ class EvidenceStatus(str, Enum):
     AMBIGUOUS = "ambiguous"
 
 
+class FeedbackFactKind(str, Enum):
+    """Stable presentation fact categories; wording remains a renderer concern."""
+
+    PREVIEW = "preview"
+    EXPLICIT_TIMING = "explicit_timing"
+    CARRY_CHANGE = "carry_change"
+    CHAIN_ACTIVATION = "chain_activation"
+    UPDATE = "update"
+    COMPLETION = "completion"
+    RESUME = "resume"
+    TERMINAL_STOP = "terminal_stop"
+    WARNING = "warning"
+    RECOVERY = "recovery"
+    MANUAL_REVIEW = "manual_review"
+
+
 class PatchOperation(str, Enum):
     SET = "set"
     CLEAR = "clear"
@@ -372,6 +388,7 @@ class FeedbackFacts:
     chain_completed: bool = False
     warnings: tuple[str, ...] = ()
     recovery_guidance: tuple[str, ...] = ()
+    fact_kinds: tuple[FeedbackFactKind, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("first_occurrence", "next_occurrence"):
@@ -384,6 +401,10 @@ class FeedbackFacts:
         object.__setattr__(self, "limits", _normalized_pairs(self.limits, "limits"))
         object.__setattr__(self, "warnings", _normalized_texts(self.warnings))
         object.__setattr__(self, "recovery_guidance", _normalized_texts(self.recovery_guidance))
+        kinds = tuple(FeedbackFactKind(item) for item in self.fact_kinds)
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("feedback fact kinds must be unique")
+        object.__setattr__(self, "fact_kinds", kinds)
         object.__setattr__(self, "chain_completed", bool(self.chain_completed))
 
 
@@ -436,6 +457,7 @@ __all__ = [
     "EvidenceResult",
     "EvidenceStatus",
     "FeedbackFacts",
+    "FeedbackFactKind",
     "LifecycleEffectRef",
     "ModifyWorkflowRequest",
     "OutcomeDisposition",

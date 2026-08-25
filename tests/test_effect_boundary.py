@@ -18,6 +18,7 @@ from nautical_core.integration_models import (
 )
 from nautical_core.taskwarrior_uow import InvocationReadCache, QueryScope, QueryScopeKind
 from nautical_core.modify_feedback import lifecycle_result_feedback_facts
+from nautical_core.hook_workflow_models import FeedbackFactKind
 from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 
@@ -143,6 +144,7 @@ class EffectBoundaryTests(unittest.TestCase):
         facts = lifecycle_result_feedback_facts(Result())
         self.assertEqual(facts.warnings, ("link verification unavailable",))
         self.assertTrue(facts.recovery_guidance)
+        self.assertEqual(facts.fact_kinds, (FeedbackFactKind.RECOVERY,))
         self.assertFalse(facts.chain_completed)
 
 

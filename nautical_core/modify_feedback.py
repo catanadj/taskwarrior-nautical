@@ -7,7 +7,7 @@ from typing import Any
 
 from .task_models import TaskPayload
 from .modify_models import TaskView
-from .hook_workflow_models import FeedbackFacts
+from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 
 
 def append_next_wait_sched_rows(
@@ -755,6 +755,15 @@ def lifecycle_result_feedback_facts(lifecycle_result) -> FeedbackFacts:
         chain_completed=state == "terminal",
         warnings=(reason,) if state in {"retryable", "manual_review", "stale"} and reason else (),
         recovery_guidance=recovery,
+        fact_kinds=(
+            FeedbackFactKind.MANUAL_REVIEW
+            if state == "manual_review"
+            else FeedbackFactKind.RECOVERY
+            if state in {"retryable", "stale"}
+            else FeedbackFactKind.TERMINAL_STOP
+            if state == "terminal"
+            else FeedbackFactKind.UPDATE,
+        ),
     )
 
 

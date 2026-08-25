@@ -197,6 +197,12 @@ _MODULE_SPECS = {
         "exit_composition.py",
         "nautical_core.exit_composition",
     ),
+    "exit_diagnostics": (
+        "_EXIT_DIAGNOSTICS",
+        "_EXIT_DIAGNOSTICS_LOAD_FAILED",
+        "exit_diagnostics.py",
+        "nautical_core.exit_diagnostics",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",
@@ -536,7 +542,11 @@ def _drain_outbox_result(unit_of_work) -> dict[str, Any]:
         outbox_lock_failures = 1
         _diag(f"lifecycle outbox claim failed: {result.claim.reason or 'unknown error'}")
 
-    suppressed_diagnostics = _emit_outcome_diagnostics(outcomes)
+    suppressed_diagnostics = _module("exit_diagnostics").emit_outcome_diagnostics(
+        outcomes,
+        diagnostic=_diag,
+        limit=_OUTBOX_DIAG_MAX_ITEMS,
+    )
     if suppressed_diagnostics:
         state.diag_stats["outbox_diagnostics_suppressed"] = suppressed_diagnostics
 
@@ -577,65 +587,9 @@ def _drain_outbox(unit_of_work) -> dict:
     return _drain_outbox_result(unit_of_work)
 
 
-def _emit_outcome_diagnostics(outcomes) -> int:
-    """Emit bounded per-intent diagnostics and return suppressed count."""
-    emitted = 0
-    suppressed = 0
-    for outcome in outcomes:
-        reason = getattr(outcome, "reason", "")
-        if not reason:
-            continue
-        if emitted < _OUTBOX_DIAG_MAX_ITEMS:
-            _diag(
-                f"lifecycle intent {getattr(outcome, 'intent_id', '') or '(unstaged)'}: "
-                f"{getattr(getattr(outcome, 'kind', None), 'value', 'unknown')}: {reason}"
-            )
-            emitted += 1
-        else:
-            suppressed += 1
-    if suppressed:
-        _diag(
-            f"lifecycle diagnostics: suppressed {suppressed} additional intent results "
-            f"(limit {_OUTBOX_DIAG_MAX_ITEMS})"
-        )
-    return suppressed
-
-
 def _redirect_stdout_to_devnull() -> None:
     hook_results = _module("hook_results")
     hook_results.redirect_stdout_to_devnull()
-
-
-def _emit_drain_stats_diag(stats: dict) -> None:
-    if os.environ.get("NAUTICAL_DIAG") != "1":
-        return
-    startup_stats = _exit_runtime_state().startup_stats
-    if startup_stats:
-        _diag_block("on-exit startup", startup_stats.items(), columns=2)
-    drain_items = [
-        ("entries_total", stats.get("entries_total", 0)),
-        ("processed", stats.get("processed", 0)),
-        ("errors", stats.get("errors", 0)),
-        ("retry_released", stats.get("retry_released", 0)),
-        ("manual_reviewed", stats.get("manual_reviewed", 0)),
-        ("quarantined", stats.get("quarantined", 0)),
-        ("conflicted", stats.get("conflicted", 0)),
-        ("outbox_lock_failures", stats.get("outbox_lock_failures", 0)),
-        ("diagnostics_suppressed", stats.get("diagnostics_suppressed", 0)),
-        ("drain_ms", stats.get("drain_ms", 0)),
-        ("presentation_ms", _exit_runtime_state().diag_stats.get("presentation_ms", 0)),
-    ]
-    _diag_block("on-exit drain", drain_items, columns=3)
-    diag_stats = _exit_runtime_state().diag_stats
-    task_stats = {
-        str(key): value
-        for key, value in diag_stats.items()
-        if str(key).startswith("run_task_calls")
-        or str(key).startswith("run_task_failures")
-        or str(key).startswith("run_task_seconds")
-    }
-    task_stats["run_task_seconds"] = round(float(task_stats.get("run_task_seconds", 0.0)), 4)
-    _diag_block("on-exit task stats", task_stats.items(), columns=3)
 
 
 def _command_purpose_stat_key(purpose: object) -> str:
@@ -699,7 +653,12 @@ def main() -> int:
         exit_code = hook_results.emit_exit_result(
             result,
             emit_exit_feedback=_emit_exit_feedback,
-            emit_stats_diag=_emit_drain_stats_diag,
+            emit_stats_diag=lambda stats: _module("exit_diagnostics").emit_drain_stats_diag(
+                stats,
+                startup_stats=_exit_runtime_state().startup_stats,
+                diag_stats=_exit_runtime_state().diag_stats,
+                diagnostic_block=_diag_block,
+            ) if os.environ.get("NAUTICAL_DIAG") == "1" else None,
         )
         presentation_ms = round((time.perf_counter() - presentation_t0) * 1000.0, 3)
         if stats_path:

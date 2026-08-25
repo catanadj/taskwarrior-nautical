@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle_models import LifecycleEvent, LifecycleRecoveryDecision, TaskSnapshot
 from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
+from nautical_core.chain_integrity_lifecycle import describe_plan
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
@@ -48,6 +49,28 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             recurrence_service=ExhaustedService(),
         ).plan(snapshot(), LifecycleEvent.EXPIRE)
         self.assertEqual(plan.terminal_kind, "search_limit")
+
+    def test_terminal_plan_replay_preserves_identity_and_provenance(self) -> None:
+        plan = terminal_plan_for_snapshot(snapshot(), LifecycleEvent.CHAIN_UNTIL)
+        restored = type(plan).from_dict(plan.to_dict())
+        self.assertEqual(restored.identity.key, plan.identity.key)
+        self.assertEqual(restored.identity.idempotency_key, plan.identity.idempotency_key)
+        self.assertEqual(restored.terminal_kind, "chain_until")
+        self.assertEqual(restored.action, plan.action)
+        self.assertEqual(restored.expected_postconditions, plan.expected_postconditions)
+
+    def test_shared_description_preserves_terminal_provenance(self) -> None:
+        plan = terminal_plan_for_snapshot(snapshot(), LifecycleEvent.CHAIN_MAX)
+        decision = LifecycleRecoveryDecision(
+            "legitimate_final",
+            snapshot().observation,
+            5,
+            "reached chain maximum",
+            terminal_kind=plan.terminal_kind,
+        )
+        evidence = describe_plan(decision)
+        self.assertEqual(evidence["terminal_kind"], "chain_max")
+        self.assertEqual(evidence["trigger"], "completion")
 
 
 if __name__ == "__main__":

@@ -68,8 +68,13 @@ def scheduling_error_message(exc: BaseException) -> str:
 
 
 def is_terminal_plan(plan: LifecycleRecoveryDecision) -> bool:
-    """Return whether a final plan ended at the representable date boundary."""
-    return plan.action == "legitimate_final" and plan.terminal_kind == "date_limit"
+    """Return whether a final plan carries a durable terminal provenance."""
+    return plan.action == "legitimate_final" and plan.terminal_kind in {
+        "date_limit",
+        "search_limit",
+        "chain_max",
+        "chain_until",
+    }
 
 
 def short_uuid(value: object) -> str:

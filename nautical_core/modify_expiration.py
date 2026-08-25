@@ -74,7 +74,11 @@ def render_recovery_warning(task: TaskPayload, reason: str, *, services: Expirat
         [
             ("Task", services.short(task.get("uuid")) or "–"),
             ("Reason", reason or "The next occurrence could not be prepared."),
-            ("Action", "Run nautical reconcile --apply."),
+            (
+                "Action",
+                "Lifecycle recovery will retry on-exit; run `nautical reconcile --apply` "
+                "if it remains pending.",
+            ),
         ],
         kind="warning",
     )

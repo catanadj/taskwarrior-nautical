@@ -16838,7 +16838,7 @@ def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
         tokens = core.parse_cp_sequence_tokens(cp)
         add_preview = add_mod._module("add_preview_composition")
         add_td = add_preview.cp_sequence_period_for_link(add_mod, tokens, cp, link_no, chain_id)
-        modify_td = modify_mod._cp_sequence_period_for_link(tokens, cp, link_no, chain_id)
+        modify_td = modify_mod._module("modify_schedule_effects").sequence_period_for_link(modify_mod, tokens, cp, link_no, chain_id)
         core_td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
         expect(add_td == modify_td == core_td, f"cp interval mismatch for {cp!r} link {link_no}: add={add_td}, modify={modify_td}, core={core_td}")
 
@@ -26053,8 +26053,9 @@ def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
 
 def test_modify_hook_uses_explicit_recurrence_identity():
     """Modify hook cap paths should share the chainID-first identity policy."""
-    expect(_hook._recurrence_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a", "modify hook preferred UUID over chainID")
-    expect(_hook._recurrence_seed_base({}) == "preview", "modify hook fallback identity changed")
+    schedule = _hook._module("modify_schedule_effects")
+    expect(schedule.recurrence_seed_base(_hook, {"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a", "modify hook preferred UUID over chainID")
+    expect(schedule.recurrence_seed_base(_hook, {}) == "preview", "modify hook fallback identity changed")
 
 
 def test_add_preview_uses_explicit_recurrence_identity():

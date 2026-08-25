@@ -2,9 +2,32 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .task_models import TaskPayload
+
+
+def recurrence_seed_base(_host: Any, task: TaskPayload) -> str:
+    return str(task.get("chainID") or task.get("uuid") or "preview").strip()
+
+
+def cp_add_period(host: Any, dt: datetime, td: timedelta) -> datetime:
+    secs = int(td.total_seconds())
+    if secs % 86400 == 0:
+        local = host._tolocal(dt)
+        return host.core.build_local_datetime(
+            (local + timedelta(days=int(secs // 86400))).date(),
+            (local.hour, local.minute),
+        ).astimezone(timezone.utc)
+    return (dt + td).replace(microsecond=0)
+
+
+def sequence_period_for_link(host: Any, tokens: list[dict], cp_str: str, link_no: int, chain_id: str | None = None) -> timedelta:
+    index = (max(1, int(link_no)) - 1) % len(tokens)
+    return host.core.cp_sequence_interval_for_token(
+        tokens[index], cp=cp_str, link_no=link_no, token_index=index, chain_id=chain_id
+    ) or timedelta()
 
 
 def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any):
@@ -13,8 +36,8 @@ def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any):
         next_due_utc,
         coerce_int=host.core.coerce_int,
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
-        sequence_period_for_link=host._cp_sequence_period_for_link,
-        add_period=host._cp_add_td,
+        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
+        add_period=lambda dt, td: cp_add_period(host, dt, td),
         max_iterations=host._MAX_ITERATIONS,
         diagnostic=host._diag,
     )
@@ -26,7 +49,7 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
         next_due_utc,
         dnf,
         coerce_int=host.core.coerce_int,
-        recurrence_seed_base=host._recurrence_seed_base,
+        recurrence_seed_base=lambda task: recurrence_seed_base(host, task),
         to_local_cached=host._to_local_cached,
         safe_parse_datetime=host._safe_parse_datetime,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
@@ -46,8 +69,8 @@ def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any):
         parse_datetime=host._dtparse,
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
         coerce_int=host.core.coerce_int,
-        sequence_period_for_link=host._cp_sequence_period_for_link,
-        add_period=host._cp_add_td,
+        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
+        add_period=lambda dt, td: cp_add_period(host, dt, td),
         max_iterations=host._MAX_ITERATIONS,
     )
 
@@ -59,7 +82,7 @@ def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: 
         dnf,
         parse_datetime=host._dtparse,
         coerce_int=host.core.coerce_int,
-        recurrence_seed_base=host._recurrence_seed_base,
+        recurrence_seed_base=lambda task: recurrence_seed_base(host, task),
         to_local_cached=host._to_local_cached,
         safe_parse_datetime=host._safe_parse_datetime,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,

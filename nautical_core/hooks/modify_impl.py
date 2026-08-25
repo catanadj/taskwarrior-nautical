@@ -1676,10 +1676,6 @@ def _seed_runtime_lookup_tasks(*tasks: dict | None) -> None:
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------
 
-def _recurrence_seed_base(task: dict) -> str:
-    """Resolve the task recurrence identity at the hook input boundary."""
-    return str(task.get("chainID") or task.get("uuid") or "preview").strip()
-
 def _norm_hhmm_list(v, target_date=None) -> list[tuple[int, int]]:
     """Normalize various core representations of @t into a sorted list of (hh, mm)."""
     if v is None:
@@ -1727,33 +1723,6 @@ def _human_delta(a, b, prefer_months=True):
         return core.humanize_delta(a, b, use_months_days=bool(prefer_months))
     except TypeError:
         return core.humanize_delta(a, b)
-
-
-def _cp_add_td(dt: datetime, td: timedelta) -> datetime:
-    secs = int(td.total_seconds())
-    if secs % 86400 == 0:
-        dl = _tolocal(dt)
-        return core.build_local_datetime(
-            (dl + timedelta(days=int(secs // 86400))).date(), (dl.hour, dl.minute)
-        ).astimezone(timezone.utc)
-    return (dt + td).replace(microsecond=0)
-
-
-def _cp_sequence_period_for_link(
-    tokens: list[dict],
-    cp_str: str,
-    link_no: int,
-    chain_id: str | None = None,
-) -> timedelta:
-    idx = (max(1, int(link_no)) - 1) % len(tokens)
-    td = core.cp_sequence_interval_for_token(
-        tokens[idx],
-        cp=cp_str,
-        link_no=link_no,
-        token_index=idx,
-        chain_id=chain_id,
-    )
-    return td or timedelta()
 
 
 # ------------------------------------------------------------------------------
@@ -1847,7 +1816,7 @@ def _scheduler_service_for_task(task: dict):
         task,
         state=_modify_runtime_state(),
         core=core,
-        recurrence_seed_base=_recurrence_seed_base,
+        recurrence_seed_base=lambda value: _module("modify_schedule_effects").recurrence_seed_base(None, value),
     )
 
 

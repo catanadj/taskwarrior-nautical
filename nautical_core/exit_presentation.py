@@ -116,4 +116,57 @@ class ExitDrainProgress:
             self._task_id = None
 
 
-__all__ = ("ExitDrainProgress",)
+def render_drain_failure_panel(core: Any, stats: dict[str, Any]) -> None:
+    """Render actionable drain findings without changing lifecycle state."""
+    if not isinstance(stats, dict) or core is None:
+        return
+
+    def count(key: str) -> int:
+        try:
+            return max(0, int(stats.get(key, 0) or 0))
+        except Exception:
+            return 0
+
+    errors = count("errors")
+    manual_reviewed = count("manual_reviewed")
+    quarantined = count("quarantined")
+    if not (errors or manual_reviewed or quarantined):
+        return
+
+    problems = []
+    if manual_reviewed:
+        problems.append(f"{manual_reviewed} manual-review intents")
+    if quarantined:
+        suffix = "" if quarantined == 1 else "s"
+        problems.append(f"{quarantined} quarantined intent{suffix}")
+    other_errors = max(0, errors - manual_reviewed - quarantined)
+    if other_errors:
+        suffix = "" if other_errors == 1 else "s"
+        problems.append(f"{other_errors} other drain error{suffix}")
+
+    rows = [("Action", "Run nautical queue-status"), ("Problems", "; ".join(problems) or f"{errors} drain errors")]
+    if manual_reviewed or quarantined:
+        rows.append(("Review", "Run nautical queue-status"))
+    retry_released = count("retry_released")
+    if retry_released:
+        rows.append(("Retrying", str(retry_released)))
+    outbox_lock_failures = count("outbox_lock_failures")
+    if outbox_lock_failures:
+        rows.append(("Lock events", str(outbox_lock_failures)))
+
+    core.render_panel(
+        "⚠ Nautical spawn drain failed",
+        rows,
+        kind="warning",
+        panel_mode=core.PANEL_MODE,
+        live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
+        live_footer=getattr(core, "LIVE_PANEL_FOOTER", "NAUTICAL"),
+        fast_color=core.FAST_COLOR,
+        themes=core.panel_themes(),
+        allow_line=True,
+        label_width_min=6,
+        label_width_max=14,
+    )
+
+
+__all__ = ("ExitDrainProgress", "render_drain_failure_panel")

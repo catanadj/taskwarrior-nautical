@@ -122,6 +122,18 @@ class HookWorkflowContractTests(unittest.TestCase):
         self.assertEqual(facts.warnings, ("same warning", "different warning"))
         self.assertEqual(facts.recovery_guidance, ("retry",))
 
+    def test_feedback_facts_carry_actionable_identity(self) -> None:
+        facts = FeedbackFacts(
+            task_uuid=" task-1 ",
+            chain_id=" chain-1 ",
+            changed_fields=("due", "due", "scheduled"),
+            next_action="run reconcile",
+        )
+        self.assertEqual(facts.task_uuid, "task-1")
+        self.assertEqual(facts.chain_id, "chain-1")
+        self.assertEqual(facts.changed_fields, ("due", "scheduled"))
+        self.assertEqual(facts.next_action, "run reconcile")
+
     def test_rejection_requires_nonzero_exit(self) -> None:
         with self.assertRaises(ValueError):
             WorkflowOutcome(

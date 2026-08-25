@@ -389,6 +389,10 @@ class FeedbackFacts:
     warnings: tuple[str, ...] = ()
     recovery_guidance: tuple[str, ...] = ()
     fact_kinds: tuple[FeedbackFactKind, ...] = ()
+    task_uuid: str = ""
+    chain_id: str = ""
+    changed_fields: tuple[str, ...] = ()
+    next_action: str = ""
 
     def __post_init__(self) -> None:
         for name in ("first_occurrence", "next_occurrence"):
@@ -401,6 +405,10 @@ class FeedbackFacts:
         object.__setattr__(self, "limits", _normalized_pairs(self.limits, "limits"))
         object.__setattr__(self, "warnings", _normalized_texts(self.warnings))
         object.__setattr__(self, "recovery_guidance", _normalized_texts(self.recovery_guidance))
+        object.__setattr__(self, "task_uuid", str(self.task_uuid or "").strip())
+        object.__setattr__(self, "chain_id", str(self.chain_id or "").strip())
+        object.__setattr__(self, "changed_fields", _normalized_texts(self.changed_fields))
+        object.__setattr__(self, "next_action", str(self.next_action or "").strip())
         kinds = tuple(FeedbackFactKind(item) for item in self.fact_kinds)
         if len(kinds) != len(set(kinds)):
             raise ValueError("feedback fact kinds must be unique")

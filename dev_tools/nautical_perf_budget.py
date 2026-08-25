@@ -1818,12 +1818,19 @@ def _bench_expensive_workflows(
 
         for name, kind, nonfinal in completion_cases:
             fresh_samples = []
+            fresh_call_stats: list[dict[str, int]] = []
             for sample_index in range(repeats):
                 old = _completion_fixture(kind, sample_index, nonfinal=nonfinal, mode="fresh")
                 new = dict(old, status="completed", end="20270101T100000Z" if kind == "cp" else "20270105T100000Z")
                 taskdata = root / f"{name}-fresh-{sample_index}"
                 taskdata.mkdir()
-                env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
+                stats_path = taskdata / "on-modify-task-stats.json"
+                env = dict(
+                    base_env,
+                    TASKDATA=str(taskdata),
+                    NAUTICAL_BENCH_FORCE_FULL="1",
+                    NAUTICAL_BENCH_STATS_FILE=str(stats_path),
+                )
                 _import_workflow_rows((old,), env=env)
                 elapsed, result, _stderr = _run_workflow_hook_result(
                     ROOT / "on-modify.nautical",
@@ -1833,6 +1840,7 @@ def _bench_expensive_workflows(
                 )
                 if not isinstance(result, dict):
                     raise RuntimeError(f"{name} fresh sample returned no task object")
+                fresh_call_stats.append(_read_exit_task_call_stats(stats_path))
                 queued = _workflow_outbox_pending(taskdata)
                 if nonfinal:
                     if result.get("chain") != "on" or len(queued) != 1:
@@ -1846,16 +1854,26 @@ def _bench_expensive_workflows(
                     raise RuntimeError(f"{name} final sample did not complete without a successor")
                 fresh_samples.append(elapsed)
             results[name] = _measure_workflow(name, fresh_samples, float(budgets.get(name, 2.0)))
+            results[name]["task_call_stats"] = fresh_call_stats
+            call_budgets = workflow_cfg.get("task_call_budgets")
+            if isinstance(call_budgets, dict):
+                _apply_task_call_budgets(results[name], fresh_call_stats, call_budgets.get(name, {}))
 
             if nonfinal:
                 idem_name = f"{name}_idempotent"
                 idem_samples = []
+                idem_call_stats: list[dict[str, int]] = []
                 for sample_index in range(repeats):
                     old = _completion_fixture(kind, sample_index, nonfinal=True, mode="idempotent")
                     new = dict(old, status="completed", end="20260101T100000Z" if kind == "cp" else "20260105T100000Z")
                     taskdata = root / f"{idem_name}-{sample_index}"
                     taskdata.mkdir()
-                    env = dict(base_env, TASKDATA=str(taskdata))
+                    stats_path = taskdata / "on-modify-task-stats.json"
+                    env = dict(
+                        base_env,
+                        TASKDATA=str(taskdata),
+                        NAUTICAL_BENCH_STATS_FILE=str(stats_path),
+                    )
                     _import_workflow_rows((old,), env=env)
                     _import_existing_completion_child(old, env=env)
                     elapsed, result, stderr = _run_workflow_hook_result(
@@ -1870,12 +1888,18 @@ def _bench_expensive_workflows(
                         raise RuntimeError(f"{idem_name} sample staged a duplicate child")
                     if "Spawn skipped" not in stderr:
                         raise RuntimeError(f"{idem_name} sample did not report the existing next link")
+                    idem_call_stats.append(_read_exit_task_call_stats(stats_path))
                     idem_samples.append(elapsed)
                 results[idem_name] = _measure_workflow(
                     idem_name,
                     idem_samples,
                     float(budgets.get(idem_name, 2.0)),
                 )
+                results[idem_name]["task_call_stats"] = idem_call_stats
+                if isinstance(call_budgets, dict):
+                    _apply_task_call_budgets(
+                        results[idem_name], idem_call_stats, call_budgets.get(idem_name, {})
+                    )
 
         queue_samples = []
         queue_call_stats: list[dict[str, int]] = []

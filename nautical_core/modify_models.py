@@ -617,8 +617,12 @@ class CompletionSpawnResult:
 
     def __post_init__(self) -> None:
         state = str(self.outcome_state or "").strip().lower()
-        if state not in {"applied", "manual_review", "retryable"}:
+        if state not in {"applied", "already_applied", "queued", "terminal", "manual_review", "retryable", "stale"}:
             raise ValueError(f"unsupported completion spawn state: {self.outcome_state!r}")
+        if state == "queued" and (not self.deferred_spawn or not str(self.spawn_intent_id or "").strip()):
+            raise ValueError("queued completion spawn requires deferred spawn and an intent ID")
+        if state in {"already_applied", "terminal", "manual_review", "stale"} and self.deferred_spawn:
+            raise ValueError("completed completion spawn state cannot be deferred")
         self.outcome_state = state
         self.reason = str(self.reason or "").strip()
 

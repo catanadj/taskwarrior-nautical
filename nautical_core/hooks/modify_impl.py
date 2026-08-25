@@ -288,6 +288,21 @@ def _query_ctx_get(bucket: str, key):
             return store.get(key)
     except Exception:
         pass
+
+
+def _write_bench_stats() -> None:
+    """Persist opt-in workflow counters for the performance harness."""
+    path = str(os.environ.get("NAUTICAL_BENCH_STATS_FILE") or "").strip()
+    if not path:
+        return
+    try:
+        stats = dict(_modify_runtime_state().diag_stats)
+        Path(path).write_text(
+            json.dumps({"task_stats": stats}, ensure_ascii=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        _diag(f"benchmark stats write failed: {type(exc).__name__}: {exc}")
     return None
 
 
@@ -365,7 +380,12 @@ def _invalidate_read_query_cache() -> None:
     except Exception:
         pass
     try:
-        _module("lifecycle_read_service").clear_cached_chain_exports()
+        service = getattr(_modify_chain_state(), "lifecycle_read_service", None)
+        clear_cache = getattr(service, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+        else:
+            _module("lifecycle_read_service").clear_cached_chain_exports()
     except Exception:
         pass
 
@@ -3594,6 +3614,7 @@ def main():
             hook_results.emit_json_result(result, core=core)
     finally:
         runtime.close()
+        _write_bench_stats()
 
 
 def run_hook(

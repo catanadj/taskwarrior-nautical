@@ -143,6 +143,17 @@ class ModifyWorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CompletionLifecycleResult("stale", deferred_spawn=True)
 
+    def test_completion_spawn_result_preserves_all_durable_outcomes(self) -> None:
+        from nautical_core.modify_models import CompletionSpawnResult
+
+        for state in ("already_applied", "terminal", "manual_review", "retryable", "stale"):
+            self.assertEqual(
+                CompletionSpawnResult({}, "", [], False, False, None, outcome_state=state).outcome_state,
+                state,
+            )
+        with self.assertRaises(ValueError):
+            CompletionSpawnResult({}, "", [], False, True, None, outcome_state="queued")
+
     def test_recurring_intent_matrix_keeps_local_edits_scheduler_free(self) -> None:
         root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
         local = classify_modify_transition(transition(root, dict(root, description="note")))

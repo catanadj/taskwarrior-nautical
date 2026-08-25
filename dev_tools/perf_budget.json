@@ -136,6 +136,24 @@
         "run_task_calls_purpose_task_read_uuid": 24,
         "run_task_calls_purpose_lifecycle_child_import": 8,
         "run_task_calls_purpose_lifecycle_parent_link": 8
+      },
+      "workflow_cp_completion": {
+        "run_task_calls": 32
+      },
+      "workflow_cp_completion_nonfinal": {
+        "run_task_calls": 32
+      },
+      "workflow_cp_completion_nonfinal_idempotent": {
+        "run_task_calls": 8
+      },
+      "workflow_anchor_completion": {
+        "run_task_calls": 32
+      },
+      "workflow_anchor_completion_nonfinal": {
+        "run_task_calls": 32
+      },
+      "workflow_anchor_completion_nonfinal_idempotent": {
+        "run_task_calls": 8
       }
     },
     "reconcile_candidate_chains": 32,

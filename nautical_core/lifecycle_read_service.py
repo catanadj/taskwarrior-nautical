@@ -246,6 +246,12 @@ class LifecycleReadService:
             self._cache_store.replace(chain_id, stored_rows, indexes)
         return indexes
 
+    def clear_cache(self) -> None:
+        """Drop invocation evidence after a certain or uncertain mutation."""
+        if self._cache_store is not None:
+            self._cache_store.clear()
+        clear_cached_chain_exports()
+
     def collect_prev_two(
         self,
         current_task: TaskRow,

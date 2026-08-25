@@ -162,9 +162,10 @@ def handle_on_modify(
         if not typed_route.has_nautical_fields or typed_route.kind is workflow.ModifyRouteKind.ORDINARY:
             return services.result(task=new, sanitize=False)
         if typed_route.kind in {
-            workflow.ModifyRouteKind.COMPLETION,
             workflow.ModifyRouteKind.IDEMPOTENT_COMPLETION,
         }:
+            return services.result(task=new, sanitize=False)
+        if typed_route.kind is workflow.ModifyRouteKind.COMPLETION:
             services.load_core()
             lifecycle_result = invoke_typed("handle_completion")
             request.runtime.lifecycle_result = lifecycle_result

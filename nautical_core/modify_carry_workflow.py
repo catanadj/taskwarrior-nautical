@@ -24,6 +24,26 @@ class TemporalCarryAdjustment:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeUntilDecision:
+    status: str
+    value: TaskTimestamp | None = None
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        status = str(self.status).strip().lower()
+        if status not in {"unchanged", "carried", "rejected"}:
+            raise ValueError("invalid native-until decision status")
+        if status == "carried" and self.value is None:
+            raise ValueError("carried native-until decision requires a value")
+        if status == "rejected" and not str(self.reason).strip():
+            raise ValueError("rejected native-until decision requires a reason")
+        if self.value is not None and not isinstance(self.value, TaskTimestamp):
+            raise TypeError("native-until decision value must be a TaskTimestamp")
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "reason", str(self.reason).strip())
+
+
+@dataclass(frozen=True, slots=True)
 class TemporalCarryDecision:
     status: str
     adjustments: tuple[TemporalCarryAdjustment, ...] = ()
@@ -73,4 +93,4 @@ def decision_from_cp_adjustments(result, *, timestamp_factory=TaskTimestamp) -> 
     return TemporalCarryDecision("adjusted", tuple(typed)) if typed else TemporalCarryDecision("unchanged")
 
 
-__all__ = ("TemporalCarryAdjustment", "TemporalCarryDecision", "decision_from_cp_adjustments")
+__all__ = ("NativeUntilDecision", "TemporalCarryAdjustment", "TemporalCarryDecision", "decision_from_cp_adjustments")

@@ -15,6 +15,7 @@ from nautical_core.add_workflow import (
     schedule_patch,
     preview_policy,
     record_preview,
+    apply_task_patch,
 )
 from nautical_core.hook_workflow_models import PatchOperation, WorkflowRoute
 from nautical_core.task_models import TaskObservation, TaskTimestamp
@@ -32,6 +33,13 @@ def observation(values: dict[str, object]) -> TaskObservation:
 
 
 class AddWorkflowTests(unittest.TestCase):
+    def test_apply_task_patch_owns_add_mutation_semantics(self) -> None:
+        task = {"description": "test"}
+        plan = plan_add(observation({"anchor": "w:mon"}))
+        apply_task_patch(task, plan.patch)
+        self.assertEqual(task["chain"], "on")
+        self.assertEqual(task["link"], 1)
+
     def test_ordinary_add_is_a_noop_plan(self) -> None:
         task = observation({})
         plan = plan_add(task)

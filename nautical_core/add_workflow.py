@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from typing import Any, MutableMapping
 
 from .hook_workflow_models import (
     AddWorkflowRequest,
@@ -196,6 +197,19 @@ def plan_add(task: TaskObservation) -> AddWorkflowPlan:
     )
 
 
+def apply_task_patch(task: MutableMapping[str, Any], patch: TaskPatch) -> None:
+    """Apply a validated add patch at the hook's single output boundary."""
+    if not isinstance(task, MutableMapping):
+        raise TypeError("add patch target must be mutable task data")
+    if not isinstance(patch, TaskPatch):
+        raise TypeError("add patch application requires a TaskPatch")
+    for operation in patch.operations:
+        if operation.operation is PatchOperation.SET:
+            task[operation.field] = operation.value
+        elif operation.operation is PatchOperation.CLEAR:
+            task.pop(operation.field, None)
+
+
 def record_schedule(
     plan: AddWorkflowPlan,
     *,
@@ -320,6 +334,7 @@ __all__ = (
     "AddWorkflowPlan",
     "classify_add_route",
     "plan_add",
+    "apply_task_patch",
     "record_schedule",
     "schedule_patch",
     "record_limits",

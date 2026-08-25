@@ -1898,9 +1898,7 @@ class _OnAddServices:
         return core._import_sibling("add_workflow").plan_add(observation)
 
     def apply_add_plan(self, task, plan):
-        for operation in plan.patch.operations:
-            if operation.operation.value == "set":
-                task[operation.field] = operation.value
+        core._import_sibling("add_workflow").apply_task_patch(task, plan.patch)
 
     def record_schedule(self, plan, task, target_field):
         workflow = core._import_sibling("add_workflow")

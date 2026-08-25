@@ -197,6 +197,29 @@ def validate_temporal_order_domain(value: ValidationInput) -> tuple[ValidationFi
     return tuple(findings)
 
 
+def validate_transition_policy(value: ValidationInput) -> tuple[ValidationFinding, ...]:
+    """Reject user edits to identity fields before lifecycle planning."""
+    transition = value.transition
+    if transition is None:
+        return ()
+    identity_fields = tuple(
+        field for field in ("chainID", "link", "prevLink", "nextLink")
+        if transition.changed(field)
+    )
+    if not identity_fields:
+        return ()
+    return tuple(
+        ValidationFinding(
+            ValidationStage.TRANSITION,
+            "chain_identity_edit",
+            field,
+            f"manual modification of {field} is not permitted",
+            correction="Modify recurrence settings instead of chain identity fields.",
+        )
+        for field in identity_fields
+    )
+
+
 DEFAULT_DOMAIN_RULES: tuple[tuple[ValidationStage, ValidationRule], ...] = (
     (ValidationStage.DOMAIN, validate_recurrence_exclusivity),
     (ValidationStage.DOMAIN, validate_anchor_mode_domain),
@@ -234,6 +257,20 @@ def validate_task_mapping(
     if findings:
         report = ValidationReport.from_findings(tuple(findings) + report.findings)
     return observation, report
+
+
+def validate_task_transition(
+    old: TaskObservation,
+    new: TaskObservation,
+    *,
+    route: WorkflowRoute,
+    source_query: str,
+) -> ValidationReport:
+    """Validate a typed old/new pair without mutation or presentation."""
+    transition = TaskTransition.from_observations(old, new)
+    return ValidationPipeline(
+        DEFAULT_DOMAIN_RULES + ((ValidationStage.TRANSITION, validate_transition_policy),)
+    ).validate(ValidationInput(new, previous=old, transition=transition, route=route))
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,5 +339,6 @@ __all__ = (
     "validate_recurrence_exclusivity",
     "validate_temporal_order_domain",
     "validate_task_mapping",
+    "validate_task_transition",
     "normalize_description_uda_aliases",
 )

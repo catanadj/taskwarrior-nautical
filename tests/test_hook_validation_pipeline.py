@@ -9,6 +9,7 @@ from nautical_core.hook_validation_pipeline import (
     ValidationStage,
     ValidationStatus,
     build_default_validation_pipeline,
+    validate_task_transition,
     normalize_description_uda_aliases,
 )
 from nautical_core.hook_workflow_models import WorkflowRoute
@@ -61,6 +62,20 @@ class ValidationPipelineTests(unittest.TestCase):
         )
         self.assertEqual(report.status, ValidationStatus.INVALID)
         self.assertTrue(report.findings)
+
+    def test_transition_policy_rejects_identity_edits(self) -> None:
+        old = _observation()
+        changed = old.to_mapping()
+        changed["link"] = 2
+        new = TaskObservation.from_mapping(changed, source_query="transition-test")
+        report = validate_task_transition(
+            old,
+            new,
+            route=WorkflowRoute.RECURRING_EDIT,
+            source_query="transition-test",
+        )
+        self.assertEqual(report.status, ValidationStatus.INVALID)
+        self.assertEqual(report.findings[-1].code, "chain_identity_edit")
 
     def test_alias_normalization_preserves_empty_clear_syntax(self) -> None:
         task = {"description": "review am:"}

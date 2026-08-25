@@ -165,7 +165,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         stats_rows=stats_rows,
         limits_row=limits_row,
         last_n_timeline_rows=lambda chain: last_n_timeline(host, chain),
-        format_rows=host._format_chain_summary_rows,
+        format_rows=host._module("modify_feedback").format_chain_summary_rows,
         coerce_int=host.core.coerce_int,
         format_local=host.core.fmt_dt_local,
         max_chain_walk=host._MAX_CHAIN_WALK,

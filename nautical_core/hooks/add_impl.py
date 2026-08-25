@@ -1163,131 +1163,41 @@ def _build_hook_runtime_context(task=None):
 
 
 def _apply_description_uda_aliases(task: dict) -> None:
-    """Expand opt-in short UDA directives before normal on-add validation."""
-    if not bool(getattr(core, "ENABLE_UDA_ALIASES", False)):
-        return
-    description = task.get("description")
-    if not isinstance(description, str) or not description:
-        return
-    try:
-        validation = core._import_sibling("hook_validation_pipeline")
-        validation.normalize_description_uda_aliases(task, enabled=True)
-    except ValueError as exc:
-        _error_and_exit([("Invalid UDA alias", str(exc))])
-        return
+    _module("add_composition").apply_description_uda_aliases(
+        sys.modules.get(__name__, SimpleNamespace(**globals())), task
+    )
 
 
 def _kind_and_defaults_on_add(task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
-    has_cp = bool(cp_str)
-    has_anchor = bool(anchor_str)
-    has_anchor_file = bool(anchor_file_str)
-    kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
-
-    ch = (task.get("chain") or "").strip().lower()
-    if (has_cp or has_anchor or has_anchor_file) and (not ch or ch == "off"):
-        task["chain"] = "on"
-        ch = "on"
-
-    if has_cp or has_anchor or has_anchor_file:
-        linked_already = bool((task.get("prevLink") or "").strip() or (task.get("nextLink") or "").strip())
-        if not linked_already:
-            link_no = core.coerce_int(task.get("link"), 0)
-            if link_no <= 0:
-                task["link"] = 1
-    return kind, ch
+    host = sys.modules.get(__name__, SimpleNamespace(**globals()))
+    return _module("add_composition").kind_and_defaults(host, task, cp_str, anchor_str, anchor_file_str)
 
 
 def _validate_chain_limits_on_add(task: dict, now_utc: datetime) -> datetime | None:
-    add_validation = _module("add_validation")
-    pipeline = core._import_sibling("hook_validation_pipeline")
-    cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
-        task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
-        parse_cp_sequence=core.parse_cp_sequence,
-        cp_sequence_parse_error=core.cp_sequence_parse_error,
-        parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=core.parse_dt_any,
-    )
-    if findings:
-        finding = findings[0]
-        _error_and_exit([(f"Invalid {finding.field}", finding.reason)])
-    if cpmax is not None:
-        task["chainMax"] = cpmax
-    if until_dt:
-        is_valid, err = _validate_until_not_past(until_dt, now_utc)
-        if not is_valid:
-            _error_and_exit([("Invalid chainUntil", err)])
-    return until_dt
+    host = sys.modules.get(__name__, SimpleNamespace(**globals()))
+    return _module("add_composition").validate_chain_limits(host, task, now_utc)
 
 
 def _due_matches_entry_timestamp_on_add(task: dict) -> bool:
-    due_raw = task.get("due")
-    entry_raw = task.get("entry")
-    if not due_raw or not entry_raw:
-        return False
-    try:
-        due_dt, due_err = _safe_parse_datetime(due_raw, "due")
-    except Exception:
-        return False
-    if due_err or due_dt is None:
-        return False
-    try:
-        entry_dt, entry_err = _safe_parse_datetime(entry_raw, "entry")
-    except Exception:
-        return False
-    if entry_err or entry_dt is None:
-        return False
-    return due_dt == entry_dt
+    host = sys.modules.get(__name__, SimpleNamespace(**globals()))
+    return _module("add_composition")._due_matches_entry(host, task)
 
 
-def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, str, datetime, str | None, object, tuple[int, int]]:
-    has_due = bool(task.get("due"))
-    has_scheduled = bool(task.get("scheduled"))
-    implicit_due_from_entry = has_due and _due_matches_entry_timestamp_on_add(task)
-
-    if has_scheduled and (not has_due or implicit_due_from_entry):
-        recurrence_field = "scheduled"
-        user_provided_due = True
-    elif has_due and not implicit_due_from_entry:
-        recurrence_field = "due"
-        user_provided_due = True
-    else:
-        recurrence_field = "due"
-        user_provided_due = False
-    due_dt = None
-    past_due_warning = None
-    if recurrence_field == "due" and user_provided_due:
-        due_dt, err = _safe_parse_datetime(task.get("due"), "due")
-        if err:
-            _error_and_exit([("Invalid due", err)])
-        is_past, warn_msg = _check_due_in_past(due_dt, now_utc)
-        if is_past:
-            past_due_warning = warn_msg
-    elif recurrence_field == "scheduled":
-        due_dt, err = _safe_parse_datetime(task.get("scheduled"), "scheduled")
-        if err:
-            _error_and_exit([("Invalid scheduled", err)])
-    if due_dt is None:
-        due_dt = now_utc
-
-    due_local = core.to_local(due_dt)
-    due_day = due_local.date()
-    due_hhmm = (due_local.hour, due_local.minute)
-    return user_provided_due, recurrence_field, due_dt, past_due_warning, due_day, due_hhmm
+def _due_context_on_add(task: dict, now_utc: datetime):
+    host = sys.modules.get(__name__, SimpleNamespace(**globals()))
+    return _module("add_composition").due_context(host, task, now_utc)
 
 
-# --------------------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------------------
 def main():
     global _PARSED_OBSERVATION
     prof = _build_profiler()
     task = _read_on_add_task(prof)
-    # The implementation module is now import-lazy; load the core only once
-    # the request has reached the full lifecycle path.
     _load_core()
-    _apply_description_uda_aliases(task)
-    hook_results = _module("hook_results")
     composition = _module("add_composition")
+    composition.apply_description_uda_aliases(
+        sys.modules.get(__name__, SimpleNamespace(**globals())), task
+    )
+    hook_results = _module("hook_results")
     _PARSED_OBSERVATION = composition.validate_task(
         sys.modules.get(__name__, SimpleNamespace(**globals())), task
     )

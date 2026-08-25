@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 
@@ -42,6 +43,90 @@ def load_core(host: Any) -> None:
         pass
     host._IMPORT_MS = (host.time.perf_counter() - host._IMPORT_T0) * 1000.0
     host._CORE_READY = True
+
+
+def apply_description_uda_aliases(host: Any, task: dict) -> None:
+    if not bool(getattr(host.core, "ENABLE_UDA_ALIASES", False)):
+        return
+    description = task.get("description")
+    if not isinstance(description, str) or not description:
+        return
+    try:
+        validation = host.core._import_sibling("hook_validation_pipeline")
+        validation.normalize_description_uda_aliases(task, enabled=True)
+    except ValueError as exc:
+        host._error_and_exit([("Invalid UDA alias", str(exc))])
+
+
+def kind_and_defaults(host: Any, task: dict, cp_str: str, anchor_str: str, anchor_file_str: str) -> tuple[str | None, str]:
+    has_cp, has_anchor, has_anchor_file = bool(cp_str), bool(anchor_str), bool(anchor_file_str)
+    kind = "anchor" if has_anchor else ("anchor_file" if has_anchor_file else ("cp" if has_cp else None))
+    ch = (task.get("chain") or "").strip().lower()
+    if (has_cp or has_anchor or has_anchor_file) and (not ch or ch == "off"):
+        task["chain"], ch = "on", "on"
+    if has_cp or has_anchor or has_anchor_file:
+        linked = bool((task.get("prevLink") or "").strip() or (task.get("nextLink") or "").strip())
+        if not linked and host.core.coerce_int(task.get("link"), 0) <= 0:
+            task["link"] = 1
+    return kind, ch
+
+
+def validate_chain_limits(host: Any, task: dict, now_utc: datetime) -> datetime | None:
+    add_validation = host._module("add_validation")
+    pipeline = host.core._import_sibling("hook_validation_pipeline")
+    cpmax, until_dt, findings = pipeline.validate_recurrence_limits(
+        task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
+        parse_cp_sequence=host.core.parse_cp_sequence,
+        cp_sequence_parse_error=host.core.cp_sequence_parse_error,
+        parse_chain_max=add_validation.parse_chain_max,
+        parse_datetime=host.core.parse_dt_any,
+    )
+    if findings:
+        finding = findings[0]
+        host._error_and_exit([(f"Invalid {finding.field}", finding.reason)])
+    if cpmax is not None:
+        task["chainMax"] = cpmax
+    if until_dt:
+        is_valid, err = host._validate_until_not_past(until_dt, now_utc)
+        if not is_valid:
+            host._error_and_exit([("Invalid chainUntil", err)])
+    return until_dt
+
+
+def due_context(host: Any, task: dict, now_utc: datetime):
+    has_due, has_scheduled = bool(task.get("due")), bool(task.get("scheduled"))
+    implicit_due = has_due and _due_matches_entry(host, task)
+    if has_scheduled and (not has_due or implicit_due):
+        recurrence_field, user_provided_due = "scheduled", True
+    elif has_due and not implicit_due:
+        recurrence_field, user_provided_due = "due", True
+    else:
+        recurrence_field, user_provided_due = "due", False
+    due_dt = None
+    past_due_warning = None
+    if recurrence_field == "due" and user_provided_due:
+        due_dt, err = host._safe_parse_datetime(task.get("due"), "due")
+        if err:
+            host._error_and_exit([("Invalid due", err)])
+        is_past, warn_msg = host._check_due_in_past(due_dt, now_utc)
+        if is_past:
+            past_due_warning = warn_msg
+    elif recurrence_field == "scheduled":
+        due_dt, err = host._safe_parse_datetime(task.get("scheduled"), "scheduled")
+        if err:
+            host._error_and_exit([("Invalid scheduled", err)])
+    if due_dt is None:
+        due_dt = now_utc
+    due_local = host.core.to_local(due_dt)
+    return user_provided_due, recurrence_field, due_dt, past_due_warning, due_local.date(), (due_local.hour, due_local.minute)
+
+
+def _due_matches_entry(host: Any, task: dict) -> bool:
+    if not task.get("due") or not task.get("entry"):
+        return False
+    due_dt, due_err = host._safe_parse_datetime(task.get("due"), "due")
+    entry_dt, entry_err = host._safe_parse_datetime(task.get("entry"), "entry")
+    return not due_err and not entry_err and due_dt is not None and due_dt == entry_dt
 
 
 class AddCompositionServices:
@@ -101,9 +186,9 @@ class AddCompositionServices:
                 validate_kind_not_conflicting=core._import_sibling(
                     "hook_validation_pipeline"
                 ).recurrence_kind_conflict,
-                kind_and_defaults_on_add=host._kind_and_defaults_on_add,
-                validate_chain_limits_on_add=host._validate_chain_limits_on_add,
-                due_context_on_add=host._due_context_on_add,
+                kind_and_defaults_on_add=lambda task, cp, anchor, anchor_file: kind_and_defaults(host, task, cp, anchor, anchor_file),
+                validate_chain_limits_on_add=lambda task, now: validate_chain_limits(host, task, now),
+                due_context_on_add=lambda task, now: due_context(host, task, now),
                 observation=observation,
             )
             omit_expr = host._strip_quotes(str(task.get("omit") or "").strip())
@@ -224,7 +309,16 @@ def validate_task(host: Any, task):
     return observation
 
 
-__all__ = ("AddCompositionServices", "initialize_core", "load_core", "validate_task")
+__all__ = (
+    "AddCompositionServices",
+    "apply_description_uda_aliases",
+    "initialize_core",
+    "load_core",
+    "validate_task",
+    "kind_and_defaults",
+    "validate_chain_limits",
+    "due_context",
+)
 
 
 def build_on_add_context(host: Any, task, now_utc, now_local, *, observation=None, prof=None):

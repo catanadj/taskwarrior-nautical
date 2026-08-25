@@ -28,6 +28,10 @@ _CHAIN_FIELDS = frozenset({"chainID", "link", "prevLink", "nextLink", "chain"})
 _IDENTITY_FIELDS = frozenset({"chainID", "link", "prevLink", "nextLink"})
 
 
+class ModifyTransitionError(ValueError):
+    """A typed modify transition cannot be safely classified."""
+
+
 @dataclass(frozen=True, slots=True)
 class ModifyWorkflowRoute:
     """One mutually exclusive route and its local evidence summary."""
@@ -88,6 +92,10 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
     """Classify a typed old/new transition without callbacks or side effects."""
     if not isinstance(transition, TaskTransition):
         raise TypeError("modify route classification requires a TaskTransition")
+    old_uuid = str(transition.old.field("uuid").raw_value() or "").strip().lower()
+    new_uuid = str(transition.new.field("uuid").raw_value() or "").strip().lower()
+    if old_uuid and new_uuid and old_uuid != new_uuid:
+        raise ModifyTransitionError("modify transition mixes two task UUIDs")
     old_status = _value(transition, "old", "status")
     new_status = _value(transition, "new", "status")
     old_recurrence = _has_recurrence(transition, "old")
@@ -141,4 +149,4 @@ def classify_modify_transition(transition: TaskTransition) -> ModifyWorkflowRout
     return ModifyWorkflowRoute(kind, has_nautical, transition.changed_fields, tuple(evidence))
 
 
-__all__ = ("ModifyRouteKind", "ModifyWorkflowRoute", "classify_modify_transition")
+__all__ = ("ModifyRouteKind", "ModifyTransitionError", "ModifyWorkflowRoute", "classify_modify_transition")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.modify_workflow import ModifyRouteKind, classify_modify_transition
+from nautical_core.modify_workflow import ModifyRouteKind, ModifyTransitionError, classify_modify_transition
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 
@@ -77,6 +77,12 @@ class ModifyWorkflowTests(unittest.TestCase):
             second = classify_modify_transition(transition(old, new))
             self.assertEqual(first.kind, expected)
             self.assertEqual(first, second)
+
+    def test_cross_task_transition_is_rejected(self) -> None:
+        old = {"status": "pending", "anchor": "w:mon", "uuid": "11111111-1111-4111-8111-111111111111"}
+        new = {"status": "pending", "anchor": "w:mon", "uuid": "22222222-2222-4222-8222-222222222222"}
+        with self.assertRaisesRegex(ModifyTransitionError, "two task UUIDs"):
+            classify_modify_transition(transition(old, new))
 
 
 if __name__ == "__main__":

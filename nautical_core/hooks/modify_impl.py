@@ -1428,16 +1428,6 @@ def _child_uuid_for_spawn(parent_task: dict | None, child_task: dict | None, env
     )
 
 
-def _sanitize_unknown_attrs(stderr: str, payload: dict) -> set[str]:
-    return _module("modify_spawn_prep").sanitize_unknown_attrs(stderr, payload)
-
-
-# Helper to categorize subprocess failures
-def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
-    return _module("modify_spawn_prep").categorize_spawn_error(returncode, stderr)
-
-
-
 # --- Chain export: chainID is mandatory --------------------------------------
 def _task(args, env=None) -> str:
     """

@@ -1903,12 +1903,6 @@ class _OnAddServices:
     def build_context(self, task, now_utc, now_local, *, observation=None, prof):
         return _build_on_add_context(task, now_utc, now_local, observation=observation, prof=prof)
 
-    def plan_add(self, observation):
-        return core._import_sibling("add_workflow").plan_add(observation)
-
-    def apply_add_plan(self, task, plan):
-        core._import_sibling("add_workflow").apply_task_patch(task, plan.patch)
-
     def record_schedule(self, plan, task, target_field):
         workflow = core._import_sibling("add_workflow")
         raw = task.get(target_field)

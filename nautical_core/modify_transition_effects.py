@@ -60,7 +60,7 @@ def reject_native_until_carry(
     target_label = (
         host.core.fmt_dt_local(new_target)
         if isinstance(new_target, datetime)
-        else str(host._recurrence_anchor_field(new) or "–")
+        else str(host._module("modify_task_fields").recurrence_anchor_field(new) or "–")
     )
     rows = [("Target", target_label), ("Required", str(exc))]
     if carry:
@@ -86,7 +86,7 @@ def preserve_native_until_on_target_change(
             if transition is not None
             else host._field_changed
         ),
-        recurrence_anchor_field=host._recurrence_anchor_field,
+        recurrence_anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
         parse_datetime=host.core.parse_dt_any,
         native_until=host.core._import_sibling("native_until"),
         generation_service=host._chain_generation_service,

@@ -838,6 +838,12 @@ _MODULE_SPECS = {
         "modify_anchor_effects.py",
         "nautical_core.modify_anchor_effects",
     ),
+    "modify_task_fields": (
+        "_MODIFY_TASK_FIELDS",
+        "_MODIFY_TASK_FIELDS_LOAD_FAILED",
+        "modify_task_fields.py",
+        "nautical_core.modify_task_fields",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -1797,15 +1803,6 @@ def _local_naive_to_utc(dt_local_naive: datetime) -> datetime:
         raise TypeError("dt_local_naive must be datetime")
     naive = dt_local_naive.replace(microsecond=0)
     return core.local_naive_to_utc(naive)
-
-
-def _recurrence_anchor_field(task: dict | None) -> str:
-    if isinstance(task, dict):
-        if task.get("due"):
-            return "due"
-        if task.get("scheduled"):
-            return "scheduled"
-    return "due"
 
 
 # ------------------------------------------------------------------------------

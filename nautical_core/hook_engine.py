@@ -32,7 +32,13 @@ class OnModifyServices(Protocol):
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
     def handle_non_completion(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> None: ...
     def handle_completion(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> Any: ...
-    def handle_deleted(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> None: ...
+    def handle_deleted(
+        self,
+        old: TaskPayload,
+        new: TaskPayload,
+        unit_of_work: Any,
+        terminal_decision: Any | None = None,
+    ) -> None: ...
 
 
 class OnExitServices(Protocol):
@@ -153,6 +159,14 @@ def handle_on_modify(
     def invoke_typed(handler_name):
         handler = getattr(services, handler_name)
         if typed_handlers:
+            if handler_name == "handle_deleted":
+                return handler(
+                    old,
+                    new,
+                    request.runtime.uow,
+                    transition,
+                    request.terminal_decision,
+                )
             return handler(old, new, request.runtime.uow, transition)
         return handler(old, new, request.runtime.uow)
 

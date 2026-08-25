@@ -3518,7 +3518,14 @@ def _handle_expired_deleted_modify(new: dict) -> bool:
     return modify_expiration.handle_expired_deleted_modify(new, services=_expiration_services())
 
 
-def _handle_deleted_modify(old: dict, new: dict, unit_of_work, *, transition=None) -> None:
+def _handle_deleted_modify(
+    old: dict,
+    new: dict,
+    unit_of_work,
+    *,
+    transition=None,
+    terminal_decision=None,
+) -> None:
     _modify_runtime_state().task_repository = unit_of_work.repository
     modify_expiration = _module("modify_expiration", required=False)
     if modify_expiration is None:
@@ -3535,7 +3542,13 @@ def _handle_deleted_modify(old: dict, new: dict, unit_of_work, *, transition=Non
         diag=_diag,
         recovery_warning=_expiration_recovery_warning,
     )
-    modify_expiration.handle_deleted_modify(old, new, services=services, transition=transition)
+    modify_expiration.handle_deleted_modify(
+        old,
+        new,
+        services=services,
+        transition=transition,
+        terminal_decision=terminal_decision,
+    )
 
 
 class _OnModifyServices:
@@ -3567,8 +3580,14 @@ class _OnModifyServices:
     def handle_completion(self, old, new, unit_of_work, transition=None):
         return _handle_completion_modify(old, new, unit_of_work, transition=transition)
 
-    def handle_deleted(self, old, new, unit_of_work, transition=None):
-        _handle_deleted_modify(old, new, unit_of_work, transition=transition)
+    def handle_deleted(self, old, new, unit_of_work, transition=None, terminal_decision=None):
+        _handle_deleted_modify(
+            old,
+            new,
+            unit_of_work,
+            transition=transition,
+            terminal_decision=terminal_decision,
+        )
 
 
 def main():

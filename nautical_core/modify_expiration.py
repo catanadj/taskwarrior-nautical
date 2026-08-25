@@ -197,6 +197,7 @@ def handle_deleted_modify(
     *,
     services: DeletedModifyServices,
     transition: Any = None,
+    terminal_decision: Any = None,
 ) -> None:
     """Classify one deleted pending task and converge its chain state."""
     old_status = (
@@ -251,7 +252,8 @@ def handle_deleted_modify(
     if disposition == "manual":
         services.diag("deleted Nautical task classified as manual stop")
 
-    services.terminal_chain_off(new, "manual_delete")
+    event = str(getattr(terminal_decision, "event", "manual_delete") or "manual_delete")
+    services.terminal_chain_off(new, event)
     now_utc = services.now_utc()
     try:
         services.end_chain_summary(new, "Pending task deleted.", now_utc, current_task=old)

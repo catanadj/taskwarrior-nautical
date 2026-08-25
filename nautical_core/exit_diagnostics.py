@@ -40,7 +40,7 @@ def emit_drain_stats_diag(
     *,
     startup_stats: Mapping[str, Any],
     diag_stats: Mapping[str, Any],
-    diagnostic_block: Callable[[str, Any], None],
+    diagnostic_block: Callable[..., None],
 ) -> None:
     """Render stable startup, drain, and Taskwarrior timing diagnostics."""
     startup = dict(startup_stats)

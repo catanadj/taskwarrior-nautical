@@ -11344,7 +11344,12 @@ def test_on_exit_outcome_diagnostics_are_bounded():
         for index in range(5)
     ]
     try:
-        suppressed = mod._emit_outcome_diagnostics(outcomes)
+        diagnostics = importlib.import_module("nautical_core.exit_diagnostics")
+        suppressed = diagnostics.emit_outcome_diagnostics(
+            outcomes,
+            diagnostic=messages.append,
+            limit=mod._OUTBOX_DIAG_MAX_ITEMS,
+        )
     finally:
         mod._OUTBOX_DIAG_MAX_ITEMS = previous_limit
         mod._diag = previous_diag

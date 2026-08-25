@@ -5,7 +5,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .hook_workflow_models import AddWorkflowRequest, PatchOperation, TaskPatch, TaskPatchOperation, WorkflowRoute
-from .task_models import TaskObservation
+from .task_models import TaskObservation, TaskTimestamp
+
+
+@dataclass(frozen=True, slots=True)
+class AddScheduleSelection:
+    """Validated scheduler output consumed by the add planner."""
+
+    target_field: str
+    first_occurrence: TaskTimestamp | None
+    status: str = "found"
+
+    def __post_init__(self) -> None:
+        field = str(self.target_field).strip()
+        if field not in {"due", "scheduled"}:
+            raise ValueError("add schedule target must be due or scheduled")
+        status = str(self.status).strip().lower()
+        if status not in {"found", "terminal", "unavailable"}:
+            raise ValueError("invalid add schedule status")
+        if status == "found" and self.first_occurrence is None:
+            raise ValueError("found add schedule requires a first occurrence")
+        if status != "found" and self.first_occurrence is not None:
+            raise ValueError("non-found add schedule cannot carry an occurrence")
+        object.__setattr__(self, "target_field", field)
+        object.__setattr__(self, "status", status)
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +40,7 @@ class AddWorkflowPlan:
     recurrence_kind: str = ""
     target_field: str = "due"
     target_explicit: bool = False
+    schedule: AddScheduleSelection | None = None
 
     @property
     def ordinary(self) -> bool:
@@ -73,4 +97,26 @@ def plan_add(task: TaskObservation) -> AddWorkflowPlan:
     )
 
 
-__all__ = ("AddWorkflowPlan", "classify_add_route", "plan_add")
+def record_schedule(
+    plan: AddWorkflowPlan,
+    *,
+    first_occurrence: TaskTimestamp | None,
+    status: str = "found",
+) -> AddWorkflowPlan:
+    """Attach one scheduler result without mutating the task or doing I/O."""
+    selection = AddScheduleSelection(
+        target_field=plan.target_field,
+        first_occurrence=first_occurrence,
+        status=status,
+    )
+    return AddWorkflowPlan(
+        request=plan.request,
+        patch=plan.patch,
+        recurrence_kind=plan.recurrence_kind,
+        target_field=plan.target_field,
+        target_explicit=plan.target_explicit,
+        schedule=selection,
+    )
+
+
+__all__ = ("AddScheduleSelection", "AddWorkflowPlan", "classify_add_route", "plan_add", "record_schedule")

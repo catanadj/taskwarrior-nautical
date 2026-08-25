@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.add_workflow import classify_add_route, plan_add
+from datetime import datetime, timezone
+
+from nautical_core.add_workflow import classify_add_route, plan_add, record_schedule
 from nautical_core.hook_workflow_models import PatchOperation, WorkflowRoute
-from nautical_core.task_models import TaskObservation
+from nautical_core.task_models import TaskObservation, TaskTimestamp
 
 
 def observation(values: dict[str, object]) -> TaskObservation:
@@ -49,6 +51,21 @@ class AddWorkflowTests(unittest.TestCase):
         plan = plan_add(observation({"cp": "P1D", "scheduled": "20260825T090000Z"}))
         self.assertEqual(plan.target_field, "scheduled")
         self.assertTrue(plan.target_explicit)
+
+    def test_scheduler_result_is_typed_and_does_not_mutate_request(self) -> None:
+        task = observation({"anchor": "w:mon"})
+        plan = plan_add(task)
+        timestamp = TaskTimestamp(datetime(2026, 8, 31, 6, tzinfo=timezone.utc))
+        scheduled = record_schedule(plan, first_occurrence=timestamp)
+        self.assertIsNone(plan.schedule)
+        self.assertEqual(scheduled.schedule.target_field, "due")
+        self.assertEqual(scheduled.schedule.first_occurrence, timestamp)
+        self.assertEqual(task.get("due"), None)
+
+    def test_scheduler_unavailable_is_explicit(self) -> None:
+        plan = plan_add(observation({"cp": "P1D"}))
+        scheduled = record_schedule(plan, first_occurrence=None, status="unavailable")
+        self.assertEqual(scheduled.schedule.status, "unavailable")
 
 
 if __name__ == "__main__":

@@ -79,8 +79,10 @@ def handle_on_add(
     observation = getattr(request, "observation", None)
     plan_add = getattr(services, "plan_add", None)
     apply_add_plan = getattr(services, "apply_add_plan", None)
+    planned_add = False
     if observation is not None and callable(plan_add) and callable(apply_add_plan):
         apply_add_plan(task, plan_add(observation))
+        planned_add = True
 
     ctx = services.build_context(
         task,
@@ -92,7 +94,8 @@ def handle_on_add(
     if not ctx.kind:
         return services.result(task, sanitize=True, prof=prof)
 
-    services.stamp_chain_id(task)
+    if not planned_add:
+        services.stamp_chain_id(task)
     if ctx.kind in {'anchor', 'anchor_file'}:
         services.render_anchor_preview(ctx, prof=prof)
         return None

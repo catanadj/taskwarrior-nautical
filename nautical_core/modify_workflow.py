@@ -90,6 +90,32 @@ def recurring_edit_intent(route: ModifyWorkflowRoute) -> RecurringEditIntent:
     return RecurringEditIntent(route.changed_fields, scheduler, carry)
 
 
+def terminal_decision_for_route(route: ModifyWorkflowRoute) -> TerminalRouteDecision | None:
+    """Map a classified user stop to one durable terminal policy."""
+    if route.kind is ModifyRouteKind.DELETION:
+        return TerminalRouteDecision(
+            route.kind,
+            event="manual_delete",
+            durable_state="disabled",
+            reason="Task deletion disabled the Nautical chain.",
+        )
+    if route.kind is ModifyRouteKind.RECURRENCE_REMOVAL:
+        return TerminalRouteDecision(
+            route.kind,
+            event="disable",
+            durable_state="disabled",
+            reason="Nautical recurrence was removed from the task.",
+        )
+    if route.kind is ModifyRouteKind.MANUAL_CHAIN_OFF:
+        return TerminalRouteDecision(
+            route.kind,
+            event="disable",
+            durable_state="disabled",
+            reason="The Nautical chain was manually disabled.",
+        )
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class ChainCompletionDecision:
     reason: str
@@ -112,6 +138,57 @@ class ChainCompletionDecision:
             raise ValueError("chain completion feedback facts must be non-empty pairs")
         unique = tuple(dict.fromkeys((str(key).strip(), str(value).strip()) for key, value in facts))
         object.__setattr__(self, "feedback_facts", unique)
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalRouteDecision:
+    """Presentation-neutral outcome for a user-driven terminal route."""
+
+    route: ModifyRouteKind
+    event: str
+    durable_state: str
+    reason: str
+    recovery_available: bool = False
+    feedback_facts: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        route = ModifyRouteKind(self.route)
+        if route not in {
+            ModifyRouteKind.DELETION,
+            ModifyRouteKind.RECURRENCE_REMOVAL,
+            ModifyRouteKind.MANUAL_CHAIN_OFF,
+        }:
+            raise ValueError("terminal decision requires a user-driven terminal route")
+        event = str(self.event).strip().lower()
+        if event not in {"manual_delete", "disable"}:
+            raise ValueError("unsupported terminal route event")
+        state = str(self.durable_state).strip().lower()
+        if state not in {"disabled", "terminal"}:
+            raise ValueError("unsupported terminal durable state")
+        reason = str(self.reason).strip()
+        if not reason:
+            raise ValueError("terminal decision requires a reason")
+        facts = tuple(self.feedback_facts) + (
+            ("terminal_route", route.value),
+            ("terminal_event", event),
+            ("durable_state", state),
+        )
+        if any(
+            not isinstance(fact, tuple)
+            or len(fact) != 2
+            or not str(fact[0]).strip()
+            or not str(fact[1]).strip()
+            for fact in facts
+        ):
+            raise ValueError("terminal decision feedback facts must be non-empty pairs")
+        object.__setattr__(self, "route", route)
+        object.__setattr__(self, "event", event)
+        object.__setattr__(self, "durable_state", state)
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "recovery_available", bool(self.recovery_available))
+        object.__setattr__(self, "feedback_facts", tuple(dict.fromkeys(
+            (str(key).strip(), str(value).strip()) for key, value in facts
+        )))
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,8 +315,10 @@ __all__ = (
     "ModifyTransitionError",
     "ModifyWorkflowRoute",
     "ChainCompletionDecision",
+    "TerminalRouteDecision",
     "RecurrenceTransitionDecision",
     "RecurringEditIntent",
     "classify_modify_transition",
     "recurring_edit_intent",
+    "terminal_decision_for_route",
 )

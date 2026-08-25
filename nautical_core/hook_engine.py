@@ -145,6 +145,9 @@ def handle_on_modify(
         )
     workflow = importlib.import_module("nautical_core.modify_workflow")
     typed_route = workflow.classify_modify_transition(transition)
+    terminal_decision = workflow.terminal_decision_for_route(typed_route)
+    if terminal_decision is not None:
+        request.terminal_decision = terminal_decision
     typed_handlers = bool(getattr(services, "typed_transition_handlers", False))
 
     def invoke_typed(handler_name):

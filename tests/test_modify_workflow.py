@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from nautical_core.modify_workflow import ChainCompletionDecision, ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition, recurring_edit_intent
+from nautical_core.modify_workflow import ChainCompletionDecision, ModifyRouteKind, ModifyTransitionError, RecurrenceTransitionDecision, classify_modify_transition, recurring_edit_intent, terminal_decision_for_route
 from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 from nautical_core.task_models import TaskTimestamp
@@ -60,6 +60,22 @@ class ModifyWorkflowTests(unittest.TestCase):
         self.assertEqual(route.kind, ModifyRouteKind.INVALID_IDENTITY_EDIT)
         self.assertIn("chain_identity_edit", route.evidence)
         self.assertTrue(route.identity_mutation)
+
+    def test_terminal_routes_have_distinct_typed_decisions(self) -> None:
+        active = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        cases = (
+            (dict(active, status="deleted"), ModifyRouteKind.DELETION, "manual_delete"),
+            ({"status": "pending"}, ModifyRouteKind.RECURRENCE_REMOVAL, "disable"),
+            (dict(active, chain="off"), ModifyRouteKind.MANUAL_CHAIN_OFF, "disable"),
+        )
+        for new, kind, event in cases:
+            decision = terminal_decision_for_route(classify_modify_transition(transition(active, new)))
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            self.assertEqual(decision.route, kind)
+            self.assertEqual(decision.event, event)
+            self.assertEqual(decision.durable_state, "disabled")
+            self.assertIn(("terminal_route", kind.value), decision.feedback_facts)
 
     def test_volatile_only_reentry_is_marked_as_evidence(self) -> None:
         active = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}

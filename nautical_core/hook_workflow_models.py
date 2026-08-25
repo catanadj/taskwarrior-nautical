@@ -93,6 +93,103 @@ class PatchOperation(str, Enum):
     PRESERVE = "preserve"
 
 
+class OutcomeDisposition(str, Enum):
+    """How the hook boundary must complete an accepted workflow result."""
+
+    EMIT_TASK = "emit_task"
+    REJECT_OPERATION = "reject_operation"
+    DEFER_RECOVERY = "defer_recovery"
+    TERMINAL = "terminal"
+
+
+@dataclass(frozen=True, slots=True)
+class HookOutputContract:
+    """Machine-facing stdout/stderr contract for one hook kind."""
+
+    hook_kind: HookKind
+    stdout: str
+    ensure_ascii: bool = False
+    diagnostics_stderr_only_when_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "hook_kind", HookKind(self.hook_kind))
+        if self.stdout not in {"task_json", "empty"}:
+            raise ValueError("hook stdout contract must be task_json or empty")
+        if not self.ensure_ascii:
+            return
+        raise ValueError("Nautical hook JSON must preserve Unicode with ensure_ascii=False")
+
+
+HOOK_OUTPUT_CONTRACTS: dict[HookKind, HookOutputContract] = {
+    HookKind.ADD: HookOutputContract(HookKind.ADD, "task_json"),
+    HookKind.MODIFY: HookOutputContract(HookKind.MODIFY, "task_json"),
+    HookKind.EXIT: HookOutputContract(HookKind.EXIT, "empty"),
+}
+
+
+ROUTE_PRECEDENCE: tuple[WorkflowRoute, ...] = (
+    WorkflowRoute.DELETION,
+    WorkflowRoute.TERMINAL_STOP,
+    WorkflowRoute.MANUAL_CHAIN_OFF,
+    WorkflowRoute.RECURRENCE_REMOVAL,
+    WorkflowRoute.RESUME,
+    WorkflowRoute.COMPLETION,
+    WorkflowRoute.RECURRING_EDIT,
+    WorkflowRoute.CP_ACTIVATION,
+    WorkflowRoute.ANCHOR_FILE_ACTIVATION,
+    WorkflowRoute.ANCHOR_ACTIVATION,
+    WorkflowRoute.ORDINARY,
+)
+
+
+OUTCOME_DISPOSITION_RULES: dict[WorkflowOutcomeKind, OutcomeDisposition] = {
+    WorkflowOutcomeKind.PASSTHROUGH: OutcomeDisposition.EMIT_TASK,
+    WorkflowOutcomeKind.ACCEPTED_PATCH: OutcomeDisposition.EMIT_TASK,
+    WorkflowOutcomeKind.LIFECYCLE_APPLICATION: OutcomeDisposition.EMIT_TASK,
+    WorkflowOutcomeKind.TERMINAL_TRANSITION: OutcomeDisposition.TERMINAL,
+    WorkflowOutcomeKind.REJECTED_INPUT: OutcomeDisposition.REJECT_OPERATION,
+    WorkflowOutcomeKind.RETRYABLE_UNAVAILABLE: OutcomeDisposition.DEFER_RECOVERY,
+    WorkflowOutcomeKind.INTERNAL_FAILURE: OutcomeDisposition.REJECT_OPERATION,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowOutcome:
+    """Structured result at the hook boundary, before rendering."""
+
+    kind: WorkflowOutcomeKind
+    disposition: OutcomeDisposition
+    route: WorkflowRoute
+    exit_code: int = 0
+    preserve_input: bool = False
+    failure: WorkflowFailureCategory | None = None
+    message: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", WorkflowOutcomeKind(self.kind))
+        object.__setattr__(self, "disposition", OutcomeDisposition(self.disposition))
+        object.__setattr__(self, "route", WorkflowRoute(self.route))
+        if OUTCOME_DISPOSITION_RULES[self.kind] is not self.disposition:
+            raise ValueError(
+                f"outcome {self.kind.value} requires disposition "
+                f"{OUTCOME_DISPOSITION_RULES[self.kind].value}"
+            )
+        if self.exit_code not in (0, 1):
+            raise ValueError("workflow exit_code must be 0 or 1")
+        failure = self.failure
+        if failure is not None:
+            object.__setattr__(self, "failure", WorkflowFailureCategory(failure))
+        if self.kind in {WorkflowOutcomeKind.REJECTED_INPUT, WorkflowOutcomeKind.RETRYABLE_UNAVAILABLE, WorkflowOutcomeKind.INTERNAL_FAILURE} and failure is None:
+            raise ValueError("failed workflow outcomes require a failure category")
+        if self.kind in {WorkflowOutcomeKind.PASSTHROUGH, WorkflowOutcomeKind.ACCEPTED_PATCH, WorkflowOutcomeKind.LIFECYCLE_APPLICATION, WorkflowOutcomeKind.TERMINAL_TRANSITION} and failure is not None:
+            raise ValueError("successful workflow outcomes cannot carry a failure category")
+        if self.disposition is OutcomeDisposition.REJECT_OPERATION and self.exit_code == 0:
+            raise ValueError("rejected workflow outcomes require a non-zero exit code")
+        if self.disposition is OutcomeDisposition.DEFER_RECOVERY and not self.preserve_input:
+            raise ValueError("deferred recovery must preserve the incoming task")
+        object.__setattr__(self, "message", str(self.message).strip())
+
+
 @dataclass(frozen=True, slots=True)
 class AddWorkflowRequest:
     """Validated add input before planning or mutation."""
@@ -223,15 +320,21 @@ class TaskPatch:
 
 __all__ = [
     "HookKind",
+    "HookOutputContract",
+    "HOOK_OUTPUT_CONTRACTS",
+    "OUTCOME_DISPOSITION_RULES",
     "AddWorkflowRequest",
     "EvidenceKind",
     "EvidenceRequest",
     "EvidenceResult",
     "EvidenceStatus",
     "ModifyWorkflowRequest",
+    "OutcomeDisposition",
     "PatchOperation",
+    "ROUTE_PRECEDENCE",
     "TaskPatch",
     "TaskPatchOperation",
+    "WorkflowOutcome",
     "WorkflowFailureCategory",
     "WorkflowOutcomeKind",
     "WorkflowRoute",

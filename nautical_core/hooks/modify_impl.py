@@ -1630,62 +1630,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _validate_native_until_after_target_or_fail(task: dict) -> None:
-    add_validation = core._import_sibling("add_validation")
-    _module("modify_validation").validate_native_until_after_target_or_fail(
-        task,
-        validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
-        safe_parse_datetime=_safe_parse_datetime,
-        validate_after_target=add_validation.validate_native_until_after_target,
-        format_local=core.fmt_dt_local,
-        panel=_panel,
-        fail=_fail_and_exit,
-        abort=sys.exit,
-    )
-
-
-def _validate_native_until_anchor_slots_or_fail(task: dict) -> None:
-    add_validation = core._import_sibling("add_validation")
-    astronomy = core._import_sibling("astronomy")
-    native_until = core._import_sibling("native_until")
-    recurrence_context = core._import_sibling("recurrence_context").RecurrenceContext
-    until_dt, until_err = _safe_parse_datetime(task.get("until"))
-    if until_err or until_dt is None:
-        return
-    anchor = str(task.get("anchor") or "").strip()
-    dnf = _validate_anchor_expr_cached(anchor) if anchor else None
-    try:
-        valid, reason, slots = core._import_sibling("astronomy_validation").validate_native_until_slots(
-            until_dt=until_dt,
-            target_dt=core.parse_dt_any(task.get("due") or task.get("scheduled")),
-            dnf=dnf,
-            anchor_file_value=str(task.get("anchor_file") or "").strip(),
-            fallback_hhmm=(0, 0),
-            collect_time_slots=add_validation.collect_anchor_time_slots,
-            normalize_time_slots=_norm_hhmm_list,
-            resolve_time_slots=lambda value, target_date: _norm_hhmm_list(value, target_date),
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            recurrence_context=recurrence_context.from_task(task),
-            to_local=_tolocal,
-            validate_time_slots=native_until.validate_calendar_slots,
-        )
-    except Exception as exc:
-        if astronomy.is_astronomy_error(exc):
-            _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
-            sys.exit(1)
-        return
-    if valid:
-        return
-    _panel(
-        "❌ Invalid expiration window",
-        [("Expires", core.fmt_dt_local(until_dt)),
-         ("Anchor slots", ", ".join(f"{hh:02d}:{mm:02d}" for hh, mm in slots) or "none"),
-         ("Required", reason or "calendar expiration must be later than every anchor slot")],
-        kind="error",
-    )
-    sys.exit(1)
-
-
 def _fmt_on_time_delta(due_dt, end_dt, tol_secs: int = 60):
     if not (due_dt and end_dt):
         return ""

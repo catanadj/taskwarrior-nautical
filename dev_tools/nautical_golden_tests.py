@@ -20984,8 +20984,8 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         "validate": mod._completion_effects.validate_cp_and_anchor,
         "preserve_cp": mod._transition_effects.preserve_cp_relative_offsets_on_due_change,
         "preserve_until": mod._transition_effects.preserve_native_until_on_target_change,
-        "validate_until": mod._validate_native_until_after_target_or_fail,
-        "validate_slots": mod._validate_native_until_anchor_slots_or_fail,
+        "validate_until": mod._module("modify_validation_effects").validate_native_until,
+        "validate_slots": mod._module("modify_validation_effects").validate_native_until_slots,
         "preflight": mod._completion_effects.preflight_context,
         "compute": mod._completion_effects.compute_next_and_limits,
         "import_module": mod.importlib.import_module,
@@ -20994,8 +20994,8 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         mod._completion_effects.validate_cp_and_anchor = lambda *_a, **_k: ("", "w:mon", "")
         mod._transition_effects.preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
         mod._transition_effects.preserve_native_until_on_target_change = lambda *_a, **_k: None
-        mod._validate_native_until_after_target_or_fail = lambda *_a, **_k: None
-        mod._validate_native_until_anchor_slots_or_fail = lambda *_a, **_k: None
+        mod._module("modify_validation_effects").validate_native_until = lambda *_a, **_k: None
+        mod._module("modify_validation_effects").validate_native_until_slots = lambda *_a, **_k: None
         mod._completion_effects.preflight_context = lambda *_a, **_k: ctx
         mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: computed
 
@@ -21014,8 +21014,8 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         mod._completion_effects.validate_cp_and_anchor = original["validate"]
         mod._transition_effects.preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
         mod._transition_effects.preserve_native_until_on_target_change = original["preserve_until"]
-        mod._validate_native_until_after_target_or_fail = original["validate_until"]
-        mod._validate_native_until_anchor_slots_or_fail = original["validate_slots"]
+        mod._module("modify_validation_effects").validate_native_until = original["validate_until"]
+        mod._module("modify_validation_effects").validate_native_until_slots = original["validate_slots"]
         mod._completion_effects.preflight_context = original["preflight"]
         mod._completion_effects.compute_next_and_limits = original["compute"]
         mod.importlib.import_module = original["import_module"]

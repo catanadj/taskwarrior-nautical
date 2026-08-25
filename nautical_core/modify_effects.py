@@ -40,8 +40,8 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
             host,
             old_task, new_task, kind, transition=transition,
         ),
-        validate_native_until=host._validate_native_until_after_target_or_fail,
-        validate_native_until_slots=host._validate_native_until_anchor_slots_or_fail,
+        validate_native_until=lambda task: validation.validate_native_until(host, task),
+        validate_native_until_slots=lambda task: validation.validate_native_until_slots(host, task),
         render_cp_adjustment=lambda adjustment: presentation.render_cp_schedule_adjusted_panel(host, adjustment),
         render_timing_warning=lambda task, fields: presentation.render_explicit_timing_order_warning(host, task, fields),
         apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
@@ -73,6 +73,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     transition_effects = host._module("modify_transition_effects")
     presentation = host._module("modify_presentation_effects")
     diagnostics = host._module("modify_diagnostics_effects")
+    validation = host._module("modify_validation_effects")
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
@@ -102,8 +103,8 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         preserve_native_until=lambda old_task, new_task, kind: transition_effects.preserve_native_until_on_target_change(
             host, old_task, new_task, kind, transition=transition
         ),
-        validate_native_until=host._validate_native_until_after_target_or_fail,
-        validate_native_until_slots=host._validate_native_until_anchor_slots_or_fail,
+        validate_native_until=lambda task: validation.validate_native_until(host, task),
+        validate_native_until_slots=lambda task: validation.validate_native_until_slots(host, task),
         now_utc=host.core.now_utc,
         preflight_context=lambda task, now, repository: completion.preflight_context(host, task, now, repository),
         compute_next_and_limits=lambda task, kind, next_no, now, preflight=None: completion.compute_next_and_limits(

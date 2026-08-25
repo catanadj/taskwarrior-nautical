@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .task_models import TaskPayload
+
 
 def human_delta(host: Any, start, end, prefer_months: bool = True):
     try:
@@ -25,7 +27,7 @@ def on_time_delta(host: Any, due_dt, end_dt, tol_secs: int = 60):
     return "[green](on time)[/]"
 
 
-def line_preview(host: Any, link_no: int, task: dict, child_due_utc, child_short: str, now_utc, **kwargs) -> str:
+def line_preview(host: Any, link_no: int, task: TaskPayload, child_due_utc, child_short: str, now_utc, **kwargs) -> str:
     task_view = host._module("modify_models").TaskView.from_mapping(task)
     return host._module("modify_feedback").format_line_preview(
         link_no, task_view, child_due_utc, child_short, now_utc,

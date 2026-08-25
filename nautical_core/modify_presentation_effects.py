@@ -21,7 +21,8 @@ def _task_view(models: Any, value: Any):
 
 def chain_colour_for_task(host: Any, task: TaskPayload, kind: str) -> str:
     """Resolve the configured presentation colour for a chain root."""
-    return host.core.chain_colour_root(kind, host._root_uuid_from(task))
+    root_uuid = host._module("modify_task_fields").root_uuid(task)
+    return host.core.chain_colour_root(kind, root_uuid)
 
 
 def future_style_for_chain(host: Any, task: TaskPayload, kind: str) -> str:
@@ -226,7 +227,7 @@ def build_runtime_services(host: Any):
         append_next_wait_sched_rows=host._append_next_wait_sched_rows,
         timeline_lines=getattr(host, "_timeline_lines", lambda *args, **kwargs: timeline_lines(host, *args, **kwargs)),
         show_timeline_gaps=host._SHOW_TIMELINE_GAPS,
-        root_uuid_from=host._root_uuid_from, short=host._short,
+        root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload), short=host._short,
         format_next_anchor_rows=host._module("modify_feedback").format_next_anchor_rows,
         format_next_cp_rows=host._module("modify_feedback").format_next_cp_rows,
         format_line_preview=lambda *args, **kwargs: host._module("modify_format_effects").line_preview(host, *args, **kwargs),

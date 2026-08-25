@@ -1438,14 +1438,6 @@ def _categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
 
 
 
-def _root_uuid_from(task: dict) -> str:
-    """Return the stable chain seed.
-
-    ChainID is the only source of truth.
-    """
-    return (task.get("chainID") or "").strip()
-
-
 # --- Chain export: chainID is mandatory --------------------------------------
 def _task(args, env=None) -> str:
     """

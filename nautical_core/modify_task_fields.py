@@ -14,4 +14,8 @@ def recurrence_anchor_field(payload: dict[str, Any] | None) -> str:
     return "due"
 
 
-__all__ = ("recurrence_anchor_field",)
+def root_uuid(payload: dict[str, Any]) -> str:
+    return str(payload.get("chainID") or "").strip()
+
+
+__all__ = ("recurrence_anchor_field", "root_uuid")

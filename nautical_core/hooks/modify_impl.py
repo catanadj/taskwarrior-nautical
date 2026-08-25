@@ -786,6 +786,12 @@ _MODULE_SPECS = {
         "modify_transition_effects.py",
         "nautical_core.modify_transition_effects",
     ),
+    "modify_presentation_effects": (
+        "_MODIFY_PRESENTATION_EFFECTS",
+        "_MODIFY_PRESENTATION_EFFECTS_LOAD_FAILED",
+        "modify_presentation_effects.py",
+        "nautical_core.modify_presentation_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -2803,111 +2809,6 @@ def _validate_omit_for_anchor_or_fail(anchor_expr: str, anchor_file_expr: str, o
 
 def _semantic_diff_value(old_text: str, new_text: str) -> str:
     return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
-
-
-def _render_recurrence_updated_panel(changes: list[tuple[str, str, str]], new: dict) -> None:
-    modify_feedback = _module("modify_feedback")
-    modify_models = _module("modify_models")
-    add_validation = core._import_sibling("add_validation")
-    modify_feedback.render_recurrence_updated_panel(
-        changes,
-        modify_models.TaskView.from_mapping(new),
-        parse_datetime=core.parse_dt_any,
-        format_local=_fmtlocal,
-        describe_native_until_carry=add_validation.describe_native_until_carry,
-        to_local=core.to_local,
-        coerce_int=core.coerce_int,
-        describe_anchor=core.describe_anchor_expr,
-        resolve_omit_presets=core.resolve_omit_presets,
-        first_recurrence_target=_first_recurrence_target,
-        panel_mode=getattr(core, "PANEL_MODE", "rich"),
-        strip_markup=core.strip_rich_markup,
-        panel=_panel,
-    )
-
-
-def _first_recurrence_target(new: dict, source: str):
-    task_view = _module("modify_models").TaskView.from_mapping(new)
-    return _module("modify_completion_compute").first_recurrence_target(
-        task_view,
-        source,
-        parse_datetime=core.parse_dt_any,
-        format_datetime=core.fmt_isoz,
-        generation_service=_chain_generation_service,
-    )
-
-
-def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
-    task_view = _module("modify_models").TaskView.from_mapping(new)
-    return _module("modify_feedback").recurrence_enabled_rows(
-        task_view,
-        source,
-        describe_anchor=core.describe_anchor_expr,
-        parse_cp_sequence_tokens=core.parse_cp_sequence_tokens,
-        first_recurrence_target=_first_recurrence_target,
-        format_local=_fmtlocal,
-    )
-
-
-def _render_cp_schedule_adjusted_panel(
-    adjustment,
-) -> None:
-    _module("modify_feedback").render_cp_schedule_adjusted_panel(
-        adjustment,
-        format_local=_fmtlocal,
-        semantic_diff_value=_semantic_diff_value,
-        format_offset=_fmt_td_dd_hhmm,
-        panel=_panel,
-    )
-
-
-def _render_explicit_timing_order_warning(new: dict, changed_fields: tuple[str, ...]) -> None:
-    new = _module("modify_models").TaskView.from_mapping(new)
-    _module("modify_feedback").render_explicit_timing_order_warning(
-        new,
-        changed_fields,
-        format_offset=_fmt_td_dd_hhmm,
-        panel=_panel,
-    )
-
-
-def _render_disabled_chain_summary(old: dict, new: dict, decision) -> None:
-    """Show the normal finished-chain summary when an active chain is stopped."""
-    reason = str(getattr(decision, "reason", decision))
-    if not (old.get("chainID") or new.get("chainID")):
-        return
-    modify_models = _module("modify_models")
-    old_view = modify_models.TaskView.from_mapping(old)
-    new_view = modify_models.TaskView.from_mapping(new)
-    now_utc = _workflow_now_utc()
-    try:
-        _end_chain_summary(old_view, reason, now_utc, current_task=new_view)
-    except Exception as exc:
-        _diag(f"removed recurrence chain summary failed: {exc}")
-        _panel(
-            "⛔ Nautical chain stopped",
-            [
-                ("Reason", reason),
-                ("Root", _format_root_and_age(old_view, now_utc)),
-                ("Task", _short(old_view.get("uuid")) or "–"),
-            ],
-            kind="summary",
-        )
-
-
-def _ensure_terminal_chain_off(task: dict, event: str | None = None) -> bool:
-    """Validate and apply one idempotent terminal patch for hook-side stops."""
-    if event:
-        lifecycle_models = _module("lifecycle_models")
-        lifecycle_planner = _module("lifecycle_planner")
-        task_codec = _module("task_codec")
-        lifecycle_planner.terminal_plan_for_snapshot(
-            lifecycle_models.TaskSnapshot.from_observation(
-                task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify terminal")
-            ),
-            lifecycle_models.LifecycleEvent(event),
-        )
-    return _module("modify_lifecycle").ensure_terminal_chain_off(task)
 
 
 def main():

@@ -116,7 +116,7 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
     def handle_terminal(exc) -> None:
         message = host.core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
         if exc.is_date_limit:
-            host._ensure_terminal_chain_off(new, "complete")
+            host._module("modify_presentation_effects").ensure_terminal_chain_off(host, new, "complete")
             try:
                 host._end_chain_summary(new, message, host._workflow_now_utc(), current_task=new)
             except Exception as summary_exc:
@@ -221,7 +221,7 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         lifecycle_models=host._module("lifecycle_models"),
         modify_models=host._module("modify_models"),
         end_chain_summary=host._end_chain_summary,
-        ensure_terminal_chain_off=host._ensure_terminal_chain_off,
+        ensure_terminal_chain_off=lambda task, event=None: host._module("modify_presentation_effects").ensure_terminal_chain_off(host, task, event),
         panel=host._panel,
         print_task=host._print_task,
         diag=host._diag,

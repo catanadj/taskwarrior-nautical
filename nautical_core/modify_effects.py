@@ -16,6 +16,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     modify_ordinary = host._module("modify_ordinary")
     modify_lifecycle = host._module("modify_lifecycle")
     transition_effects = host._module("modify_transition_effects")
+    presentation = host._module("modify_presentation_effects")
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
@@ -39,19 +40,19 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         ),
         validate_native_until=host._validate_native_until_after_target_or_fail,
         validate_native_until_slots=host._validate_native_until_anchor_slots_or_fail,
-        render_cp_adjustment=host._render_cp_schedule_adjusted_panel,
-        render_timing_warning=host._render_explicit_timing_order_warning,
+        render_cp_adjustment=lambda adjustment: presentation.render_cp_schedule_adjusted_panel(host, adjustment),
+        render_timing_warning=lambda task, fields: presentation.render_explicit_timing_order_warning(host, task, fields),
         apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
             old_task, new_task, short_uuid=host.core.short_uuid,
         ),
         short_uuid=host.core.short_uuid,
-        recurrence_enabled_rows=host._recurrence_enabled_rows,
+        recurrence_enabled_rows=lambda task, source: presentation.recurrence_enabled_rows(host, task, source),
         panel=host._panel,
-        render_disabled_summary=host._render_disabled_chain_summary,
+        render_disabled_summary=lambda old_task, new_task, decision: presentation.render_disabled_chain_summary(host, old_task, new_task, decision),
         semantic_diff_value=host._semantic_diff_value,
-        first_recurrence_target=host._first_recurrence_target,
+        first_recurrence_target=lambda task, source: presentation.first_recurrence_target(host, task, source),
         fmtlocal=host._fmtlocal,
-        render_recurrence_updated=host._render_recurrence_updated_panel,
+        render_recurrence_updated=lambda changes, task: presentation.render_recurrence_updated_panel(host, changes, task),
         print_task=host._print_task,
     )
     try:
@@ -68,6 +69,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     host._modify_runtime_state().task_repository = unit_of_work.repository
     completion = host._module("modify_completion_effects")
     transition_effects = host._module("modify_transition_effects")
+    presentation = host._module("modify_presentation_effects")
     modify_completion_flow = host.importlib.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
@@ -122,7 +124,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         return
     services = modify_expiration.DeletedModifyServices(
         expiration=expiration_services(host),
-        terminal_chain_off=host._ensure_terminal_chain_off,
+        terminal_chain_off=lambda task, event=None: presentation.ensure_terminal_chain_off(host, task, event),
         now_utc=host.core.now_utc,
         end_chain_summary=host._end_chain_summary,
         format_root_and_age=host._format_root_and_age,

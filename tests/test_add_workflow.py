@@ -41,6 +41,10 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertEqual(plan.request.route, WorkflowRoute.ANCHOR_FILE_ACTIVATION)
         self.assertEqual(plan.patch.operations[-1].field, "anchor_mode")
 
+    def test_combined_anchor_sources_keep_anchor_route(self) -> None:
+        task = observation({"anchor": "w:mon", "anchor_file": "calendar.csv"})
+        self.assertEqual(classify_add_route(task), WorkflowRoute.ANCHOR_ACTIVATION)
+
 
 if __name__ == "__main__":
     unittest.main()

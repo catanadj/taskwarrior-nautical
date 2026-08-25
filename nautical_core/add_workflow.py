@@ -29,10 +29,10 @@ def classify_add_route(task: TaskObservation) -> WorkflowRoute:
     """Classify one typed add observation without loading scheduling modules."""
     if _text(task, "cp"):
         return WorkflowRoute.CP_ACTIVATION
-    if _text(task, "anchor_file"):
-        return WorkflowRoute.ANCHOR_FILE_ACTIVATION
     if _text(task, "anchor"):
         return WorkflowRoute.ANCHOR_ACTIVATION
+    if _text(task, "anchor_file"):
+        return WorkflowRoute.ANCHOR_FILE_ACTIVATION
     return WorkflowRoute.ORDINARY
 
 

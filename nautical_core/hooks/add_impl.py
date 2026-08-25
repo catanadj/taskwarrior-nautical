@@ -1882,6 +1882,14 @@ class _OnAddServices:
     def build_context(self, task, now_utc, now_local, *, observation=None, prof):
         return _build_on_add_context(task, now_utc, now_local, observation=observation, prof=prof)
 
+    def plan_add(self, observation):
+        return core._import_sibling("add_workflow").plan_add(observation)
+
+    def apply_add_plan(self, task, plan):
+        for operation in plan.patch.operations:
+            if operation.operation.value == "set":
+                task[operation.field] = operation.value
+
     def stamp_chain_id(self, task):
         _stamp_chain_id_on_add(task)
 
@@ -1990,6 +1998,7 @@ def _due_context_on_add(task: dict, now_utc: datetime) -> tuple[bool, str, datet
 # Main
 # --------------------------------------------------------------------------------------
 def main():
+    global _PARSED_OBSERVATION
     prof = _build_profiler()
     task = _read_on_add_task(prof)
     # The implementation module is now import-lazy; load the core only once
@@ -2014,6 +2023,7 @@ def main():
         finding = validation_report.findings[0]
         title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid Nautical task"
         _error_and_exit([(title, f"{finding.reason} {finding.correction}")])
+    _PARSED_OBSERVATION = _validated_observation
     config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
     if config_error and _task_has_nautical_fields(task):
         _fail_and_exit(

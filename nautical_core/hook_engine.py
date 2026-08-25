@@ -76,6 +76,12 @@ def handle_on_add(
             now_utc = core.now_utc()
             now_local = core.to_local(now_utc)
 
+    observation = getattr(request, "observation", None)
+    plan_add = getattr(services, "plan_add", None)
+    apply_add_plan = getattr(services, "apply_add_plan", None)
+    if observation is not None and callable(plan_add) and callable(apply_add_plan):
+        apply_add_plan(task, plan_add(observation))
+
     ctx = services.build_context(
         task,
         now_utc,

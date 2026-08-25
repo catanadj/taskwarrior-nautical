@@ -125,7 +125,7 @@ def validate_native_until(host: Any, task: dict) -> None:
     host._module("modify_validation").validate_native_until_after_target_or_fail(
         task,
         validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
-        safe_parse_datetime=host._safe_parse_datetime,
+        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
         validate_after_target=add_validation.validate_native_until_after_target,
         format_local=host.core.fmt_dt_local,
         panel=host._panel,
@@ -141,7 +141,7 @@ def validate_native_until_slots(host: Any, task: dict) -> None:
     recurrence_context = host.core._import_sibling("recurrence_context").RecurrenceContext
     host._module("modify_validation").validate_native_until_anchor_slots_or_fail(
         task,
-        safe_parse_datetime=host._safe_parse_datetime,
+        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
         validate_anchor=host._validate_anchor_expr_cached,
         collect_time_slots=add_validation.collect_anchor_time_slots,
         validate_time_slots=native_until.validate_calendar_slots,

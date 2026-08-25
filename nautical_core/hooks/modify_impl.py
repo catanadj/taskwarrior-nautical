@@ -218,7 +218,9 @@ def _anchor_file_provider_for(
 def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int, int]:
     """Keep provider fallback time stable across completion projection stages."""
     for field in ("due", "scheduled"):
-        parsed, error = _safe_parse_datetime(task.get(field))
+        parsed, error = _module("modify_datetime_effects").safe_parse_datetime(
+            _module("modify_composition").hook_host(globals(), __name__), task.get(field)
+        )
         if not error and parsed is not None:
             local = _to_local_cached(parsed)
             return local.hour, local.minute
@@ -823,6 +825,12 @@ _MODULE_SPECS = {
         "_MODIFY_SCHEDULE_EFFECTS_LOAD_FAILED",
         "modify_schedule_effects.py",
         "nautical_core.modify_schedule_effects",
+    ),
+    "modify_datetime_effects": (
+        "_MODIFY_DATETIME_EFFECTS",
+        "_MODIFY_DATETIME_EFFECTS_LOAD_FAILED",
+        "modify_datetime_effects.py",
+        "nautical_core.modify_datetime_effects",
     ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
@@ -1720,31 +1728,6 @@ def _chain_generation_service():
         )
         state.chain_generation_service = service
     return service
-
-
-def _safe_parse_datetime(dt_str: str) -> tuple[datetime | None, str | None]:
-    """
-    Parse datetime safely.
-    Returns (datetime, error_msg).
-    error_msg is None on success, or a user-friendly explanation on failure.
-    """
-    if not (dt_str or "").strip():
-        return (None, None)
-
-    try:
-        dt = core.parse_dt_any(dt_str)
-        if dt is None:
-            return (None, f"Unrecognized datetime format '{dt_str}'")
-        return (dt, None)
-    except ValueError as e:
-        _diag(f"datetime parse value error: {e}")
-        return (None, "DateTime parsing error")
-    except TypeError as e:
-        _diag(f"datetime parse type error: {e}")
-        return (None, "DateTime type error")
-    except Exception as e:
-        _diag(f"datetime parse unexpected error: {e}")
-        return (None, "Unexpected error parsing datetime")
 
 
 def _omit_dnf_from_parent(parent: dict):

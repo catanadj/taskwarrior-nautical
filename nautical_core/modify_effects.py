@@ -158,7 +158,7 @@ def expiration_services(host: Any):
     return modify_expiration.ExpirationServices(
         core=host.core,
         reconcile=host._module("chain_integrity_lifecycle"),
-        safe_parse_datetime=host._safe_parse_datetime,
+        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
         compute_anchor_child_due=lambda task: generation.compute_anchor_child_due(typed_task(task)),
         compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
         build_child_draft=lambda task, *args, **kwargs: generation.build_child_draft(typed_task(task), *args, **kwargs),

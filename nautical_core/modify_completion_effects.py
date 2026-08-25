@@ -143,7 +143,7 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
     compute = host._module("modify_completion_compute")
     return compute.completion_until_or_fail(
         new, now_utc,
-        safe_parse_datetime=host._safe_parse_datetime,
+        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
         validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(host, until_dt, now),
         panel=host._panel,
         print_task=host._print_task,

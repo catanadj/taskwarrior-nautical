@@ -823,12 +823,6 @@ def _validate_chain_duration_reasonable(
     )
 
 
-# Helper to validate cp/anchor not missing
-def _validate_kind_not_conflicting(cp_str, anchor_str, anchor_file_str="") -> tuple[bool, str | None]:
-    add_validation = _module("add_validation")
-    return add_validation.validate_kind_not_conflicting(cp_str, anchor_str, anchor_file_str)
-
-
 # Helper to validate chainMax > 0
 def _validate_cpmax_positive(cpmax) -> tuple[bool, str | None]:
     add_validation = _module("add_validation")
@@ -1793,7 +1787,7 @@ def _build_on_add_context(
             task,
             now_utc,
             now_local,
-            validate_kind_not_conflicting=_validate_kind_not_conflicting,
+            validate_kind_not_conflicting=_module("add_validation").validate_kind_not_conflicting,
             kind_and_defaults_on_add=_kind_and_defaults_on_add,
             validate_chain_limits_on_add=_validate_chain_limits_on_add,
             due_context_on_add=_due_context_on_add,

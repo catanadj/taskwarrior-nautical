@@ -20441,7 +20441,9 @@ def test_on_modify_link_limit():
     previous_max_link = mod.core.MAX_LINK_NUMBER
     mod.core.MAX_LINK_NUMBER = 3
 
-    mod._spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("should not spawn"))
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",
@@ -20470,6 +20472,7 @@ def test_on_modify_link_limit():
     finally:
         sys.stdin = orig_stdin
         mod.core.MAX_LINK_NUMBER = previous_max_link
+        spawn_effects.spawn_child_atomic = original_spawn
 
     out = json.loads((stdout.getvalue() or "{}").strip() or "{}")
     expect(out.get("link") == 3, "should pass task through unchanged")
@@ -27443,7 +27446,9 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
 
     original_generation = mod._chain_generation_service
     mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
-    mod._spawn_child_atomic = lambda _child, _parent: ("beeswax", set(), True, False, None, "si_test")
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda _host, _child, _parent, **_kwargs: ("beeswax", set(), True, False, None, "si_test")
     try:
         out = mod._completion_effects.build_and_spawn_child(
             new,
@@ -27457,6 +27462,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
         )
     finally:
         mod._chain_generation_service = original_generation
+        spawn_effects.spawn_child_atomic = original_spawn
     expect(bool(out), f"expected spawn result, got {out}")
     expect(out.child.get("uuid") == child["uuid"], f"unexpected child payload: {out}")
     expect(out.child.get("link") == 2, f"typed child lost link: {out}")
@@ -27498,13 +27504,14 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
             })
 
     original_generation = mod._chain_generation_service
-    original_spawn = mod._spawn_child_atomic
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
     original_panel = mod._panel
     original_print = mod._print_task
     panels = []
     try:
         mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
-        mod._spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Taskwarrior lock busy"))
+        spawn_effects.spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Taskwarrior lock busy"))
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
         result = mod._completion_effects.build_and_spawn_child(
@@ -27519,7 +27526,7 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
         )
     finally:
         mod._chain_generation_service = original_generation
-        mod._spawn_child_atomic = original_spawn
+        spawn_effects.spawn_child_atomic = original_spawn
         mod._panel = original_panel
         mod._print_task = original_print
 
@@ -27551,11 +27558,12 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     spawned = []
     original_panel = mod._panel
     original_print = mod._print_task
-    original_spawn = mod._spawn_child_atomic
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
     try:
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
-        mod._spawn_child_atomic = lambda *_args, **_kwargs: spawned.append(True)
+        spawn_effects.spawn_child_atomic = lambda *_args, **_kwargs: spawned.append(True)
         result = mod._completion_effects.build_and_spawn_child(
             dict(parent),
             child_due=child_due,
@@ -27569,7 +27577,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     finally:
         mod._panel = original_panel
         mod._print_task = original_print
-        mod._spawn_child_atomic = original_spawn
+        spawn_effects.spawn_child_atomic = original_spawn
 
     expect(result is not None and result.outcome_state == "retryable", f"completion should return retryable carry result, got {result!r}")
     expect("wait" in result.reason and "Invalid isoformat" in result.reason, f"carry result lost actionable reason: {result!r}")
@@ -29747,7 +29755,9 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
         called["spawn"] = True
         return ("beeswax", set(), False, True, "queued", "si_test1")
 
-    mod._spawn_child_atomic = _spawn_child_atomic_stub
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda _host, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",
@@ -29778,8 +29788,10 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
             mod.main()
     finally:
         sys.stdin = prev_stdin
+        spawn_effects.spawn_child_atomic = original_spawn
 
     out_task = _extract_last_json(buf_out.getvalue())
+    spawn_effects.spawn_child_atomic = original_spawn
     expect(not called["spawn"], "re-completion should not trigger duplicate spawn")
     expect(out_task.get("nextLink") == "beeswax", "existing nextLink should be preserved")
 
@@ -29798,7 +29810,9 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
         called["spawn"] = True
         return ("cafebabe", set(), False, True, "queued", "si_test2")
 
-    mod._spawn_child_atomic = _spawn_child_atomic_stub
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda _host, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
     modify_models = mod._module("modify_models")
     mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
         mode="recent", rows=[], loaded=False, chain_id=str(chain_id)
@@ -29851,6 +29865,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
             mod.main()
     finally:
         sys.stdin = prev_stdin
+        spawn_effects.spawn_child_atomic = original_spawn
 
     _ = _extract_last_json(buf_out.getvalue())
     expect(not called["spawn"], "existing link #N+1 should prevent duplicate spawn")
@@ -31566,7 +31581,9 @@ def test_on_modify_cp_completion_spawns_next_link():
         spawned["child"] = child
         return ("beeswax", set(), False, True, "queued", "si_test3")
 
-    mod._spawn_child_atomic = _spawn_child_atomic_stub
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_spawn = spawn_effects.spawn_child_atomic
+    spawn_effects.spawn_child_atomic = lambda _host, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
     modify_models = mod._module("modify_models")
     mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
         mode="next", rows=[], loaded=True, chain_id=str(chain_id)
@@ -31607,6 +31624,7 @@ def test_on_modify_cp_completion_spawns_next_link():
                 raise AssertionError(f"on-modify exited unexpectedly (code={e.code})")
     finally:
         sys.stdin = prev_stdin
+        spawn_effects.spawn_child_atomic = original_spawn
 
     out_task = _extract_last_json(buf_out.getvalue())
     expect("child" in spawned, "CP completion did not trigger spawn")
@@ -31618,9 +31636,11 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_spawn_queue_failure_test")
     mod._reserve_child_uuid = lambda _env: "00000000-0000-4000-8000-00000000abcd"
-    mod._enqueue_spawn_intent = lambda _entry: (False, "queue lock busy")
+    spawn_effects = mod._module("modify_spawn_effects")
+    original_enqueue = spawn_effects.enqueue_spawn_intent
+    spawn_effects.enqueue_spawn_intent = lambda _host, _entry: (False, "queue lock busy")
 
-    child_short, _stripped, verified, deferred, reason, intent = mod._spawn_child_atomic(
+    child_short, _stripped, verified, deferred, reason, intent = spawn_effects.spawn_child_atomic(mod,
         {
             "uuid": "00000000-0000-4000-8000-000000000999",
             "description": "x",
@@ -31640,6 +31660,7 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
             "nextLink": "",
         },
     )
+    spawn_effects.enqueue_spawn_intent = original_enqueue
     expect(len(child_short) == 8 and all(ch in "0123456789abcdef" for ch in child_short.lower()), f"unexpected child short: {child_short}")
     expect(not verified, "verified should be false when queue fails")
     expect(not deferred, "deferred should be false when queue fails")
@@ -36838,7 +36859,8 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
 
-        ok, reason = mod._enqueue_spawn_intent(plan)
+        spawn_effects = mod._module("modify_spawn_effects")
+        ok, reason = spawn_effects.enqueue_spawn_intent(mod, plan)
         expect(ok, f"_enqueue_spawn_intent failed: {reason}")
 
         outbox = LifecycleOutboxRepository(root)
@@ -36862,7 +36884,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
         )
 
         # Staging the same plan again must be idempotent (same intent_id, no second record)
-        ok2, reason2 = mod._enqueue_spawn_intent(plan)
+        ok2, reason2 = spawn_effects.enqueue_spawn_intent(mod, plan)
         expect(ok2, f"second _enqueue_spawn_intent failed: {reason2}")
         _, status2 = outbox.status()
         expect(len(status2["records"]) == 1,

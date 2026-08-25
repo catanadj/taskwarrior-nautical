@@ -1441,24 +1441,6 @@ def _root_uuid_from(task: dict) -> str:
     return (task.get("chainID") or "").strip()
 
 
-# Explicit test/tooling aliases while fixtures migrate to modify_spawn_effects.
-class _ModuleHost:
-    def __getattr__(self, name):
-        return globals()[name]
-
-
-_MODULE_HOST = _ModuleHost()
-
-
-def _enqueue_spawn_intent(plan):
-    return _module("modify_spawn_effects").enqueue_spawn_intent(_MODULE_HOST, plan)
-
-
-def _spawn_child_atomic(child_task, parent_task_with_nextlink, *, lifecycle_plan=None):
-    return _module("modify_spawn_effects").spawn_child_atomic(
-        _MODULE_HOST, child_task, parent_task_with_nextlink, lifecycle_plan=lifecycle_plan
-    )
-
 # --- Chain export: chainID is mandatory --------------------------------------
 def _task(args, env=None) -> str:
     """

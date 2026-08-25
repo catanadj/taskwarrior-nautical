@@ -68,11 +68,7 @@ def spawn_child_atomic(host: Any, child_task, parent_task_with_nextlink: dict, *
             now_utc=host.core.now_utc,
             lifecycle_models=host._module("lifecycle_models"),
             lifecycle_spawn_identity=lambda parent, child: lifecycle_spawn_identity(host, parent, child),
-            enqueue_spawn_intent=getattr(
-                host,
-                "_enqueue_spawn_intent",
-                lambda plan: enqueue_spawn_intent(host, plan),
-            ),
+            enqueue_spawn_intent=lambda plan: enqueue_spawn_intent(host, plan),
             parse_datetime=getattr(host.core, "parse_dt_any", None),
             diag_count=host._diag_count,
         ),

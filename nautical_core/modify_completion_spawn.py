@@ -17,6 +17,7 @@ def completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt: Any,
+    lifecycle_plan: Any = None,
     services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
     task_row = dict(new)
@@ -24,9 +25,16 @@ def completion_build_and_spawn_child(
     spawn_child_atomic = services.spawn_child_atomic
     diag = services.diag
     try:
-        child_draft = build_child_draft(
-            task_row, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
-        )
+        if lifecycle_plan is not None:
+            if getattr(getattr(lifecycle_plan, "action", None), "value", "") != "spawn_child":
+                raise ValueError("completion lifecycle plan is not a child-spawn plan")
+            child_draft = lifecycle_plan.child_draft()
+            if child_draft is None:
+                raise ValueError("completion lifecycle plan has no child draft")
+        else:
+            child_draft = build_child_draft(
+                task_row, child_due, child_field, next_no, parent_short, kind, cpmax, until_dt,
+            )
         if not isinstance(child_draft, TaskDraft):
             raise TypeError("child builder returned a non-TaskDraft value")
         child = child_draft.to_mapping()

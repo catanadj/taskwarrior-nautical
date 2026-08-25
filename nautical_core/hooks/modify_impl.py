@@ -3319,6 +3319,7 @@ def _completion_build_and_spawn_child(
     kind: str,
     cpmax: int,
     until_dt,
+    lifecycle_plan=None,
 ):
     modify_completion_spawn = _module("modify_completion_spawn")
     modify_runtime = _module("modify_runtime")
@@ -3348,6 +3349,7 @@ def _completion_build_and_spawn_child(
         kind=kind,
         cpmax=cpmax,
         until_dt=until_dt,
+        lifecycle_plan=lifecycle_plan,
         services=services,
     )
 

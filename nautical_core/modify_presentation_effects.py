@@ -193,11 +193,16 @@ def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, 
     if not host._require_core():
         return []
     evaluator_callback, service_callback = host._module("modify_schedule_effects").scheduler_callbacks(host)
+    collector = getattr(host, "_collect_prev_two", None)
+    if callable(collector) and getattr(collector, "__name__", "") != "_collect_prev_two":
+        collect_prev_two = collector
+    else:
+        collect_prev_two = lambda task, chain_by_link=None: host._module("modify_read_effects").collect_prev_two(host, task, chain_by_link)
     return host._module("modify_timeline").timeline_lines_for_task(
         kind, task, child_due_utc, child_short, dnf, **kwargs,
         core=host.core, max_iterations=host._MAX_ITERATIONS,
         future_style_for_chain=lambda task, kind: future_style_for_chain(host, task, kind),
-        collect_prev_two=host._collect_prev_two, dtparse=host._dtparse,
+        collect_prev_two=collect_prev_two, dtparse=host._dtparse,
         fmt_on_time_delta=host._fmt_on_time_delta, fmtlocal=host._fmtlocal,
         short=host._short, tolocal=host._tolocal,
         next_occurrence_after_local_dt=lambda *args, **kwargs: host._module("modify_schedule_effects").next_occurrence_after_local_dt(host, *args, **kwargs),

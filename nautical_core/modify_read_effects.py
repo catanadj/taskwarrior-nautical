@@ -80,4 +80,25 @@ def seed_runtime_lookup_tasks(host: Any, *tasks: dict | None) -> None:
         seed_runtime_lookup_task(host, task)
 
 
-__all__ = ("lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks")
+def collect_prev_two(host: Any, current_task: dict, chain_by_link=None):
+    from .integration_models import Absent, Found, Unavailable
+
+    service = lifecycle_read_service(host)
+    state = host._modify_runtime_state()
+    read = service.collect_prev_two(
+        current_task,
+        get_chain_read=lambda chain_id: service.get_chain_read(chain_id),
+        panel_chain_by_link=state.panel_chain_by_link,
+        panel_chain_snapshot_loaded=state.panel_chain_snapshot_loaded,
+        chain_by_link=chain_by_link,
+    )
+    if isinstance(read, Unavailable):
+        raise RuntimeError(read.evidence.detail or "lifecycle predecessor read unavailable")
+    if isinstance(read, Absent):
+        return []
+    if not isinstance(read, Found):
+        raise RuntimeError("lifecycle predecessor read returned an invalid result")
+    return list(read.value)
+
+
+__all__ = ("lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two")

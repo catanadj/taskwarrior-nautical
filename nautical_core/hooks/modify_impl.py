@@ -1600,14 +1600,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 
 
 
-def _collect_prev_two(current_task: dict, chain_by_link=None):
-    return _module("modify_read_effects").collect_prev_two(
-        _module("modify_composition").hook_host(globals(), __name__),
-        current_task,
-        chain_by_link,
-    )
-
-
 # ------------------------------------------------------------------------------
 # Multi-time occurrence helpers (hook-level)
 # ------------------------------------------------------------------------------

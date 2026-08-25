@@ -624,6 +624,9 @@ def _load_hook_module(path: str, module_name: str):
         mod._cap_from_until_cp = lambda task, due: schedule_effects.cap_from_until_cp(mod, task, due)
         mod._cap_from_until_anchor = lambda task, due, dnf: schedule_effects.cap_from_until_anchor(mod, task, due, dnf)
         def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
+            override = getattr(mod, "_collect_prev_two", None)
+            if callable(override):
+                kwargs["_collect_prev_two_override"] = override
             return mod._presentation_effects.timeline_lines(
                 kind, task, child_due_utc, child_short, dnf, **kwargs
             )
@@ -794,7 +797,11 @@ def _assert_stdout_json_only(stdout_text: str) -> dict:
     return obj
 def _call_with_supported_kwargs(fn, **kwargs):
     sig = inspect.signature(fn)
-    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    accepts_var_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in sig.parameters.values()
+    )
+    filtered = dict(kwargs) if accepts_var_kwargs else {k: v for k, v in kwargs.items() if k in sig.parameters}
     for key in ("task", "new", "old", "parent", "child"):
         value = filtered.get(key)
         if isinstance(value, dict) and {"anchor", "anchor_file", "cp", "chainID"}.intersection(value):
@@ -19036,8 +19043,7 @@ def test_hook_on_modify_timeline_cp_random_labels_selected_intervals():
     mod = _load_hook_module(hook, "_nautical_on_modify_cp_random_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate cp random timeline.")
-    if hasattr(mod, "_collect_prev_two"):
-        setattr(mod, "_collect_prev_two", lambda _task: [])
+    setattr(mod, "_collect_prev_two", lambda _task: [])
     cp = "rand(11d..14d)"
     chain_id = "chain-a"
     first_td = mod.core.cp_sequence_interval_for_link(cp, 1, chain_id)
@@ -19081,8 +19087,7 @@ def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
     mod = _load_hook_module(hook, "_nautical_on_modify_omit_timeline_test")
     if not hasattr(mod, "_timeline_lines"):
         raise AssertionError("on-modify hook does not expose _timeline_lines; cannot validate omit timeline handling.")
-    if hasattr(mod, "_collect_prev_two"):
-        setattr(mod, "_collect_prev_two", lambda _task: [])
+    setattr(mod, "_collect_prev_two", lambda _task: [])
     expr = "w:mon,wed,fri"
     dnf = core.validate_anchor_expr_strict(expr)
     child_due_utc = datetime(2025, 1, 10, 9, 0, tzinfo=timezone.utc)
@@ -27036,8 +27041,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
     """when anchor_file is shifted and anchor matches the original file date, timeline should still show the original date as the next future anchor."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_timeline_test")
-    if hasattr(mod, "_collect_prev_two"):
-        setattr(mod, "_collect_prev_two", lambda _task: [])
+    setattr(mod, "_collect_prev_two", lambda _task: [])
     from zoneinfo import ZoneInfo
     previous_tz_name = mod.core.LOCAL_TZ_NAME
     previous_tz = mod.core._LOCAL_TZ
@@ -27071,6 +27075,7 @@ def test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_ch
                     child_due_utc=child_due,
                     child_short="beeswax",
                     dnf=dnf,
+                    _collect_prev_two_override=lambda _task: [],
                     next_count=4,
                     cap_no=None,
                     cur_no=1,
@@ -27090,8 +27095,7 @@ def test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_strea
     """merged anchor timelines should still omit shifted anchor_file dates when omit matches their shifted local date."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_shifted_anchor_file_omit_timeline_test")
-    if hasattr(mod, "_collect_prev_two"):
-        setattr(mod, "_collect_prev_two", lambda _task: [])
+    setattr(mod, "_collect_prev_two", lambda _task: [])
     from zoneinfo import ZoneInfo
     previous_tz_name = mod.core.LOCAL_TZ_NAME
     previous_tz = mod.core._LOCAL_TZ
@@ -27185,6 +27189,7 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
                     child_due_utc=child_due,
                     child_short="ba5b8228",
                     dnf=dnf,
+                    _collect_prev_two_override=lambda _task: [],
                     next_count=4,
                     cap_no=None,
                     cur_no=7,

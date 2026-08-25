@@ -19,6 +19,18 @@ def _task_view(models: Any, value: Any):
     return value
 
 
+def chain_colour_for_task(host: Any, task: TaskPayload, kind: str) -> str:
+    """Resolve the configured presentation colour for a chain root."""
+    return host.core.chain_colour_root(kind, host._root_uuid_from(task))
+
+
+def future_style_for_chain(host: Any, task: TaskPayload, kind: str) -> str:
+    """Return static or per-chain future styling for timeline presentation."""
+    if not host._CHAIN_COLOR_PER_CHAIN:
+        return "dark_orange" if kind == "cp" else "cyan"
+    return chain_colour_for_task(host, task, kind)
+
+
 def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str]], new: TaskPayload) -> None:
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
@@ -183,7 +195,7 @@ def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, 
     return host._module("modify_timeline").timeline_lines_for_task(
         kind, task, child_due_utc, child_short, dnf, **kwargs,
         core=host.core, max_iterations=host._MAX_ITERATIONS,
-        future_style_for_chain=host._future_style_for_chain,
+        future_style_for_chain=lambda task, kind: future_style_for_chain(host, task, kind),
         collect_prev_two=host._collect_prev_two, dtparse=host._dtparse,
         fmt_on_time_delta=host._fmt_on_time_delta, fmtlocal=host._fmtlocal,
         short=host._short, tolocal=host._tolocal,
@@ -214,7 +226,7 @@ def build_runtime_services(host: Any):
         panel_line=host._panel_line, text_line=host._text_line,
         panel=host._panel, print_task=host._print_task, diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
-        chain_colour_for_task=host._chain_colour_for_task,
+        chain_colour_for_task=lambda task, kind: chain_colour_for_task(host, task, kind),
         strip_quotes=host._strip_quotes, human_delta=host._human_delta,
     )
 

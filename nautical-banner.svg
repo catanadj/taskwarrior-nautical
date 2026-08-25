@@ -136,59 +136,59 @@
 
     <!-- Animated Header Overlays -->
     <g class="cal-pat-1">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#2563eb"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#2c6b8f"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">w:mon..fri</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#dbeafe">WEEKDAYS</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#cfe0ea">WEEKDAYS</text>
     </g>
     <g class="cal-pat-2">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#059669"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#468066"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">m:1, 15, 30</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#d1fae5">MONTHLY DATES</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#d7e8de">MONTHLY DATES</text>
     </g>
     <g class="cal-pat-3">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#e11d48"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#b4573f"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">w:mon,wed,fri</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#ffe4e6">MON / WED / FRI</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#e8d4cd">MON / WED / FRI</text>
     </g>
     <g class="cal-pat-4">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#7c3aed"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#6e5a91"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">w:sat,sun</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#ede9fe">WEEKENDS</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#ded6ea">WEEKENDS</text>
     </g>
     <g class="cal-pat-5">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#0891b2"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#2f7d84"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">w/2:tue,thu</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#cffafe">BI-WEEKLY</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#cde6e6">BI-WEEKLY</text>
     </g>
     <g class="cal-pat-6">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#d97706"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#8a6428"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">m:last</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#fef3c7">MONTH-END</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#eaddc0">MONTH-END</text>
     </g>
     <g class="cal-pat-7">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#0f766e"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#1f6b60"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">m:7rand</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#ccfbf1">7 RANDOM / MONTH</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#cde0da">7 RANDOM / MONTH</text>
     </g>
     <g class="cal-pat-8">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#9333ea"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#7d6a9e"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">m:1wed,3fri</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#f3e8ff">NTH WEEKDAYS</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#e0dae9">NTH WEEKDAYS</text>
     </g>
     <g class="cal-pat-9">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#c2410c"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#a15a35"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">m:last-tue</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#ffedd5">LAST TUESDAY</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#e6d2c4">LAST TUESDAY</text>
     </g>
     <g class="cal-pat-10">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#0369a1"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#33587a"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">w:2rand</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#e0f2fe">2 RANDOM / WEEK</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#cfdbe6">2 RANDOM / WEEK</text>
     </g>
     <g class="cal-pat-11">
-      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#be123c"/>
+      <rect x="-80" y="-100" width="160" height="35" rx="8" fill="#8a3f43"/>
       <text x="0" y="-81" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" font-weight="700" fill="#ffffff">w:fri..mon</text>
-      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#ffe4e6">FRIDAY → MONDAY</text>
+      <text x="0" y="-69" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="600" fill="#e8d4cd">FRIDAY → MONDAY</text>
     </g>
 
     <!-- Calendar Grid Headers (Monday Start: M T W T F S S) -->
@@ -198,8 +198,8 @@
       <text x="-25" y="-48">W</text>
       <text x="-5" y="-48">T</text>
       <text x="15" y="-48">F</text>
-      <text x="35" y="-48" fill="#e11d48">S</text>
-      <text x="55" y="-48" fill="#e11d48">S</text>
+      <text x="35" y="-48" fill="#b4573f">S</text>
+      <text x="55" y="-48" fill="#b4573f">S</text>
     </g>
 
     <!-- Neutral Base Date Numbers Grid (Monday Start) -->
@@ -213,215 +213,215 @@
 
     <!-- Animated Pattern Layer (cal-pat-1) -->
     <g class="cal-pat-1">
-      <rect x="-14" y="-36" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-14" y="-36" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-5" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">1</text>
-      <rect x="6" y="-36" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="6" y="-36" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="15" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">2</text>
-      <rect x="-74" y="-16" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-74" y="-16" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-65" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">5</text>
-      <rect x="-54" y="-16" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-54" y="-16" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-45" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">6</text>
-      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-25" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">7</text>
-      <rect x="-14" y="-16" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-14" y="-16" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-5" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">8</text>
-      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="15" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">9</text>
-      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-65" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">12</text>
-      <rect x="-54" y="4" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-54" y="4" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-45" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">13</text>
-      <rect x="-34" y="4" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-34" y="4" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-25" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">14</text>
-      <rect x="-14" y="4" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-14" y="4" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-5" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">15</text>
-      <rect x="6" y="4" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="6" y="4" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="15" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">16</text>
-      <rect x="-74" y="24" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-74" y="24" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-65" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">19</text>
-      <rect x="-54" y="24" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-54" y="24" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-45" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">20</text>
-      <rect x="-34" y="24" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-34" y="24" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-25" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">21</text>
-      <rect x="-14" y="24" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-14" y="24" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-5" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">22</text>
-      <rect x="6" y="24" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="6" y="24" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="15" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">23</text>
-      <rect x="-74" y="44" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-74" y="44" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-65" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">26</text>
-      <rect x="-54" y="44" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-54" y="44" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-45" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">27</text>
-      <rect x="-34" y="44" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-34" y="44" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-25" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">28</text>
-      <rect x="-14" y="44" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="-14" y="44" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="-5" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">29</text>
-      <rect x="6" y="44" width="18" height="15" rx="4" fill="#2563eb"/>
+      <rect x="6" y="44" width="18" height="15" rx="4" fill="#2c6b8f"/>
       <text x="15" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">30</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-2) -->
     <g class="cal-pat-2">
-      <rect x="-14" y="-36" width="18" height="15" rx="4" fill="#059669"/>
+      <rect x="-14" y="-36" width="18" height="15" rx="4" fill="#468066"/>
       <text x="-5" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">1</text>
-      <rect x="-14" y="4" width="18" height="15" rx="4" fill="#059669"/>
+      <rect x="-14" y="4" width="18" height="15" rx="4" fill="#468066"/>
       <text x="-5" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">15</text>
-      <rect x="6" y="44" width="18" height="15" rx="4" fill="#059669"/>
+      <rect x="6" y="44" width="18" height="15" rx="4" fill="#468066"/>
       <text x="15" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">30</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-3) -->
     <g class="cal-pat-3">
-      <rect x="6" y="-36" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="6" y="-36" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="15" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">2</text>
-      <rect x="-74" y="-16" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-74" y="-16" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-65" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">5</text>
-      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-25" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">7</text>
-      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="15" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">9</text>
-      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-65" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">12</text>
-      <rect x="-34" y="4" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-34" y="4" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-25" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">14</text>
-      <rect x="6" y="4" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="6" y="4" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="15" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">16</text>
-      <rect x="-74" y="24" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-74" y="24" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-65" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">19</text>
-      <rect x="-34" y="24" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-34" y="24" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-25" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">21</text>
-      <rect x="6" y="24" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="6" y="24" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="15" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">23</text>
-      <rect x="-74" y="44" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-74" y="44" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-65" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">26</text>
-      <rect x="-34" y="44" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="-34" y="44" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="-25" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">28</text>
-      <rect x="6" y="44" width="18" height="15" rx="4" fill="#e11d48"/>
+      <rect x="6" y="44" width="18" height="15" rx="4" fill="#b4573f"/>
       <text x="15" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">30</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-4) -->
     <g class="cal-pat-4">
-      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="35" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">3</text>
-      <rect x="46" y="-36" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="46" y="-36" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="55" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">4</text>
-      <rect x="26" y="-16" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="26" y="-16" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="35" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">10</text>
-      <rect x="46" y="-16" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="46" y="-16" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="55" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">11</text>
-      <rect x="26" y="4" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="26" y="4" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="35" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">17</text>
-      <rect x="46" y="4" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="46" y="4" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="55" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">18</text>
-      <rect x="26" y="24" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="26" y="24" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="35" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">24</text>
-      <rect x="46" y="24" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="46" y="24" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="55" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">25</text>
-      <rect x="26" y="44" width="18" height="15" rx="4" fill="#7c3aed"/>
+      <rect x="26" y="44" width="18" height="15" rx="4" fill="#6e5a91"/>
       <text x="35" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">31</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-5) -->
     <g class="cal-pat-5">
-      <rect x="-54" y="-16" width="18" height="15" rx="4" fill="#0891b2"/>
+      <rect x="-54" y="-16" width="18" height="15" rx="4" fill="#2f7d84"/>
       <text x="-45" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">6</text>
-      <rect x="-14" y="-16" width="18" height="15" rx="4" fill="#0891b2"/>
+      <rect x="-14" y="-16" width="18" height="15" rx="4" fill="#2f7d84"/>
       <text x="-5" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">8</text>
-      <rect x="-54" y="24" width="18" height="15" rx="4" fill="#0891b2"/>
+      <rect x="-54" y="24" width="18" height="15" rx="4" fill="#2f7d84"/>
       <text x="-45" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">20</text>
-      <rect x="-14" y="24" width="18" height="15" rx="4" fill="#0891b2"/>
+      <rect x="-14" y="24" width="18" height="15" rx="4" fill="#2f7d84"/>
       <text x="-5" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">22</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-6) -->
     <g class="cal-pat-6">
-      <rect x="26" y="44" width="18" height="15" rx="4" fill="#d97706"/>
+      <rect x="26" y="44" width="18" height="15" rx="4" fill="#8a6428"/>
       <text x="35" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">31</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-7): m:7rand — representative 7 distinct random dates -->
     <g class="cal-pat-7">
-      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="35" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">3</text>
-      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="-25" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">7</text>
-      <rect x="46" y="-16" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="46" y="-16" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="55" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">11</text>
-      <rect x="6" y="4" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="6" y="4" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="15" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">16</text>
-      <rect x="-54" y="24" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="-54" y="24" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="-45" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">20</text>
-      <rect x="46" y="24" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="46" y="24" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="55" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">25</text>
-      <rect x="-14" y="44" width="18" height="15" rx="4" fill="#0f766e"/>
+      <rect x="-14" y="44" width="18" height="15" rx="4" fill="#1f6b60"/>
       <text x="-5" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">29</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-8): m:1wed,3fri — first Wednesday and third Friday -->
     <g class="cal-pat-8">
-      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#9333ea"/>
+      <rect x="-34" y="-16" width="18" height="15" rx="4" fill="#7d6a9e"/>
       <text x="-25" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">7</text>
-      <rect x="6" y="4" width="18" height="15" rx="4" fill="#9333ea"/>
+      <rect x="6" y="4" width="18" height="15" rx="4" fill="#7d6a9e"/>
       <text x="15" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">16</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-9): m:last-tue — last Tuesday -->
     <g class="cal-pat-9">
-      <rect x="-54" y="44" width="18" height="15" rx="4" fill="#c2410c"/>
+      <rect x="-54" y="44" width="18" height="15" rx="4" fill="#a15a35"/>
       <text x="-45" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">27</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-10): w:2rand — representative two distinct random dates in each calendar row/week -->
     <g class="cal-pat-10">
-      <rect x="-14" y="-36" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="-14" y="-36" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="-5" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">1</text>
-      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="35" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">3</text>
-      <rect x="-54" y="-16" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="-54" y="-16" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="-45" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">6</text>
-      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="15" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">9</text>
-      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="-65" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">12</text>
-      <rect x="46" y="4" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="46" y="4" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="55" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">18</text>
-      <rect x="-34" y="24" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="-34" y="24" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="-25" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">21</text>
-      <rect x="6" y="24" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="6" y="24" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="15" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">23</text>
-      <rect x="-54" y="44" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="-54" y="44" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="-45" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">27</text>
-      <rect x="26" y="44" width="18" height="15" rx="4" fill="#0369a1"/>
+      <rect x="26" y="44" width="18" height="15" rx="4" fill="#33587a"/>
       <text x="35" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">31</text>
     </g>
     <!-- Animated Pattern Layer (cal-pat-11): w:fri..mon — Friday through Monday, wrapping across the week boundary -->
     <g class="cal-pat-11">
-      <rect x="6" y="-36" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="6" y="-36" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="15" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">2</text>
-      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="26" y="-36" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="35" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">3</text>
-      <rect x="46" y="-36" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="46" y="-36" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="55" y="-25" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">4</text>
-      <rect x="-74" y="-16" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="-74" y="-16" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="-65" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">5</text>
-      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="6" y="-16" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="15" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">9</text>
-      <rect x="26" y="-16" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="26" y="-16" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="35" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">10</text>
-      <rect x="46" y="-16" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="46" y="-16" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="55" y="-5" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">11</text>
-      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="-74" y="4" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="-65" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">12</text>
-      <rect x="6" y="4" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="6" y="4" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="15" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">16</text>
-      <rect x="26" y="4" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="26" y="4" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="35" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">17</text>
-      <rect x="46" y="4" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="46" y="4" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="55" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">18</text>
-      <rect x="-74" y="24" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="-74" y="24" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="-65" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">19</text>
-      <rect x="6" y="24" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="6" y="24" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="15" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">23</text>
-      <rect x="26" y="24" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="26" y="24" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="35" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">24</text>
-      <rect x="46" y="24" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="46" y="24" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="55" y="35" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">25</text>
-      <rect x="-74" y="44" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="-74" y="44" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="-65" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">26</text>
-      <rect x="6" y="44" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="6" y="44" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="15" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">30</text>
-      <rect x="26" y="44" width="18" height="15" rx="4" fill="#be123c"/>
+      <rect x="26" y="44" width="18" height="15" rx="4" fill="#8a3f43"/>
       <text x="35" y="55" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="700" fill="#ffffff">31</text>
     </g>
   </g>

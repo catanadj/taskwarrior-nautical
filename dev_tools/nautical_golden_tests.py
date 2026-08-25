@@ -27459,8 +27459,9 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
                 child_field: child_due,
             })
 
-    original_generation = mod._chain_generation_service
-    mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
+    generation_effects = mod._module("modify_generation_effects")
+    original_generation = generation_effects.chain_generation_service
+    generation_effects.chain_generation_service = lambda _host: StubGeneration.from_core(mod.core)
     spawn_effects = mod._module("modify_spawn_effects")
     original_spawn = spawn_effects.spawn_child_atomic
     spawn_effects.spawn_child_atomic = lambda _host, _child, _parent, **_kwargs: ("beeswax", set(), True, False, None, "si_test")
@@ -27476,7 +27477,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
             until_dt=None,
         )
     finally:
-        mod._chain_generation_service = original_generation
+        generation_effects.chain_generation_service = original_generation
         spawn_effects.spawn_child_atomic = original_spawn
     expect(bool(out), f"expected spawn result, got {out}")
     expect(out.child.get("uuid") == child["uuid"], f"unexpected child payload: {out}")
@@ -27518,14 +27519,15 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
                 child_field: child_due,
             })
 
-    original_generation = mod._chain_generation_service
+    generation_effects = mod._module("modify_generation_effects")
+    original_generation = generation_effects.chain_generation_service
     spawn_effects = mod._module("modify_spawn_effects")
     original_spawn = spawn_effects.spawn_child_atomic
     original_panel = mod._panel
     original_print = mod._print_task
     panels = []
     try:
-        mod._chain_generation_service = lambda: StubGeneration.from_core(mod.core)
+        generation_effects.chain_generation_service = lambda _host: StubGeneration.from_core(mod.core)
         spawn_effects.spawn_child_atomic = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Taskwarrior lock busy"))
         mod._panel = lambda title, rows, *, kind=None: panels.append((title, list(rows), kind))
         mod._print_task = lambda _task: None
@@ -27540,7 +27542,7 @@ def test_on_modify_completion_spawn_exception_is_retryable_with_reason():
             until_dt=None,
         )
     finally:
-        mod._chain_generation_service = original_generation
+        generation_effects.chain_generation_service = original_generation
         spawn_effects.spawn_child_atomic = original_spawn
         mod._panel = original_panel
         mod._print_task = original_print

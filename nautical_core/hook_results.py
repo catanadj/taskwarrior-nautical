@@ -9,8 +9,10 @@ from dataclasses import dataclass
 
 try:
     from .task_codec import DEFAULT_TASK_CODEC
+    from .on_exit_models import ExitDrainStats
 except ImportError:  # standalone hook bootstrap loader
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
+    from nautical_core.on_exit_models import ExitDrainStats
 
 
 @dataclass(slots=True)
@@ -24,7 +26,7 @@ class TaskHookResponse:
 class ExitHookResponse:
     exit_code: int = 0
     feedback_message: str | None = None
-    stats: dict[str, Any] | None = None
+    stats: ExitDrainStats | None = None
 
 
 # Compatibility names retained for existing hook loaders and integrations.
@@ -113,7 +115,7 @@ def emit_json_result(result: TaskHookResponse, *, core=None) -> None:
 
 
 def emit_exit_result(result: ExitHookResponse, *, emit_exit_feedback, emit_stats_diag) -> int:
-    stats = result.stats if isinstance(result.stats, dict) else {}
+    stats = result.stats.to_mapping() if isinstance(result.stats, ExitDrainStats) else {}
     emit_stats_diag(stats)
     if result.feedback_message:
         emit_exit_feedback(result.feedback_message)

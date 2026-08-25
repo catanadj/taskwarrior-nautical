@@ -8,6 +8,7 @@ from nautical_core.hook_validation_pipeline import (
     ValidationPipeline,
     ValidationStage,
     ValidationStatus,
+    build_default_validation_pipeline,
     normalize_description_uda_aliases,
 )
 from nautical_core.hook_workflow_models import WorkflowRoute
@@ -29,6 +30,27 @@ def _observation() -> TaskObservation:
 
 
 class ValidationPipelineTests(unittest.TestCase):
+    def test_default_domain_pipeline_rejects_mixed_recurrence_sources(self) -> None:
+        task = _observation().to_mapping()
+        task["anchor"] = "w:mon"
+        report = build_default_validation_pipeline().validate(
+            ValidationInput(TaskObservation.from_mapping(task, source_query="domain-test"))
+        )
+        self.assertEqual(report.status, ValidationStatus.INVALID)
+        self.assertEqual(report.findings[0].code, "recurrence_kind_conflict")
+
+    def test_default_domain_pipeline_allows_missing_identity_on_activation(self) -> None:
+        task = _observation().to_mapping()
+        task.pop("chainID", None)
+        task.pop("link", None)
+        report = build_default_validation_pipeline().validate(
+            ValidationInput(
+                TaskObservation.from_mapping(task, source_query="activation-test"),
+                route=WorkflowRoute.CP_ACTIVATION,
+            )
+        )
+        self.assertEqual(report.status, ValidationStatus.VALID)
+
     def test_alias_normalization_preserves_empty_clear_syntax(self) -> None:
         task = {"description": "review am:"}
         self.assertTrue(normalize_description_uda_aliases(task, enabled=True))

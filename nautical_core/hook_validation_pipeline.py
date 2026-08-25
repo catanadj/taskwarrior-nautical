@@ -8,7 +8,7 @@ from typing import Mapping, MutableMapping, Protocol, cast
 
 from .hook_workflow_models import WorkflowRoute
 from .task_changes import TaskTransition
-from .task_models import TaskObservation
+from .task_models import ChainID, TaskLink, TaskObservation, TaskTimestamp
 
 
 def normalize_description_uda_aliases(
@@ -96,6 +96,120 @@ class ValidationRule(Protocol):
     def __call__(self, value: ValidationInput) -> tuple[ValidationFinding, ...]: ...
 
 
+def _finding(code: str, field: str, reason: str, correction: str) -> ValidationFinding:
+    return ValidationFinding(ValidationStage.DOMAIN, code, field, reason, correction=correction)
+
+
+def validate_recurrence_exclusivity(value: ValidationInput) -> tuple[ValidationFinding, ...]:
+    """Reject mixed recurrence sources before scheduler work begins."""
+    task = value.current
+    cp = str(task.get("cp") or "").strip()
+    anchor = str(task.get("anchor") or "").strip()
+    anchor_file = str(task.get("anchor_file") or "").strip()
+    if cp and (anchor or anchor_file):
+        return (_finding(
+            "recurrence_kind_conflict", "cp",
+            "cp cannot be combined with anchor or anchor_file",
+            "Keep cp, or remove it before using anchor/anchor_file.",
+        ),)
+    if anchor and anchor_file:
+        return (_finding(
+            "recurrence_source_conflict", "anchor_file",
+            "anchor and anchor_file cannot both be active",
+            "Keep anchor, or keep anchor_file, but not both.",
+        ),)
+    return ()
+
+
+def validate_anchor_mode_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
+    task = value.current
+    if not str(task.get("anchor") or task.get("anchor_file") or "").strip():
+        return ()
+    mode = str(task.get("anchor_mode") or "skip").strip().lower()
+    if mode not in {"skip", "all", "flex"}:
+        return (_finding(
+            "anchor_mode_invalid", "anchor_mode",
+            f"unsupported anchor mode: {mode or '<empty>'}",
+            "Use anchor_mode:skip, anchor_mode:all, or anchor_mode:flex.",
+        ),)
+    return ()
+
+
+def validate_chain_limits_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
+    raw = value.current.get("chainMax")
+    if raw in (None, ""):
+        return ()
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        return (_finding(
+            "chain_max_invalid", "chainMax", "chainMax must be a positive integer",
+            "Set chainMax to a positive whole number or clear it.",
+        ),)
+    return ()
+
+
+def validate_chain_identity_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
+    """Require identity once a task is an existing chain member.
+
+    Activation routes intentionally validate the draft before generated
+    identity exists; the add owner stamps it after this stage.
+    """
+    if value.route in {
+        WorkflowRoute.CP_ACTIVATION,
+        WorkflowRoute.ANCHOR_ACTIVATION,
+        WorkflowRoute.ANCHOR_FILE_ACTIVATION,
+    }:
+        return ()
+    task = value.current
+    if str(task.get("chain") or "").strip().lower() not in {"on", "true", "1"}:
+        return ()
+    findings: list[ValidationFinding] = []
+    if not isinstance(task.field("chainID").value, ChainID):
+        findings.append(_finding(
+            "chain_identity_missing", "chainID", "chainID is required for an enabled chain",
+            "Restore the task's chainID or disable recurrence before retrying.",
+        ))
+    if not isinstance(task.field("link").value, TaskLink):
+        findings.append(_finding(
+            "chain_link_invalid", "link", "link must be a positive integer for an enabled chain",
+            "Restore a positive chain link or disable recurrence before retrying.",
+        ))
+    return tuple(findings)
+
+
+def validate_temporal_order_domain(value: ValidationInput) -> tuple[ValidationFinding, ...]:
+    task = value.current
+    due = task.field("due").value
+    scheduled = task.field("scheduled").value
+    wait = task.field("wait").value
+    if not all(item is None or isinstance(item, TaskTimestamp) for item in (due, scheduled, wait)):
+        return ()
+    findings: list[ValidationFinding] = []
+    if isinstance(due, TaskTimestamp) and isinstance(scheduled, TaskTimestamp) and due.value < scheduled.value:
+        findings.append(_finding(
+            "due_before_scheduled", "due", "due must not be earlier than scheduled",
+            "Move due to scheduled or later, or adjust scheduled.",
+        ))
+    if isinstance(due, TaskTimestamp) and isinstance(wait, TaskTimestamp) and due.value < wait.value:
+        findings.append(_finding(
+            "due_before_wait", "due", "due must not be earlier than wait",
+            "Move due to wait or later, or adjust wait.",
+        ))
+    return tuple(findings)
+
+
+DEFAULT_DOMAIN_RULES: tuple[tuple[ValidationStage, ValidationRule], ...] = (
+    (ValidationStage.DOMAIN, validate_recurrence_exclusivity),
+    (ValidationStage.DOMAIN, validate_anchor_mode_domain),
+    (ValidationStage.DOMAIN, validate_chain_limits_domain),
+    (ValidationStage.DOMAIN, validate_chain_identity_domain),
+    (ValidationStage.DOMAIN, validate_temporal_order_domain),
+)
+
+
+def build_default_validation_pipeline() -> "ValidationPipeline":
+    return ValidationPipeline(DEFAULT_DOMAIN_RULES)
+
+
 @dataclass(frozen=True, slots=True)
 class ValidationReport:
     status: ValidationStatus
@@ -154,5 +268,12 @@ __all__ = (
     "ValidationRule",
     "ValidationStage",
     "ValidationStatus",
+    "DEFAULT_DOMAIN_RULES",
+    "build_default_validation_pipeline",
+    "validate_anchor_mode_domain",
+    "validate_chain_identity_domain",
+    "validate_chain_limits_domain",
+    "validate_recurrence_exclusivity",
+    "validate_temporal_order_domain",
     "normalize_description_uda_aliases",
 )

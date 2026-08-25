@@ -80,8 +80,10 @@ def handle_on_add(
     plan_add = getattr(services, "plan_add", None)
     apply_add_plan = getattr(services, "apply_add_plan", None)
     planned_add = False
+    workflow_plan = None
     if observation is not None and callable(plan_add) and callable(apply_add_plan):
-        apply_add_plan(task, plan_add(observation))
+        workflow_plan = plan_add(observation)
+        apply_add_plan(task, workflow_plan)
         planned_add = True
 
     ctx = services.build_context(
@@ -98,9 +100,12 @@ def handle_on_add(
         services.stamp_chain_id(task)
     if ctx.kind in {'anchor', 'anchor_file'}:
         services.render_anchor_preview(ctx, prof=prof)
-        return None
-
-    services.render_cp_preview(ctx, prof=prof)
+    else:
+        services.render_cp_preview(ctx, prof=prof)
+    record_schedule = getattr(services, "record_schedule", None)
+    if workflow_plan is not None and callable(record_schedule):
+        workflow_plan = record_schedule(workflow_plan, task, ctx.recurrence_field)
+        request.workflow_plan = workflow_plan
     return None
 
 

@@ -1890,6 +1890,20 @@ class _OnAddServices:
             if operation.operation.value == "set":
                 task[operation.field] = operation.value
 
+    def record_schedule(self, plan, task, target_field):
+        workflow = core._import_sibling("add_workflow")
+        raw = task.get(target_field)
+        try:
+            value = core.parse_dt_any(raw)
+            TaskTimestamp = core._import_sibling("task_models").TaskTimestamp
+            return workflow.record_schedule(
+                plan,
+                first_occurrence=TaskTimestamp(value),
+            )
+        except Exception as exc:
+            _fail_and_exit("Scheduler unavailable", f"Could not record first {target_field}: {exc}")
+            raise
+
     def stamp_chain_id(self, task):
         _stamp_chain_id_on_add(task)
 

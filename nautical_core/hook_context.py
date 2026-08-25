@@ -33,6 +33,7 @@ class OnAddRequest:
     task: TaskPayload
     observation: TaskObservation | None = None
     prof: Any | None = None
+    workflow_plan: Any | None = None
 
 
 @dataclass(slots=True)

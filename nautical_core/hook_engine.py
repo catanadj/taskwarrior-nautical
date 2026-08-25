@@ -27,13 +27,18 @@ class OnModifyServices(Protocol):
     def load_core(self) -> None: ...
     def diag(self, message: str) -> None: ...
     def fail_and_exit(self, title: str, message: str) -> NoReturn: ...
-    def handle_non_completion(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> None: ...
-    def handle_completion(self, old: TaskPayload, new: TaskPayload, unit_of_work: Any) -> Any: ...
+    def handle_non_completion(
+        self, old: TaskPayload, new: TaskPayload, unit_of_work: Any, transition: Any
+    ) -> None: ...
+    def handle_completion(
+        self, old: TaskPayload, new: TaskPayload, unit_of_work: Any, transition: Any
+    ) -> Any: ...
     def handle_deleted(
         self,
         old: TaskPayload,
         new: TaskPayload,
         unit_of_work: Any,
+        transition: Any,
         terminal_decision: Any | None = None,
     ) -> None: ...
 
@@ -146,21 +151,17 @@ def handle_on_modify(
     terminal_decision = workflow.terminal_decision_for_route(typed_route)
     if terminal_decision is not None:
         request.terminal_decision = terminal_decision
-    typed_handlers = bool(getattr(services, "typed_transition_handlers", False))
-
-    def invoke_typed(handler_name):
+    def invoke(handler_name):
         handler = getattr(services, handler_name)
-        if typed_handlers:
-            if handler_name == "handle_deleted":
-                return handler(
-                    old,
-                    new,
-                    request.runtime.uow,
-                    transition,
-                    request.terminal_decision,
-                )
-            return handler(old, new, request.runtime.uow, transition)
-        return handler(old, new, request.runtime.uow)
+        if handler_name == "handle_deleted":
+            return handler(
+                old,
+                new,
+                request.runtime.uow,
+                transition,
+                request.terminal_decision,
+            )
+        return handler(old, new, request.runtime.uow, transition)
 
     if typed_route.kind is workflow.ModifyRouteKind.INVALID_IDENTITY_EDIT:
         services.fail_and_exit(
@@ -170,7 +171,7 @@ def handle_on_modify(
     if typed_route.kind is workflow.ModifyRouteKind.DELETION:
         if typed_route.has_nautical_fields:
             services.load_core()
-            invoke_typed("handle_deleted")
+            invoke("handle_deleted")
         return services.result(task=new, sanitize=False)
     if not typed_route.has_nautical_fields or typed_route.kind is workflow.ModifyRouteKind.ORDINARY:
         return services.result(task=new, sanitize=False)
@@ -178,9 +179,9 @@ def handle_on_modify(
         return services.result(task=new, sanitize=False)
     if typed_route.kind is workflow.ModifyRouteKind.COMPLETION:
         services.load_core()
-        lifecycle_result = invoke_typed("handle_completion")
+        lifecycle_result = invoke("handle_completion")
         request.runtime.lifecycle_result = lifecycle_result
         return None
     services.load_core()
-    invoke_typed("handle_non_completion")
+    invoke("handle_non_completion")
     return None

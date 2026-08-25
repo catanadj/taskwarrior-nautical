@@ -3563,87 +3563,9 @@ def _handle_deleted_modify(
 
 
 def main():
-    # Keep module import cheap while preserving the existing full-hook
-    # contract: all mutation decisions run with the validated core loaded.
-    _load_core()
-    _reset_modify_runtime_state()
-    state = _modify_runtime_state()
-    startup_t0 = _ptime.perf_counter()
-    module_t0 = _ptime.perf_counter()
-    hook_context = _module("hook_context")
-    hook_results = _module("hook_results")
-    hook_engine = _module("hook_engine")
-    composition = _module("modify_composition")
-    state.diag_stats["startup_module_ms"] = round((_ptime.perf_counter() - module_t0) * 1000.0, 3)
-    read_t0 = _ptime.perf_counter()
-    old, new = _read_two()
-    _apply_description_uda_aliases(old, new)
-    validation = core._import_sibling("hook_validation_pipeline")
-    _validated_observation, validation_report = validation.validate_task_mapping(
-        new,
-        route=validation.WorkflowRoute.RECURRING_EDIT,
-        source_query="on-modify validation",
+    _module("modify_composition").run_on_modify(
+        _module("modify_composition").hook_host(globals(), __name__)
     )
-    if validation_report.status is not validation.ValidationStatus.VALID:
-        finding = validation_report.findings[0]
-        title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid Nautical task"
-        _fail_and_exit(title, f"{finding.reason} {finding.correction}")
-    if _PARSED_OLD_OBSERVATION is not None and _PARSED_NEW_OBSERVATION is not None:
-        transition_report = validation.validate_task_transition(
-            _PARSED_OLD_OBSERVATION,
-            _PARSED_NEW_OBSERVATION,
-            route=validation.WorkflowRoute.RECURRING_EDIT,
-            source_query="on-modify transition validation",
-        )
-        if transition_report.status is not validation.ValidationStatus.VALID:
-            finding = transition_report.findings[0]
-            title = "Invalid chainMax" if finding.code == "chain_max_invalid" else "Invalid recurrence transition"
-            _fail_and_exit(title, f"{finding.reason} {finding.correction}")
-    config_error = str(getattr(core, "scheduling_configuration_error", lambda: "")() or "")
-    if config_error and _task_has_nautical_fields(old, new):
-        _fail_and_exit(
-            "Invalid Nautical configuration",
-            f"{config_error}. Fix Nautical configuration before modifying a recurring task.",
-        )
-    state.diag_stats["startup_read_input_ms"] = round((_ptime.perf_counter() - read_t0) * 1000.0, 3)
-    try:
-        calendar_context = core.use_task_business_calendar(new)
-    except Exception as exc:
-        _fail_and_exit("Invalid business calendar", str(exc))
-        return
-    request_t0 = _ptime.perf_counter()
-    _seed_runtime_lookup_tasks(old, new)
-    runtime = _build_hook_runtime_context(new)
-    _modify_runtime_state().workflow_context = runtime.workflow
-    request = hook_context.build_on_modify_request(
-        runtime=runtime,
-        old=old,
-        new=new,
-        old_observation=_PARSED_OLD_OBSERVATION,
-        new_observation=_PARSED_NEW_OBSERVATION,
-    )
-    if _IMPORT_MS is not None:
-        state.diag_stats["startup_import_ms"] = round(float(_IMPORT_MS), 3)
-    state.diag_stats["startup_request_ms"] = round((_ptime.perf_counter() - request_t0) * 1000.0, 3)
-    state.diag_stats["startup_total_ms"] = round((_ptime.perf_counter() - startup_t0) * 1000.0, 3)
-    displacement_context = (
-        core.capture_business_calendar_displacements()
-        if str(new.get("bc") or "").strip()
-        else nullcontext()
-    )
-    try:
-        with calendar_context, displacement_context:
-            result = hook_engine.handle_on_modify(
-                request,
-                services=composition.ModifyCompositionServices(
-                    sys.modules[__name__], hook_results.TaskHookResponse
-                ),
-            )
-        if result is not None:
-            hook_results.emit_json_result(result, core=core)
-    finally:
-        runtime.close()
-        _write_bench_stats()
 
 
 def run_hook(

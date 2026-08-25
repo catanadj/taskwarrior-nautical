@@ -104,7 +104,7 @@ def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository
 
 def compute_child_due(host: Any, new: TaskPayload, kind: str):
     compute = host._module("modify_completion_compute")
-    generation = host._chain_generation_service()
+    generation = host._module("modify_generation_effects").chain_generation_service(host)
     codec = host._module("task_codec")
     models = host._module("task_models")
 
@@ -216,7 +216,7 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
     return compute.attach_lifecycle_plan(
         new, computed, next_no, now_utc,
         preflight=preflight,
-        generation=host._chain_generation_service(),
+        generation=host._module("modify_generation_effects").chain_generation_service(host),
         scheduler_fingerprint=fingerprint_fn() if callable(fingerprint_fn) else "",
         compare_datetimes=host._compare_datetimes,
         invalid_relative_carry_reason=host._module("chain_integrity_lifecycle").invalid_relative_carry_reason,
@@ -234,7 +234,7 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
 def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
     spawn = host._module("modify_completion_spawn")
     runtime = host._module("modify_runtime")
-    generation = host._chain_generation_service()
+    generation = host._module("modify_generation_effects").chain_generation_service(host)
     codec = host._module("task_codec")
     models = host._module("task_models")
 

@@ -146,7 +146,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
 
 def expiration_services(host: Any):
     modify_expiration = host._module("modify_expiration")
-    generation = host._chain_generation_service()
+    generation = host._module("modify_generation_effects").chain_generation_service(host)
     task_codec = host._module("task_codec")
     task_models = host._module("task_models")
 

@@ -89,7 +89,7 @@ def preserve_native_until_on_target_change(
         recurrence_anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
         parse_datetime=host.core.parse_dt_any,
         native_until=host.core._import_sibling("native_until"),
-        generation_service=host._chain_generation_service,
+        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(host),
         reject_carry=lambda old_task, new_task, target, field, exc: reject_native_until_carry(
             host, old_task, new_task, target, field, exc
         ),

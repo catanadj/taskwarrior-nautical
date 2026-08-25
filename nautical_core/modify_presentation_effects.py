@@ -59,7 +59,7 @@ def first_recurrence_target(host: Any, new: TaskPayload, source: str):
         source,
         parse_datetime=host.core.parse_dt_any,
         format_datetime=host.core.fmt_isoz,
-        generation_service=host._chain_generation_service,
+        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(host),
     )
 
 

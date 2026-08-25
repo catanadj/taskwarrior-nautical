@@ -862,6 +862,12 @@ _MODULE_SPECS = {
         "modify_format_effects.py",
         "nautical_core.modify_format_effects",
     ),
+    "modify_generation_effects": (
+        "_MODIFY_GENERATION_EFFECTS",
+        "_MODIFY_GENERATION_EFFECTS_LOAD_FAILED",
+        "modify_generation_effects.py",
+        "nautical_core.modify_generation_effects",
+    ),
     "modify_validation": (
         "_MODIFY_VALIDATION",
         "_MODIFY_VALIDATION_LOAD_FAILED",
@@ -1607,27 +1613,6 @@ def _field_changed(old: dict, new: dict, key: str) -> bool:
 # ------------------------------------------------------------------------------
 # Due calculators
 # ------------------------------------------------------------------------------
-
-
-def _chain_generation_service():
-    """Return the task-scoped shared chain-generation service."""
-    state = _modify_runtime_state()
-    generation_module = _module("chain_generation")
-    configured = tuple(_RECURRENCE_UPDATE_UDAS or ())
-    service = state.chain_generation_service
-    if (
-        service is None
-        or getattr(service, "core", None) is not core
-        or tuple(getattr(service, "recurrence_update_udas", ())) != configured
-    ):
-        service = generation_module.ChainGenerationService.from_core(
-            core,
-            recurrence_update_udas=configured,
-            debug_wait_sched=_DEBUG_WAIT_SCHED,
-            wait_sched_debug=_LAST_WAIT_SCHED_DEBUG,
-        )
-        state.chain_generation_service = service
-    return service
 
 
 def _anchor_included_occurrences(

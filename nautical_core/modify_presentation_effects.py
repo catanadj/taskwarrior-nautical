@@ -109,8 +109,63 @@ def ensure_terminal_chain_off(host: Any, task: TaskPayload, event: str | None = 
     return host._module("modify_lifecycle").ensure_terminal_chain_off(task)
 
 
+def render_anchor_completion_feedback(host: Any, **kwargs) -> None:
+    calendar_feedback = host.importlib.import_module("nautical_core.calendar_feedback")
+    feedback = host._module("modify_feedback")
+    models = host._module("modify_models")
+    feedback.orchestrate_anchor_completion_feedback(
+        **{
+            **kwargs,
+            "new": models.TaskView.from_mapping(kwargs["new"]),
+            "child": models.TaskView.from_mapping(kwargs["child"]),
+            "core": host.core,
+            "panel": host._panel,
+            "calendar_feedback": calendar_feedback,
+            "panel_diagnostics": host._module("panel_diagnostics"),
+            "modify_models": models,
+            "modify_runtime": host._module("modify_runtime"),
+            "build_runtime_services": host._modify_runtime_services,
+        }
+    )
+
+
+def render_cp_completion_feedback(host: Any, **kwargs) -> None:
+    feedback = host._module("modify_feedback")
+    models = host._module("modify_models")
+    feedback.orchestrate_cp_completion_feedback(
+        **{
+            **kwargs,
+            "new": models.TaskView.from_mapping(kwargs["new"]),
+            "child": models.TaskView.from_mapping(kwargs["child"]),
+            "core": host.core,
+            "panel_diagnostics": host._module("panel_diagnostics"),
+            "modify_models": models,
+            "modify_runtime": host._module("modify_runtime"),
+            "build_runtime_services": host._modify_runtime_services,
+        }
+    )
+
+
+def render_lifecycle_result(host: Any, result, task) -> None:
+    """Render one finalized non-success outcome without deciding its state."""
+    state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
+    title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
+    rows = [("Result", state.replace("_", " ").title())]
+    reason = str(getattr(result, "reason", "") or "").strip()
+    if reason:
+        rows.append(("Reason", reason))
+    child_short = str(getattr(result, "child_short", "") or "").strip()
+    if child_short:
+        rows.append(("Child", child_short))
+    intent_id = str(getattr(result, "spawn_intent_id", "") or "").strip()
+    if intent_id:
+        rows.append(("Intent", intent_id))
+    host._panel(title, rows, kind="warning" if state == "manual_review" else "error")
+
+
 __all__ = (
     "render_recurrence_updated_panel", "first_recurrence_target", "recurrence_enabled_rows",
     "render_cp_schedule_adjusted_panel", "render_explicit_timing_order_warning",
     "render_disabled_chain_summary", "ensure_terminal_chain_off",
+    "render_anchor_completion_feedback", "render_cp_completion_feedback", "render_lifecycle_result",
 )

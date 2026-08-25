@@ -67,7 +67,7 @@ def render_cp_schedule_adjusted_panel(host: Any, adjustment) -> None:
     host._module("modify_feedback").render_cp_schedule_adjusted_panel(
         adjustment,
         format_local=host._fmtlocal,
-        semantic_diff_value=host._semantic_diff_value,
+        semantic_diff_value=host._module("modify_validation_effects").semantic_diff_value,
         format_offset=host._fmt_td_dd_hhmm,
         panel=host._panel,
     )

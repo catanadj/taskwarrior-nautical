@@ -12,7 +12,7 @@ def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     return f"{default_msg} (expected an anchor such as w:mon, m:15, or y:jul)"
 
 
-def anchor_mode(host: Any, old: dict, new: dict) -> str:
+def anchor_mode(host: Any, old: Any, new: Any) -> str:
     raw = str(new.get("anchor_mode") or old.get("anchor_mode") or "skip").strip()
     mode = raw.lower()
     aliases = {"all": "all", "skip": "skip", "flex": "flex"}
@@ -26,7 +26,7 @@ def anchor_mode(host: Any, old: dict, new: dict) -> str:
     return normalized.upper()
 
 
-def validate_anchor(host: Any, old: dict, new: dict, anchor_expr: str) -> None:
+def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
     try:
         _, warns = host.core.lint_anchor_expr(anchor_expr)
         if warns:

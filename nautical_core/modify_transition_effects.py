@@ -113,13 +113,14 @@ def preserve_native_until_on_target_change(
 def validate_completion_cp_and_anchor(host: Any, old: TaskPayload, new: TaskPayload, *, transition=None) -> tuple[str, str, str]:
     modify_validation = host._module("modify_validation")
     modify_lifecycle = host._module("modify_lifecycle")
+    validation_effects = host._module("modify_validation_effects")
     return modify_validation.validate_completion_cp_and_anchor(
         old,
         new,
         services=modify_validation.CompletionValidationServices(
             strip_quotes=host._strip_quotes,
             reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
-            validate_omit=host._validate_omit_for_anchor_or_fail,
+            validate_omit=lambda anchor, anchor_file, omit, omit_file: validation_effects.validate_omit(host, anchor, anchor_file, omit, omit_file),
             validate_chain_limits=host._validate_chain_limits_on_modify,
             parse_cp_sequence=host.core.parse_cp_sequence,
             cp_sequence_parse_error=host.core.cp_sequence_parse_error,

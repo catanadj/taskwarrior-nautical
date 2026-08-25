@@ -2569,67 +2569,6 @@ def _non_completion_anchor_error_message(anchor_expr: str, default_msg: str) -> 
     )
 
 
-def _non_completion_anchor_mode(old: dict, new: dict) -> str:
-    anchor_mode_raw = (new.get("anchor_mode") or old.get("anchor_mode") or "").strip()
-    mode_norm, warn_msg = _validate_anchor_mode(anchor_mode_raw)
-    if warn_msg:
-        _panel("⚠ Anchor mode", [("Warning", warn_msg)], kind="warning")
-        new["anchor_mode"] = mode_norm
-    elif (new.get("anchor_mode") or "").strip():
-        new["anchor_mode"] = mode_norm
-    return ((mode_norm or anchor_mode_raw or "").strip().upper() or "ALL")
-
-
-def _non_completion_validate_anchor_cache(new: dict, old: dict, anchor_expr: str) -> None:
-    _, warns = core.lint_anchor_expr(anchor_expr)
-    if warns:
-        _panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
-
-    anchor_mode = _non_completion_anchor_mode(old, new)
-    due_dt = _safe_dt(new.get("due") or old.get("due"))
-    if core.ENABLE_ANCHOR_CACHE:
-        _ = core.build_and_cache_hints(
-            anchor_expr,
-            anchor_mode,
-            default_due_dt=due_dt,
-            include_per_year=False,
-        )
-    else:
-        _ = core.validate_anchor_expr_strict(anchor_expr)
-
-
-def _non_completion_validate_anchor(old: dict, new: dict, new_anchor: str) -> None:
-    try:
-        _non_completion_validate_anchor_cache(new, old, new_anchor)
-    except TypeError:
-        _ = core.validate_anchor_expr_strict(new_anchor)
-    except Exception as e:
-        astronomy = core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(e):
-            _got_anchor_invalid(astronomy.scheduling_error_message(e))
-        _got_anchor_invalid(_non_completion_anchor_error_message(new_anchor, str(e)))
-
-
-def _validate_omit_for_anchor_or_fail(anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
-    try:
-        _validate_shared_omit_on_modify(omit_expr)
-        findings = core._import_sibling("hook_validation_pipeline").validate_recurrence_files(
-            anchor_expr, anchor_file_expr, omit_expr, omit_file,
-            load_anchor_file=_load_anchor_file_dates,
-            load_omit_file=_load_omit_file_dates,
-        )
-    except Exception as exc:
-        _fail_and_exit("Invalid omit", str(exc))
-        return
-    if findings:
-        finding = findings[0]
-        _fail_and_exit(f"Invalid {finding.field}", finding.reason)
-
-
-def _semantic_diff_value(old_text: str, new_text: str) -> str:
-    return f"[dim]{old_text}[/] [cyan]→[/] [bold]{new_text}[/]"
-
-
 def main():
     _module("modify_composition").run_on_modify(
         _module("modify_composition").hook_host(globals(), __name__)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 
 from .hook_workflow_models import (
     AddWorkflowRequest,
@@ -91,6 +93,21 @@ class AddWorkflowPlan:
     @property
     def ordinary(self) -> bool:
         return self.request.route is WorkflowRoute.ORDINARY
+
+    @property
+    def deterministic_fingerprint(self) -> str:
+        """Stable identity for the same request and planner decision."""
+        payload = {
+            "task": self.request.task.semantic_fingerprint,
+            "route": self.request.route.value,
+            "patch": [
+                (item.field, item.operation.value, item.value)
+                for item in self.patch.operations
+            ],
+            "target": (self.target_field, self.target_explicit),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
 
 def _text(task: TaskObservation, field: str) -> str:

@@ -36,6 +36,11 @@ class AddWorkflowTests(unittest.TestCase):
         self.assertTrue(plan.ordinary)
         self.assertEqual(plan.patch.operations, ())
 
+    def test_plan_fingerprint_is_deterministic(self) -> None:
+        first = plan_add(observation({"anchor": "w:mon"}))
+        second = plan_add(observation({"anchor": "w:mon"}))
+        self.assertEqual(first.deterministic_fingerprint, second.deterministic_fingerprint)
+
     def test_cp_add_emits_root_defaults_without_mutation(self) -> None:
         task = observation({"cp": "P1D"})
         plan = plan_add(task)

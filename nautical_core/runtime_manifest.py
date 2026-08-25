@@ -95,6 +95,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "lifecycle_application",
         "lifecycle_outbox",
         "exit_runtime",
+        "exit_presentation",
         "hook_context",
         "hook_engine",
         "hook_results",

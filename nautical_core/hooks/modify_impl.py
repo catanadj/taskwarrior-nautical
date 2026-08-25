@@ -738,6 +738,12 @@ _MODULE_SPECS = {
         "modify_carry.py",
         "nautical_core.modify_carry",
     ),
+    "modify_carry_workflow": (
+        "_MODIFY_CARRY_WORKFLOW",
+        "_MODIFY_CARRY_WORKFLOW_LOAD_FAILED",
+        "modify_carry_workflow.py",
+        "nautical_core.modify_carry_workflow",
+    ),
 }
 core = None
 _CORE_IMPORT_TARGET = None
@@ -2756,11 +2762,7 @@ def _recurrence_enabled_rows(new: dict, source: str) -> list[tuple[str, str]]:
 
 
 def _render_cp_schedule_adjusted_panel(
-    adjustment: tuple[
-        datetime,
-        datetime,
-        list[tuple[str, datetime, datetime, timedelta]],
-    ],
+    adjustment,
 ) -> None:
     _module("modify_feedback").render_cp_schedule_adjusted_panel(
         adjustment,
@@ -2825,12 +2827,8 @@ def _preserve_cp_relative_offsets_on_due_change(
     new_cp: str,
     *,
     transition=None,
-) -> tuple[
-    datetime,
-    datetime,
-    list[tuple[str, datetime, datetime, timedelta]],
-] | None:
-    return _module("modify_carry").preserve_cp_relative_offsets_on_due_change(
+) :
+    result = _module("modify_carry").preserve_cp_relative_offsets_on_due_change(
         old,
         new,
         new_cp,
@@ -2845,6 +2843,7 @@ def _preserve_cp_relative_offsets_on_due_change(
         format_datetime=core.fmt_isoz,
         carry_error=_module("chain_generation").CarryFieldError,
     )
+    return _module("modify_carry_workflow").decision_from_cp_adjustments(result)
 
 
 def _reject_native_until_carry(
@@ -2877,8 +2876,8 @@ def _reject_native_until_carry(
     sys.exit(1)
 
 
-def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, transition=None) -> bool:
-    return _module("modify_carry").preserve_native_until_on_target_change(
+def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, transition=None):
+    carried = _module("modify_carry").preserve_native_until_on_target_change(
         old,
         new,
         kind,
@@ -2893,6 +2892,16 @@ def _preserve_native_until_on_target_change(old: dict, new: dict, kind: str, *, 
         generation_service=_chain_generation_service,
         reject_carry=_reject_native_until_carry,
         diagnostic=_diag,
+    )
+    if not carried:
+        return _module("modify_carry_workflow").NativeUntilDecision("unchanged")
+    value = core.parse_dt_any(new.get("until"))
+    if value is None:
+        return _module("modify_carry_workflow").NativeUntilDecision(
+            "rejected", reason="native-until carry produced no parseable value"
+        )
+    return _module("modify_carry_workflow").NativeUntilDecision(
+        "carried", value=_module("task_models").TaskTimestamp(value)
     )
 
 

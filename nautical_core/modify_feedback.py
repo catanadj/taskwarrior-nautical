@@ -68,7 +68,7 @@ def _format_td_short(td: timedelta) -> str:
 
 
 def render_cp_schedule_adjusted_panel(
-    adjustment: tuple[Any, Any, list[tuple[str, Any, Any, timedelta]]],
+    adjustment: Any,
     *,
     format_local: Callable[[Any], str],
     semantic_diff_value: Callable[[str, str], str],
@@ -76,8 +76,19 @@ def render_cp_schedule_adjusted_panel(
     panel: Callable[..., Any],
 ) -> None:
     """Render the relative schedule changes applied after a CP due edit."""
-    old_due, new_due, field_adjustments = adjustment
-    rows = [("Due", semantic_diff_value(format_local(old_due), format_local(new_due)))]
+    old_due = getattr(adjustment, "target_old", None)
+    new_due = getattr(adjustment, "target_new", None)
+    if old_due is not None:
+        old_due = old_due.value
+    if new_due is not None:
+        new_due = new_due.value
+    field_adjustments = tuple(
+        (item.field, item.old_value.value, item.new_value.value, timedelta(seconds=item.offset_seconds))
+        for item in getattr(adjustment, "adjustments", ())
+    )
+    rows = []
+    if old_due is not None and new_due is not None:
+        rows.append(("Due", semantic_diff_value(format_local(old_due), format_local(new_due))))
     rows.extend(
         (field.capitalize(), semantic_diff_value(format_local(old_value), format_local(new_value)))
         for field, old_value, new_value, _offset in field_adjustments

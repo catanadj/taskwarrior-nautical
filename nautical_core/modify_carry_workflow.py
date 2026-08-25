@@ -48,6 +48,8 @@ class TemporalCarryDecision:
     status: str
     adjustments: tuple[TemporalCarryAdjustment, ...] = ()
     reason: str = ""
+    target_old: TaskTimestamp | None = None
+    target_new: TaskTimestamp | None = None
 
     def __post_init__(self) -> None:
         status = str(self.status).strip().lower()
@@ -56,6 +58,12 @@ class TemporalCarryDecision:
         adjustments = tuple(self.adjustments)
         if any(not isinstance(item, TemporalCarryAdjustment) for item in adjustments):
             raise TypeError("temporal carry adjustments must be typed")
+        if (self.target_old is None) != (self.target_new is None):
+            raise ValueError("temporal carry target must include both values")
+        if self.target_old is not None and not isinstance(self.target_old, TaskTimestamp):
+            raise TypeError("temporal carry target must be a TaskTimestamp")
+        if self.target_new is not None and not isinstance(self.target_new, TaskTimestamp):
+            raise TypeError("temporal carry target must be a TaskTimestamp")
         if status == "adjusted" and not adjustments:
             raise ValueError("adjusted carry requires at least one field")
         if status == "rejected" and not str(self.reason).strip():
@@ -87,10 +95,16 @@ def decision_from_cp_adjustments(result, *, timestamp_factory=TaskTimestamp) -> 
                 field,
                 timestamp_factory(old_value),
                 timestamp_factory(new_value),
-                offset,
+                offset.total_seconds() if hasattr(offset, "total_seconds") else offset,
             )
         )
-    return TemporalCarryDecision("adjusted", tuple(typed)) if typed else TemporalCarryDecision("unchanged")
+    old_target = timestamp_factory(_old_due)
+    new_target = timestamp_factory(_new_due)
+    return (
+        TemporalCarryDecision("adjusted", tuple(typed), target_old=old_target, target_new=new_target)
+        if typed
+        else TemporalCarryDecision("unchanged", target_old=old_target, target_new=new_target)
+    )
 
 
 __all__ = ("NativeUntilDecision", "TemporalCarryAdjustment", "TemporalCarryDecision", "decision_from_cp_adjustments")

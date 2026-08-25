@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .task_changes import TaskTransition
 from .task_models import TaskPayload
+from .modify_carry_workflow import NativeUntilDecision, TemporalCarryDecision
 
 
 class RecurrenceActivationError(RuntimeError):
@@ -26,9 +27,9 @@ class OrdinaryModifyServices:
     validate_omit: Callable[[str, str, str, str], None]
     reject_conflicting_types: Callable[[str, str, str], None]
     validate_chain_limits: Callable[[dict], None]
-    preserve_cp_offsets: Callable[[dict, dict, str], Any]
+    preserve_cp_offsets: Callable[[dict, dict, str], TemporalCarryDecision]
     task_has_recurrence: Callable[[dict], bool]
-    preserve_native_until: Callable[[dict, dict, str], bool]
+    preserve_native_until: Callable[[dict, dict, str], NativeUntilDecision]
     validate_native_until: Callable[[dict], None]
     validate_native_until_slots: Callable[[dict], None]
     render_cp_adjustment: Callable[[Any], None]
@@ -102,7 +103,9 @@ def handle_non_completion_modify(
     )
     if new_has_recurrence and not recurrence_enabled:
         recurrence_kind = "cp" if new_cp else "anchor_file" if new_anchor_file else "anchor"
-        services.preserve_native_until(old, new, recurrence_kind)
+        native_until_decision = services.preserve_native_until(old, new, recurrence_kind)
+    else:
+        native_until_decision = NativeUntilDecision("unchanged")
     native_window_changed = any(
         services.field_changed(old, new, field)
         for field in ("due", "scheduled", "until", "anchor", "anchor_file", "anchor_mode")

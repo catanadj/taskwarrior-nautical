@@ -46,4 +46,11 @@ def field_changed(old: dict[str, Any], new: dict[str, Any], key: str) -> bool:
     return _canonical(old.get(key)) != _canonical(new.get(key))
 
 
-__all__ = ("recurrence_anchor_field", "root_uuid", "field_changed")
+def strip_quotes(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
+
+
+__all__ = ("recurrence_anchor_field", "root_uuid", "field_changed", "strip_quotes")

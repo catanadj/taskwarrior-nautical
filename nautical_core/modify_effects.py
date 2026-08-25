@@ -26,7 +26,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     )
     services = modify_ordinary.OrdinaryModifyServices(
         field_changed=field_changed,
-        strip_quotes=host._strip_quotes,
+        strip_quotes=host._module("modify_task_fields").strip_quotes,
         validate_anchor=lambda old_task, new_task, expr: validation.validate_anchor(host, old_task, new_task, expr),
         validate_omit=lambda anchor, anchor_file, omit, omit_file: validation.validate_omit(host, anchor, anchor_file, omit, omit_file),
         reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,

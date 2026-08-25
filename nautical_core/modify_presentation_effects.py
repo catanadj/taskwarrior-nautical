@@ -235,7 +235,7 @@ def build_runtime_services(host: Any):
         panel=host._panel, print_task=host._print_task, diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
         chain_colour_for_task=lambda task, kind: chain_colour_for_task(host, task, kind),
-        strip_quotes=host._strip_quotes,
+        strip_quotes=host._module("modify_task_fields").strip_quotes,
         human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
     )
 

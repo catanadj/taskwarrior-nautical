@@ -1343,11 +1343,6 @@ def _text_line(
         markup_body=markup_body,
     )
 
-def _strip_quotes(s: str) -> str:
-    s = (s or "").strip()
-    return s[1:-1] if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"') else s
-
-
 # ------------------------------------------------------------------------------
 # Taskwarrior integration
 # ------------------------------------------------------------------------------

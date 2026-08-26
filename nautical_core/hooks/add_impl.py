@@ -129,7 +129,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any
 
-core = None
+core: Any = None
 _DATETIME_COMPARATOR = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
@@ -1103,7 +1103,7 @@ class _NoopProfiler:
 
 
 def _build_profiler():
-    prof = _NoopProfiler()
+    prof: Any = _NoopProfiler()
     if _PROFILE_LEVEL <= 0:
         return prof
     prof = _Profiler(level=_PROFILE_LEVEL, import_ms=_IMPORT_MS)

@@ -113,7 +113,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, NoReturn, Optional
+from typing import TYPE_CHECKING, Any, NoReturn, Optional, cast
 
 if TYPE_CHECKING:
     from nautical_core.modify_models import CompletionLifecycleResult
@@ -227,7 +227,7 @@ def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int
     return default_local.hour, default_local.minute
 
 
-def _diag_count(key: str, inc: int = 1) -> None:
+def _diag_count(key: str, inc: float = 1) -> None:
     try:
         state = _modify_runtime_state()
         stats = state.diag_stats
@@ -238,22 +238,22 @@ def _diag_count(key: str, inc: int = 1) -> None:
 
 def _run_task_diag_bucket(cmd: list[str]) -> str:
     try:
-        parts = []
+        parts: list[str] = []
         for p in (cmd or ()):
             parts.extend(str(p).split())
-        parts = tuple(parts)
+        tokens = tuple(parts)
     except Exception:
         return "other"
     if not parts:
         return "other"
-    if "_get" in parts:
+    if "_get" in tokens:
         return "get"
     if "import" in parts:
         return "import"
     if "count" in parts:
         return "count"
-    if "export" in parts:
-        if any(p.startswith("chainID:") for p in parts):
+    if "export" in tokens:
+        if any(p.startswith("chainID:") for p in tokens):
             return "export_chain"
         return "other"
     return "other"
@@ -479,7 +479,7 @@ def _append_next_wait_sched_rows(
         format_delta=_module("modify_value_effects").format_delta,
     )
 
-core = None
+core: Any = None
 _CORE_READY = False
 _CORE_IMPORT_ERROR: Exception | None = None
 _CORE_IMPORT_TARGET: Path | None = None
@@ -1221,11 +1221,11 @@ def _read_two():
         if raw[idx:].strip():
             _fail_protocol_error("Invalid JSON input: trailing content")
         _PARSED_NEW = objs[-1]
-        old, new = _validate_modify_pair(objs[0], objs[-1])
+        old, new = _validate_modify_pair(cast(dict, objs[0]), cast(dict, objs[-1]))
         return old, new
     if len(objs) == 1:
         _PARSED_NEW = objs[0]
-        only, _ = _validate_single_modify_task(objs[0])
+        only, _ = _validate_single_modify_task(cast(dict, objs[0]))
         return only, only
 
     _fail_invalid_input("on-modify must receive two JSON tasks")

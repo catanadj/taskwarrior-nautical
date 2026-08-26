@@ -14,7 +14,7 @@ import time
 import uuid
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 
 CORE_DIR = Path(__file__).resolve().parents[1]
@@ -354,7 +354,9 @@ class _ReconcileSnapshot:
                 ),
                 "reconcile lifecycle snapshot",
             )
-            self._rows = tuple(value or ())
+            self._rows = (
+                value if isinstance(value, tuple) else (value,) if isinstance(value, TaskObservation) else ()
+            )
         else:
             _EXPORT_STATS["snapshot_hits"] += 1
         return self._rows
@@ -466,17 +468,17 @@ def _fresh_native_until_previous(row: TaskObservation) -> TaskObservation | None
         _repository().predecessor_slot(chain_id, link - 1, refresh=True),
         f"predecessor {chain_id}:{link - 1}",
     )
-    return value
+    return value if isinstance(value, TaskObservation) else None
 
 
 def _fresh_native_until_parent(row: TaskObservation) -> TaskObservation | None:
     uuid_value = _observation_text(row, "uuid")
     if not uuid_value:
         raise RuntimeError("native-until target has no UUID")
-    return _read_value(
+    return cast(TaskObservation | None, _read_value(
         _repository().verification(uuid_value),
         f"native-until parent {uuid_value}",
-    )
+    ))
 
 
 def _native_until_repairs(
@@ -1726,7 +1728,7 @@ def main(
         if snapshot._rows is not None:
             integrity_started = time.perf_counter()
             integrity_engine, integrity_audit_result = _audit_reconcile_integrity(
-                tuple(snapshot._rows), outbox_repository=integrity_outbox,
+                tuple(row.to_mapping() for row in snapshot._rows), outbox_repository=integrity_outbox,
             )
             integrity_seconds = time.perf_counter() - integrity_started
         if integrity_audit_result is not None and integrity_audit_result.status.value == "unavailable":

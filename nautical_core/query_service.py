@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from types import ModuleType
-from typing import Any, Mapping, TypeAlias
+from typing import Any, Literal, Mapping, TypeAlias, cast
 
 from .integration_models import Absent, Found, Unavailable
 from .integration_context import IntegrationAccess
@@ -187,9 +187,10 @@ class OccurrenceQueryService:
             raise QueryServiceError("occurrence queries require a read-only Taskwarrior unit of work")
         self._uow = unit_of_work
         self._core = core
-        self._timezone = getattr(context, "local_timezone", None)
-        if not isinstance(self._timezone, tzinfo):
+        local_timezone = getattr(context, "local_timezone", None)
+        if not isinstance(local_timezone, tzinfo):
             raise QueryServiceError("validated local timezone is unavailable")
+        self._timezone: tzinfo = local_timezone
 
     def _context_for(self, task: TaskObservation) -> RecurrenceContext:
         chain_id = str(_task_value(task, "chainID") or "").strip()
@@ -466,11 +467,11 @@ class OccurrenceQueryService:
                 terminal=_terminal(collected),
             )
         except (ParseError, QueryServiceError, LookupError, OSError, TypeError, ValueError) as exc:
-            uuid_value = str(_task_value(task, "uuid") or "") or None
+            error_uuid: str | None = str(_task_value(task, "uuid") or "") or None
             return TaskOccurrenceResult(
                 task=None,
                 status="invalid" if isinstance(exc, (ParseError, TypeError, ValueError, QueryServiceError)) else "unavailable",
-                failure=_failure("task_invalid", str(exc), task_uuid=uuid_value),
+                failure=_failure("task_invalid", str(exc), task_uuid=error_uuid),
             )
 
     def query(self, request: OccurrenceQueryRequest) -> OccurrenceQueryResponse:
@@ -541,7 +542,10 @@ class OccurrenceQueryService:
             request=request,
             timezone=_timezone_name(self._timezone),
             results=results,
-            status=status,
+            status=cast(
+                Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"],
+                status,
+            ),
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
         )
 
@@ -807,7 +811,10 @@ class OccurrenceQueryService:
             request=request,
             timezone=_timezone_name(self._timezone),
             results=results,
-            status=status,
+            status=cast(
+                Literal["found", "empty", "exhausted", "absent", "unavailable", "invalid"],
+                status,
+            ),
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
             schema="nautical.query.next",
         )

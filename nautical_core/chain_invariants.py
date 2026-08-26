@@ -18,6 +18,7 @@ from .chain_integrity_models import (
     SnapshotCoverage,
 )
 from .lifecycle_models import recurrence_fingerprint
+from .lifecycle_outbox import LifecycleOutboxRecord
 
 
 InvariantEvaluator = Callable[[ChainGraph], tuple[IntegrityFinding, ...]]
@@ -674,6 +675,8 @@ def _outbox_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
         ),)
     findings: list[IntegrityFinding] = []
     for record in context.outbox.records:
+        if not isinstance(record, LifecycleOutboxRecord):
+            continue
         identity = record.plan.identity
         if record.stage is not record.plan.stage:
             findings.append(IntegrityFinding(
@@ -755,7 +758,7 @@ def _finalization_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...
     """Check acknowledged terminal plans against the persisted parent tip."""
     graph = context.graph
     findings: list[IntegrityFinding] = []
-    for chain_id in sorted({record.plan.identity.chain_id for record in context.outbox.records}):
+    for chain_id in sorted({record.plan.identity.chain_id for record in context.outbox.records if isinstance(record, LifecycleOutboxRecord)}):
         for record in context.outbox.terminal_records(chain_id):
             identity = record.plan.identity
             matches = graph.uuid_matches(identity.parent_uuid)
@@ -840,7 +843,7 @@ def _acknowledged_postcondition_rule(context: IntegrityContext) -> tuple[Integri
     findings: list[IntegrityFinding] = []
     for record in context.outbox.records:
         state = getattr(record, "state", None)
-        if not hasattr(record, "plan") or getattr(state, "value", "") != "acknowledged":
+        if not isinstance(record, LifecycleOutboxRecord) or getattr(state, "value", "") != "acknowledged":
             continue
         plan = record.plan
         parent_matches = graph.uuid_matches(plan.identity.parent_uuid)

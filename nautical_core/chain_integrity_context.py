@@ -88,7 +88,15 @@ class OutboxSnapshot:
 
     def for_chain(self, chain_id: str) -> tuple[OutboxEvidenceRecord, ...]:
         wanted = str(chain_id or "").strip()
-        return tuple(record for record in self.records if record.plan.identity.chain_id == wanted)
+        return tuple(
+            record for record in self.records
+            if isinstance(record, LifecycleOutboxRecord)
+            and record.plan.identity.chain_id == wanted
+        ) + tuple(
+            record for record in self.records
+            if isinstance(record, IntegrityOutboxRecord)
+            and record.envelope.plan.chain_id == wanted
+        )
 
     def terminal_records(self, chain_id: str) -> tuple[LifecycleOutboxRecord, ...]:
         """Return acknowledged, finalized lifecycle plans for one chain."""

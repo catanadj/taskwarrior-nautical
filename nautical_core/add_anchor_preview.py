@@ -866,12 +866,14 @@ def handle_anchor_file_preview_on_add(
         first_due_local_dt = occurrence_datetimes[0]
     elif user_provided_due:
         first_due_local_dt = next((dt for dt in occurrence_datetimes if compare_datetimes(dt, due_local_dt) > 0), None)
-        if not first_due_local_dt:
+        if first_due_local_dt is None:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found after the provided due.")])
+            raise RuntimeError("anchor-file preview terminated")
     else:
         first_due_local_dt = next((dt for dt in occurrence_datetimes if compare_datetimes(dt, now_local) >= 0), None)
-        if not first_due_local_dt:
+        if first_due_local_dt is None:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
+            raise RuntimeError("anchor-file preview terminated")
 
     first_due_utc = first_due_local_dt.astimezone(timezone.utc)
     display_first_due_utc = due_dt if user_provided_due else first_due_utc
@@ -1205,7 +1207,11 @@ def handle_anchor_preview_on_add(
         )
         if not occurrences:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
+            raise RuntimeError("anchor-file preview terminated")
         first_due_local_dt = occurrences[0]
+        if not isinstance(first_due_local_dt, datetime):
+            error_and_exit([("anchor_file", "Anchor-file occurrence has no valid local timestamp.")])
+            raise RuntimeError("anchor-file preview terminated")
         first_due_utc = first_due_local_dt.astimezone(timezone.utc)
         display_first_due_utc = due_dt if user_provided_due else first_due_utc
         first_date_local = first_due_local_dt.date()
@@ -1265,7 +1271,11 @@ def handle_anchor_preview_on_add(
         )
         if not occurrences:
             error_and_exit([("anchor pattern", "No matching anchor occurrences found.")])
+            raise RuntimeError("anchor preview terminated")
         first_due_local_dt = occurrences[0]
+        if not isinstance(first_due_local_dt, datetime):
+            error_and_exit([("anchor pattern", "Anchor occurrence has no valid local timestamp.")])
+            raise RuntimeError("anchor preview terminated")
         first_due_utc = first_due_local_dt.astimezone(timezone.utc)
         display_first_due_utc = due_dt if user_provided_due else first_due_utc
         first_date_local = first_due_local_dt.date()

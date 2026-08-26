@@ -21,6 +21,7 @@ import importlib
 import types
 import random
 import time
+fcntl: Any
 try:
     import fcntl  # POSIX advisory lock
 except Exception:
@@ -492,6 +493,7 @@ def _with_business_calendar(fn: Callable[..., Any], business_calendar) -> Callab
 # ==============================================================================
 # SECTION: Time & timezone helpers
 # ==============================================================================
+_zoneinfo: Any
 try:
     import zoneinfo as _zoneinfo
 except Exception:

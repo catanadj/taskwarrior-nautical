@@ -111,6 +111,28 @@ class ModifyWorkflowTests(unittest.TestCase):
             self.assertEqual(first.kind, expected)
             self.assertEqual(first, second)
 
+    def test_section16_route_conformance_matrix_covers_supported_transitions(self) -> None:
+        root = {"status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "abcd1234", "link": 1}
+        cases = {
+            ModifyRouteKind.ORDINARY: ({"status": "pending"}, {"status": "pending", "description": "edit"}),
+            ModifyRouteKind.RECURRING_EDIT: (root, dict(root, due="20260826T090000Z")),
+            ModifyRouteKind.ACTIVATION: ({"status": "pending"}, root),
+            ModifyRouteKind.COMPLETION: (root, dict(root, status="completed")),
+            ModifyRouteKind.IDEMPOTENT_COMPLETION: (dict(root, status="completed"), dict(root, status="completed", modified="20260825T100000Z")),
+            ModifyRouteKind.DELETION: (root, dict(root, status="deleted")),
+            ModifyRouteKind.RECURRENCE_REMOVAL: (root, {"status": "pending"}),
+            ModifyRouteKind.MANUAL_CHAIN_OFF: (root, dict(root, chain="off")),
+            ModifyRouteKind.RESUME: (dict(root, chain="off"), root),
+            ModifyRouteKind.INVALID_IDENTITY_EDIT: (root, dict(root, chainID="ffff0000")),
+        }
+        observed = {classify_modify_transition(transition(old, new)).kind for old, new in cases.values()}
+        self.assertEqual(observed, set(cases))
+        for kind in (ModifyRouteKind.DELETION, ModifyRouteKind.RECURRENCE_REMOVAL, ModifyRouteKind.MANUAL_CHAIN_OFF):
+            decision = terminal_decision_for_route(classify_modify_transition(transition(*cases[kind])))
+            self.assertIsNotNone(decision)
+            assert decision is not None
+            self.assertEqual(decision.durable_state, "disabled")
+
     def test_cross_task_transition_is_rejected(self) -> None:
         old = {"status": "pending", "anchor": "w:mon", "uuid": "11111111-1111-4111-8111-111111111111"}
         new = {"status": "pending", "anchor": "w:mon", "uuid": "22222222-2222-4222-8222-222222222222"}

@@ -784,7 +784,12 @@ def _validate_native_until_anchor_slots_or_fail(
         if astronomy.is_astronomy_error(exc):
             _panel("❌ Invalid astronomy time", [("Required", astronomy.scheduling_error_message(exc))], kind="error")
             sys.exit(1)
-        return
+        _panel(
+            "❌ Invalid expiration window",
+            [("Required", f"Could not validate native until against recurrence slots: {type(exc).__name__}: {exc}")],
+            kind="error",
+        )
+        sys.exit(1)
     if valid:
         return
     _panel(

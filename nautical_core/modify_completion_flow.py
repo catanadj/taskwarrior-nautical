@@ -129,8 +129,9 @@ def _render_lifecycle_result(services: CompletionFinalizeServices, result: Compl
     """Keep presentation failures from suppressing the task response."""
     try:
         services.render_lifecycle_result(result, task)
-    except Exception:
-        pass
+    except Exception as exc:
+        if services.diagnostic is not None:
+            services.diagnostic(f"completion lifecycle presentation failed: {type(exc).__name__}: {exc}")
 
 
 def finalize_completion_modify(
@@ -240,8 +241,9 @@ def finalize_completion_modify(
                     indexes = read_service.build_indexes(chain)
                     chain_by_link, chain_by_short = indexes.by_link, indexes.by_short
                     read_service.replace_chain_cache(chain_id, chain)
-        except Exception:
-            pass
+        except Exception as exc:
+            if services.diagnostic is not None:
+                services.diagnostic(f"completion chain refresh failed: {type(exc).__name__}: {exc}")
 
     state = services.modify_chain_state()
     state.panel_chain_by_link = chain_by_link
@@ -260,13 +262,21 @@ def finalize_completion_modify(
     if chain and services.show_analytics:
         try:
             analytics_advice = services.chain_health_advice(chain, kind, new, style=services.analytics_style)
-        except Exception:
+        except Exception as exc:
             analytics_advice = None
+            if services.diagnostic is not None:
+                services.diagnostic(
+                    f"completion analytics failed: {type(exc).__name__}: {exc}"
+                )
     if chain and services.check_integrity:
         try:
             integrity_warnings = services.chain_integrity_warnings(chain, expected_chain_id=chain_id)
-        except Exception:
+        except Exception as exc:
             integrity_warnings = None
+            if services.diagnostic is not None:
+                services.diagnostic(
+                    f"completion integrity presentation failed: {type(exc).__name__}: {exc}"
+                )
 
     if kind in {"anchor", "anchor_file"}:
         services.render_anchor_completion_feedback(

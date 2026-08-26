@@ -707,6 +707,7 @@ class CompletionFinalizeServices:
     show_analytics: bool
     check_integrity: bool
     analytics_style: str
+    diagnostic: DiagnosticCallback | None = None
 
 
 @dataclass(slots=True)

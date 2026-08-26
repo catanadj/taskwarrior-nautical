@@ -341,6 +341,8 @@ class _ReconcileSnapshot:
         self.scope_filter = str(scope_filter or "").strip() or None
         self.full_audit = bool(full_audit)
         self._rows: tuple[TaskObservation, ...] | None = None
+        self._active: tuple[TaskObservation, ...] | None = None
+        self._candidates: tuple[TaskObservation, ...] | None = None
 
     def _all_rows(self) -> tuple[TaskObservation, ...]:
         if self._rows is None:
@@ -358,19 +360,29 @@ class _ReconcileSnapshot:
         return self._rows
 
     def active_rows(self) -> list[TaskObservation]:
-        return [
-            row for row in self._all_rows()
-            if _observation_text(row, "chainID")
-            and _observation_text(row, "status").lower() not in {"completed", "deleted"}
-        ]
+        if self._active is None:
+            self._active = tuple(
+                row for row in self._all_rows()
+                if _observation_text(row, "chainID")
+                and _observation_text(row, "status").lower() not in {"completed", "deleted"}
+            )
+        return list(self._active)
 
     def candidate_rows(self) -> list[TaskObservation]:
-        return [
-            row for row in self._all_rows()
-            if _observation_text(row, "chainID")
-            and not _observation_text(row, "nextLink")
-            and _observation_text(row, "status").lower() in {"completed", "deleted"}
-        ]
+        if self._candidates is None:
+            self._candidates = tuple(
+                row for row in self._all_rows()
+                if _observation_text(row, "chainID")
+                and not _observation_text(row, "nextLink")
+                and _observation_text(row, "status").lower() in {"completed", "deleted"}
+            )
+        return list(self._candidates)
+
+    def invalidate(self) -> None:
+        """Discard projections after a mutation changes authoritative rows."""
+        self._rows = None
+        self._active = None
+        self._candidates = None
 
 
 class _ReconcileRuntimeState:
@@ -1724,7 +1736,7 @@ def main(
             integrity_application_results = integrity_application.applications
             integrity_application_seconds = time.perf_counter() - application_started
             if integrity_application_results:
-                snapshot._rows = None
+                snapshot.invalidate()
                 candidates = lifecycle_service.candidates()
     except Exception as exc:
         integrity_audit_result = None

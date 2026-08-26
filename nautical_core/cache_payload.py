@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .season_support import SEASON_NAMES
 from .time_windows import parse_random_time_window_spec, validate_time_schedule_slots, validate_time_window_offsets, validate_time_window_slots
 
@@ -68,10 +70,10 @@ def clone_mod_value(value):
     return value
 
 
-def clone_mods(mods):
+def clone_mods(mods) -> dict[str, Any]:
     if not isinstance(mods, dict):
         return {}
-    out = {}
+    out: dict[str, Any] = {}
     for key, value in mods.items():
         if isinstance(value, tuple):
             out[key] = tuple(clone_mod_value(item) for item in value)
@@ -87,7 +89,7 @@ def clone_mods(mods):
 def clone_atom(atom):
     if not isinstance(atom, dict):
         return atom
-    out = {}
+    out: dict[str, Any] = {}
     for key, value in atom.items():
         if key == "mods":
             out["mods"] = clone_mods(value)
@@ -220,10 +222,14 @@ def cache_atomic_replace(src: str, dst: str, *, os_mod) -> None:
         import ctypes
 
         flags = 0x1 | 0x8
-        ok = ctypes.windll.kernel32.MoveFileExW(str(src), str(dst), flags)
+        kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+        move_file = getattr(kernel32, "MoveFileExW", None)
+        if move_file is None:
+            raise OSError("MoveFileExW is unavailable")
+        ok = move_file(str(src), str(dst), flags)
         if ok:
             return
-        err = ctypes.GetLastError()
+        err = getattr(ctypes, "GetLastError", lambda: 0)()
         raise OSError(err, "MoveFileExW failed")
     except Exception:
         raise

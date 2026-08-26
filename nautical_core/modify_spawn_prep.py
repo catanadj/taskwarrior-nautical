@@ -129,7 +129,7 @@ def prepare_spawn_child_payload(
 
     child_short = child_uuid[:8]
     child_obj = DEFAULT_TASK_CODEC.prepare_task_import_mapping(child_obj)
-    child_task = NauticalTask.from_observation(
+    child_domain_task = NauticalTask.from_observation(
         DEFAULT_TASK_CODEC.decode_row(child_obj, source_query="hook child import")
     )
-    return TaskDraft.from_task(child_task), child_uuid, child_short
+    return TaskDraft.from_task(child_domain_task), child_uuid, child_short

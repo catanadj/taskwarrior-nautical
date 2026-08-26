@@ -22,35 +22,35 @@ class RecurrenceActivationError(RuntimeError):
 
 
 class _LifecyclePolicy:
-    def recurrence_setting_changes(self, old: dict, new: dict, *, transition: TaskTransition | None = None) -> list[tuple[str, str, str]]:
+    def recurrence_setting_changes(self, old: TaskPayload, new: TaskPayload, *, transition: TaskTransition | None = None) -> list[tuple[str, str, str]]:
         raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)
 class OrdinaryModifyServices:
-    field_changed: Callable[[dict, dict, str], bool]
+    field_changed: Callable[[TaskPayload, TaskPayload, str], bool]
     strip_quotes: Callable[[str], str]
-    validate_anchor: Callable[[dict, dict, str], None]
+    validate_anchor: Callable[[TaskPayload, TaskPayload, str], None]
     validate_omit: Callable[[str, str, str, str], None]
     reject_conflicting_types: Callable[[str, str, str], None]
-    validate_chain_limits: Callable[[dict], None]
-    preserve_cp_offsets: Callable[[dict, dict, str], TemporalCarryDecision]
-    task_has_recurrence: Callable[[dict], bool]
-    preserve_native_until: Callable[[dict, dict, str], NativeUntilDecision]
-    validate_native_until: Callable[[dict], None]
-    validate_native_until_slots: Callable[[dict], None]
+    validate_chain_limits: Callable[[TaskPayload], None]
+    preserve_cp_offsets: Callable[[TaskPayload, TaskPayload, str], TemporalCarryDecision]
+    task_has_recurrence: Callable[[TaskPayload], bool]
+    preserve_native_until: Callable[[TaskPayload, TaskPayload, str], NativeUntilDecision]
+    validate_native_until: Callable[[TaskPayload], None]
+    validate_native_until_slots: Callable[[TaskPayload], None]
     render_cp_adjustment: Callable[[TemporalCarryDecision], None]
-    render_timing_warning: Callable[[dict, tuple[str, ...]], None]
-    apply_transition: Callable[[dict, dict], RecurrenceTransitionDecision]
+    render_timing_warning: Callable[[TaskPayload, tuple[str, ...]], None]
+    apply_transition: Callable[[TaskPayload, TaskPayload], RecurrenceTransitionDecision]
     short_uuid: Callable[[str], str]
-    recurrence_enabled_rows: Callable[[dict, str], list[tuple[str, str]]]
+    recurrence_enabled_rows: Callable[[TaskPayload, str], list[tuple[str, str]]]
     panel: Callable[..., None]
-    render_disabled_summary: Callable[[dict, dict, ChainCompletionDecision], None]
+    render_disabled_summary: Callable[[TaskPayload, TaskPayload, ChainCompletionDecision], None]
     semantic_diff_value: Callable[[str, str], str]
-    first_recurrence_target: Callable[[dict, str], datetime | None]
+    first_recurrence_target: Callable[[TaskPayload, str], datetime | None]
     fmtlocal: Callable[[datetime], str]
-    render_recurrence_updated: Callable[[list[tuple[str, str, str]], dict], None]
-    print_task: Callable[[dict], None]
+    render_recurrence_updated: Callable[[list[tuple[str, str, str]], TaskPayload], None]
+    print_task: Callable[[TaskPayload], None]
 
 
 def handle_non_completion_modify(

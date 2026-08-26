@@ -226,7 +226,10 @@ def next_included_occurrence(
                 f"Anchor-file omission scan exceeded {max_file_skips} occurrences; "
                 "narrow the anchor_file or omit rule."
             )
-        file_cursor = file_occurrence.local_datetime
+        file_datetime = file_occurrence.local_datetime
+        if file_datetime is None:
+            raise ValueError("anchor-file occurrence has no local datetime")
+        file_cursor = file_datetime
         file_inclusive = False
         file_occurrence = _next_anchor_file_occurrence(
             anchor_file_str,
@@ -251,7 +254,7 @@ def next_included_occurrence(
     selected = expr_occurrence
     if selected is None:
         selected = file_occurrence
-    elif file_occurrence is not None and file_occurrence.local_datetime is not None:
+    elif expr_local is not None and file_occurrence is not None and file_occurrence.local_datetime is not None:
         comparison = compare_datetimes(expr_local, file_occurrence.local_datetime)
         if comparison > 0 or (comparison == 0 and file_occurrence.description):
             selected = file_occurrence
@@ -330,7 +333,7 @@ def next_occurrence_event_local(
     selected = expr_occurrence
     if selected is None:
         selected = file_occurrence
-    elif file_occurrence is not None and file_occurrence.local_datetime is not None:
+    elif expr_local is not None and file_occurrence is not None and file_occurrence.local_datetime is not None:
         comparison = compare_datetimes(expr_local, file_occurrence.local_datetime)
         if comparison > 0 or (comparison == 0 and file_occurrence.description):
             selected = file_occurrence

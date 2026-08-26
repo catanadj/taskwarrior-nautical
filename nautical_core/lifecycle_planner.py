@@ -235,7 +235,7 @@ class PrecomputedRecurrencePlanningService:
         event: LifecycleEvent,
         candidate: RecurrenceCandidate,
         next_link: int,
-    ) -> Mapping[str, Any] | None:
+    ) -> TaskDraft | None:
         return self.child_service.build_child(snapshot, event, candidate, next_link)
 
 

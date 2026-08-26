@@ -19,6 +19,7 @@ from .task_models import (
     TaskTimestamp,
     TaskUUID,
     TemporalState,
+    TaskPayload,
 )
 
 
@@ -26,7 +27,7 @@ from .task_models import (
 # orchestration boundary still needs to distinguish injected callables from
 # task data and result values.  ``Any`` remains the payload type because hook
 # modules support Taskwarrior's heterogeneous JSON fields.
-TaskRow: TypeAlias = dict[str, Any]
+TaskRow: TypeAlias = TaskPayload
 ShortUuidCallback: TypeAlias = Callable[[Any], str]
 
 

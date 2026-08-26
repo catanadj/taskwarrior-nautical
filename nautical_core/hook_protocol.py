@@ -5,6 +5,7 @@ import sys
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
+    from .task_codec import TaskCodec
     from .task_models import TaskObservation
 
 class _ProtocolCodecError(Exception):
@@ -12,6 +13,7 @@ class _ProtocolCodecError(Exception):
 
 
 TaskCodecError: type[Exception]
+DEFAULT_TASK_CODEC: TaskCodec | None
 
 
 try:

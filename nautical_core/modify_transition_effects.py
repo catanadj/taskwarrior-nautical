@@ -65,7 +65,7 @@ def reject_native_until_carry(
     rows = [("Target", target_label), ("Required", str(exc))]
     if carry:
         rows.insert(1, ("Carry", carry))
-    host._panel("❌ Invalid expiration window", rows, kind="error")
+    host._module("modify_ui_effects").panel(host, "❌ Invalid expiration window", rows, kind="error")
     host.sys.exit(1)
 
 

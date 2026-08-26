@@ -18,7 +18,9 @@ def anchor_mode(host: Any, old: Any, new: Any) -> str:
     aliases = {"all": "all", "skip": "skip", "flex": "flex"}
     normalized = aliases.get(mode)
     if normalized is None:
-        host._panel("⚠ Anchor mode", [("Warning", f"Unknown anchor mode {raw!r}; using skip.")], kind="warning")
+        host._module("modify_ui_effects").panel(
+            host, "⚠ Anchor mode", [("Warning", f"Unknown anchor mode {raw!r}; using skip.")], kind="warning"
+        )
         normalized = "skip"
         new["anchor_mode"] = normalized
     elif new.get("anchor_mode"):
@@ -30,7 +32,9 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
     try:
         _, warns = host.core.lint_anchor_expr(anchor_expr)
         if warns:
-            host._panel("ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note")
+            host._module("modify_ui_effects").panel(
+                host, "ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note"
+            )
         mode = anchor_mode(host, old, new)
         due = host._module("modify_datetime_effects").safe_dt(host, new.get("due") or old.get("due"))
         if host.core.ENABLE_ANCHOR_CACHE:
@@ -128,7 +132,7 @@ def validate_native_until(host: Any, task: dict) -> None:
         safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
         validate_after_target=add_validation.validate_native_until_after_target,
         format_local=host.core.fmt_dt_local,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
         fail=host._fail_and_exit,
         abort=host.sys.exit,
     )
@@ -152,7 +156,7 @@ def validate_native_until_slots(host: Any, task: dict) -> None:
         format_local=host.core.fmt_dt_local,
         astronomy_is_error=astronomy.is_astronomy_error,
         astronomy_error_message=astronomy.scheduling_error_message,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
         abort=host.sys.exit,
     )
 

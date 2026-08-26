@@ -10,9 +10,10 @@ def _test_override(host: Any, name: str):
     values = getattr(host, "_values", None)
     if values is None and hasattr(host, "__dict__"):
         values = vars(host)
-    override = values.get(name) if isinstance(values, dict) else None
+    values_map = values if isinstance(values, dict) else {}
+    override = values_map.get(name)
     is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
-        getattr(getattr(override, "__code__", None), "co_filename", "") == values.get("__file__")
+        getattr(getattr(override, "__code__", None), "co_filename", "") == values_map.get("__file__")
     )
     return override if callable(override) and not is_root_delegate else None
 

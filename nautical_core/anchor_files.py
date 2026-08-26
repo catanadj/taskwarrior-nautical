@@ -5,7 +5,7 @@ import re
 from bisect import bisect_right
 from datetime import date, datetime, timedelta
 from datetime import timezone
-from typing import Callable
+from typing import Any, Callable
 
 from .business_calendar import (
     DEFAULT_BUSINESS_CALENDAR,
@@ -389,12 +389,13 @@ def _load_anchor_file_occurrence_records(
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
     out: list[tuple[date, tuple[int, int], str]] = []
     seen: dict[tuple[date, tuple[int, int]], int] = {}
+    times: list[tuple[Any, ...]]
     for source in resolution.sources:
         dates, _descriptions, source_time = _load_anchor_source_data(source, business_calendar)
         if isinstance(source_time, dict) and source_time.get("time_random"):
             if context is None:
                 raise ValueError("anchor_file random time windows require recurrence context with chain ID.")
-            times = None
+            times = []
         elif isinstance(source_time, (list, tuple)) and source_time and all(
             isinstance(item, tuple) and len(item) == 3 for item in source_time
         ):

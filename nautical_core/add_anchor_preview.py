@@ -76,6 +76,7 @@ def anchor_preview_prepare_dnf(
     dnf, err = validate_anchor_syntax_strict(anchor_str)
     if dnf is None:
         error_and_exit([("Invalid anchor", err or "anchor syntax error")])
+    assert dnf is not None
 
     mode, warn_msg = validate_anchor_mode(task.get("anchor_mode"))
     task["anchor_mode"] = mode

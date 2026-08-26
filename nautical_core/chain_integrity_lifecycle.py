@@ -669,9 +669,12 @@ def _plan_recovery_decision_unscoped(
             )
         child = lifecycle_plan.child_dict()
     except Exception as exc:
-        underlying = exc
-        while getattr(underlying, "__cause__", None) is not None:
-            underlying = underlying.__cause__
+        underlying: BaseException = exc
+        while True:
+            cause = underlying.__cause__
+            if cause is None:
+                break
+            underlying = cause
         carry_conflict = (
             isinstance(underlying, native_until.NativeUntilCarryError)
             and underlying.code == native_until.CARRY_CONFLICT

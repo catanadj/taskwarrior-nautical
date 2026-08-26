@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from .chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
 from .integration_models import (
@@ -213,7 +213,7 @@ class ChainSnapshotService:
     @staticmethod
     def _validate_rows(
         request: IntegritySnapshotRequest,
-        snapshot: AuthoritativeTaskSnapshot,
+        snapshot: Any,
     ) -> str:
         """Reject impossible identity evidence before graph construction.
 

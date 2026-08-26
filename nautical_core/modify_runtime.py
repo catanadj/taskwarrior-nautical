@@ -26,6 +26,7 @@ from nautical_core.modify_models import (
     TimelineLinesCallback,
     WaitScheduleRowsCallback,
 )
+from nautical_core.task_models import TaskPayload
 
 
 @dataclass(slots=True)
@@ -193,7 +194,7 @@ class ModifyRuntimeServices:
     append_next_wait_sched_rows: WaitScheduleRowsCallback
     timeline_lines: TimelineLinesCallback
     show_timeline_gaps: bool
-    root_uuid_from: Callable[[dict[str, Any]], str]
+    root_uuid_from: Callable[[TaskPayload], str]
     short: ShortUuidCallback
     format_next_anchor_rows: FeedbackRowsFormatter
     format_next_cp_rows: FeedbackRowsFormatter
@@ -216,7 +217,7 @@ def _timeline_lines_adapter(
 ) -> TimelineLinesCallback:
     def timeline_lines(
         kind: str,
-        task: dict[str, Any],
+        task: TaskPayload,
         child_due: Any,
         child_short: str,
         dnf: Any,

@@ -7,6 +7,8 @@ from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_m
 from .timeutil import compare_datetimes
 from .task_models import TaskObservation, TaskPayload
 
+TimelineItem = tuple[object, Any, dict[str, Any], str]
+
 
 def _timeline_seed_base(task: TaskPayload) -> str:
     """Return the stable recurrence identity used by timeline projections."""
@@ -105,8 +107,8 @@ def _timeline_initial_items(
     core: Any,
     collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
-) -> list[tuple[int, Any, dict[str, Any], str]]:
-    items: list[tuple[int, Any, dict[str, Any], str]] = []
+) -> list[TimelineItem]:
+    items: list[TimelineItem] = []
     prevs = collect_prev_two(task)
     prev_count = len(prevs)
     for idx, observation in enumerate(prevs):
@@ -222,6 +224,7 @@ def _timeline_future_anchor_items(
                 fallback_hhmm=fallback_hhmm,
             ),
         )
+    assert provider is not None
     after_local = nxt_local
     iterations = 0
     actual_future = 0
@@ -399,6 +402,7 @@ def _timeline_omitted_before_next_anchor_items(
             fallback_hhmm=fallback_hhmm,
         ),
     )
+    assert provider is not None
     iterations = 0
     iteration_limit_reached = False
     while True:
@@ -535,7 +539,7 @@ def _timeline_with_gap(
     base_line: str,
     *,
     idx: int,
-    items: list[tuple[int, Any, dict[str, Any], str]],
+    items: list[TimelineItem],
     show_gaps: bool,
     kind: str,
     round_anchor_gaps: bool,
@@ -614,7 +618,7 @@ def anchor_file_timeline_lines(
         "anchor",
         future_style_for_chain=future_style_for_chain,
     )
-    items = _timeline_initial_items(
+    items: list[TimelineItem] = _timeline_initial_items(
         task,
         cur_no,
         nxt_no,
@@ -740,7 +744,7 @@ def timeline_lines(
         kind,
         future_style_for_chain=future_style_for_chain,
     )
-    items = _timeline_initial_items(
+    items: list[TimelineItem] = _timeline_initial_items(
         task,
         cur_no,
         nxt_no,

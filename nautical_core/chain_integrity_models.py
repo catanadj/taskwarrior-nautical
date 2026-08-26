@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Mapping, TypeAlias, cast
 
 if TYPE_CHECKING:
     from .task_models import TaskObservation
@@ -241,7 +241,7 @@ class ChainNode:
                 return _thaw(value)
         return default
 
-    def field_state(self, name: str) -> object | None:
+    def field_state(self, name: str) -> Any | None:
         """Return the source observation's typed field state when available."""
         if self.observation is not None:
             return self.observation.field(name)
@@ -501,7 +501,7 @@ class IntegrityOperation:
             payload = fields
         return cls(
             str(value.get("operation_id") or ""),
-            value.get("kind"),
+            cast(RepairOperationKind, value.get("kind")),
             str(value.get("chain_id") or ""),
             str(value.get("target_uuid") or ""),
             _freeze_pairs(value.get("guard") if isinstance(value.get("guard"), Mapping) else {}),
@@ -573,7 +573,7 @@ class IntegrityRepairPlan:
             str(value.get("plan_id") or ""),
             str(value.get("snapshot_id") or ""),
             str(value.get("chain_id") or ""),
-            value.get("safety"),
+            cast(RepairSafety, value.get("safety")),
             str(value.get("reason_code") or ""),
             str(value.get("summary") or ""),
             operations,

@@ -1714,6 +1714,14 @@ def main(
     integrity_application_results: tuple[Any, ...] = ()
     integrity_seconds = 0.0
     integrity_application_seconds = 0.0
+    stage_seconds: dict[str, float] = {
+        "export": 0.0,
+        "hydration": 0.0,
+        "planning": 0.0,
+        "mutation": 0.0,
+        "verification": 0.0,
+        "presentation": 0.0,
+    }
     try:
         if snapshot._rows is not None:
             integrity_started = time.perf_counter()
@@ -1832,14 +1840,17 @@ def main(
     processed_slots: set[tuple[str, int]] = set()
     ambiguous_slots = IntegrityRecoveryService.ambiguous_candidate_slots(candidates)
     if configuration_status == "valid":
+        hydration_started = time.perf_counter()
         try:
             lifecycle_service.preflight_wave(candidates)
         except Exception as exc:
             configuration_status = "unavailable"
             configuration_drift_reason = f"wave child-slot evidence unavailable: {type(exc).__name__}: {exc}"
+        stage_seconds["hydration"] += time.perf_counter() - hydration_started
     wave_results: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
     if args.apply and configuration_status == "valid" and taskdata is not None:
         wave_plans: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
+        planning_started = time.perf_counter()
         for parent_observation in candidates:
             parent = parent_observation.to_mapping()
             parent_uuid = str(parent.get("uuid") or "").strip().lower()
@@ -1863,7 +1874,9 @@ def main(
                 continue
             if len(planned_outcomes) == 1 and planned_outcomes[0][0].action == "spawn":
                 wave_plans[parent_uuid] = planned_outcomes[0]
+        stage_seconds["planning"] += time.perf_counter() - planning_started
         if wave_plans:
+            mutation_started = time.perf_counter()
             try:
                 wave_result = _execute_reconcile_lifecycle_wave(
                     hook,
@@ -1879,7 +1892,9 @@ def main(
             except Exception as exc:
                 if os.environ.get("NAUTICAL_DIAG") == "1":
                     print(f"[nautical] reconcile lifecycle wave deferred: {type(exc).__name__}: {exc}", file=sys.stderr)
+            stage_seconds["mutation"] += time.perf_counter() - mutation_started
     for parent_observation in candidates:
+        planning_started = time.perf_counter()
         parent = parent_observation.to_mapping()
         if configuration_status == "valid":
             configuration_status, configuration_drift_reason = _configuration_state(hook)
@@ -1897,6 +1912,7 @@ def main(
         elif parent_slot in ambiguous_slots:
             outcomes = [(_recovery_error(parent, ambiguous_slots[parent_slot]), "")]
         else:
+            mutation_started = time.perf_counter() if args.apply else 0.0
             try:
                 outcomes = _reconcile_candidate(
                     args.task_bin,
@@ -1912,6 +1928,9 @@ def main(
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__
                 outcomes = [(_recovery_error(parent, reason), "")]
+            if args.apply:
+                stage_seconds["mutation"] += time.perf_counter() - mutation_started
+        stage_seconds["planning"] += time.perf_counter() - planning_started
         outcome_groups.append(outcomes)
         if configuration_status == "valid":
             configuration_drift_reason = next(
@@ -1931,6 +1950,7 @@ def main(
                     )
                     else "drifted"
                 )
+        presentation_started = time.perf_counter()
         rendered: list[tuple[lifecycle.LifecycleRecoveryDecision, dict[str, Any], str]] = []
         for plan, applied_short in outcomes:
             plan_parent = plan.parent.to_mapping()
@@ -1960,6 +1980,7 @@ def main(
                     _print_plan(plan, evidence, applied_short=applied_short)
             else:
                 _print_recovery_group(rendered)
+        stage_seconds["presentation"] += time.perf_counter() - presentation_started
 
     expiration_hops = sum(
         1
@@ -2062,6 +2083,7 @@ def main(
         "integrity_audit": None if integrity_audit_result is None else integrity_components(integrity_audit_result),
         "integrity_seconds": round(integrity_seconds, 6),
         "integrity_application_seconds": round(integrity_application_seconds, 6),
+        "stage_seconds": {key: round(value, 6) for key, value in stage_seconds.items()},
         "export_calls": _EXPORT_STATS["calls"],
         "export_rows": _EXPORT_STATS["rows"],
         "export_seconds": round(_EXPORT_STATS["seconds"], 4),

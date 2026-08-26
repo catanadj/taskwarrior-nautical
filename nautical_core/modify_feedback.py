@@ -11,6 +11,10 @@ from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
 
 
+def _timestamp(task: TaskPayload, field: str):
+    return TaskView.from_mapping(task).timestamp(field)
+
+
 def append_next_wait_sched_rows(
     rows: list[tuple[str, str]],
     next_task: TaskView,
@@ -115,7 +119,7 @@ def render_explicit_timing_order_warning(
         return
 
     def parsed(field: str) -> Any:
-        value = new.timestamp(field)
+        value = _timestamp(new, field)
         return value.value if value is not None else None
 
     due = parsed("due")
@@ -256,9 +260,9 @@ def render_recurrence_updated_panel(
 
     if any(field == "until" for field, _old, _new in changes):
         try:
-            target_field = "due" if new.timestamp("due") else "scheduled" if new.timestamp("scheduled") else ""
-            until_value = new.timestamp("until")
-            target_value = new.timestamp(target_field) if target_field else None
+            target_field = "due" if _timestamp(new, "due") else "scheduled" if _timestamp(new, "scheduled") else ""
+            until_value = _timestamp(new, "until")
+            target_value = _timestamp(new, target_field) if target_field else None
             until_dt = until_value.value if until_value else None
             target_dt = target_value.value if target_value else None
             carry = describe_native_until_carry(until_dt, target_dt, to_local=to_local)
@@ -269,7 +273,7 @@ def render_recurrence_updated_panel(
 
     if any(field in {"chainMax", "chainUntil"} for field, _old, _new in changes):
         max_link = coerce_int(new.get("chainMax"), 0)
-        deadline_value = new.timestamp("chainUntil")
+        deadline_value = _timestamp(new, "chainUntil")
         deadline = deadline_value.value if deadline_value else None
         if max_link:
             rows.append(("Final link", f"#{max_link}"))
@@ -504,8 +508,8 @@ def format_line_preview(
     lead = f"#{link_no} ✓"
     if minimal:
         return " ".join((lead, f"next {next_glyph}", due_local)).strip()
-    due_value = task.timestamp("due")
-    end_value = task.timestamp("end")
+    due_value = _timestamp(task, "due")
+    end_value = _timestamp(task, "end")
     cur_due = due_value.value if due_value is not None else None
     cur_end = end_value.value if end_value is not None else None
     delta_text = core.strip_rich_markup(on_time_delta(cur_due, cur_end) or "").strip()
@@ -574,7 +578,7 @@ def _pretty_basis_anchor(meta: Mapping[str, Any], task: TaskPayload, *, fmt_dt_l
     basis = meta.get("basis")
     missed = int(meta.get("missed_count") or 0)
     target_field = "scheduled" if meta.get("target_field") == "scheduled" else "due"
-    typed_due = task.timestamp("due") or task.timestamp("scheduled")
+    typed_due = _timestamp(task, "due") or _timestamp(task, "scheduled")
     due0 = typed_due.value if typed_due is not None else None
     due_s = fmt_dt_local(due0) if due0 else f"(no {target_field})"
     if mode == "skip":

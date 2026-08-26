@@ -76,6 +76,11 @@ def chain_snapshot(host: Any, chain_id: str, base_no: int, next_no: int, reposit
     snapshot = repository.chain_snapshot(chain_id)
     if isinstance(snapshot, Found):
         value = getattr(snapshot.value, "rows", snapshot.value)
+        if not isinstance(value, (list, tuple)):
+            return models.CompletionChainSnapshot(
+                mode=_snapshot_mode(host), rows=[], loaded=False,
+                chain_id=chain_id, error="typed chain snapshot rows are unavailable"
+            )
         task_models = host._module("task_models")
         rows = [
             row if hasattr(row, "to_mapping") else task_models.TaskObservation.from_mapping(

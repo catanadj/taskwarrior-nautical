@@ -166,9 +166,13 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
         raise ValueError("A compiled schedule requires an anchor, anchor_file, or cp provider.")
     omit_dnf = None
     if spec.omit:
+        def validate_anchor_for_omit(value):
+            if isinstance(value, str):
+                return parse_anchor_expr_to_dnf_cached(value)
+            return value
         omit_dnf = validate_omit_expr_strict(
             spec.omit,
-            validate_anchor_expr_cached=parse_anchor_expr_to_dnf_cached,
+            validate_anchor_expr_cached=validate_anchor_for_omit,
             resolve_omit_presets=resolve_omit_presets,
         )
     time_modifiers: list[Any] = []

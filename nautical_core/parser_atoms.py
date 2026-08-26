@@ -67,8 +67,8 @@ def parse_atom_mods(
         parts = split_csv_tokens(v)
         if not parts:
             return None
-        out = []
-        seen = set()
+        out: list[Any] = []
+        seen: set[Any] = set()
         for p in parts:
             symbolic = str(p or "").strip().lower()
             if astronomy.is_event_name(symbolic):

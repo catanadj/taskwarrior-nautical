@@ -79,12 +79,17 @@ class IntegrityOutboxEnvelope:
         plan_value = value.get("plan")
         if not isinstance(plan_value, dict):
             raise ValueError("integrity envelope requires a plan object")
+        try:
+            stage = ExecutionStage(str(value.get("stage", ExecutionStage.PLANNED.value)))
+            state = OutboxProcessingState(str(value.get("state", OutboxProcessingState.READY.value)))
+        except ValueError as exc:
+            raise ValueError("integrity envelope has invalid stage or state") from exc
         envelope = cls(
             IntegrityRepairPlan.from_dict(plan_value),
             str(value.get("configuration_fingerprint") or ""),
             str(value.get("schedule_fingerprint") or ""),
-            value.get("stage", ExecutionStage.PLANNED.value),
-            value.get("state", OutboxProcessingState.READY.value),
+            stage,
+            state,
         )
         if str(value.get("intent_id") or "") != envelope.intent_id:
             raise ValueError("integrity envelope intent ID does not match plan")

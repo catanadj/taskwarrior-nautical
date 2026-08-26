@@ -398,7 +398,8 @@ def _check_managed_runtime(
             f"Managed Nautical runtime is active: {release_id}.",
             details=status,
         )
-        manifest = status.get("manifest") if isinstance(status.get("manifest"), dict) else {}
+        manifest_value = status.get("manifest")
+        manifest: dict[str, Any] = manifest_value if isinstance(manifest_value, dict) else {}
         runtime_root = Path(str(status.get("runtime_root") or hooks_dir.parent)).expanduser()
         current_root = runtime_root / "current"
         provenance_errors: list[str] = []
@@ -625,7 +626,8 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
 def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
     """Report the active seasonal backend and preflight astronomical data."""
     snapshot = effective_config_snapshot()
-    effective = snapshot.get("values") if isinstance(snapshot.get("values"), dict) else {}
+    effective_value = snapshot.get("values")
+    effective: dict[str, Any] = effective_value if isinstance(effective_value, dict) else {}
     mode = str((data or {}).get("season_mode", effective.get("season_mode", "fixed")) or "fixed").strip().lower()
     hemisphere = str(
         (data or {}).get("season_hemisphere", effective.get("season_hemisphere", "north")) or "north"
@@ -687,7 +689,8 @@ def _check_astronomy(
 ) -> None:
     """Check optional astronomy setup without touching Taskwarrior state."""
     snapshot = effective_config_snapshot()
-    effective = snapshot.get("values") if isinstance(snapshot.get("values"), dict) else {}
+    effective_value = snapshot.get("values")
+    effective: dict[str, Any] = effective_value if isinstance(effective_value, dict) else {}
     if isinstance(data, dict) and data:
         config = data.get("astronomy")
         effective_timezone = data.get("tz", effective.get("tz", "UTC"))

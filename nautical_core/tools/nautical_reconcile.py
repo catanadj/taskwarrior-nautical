@@ -962,7 +962,10 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repos
         coverage=SnapshotCoverage.CHAIN,
     )
     if not isinstance(snapshot_result, ChainSnapshot):
-        raise RuntimeError(f"reconcile lifecycle snapshot rejected: {snapshot_result.reason}")
+        raise RuntimeError(
+            f"reconcile lifecycle snapshot rejected: "
+            f"{snapshot_result.evidence.detail}"
+        )
     snapshot = snapshot_result
 
     class _NoopProvider:
@@ -1001,7 +1004,7 @@ def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:
             return row
         if (
             str(value("chainID") or "").strip() == lifecycle_plan.identity.chain_id
-            and lifecycle.int_or_default(value("link"), None) == lifecycle_plan.identity.target_link
+            and lifecycle.int_or_default(value("link"), 0) == lifecycle_plan.identity.target_link
             and str(value("prevLink") or "").strip().lower() == parent_short
         ):
             return row
@@ -1026,7 +1029,10 @@ def _lifecycle_plan_with_resolved_child_uuid(
         return recon_plan
     child = lifecycle_plan.child_dict()
     existing = recon_plan.child_observation or _find_positional_child(lifecycle_plan)
-    resolved_uuid = str(existing.field("uuid").value.value or "").strip() if existing is not None else ""
+    resolved_uuid = (
+        str(getattr(existing.field("uuid").value, "value", existing.field("uuid").value) or "").strip()
+        if existing is not None else ""
+    )
     if not resolved_uuid:
         resolved_uuid = _stable_child_uuid(hook, recon_plan.parent.to_mapping(), child)
     if not resolved_uuid or resolved_uuid == str(child.get("uuid") or "").strip():

@@ -1,0 +1,112 @@
+site_name: Taskwarrior Nautical
+site_description: Taskwarrior recurrence, lifecycle, and recovery documentation
+site_url: https://catanadj.github.io/taskwarrior-nautical/
+repo_url: https://github.com/catanadj/taskwarrior-nautical
+repo_name: catanadj/taskwarrior-nautical
+edit_uri: edit/main/docs/
+copyright: Taskwarrior Nautical documentation
+
+theme:
+  name: material
+  language: en
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Use light mode
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - First Recurrence: getting-started/first-recurrence.md
+      - Mental Model: getting-started/mental-model.md
+  - Guides:
+      - Completion Periods: guides/completion-periods.md
+      - Calendar Anchors: guides/calendar-anchors.md
+      - Multiple Times: guides/multiple-times.md
+      - Limits and Expiration: guides/limits-and-expiration.md
+      - Recipes: guides/recipes.md
+  - Advanced:
+      - Grammar and Composition: advanced/grammar-and-composition.md
+      - Deterministic Random Schedules: advanced/random-schedules.md
+      - Business Calendars: advanced/business-calendars.md
+      - Files and Omissions: advanced/files-and-omissions.md
+      - Seasonal Selection: advanced/seasons.md
+      - Astronomy: advanced/astronomy.md
+  - Tools:
+      - Query API: tools/query-api.md
+      - Navigator: tools/navigator.md
+      - Doctor: tools/doctor.md
+      - Reconcile: tools/reconcile.md
+      - Lifecycle Outbox: tools/lifecycle-outbox.md
+  - Operations:
+      - Lifecycle and Chain Integrity: operations/lifecycle-and-integrity.md
+      - Sync and Recovery: operations/sync-and-recovery.md
+      - Diagnostics and Performance: operations/diagnostics-and-performance.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Reference:
+      - Grammar: reference/grammar.md
+      - Taskwarrior UDAs: reference/udas.md
+      - Configuration: reference/configuration.md
+      - Environment and Files: reference/environment-and-files.md
+      - Command Status and Exit Codes: reference/command-status.md
+  - Project:
+      - Documentation Development: contributing-docs.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/catanadj/taskwarrior-nautical
+      name: Taskwarrior Nautical on GitHub

@@ -57,13 +57,15 @@ task add "Anniversary" anchor:"y:04-12"
 
 That is enough to begin. `cp` is for “after this long”; `anchor` is for “on
 these dates.” Together they are a small doorway into routines as precise and
-individual as real life requires. The manual holds the deeper grammar and
-ready-to-adapt examples whenever you need them.
+individual as real life requires. The documentation site holds the deeper
+grammar and ready-to-adapt examples whenever you need them.
 
-## Learn More
+## Documentation
 
-- [Systems Manual PDF](./Taskwarrior-Nautical-v6-Systems-Manual.pdf): setup, configuration, grammar, examples, and recovery.
-- [Cheatsheet PDF](./Taskwarrior-Nautical-v6-CheatSheet.pdf): quick anchor and period reference.
+- [Taskwarrior Nautical documentation](https://catanadj.github.io/taskwarrior-nautical/)
+- [Getting started](https://catanadj.github.io/taskwarrior-nautical/getting-started/installation/)
+- [Grammar reference](https://catanadj.github.io/taskwarrior-nautical/reference/grammar/)
+- [Recovery workflow](https://catanadj.github.io/taskwarrior-nautical/operations/sync-and-recovery/)
 - [Releases](https://github.com/catanadj/taskwarrior-nautical/releases)
 - [Issues](https://github.com/catanadj/taskwarrior-nautical/issues)
 

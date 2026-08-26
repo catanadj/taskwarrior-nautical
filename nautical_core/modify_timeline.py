@@ -10,7 +10,7 @@ from .task_models import TaskObservation, TaskPayload
 TimelineItem = tuple[object, Any, TaskPayload, str]
 
 
-def _build_slot_datetime(day, hhmm):
+def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
     return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
 
@@ -20,8 +20,8 @@ def _timeline_seed_base(task: TaskPayload) -> str:
 
 
 def _timeline_omit_label(
-    omit_dnf,
-    omit_date,
+    omit_dnf: Any,
+    omit_date: Any,
     *,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
 ) -> str | None:
@@ -201,7 +201,7 @@ def _timeline_future_anchor_items(
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     next_occurrence_after_local_dt: Callable[..., Any],
     scheduler_service: Any | None = None,
-    omit_dnf,
+    omit_dnf: Any,
     omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
@@ -334,7 +334,7 @@ def _timeline_omitted_before_next_anchor_items(
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     next_occurrence_after_local_dt: Callable[..., Any],
     scheduler_service: Any | None = None,
-    omit_dnf,
+    omit_dnf: Any,
     omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
@@ -735,7 +735,7 @@ def timeline_lines(
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     format_gap: Callable[[Any, Any, str, bool], str],
-    omit_dnf=None,
+    omit_dnf: Any = None,
     omit_expr_fires_on_date: Callable[..., bool] | None = None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None = None,
     evaluator: Any | None = None,

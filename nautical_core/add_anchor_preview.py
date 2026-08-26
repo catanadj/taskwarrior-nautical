@@ -1091,7 +1091,7 @@ def handle_anchor_preview_on_add(
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
     validate_native_until_after_target: Callable[[TaskPayload, datetime, str], None],
-    validate_native_until_anchor_slots: Callable[[dict[str, Any], datetime, Any, str, tuple[int, int]], None],
+    validate_native_until_anchor_slots: Callable[[TaskPayload, datetime, Any, str, tuple[int, int]], None],
     append_first_expiration_row: Callable[[list[tuple[str, str]], TaskPayload, datetime, str], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
@@ -1444,7 +1444,11 @@ def handle_anchor_preview_on_add(
         presentation_terminal = getattr(all_occurrences, "terminal", None)
         if until_dt:
             until_local = core.to_local(until_dt)
-            limited = [dt for dt in all_occurrences if _event_on_or_before(dt, until_local)]
+            limited: list[datetime] = []
+            for event in all_occurrences:
+                event_dt = _event_datetime(event)
+                if event_dt is not None and _event_on_or_before(event_dt, until_local):
+                    limited.append(event_dt)
             exact_until_count = max(0, len(limited) - 1)
             if limited:
                 final_until_dt = limited[-1].astimezone(timezone.utc)

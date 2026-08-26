@@ -15,7 +15,7 @@ import json
 import math
 import re
 from types import MappingProxyType
-from typing import Any, Mapping, MutableMapping, TypeAlias
+from typing import Any, Mapping, MutableMapping, TypeAlias, cast
 from uuid import UUID
 
 try:
@@ -526,7 +526,14 @@ class NauticalTask:
         if errors:
             raise ValueError("; ".join(f"{issue.field}: {issue.message}" for issue in errors))
         state = ChainState.ENABLED if str(observation.field("chain").value or "on").lower() == "on" else ChainState.DISABLED
-        identity = ChainIdentity(uuid, chain_id, link, observation.field("prevLink").value, observation.field("nextLink").value, state)
+        identity = ChainIdentity(
+            cast(TaskUUID, uuid),
+            cast(ChainID, chain_id),
+            cast(TaskLink, link),
+            cast(TaskUUID | ShortUUIDRef | None, observation.field("prevLink").value),
+            cast(TaskUUID | ShortUUIDRef | None, observation.field("nextLink").value),
+            state,
+        )
         temporal_values: dict[str, TaskTimestamp | None] = {}
         presence: dict[str, FieldPresence] = {}
         for name in ("due", "scheduled", "wait", "until", "entry", "modified", "end"):
@@ -551,7 +558,7 @@ class NauticalTask:
         from .recurrence_spec import RecurrenceSpec
 
         spec = RecurrenceSpec(
-            context=RecurrenceContext(chain_id=chain_id.value),
+            context=RecurrenceContext(chain_id=cast(ChainID, chain_id).value),
             anchor=str(anchor or ""), anchor_file=str(anchor_file or ""),
             omit=str(observation.field("omit").value or ""),
             omit_file=str(observation.field("omit_file").value or ""), cp=str(cp or ""),
@@ -565,10 +572,10 @@ class NauticalTask:
             str(observation.field("omit").value or ""),
             str(observation.field("omit_file").value or ""),
         )
-        return observation.cache_projection(
+        return cast(NauticalTask, observation.cache_projection(
             "nautical_task",
-            cls(observation, identity, status, temporal, recurrence, str(observation.field("description").value or "")),
-        )
+            cls(observation, identity, cast(TaskStatus, status), temporal, recurrence, str(observation.field("description").value or "")),
+        ))
 
 
 @dataclass(frozen=True, slots=True)

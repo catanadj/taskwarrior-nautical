@@ -74,7 +74,9 @@ def span_fields(host: Any, chain_id: str, chain, *, stop_at=None, stopped_by_del
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
         export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
         parse_datetime=host._dtparse,
-        human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
+        human_delta=lambda start, end, prefer=True, *, prefer_months=None: host._module("modify_format_effects").human_delta(
+            host, start, end, prefer if prefer_months is None else prefer_months
+        ),
     )
 
 
@@ -120,7 +122,9 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             stopped_by_delete=stopped_by_delete,
             export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
             parse_datetime=host._dtparse,
-        human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
+            human_delta=lambda start, end, prefer=True, *, prefer_months=None: host._module("modify_format_effects").human_delta(
+                host, start, end, prefer if prefer_months is None else prefer_months
+            ),
         )
 
     def kind_rows(rows, kind: str, task: Any) -> None:
@@ -139,7 +143,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             chain,
             clock,
             lateness_stats=lambda value: lateness_stats(host, value),
-            format_seconds_delta=lambda value: _fmt_secs_delta(host, value),
+            format_seconds_delta=lambda _now, value: _fmt_secs_delta(host, value),
         )
 
     def limits_row(rows, task) -> None:
@@ -164,7 +168,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         span_fields=span_fields,
         stats_rows=stats_rows,
         limits_row=limits_row,
-        last_n_timeline_rows=lambda chain: last_n_timeline(host, chain),
+        last_n_timeline_rows=lambda chain, n=6: last_n_timeline(host, chain, n),
         format_rows=host._module("modify_feedback").format_chain_summary_rows,
         coerce_int=host.core.coerce_int,
         format_local=host.core.fmt_dt_local,

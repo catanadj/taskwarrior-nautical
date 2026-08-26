@@ -33787,9 +33787,9 @@ def test_position_selection_public_period_scopes_hooks():
     expect(meta.get("basis") == "after_end", f"unexpected completion metadata: {meta}")
     expect(child_dnf[0][0].get("scope") == "year", "completion lost yearly scope")
 
-    saved_collect = getattr(mod, "_collect_prev_two", None)
-    if saved_collect is not None:
-        mod._collect_prev_two = lambda _task: []
+    read_effects = mod._module("modify_read_effects")
+    saved_collect = read_effects.collect_prev_two
+    read_effects.collect_prev_two = lambda _host, _task, _chain=None: []
     try:
         lines = _call_with_supported_kwargs(
             mod._timeline_lines,
@@ -33810,8 +33810,7 @@ def test_position_selection_public_period_scopes_hooks():
             cur_no=2,
         )
     finally:
-        if saved_collect is not None:
-            mod._collect_prev_two = saved_collect
+        read_effects.collect_prev_two = saved_collect
     timeline = _strip_markup("\n".join(lines))
     expect("2028-01-03" in timeline, f"timeline omitted yearly child: {timeline}")
     expect("2029-01-01" in timeline, f"timeline omitted next yearly selection: {timeline}")

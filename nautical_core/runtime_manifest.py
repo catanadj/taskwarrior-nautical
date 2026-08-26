@@ -33,6 +33,8 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         "modify_models",
         "task_codec",
         "task_models",
+        "modify_lifecycle",
+        "modify_value_effects",
     ),
     "on-modify": (
         *_SHARED_HOOK_MODULES,
@@ -97,6 +99,7 @@ HOOK_LAZY_MODULES: dict[str, tuple[str, ...]] = {
         # HookModuleAccess, so keep them in the same deployment contract.
         "calendar_feedback",
         "modify_completion_flow",
+        "add_preview_composition",
     ),
     "on-exit": (
         *_SHARED_HOOK_MODULES,

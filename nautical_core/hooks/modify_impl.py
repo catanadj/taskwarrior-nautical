@@ -716,6 +716,12 @@ _MODULE_SPECS = {
         "add_anchor_compute.py",
         "nautical_core.add_anchor_compute",
     ),
+    "add_preview_composition": (
+        "_ADD_PREVIEW_COMPOSITION",
+        "_ADD_PREVIEW_COMPOSITION_LOAD_FAILED",
+        "add_preview_composition.py",
+        "nautical_core.add_preview_composition",
+    ),
     "panel_diagnostics": (
         "_PANEL_DIAGNOSTICS",
         "_PANEL_DIAGNOSTICS_LOAD_FAILED",
@@ -1036,6 +1042,14 @@ def _apply_core_config() -> None:
 # ------------------------------------------------------------------------------
 # Small cached helpers for speed + consistency
 # ------------------------------------------------------------------------------
+def _safe_parse_datetime(value):
+    """Parse a Taskwarrior timestamp for operator/reconcile integrations."""
+    try:
+        return core.parse_dt_any(value), None
+    except Exception as exc:
+        return None, str(exc)
+
+
 @lru_cache(maxsize=512)
 def _parse_dt_any_cached(s: str):
     return core.parse_dt_any(s)

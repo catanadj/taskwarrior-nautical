@@ -368,6 +368,9 @@ def anchor_next_occurrence_after_local_dt(
     if norm_t_mod is None:
         from .anchor_inclusion import _norm_t_mod
         norm_t_mod = _norm_t_mod
+    to_local = getattr(core, "to_local", None)
+    if not callable(to_local):
+        raise RuntimeError("Anchor scheduler core is missing the timezone conversion callback")
     d0 = after_dt_local.date()
     unavailable = None
     if anchor_expr_fires_on_date_with_omit(
@@ -396,7 +399,7 @@ def anchor_next_occurrence_after_local_dt(
             )
             if same_window:
                 candidate, tlist = same_window
-                return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
+                return to_local(_build_slot_datetime(candidate, tlist[0], core=core))
 
     # An overnight window belongs to the previous anchor date. Continue any
     # after-midnight slots before advancing to the next anchor date.
@@ -435,9 +438,9 @@ def anchor_next_occurrence_after_local_dt(
             )
             if same_window:
                 candidate, tlist = same_window
-                return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
+                return to_local(_build_slot_datetime(candidate, tlist[0], core=core))
             continue
-        return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
+        return to_local(_build_slot_datetime(candidate, tlist[0], core=core))
     if unavailable is not None:
         raise unavailable
     return None

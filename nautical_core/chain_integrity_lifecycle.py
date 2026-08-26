@@ -625,7 +625,7 @@ def _plan_recovery_decision_unscoped(
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
     parent_short = short_uuid(parent.get("uuid"))
-    lifecycle_plan = None
+    recovery_plan: LifecyclePlan | None = None
     try:
         candidate = RecurrenceCandidate(
             child_due=child_due,
@@ -633,37 +633,40 @@ def _plan_recovery_decision_unscoped(
             dnf=None,
             until=until_dt,
         )
-        planner_kwargs = {
-            "generation": generation,
-            "validated_configuration": {"scheduler_fingerprint": "reconcile"},
-            "compare_datetimes": compare_datetimes,
-            "preflight": LifecyclePreflight.from_context(
-                base_link=link,
-                next_link=next_link,
-                kind=kind,
-                chain_id=parent.get("chainID"),
-            ),
-            "carry_validator": lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
-                snapshot.observation,
-                candidate_child,
-                child_field=child_field,
-                generation=generation,
-            ),
-        }
-        lifecycle_plan = (
+        preflight = LifecyclePreflight.from_context(
+            base_link=link,
+            next_link=next_link,
+            kind=kind,
+            chain_id=parent.get("chainID"),
+        )
+        carry_validator = lambda snapshot, candidate_child, _candidate: invalid_relative_carry_reason(
+            snapshot.observation,
+            candidate_child,
+            child_field=child_field,
+            generation=generation,
+        )
+        recovery_plan = (
             plan_expiration_successor(
                 TaskSnapshot.from_observation(observation),
-                **planner_kwargs,
+                generation=generation,
+                validated_configuration={"scheduler_fingerprint": "reconcile"},
+                compare_datetimes=compare_datetimes,
+                preflight=preflight,
+                carry_validator=carry_validator,
             )
             if is_expiration
             else plan_candidate_successor(
                 TaskSnapshot.from_observation(observation),
                 LifecycleEvent.COMPLETE,
                 candidate,
-                **planner_kwargs,
+                generation=generation,
+                validated_configuration={"scheduler_fingerprint": "reconcile"},
+                compare_datetimes=compare_datetimes,
+                preflight=preflight,
+                carry_validator=carry_validator,
             )
         )
-        if lifecycle_plan.action is LifecycleAction.FINALIZE_CHAIN:
+        if recovery_plan.action is LifecycleAction.FINALIZE_CHAIN:
             return LifecycleRecoveryDecision(
                 "legitimate_final",
                 decision_parent,
@@ -671,7 +674,7 @@ def _plan_recovery_decision_unscoped(
                 "reached lifecycle successor limit",
                 child_due=child_due,
             )
-        child = lifecycle_plan.child_dict()
+        child = recovery_plan.child_dict()
     except Exception as exc:
         underlying: BaseException = exc
         while True:
@@ -701,7 +704,7 @@ def _plan_recovery_decision_unscoped(
                 return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
         else:
             return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
-    if lifecycle_plan is None:
+    if recovery_plan is None:
         try:
             guard = ParentGuard(
                 status=str(parent.get("status") or "pending"),
@@ -718,7 +721,7 @@ def _plan_recovery_decision_unscoped(
                 target_link=next_link,
                 event=LifecycleEvent.EXPIRE if is_expiration else LifecycleEvent.COMPLETE,
             )
-            lifecycle_plan = LifecyclePlan.from_draft(
+            recovery_plan = LifecyclePlan.from_draft(
                 identity=identity,
                 action=LifecycleAction.SPAWN_CHILD,
                 parent_guard=guard,
@@ -742,8 +745,8 @@ def _plan_recovery_decision_unscoped(
         reason,
         child=child,
         child_due=child_due,
-        lifecycle_plan=lifecycle_plan,
-        child_draft=lifecycle_plan.child_draft() if lifecycle_plan is not None else None,
+        lifecycle_plan=recovery_plan,
+        child_draft=recovery_plan.child_draft() if recovery_plan is not None else None,
     )
 
 

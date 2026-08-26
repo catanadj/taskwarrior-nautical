@@ -61,5 +61,16 @@ jobs:
           nautical_core/scheduler_trace.py
           nautical_core/scheduler_service.py
 
+      - name: Run full strict package mypy
+        run: >-
+          python3 -m mypy --config-file mypy.ini
+          --enable-error-code=union-attr
+          --enable-error-code=attr-defined
+          --enable-error-code=assignment
+          --enable-error-code=arg-type
+          --enable-error-code=return-value
+          --enable-error-code=operator
+          nautical_core
+
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

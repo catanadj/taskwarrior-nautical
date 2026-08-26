@@ -10,7 +10,7 @@ from .task_models import TaskPayload
 
 def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
     """Return the stable one-argument callbacks used by projection services."""
-    def service_for_task(task: TaskPayload):
+    def service_for_task(task: TaskPayload) -> Any:
         return host._module("modify_runtime").scheduler_service_for_task(
             task,
             state=host._modify_runtime_state(),
@@ -43,7 +43,15 @@ def sequence_period_for_link(host: Any, tokens: list[dict], cp_str: str, link_no
     ) or timedelta()
 
 
-def next_occurrence_after_local_dt(host: Any, dnf, after_local_dt: datetime, default_seed_date, seed_base: str, omit_dnf=None, fallback_hhmm: tuple[int, int] | None = None):
+def next_occurrence_after_local_dt(
+    host: Any,
+    dnf: Any,
+    after_local_dt: datetime,
+    default_seed_date: Any,
+    seed_base: str,
+    omit_dnf: Any = None,
+    fallback_hhmm: tuple[int, int] | None = None,
+) -> Any:
     if not dnf:
         return None
     return host._module("add_anchor_compute").anchor_next_occurrence_after_local_dt(
@@ -53,12 +61,20 @@ def next_occurrence_after_local_dt(host: Any, dnf, after_local_dt: datetime, def
     )
 
 
-def anchor_included_occurrences(host: Any, parent: TaskPayload, *, after_local_dt: datetime, inclusive: bool, limit: int, **_kwargs):
+def anchor_included_occurrences(
+    host: Any,
+    parent: TaskPayload,
+    *,
+    after_local_dt: datetime,
+    inclusive: bool,
+    limit: int,
+    **_kwargs: Any,
+) -> Any:
     service = scheduler_callbacks(host)[1](parent)
     return service.included_occurrences_after(after_local_dt, inclusive=inclusive, limit=limit)
 
 
-def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any):
+def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
     return host._module("modify_completion_compute").estimate_cp_final_by_max(
         task,
         next_due_utc,
@@ -71,7 +87,7 @@ def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any):
     )
 
 
-def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any):
+def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any) -> Any:
     evaluator_callback, _service_callback = scheduler_callbacks(host)
     return host._module("modify_completion_compute").estimate_anchor_final_by_max(
         task,
@@ -91,7 +107,7 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
     )
 
 
-def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any):
+def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
     return host._module("modify_completion_compute").cap_from_until_cp(
         task,
         next_due_utc,
@@ -104,7 +120,7 @@ def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any):
     )
 
 
-def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any):
+def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any) -> Any:
     evaluator_callback, _service_callback = scheduler_callbacks(host)
     return host._module("modify_completion_compute").cap_from_until_anchor(
         task,

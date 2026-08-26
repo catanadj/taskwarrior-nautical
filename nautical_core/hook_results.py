@@ -10,14 +10,16 @@ from dataclasses import dataclass
 try:
     from .task_codec import DEFAULT_TASK_CODEC
     from .on_exit_models import ExitDrainStats
+    from .task_models import TaskPayload
 except ImportError:  # standalone hook bootstrap loader
     from nautical_core.task_codec import DEFAULT_TASK_CODEC
     from nautical_core.on_exit_models import ExitDrainStats
+    from nautical_core.task_models import TaskPayload
 
 
 @dataclass(slots=True)
 class TaskHookResponse:
-    task: dict[str, Any]
+    task: TaskPayload
     sanitize: bool = False
     prof: Any | None = None
 
@@ -43,7 +45,7 @@ def emit_passthrough_json(task: Any) -> None:
         pass
 
 
-def emit_task_json(task: dict[str, Any], *, sanitize: bool = False, core=None, prof=None) -> None:
+def emit_task_json(task: TaskPayload, *, sanitize: bool = False, core=None, prof=None) -> None:
     t_out = time.perf_counter()
     if sanitize and core is not None and getattr(core, 'SANITIZE_UDA', False):
         DEFAULT_TASK_CODEC.sanitize_task_mapping(task, max_len=core.SANITIZE_UDA_MAX_LEN)

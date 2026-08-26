@@ -26,7 +26,7 @@ class HookModuleAccess:
     module_specs: dict[str, tuple[str, str, str, str]]
     errors: dict[str, str] = field(default_factory=dict)
 
-    def load_named_module(self, name: str):
+    def load_named_module(self, name: str) -> Any | None:
         cache_attr, failed_attr, _rel_name, import_name = self.module_specs[name]
         module = self.namespace.get(cache_attr)
         if module is not None:
@@ -42,13 +42,13 @@ class HookModuleAccess:
             self.namespace[failed_attr] = True
             return None
 
-    def require_loaded_module(self, module, rel_name: str, error: str = ""):
+    def require_loaded_module(self, module: Any, rel_name: str, error: str = "") -> Any:
         if module is None:
             detail = f" ({error})" if error else ""
             raise RuntimeError(f"nautical_core/{rel_name} is required{detail}")
         return module
 
-    def module(self, name: str, *, required: bool = True):
+    def module(self, name: str, *, required: bool = True) -> Any:
         module = self.load_named_module(name)
         if not required:
             return module
@@ -60,12 +60,12 @@ def build_hook_runtime_context(
     *,
     module_access: HookModuleAccess,
     hook_name: str,
-    integration_context,
+    integration_context: Any,
     hook_dir: str,
     profile_level: int = 0,
     import_ms: float | None = None,
-    business_calendar=None,
-):
+    business_calendar: Any = None,
+) -> Any:
     hook_context = module_access.module("hook_context")
     uow = build_taskwarrior_uow(integration_context, env=os.environ)
     return hook_context.build_hook_runtime_context(
@@ -82,12 +82,12 @@ def build_hook_runtime_context(
 def initialize_integration_context(
     *,
     module_access: HookModuleAccess,
-    hook_bootstrap,
+    hook_bootstrap: Any,
     core_base: Path,
     argv: tuple[str, ...],
     tw_dir: str,
     access: str,
-):
+) -> tuple[Any, Path | None, Any]:
     """Import core and construct the sole validated context for a full hook."""
     core, target, import_error = hook_bootstrap.import_core_package(core_base)
     if core is None:

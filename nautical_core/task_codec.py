@@ -8,7 +8,7 @@ import math
 import os
 import re
 import sys
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 try:
     from .task_models import TaskDraft, TaskObservation
@@ -72,7 +72,7 @@ class TaskCodec:
         return "" if text.casefold() == "null" else text
 
     @staticmethod
-    def sanitize_task_mapping(task: dict[str, Any], max_len: int = 1024) -> None:
+    def sanitize_task_mapping(task: MutableMapping[str, Any], max_len: int = 1024) -> None:
         """Sanitize string fields at the Taskwarrior output boundary."""
         if not isinstance(task, dict):
             return

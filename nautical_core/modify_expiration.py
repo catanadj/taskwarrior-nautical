@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from .task_models import TaskPayload
+from .task_models import TaskObservation
 
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import DeletionEvidence
@@ -38,7 +39,7 @@ class DeletedModifyServices:
     recovery_warning: Any
 
 
-def has_expiration_evidence(task: TaskPayload, *, safe_parse_datetime) -> bool:
+def has_expiration_evidence(task: TaskPayload, *, safe_parse_datetime: Any) -> bool:
     try:
         until_dt, until_err = safe_parse_datetime(task.get("until"))
         end_dt, end_err = safe_parse_datetime(task.get("end"))
@@ -57,7 +58,7 @@ def classify_deleted_task(
     task: TaskPayload,
     *,
     services: ExpirationServices,
-    observation: Any = None,
+    observation: TaskObservation | None = None,
 ) -> DeletionEvidence:
     """Return the deletion disposition without turning unavailable evidence into manual stop."""
     if observation is None:
@@ -86,7 +87,7 @@ def render_recovery_warning(task: TaskPayload, reason: str, *, services: Expirat
 
 def _render_recovery_panel(
     task: TaskPayload,
-    plan,
+    plan: Any,
     *,
     services: ExpirationServices,
     result: str = "",

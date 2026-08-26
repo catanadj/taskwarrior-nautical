@@ -4,6 +4,8 @@ import json
 import sys
 from typing import TYPE_CHECKING, TypeAlias
 
+from .task_models import TaskPayload
+
 if TYPE_CHECKING:
     from .task_codec import TaskCodec
     from .task_models import TaskObservation
@@ -81,9 +83,6 @@ _MODIFY_SAFE_ORDINARY_FIELDS = frozenset(
 )
 _MISSING = object()
 
-TaskPayload: TypeAlias = dict[str, object]
-
-
 class OnAddInput:
     __slots__ = ("task",)
 
@@ -124,8 +123,8 @@ class HookProtocolResult:
         event: str,
         raw_bytes: bytes,
         raw_text: str,
-        old: dict | None = None,
-        new: dict | None = None,
+        old: TaskPayload | None = None,
+        new: TaskPayload | None = None,
         observation: TaskObservation | None = None,
         old_observation: TaskObservation | None = None,
         new_observation: TaskObservation | None = None,
@@ -162,11 +161,11 @@ class HookProtocolResult:
         return self.failure is None and self.request is not None
 
     @property
-    def task(self) -> dict | None:
+    def task(self) -> TaskPayload | None:
         return self.new
 
 
-def _field_has_value(task: dict, field: str) -> bool:
+def _field_has_value(task: TaskPayload, field: str) -> bool:
     try:
         value = task.get(field)
     except Exception:

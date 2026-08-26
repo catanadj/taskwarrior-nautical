@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .task_models import TaskPayload
+from .task_changes import TaskTransition
 
 
 def preserve_cp_relative_offsets_on_due_change(
@@ -14,8 +15,8 @@ def preserve_cp_relative_offsets_on_due_change(
     new: TaskPayload,
     new_cp: str,
     *,
-    transition=None,
-):
+    transition: TaskTransition | None = None,
+) -> Any:
     result = host._module("modify_carry").preserve_cp_relative_offsets_on_due_change(
         old,
         new,
@@ -75,8 +76,8 @@ def preserve_native_until_on_target_change(
     new: TaskPayload,
     kind: str,
     *,
-    transition=None,
-):
+    transition: TaskTransition | None = None,
+) -> Any:
     carried = host._module("modify_carry").preserve_native_until_on_target_change(
         old,
         new,
@@ -110,7 +111,13 @@ def preserve_native_until_on_target_change(
     return decision
 
 
-def validate_completion_cp_and_anchor(host: Any, old: TaskPayload, new: TaskPayload, *, transition=None) -> tuple[str, str, str]:
+def validate_completion_cp_and_anchor(
+    host: Any,
+    old: TaskPayload,
+    new: TaskPayload,
+    *,
+    transition: TaskTransition | None = None,
+) -> tuple[str, str, str]:
     modify_validation = host._module("modify_validation")
     modify_lifecycle = host._module("modify_lifecycle")
     validation_effects = host._module("modify_validation_effects")

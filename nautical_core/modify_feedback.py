@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .task_models import TaskPayload
-from .modify_models import TaskView
+from .modify_models import CompletionLifecycleResult, TaskView
 from .hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from .feedback_renderer import PanelView, render_panel_view
 
@@ -756,10 +756,10 @@ def _append_chain_boundary_rows(fb: list[tuple[str, object]], task: TaskPayload,
         fb.append(("Chain end point", core.fmt_dt_local(until_dt)))
 
 
-def lifecycle_result_feedback_facts(lifecycle_result) -> FeedbackFacts:
+def lifecycle_result_feedback_facts(lifecycle_result: CompletionLifecycleResult) -> FeedbackFacts:
     """Convert an application result to immutable presentation facts."""
-    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
-    reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
+    state = lifecycle_result.state
+    reason = lifecycle_result.reason
     recovery: tuple[str, ...] = ()
     if state in {"retryable", "manual_review", "stale"}:
         recovery = ("Run nautical reconcile --apply if recovery remains pending.",)
@@ -779,9 +779,11 @@ def lifecycle_result_feedback_facts(lifecycle_result) -> FeedbackFacts:
     )
 
 
-def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result) -> None:
+def _append_lifecycle_result_row(
+    fb: list[tuple[str, object]], lifecycle_result: CompletionLifecycleResult
+) -> None:
     """Render immutable lifecycle facts without changing application state."""
-    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+    state = lifecycle_result.state
     facts = lifecycle_result_feedback_facts(lifecycle_result)
     if not state:
         return
@@ -793,10 +795,10 @@ def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result)
         "manual_review": "[yellow]Manual review required[/]",
     }
     value = labels.get(state, f"[yellow]{state}[/]")
-    child_short = str(getattr(lifecycle_result, "child_short", "") or "").strip()
+    child_short = lifecycle_result.child_short
     if child_short and state in {"applied", "queued"}:
         value += f" · child {child_short}"
-    intent_id = str(getattr(lifecycle_result, "spawn_intent_id", "") or "").strip()
+    intent_id = lifecycle_result.spawn_intent_id or ""
     if intent_id and state == "queued":
         value += f" · intent {intent_id}"
     if facts.warnings:
@@ -804,8 +806,8 @@ def _append_lifecycle_result_row(fb: list[tuple[str, object]], lifecycle_result)
     fb.append(("Result", value))
 
 
-def _lifecycle_result_label(lifecycle_result) -> str:
-    state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
+def _lifecycle_result_label(lifecycle_result: CompletionLifecycleResult) -> str:
+    state = lifecycle_result.state
     return {
         "applied": "Applied now",
         "queued": "Queued for on-exit",
@@ -815,7 +817,9 @@ def _lifecycle_result_label(lifecycle_result) -> str:
     }.get(state, state.replace("_", " ").title() if state else "")
 
 
-def _child_expiration(child):
+def _child_expiration(child: TaskView | TaskPayload):
+    if not isinstance(child, TaskView):
+        child = TaskView.from_mapping(child)
     typed_until = child.timestamp("until")
     return typed_until.value if typed_until is not None else None
 

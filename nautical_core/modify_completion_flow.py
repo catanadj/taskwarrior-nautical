@@ -174,7 +174,7 @@ def finalize_completion_modify(
         _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))
         services.print_task(new)
         return lifecycle_result
-    spawn_state = str(getattr(spawned, "outcome_state", "applied") or "applied").strip().lower()
+    spawn_state = spawned.outcome_state
     if spawn_state != "applied":
         result_state = {
             "already_applied": "already_applied",
@@ -183,15 +183,15 @@ def finalize_completion_modify(
         }.get(spawn_state, "retryable")
         lifecycle_result = CompletionLifecycleResult(
             state=result_state,
-            child_short=getattr(spawned, "child_short", ""),
-            spawn_intent_id=getattr(spawned, "spawn_intent_id", None),
-            reason=getattr(spawned, "reason", "") or "child spawn could not be completed",
+            child_short=spawned.child_short,
+            spawn_intent_id=spawned.spawn_intent_id,
+            reason=spawned.reason or "child spawn could not be completed",
             diagnostic=_completion_diagnostic(
                 ctx,
                 chain_id,
                 stage="spawn",
                 failure_kind=spawn_state,
-                transition_id=str(getattr(spawned, "spawn_intent_id", "") or ""),
+                transition_id=str(spawned.spawn_intent_id or ""),
             ),
         )
         _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))

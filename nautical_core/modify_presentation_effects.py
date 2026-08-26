@@ -7,7 +7,7 @@ from typing import Any
 from .task_models import TaskPayload
 
 
-def _task_view(models: Any, value: Any):
+def _task_view(models: Any, value: Any) -> Any:
     """Use typed views for real tasks while keeping panel-only fixtures permissive."""
     if isinstance(value, models.TaskView):
         return value
@@ -54,7 +54,7 @@ def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str
     )
 
 
-def first_recurrence_target(host: Any, new: TaskPayload, source: str):
+def first_recurrence_target(host: Any, new: TaskPayload, source: str) -> Any:
     task_view = host._module("modify_models").TaskView.from_mapping(new)
     return host._module("modify_completion_compute").first_recurrence_target(
         task_view,
@@ -77,7 +77,7 @@ def recurrence_enabled_rows(host: Any, new: TaskPayload, source: str) -> list[tu
     )
 
 
-def render_cp_schedule_adjusted_panel(host: Any, adjustment) -> None:
+def render_cp_schedule_adjusted_panel(host: Any, adjustment: Any) -> None:
     ui = host._module("modify_ui_effects")
     host._module("modify_feedback").render_cp_schedule_adjusted_panel(
         adjustment,
@@ -99,7 +99,7 @@ def render_explicit_timing_order_warning(host: Any, new: TaskPayload, changed_fi
     )
 
 
-def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload, decision) -> None:
+def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload, decision: Any) -> None:
     reason = str(getattr(decision, "reason", decision))
     if not (old.get("chainID") or new.get("chainID")):
         return
@@ -140,7 +140,7 @@ def ensure_terminal_chain_off(host: Any, task: TaskPayload, event: str | None = 
     return host._module("modify_lifecycle").ensure_terminal_chain_off(task)
 
 
-def render_anchor_completion_feedback(host: Any, **kwargs) -> None:
+def render_anchor_completion_feedback(host: Any, **kwargs: Any) -> None:
     calendar_feedback = host.importlib.import_module("nautical_core.calendar_feedback")
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
@@ -161,7 +161,7 @@ def render_anchor_completion_feedback(host: Any, **kwargs) -> None:
     )
 
 
-def render_cp_completion_feedback(host: Any, **kwargs) -> None:
+def render_cp_completion_feedback(host: Any, **kwargs: Any) -> None:
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
     feedback.orchestrate_cp_completion_feedback(
@@ -178,7 +178,7 @@ def render_cp_completion_feedback(host: Any, **kwargs) -> None:
     )
 
 
-def render_lifecycle_result(host: Any, result, task) -> None:
+def render_lifecycle_result(host: Any, result: Any, task: Any) -> None:
     """Render one finalized non-success outcome without deciding its state."""
     state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
     title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
@@ -195,7 +195,7 @@ def render_lifecycle_result(host: Any, result, task) -> None:
     host._module("modify_ui_effects").panel(host, title, rows, kind="warning" if state == "manual_review" else "error")
 
 
-def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, dnf, **kwargs) -> list[str]:
+def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_short: str, dnf: Any, **kwargs: Any) -> list[str]:
     if not host._require_core():
         return []
     evaluator_callback, service_callback = host._module("modify_schedule_effects").scheduler_callbacks(host)
@@ -221,7 +221,7 @@ def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, 
     )
 
 
-def build_runtime_services(host: Any):
+def build_runtime_services(host: Any) -> Any:
     runtime = host._module("modify_runtime")
     return runtime.ModifyRuntimeServices(
         state=host._modify_runtime_state(), core=host.core,

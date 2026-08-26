@@ -388,6 +388,7 @@ class BuildAndSpawnCallback(Protocol):
         cpmax: int,
         until_dt: Any,
         planned_child: TaskRow | None = None,
+        lifecycle_plan: Any = None,
     ) -> "CompletionSpawnResult | None":
         ...
 
@@ -607,7 +608,7 @@ class AnchorCompletionFeedbackModel:
 
 @dataclass(slots=True)
 class CompletionSpawnResult:
-    child: dict[str, Any]
+    child: TaskPayload
     child_short: str
     stripped_attrs: Any
     verified: bool

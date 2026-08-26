@@ -9,7 +9,8 @@ from typing import Callable, Protocol
 
 
 class BusinessCalendar(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def is_business_day(self, value: date) -> bool: ...
 

@@ -11,8 +11,9 @@ from typing import Any
 class ExitDrainProgress:
     """Render lifecycle drain events without participating in mutation."""
 
-    def __init__(self, *, core: Any) -> None:
+    def __init__(self, *, core: Any, diagnostic=None) -> None:
         self._core = core
+        self._diagnostic = diagnostic
         self._progress: Any = None
         self._task_id: Any = None
         self._enabled = self._is_enabled()
@@ -68,7 +69,9 @@ class ExitDrainProgress:
             progress.start()
             self._progress = progress
             self._task_id = progress.add_task("⚓ Nautical drain", total=total)
-        except Exception:
+        except Exception as exc:
+            if self._diagnostic is not None:
+                self._diagnostic(f"exit progress startup failed: {type(exc).__name__}: {exc}")
             if progress is not None:
                 try:
                     progress.stop()
@@ -99,7 +102,9 @@ class ExitDrainProgress:
                 description=description,
                 refresh=False,
             )
-        except Exception:
+        except Exception as exc:
+            if self._diagnostic is not None:
+                self._diagnostic(f"exit progress update failed: {type(exc).__name__}: {exc}")
             return
         finally:
             self._presentation_seconds += time.perf_counter() - started
@@ -109,7 +114,9 @@ class ExitDrainProgress:
             return
         try:
             self._progress.stop()
-        except Exception:
+        except Exception as exc:
+            if self._diagnostic is not None:
+                self._diagnostic(f"exit progress shutdown failed: {type(exc).__name__}: {exc}")
             pass
         finally:
             self._progress = None

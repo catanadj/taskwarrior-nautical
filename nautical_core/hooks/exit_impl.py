@@ -520,7 +520,7 @@ def _drain_outbox_result(runtime):
         raise RuntimeError("on-exit integration context is unavailable")
     configuration = integration_context.configuration
     drain_t0 = time.perf_counter()
-    progress = _module("exit_presentation").ExitDrainProgress(core=core)
+    progress = _module("exit_presentation").ExitDrainProgress(core=core, diagnostic=_diag)
     try:
         result = service.drain(
             limit=_OUTBOX_BATCH_MAX_ITEMS,

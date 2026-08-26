@@ -34,7 +34,7 @@ class _SnapshotRepository(Protocol):
 
 
 class _SnapshotUnitOfWork(Protocol):
-    repository: _SnapshotRepository
+    repository: Any
     mutation_epoch: int
 
 

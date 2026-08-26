@@ -43,6 +43,8 @@ from .task_codec import DEFAULT_TASK_CODEC
 from .task_models import FieldPresence, TaskObservation
 from .task_changes import timestamp_equal
 from .task_set_reads import SetReadResult, SetReadStatus, UUIDSetRequest
+from .taskwarrior_client import TaskwarriorClient
+from .task_read_repository import TaskReadRepository
 
 
 class _TaskRepository(Protocol):
@@ -64,8 +66,8 @@ class _TaskClient(Protocol):
 
 
 class _UnitOfWork(Protocol):
-    repository: _TaskRepository
-    client: _TaskClient
+    repository: TaskReadRepository
+    client: TaskwarriorClient
     mutation_epoch: int
 
     def record_mutation(self, *, uncertain: bool = False) -> int: ...

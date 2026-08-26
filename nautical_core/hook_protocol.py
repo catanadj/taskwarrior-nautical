@@ -4,7 +4,10 @@ import json
 import sys
 from typing import TYPE_CHECKING, TypeAlias
 
-from .task_models import TaskPayload
+try:
+    from .task_models import TaskPayload
+except ImportError:  # standalone hook bootstrap loader
+    from task_models import TaskPayload
 
 if TYPE_CHECKING:
     from .task_codec import TaskCodec

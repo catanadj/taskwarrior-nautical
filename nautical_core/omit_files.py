@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import date
+from typing import Any
 
 from .business_calendar import (
     DEFAULT_BUSINESS_CALENDAR,
@@ -42,7 +43,7 @@ def parse_omit_file_spec(value: str | None) -> tuple[str, dict]:
         return "", {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}
     name, mods_str = (raw.split("@", 1) + [""])[:2]
     file_name = validate_omit_file_name(name.strip())
-    mods = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}
+    mods: dict[str, Any] = {"t": None, "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}
     if not mods_str:
         return file_name, mods
     for raw_tok in mods_str.split("@"):

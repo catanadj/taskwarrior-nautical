@@ -169,7 +169,7 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         coerce_int=host.core.coerce_int,
         format_local=host.core.fmt_dt_local,
         max_chain_walk=host._MAX_CHAIN_WALK,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
         diagnostic=host._diag,
     )
 

@@ -19,6 +19,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
     presentation = host._module("modify_presentation_effects")
     diagnostics = host._module("modify_diagnostics_effects")
     validation = host._module("modify_validation_effects")
+    ui = host._module("modify_ui_effects")
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
@@ -49,7 +50,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         ),
         short_uuid=host.core.short_uuid,
         recurrence_enabled_rows=lambda task, source: presentation.recurrence_enabled_rows(host, task, source),
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
         render_disabled_summary=lambda old_task, new_task, decision: presentation.render_disabled_chain_summary(host, old_task, new_task, decision),
         semantic_diff_value=validation.semantic_diff_value,
         first_recurrence_target=lambda task, source: presentation.first_recurrence_target(host, task, source),
@@ -124,6 +125,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
     host._modify_runtime_state().task_repository = unit_of_work.repository
     presentation = host._module("modify_presentation_effects")
     diagnostics = host._module("modify_diagnostics_effects")
+    ui = host._module("modify_ui_effects")
     modify_expiration = host._module("modify_expiration", required=False)
     if modify_expiration is None:
         expiration_recovery_warning(host, new, "Expiration recovery module is unavailable; deletion was not classified.")
@@ -135,7 +137,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         end_chain_summary=lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(host, task, reason, now, current_task),
         format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(host, task, now),
         short=host.core.short_uuid,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
         diag=host._diag,
         recovery_warning=lambda task, reason: expiration_recovery_warning(host, task, reason),
     )
@@ -163,7 +165,7 @@ def expiration_services(host: Any):
         compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
         build_child_draft=lambda task, *args, **kwargs: generation.build_child_draft(typed_task(task), *args, **kwargs),
         stage_recovery_plan=lambda plan: host._module("modify_spawn_effects").enqueue_spawn_intent(host, plan),
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
         short=host.core.short_uuid,
         diag=host._diag,
     )
@@ -177,7 +179,7 @@ def expiration_recovery_warning(host: Any, new: TaskPayload, reason: str) -> Non
             return
         except Exception as exc:
             host._diag(f"expiration recovery warning render failed: {exc}")
-    host._panel(
+    host._module("modify_ui_effects").panel(
         "⚠ Nautical expiration recovery deferred",
         [("Task", host.core.short_uuid(new.get("uuid")) or "–"), ("Reason", reason or "The next occurrence could not be prepared."), ("Action", "Run nautical reconcile --apply.")],
         kind="warning",

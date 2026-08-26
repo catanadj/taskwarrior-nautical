@@ -91,6 +91,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         show_analytics=host._SHOW_ANALYTICS,
         check_integrity=host._CHECK_CHAIN_INTEGRITY,
         analytics_style=host._ANALYTICS_STYLE,
+        diagnostic=host._diag,
     )
     flow_services = modify_completion_flow.CompletionFlowServices(
         runtime_state=host._modify_runtime_state,

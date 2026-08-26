@@ -98,8 +98,8 @@ def chain_snapshot(host: Any, chain_id: str, base_no: int, next_no: int, reposit
 
 def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository):
     preflight = host._module("modify_completion_preflight")
-    runtime = host._module("modify_runtime")
-    services = runtime.build_preflight_services(
+    models = host._module("modify_models")
+    services = models.CompletionPreflightServices(
         short=host.core.short_uuid,
         completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(host, task),
         completion_kind_or_stop=lambda task, clock: kind_or_stop(host, task, clock),
@@ -114,7 +114,8 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
     compute = host._module("modify_completion_compute")
     generation = host._module("modify_generation_effects").chain_generation_service(host)
     codec = host._module("task_codec")
-    models = host._module("task_models")
+    task_models = host._module("task_models")
+    models = host._module("modify_models")
 
     def typed_task(task):
         return models.NauticalTask.from_observation(
@@ -203,8 +204,8 @@ def cap_guard_or_stop(host: Any, new: TaskPayload, next_no: int, cap_no: int | N
 
 def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int, now_utc: datetime, *, preflight=None):
     compute = host._module("modify_completion_compute")
-    runtime = host._module("modify_runtime")
-    services = runtime.build_compute_services(
+    models = host._module("modify_models")
+    services = models.CompletionComputeServices(
         completion_compute_child_due=lambda value, value_kind: compute_child_due(host, value, value_kind),
         completion_until_or_fail=lambda value, clock: until_or_fail(host, value, clock),
         completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(host, value, due, until, clock),
@@ -241,19 +242,19 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
 
 def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
     spawn = host._module("modify_completion_spawn")
-    runtime = host._module("modify_runtime")
     generation = host._module("modify_generation_effects").chain_generation_service(host)
     codec = host._module("task_codec")
-    models = host._module("task_models")
+    task_models = host._module("task_models")
+    models = host._module("modify_models")
 
     def build_child_draft(task, *args, **inner_kwargs):
-        typed_task = models.NauticalTask.from_observation(
+        typed_task = task_models.NauticalTask.from_observation(
             codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
         )
         return generation.build_child_draft(typed_task, *args, **inner_kwargs)
 
     spawn_effects = host._module("modify_spawn_effects")
-    services = runtime.build_spawn_services(
+    services = models.CompletionSpawnServices(
         build_child_draft=build_child_draft,
         spawn_child_atomic=lambda child, parent, *, lifecycle_plan=None: spawn_effects.spawn_child_atomic(
             host, child, parent, lifecycle_plan=lifecycle_plan

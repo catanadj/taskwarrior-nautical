@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias, Any
+from collections.abc import MutableMapping
 
-try:
-    from .task_models import TaskPayload
-except ImportError:  # standalone hook bootstrap loader
-    from task_models import TaskPayload
+# Keep the lightweight protocol gate independent of the package.  The domain
+# model uses the same mutable mapping shape at the Taskwarrior edge.
+TaskPayload: TypeAlias = MutableMapping[str, Any]
 
 if TYPE_CHECKING:
     from .task_codec import TaskCodec

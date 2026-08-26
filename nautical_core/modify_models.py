@@ -397,7 +397,7 @@ class ChainHealthCallback(Protocol):
 
     def __call__(
         self,
-        chain: list[TaskRow],
+        chain: list[TaskObservation],
         kind: str,
         task: TaskRow,
         tol_secs: int = 3600,
@@ -411,7 +411,7 @@ class ChainIntegrityCallback(Protocol):
 
     def __call__(
         self,
-        chain: list[TaskRow],
+        chain: list[TaskObservation],
         expected_chain_id: str | None = None,
     ) -> list[str]:
         ...

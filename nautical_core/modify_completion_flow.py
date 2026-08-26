@@ -256,6 +256,7 @@ def finalize_completion_modify(
         short: TaskView.from_observation(row)
         for short, row in (chain_by_short or {}).items()
     }
+    new_view = TaskView.from_mapping(new)
 
     analytics_advice = None
     integrity_warnings = None
@@ -280,7 +281,7 @@ def finalize_completion_modify(
 
     if kind in {"anchor", "anchor_file"}:
         services.render_anchor_completion_feedback(
-            new=new,
+            new=new_view,
             child=child_view,
             child_due=computed.child_due,
             child_short=child_short,
@@ -304,7 +305,7 @@ def finalize_completion_modify(
         )
     else:
         services.render_cp_completion_feedback(
-            new=new,
+            new=new_view,
             child=child_view,
             child_due=computed.child_due,
             child_short=child_short,

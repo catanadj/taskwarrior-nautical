@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections import OrderedDict
 import json
 import uuid
 from typing import Any, Mapping, MutableMapping
@@ -111,10 +112,11 @@ class ChainGenerationService:
     recurrence_update_udas: tuple[str, ...] = ()
     debug_wait_sched: bool = False
     wait_sched_debug: MutableMapping[str, dict[str, Any]] | None = None
-    _evaluator_cache: dict[tuple[Any, ...], SchedulerService] = field(
-        default_factory=dict,
+    _evaluator_cache: OrderedDict[tuple[Any, ...], SchedulerService] = field(
+        default_factory=OrderedDict,
         repr=False,
     )
+    _evaluator_cache_limit: int = field(default=128, repr=False)
 
     @classmethod
     def from_core(
@@ -177,7 +179,6 @@ class ChainGenerationService:
         identity = self._require_chain_id(task)
         key = (
             identity,
-            str(task.get("modified") or ""),
             str(task.get("anchor") or ""),
             str(task.get("anchor_file") or ""),
             str(task.get("omit") or ""),
@@ -188,6 +189,7 @@ class ChainGenerationService:
         )
         cached = self._evaluator_cache.get(key)
         if cached is not None:
+            self._evaluator_cache.move_to_end(key)
             return cached
         context = RecurrenceContext.from_observation(
             task.observation,
@@ -198,6 +200,9 @@ class ChainGenerationService:
         )
         service = SchedulerService.from_task(task, context=context)
         self._evaluator_cache[key] = service
+        self._evaluator_cache.move_to_end(key)
+        while len(self._evaluator_cache) > max(1, self._evaluator_cache_limit):
+            self._evaluator_cache.popitem(last=False)
         return service
 
     def _local(self, value: datetime) -> datetime:

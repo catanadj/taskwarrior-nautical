@@ -852,16 +852,17 @@ def handle_anchor_file_preview_on_add(
         error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
         raise RuntimeError("anchor-file preview terminated")
 
-    occurrence_datetimes = [
-        item.local_datetime if isinstance(item, Occurrence) else item
-        for item in all_occurrences
-    ]
-    occurrence_datetimes = [item for item in occurrence_datetimes if isinstance(item, datetime)]
+    occurrence_datetimes: list[datetime] = []
+    for item in all_occurrences:
+        candidate = item.local_datetime if isinstance(item, Occurrence) else item
+        if isinstance(candidate, datetime):
+            occurrence_datetimes.append(candidate)
     if not occurrence_datetimes:
         error_and_exit([("anchor_file", "Anchor-file occurrences did not contain valid local timestamps.")])
         raise RuntimeError("anchor-file preview terminated")
 
     due_local_dt = core.to_local(due_dt)
+    first_due_local_dt: datetime | None
     if compact_presentation:
         first_due_local_dt = occurrence_datetimes[0]
     elif user_provided_due:

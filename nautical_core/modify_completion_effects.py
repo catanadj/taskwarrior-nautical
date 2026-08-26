@@ -8,12 +8,20 @@ from typing import Any
 from .task_models import TaskPayload
 
 
+def _panel(host: Any, title, rows, **kwargs):
+    return host._module("modify_ui_effects").panel(host, title, rows, **kwargs)
+
+
+def _panel_callback(host: Any):
+    return lambda title, rows, **kwargs: _panel(host, title, rows, **kwargs)
+
+
 def link_numbers_or_fail(host: Any, new: TaskPayload):
     return host._module("modify_completion_preflight").completion_link_numbers_or_fail(
         new,
         coerce_int=host.core.coerce_int,
         max_link_number=host.core.MAX_LINK_NUMBER,
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
     )
 
@@ -22,7 +30,7 @@ def kind_or_stop(host: Any, new: TaskPayload, now_utc: datetime):
     return host._module("modify_completion_preflight").completion_kind_or_stop(
         new,
         now_utc,
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
         end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
     )
@@ -32,7 +40,7 @@ def chain_id_or_fail(host: Any, new: TaskPayload) -> str | None:
     preflight = host._module("modify_completion_preflight")
     return preflight.completion_chain_id_or_fail(
         new,
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
     )
 
@@ -46,7 +54,7 @@ def existing_next_or_fail(host: Any, new: TaskPayload, next_no: int, chain_snaps
             str(task.get("chainID") or ""), link
         ),
         short=host.core.short_uuid,
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
     )
 
@@ -121,10 +129,10 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
                 host._module("modify_diagnostics_effects").end_chain_summary(host, new, message, host._workflow_now_utc(), current_task=new)
             except Exception as summary_exc:
                 host._diag(f"terminal chain summary failed: {summary_exc}")
-                host._panel("⛔ Nautical chain stopped", [("Reason", message), ("Task", host.core.short_uuid(new.get("uuid")) or "–")], kind="summary")
+                _panel(host, "⛔ Nautical chain stopped", [("Reason", message), ("Task", host.core.short_uuid(new.get("uuid")) or "–")], kind="summary")
             host._module("modify_ui_effects").print_task(host, new)
             return
-        host._panel("⛔ Chain error", [("Scheduler", message), ("Fix", "Use a less sparse rule or adjust its search limits.")], kind="error")
+        _panel(host, "⛔ Chain error", [("Scheduler", message), ("Fix", "Use a less sparse rule or adjust its search limits.")], kind="error")
         host._module("modify_ui_effects").print_task(host, new)
 
     return compute.completion_compute_child_due(
@@ -132,7 +140,7 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
         kind,
         compute_anchor_child_due=lambda task: generation.compute_anchor_child_due(typed_task(task)),
         compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
         diag=host._diag,
         on_terminal=handle_terminal,
@@ -145,7 +153,7 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
         new, now_utc,
         safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
         validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(host, until_dt, now),
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
     )
 
@@ -160,7 +168,7 @@ def until_guard_or_stop(host: Any, new: TaskPayload, child_due, until_dt, now_ut
 
 def require_child_due_or_fail(host: Any, new: TaskPayload, child_due) -> bool:
     return host._module("modify_completion_compute").completion_require_child_due_or_fail(
-        new, child_due, panel=host._panel, print_task=lambda task: host._module("modify_ui_effects").print_task(host, task)
+        new, child_due, panel=_panel_callback(host), print_task=lambda task: host._module("modify_ui_effects").print_task(host, task)
     )
 
 
@@ -168,7 +176,7 @@ def warn_unreasonable_duration(host: Any, new: TaskPayload, child_due, until_dt,
     host._module("modify_completion_compute").completion_warn_unreasonable_duration(
         new, child_due, until_dt, now_utc,
         validate_chain_duration_reasonable=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(host, child_due, until_dt, now),
-        panel=host._panel,
+        panel=_panel_callback(host),
     )
 
 
@@ -225,7 +233,7 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         modify_models=host._module("modify_models"),
         end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
         ensure_terminal_chain_off=lambda task, event=None: host._module("modify_presentation_effects").ensure_terminal_chain_off(host, task, event),
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
         diag=host._diag,
     )
@@ -250,7 +258,7 @@ def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
         spawn_child_atomic=lambda child, parent, *, lifecycle_plan=None: spawn_effects.spawn_child_atomic(
             host, child, parent, lifecycle_plan=lifecycle_plan
         ),
-        panel=host._panel,
+        panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
         diag=host._diag,
     )

@@ -449,8 +449,11 @@ def _native_until_guard_error(expected: TaskObservation, fresh: TaskObservation)
         left = _observation_text(expected, field)
         right = _observation_text(fresh, field)
         if field == "link":
-            left = lifecycle.int_or_default(left, 0)
-            right = lifecycle.int_or_default(right, 0)
+            left_link = lifecycle.int_or_default(left, 0)
+            right_link = lifecycle.int_or_default(right, 0)
+            if left_link != right_link:
+                return f"native-until target changed ({field}: {left_link} -> {right_link})"
+            continue
         else:
             left = str(left or "").strip()
             right = str(right or "").strip()

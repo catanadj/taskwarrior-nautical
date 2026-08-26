@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Mapping
 
 
 _UNREC_ATTR_RE = re.compile(r"Unrecognized attribute '([^']+)'", re.I)
@@ -45,8 +46,8 @@ def categorize_spawn_error(returncode: int, stderr: str) -> tuple[str, bool]:
 
 
 def stable_child_uuid(
-    parent_task: dict | None,
-    child_task: dict | None,
+    parent_task: Mapping[str, object] | None,
+    child_task: Mapping[str, object] | None,
     *,
     task_uuid_or_empty,
     coerce_int,

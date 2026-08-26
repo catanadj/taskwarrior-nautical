@@ -11,6 +11,10 @@ from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_m
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
 
+
+def _build_slot_datetime(day, hhmm):
+    return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
+
 def _preview_seed_base(task: TaskPayload, fallback_chain_id: str) -> str:
     """Resolve the stable preview identity at the raw-input boundary."""
     return str(task.get("chainID") or fallback_chain_id).strip()
@@ -175,7 +179,7 @@ def anchor_preview_seed_context(
     now_local: datetime,
     user_provided_due: bool,
     *,
-    root_uuid_from: Callable[[dict[str, Any]], str | None],
+    root_uuid_from: Callable[[TaskPayload], str | None],
 ) -> tuple[Any, Any, str]:
     base_local_date = due_day if user_provided_due else now_local.date()
     seed_base = _preview_seed_base(task, root_uuid_from(task) or "preview")
@@ -229,7 +233,7 @@ def anchor_preview_first_due(
         first_due_local_dt = outcome.local_datetime
     else:
         first_due_local_dt = None
-    if not first_due_local_dt:
+    if first_due_local_dt is None:
         if omit_dnf:
             message = "No matching anchor dates found. Omit rules removed every future occurrence."
         else:
@@ -239,6 +243,7 @@ def anchor_preview_first_due(
                 else "No matching anchor occurrences found."
             )
         error_and_exit([("anchor pattern", message)])
+        raise RuntimeError("anchor preview terminated")
 
     prof.add_ms("anchor:first_occurrence", (time.perf_counter() - t_first) * 1000.0)
 
@@ -608,7 +613,7 @@ def _collect_included_with_provider(
         limit=limit,
         inclusive=inclusive,
         max_iterations=max_iterations,
-        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        build_local_datetime=_build_slot_datetime,
         to_local=lambda value: value,
     )
     if return_occurrences:
@@ -639,7 +644,7 @@ def _collect_events_with_provider(
     anchor_file_provider: Any | None = None,
     evaluator: Any | None = None,
     scheduler_service: Any | None = None,
-) -> list[Occurrence] | list[tuple[datetime, bool]]:
+    ) -> list[Any]:
     if scheduler_service is not None:
         from .scheduler_cursor import OccurrenceCursor
 
@@ -688,7 +693,7 @@ def _collect_events_with_provider(
             limit=limit_included,
             inclusive=inclusive,
             max_iterations=max_iterations,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+            build_local_datetime=_build_slot_datetime,
             to_local=lambda value: value,
         )
         if return_occurrences:
@@ -751,7 +756,7 @@ def _collect_events_with_provider(
         limit=limit_included,
         inclusive=inclusive,
         max_iterations=max_iterations,
-        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+        build_local_datetime=_build_slot_datetime,
         to_local=lambda value: value,
     )
     if return_occurrences:
@@ -1050,7 +1055,7 @@ def handle_anchor_preview_on_add(
     preview_hard_cap: int,
     max_summary_links: int,
     core: Any,
-    root_uuid_from: Callable[[dict[str, Any]], str | None],
+    root_uuid_from: Callable[[TaskPayload], str | None],
     short: Callable[[Any], str],
     validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],

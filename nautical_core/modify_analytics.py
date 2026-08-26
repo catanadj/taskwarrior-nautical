@@ -145,8 +145,12 @@ def chain_health_advice(
         ]
         gaps = [gap for gap in gaps if gap > 0]
         if gaps:
-            median_gap = _median(gaps)
-            if kind == "cp":
+            median = _median(gaps)
+            if median is None:
+                median_gap = None
+            else:
+                median_gap = median
+            if median is not None and kind == "cp":
                 interval = core.cp_sequence_interval_for_link(
                     task.get("cp") or "",
                     coerce_int(task.get("link"), 1),
@@ -154,8 +158,8 @@ def chain_health_advice(
                 )
                 if interval:
                     drift_secs = median_gap - interval.total_seconds()
-            elif len(gaps) >= 2:
-                drift_secs = gaps[-1] - median_gap
+            elif median is not None and len(gaps) >= 2:
+                drift_secs = gaps[-1] - median
 
     style = (style or "coach").strip().lower()
     if style == "clinical":

@@ -478,7 +478,7 @@ def _timeline_no_text(no: object) -> str:
 def _timeline_base_line(
     no: object,
     dt: Any,
-    obj: dict[str, Any],
+    obj: TaskPayload,
     item_type: str,
     *,
     task: TaskPayload,

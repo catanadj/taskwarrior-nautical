@@ -6,7 +6,7 @@ from datetime import timedelta
 
 from .business_calendar import is_business_day as default_is_business_day
 from .scheduler_models import OccurrenceSearchExhausted
-from .scheduler_trace import active_trace
+from .scheduler_trace import SchedulerTrace, active_trace
 
 
 def base_next_after_atom(
@@ -270,8 +270,8 @@ def next_after_atom_with_mods(
     spec = atom.get("spec") or ""
     roll_kind = mods.get("roll")
     probe = ref_d - timedelta(days=1) if roll_kind == "next-wd" else ref_d
-    trace = active_trace()
-    trace_enabled = trace is not None
+    trace = active_trace() or SchedulerTrace(enabled=False)
+    trace_enabled = trace.enabled
 
     if ival == 1 and not active_mod_keys(mods):
         candidate = base_next_after_atom(atom, ref_d, seed_base=seed_base)

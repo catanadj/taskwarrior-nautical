@@ -165,9 +165,10 @@ class ChainSnapshotService:
         validation_error = self._validate_rows(request, read.value)
         if validation_error:
             return Unavailable(self._query(request), self._invalid_response(read.value, validation_error))
-        snapshot = self.from_rows(request, read.value.rows, source="taskwarrior.authoritative_export")
-        if isinstance(snapshot, Unavailable):
-            return Unavailable(self._query(request), self._invalid_response(read.value, snapshot.reason))
+        normalized_snapshot = self.from_rows(request, read.value.rows, source="taskwarrior.authoritative_export")
+        if isinstance(normalized_snapshot, Unavailable):
+            return Unavailable(self._query(request), self._invalid_response(read.value, normalized_snapshot.reason))
+        snapshot = normalized_snapshot
         self._normalized[cache_key] = snapshot
         return Found(snapshot, self._query(request))
 

@@ -1522,8 +1522,8 @@ def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: s
             "chainID": chain_id,
             "link": 1,
             "chainMax": limit,
-            "due": "20270101T090000Z",
-            "modified": "20270101T090000Z",
+            "due": "20260101T090000Z",
+            "modified": "20260101T090000Z",
         }
     return {
         "uuid": parent_uuid,
@@ -1535,8 +1535,8 @@ def _completion_fixture(kind: str, sample_index: int, *, nonfinal: bool, mode: s
         "chainID": chain_id,
         "link": 1,
         "chainMax": limit,
-        "due": "20270105T090000Z",
-        "modified": "20270105T090000Z",
+        "due": "20260105T090000Z",
+        "modified": "20260105T090000Z",
     }
 
 
@@ -1821,7 +1821,7 @@ def _bench_expensive_workflows(
             fresh_call_stats: list[dict[str, int]] = []
             for sample_index in range(repeats):
                 old = _completion_fixture(kind, sample_index, nonfinal=nonfinal, mode="fresh")
-                new = dict(old, status="completed", end="20270101T100000Z" if kind == "cp" else "20270105T100000Z")
+                new = dict(old, status="completed", end="20260101T100000Z" if kind == "cp" else "20260105T100000Z")
                 taskdata = root / f"{name}-fresh-{sample_index}"
                 taskdata.mkdir()
                 stats_path = taskdata / "on-modify-task-stats.json"

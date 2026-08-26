@@ -157,6 +157,7 @@ def anchor_times_for_date(
         if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}
+                slots: list[Any]
                 if project_time is not None:
                     from .time_projection import (
                         ProjectedTime,

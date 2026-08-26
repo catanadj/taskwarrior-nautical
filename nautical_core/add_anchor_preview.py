@@ -850,16 +850,26 @@ def handle_anchor_file_preview_on_add(
     prof.add_ms("anchor_file:occurrences", (time.perf_counter() - t_occ) * 1000.0)
     if not all_occurrences:
         error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
+        raise RuntimeError("anchor-file preview terminated")
+
+    occurrence_datetimes = [
+        item.local_datetime if isinstance(item, Occurrence) else item
+        for item in all_occurrences
+    ]
+    occurrence_datetimes = [item for item in occurrence_datetimes if isinstance(item, datetime)]
+    if not occurrence_datetimes:
+        error_and_exit([("anchor_file", "Anchor-file occurrences did not contain valid local timestamps.")])
+        raise RuntimeError("anchor-file preview terminated")
 
     due_local_dt = core.to_local(due_dt)
     if compact_presentation:
-        first_due_local_dt = all_occurrences[0]
+        first_due_local_dt = occurrence_datetimes[0]
     elif user_provided_due:
-        first_due_local_dt = next((dt for dt in all_occurrences if compare_datetimes(dt, due_local_dt) > 0), None)
+        first_due_local_dt = next((dt for dt in occurrence_datetimes if compare_datetimes(dt, due_local_dt) > 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found after the provided due.")])
     else:
-        first_due_local_dt = next((dt for dt in all_occurrences if compare_datetimes(dt, now_local) >= 0), None)
+        first_due_local_dt = next((dt for dt in occurrence_datetimes if compare_datetimes(dt, now_local) >= 0), None)
         if not first_due_local_dt:
             error_and_exit([("anchor_file", "No matching anchor_file occurrences found.")])
 
@@ -918,7 +928,7 @@ def handle_anchor_file_preview_on_add(
     final_until_dt = None
     if not compact_presentation and until_dt:
         until_local = core.to_local(until_dt)
-        limited = [dt for dt in all_occurrences if compare_datetimes(dt, until_local) <= 0]
+        limited = [dt for dt in occurrence_datetimes if compare_datetimes(dt, until_local) <= 0]
         exact_until_count = max(0, len(limited) - 1)
         if limited:
             final_until_dt = limited[-1].astimezone(timezone.utc)

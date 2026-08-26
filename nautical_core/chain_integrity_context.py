@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 import json
@@ -117,7 +117,7 @@ class IntegrityContext:
     outbox: OutboxSnapshot
     configuration_fingerprint: str = ""
     mutation_epoch: int = 0
-    metadata: Mapping[str, str] = ()
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.graph, ChainGraph):

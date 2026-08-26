@@ -897,8 +897,10 @@ def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stal
             details={"error": str(exc)},
         )
         return {}
-    outbox = payload.get("outbox") if isinstance(payload.get("outbox"), dict) else {}
-    states = outbox.get("states") if isinstance(outbox.get("states"), dict) else {}
+    outbox_value = payload.get("outbox")
+    outbox: dict[str, Any] = dict(outbox_value) if isinstance(outbox_value, dict) else {}
+    states_value = outbox.get("states")
+    states: dict[str, Any] = dict(states_value) if isinstance(states_value, dict) else {}
     quarantined = int(states.get("quarantined") or 0)
     if quarantined:
         _finding(
@@ -909,7 +911,8 @@ def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stal
             fix="Inspect nautical queue-status and resolve the quarantined lifecycle intents.",
             details={"count": quarantined, "sample": outbox.get("sample") or []},
         )
-    schema = outbox.get("schema") if isinstance(outbox.get("schema"), dict) else {}
+    schema_value = outbox.get("schema")
+    schema: dict[str, Any] = dict(schema_value) if isinstance(schema_value, dict) else {}
     schema_status = str(schema.get("status") or "absent")
     if schema_status == "error":
         _finding(
@@ -943,7 +946,8 @@ def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stal
         fix="Run nautical queue-status for lifecycle outbox details." if issues else "",
         details={"issues": issues} if issues else None,
     )
-    retention = outbox.get("retention") if isinstance(outbox.get("retention"), dict) else {}
+    retention_value = outbox.get("retention")
+    retention: dict[str, Any] = dict(retention_value) if isinstance(retention_value, dict) else {}
     eligible = int(retention.get("eligible") or 0)
     if eligible:
         _finding(
@@ -1364,12 +1368,14 @@ def _historical_summaries(findings: list[dict[str, Any]]) -> list[dict[str, Any]
     for item in findings:
         if item.get("severity") != "info":
             continue
-        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        details_value = item.get("details")
+        details: dict[str, Any] = dict(details_value) if isinstance(details_value, dict) else {}
         if not details.get("historical"):
             continue
         chain_id = str(details.get("chainID") or "").strip() or "unassigned"
         invariant_id = str(details.get("invariant_id") or item.get("id") or "historical")
-        observed = details.get("observed") if isinstance(details.get("observed"), dict) else {}
+        observed_value = details.get("observed")
+        observed: dict[str, Any] = dict(observed_value) if isinstance(observed_value, dict) else {}
         field = str(observed.get("field") or "").strip()
         key = (chain_id, invariant_id, field)
         group = groups.setdefault(key, {"count": 0, "subjects": set()})
@@ -1462,7 +1468,8 @@ def _timezone_summary(findings: list[dict[str, Any]]) -> str:
         if check_id == "config.timezone":
             return str(item.get("message") or "").replace("Nautical timezone is available: ", "")
         if check_id in {"config.timezone.missing", "config.timezone.invalid", "config.timezone.unavailable"}:
-            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            details_value = item.get("details")
+            details: dict[str, Any] = dict(details_value) if isinstance(details_value, dict) else {}
             tz_name = str(details.get("tz") or "?")
             return f"{tz_name} unavailable; UTC fallback active"
     return ""

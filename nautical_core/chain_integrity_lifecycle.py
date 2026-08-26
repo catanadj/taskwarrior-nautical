@@ -370,12 +370,13 @@ def resolve_existing_child(
     return short_uuid(child_uuid), ""
 
 
-def recurrence_kind(task: TaskObservation) -> str:
+def recurrence_kind(task: TaskObservation | NauticalTask) -> str:
     # Recovery only needs the recurrence family to carry native-until policy;
     # full schedule compilation belongs to the scheduler service.
-    if TaskCodec.normalize_text(_observation_value(task, "anchor")):
+    observation = task if isinstance(task, TaskObservation) else task.observation
+    if TaskCodec.normalize_text(_observation_value(observation, "anchor")):
         return "anchor"
-    if TaskCodec.normalize_text(_observation_value(task, "anchor_file")):
+    if TaskCodec.normalize_text(_observation_value(observation, "anchor_file")):
         return "anchor_file"
     return "cp"
 
@@ -468,6 +469,7 @@ def _plan_recovery_decision_unscoped(
 ) -> LifecycleRecoveryDecision:
     generation = generation or _generation_service(hook)
     observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery")
+    meta: dict[str, Any] = {}
     try:
         operational_parent = NauticalTask.from_observation(observation)
     except (TypeError, ValueError) as exc:
@@ -597,9 +599,11 @@ def _plan_recovery_decision_unscoped(
             child_due = expiration.child_due
             meta = dict(expiration.metadata)
         elif kind in {"anchor", "anchor_file"}:
-            child_due, meta, _dnf = generation.compute_anchor_child_due(operational_parent)
+            child_due, raw_meta, _dnf = generation.compute_anchor_child_due(operational_parent)
+            meta = dict(raw_meta or {})
         else:
-            child_due, meta = generation.compute_cp_child_due(operational_parent)
+            child_due, raw_meta = generation.compute_cp_child_due(operational_parent)
+            meta = dict(raw_meta or {})
     except Exception as exc:
         if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
             return LifecycleRecoveryDecision(

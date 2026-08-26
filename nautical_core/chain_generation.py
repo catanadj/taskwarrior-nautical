@@ -195,10 +195,18 @@ class ChainGenerationService:
         if cached is not None:
             self._evaluator_cache.move_to_end(key)
             return cached
+        # Capture the active timezone before calendar lookup; the calendar
+        # adapter may refresh facade configuration as a side effect.
+        local_timezone = getattr(self.core, "_LOCAL_TZ", None)
+        business_calendar = (
+            self.core.business_calendar_for_task(task.observation)
+            if str(task.get("bc") or "").strip()
+            else getattr(self.core, "DEFAULT_BUSINESS_CALENDAR", None)
+        )
         context = RecurrenceContext.from_observation(
             task.observation,
-            timezone=getattr(self.core, "_LOCAL_TZ", None),
-            business_calendar=self.core.business_calendar_for_task(task.observation),
+            timezone=local_timezone,
+            business_calendar=business_calendar,
             astronomy_config=getattr(self.core, "ASTRONOMY_CONFIG", None),
             anchor_file_dir=getattr(self.core, "ANCHOR_FILE_DIR", ""),
         )

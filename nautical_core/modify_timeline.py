@@ -224,7 +224,6 @@ def _timeline_future_anchor_items(
                 fallback_hhmm=fallback_hhmm,
             ),
         )
-    assert provider is not None
     after_local = nxt_local
     iterations = 0
     actual_future = 0
@@ -256,6 +255,7 @@ def _timeline_future_anchor_items(
                 else:
                     next_local = None
             else:
+                assert provider is not None
                 occurrence = provider.next_after(
                     after_local,
                     build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),

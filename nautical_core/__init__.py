@@ -135,7 +135,7 @@ class _LazyApiBundle:
                 ensure_tokens()
             _ensure_public_models()
             refresh_config = globals().get("_refresh_facade_config_exports")
-            if callable(refresh_config):
+            if callable(refresh_config) and not globals().get("_FACADE_CONFIG_SYNCED", False):
                 refresh_config()
             module = _import_sibling(self._module_name)
             self._module = module

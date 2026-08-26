@@ -951,7 +951,10 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repos
         configuration_fingerprint=configuration.fingerprint,
     ).from_rows(
         IntegritySnapshotRequest.candidates(complete_chain_history=True),
-        rows,
+        tuple(
+            DEFAULT_TASK_CODEC.decode_row(row, source_query="reconcile integrity snapshot")
+            for row in rows
+        ),
         source="lifecycle.lifecycle_candidates",
         coverage=SnapshotCoverage.CHAIN,
     )
@@ -1749,6 +1752,8 @@ def main(
                 snapshot.invalidate()
                 candidates = lifecycle_service.candidates()
     except Exception as exc:
+        if os.environ.get("NAUTICAL_DIAG") == "1":
+            print(f"[nautical] integrity audit unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
         integrity_audit_result = None
         if args.apply:
             configuration_status = "unavailable"

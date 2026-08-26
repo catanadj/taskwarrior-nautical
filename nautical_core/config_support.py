@@ -88,6 +88,7 @@ def path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None
         return "empty path"
     try:
         target_exists = os.path.exists(ap)
+        probe: str
         if target_exists:
             if expect_dir and not os.path.isdir(ap):
                 return "not a directory"

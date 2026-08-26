@@ -51,7 +51,7 @@ class ConfiguredBusinessCalendar:
         return included and not excluded
 
 
-DEFAULT_BUSINESS_CALENDAR: BusinessCalendar = WeekdayBusinessCalendar()
+DEFAULT_BUSINESS_CALENDAR = WeekdayBusinessCalendar()
 WEEKDAY_BUSINESS_DAYS = frozenset({0, 1, 2, 3, 4})
 _ACTIVE_BUSINESS_CALENDAR: ContextVar[BusinessCalendar] = ContextVar(
     "nautical_business_calendar",

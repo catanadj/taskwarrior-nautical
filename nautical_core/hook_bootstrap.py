@@ -62,15 +62,15 @@ def ensure_utf8_stdio() -> None:
 
 
 def trusted_core_base(default_base: Path, *, env: dict[str, str] | None = None, diag_enabled: bool = False) -> Path:
-    env = env or os.environ
-    raw = (env.get("NAUTICAL_CORE_PATH") or "").strip()
+    env_map = os.environ if env is None else env
+    raw = (env_map.get("NAUTICAL_CORE_PATH") or "").strip()
     if not raw:
         return default_base
     try:
         cand = Path(raw).expanduser().resolve()
     except Exception:
         return default_base
-    if (env.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
+    if (env_map.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on"):
         return cand
     try:
         st = os.stat(cand)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, cast
 
 
 QUERY_API_VERSION = 1
@@ -249,7 +249,10 @@ class OccurrenceQueryRequest:
                 else (1 if operation == NEXT_OPERATION and at_value is not None else None)
             ),
             start_inclusive=_bool(value.get("start_inclusive", True), "start_inclusive"),
-            omission_policy=str(value.get("omission_policy", "exclude")),
+            omission_policy=cast(
+                Literal["exclude", "include", "report"],
+                str(value.get("omission_policy", "exclude")),
+            ),
             max_tasks=value.get("max_tasks", DEFAULT_MAX_TASKS),
             max_occurrences=value.get("max_occurrences", DEFAULT_MAX_OCCURRENCES),
             max_total_occurrences=value.get("max_total_occurrences", DEFAULT_MAX_TOTAL_OCCURRENCES),

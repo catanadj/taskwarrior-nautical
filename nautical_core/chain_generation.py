@@ -117,6 +117,10 @@ class ChainGenerationService:
         repr=False,
     )
     _evaluator_cache_limit: int = field(default=128, repr=False)
+    _mode_cache: OrderedDict[tuple[Any, ...], Any] = field(
+        default_factory=OrderedDict,
+        repr=False,
+    )
 
     @classmethod
     def from_core(
@@ -298,14 +302,28 @@ class ChainGenerationService:
         if end_local is None or due_local is None:
             return None, None, None
         try:
-            result = scheduler.select_mode(
-                str(task.get("anchor_mode") or "skip").strip().lower() or "skip",
-                due_local=due_local,
-                end_local=end_local,
-                due_explicit=due_dt is not None,
-                fallback_hhmm=(due_local.hour, due_local.minute),
-                default_seed_date=due_local.date(),
+            mode = str(task.get("anchor_mode") or "skip").strip().lower() or "skip"
+            mode_key = (
+                scheduler.fingerprint,
+                mode,
+                due_local,
+                end_local,
+                due_dt is not None,
             )
+            result = self._mode_cache.get(mode_key)
+            if result is None:
+                result = scheduler.select_mode(
+                    mode,
+                    due_local=due_local,
+                    end_local=end_local,
+                    due_explicit=due_dt is not None,
+                    fallback_hhmm=(due_local.hour, due_local.minute),
+                    default_seed_date=due_local.date(),
+                )
+                self._mode_cache[mode_key] = result
+                self._mode_cache.move_to_end(mode_key)
+                while len(self._mode_cache) > max(1, self._evaluator_cache_limit):
+                    self._mode_cache.popitem(last=False)
         except ValueError as exc:
             if "Occurrence omission scan exceeded" in str(exc):
                 raise ValueError("No valid anchor occurrences found after applying omit rules.") from exc

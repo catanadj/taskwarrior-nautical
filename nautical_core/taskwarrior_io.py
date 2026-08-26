@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 
 JsonScalar: TypeAlias = None | bool | int | float | str
@@ -31,7 +31,7 @@ class TaskDocument:
     def from_object(cls, value: object) -> "TaskDocument | None":
         if not is_json_object(value):
             return None
-        return cls(value)
+        return cls(cast(JsonObject, value))
 
     def as_dict(self) -> JsonObject:
         """Return the live payload so hook mutations remain lossless."""

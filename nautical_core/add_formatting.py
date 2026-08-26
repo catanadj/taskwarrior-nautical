@@ -113,7 +113,7 @@ def format_anchor_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, st
         upcoming_start=upcoming_start,
     )
     out = _anchor_compose_rows(grouped)
-    return out or rows
+    return out or [(key, value) for key, value in rows]
 
 
 def format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
@@ -188,4 +188,4 @@ def format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     _add(limits)
     _add(warnings)
     _add(chain)
-    return out or rows
+    return out or [(key, value) for key, value in rows]

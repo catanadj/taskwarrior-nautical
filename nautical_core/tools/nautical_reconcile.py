@@ -1848,7 +1848,10 @@ def main(
             configuration_drift_reason = f"wave child-slot evidence unavailable: {type(exc).__name__}: {exc}"
         stage_seconds["hydration"] += time.perf_counter() - hydration_started
     wave_results: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
-    if args.apply and configuration_status == "valid" and taskdata is not None:
+    # A wave is useful for batching multiple independent candidates.  For a
+    # single candidate it only adds a dry planning pass before the same guarded
+    # application path, so keep the one-candidate case on the direct route.
+    if args.apply and len(candidates) > 1 and configuration_status == "valid" and taskdata is not None:
         wave_plans: dict[str, tuple[lifecycle.LifecycleRecoveryDecision, str]] = {}
         planning_started = time.perf_counter()
         for parent_observation in candidates:
@@ -2043,6 +2046,10 @@ def main(
         seconds=float(read_metrics["seconds"]),
         slowest_seconds=float(read_metrics["slowest_seconds"]),
     )
+    # Export timing is owned by the repository metrics; integrity audit timing
+    # is the authoritative verification segment for this invocation.
+    stage_seconds["export"] = float(_EXPORT_STATS["seconds"])
+    stage_seconds["verification"] += integrity_seconds
     summary = {
         "schema": _JSON_SCHEMA,
         "schema_version": _JSON_SCHEMA_VERSION,

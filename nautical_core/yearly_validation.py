@@ -212,6 +212,7 @@ def validate_yearly_token_detailed(tok: str, fmt: str, *, year_token_format_erro
             a, b = int(m_col1.group(1)), int(m_col1.group(2))
             ex = f"{a:02d}-{b:02d}" if fmt == "MD" else f"{b:02d}-{a:02d}"
         else:
+            assert m_col2 is not None
             a, b, c, d = map(int, m_col2.groups())
             ex = (
                 f"{a:02d}-{b:02d}..{c:02d}-{d:02d}"

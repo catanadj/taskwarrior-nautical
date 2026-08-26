@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, TypeVar
 
 from .chain_integrity_models import (
     ChainNode,
@@ -16,7 +16,10 @@ from .chain_integrity_models import (
 )
 
 
-def _index(values: Mapping[object, list[ChainNode]]) -> Mapping[object, tuple[ChainNode, ...]]:
+IndexKey = TypeVar("IndexKey", str, tuple[str, int])
+
+
+def _index(values: Mapping[IndexKey, list[ChainNode]]) -> Mapping[IndexKey, tuple[ChainNode, ...]]:
     return MappingProxyType({key: tuple(items) for key, items in values.items()})
 
 

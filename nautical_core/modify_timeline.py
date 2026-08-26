@@ -7,7 +7,11 @@ from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_m
 from .timeutil import compare_datetimes
 from .task_models import TaskObservation, TaskPayload
 
-TimelineItem = tuple[object, Any, dict[str, Any], str]
+TimelineItem = tuple[object, Any, TaskPayload, str]
+
+
+def _build_slot_datetime(day, hhmm):
+    return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
 
 def _timeline_seed_base(task: TaskPayload) -> str:
@@ -42,7 +46,7 @@ def _timeline_styles(
     task: TaskPayload,
     kind: str,
     *,
-    future_style_for_chain: Callable[[dict[str, Any], str], str],
+    future_style_for_chain: Callable[[TaskPayload, str], str],
 ) -> tuple[str, str, str, str]:
     if kind == "cp":
         prev_style = "dim green"
@@ -105,7 +109,7 @@ def _timeline_initial_items(
     child_short: str,
     *,
     core: Any,
-    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
+    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
 ) -> list[TimelineItem]:
     items: list[TimelineItem] = []
@@ -258,7 +262,7 @@ def _timeline_future_anchor_items(
                 assert provider is not None
                 occurrence = provider.next_after(
                     after_local,
-                    build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                    build_local_datetime=_build_slot_datetime,
                     to_local=lambda value: value,
                 )
                 next_local = occurrence.local_datetime if occurrence is not None else None
@@ -413,7 +417,7 @@ def _timeline_omitted_before_next_anchor_items(
         try:
             occurrence = provider.next_after(
                 after_local,
-                build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
+                    build_local_datetime=_build_slot_datetime,
                 to_local=lambda value: value,
             )
             next_local = occurrence.local_datetime if occurrence is not None else None
@@ -569,8 +573,8 @@ def anchor_file_timeline_lines(
     round_anchor_gaps: bool,
     core: Any,
     max_iterations: int,
-    future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
+    future_style_for_chain: Callable[[TaskPayload, str], str],
+    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -719,8 +723,8 @@ def timeline_lines(
     round_anchor_gaps: bool = True,
     core: Any,
     max_iterations: int,
-    future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
+    future_style_for_chain: Callable[[TaskPayload, str], str],
+    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -853,8 +857,8 @@ def timeline_lines_for_task(
     round_anchor_gaps: bool = True,
     core: Any,
     max_iterations: int,
-    future_style_for_chain: Callable[[dict[str, Any], str], str],
-    collect_prev_two: Callable[[dict[str, Any]], list[TaskObservation]],
+    future_style_for_chain: Callable[[TaskPayload, str], str],
+    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -865,9 +869,9 @@ def timeline_lines_for_task(
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     format_gap: Callable[[Any, Any, str, bool], str],
     module_loader: Callable[[str], Any],
-    omit_dnf_from_parent: Callable[[dict[str, Any]], tuple[str, Any]],
-    recurrence_evaluator_for_task: Callable[[dict[str, Any]], Any],
-    scheduler_service_for_task: Callable[[dict[str, Any]], Any],
+    omit_dnf_from_parent: Callable[[TaskPayload], tuple[str, Any]],
+    recurrence_evaluator_for_task: Callable[[TaskPayload], Any],
+    scheduler_service_for_task: Callable[[TaskPayload], Any],
 ) -> list[str]:
     """Resolve task-scoped context and render the appropriate timeline."""
     if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):

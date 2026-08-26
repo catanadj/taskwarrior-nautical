@@ -1309,6 +1309,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
+        _diag(f"on-add unexpected error; passthrough emitted: {type(e).__name__}: {e}")
         if os.environ.get("NAUTICAL_DIAG") == "1":
             try:
                 sys.stderr.write(f"[nautical] on-add unexpected error: {e}\n")

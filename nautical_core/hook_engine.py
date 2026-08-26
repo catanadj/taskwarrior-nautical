@@ -57,7 +57,7 @@ class OnExitServices(Protocol):
 def handle_on_add(
     request,
     services: OnAddServices,
-) -> None:
+) -> object:
     task = request.task
     prof = request.prof
     runtime = request.runtime

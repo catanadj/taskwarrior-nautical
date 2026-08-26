@@ -17,6 +17,7 @@ from typing import Any
 from nautical_core import hook_bootstrap
 from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES, OPERATOR_RUNTIME_FILES
 
+fcntl: Any
 try:
     import fcntl
 except Exception:
@@ -458,7 +459,7 @@ def validate_installed(
 class _InstallLock:
     def __init__(self, path: Path):
         self.path = path
-        self.handle = None
+        self.handle: Any = None
         self.fallback_fd: int | None = None
 
     def __enter__(self):

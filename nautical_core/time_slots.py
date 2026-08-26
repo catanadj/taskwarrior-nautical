@@ -84,11 +84,11 @@ def resolve_time_slots(
             local = to_local(event) if to_local is not None else event
             slot = (int(local.hour), int(local.minute))
             return [_apply_offset(slot, offset_minutes)]
-        parsed_slots: list[tuple[int, int] | None] = [_parse_hhmm(part) for part in value.split(",")]
         parsed: list[tuple[int, int]] = []
-        for slot in parsed_slots:
-            if slot is not None:
-                parsed.append(slot)
+        for part in value.split(","):
+            parsed_slot = _parse_hhmm(part)
+            if parsed_slot is not None:
+                parsed.append(parsed_slot)
         return [_apply_offset(slot, offset_minutes) for slot in parsed] if offset_minutes else parsed
 
     return []

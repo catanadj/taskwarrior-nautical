@@ -213,7 +213,7 @@ def normalize_selection_node(node: object) -> SelectionNode:
     if not isinstance(node, dict) or node.get("kind") != "select":
         raise ValueError("Selection node must be a mapping with kind='select'.")
 
-    scope = _normalize_scope(node.get("scope"))
+    scope = _normalize_scope(str(node.get("scope") or ""))
     raw_positions = node.get("positions")
     if not isinstance(raw_positions, (list, tuple)) or not raw_positions:
         raise ValueError("Selection node positions must be a non-empty list or tuple.")
@@ -964,7 +964,7 @@ def next_selected_date_with_modifiers(
 
     # Supported rolls and fixed offsets are monotonic. Find the latest selected
     # base whose transformed date is not after the reference, then advance once.
-    boundary = None
+    boundary: date | None = None
     period_probe = after_day
     for _ in range(max_periods):
         selected = _selected_candidates_in_period(
@@ -993,7 +993,7 @@ def next_selected_date_with_modifiers(
     probe = boundary
     max_occurrences = max_periods * max(1, len(normalized["positions"]))
     for _ in range(max_occurrences):
-        base = next_selected_date(
+        candidate_base = next_selected_date(
             normalized,
             probe,
             matches_on=matches_on,
@@ -1002,12 +1002,12 @@ def next_selected_date_with_modifiers(
             calendar_fingerprint=calendar_fingerprint,
             max_periods=max_periods,
         )
-        if base is None:
+        if candidate_base is None:
             return None
-        transformed = apply_modifiers(base, normalized["mods"])
+        transformed = apply_modifiers(candidate_base, normalized["mods"])
         if transformed > after_day:
             return transformed
-        probe = base
+        probe = candidate_base
     return None
 
 

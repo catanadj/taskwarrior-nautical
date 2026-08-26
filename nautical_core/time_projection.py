@@ -122,7 +122,14 @@ class TimeProjectionService:
                 seed_base=seed_base,
                 context=context,
             )
-            slots = tuple(tuple(slot) for slot in raw_slots)
+            normalized_slots: list[tuple[int, int, int]] = []
+            for slot in raw_slots:
+                values = tuple(slot)
+                if len(values) == 2:
+                    normalized_slots.append((0, int(values[0]), int(values[1])))
+                elif len(values) == 3:
+                    normalized_slots.append((int(values[0]), int(values[1]), int(values[2])))
+            slots = tuple(normalized_slots)
             if not slots:
                 return ProjectionInvalid(
                     selected_date,

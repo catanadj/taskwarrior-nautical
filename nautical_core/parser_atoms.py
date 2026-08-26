@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+from typing import Any
 
 from . import astronomy
 from .moon_phase import canonical_phase
@@ -51,7 +52,7 @@ def parse_atom_mods(
     day_offset_re,
     parse_error_cls,
 ):
-    mods = {
+    mods: dict[str, Any] = {
         "t": None,
         "roll": None,
         "wd": None,

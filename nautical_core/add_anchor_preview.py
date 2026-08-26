@@ -15,6 +15,16 @@ from .task_models import TaskPayload
 def _build_slot_datetime(day, hhmm):
     return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
+
+def _event_datetime(event: Any) -> datetime | None:
+    value = event.local_datetime if isinstance(event, Occurrence) else (event[0] if isinstance(event, tuple) and event else event)
+    return value if isinstance(value, datetime) else None
+
+
+def _event_on_or_before(event: Any, boundary: datetime) -> bool:
+    value = _event_datetime(event)
+    return value is not None and compare_datetimes(value, boundary) <= 0
+
 def _preview_seed_base(task: TaskPayload, fallback_chain_id: str) -> str:
     """Resolve the stable preview identity at the raw-input boundary."""
     return str(task.get("chainID") or fallback_chain_id).strip()
@@ -963,10 +973,7 @@ def handle_anchor_file_preview_on_add(
             events = [
                 event
                 for event in events
-                if compare_datetimes(
-                    event.local_datetime if isinstance(event, Occurrence) else event[0],
-                    until_local,
-                ) <= 0
+                if _event_on_or_before(event, until_local)
             ]
         preview_rows = _preview_occurrence_lines(
             events,
@@ -1083,9 +1090,9 @@ def handle_anchor_preview_on_add(
     panel: Callable[..., None],
     human_delta: Callable[[Any, Any, bool], str],
     error_and_exit: Callable[[list[tuple[str, str]]], None],
-    validate_native_until_after_target: Callable[[dict[str, Any], datetime, str], None],
+    validate_native_until_after_target: Callable[[TaskPayload, datetime, str], None],
     validate_native_until_anchor_slots: Callable[[dict[str, Any], datetime, Any, str, tuple[int, int]], None],
-    append_first_expiration_row: Callable[[list[tuple[str, str]], dict[str, Any], datetime, str], None],
+    append_first_expiration_row: Callable[[list[tuple[str, str]], TaskPayload, datetime, str], None],
 ) -> None:
     rows: list[tuple[str, str]] = []
     panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
@@ -1437,7 +1444,7 @@ def handle_anchor_preview_on_add(
         presentation_terminal = getattr(all_occurrences, "terminal", None)
         if until_dt:
             until_local = core.to_local(until_dt)
-            limited = [dt for dt in all_occurrences if compare_datetimes(dt, until_local) <= 0]
+            limited = [dt for dt in all_occurrences if _event_on_or_before(dt, until_local)]
             exact_until_count = max(0, len(limited) - 1)
             if limited:
                 final_until_dt = limited[-1].astimezone(timezone.utc)
@@ -1471,10 +1478,7 @@ def handle_anchor_preview_on_add(
             events = [
                 event
                 for event in events
-                if compare_datetimes(
-                    event.local_datetime if isinstance(event, Occurrence) else event[0],
-                    until_local,
-                ) <= 0
+                if _event_on_or_before(event, until_local)
             ]
         preview = _preview_occurrence_lines(
             events,
@@ -1521,7 +1525,9 @@ def handle_anchor_preview_on_add(
             scheduler_service=scheduler_service,
         )
         if len(future_for_max) == future_needed:
-            final_max_dt = future_for_max[-1].astimezone(timezone.utc)
+            final_max_local = _event_datetime(future_for_max[-1])
+            if final_max_local is not None:
+                final_max_dt = final_max_local.astimezone(timezone.utc)
 
     if not compact_presentation:
         anchor_preview_limit_rows(

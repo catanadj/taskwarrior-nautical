@@ -749,7 +749,7 @@ def lifecycle_result_feedback_facts(lifecycle_result) -> FeedbackFacts:
     """Convert an application result to immutable presentation facts."""
     state = str(getattr(lifecycle_result, "state", "") or "").strip().lower()
     reason = str(getattr(lifecycle_result, "reason", "") or "").strip()
-    recovery = ()
+    recovery: tuple[str, ...] = ()
     if state in {"retryable", "manual_review", "stale"}:
         recovery = ("Run nautical reconcile --apply if recovery remains pending.",)
     return FeedbackFacts(

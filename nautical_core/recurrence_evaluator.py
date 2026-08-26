@@ -798,7 +798,7 @@ class RecurrenceEvaluator:
         *,
         limit: int,
         **kwargs: Any,
-    ) -> list[Occurrence]:
+    ) -> OccurrenceBatch[Occurrence]:
         """Collect occurrences from an explicit cursor contract."""
         if not isinstance(cursor, OccurrenceCursor):
             raise TypeError("Occurrence collection requires an OccurrenceCursor.")
@@ -807,12 +807,13 @@ class RecurrenceEvaluator:
             actual = getattr(cursor.timezone, "key", cursor.timezone)
             if str(expected) != str(actual):
                 raise ValueError("Occurrence cursor timezone does not match evaluator context.")
-        return self.collect_after(
+        values = self.collect_after(
             cursor.local_datetime,
             limit=limit,
             inclusive=cursor.inclusive,
             **kwargs,
         )
+        return OccurrenceBatch(values)
 
     @staticmethod
     def _core_module() -> Any:

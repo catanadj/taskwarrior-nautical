@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -125,7 +126,7 @@ def tw_get_cached(host: Any, ref: str) -> str:
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
             cached, cache_chain_id = service.lookup_short(short) if short else (None, "")
-            if short and hasattr(cached, "get"):
+            if short and isinstance(cached, Mapping):
                 host._diag_count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
             if short and cache_chain_id:

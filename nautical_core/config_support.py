@@ -94,9 +94,10 @@ def path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None
                 return "not a directory"
             probe = ap
         else:
-            probe = nearest_existing_dir(ap)
-            if not probe:
+            parent_probe = nearest_existing_dir(ap)
+            if not parent_probe:
                 return "no existing parent directory"
+            probe = parent_probe
 
         st = os.stat(probe)
         if target_exists:

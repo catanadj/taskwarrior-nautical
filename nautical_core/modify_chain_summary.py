@@ -224,7 +224,7 @@ def render_chain_summary(
 
     chain_read_error = ""
     try:
-        chain = export_sorted_chain(chain_id, actual_current)
+        chain = export_sorted_chain(chain_id, dict(actual_current))
     except Exception as exc:
         chain = []
         chain_read_error = str(exc) or "chain export unavailable"

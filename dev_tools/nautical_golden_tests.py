@@ -8329,8 +8329,10 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     def load_core():
         calls["load"] += 1
 
-    def handle_deleted(old, new, _unit_of_work):
+    def handle_deleted(*args):
         calls["deleted"] += 1
+        mappings = [value for value in args if isinstance(value, dict)]
+        old, new = mappings[-2:]
         expect(old.get("status") == "pending", f"delete handler should receive old pending task: {old!r}")
         expect(new.get("status") == "deleted", f"delete handler should receive new deleted task: {new!r}")
 
@@ -19389,7 +19391,7 @@ def test_hook_run_task_falls_back_when_core_load_fails():
     """on-modify uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_fallback_test")
-    result = mod._module("modify_command_effects").run_task_result(mod, [sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
+    result = core.run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
     expect(result.ok, f"typed on-modify command failed: {result}")
     expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
 
@@ -19398,7 +19400,7 @@ def test_on_add_run_task_falls_back_when_core_load_fails():
     """on-add uses the typed client independently of core facade loading."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_fallback_test")
-    result = mod._module("modify_command_effects").run_task_result(mod, [sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
+    result = core.run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
     expect(result.ok, f"typed on-add command failed: {result}")
     expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
 
@@ -24231,7 +24233,11 @@ def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
         expected = [(18, 45)]
         expect(time_slots.resolve_time_slots(value, date(2026, 7, 6), to_local=core.to_local) == expected, "shared resolver drifted")
         expect(add_mod._resolve_time_slots(value, date(2026, 7, 6)) == expected, "on-add resolver drifted")
-        expect(modify_mod._norm_hhmm_list(value, date(2026, 7, 6)) == expected, "on-modify resolver drifted")
+        modify_time = modify_mod._module("modify_time_effects")
+        expect(
+            modify_time.normalize_hhmm_list(modify_mod, value, date(2026, 7, 6)) == expected,
+            "on-modify resolver drifted",
+        )
     finally:
         time_slots.astronomy.resolve_event = original_event
         core.to_local = original_to_local
@@ -31721,8 +31727,7 @@ def test_on_add_run_task_timeout():
     """on-add typed command execution reports timeouts."""
     hook = _find_hook_file("on-add.nautical")
     mod = _load_hook_module(hook, "_nautical_on_add_run_task_timeout_test")
-    result = mod._module("modify_command_effects").run_task_result(
-        mod,
+    result = core.run_task_result(
         [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
     )
     expect(not result.ok and result.kind.value == "timeout", f"on-add timeout changed: {result}")

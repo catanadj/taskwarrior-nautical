@@ -249,6 +249,18 @@ _MODULE_SPECS = {
         "task_models.py",
         "nautical_core.task_models",
     ),
+    "modify_value_effects": (
+        "_MODIFY_VALUE_EFFECTS",
+        "_MODIFY_VALUE_EFFECTS_LOAD_FAILED",
+        "modify_value_effects.py",
+        "nautical_core.modify_value_effects",
+    ),
+    "modify_lifecycle": (
+        "_MODIFY_LIFECYCLE",
+        "_MODIFY_LIFECYCLE_LOAD_FAILED",
+        "modify_lifecycle.py",
+        "nautical_core.modify_lifecycle",
+    ),
     "hook_context": (
         "_HOOK_CONTEXT",
         "_HOOK_CONTEXT_LOAD_FAILED",

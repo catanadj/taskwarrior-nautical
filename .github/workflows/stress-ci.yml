@@ -27,12 +27,21 @@ jobs:
       - name: Install Taskwarrior
         run: |
           sudo apt-get update
-          sudo apt-get install -y taskwarrior
+          sudo apt-get install -y build-essential cmake pkg-config libgnutls28-dev uuid-dev libncurses-dev libreadline-dev
+          curl --fail --silent --show-error --location \
+            https://github.com/GothenburgBitFactory/taskwarrior/releases/download/v3.4.2/task-3.4.2.tar.gz \
+            --output /tmp/task-3.4.2.tar.gz
+          echo "d302761fcd1268e4a5a545613a2b68c61abd50c0bcaade3b3e68d728dd02e716  /tmp/task-3.4.2.tar.gz" | sha256sum --check
+          tar -xzf /tmp/task-3.4.2.tar.gz -C /tmp
+          cmake -S /tmp/task-3.4.2 -B /tmp/task-3.4.2-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/task-3.4.2-build --parallel
+          sudo cmake --install /tmp/task-3.4.2-build
 
       - name: Show tool versions
         run: |
           python3 --version
           task --version
+          test "$(task --version)" = "3.4.2"
 
       - name: Run golden correctness suite
         env:

@@ -8,23 +8,7 @@ import time as _time
 
 from nautical_core.modify_models import (
     AnchorFeedbackServices,
-    CompletionComputeServices,
-    CompletionPreflightServices,
-    CompletionSpawnServices,
     CpFeedbackServices,
-    BuildChildDraftCallback,
-    CompletionCapGuardCallback,
-    CompletionCapsCallback,
-    CompletionChainIdCallback,
-    CompletionChildDueCallback,
-    CompletionChildRequiredCallback,
-    CompletionDurationWarningCallback,
-    CompletionExistingNextCallback,
-    CompletionKindCallback,
-    CompletionLinkNumbersCallback,
-    CompletionSnapshotCallback,
-    CompletionUntilCallback,
-    CompletionUntilGuardCallback,
     ChainColourCallback,
     DiagnosticCallback,
     FeedbackPanelCallback,
@@ -302,63 +286,6 @@ def build_cp_feedback_services(runtime: ModifyRuntimeServices) -> CpFeedbackServ
     )
 
 
-def build_preflight_services(
-    *,
-    short: ShortUuidCallback,
-    completion_link_numbers_or_fail: CompletionLinkNumbersCallback,
-    completion_kind_or_stop: CompletionKindCallback,
-    completion_chain_id_or_fail: CompletionChainIdCallback,
-    completion_chain_snapshot: CompletionSnapshotCallback,
-    completion_existing_next_or_fail: CompletionExistingNextCallback,
-) -> CompletionPreflightServices:
-    return CompletionPreflightServices(
-        short=short,
-        completion_link_numbers_or_fail=completion_link_numbers_or_fail,
-        completion_kind_or_stop=completion_kind_or_stop,
-        completion_chain_id_or_fail=completion_chain_id_or_fail,
-        completion_chain_snapshot=completion_chain_snapshot,
-        completion_existing_next_or_fail=completion_existing_next_or_fail,
-    )
-
-
-def build_compute_services(
-    *,
-    completion_compute_child_due: CompletionChildDueCallback,
-    completion_until_or_fail: CompletionUntilCallback,
-    completion_until_guard_or_stop: CompletionUntilGuardCallback,
-    completion_require_child_due_or_fail: CompletionChildRequiredCallback,
-    completion_warn_unreasonable_duration: CompletionDurationWarningCallback,
-    completion_caps: CompletionCapsCallback,
-    completion_cap_guard_or_stop: CompletionCapGuardCallback,
-) -> CompletionComputeServices:
-    return CompletionComputeServices(
-        completion_compute_child_due=completion_compute_child_due,
-        completion_until_or_fail=completion_until_or_fail,
-        completion_until_guard_or_stop=completion_until_guard_or_stop,
-        completion_require_child_due_or_fail=completion_require_child_due_or_fail,
-        completion_warn_unreasonable_duration=completion_warn_unreasonable_duration,
-        completion_caps=completion_caps,
-        completion_cap_guard_or_stop=completion_cap_guard_or_stop,
-    )
-
-
-def build_spawn_services(
-    *,
-    build_child_draft: BuildChildDraftCallback,
-    spawn_child_atomic: SpawnChildCallback,
-    panel: PanelCallback,
-    print_task: PrintTaskCallback,
-    diag: DiagnosticCallback,
-) -> CompletionSpawnServices:
-    return CompletionSpawnServices(
-        build_child_draft=build_child_draft,
-        spawn_child_atomic=spawn_child_atomic,
-        panel=panel,
-        print_task=print_task,
-        diag=diag,
-    )
-
-
 __all__ = (
     'ModifyRuntimeState',
     'ModifyRuntimeServices',
@@ -367,7 +294,4 @@ __all__ = (
     'anchor_file_provider_for',
     'build_anchor_feedback_services',
     'build_cp_feedback_services',
-    'build_preflight_services',
-    'build_compute_services',
-    'build_spawn_services',
 )

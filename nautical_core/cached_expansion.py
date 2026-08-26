@@ -417,7 +417,7 @@ def expand_yearly(
             else:
                 first = _iso_week(iso_year, start_ordinal)
                 last = _iso_week(iso_year, end_ordinal)
-                week_numbers = range(first, last + 1) if first is not None and last is not None else []
+                week_numbers = list(range(first, last + 1)) if first is not None and last is not None else []
             for week in week_numbers:
                 if week is None:
                     continue

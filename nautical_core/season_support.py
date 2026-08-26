@@ -44,7 +44,7 @@ def configure_hemisphere(value: object) -> str:
     import sys
     nc = sys.modules.get("nautical_core")
     if nc is not None:
-        nc.SEASON_HEMISPHERE = _ACTIVE_HEMISPHERE
+        setattr(nc, "SEASON_HEMISPHERE", _ACTIVE_HEMISPHERE)
     return _ACTIVE_HEMISPHERE
 
 

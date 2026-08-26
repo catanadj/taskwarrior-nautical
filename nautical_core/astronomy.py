@@ -229,7 +229,8 @@ def _resolve_phase_date_cached(
 
 def _profile(config: dict[str, Any] | None, name: str | None = None) -> tuple[str, dict[str, Any]]:
     data = config if isinstance(config, dict) else {}
-    locations = data.get("locations") if isinstance(data.get("locations"), dict) else {}
+    locations_value = data.get("locations")
+    locations: dict[str, Any] = dict(locations_value) if isinstance(locations_value, dict) else {}
     selected = str(name or data.get("default_location") or "").strip()
     if not selected and len(locations) == 1:
         selected = str(next(iter(locations)))

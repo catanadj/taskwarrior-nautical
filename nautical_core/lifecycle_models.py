@@ -573,7 +573,7 @@ class LifecyclePlan:
         if not isinstance(value, Mapping):
             raise LifecycleContractError("lifecycle plan must be an object")
         try:
-            version = int(value.get("schema_version"))
+            version = int(value.get("schema_version") or 0)
         except (TypeError, ValueError) as exc:
             raise LifecycleContractError("lifecycle plan schema_version is required") from exc
         if version != LIFECYCLE_PLAN_SCHEMA_VERSION:

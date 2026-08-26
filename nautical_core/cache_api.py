@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 import zlib
 
+fcntl: Any
 try:
     import fcntl
 except Exception:
@@ -224,7 +225,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         ]
         payload = "|".join(("nautical-hints|semantic-v1", f"release:{release_hint}", *source_parts))
         semantic_fingerprint_state[0] = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
-        return semantic_fingerprint_state[0]
+        return str(semantic_fingerprint_state[0])
 
     def cache_key(
         acf: str,

@@ -20900,13 +20900,14 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
     captured = {}
 
     def fake_build_and_spawn_child(*_a, **_k):
-        return SimpleNamespace(
+        return models.CompletionSpawnResult(
             child={"uuid": "00000000-0000-4000-8000-000000000222"},
             child_short="beeswax",
             stripped_attrs=[],
             verified=False,
             deferred_spawn=False,
             spawn_intent_id=None,
+            outcome_state="applied",
         )
 
     def fake_modify_chain_state():

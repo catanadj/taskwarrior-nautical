@@ -174,9 +174,7 @@ def finalize_completion_modify(
         _render_lifecycle_result(services, lifecycle_result, TaskView.from_mapping(new))
         services.print_task(new)
         return lifecycle_result
-    # Focused fixtures may provide a minimal spawn namespace; production
-    # services always return CompletionSpawnResult with an explicit state.
-    spawn_state = getattr(spawned, "outcome_state", "applied")
+    spawn_state = spawned.outcome_state
     if spawn_state != "applied":
         result_state = {
             "already_applied": "already_applied",

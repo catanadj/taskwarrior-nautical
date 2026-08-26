@@ -36,6 +36,7 @@ def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
     add_validation = host.core._import_sibling("add_validation")
+    ui = host._module("modify_ui_effects")
     feedback.render_recurrence_updated_panel(
         changes,
         models.TaskView.from_mapping(new),
@@ -49,7 +50,7 @@ def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str
         first_recurrence_target=lambda task, source: first_recurrence_target(host, task, source),
         panel_mode=getattr(host.core, "PANEL_MODE", "rich"),
         strip_markup=host.core.strip_rich_markup,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
     )
 
 
@@ -77,22 +78,24 @@ def recurrence_enabled_rows(host: Any, new: TaskPayload, source: str) -> list[tu
 
 
 def render_cp_schedule_adjusted_panel(host: Any, adjustment) -> None:
+    ui = host._module("modify_ui_effects")
     host._module("modify_feedback").render_cp_schedule_adjusted_panel(
         adjustment,
         format_local=host._fmtlocal,
         semantic_diff_value=host._module("modify_validation_effects").semantic_diff_value,
         format_offset=host._module("modify_value_effects").format_delta,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
     )
 
 
 def render_explicit_timing_order_warning(host: Any, new: TaskPayload, changed_fields: tuple[str, ...]) -> None:
     task = host._module("modify_models").TaskView.from_mapping(new)
+    ui = host._module("modify_ui_effects")
     host._module("modify_feedback").render_explicit_timing_order_warning(
         task,
         changed_fields,
         format_offset=host._module("modify_value_effects").format_delta,
-        panel=host._panel,
+        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
     )
 
 
@@ -110,7 +113,8 @@ def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload,
         )
     except Exception as exc:
         host._diag(f"removed recurrence chain summary failed: {exc}")
-        host._panel(
+        host._module("modify_ui_effects").panel(
+            host,
             "⛔ Nautical chain stopped",
             [
                 ("Reason", reason),
@@ -140,13 +144,14 @@ def render_anchor_completion_feedback(host: Any, **kwargs) -> None:
     calendar_feedback = host.importlib.import_module("nautical_core.calendar_feedback")
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
+    ui = host._module("modify_ui_effects")
     feedback.orchestrate_anchor_completion_feedback(
         **{
             **kwargs,
             "new": _task_view(models, kwargs["new"]),
             "child": _task_view(models, kwargs["child"]),
             "core": host.core,
-            "panel": host._panel,
+            "panel": lambda title, rows, **options: ui.panel(host, title, rows, **options),
             "calendar_feedback": calendar_feedback,
             "panel_diagnostics": host._module("panel_diagnostics"),
             "modify_models": models,
@@ -187,7 +192,7 @@ def render_lifecycle_result(host: Any, result, task) -> None:
     intent_id = str(getattr(result, "spawn_intent_id", "") or "").strip()
     if intent_id:
         rows.append(("Intent", intent_id))
-    host._panel(title, rows, kind="warning" if state == "manual_review" else "error")
+    host._module("modify_ui_effects").panel(host, title, rows, kind="warning" if state == "manual_review" else "error")
 
 
 def timeline_lines(host: Any, kind: str, task, child_due_utc, child_short: str, dnf, **kwargs) -> list[str]:
@@ -233,7 +238,8 @@ def build_runtime_services(host: Any):
         format_line_preview=lambda *args, **kwargs: host._module("modify_format_effects").line_preview(host, *args, **kwargs),
         panel_line=lambda title, line, **kwargs: host._module("modify_ui_effects").panel_line(host, title, line, **kwargs),
         text_line=lambda line, **kwargs: host._module("modify_ui_effects").text_line(host, line, **kwargs),
-        panel=host._panel, print_task=lambda task: host._module("modify_ui_effects").print_task(host, task), diag=host._diag,
+        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
+        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task), diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
         chain_colour_for_task=lambda task, kind: chain_colour_for_task(host, task, kind),
         strip_quotes=host._module("modify_task_fields").strip_quotes,

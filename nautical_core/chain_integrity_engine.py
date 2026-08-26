@@ -14,6 +14,7 @@ from .chain_integrity_application import (
     IntegrityMutationRequestFactory,
     IntegrityOutboxPersistResult,
     RepositoryIntegrityOutboxSink,
+    IntegrityMutationExecutor,
 )
 from .chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot, load_outbox_snapshot
 from .chain_integrity_models import (
@@ -39,14 +40,16 @@ from .integration_models import (
 )
 from .lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure
 from .task_models import TaskObservation
+from .chain_generation import ChainGenerationService
+from .chain_integrity_lifecycle import LifecycleRecoveryDecision
 
 
 class _SnapshotProvider(Protocol):
     def collect(self, request: IntegritySnapshotRequest) -> TaskRead[ChainSnapshot]: ...
 
 
-class _MutationExecutor(Protocol):
-    def repair_metadata(self, request: object) -> object: ...
+class _MutationExecutor(IntegrityMutationExecutor, Protocol):
+    """Typed mutation executor retained as the engine's local protocol name."""
 
 
 class _NoSnapshotProvider:
@@ -115,8 +118,8 @@ class ChainIntegrityEngine:
         *,
         existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
         hook: object,
-        generation: object = None,
-    ) -> object:
+        generation: ChainGenerationService | None = None,
+    ) -> LifecycleRecoveryDecision:
         """Build one successor/expiration decision through the engine owner."""
         from .chain_integrity_lifecycle import plan_recovery_decision
 

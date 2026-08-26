@@ -118,7 +118,7 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
     models = host._module("modify_models")
 
     def typed_task(task):
-        return models.NauticalTask.from_observation(
+        return task_models.NauticalTask.from_observation(
             codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
         )
 

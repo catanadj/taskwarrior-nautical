@@ -15878,7 +15878,7 @@ def test_moon_phase_operational_errors_are_actionable():
         hook=type("Hook", (), {"core": core})(),
         generation=FailingGeneration(),
     )
-    expect(plan.action == "error", f"moon resolver failure should fail closed: {plan}")
+    expect(plan.status.value == "error", f"moon resolver failure should fail closed: {plan}")
     expect("Astronomy provider unavailable" in plan.reason, plan.reason)
 
 

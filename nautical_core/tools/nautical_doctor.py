@@ -51,7 +51,10 @@ _JSON_SCHEMA_VERSION = 1
 
 def _v2_document(payload: dict[str, Any]) -> OperatorV2Result:
     """Build the shared v2 envelope while retaining Doctor's public fields."""
-    status = OperatorV2Status(str(payload.get("status") or "error"))
+    raw_status = str(payload.get("status") or "error")
+    # Preserve Doctor's v1 ``warn`` payload while using the canonical v2
+    # attention status in the shared envelope.
+    status = OperatorV2Status.ATTENTION if raw_status == "warn" else OperatorV2Status(raw_status)
     failure = None
     if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
         finding = next((item for item in payload.get("findings", ()) if isinstance(item, dict)), {})

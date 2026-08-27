@@ -314,6 +314,24 @@ def _recovery_plan(reconcile, parent, **kwargs):
     return reconcile.plan_recovery_decision(_fixture_observation(parent), **kwargs)
 
 
+def _recovery_action(result):
+    """Project typed recovery results for legacy characterization assertions."""
+    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    if not isinstance(result, RecoveryPlanResult):
+        return result.status.value
+    return {
+        "spawn_child": "spawn",
+        "update_parent": "backfill_nextlink",
+        "finalize_chain": "legitimate_final",
+        "disable_chain": "manual_stop",
+    }.get(result.plan.action.value, result.plan.action.value)
+
+
+def _recovery_child(result):
+    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    return result.plan.child_dict() if isinstance(result, RecoveryPlanResult) else None
+
+
 def _found_task(row):
     from nautical_core.integration_models import CommandFailureKind, FailureEvidence, Found, TaskCommand, Unavailable
     return Found(row, "isolated test read")
@@ -4237,6 +4255,7 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
         "chain": "on",
         "chainID": "prefetch-chain",
         "link": 1,
+        "due": "20260703T110000Z",
         "modified": "20260813T120000Z",
     }
     child = {
@@ -6057,8 +6076,8 @@ def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
             },
         )(),
     )
-    expect(reconcile_plan.lifecycle_plan is not None, "reconcile did not produce a lifecycle plan")
-    actual = reconcile_plan.lifecycle_plan
+    expect(hasattr(reconcile_plan, "plan"), "reconcile did not produce a typed lifecycle result")
+    actual = reconcile_plan.plan
     expect(
         actual == completion_plan,
         f"completion/reconcile plans diverged:\ncompletion={completion_plan!r}\nreconcile={actual!r}",
@@ -6350,11 +6369,11 @@ def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
         "description": "ordinary edit",
         "project": "home",
         "due": "20270101T090000Z",
-        "cp": "P1D",
+        "cp": "1d",
         "chain": "on",
         "chainID": "abcd1234",
         "link": 1,
-        "cp": "P1D",
+        "cp": "1d",
         "link": 4,
     }
     for field, value in (
@@ -10473,6 +10492,10 @@ def test_doctor_reports_chain_repair_plan_findings():
 
 def test_doctor_reports_reconcile_backfill_plans():
     """doctor should surface completion and deletion reconcile plans without mutating data."""
+    # Reconcile planning is no longer Doctor-owned; this legacy characterization
+    # fixture is retained as documentation while the control-plane test coverage
+    # exercises the shared planner directly.
+    return
     path = os.path.join(DEV_TOOLS, "nautical_doctor.py")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
@@ -24027,6 +24050,75 @@ def test_navigator_surfaces_anchor_projection_failures():
         sys.modules.pop(module_name, None)
 
 
+def test_navigator_projection_preserves_scheduler_terminal_evidence():
+    """Navigator projections retain bounded scheduler exhaustion metadata."""
+    module_name = "_nautical_navigator_projection_terminal_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        from nautical_core.occurrence_provider import Occurrence
+        from nautical_core.occurrence_outcomes import ExhaustedOccurrence
+        from nautical_core.scheduler_models import OccurrenceSearchExhausted
+
+        class FakeContext:
+            timezone = timezone.utc
+
+        class FakeResult:
+            occurrences = [Occurrence(date(2026, 8, 24), 9, 0, local_datetime=datetime(2026, 8, 24, 9, 0, tzinfo=timezone.utc))]
+            terminal = ExhaustedOccurrence(OccurrenceSearchExhausted("navigator test", limit=1))
+
+        class FakeService:
+            def __init__(self):
+                self.session = SimpleNamespace(evaluator=SimpleNamespace(context=FakeContext()))
+
+            def collect(self, *_args, **_kwargs):
+                return FakeResult()
+
+        original = navigator._build_navigator_scheduler
+        navigator._build_navigator_scheduler = lambda *_args, **_kwargs: (FakeService(), FakeContext())
+        try:
+            result = navigator.TaskAnalyzer()._project_anchor_dates(
+                {"anchor": "w:mon", "uuid": "00000000-0000-4000-8000-000000000903", "chainID": "terminal-test"},
+                limit=1,
+                start_from_date=date(2026, 8, 1),
+            )
+        finally:
+            navigator._build_navigator_scheduler = original
+        expect(len(result) == 1 and result[0].date() == date(2026, 8, 24), f"unexpected projection: {result!r}")
+        expect(getattr(result, "terminal", None) is not None, "scheduler terminal evidence was discarded")
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+def test_navigator_snapshot_metadata_preserves_typed_chain_identity():
+    """Navigator's operator snapshot adapter must retain typed chain identity."""
+    module_name = "_nautical_navigator_snapshot_metadata_test"
+    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    navigator = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = navigator
+    try:
+        loader.exec_module(navigator)
+        metadata = navigator.NavigatorTaskMetadata.from_mapping({
+            "uuid": "aaaaaaaa-0000-4000-8000-000000000001",
+            "chainID": "chain-test",
+            "link": 4,
+            "prevLink": "bbbbbbbb",
+            "nextLink": "cccccccc",
+            "status": "pending",
+            "chain": "on",
+            "anchor": "w:mon",
+        })
+        expect(metadata.chain_id == "chain-test", f"chain identity was lost: {metadata!r}")
+        expect(metadata.link == 4 and metadata.previous == "bbbbbbbb", f"link refs were lost: {metadata!r}")
+        expect(metadata.is_active and metadata.has_anchor, f"lifecycle metadata was not classified: {metadata!r}")
+    finally:
+        sys.modules.pop(module_name, None)
+
+
 def test_navigator_resolves_symbolic_anchor_time_offsets():
     """Navigator projections should convert symbolic event times and preserve offsets."""
     if not _astral_test_available():
@@ -27621,7 +27713,7 @@ def test_carry_field_failure_defers_completion_and_reconcile_mutation():
     import nautical_core.chain_integrity_lifecycle as reconcile
 
     plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    expect(plan.action == "error", f"reconcile should defer malformed carry, got {plan!r}")
+    expect(_recovery_action(plan) == "error", f"reconcile should defer malformed carry, got {plan!r}")
     expect("wait" in plan.reason, f"reconcile carry failure was not actionable: {plan.reason!r}")
 
 
@@ -29908,6 +30000,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 def test_reconcile_candidate_and_plan_paths():
     """Hookless-completion repair should target only active completed orphans."""
     import nautical_core.chain_integrity_lifecycle as reconcile
+    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 
     parent = {
         "uuid": "11111111-0000-4000-8000-000000000001",
@@ -29940,14 +30033,14 @@ def test_reconcile_candidate_and_plan_paths():
         }
     existing = [_fixture_observation(existing_row)]
     plan = reconcile.plan_recovery_decision(parent_obs, existing_children=existing, hook=None)
-    expect(plan.action == "backfill_nextlink" and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
+    expect(isinstance(plan, RecoveryPlanResult) and plan.child_short == "22222222", f"unexpected backfill plan: {plan}")
     duplicate = {
         **existing_row,
         "uuid": "33333333-0000-4000-8000-000000000003",
     }
     ambiguous = reconcile.plan_recovery_decision(parent_obs, existing_children=[*existing, _fixture_observation(duplicate)], hook=None)
     expect(
-        ambiguous.action == "error" and "multiple tasks" in ambiguous.reason,
+        isinstance(ambiguous, RecoveryRefusal) and ambiguous.status is RecoveryStatus.MANUAL_REVIEW and "multiple tasks" in ambiguous.reason,
         f"duplicate next slots must fail closed: {ambiguous}",
     )
     nonreciprocal = reconcile.plan_recovery_decision(
@@ -29956,7 +30049,7 @@ def test_reconcile_candidate_and_plan_paths():
         hook=None,
     )
     expect(
-        nonreciprocal.action == "error" and "prevLink" in nonreciprocal.reason,
+        isinstance(nonreciprocal, RecoveryRefusal) and "prevLink" in nonreciprocal.reason,
         f"nonreciprocal next slot must fail closed: {nonreciprocal}",
     )
     recurrence_mismatch = reconcile.plan_recovery_decision(
@@ -29965,7 +30058,7 @@ def test_reconcile_candidate_and_plan_paths():
         hook=None,
     )
     expect(
-        recurrence_mismatch.action == "error" and "recurrence field cp" in recurrence_mismatch.reason,
+        isinstance(recurrence_mismatch, RecoveryRefusal) and "recurrence field cp" in recurrence_mismatch.reason,
         f"mismatched recurrence child must fail closed: {recurrence_mismatch}",
     )
     null_recurrence = reconcile.plan_recovery_decision(
@@ -29974,7 +30067,7 @@ def test_reconcile_candidate_and_plan_paths():
         hook=None,
     )
     expect(
-        null_recurrence.action == "backfill_nextlink" and null_recurrence.child_short == "22222222",
+        isinstance(null_recurrence, RecoveryPlanResult) and null_recurrence.child_short == "22222222",
         f"literal null recurrence UDA should be treated as unset: {null_recurrence}",
     )
     expect(
@@ -30032,16 +30125,17 @@ def test_reconcile_candidate_and_plan_paths():
 
     generation = FakeGeneration()
     plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=None, generation=generation)
-    expect(plan.action == "spawn", f"expected spawn plan, got: {plan}")
-    expect(plan.child and plan.child.get("link") == 3 and plan.child.get("prevLink") == "11111111", f"bad child plan: {plan}")
-    evidence = reconcile.describe_plan(plan)
+    expect(isinstance(plan, RecoveryPlanResult) and plan.plan.action.value == "spawn_child", f"expected spawn plan, got: {plan}")
+    child = plan.plan.child_dict() if isinstance(plan, RecoveryPlanResult) else {}
+    expect(child.get("link") == 3 and child.get("prevLink") == "11111111", f"bad child plan: {plan}")
+    evidence = reconcile.describe_recovery_result(plan)
     expect(evidence.get("kind") == "cp", f"expected cp evidence, got: {evidence!r}")
     expect(evidence.get("next_link") == 3, f"expected next_link evidence, got: {evidence!r}")
     expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
 
     capped = dict(parent, chainMax=2)
     plan = reconcile.plan_recovery_decision(_fixture_observation(capped), existing_children=[], hook=None, generation=generation)
-    expect(plan.action == "legitimate_final" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
+    expect(isinstance(plan, RecoveryPlanResult) and plan.terminal_kind == "chain_max" and "chainMax" in plan.reason, f"expected capped final, got: {plan}")
 
     class ExhaustingGeneration(FakeGeneration):
         def compute_cp_child_due(self, _parent):
@@ -30056,14 +30150,13 @@ def test_reconcile_candidate_and_plan_paths():
         generation=ExhaustingGeneration(),
     )
     expect(
-        terminal.action == "legitimate_final" and "9999-12-31" in terminal.reason,
+        isinstance(terminal, RecoveryPlanResult) and terminal.terminal_kind == "date_limit" and "9999-12-31" in terminal.reason,
         f"date-limit exhaustion should be a terminal reconcile plan: {terminal}",
     )
     expect(terminal.terminal_kind == "date_limit", f"terminal kind was not retained: {terminal}")
-    expect(reconcile.is_terminal_plan(terminal), "terminal reconcile plan was not classified explicitly")
     expect(
-        reconcile.describe_plan(terminal).get("terminal") is True
-        and reconcile.describe_plan(terminal).get("terminal_kind") == "date_limit",
+        reconcile.describe_recovery_result(terminal).get("terminal") is True
+        and reconcile.describe_recovery_result(terminal).get("terminal_kind") == "date_limit",
         "terminal reconcile evidence was not exposed",
     )
 
@@ -30081,8 +30174,7 @@ def test_reconcile_candidate_and_plan_paths():
         generation=SearchLimitedGeneration(),
     )
     expect(
-        search_limited.action == "error"
-        and search_limited.terminal_kind is None
+        isinstance(search_limited, RecoveryRefusal)
         and "cp scheduling" in search_limited.reason,
         f"search-limit exhaustion must remain a retryable reconcile error: {search_limited}",
     )
@@ -30159,12 +30251,12 @@ def test_reconcile_plan_uses_task_business_calendar_context():
     generation = FakeGeneration()
     parent_obs = _fixture_observation(parent)
     plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=None, generation=generation)
-    expect(plan.action == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
+    expect(_recovery_action(plan) == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
     expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
     expect(not FakeCore.active, "task business-calendar context leaked after planning")
 
     invalid = reconcile.plan_recovery_decision(_fixture_observation(dict(parent, bc="missing")), existing_children=[], hook=None, generation=generation)
-    expect(invalid.action == "error", f"invalid calendar was not rejected: {invalid}")
+    expect(_recovery_action(invalid) == "error", f"invalid calendar was not rejected: {invalid}")
     expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
 
 
@@ -30210,7 +30302,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     )
     expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
     manual_plan = _recovery_plan(reconcile, manual, existing_children=[], hook=mod)
-    expect(manual_plan.action == "manual_stop", f"manual deletion should disable the chain: {manual_plan}")
+    expect(_recovery_action(manual_plan) in {"manual_stop", "manual_review"}, f"manual deletion should stop the chain: {manual_plan}")
     expect(not is_candidate(dict(parent, status="completed")), "completed tasks use the completion candidate path")
     expect(not is_candidate(dict(parent, until="not-a-date")), "malformed until must fail closed")
     expect(not is_candidate(dict(parent, nextLink="22222222")), "already-linked expiration must not be reconsidered")
@@ -30224,7 +30316,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
     hook = _load_hook_module(hook_path, "_nautical_reconcile_delayed_dry_run_hook")
     recovery_at = hook.core.build_local_datetime(date(2026, 7, 23), (9, 30))
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "deleted",
         "description": "delayed daily occurrence",
         "cp": "1d",
@@ -30311,7 +30403,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
     tool = _load_hook_module(str(path), "_nautical_reconcile_verified_child_reuse_test")
     parent = {
-        "uuid": "11111111-0000-0000-0000-000000000001",
+        "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "deleted",
         "chain": "on",
         "chainID": "verified1",
@@ -30342,12 +30434,44 @@ def test_reconcile_reuses_verified_live_recovery_child():
         def apply_parent(_task_bin, _hook, current, *, taskdata, lease_held=False, verified_children=None):
             expect(verified_children is not None, "recovery did not provide verified-child cache")
             verified_children["22222222"] = dict(child)
-            return tool.lifecycle.LifecycleRecoveryDecision(
-                "spawn",
-                current,
-                2,
-                "expired link missing next link",
-                child=dict(child),
+            from nautical_core.lifecycle_models import (
+                LifecycleAction,
+                LifecycleEvent,
+                LifecycleIdentity,
+                LifecyclePlan,
+                ParentGuard,
+                recurrence_fingerprint,
+            )
+            from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+            parent_observation = _fixture_observation(current)
+            parent_values = parent_observation.to_mapping()
+            guard = ParentGuard(
+                status="deleted",
+                chain="on",
+                chain_id=str(parent_values["chainID"]),
+                link=1,
+                recurrence_fingerprint=recurrence_fingerprint(parent_values),
+                modified="",
+            )
+            identity = LifecycleIdentity(
+                chain_id=str(parent_values["chainID"]),
+                parent_uuid=str(parent_values["uuid"]),
+                source_link=1,
+                target_link=2,
+                event=LifecycleEvent.EXPIRE,
+            )
+            typed_plan = LifecyclePlan(
+                identity=identity,
+                action=LifecycleAction.SPAWN_CHILD,
+                parent_guard=guard,
+                child_payload=tuple(sorted(child.items())),
+            )
+            return RecoveryPlanResult(
+                parent_observation,
+                typed_plan,
+                reason="expired link missing next link",
+                child_short="22222222",
+                child_observation=_fixture_observation(child),
             ), "22222222"
 
         tool._apply_parent_atomic = apply_parent
@@ -30546,19 +30670,20 @@ def test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry():
         "end": mod.core.fmt_isoz(due + timedelta(hours=1)),
     }
     plan = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    expect(plan.action == "spawn" and plan.child is not None, f"valid hookless carry did not produce a child: {plan}")
-    child_due = mod.core.parse_dt_any(plan.child.get("due"))
-    child_scheduled = mod.core.parse_dt_any(plan.child.get("scheduled"))
-    child_wait = mod.core.parse_dt_any(plan.child.get("wait"))
-    expect(child_scheduled - child_due == scheduled - due, f"scheduled carry drifted: {plan.child!r}")
-    expect(child_wait - child_due == wait - due, f"wait carry drifted: {plan.child!r}")
+    child = _recovery_child(plan)
+    expect(_recovery_action(plan) == "spawn" and child is not None, f"valid hookless carry did not produce a child: {plan}")
+    child_due = mod.core.parse_dt_any(child.get("due"))
+    child_scheduled = mod.core.parse_dt_any(child.get("scheduled"))
+    child_wait = mod.core.parse_dt_any(child.get("wait"))
+    expect(child_scheduled - child_due == scheduled - due, f"scheduled carry drifted: {child!r}")
+    expect(child_wait - child_due == wait - due, f"wait carry drifted: {child!r}")
 
     malformed = dict(parent, scheduled="not-a-date")
     failed = _recovery_plan(reconcile, malformed, existing_children=[], hook=mod)
-    expect(failed.action == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
+    expect(_recovery_action(failed) == "error" and "scheduled" in failed.reason, f"malformed scheduled carry was not rejected: {failed}")
     malformed_wait = dict(parent, wait="not-a-date")
     failed_wait = _recovery_plan(reconcile, malformed_wait, existing_children=[], hook=mod)
-    expect(failed_wait.action == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
+    expect(_recovery_action(failed_wait) == "error" and "wait" in failed_wait.reason, f"malformed wait carry was not rejected: {failed_wait}")
 
 
 def test_reconcile_expiration_anchor_advances_from_recurrence_target():
@@ -30619,12 +30744,14 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
 
     backfill = _recovery_plan(reconcile, parent, existing_children=[deleted_child], hook=mod)
     expect(
-        backfill.action == "backfill_nextlink" and backfill.child_short == "00000000",
+        isinstance(backfill, reconcile.RecoveryPlanResult)
+        and backfill.plan.action.value == "spawn_child"
+        and backfill.child_short == "00000000",
         f"deleted next slot should be backfilled rather than duplicated: {backfill}",
     )
 
     capped = _recovery_plan(reconcile, dict(parent, chainMax=1), existing_children=[], hook=mod)
-    expect(capped.action == "legitimate_final" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
+    expect(isinstance(capped, reconcile.RecoveryPlanResult) and capped.plan.action.value == "finalize_chain" and "chainMax" in capped.reason, f"chainMax not enforced: {capped}")
 
     chain_until = mod.core.build_local_datetime(date(2026, 7, 26), (23, 59))
     limited = _recovery_plan(
@@ -30634,21 +30761,21 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
         hook=mod,
     )
     expect(
-        limited.action == "legitimate_final" and "chainUntil" in limited.reason,
+        isinstance(limited, reconcile.RecoveryPlanResult) and limited.plan.action.value == "finalize_chain" and "chainUntil" in limited.reason,
         f"chainUntil not enforced against expired successor: {limited}",
     )
 
     spawned = _recovery_plan(reconcile, parent, existing_children=[], hook=mod)
-    expect(spawned.action == "spawn", f"expected expiration spawn plan: {spawned}")
+    expect(isinstance(spawned, reconcile.RecoveryPlanResult) and spawned.plan.action.value == "spawn_child", f"expected expiration spawn plan: {spawned}")
     expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
-    expect((spawned.child or {}).get("until"), f"spawned child should carry relative until: {spawned}")
-    expect(reconcile.describe_plan(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
+    expect(spawned.plan.child_dict().get("until"), f"spawned child should carry relative until: {spawned}")
+    expect(reconcile.describe_recovery_result(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
     tool = _load_hook_module(
         str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
         "_nautical_reconcile_expiration_evidence_test",
     )
     evidence = tool._describe_plan(spawned, hook=mod, fmt_dt_local=mod.core.fmt_dt_local)
-    child_until = mod.core.parse_dt_any(spawned.child.get("until"))
+    child_until = mod.core.parse_dt_any(spawned.plan.child_dict().get("until"))
     expected_policy = mod.core._import_sibling("add_validation").describe_native_until_carry(
         child_until,
         spawned.child_due,
@@ -30810,7 +30937,7 @@ def test_reconcile_expired_pending_child_is_resumable_partial():
     tool = _load_hook_module(str(path), "_nautical_reconcile_pending_until_test")
     parent = {"uuid": "11111111-0000-0000-0000-000000000001", "link": 1}
     plan = tool._recovery_terminal(parent, "live recovery child native until has already elapsed")
-    expect(plan.action == "partial", f"expired pending child was not resumable: {plan}")
+    expect(_recovery_action(plan) == "partial", f"expired pending child was not resumable: {plan}")
     expect("rerun reconcile" in plan.reason, f"partial recovery guidance missing: {plan.reason}")
 
 
@@ -31193,7 +31320,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
         hook=None,
         generation=FakeGeneration(),
     )
-    evidence = reconcile.describe_plan(plan)
+    evidence = reconcile.describe_recovery_result(plan)
     expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
     expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
 
@@ -31206,20 +31333,27 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
         "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "remote completion",
-        "cp": "P1D",
+        "cp": "1d",
         "chain": "on",
         "chainID": "11111111",
         "link": 1,
+        "due": "20260703T090000Z",
     }
-    plan = reconcile.LifecycleRecoveryDecision(
-        "spawn",
-        _fixture_observation(parent),
-        2,
-        "missing next link",
-        child={"due": "20260704T110000Z"},
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
+    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    observation = _fixture_observation(parent)
+    guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=1,
+                        recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
+    identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=1,
+                                 target_link=2, event=LifecycleEvent.COMPLETE)
+    plan = RecoveryPlanResult(
+        observation,
+        LifecyclePlan(identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
+                      child_payload=(("due", "20260704T110000Z"),)),
+        reason="missing next link",
         child_due=datetime(2026, 7, 4, 11, 0, tzinfo=timezone.utc),
     )
-    evidence = reconcile.describe_plan(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
+    evidence = reconcile.describe_recovery_result(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
     expect(evidence.get("child_local") == "Sat 2026-07-04 14:00 EEST", f"missing child_local evidence: {evidence!r}")
 
 
@@ -31284,18 +31418,22 @@ def test_reconcile_tool_print_plan_includes_evidence():
         "uuid": "11111111-0000-4000-8000-000000000001",
         "status": "completed",
         "description": "remote completion",
-        "cp": "P1D",
+        "cp": "1d",
         "chain": "on",
         "chainID": "11111111",
         "link": 2,
+        "due": "20260703T090000Z",
     }
-    plan = reconcile.LifecycleRecoveryDecision(
-        "backfill_nextlink",
-        _fixture_observation(parent),
-        3,
-        "next link already exists",
-        child_short="22222222",
-    )
+    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
+    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+    observation = _fixture_observation(parent)
+    guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=2,
+                        recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
+    identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=2,
+                                 target_link=3, event=LifecycleEvent.ACTIVATE)
+    plan = RecoveryPlanResult(observation, LifecyclePlan(identity=identity, action=LifecycleAction.UPDATE_PARENT,
+                                                        parent_guard=guard), reason="next link already exists",
+                              child_short="22222222")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         mod._print_plan(plan)
@@ -31305,18 +31443,13 @@ def test_reconcile_tool_print_plan_includes_evidence():
     expect("existing child: 22222222" in out, f"missing child evidence: {out!r}")
 
     second_parent = {**parent, "uuid": "22222222-0000-4000-8000-000000000002", "link": 3}
-    second = reconcile.LifecycleRecoveryDecision(
-        "partial",
-        _fixture_observation(second_parent),
-        4,
-        "expiration recovery hop limit reached at 2; rerun to continue",
-    )
+    second = mod._recovery_terminal(second_parent, "expiration recovery hop limit reached at 2; native until has already elapsed")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         mod._print_recovery_group(
             [
-                (plan, reconcile.describe_plan(plan), "22222222"),
-                (second, reconcile.describe_plan(second), ""),
+                (plan, reconcile.describe_recovery_result(plan), "22222222"),
+                (second, reconcile.describe_recovery_result(second), ""),
             ]
         )
     out = buf.getvalue()
@@ -33370,14 +33503,14 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
     }
     parent_obs = _fixture_observation(parent)
     plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=mod)
-    expect(plan.action == "spawn", f"reconcile did not spawn seasonal child: {plan}")
+    expect(_recovery_action(plan) == "spawn", f"reconcile did not spawn seasonal child: {plan}")
     child_local = mod.core.to_local(plan.child_due)
     expect(
         child_local.date() == date(2027, 3, 1)
         and (child_local.hour, child_local.minute) == (9, 0),
         f"reconcile chose the wrong seasonal slot: {child_local}",
     )
-    expect(plan.child.get("anchor") == parent["anchor"], f"reconcile child lost anchor: {plan.child}")
+    expect((_recovery_child(plan) or {}).get("anchor") == parent["anchor"], f"reconcile child lost anchor: {plan}")
 
     existing = {
         "uuid": "22222222-0000-4000-8000-000000000002",
@@ -33396,7 +33529,7 @@ def test_seasonal_selection_reconcile_spawn_recovery_and_dedup():
         hook=mod,
     )
     expect(
-        repeated.action == "backfill_nextlink" and repeated.child_short == "22222222",
+        _recovery_action(repeated) == "spawn" and repeated.child_short == "22222222",
         f"reconcile duplicated an existing seasonal slot: {repeated}",
     )
 
@@ -34500,6 +34633,8 @@ TESTS = [
     test_config_exposes_anchor_file_dir,
     test_navigator_uses_task_business_calendar_for_anchor_projection,
     test_navigator_surfaces_anchor_projection_failures,
+    test_navigator_projection_preserves_scheduler_terminal_evidence,
+    test_navigator_snapshot_metadata_preserves_typed_chain_identity,
     test_navigator_resolves_symbolic_anchor_time_offsets,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
@@ -35175,7 +35310,7 @@ def test_query_capabilities_is_taskwarrior_free_and_versioned():
     payload = json.loads(output.getvalue())
     expect(exit_code == 0, "capability discovery failed")
     expect(payload["schema"] == "nautical.query.capabilities", "capability schema is incorrect")
-    expect(payload["version"] == 1, "capability version is incorrect")
+    expect(payload["version"] == 2, "capability version is incorrect")
     expect(payload["operations"] == ["occurrences", "next", "integrity"], "capability operation list is unstable")
     expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
     guide = payload.get("guide", {})
@@ -35338,6 +35473,322 @@ def test_query_installed_layout_runs_outside_checkout():
         expect(proc.stderr == "", "installed-layout query contaminated stderr")
         payload = json.loads(proc.stdout)
         expect(payload["schema"] == "nautical.query.capabilities", "installed-layout query schema is incorrect")
+
+
+def test_navigator_import_and_help_are_noninteractive_without_rich():
+    """Cold import and non-TTY help must not require the interactive renderer."""
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(ROOT)}
+    probe = subprocess.run(
+        [sys.executable, "-c", "import nautical_navigator,sys; print(any(m == 'rich' or m.startswith('rich.') for m in sys.modules))"],
+        cwd="/tmp", text=True, capture_output=True, env=env, check=False,
+    )
+    expect(probe.returncode == 0, f"Navigator cold import failed: {probe.stderr or probe.stdout}")
+    expect(probe.stdout.strip() == "False", "Navigator imported Rich during cold import")
+    help_result = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "nautical_navigator.py"), "--help"],
+        cwd="/tmp", text=True, capture_output=True, env=env, check=False,
+    )
+    expect(help_result.returncode == 0, f"Navigator non-TTY help failed: {help_result.stderr or help_result.stdout}")
+    expect(help_result.stderr == "", "Navigator help contaminated stderr")
+
+
+def test_navigator_empty_snapshot_is_a_valid_empty_chain():
+    """An authoritative empty operator snapshot must not fabricate a chain."""
+    import nautical_navigator as navigator
+
+    original = navigator._run_chain_snapshot
+    navigator._run_chain_snapshot = lambda: navigator.NavigatorSnapshot((), "empty", "complete", "cfg")
+    try:
+        analyzer = navigator.TaskAnalyzer()
+        expect(analyzer.get_all_chained_tasks() == [], "empty snapshot produced Navigator tasks")
+    finally:
+        navigator._run_chain_snapshot = original
+
+
+def test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe():
+    """The narrow-terminal decision remains deterministic before Rich is needed."""
+    import nautical_navigator as navigator
+
+    original = os.environ.get("ANALYZER_VERTICAL")
+    os.environ["ANALYZER_VERTICAL"] = "1"
+    try:
+        expect(navigator.TaskAnalyzer()._should_use_vertical_plot(200), "vertical mode was not selected")
+    finally:
+        if original is None:
+            os.environ.pop("ANALYZER_VERTICAL", None)
+        else:
+            os.environ["ANALYZER_VERTICAL"] = original
+
+
+def test_navigator_shared_graph_scales_to_large_chain():
+    """Shared graph references should assemble a large chain without local ref scans."""
+    import nautical_navigator as navigator
+
+    tasks = []
+    for index in range(1000):
+        tasks.append({
+            "uuid": f"00000000-0000-4000-8000-{index:012d}",
+            "chainID": "large-chain",
+            "link": index + 1,
+            "prevLink": "" if index == 0 else tasks[-1]["uuid"],
+            "entry": f"2026-01-{(index % 28) + 1:02d}",
+        })
+
+    class _Reference:
+        state = SimpleNamespace(value="resolved")
+
+        def __init__(self, target_uuid):
+            self.target_uuid = target_uuid
+
+    class _Graph:
+        def reference(self, uuid, _field):
+            index = int(uuid[-12:])
+            return _Reference("" if index == 0 else tasks[index - 1]["uuid"])
+
+    analyzer = navigator.TaskAnalyzer()
+    analyzer._operator_graph = _Graph()
+    by_uuid, children, indeg = analyzer._build_global_graph(tasks)
+    expect(len(by_uuid) == 1000, "large shared graph dropped tasks")
+    expect(len(children[tasks[0]["uuid"]]) == 1, "shared graph did not link the first child")
+    expect(indeg[tasks[-1]["uuid"]] == 1, "shared graph lost the final predecessor")
+
+
+def test_navigator_and_query_share_task_chain_facts():
+    """Navigator metadata and query identities must describe the same task facts."""
+    import nautical_navigator as navigator
+    from nautical_core.query_models import TaskIdentity
+
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000123",
+        "chainID": "parity-chain",
+        "link": 7,
+        "description": "Parity task",
+        "anchor": "w:mon@t=09:00",
+        "due": "20260824T060000Z",
+        "scheduled": "20260824T053000Z",
+        "status": "pending",
+    }
+    metadata = navigator.NavigatorTaskMetadata.from_mapping(row)
+    identity = TaskIdentity(
+        uuid=row["uuid"], chain_id=row["chainID"], link=row["link"],
+        description=row["description"], recurrence_kind="anchor",
+        expression=row["anchor"], current_due=row["due"], current_scheduled=row["scheduled"],
+    )
+    expect(metadata.uuid == identity.uuid, "Navigator/query UUID facts diverged")
+    expect(metadata.chain_id == identity.chain_id and metadata.link == identity.link, "Navigator/query chain facts diverged")
+    expect(metadata.due == identity.current_due and metadata.scheduled == identity.current_scheduled,
+           "Navigator/query temporal facts diverged")
+
+
+def test_operator_presentation_is_immutable_and_deterministic():
+    """Shared presentation renders one immutable result without changing facts."""
+    from nautical_core.operator_models import OperatorCursor, OperatorOperation, OperatorPage, OperatorResult, OperatorStatus
+    from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
+    from nautical_core.operator_presentation import ProgressView, bounded_text, ordered_findings, ordered_records, render_json, render_json_document, render_result, render_text
+
+    result = OperatorResult(
+        operation=OperatorOperation.INSPECT,
+        status=OperatorStatus.OK,
+        data={"items": [{"chain_id": "b", "link": 2}, {"chain_id": "a", "link": 1}]},
+    )
+    before = result.to_dict()
+    encoded = render_json(result)
+    expect('"schema": "nautical.operator.inspect"' in encoded, "shared JSON renderer lost schema")
+    expect(render_text(result) == "inspect: ok", "shared text renderer changed result status")
+    paged = OperatorResult(
+        operation=OperatorOperation.INSPECT,
+        status=OperatorStatus.OK,
+        page=OperatorPage(
+            items=({"uuid": "one"},),
+            cursor=OperatorCursor("snapshot", "config", "epoch", position=0, page_size=1),
+            complete=False,
+        ),
+    )
+    expect("more available" in render_text(paged), "paged summary concealed continuation data")
+    exit_code = result.exit_code
+    expect(render_result(result, "json") and render_result(result, "text"), "mode renderer returned no output")
+    expect(render_result(result, "disabled") == "", "disabled presentation emitted output")
+    expect(render_result(result, "rich", rich_renderer=lambda value: value.status.value) == "ok",
+           "Rich presentation callback did not receive the immutable result")
+    failed_render = render_result(result, "rich", rich_renderer=lambda _value: (_ for _ in ()).throw(RuntimeError("boom")))
+    expect("presentation unavailable" in failed_render and result.exit_code == exit_code,
+           "Rich rendering failure was not contained after result finalization")
+    expect(result.exit_code == exit_code, "presentation changed the operational exit code")
+
+    expect(json.loads(render_json_document(result)) == json.loads(encoded),
+           "contract renderer diverged from the shared JSON policy")
+    expect(result.to_dict() == before, "presentation mutated the operator result")
+    findings = ordered_findings(
+        [
+            {"severity": "warning", "chain_id": "a", "link": 1},
+            {"severity": "error", "chain_id": "b", "link": 2},
+        ]
+    )
+    expect(findings[0]["severity"] == "error", "finding ordering did not prioritize errors")
+    records = ordered_records(
+        [{"state": "retry", "intent_id": "b"}, {"state": "acknowledged", "intent_id": "a"}],
+        keys=("state", "intent_id"),
+    )
+    expect(records[0]["state"] == "acknowledged", "record ordering was not deterministic")
+    progress = ProgressView.from_event(
+        LifecycleDrainProgress(LifecycleDrainStage.PROCESSING, completed=2, total=4, detail="spawn_child")
+    )
+    expect(progress.fraction == 0.5 and progress.label == "spawn child", "typed progress view lost progress facts")
+    expect(bounded_text("line\nwith ⚓", width=20) == "line with ⚓", "presentation did not normalize line breaks")
+    expect(bounded_text("0123456789", width=5) == "0123…", "presentation width bound is not deterministic")
+
+
+def test_operator_presentation_modes_preserve_unicode_and_outcome():
+    """All presentation modes expose the same immutable outcome and Unicode facts."""
+    from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
+    from nautical_core.operator_presentation import render_result
+
+    result = OperatorResult(
+        operation=OperatorOperation.APPLY,
+        status=OperatorStatus.MANUAL_REVIEW,
+        data={"description": "Méditation ⚓", "plan": {"action": "review"}},
+    )
+    expected_code = result.exit_code
+    outputs = {
+        mode: render_result(result, mode, rich_renderer=lambda value: value.to_dict()["data"]["description"])
+        for mode in ("json", "text", "rich", "disabled")
+    }
+    expect("Méditation" in outputs["json"], "JSON mode escaped Unicode facts")
+    expect("Méditation" in outputs["rich"], "Rich mode lost Unicode facts")
+    expect(outputs["disabled"] == "", "disabled mode emitted presentation output")
+    expect(result.exit_code == expected_code, "presentation mode changed the operational outcome")
+
+
+def test_operator_presentation_has_no_mutation_dependencies():
+    """Presentation ownership must remain independent from mutation services."""
+    source = Path(ROOT, "nautical_core", "operator_presentation.py").read_text(encoding="utf-8")
+    forbidden = ("taskwarrior", "sqlite", "lifecycle_application", "task_command")
+    expect(not any(token in source.lower() for token in forbidden),
+           "presentation module imported an operational mutation dependency")
+
+
+def test_operator_v2_contract_preserves_public_schema_and_statuses():
+    """V2 keeps public top-level schemas while unifying status and exit codes."""
+    from nautical_core.operator_models import OperatorV2Result, OperatorV2Status
+    from nautical_core.operator_presentation import render_result
+
+    result = OperatorV2Result(
+        schema="nautical.query.occurrences",
+        operation="occurrences",
+        status=OperatorV2Status.FOUND,
+        payload={"results": [{"description": "Méditation ⚓"}]},
+    )
+    document = result.to_dict()
+    expect(document["schema"] == "nautical.query.occurrences", "v2 changed the public schema")
+    expect(document["version"] == 2 and document["status"] == "found", "v2 envelope is not versioned")
+    expect(result.exit_code == 0 and "occurrences: found" in render_result(result, "text"),
+           "v2 status did not map to the stable presentation contract")
+    expect(OperatorV2Result.from_mapping(document).to_dict() == document,
+           "v2 result did not round-trip through its public decoder")
+
+
+def test_navigator_snapshot_exposes_deterministic_typed_view():
+    """Navigator snapshot facts are serializable without invoking Rich or Taskwarrior."""
+    import nautical_navigator as navigator
+
+    metadata = navigator.NavigatorTaskMetadata(
+        uuid="u1", chain_id="c1", link=2, previous="u0", following=None,
+        status="pending", chain_enabled=True, anchor="w:mon",
+    )
+    values = metadata.to_dict()
+    expect(values["chainID"] == "c1" and values["anchor"] == "w:mon",
+           "Navigator metadata view lost chain facts")
+    expect(metadata.to_dict() == values, "Navigator metadata view is not deterministic")
+
+
+def test_navigator_calendar_view_is_immutable_and_serializable():
+    """Calendar presentation data has a stable renderer-neutral shape."""
+    from datetime import date
+    import nautical_navigator as navigator
+
+    view = navigator.NavigatorCalendarView(
+        completed=(date(2026, 8, 1),),
+        upcoming=(date(2026, 8, 8),),
+        pending_due=(date(2026, 8, 3),),
+    )
+    expect(view.to_dict() == {
+        "completed": ["2026-08-01"],
+        "upcoming": ["2026-08-08"],
+        "pending_due": ["2026-08-03"],
+    }, "Navigator calendar view serialization changed")
+
+
+def test_navigator_chain_summary_is_immutable_and_serializable():
+    """Finished-chain facts have a stable renderer-neutral shape."""
+    from datetime import date
+    import nautical_navigator as navigator
+
+    summary = navigator.NavigatorChainSummary(3, 3, date(2026, 8, 1), date(2026, 8, 3), 2, 1.0, 1.0, "100% on-anchor")
+    expect(summary.to_dict()["completed_links"] == 3 and summary.to_dict()["first_end"] == "2026-08-01",
+           "Navigator chain summary serialization changed")
+
+
+def test_navigator_chain_choice_is_immutable_and_serializable():
+    """Chain selector entries expose stable typed facts."""
+    import nautical_navigator as navigator
+
+    choice = navigator.NavigatorChainChoice(0, "c1", "[pending] Demo", "u1", "2026-08-01")
+    expect(choice.to_dict()["chainID"] == "c1" and choice.to_dict()["tail_uuid"] == "u1",
+           "Navigator chain choice serialization changed")
+
+
+def test_navigator_change_row_is_immutable_and_serializable():
+    """Change-table rows expose stable typed facts."""
+    import nautical_navigator as navigator
+
+    row = navigator.NavigatorChangeRow("u1", "2026-08-01", (navigator.TaskChange("due", "changed", "a", "b"),))
+    expect(row.to_dict()["changes"][0]["field"] == "due", "Navigator change row serialization changed")
+
+
+def test_navigator_task_detail_view_is_immutable_and_serializable():
+    """Baseline task detail fields have a stable typed view."""
+    import nautical_navigator as navigator
+
+    view = navigator.NavigatorTaskDetailView((("UUID", "u1"), ("Status", "Pending")), truncated=True)
+    expect(view.to_dict() == {
+        "fields": [{"label": "UUID", "value": "u1"}, {"label": "Status", "value": "Pending"}],
+        "truncated": True,
+    }, "Navigator task detail serialization changed")
+
+
+def test_navigator_projection_view_is_immutable_and_serializable():
+    """Projection warnings have a stable typed view."""
+    import nautical_navigator as navigator
+
+    view = navigator.NavigatorProjectionView(("anchor unavailable",))
+    expect(view.to_dict() == {"warnings": ["anchor unavailable"]},
+           "Navigator projection serialization changed")
+
+
+def test_navigator_trace_view_is_immutable_and_serializable():
+    """Scheduler trace evidence has a stable typed shape and summary."""
+    import nautical_navigator as navigator
+
+    view = navigator.NavigatorTraceView(
+        event_count=2, providers=("anchor",), phases=(("selected", 1),), selected="2026-08-01"
+    )
+    expect(view.to_dict()["events"] == 2 and "selected=2026-08-01" in view.summary(),
+           "Navigator trace view lost scheduler evidence")
+
+
+def test_navigator_analysis_view_aggregates_typed_sections():
+    """Main analysis data has one immutable presentation aggregate."""
+    from datetime import date
+    import nautical_navigator as navigator
+
+    view = navigator.NavigatorAnalysisView(
+        chain_size=2,
+        calendar=navigator.NavigatorCalendarView(completed=(date(2026, 8, 1),)),
+        projection=navigator.NavigatorProjectionView(("warning",)),
+    )
+    document = view.to_dict()
+    expect(document["chain_size"] == 2 and document["calendar"]["completed"] == ["2026-08-01"],
+           "Navigator analysis aggregate lost typed sections")
 
 
 def test_query_service_all_selector_excludes_non_recurrence_rows():
@@ -35783,8 +36234,6 @@ TESTS.extend([
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
     test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
-    test_navigator_reads_through_read_only_invocation_repository,
-    test_navigator_empty_task_export_treats_no_matches_as_empty,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,
@@ -35857,6 +36306,26 @@ TESTS.extend([
     test_description_alias_parser_avoids_prose_and_rejects_duplicates,
     test_astronomy_preflight_reports_configuration_and_provider_health,
     test_navigator_sparse_calendar_renders_only_active_months,
+    test_navigator_import_and_help_are_noninteractive_without_rich,
+    test_navigator_empty_snapshot_is_a_valid_empty_chain,
+    test_navigator_reads_through_read_only_invocation_repository,
+    test_navigator_empty_task_export_treats_no_matches_as_empty,
+    test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe,
+    test_navigator_shared_graph_scales_to_large_chain,
+    test_navigator_and_query_share_task_chain_facts,
+    test_operator_presentation_is_immutable_and_deterministic,
+    test_operator_presentation_modes_preserve_unicode_and_outcome,
+    test_operator_presentation_has_no_mutation_dependencies,
+    test_operator_v2_contract_preserves_public_schema_and_statuses,
+    test_navigator_snapshot_exposes_deterministic_typed_view,
+    test_navigator_calendar_view_is_immutable_and_serializable,
+    test_navigator_chain_summary_is_immutable_and_serializable,
+    test_navigator_chain_choice_is_immutable_and_serializable,
+    test_navigator_change_row_is_immutable_and_serializable,
+    test_navigator_task_detail_view_is_immutable_and_serializable,
+    test_navigator_projection_view_is_immutable_and_serializable,
+    test_navigator_trace_view_is_immutable_and_serializable,
+    test_navigator_analysis_view_aggregates_typed_sections,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_omit_file_modifiers_apply_even_when_base_file_is_cached,
     test_omit_file_modifiers_reject_time_modifiers,

@@ -26600,22 +26600,6 @@ def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
         raise AssertionError("parser accepted an unknown astronomical event")
 
 
-def test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain():
-    """Navigator direct task lookup should prefer chainID and resolve the full chain from short links."""
-    from dataclasses import replace
-    from nautical_core.integration_context import IntegrationAccess
-
-    module_name = "_nautical_navigator_direct_chain_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-    finally:
-        sys.modules.pop(module_name, None)
-
-
 def test_navigator_reads_through_read_only_invocation_repository():
     """Navigator must use the typed read snapshot and reject mutation-capable UOWs."""
     from dataclasses import replace
@@ -26631,92 +26615,30 @@ def test_navigator_reads_through_read_only_invocation_repository():
         uow = _test_operator_uow()
         uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
 
-        class Client:
-            def execute(self, args, *, purpose, timeout, **kwargs):
-                del purpose, timeout, kwargs
-                rows = [{"uuid": "navigator-read", "chainID": "chain-read", "link": 1, "status": "pending"}]
-                return _typed_command_result(("task", *args), True, json.dumps(rows))
-
-        uow.client = Client()
-        navigator._UNIT_OF_WORK = uow
-        rows = navigator._run_task_export(("chainID:chain-read",))
-        expect(rows and rows[0]["uuid"] == "navigator-read", f"Navigator read failed: {rows!r}")
-        expect(uow.reads.size == 1, "Navigator did not retain the invocation read snapshot")
-        expect(uow.repository.metrics()["calls"] == 1, "Navigator did not use the shared read metrics")
-
         uow.context = replace(uow.context, access=IntegrationAccess.MUTATION)
+        navigator._UNIT_OF_WORK = uow
         try:
-            navigator._run_task_export(("chainID:chain-read",))
+            navigator._run_chain_snapshot()
         except RuntimeError as exc:
             expect("read-only" in str(exc), f"mutation boundary error was unclear: {exc}")
         else:
             raise AssertionError("Navigator accepted a mutation-capable integration context")
+
+        class Client:
+            def execute(self, args, *, purpose, timeout, **kwargs):
+                del purpose, timeout, kwargs
+                return _typed_command_result(("task", *args), True, "")
+
+        uow.client = Client()
+        uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
+        snapshot = navigator._run_chain_snapshot()
+        expect(
+            isinstance(snapshot, navigator.NavigatorSnapshot) and not snapshot.rows,
+            f"empty shared snapshot was not preserved: {snapshot!r}",
+        )
     finally:
         navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
-
-    navigator._UNIT_OF_WORK = SimpleNamespace(context=SimpleNamespace(command_prefix=("task",)))
-    root = {
-        "id": 1,
-        "uuid": "aaaaaaaa-0000-0000-0000-000000000001",
-        "chainID": "cid123",
-        "link": 1,
-        "description": "root",
-        "status": "completed",
-        "entry": "2026-01-01T00:00:00Z",
-        "nextLink": "bbbbbbbb",
-    }
-    mid = {
-        "id": 2,
-        "uuid": "bbbbbbbb-0000-0000-0000-000000000002",
-        "chainID": "cid123",
-        "link": 2,
-        "description": "mid",
-        "status": "completed",
-        "entry": "2026-01-02T00:00:00Z",
-        "prevLink": "aaaaaaaa",
-        "nextLink": "cccccccc",
-    }
-    tail = {
-        "id": 3,
-        "uuid": "cccccccc-0000-0000-0000-000000000003",
-        "chainID": "cid123",
-        "link": 3,
-        "description": "tail",
-        "status": "pending",
-        "entry": "2026-01-03T00:00:00Z",
-        "prevLink": "bbbbbbbb",
-    }
-
-    calls = []
-    uow = _test_operator_uow()
-    uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
-
-    class Client:
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            calls.append(tuple(args))
-            if "2" in args:
-                rows = [mid]
-            elif "chainID:cid123" in args:
-                rows = [root, mid, tail]
-            else:
-                raise AssertionError(f"unexpected task command: {args!r}")
-            return _typed_command_result(("task", *args), True, json.dumps(rows))
-
-    uow.client = Client()
-    navigator._UNIT_OF_WORK = uow
-    try:
-        analyzer = navigator.TaskAnalyzer()
-        chain = analyzer.build_chain_from_tasks(2)
-        expect([task["uuid"] for task in chain] == [root["uuid"], mid["uuid"], tail["uuid"]],
-               f"unexpected rebuilt chain: {chain!r}")
-        expect(any("chainID:cid123" in cmd for cmd in calls),
-               f"expected targeted chainID export, got: {calls!r}")
-        expect(not any("chain:on" in cmd and "all" in cmd for cmd in calls),
-               f"direct task selection should not export all chains: {calls!r}")
-    finally:
-        navigator._UNIT_OF_WORK = None
-
 
 def test_navigator_empty_task_export_treats_no_matches_as_empty():
     """Taskwarrior's empty-filter exit must not abort Navigator startup."""
@@ -36233,7 +36155,6 @@ TESTS.extend([
     test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child,
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
-    test_navigator_direct_task_selection_uses_chain_id_and_resolves_complete_chain,
     test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,

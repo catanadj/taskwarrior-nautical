@@ -11,7 +11,6 @@ import shutil
 import sys
 import tomllib
 import zoneinfo
-from collections import defaultdict
 from datetime import date, timezone
 from pathlib import Path
 from types import ModuleType
@@ -27,11 +26,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
+from nautical_core.operator_presentation import ordered_findings, render_result  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
+from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
-from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.integration_context import (  # noqa: E402
     IntegrationAccess,
     IntegrationContext,
@@ -41,11 +43,30 @@ from nautical_core.integration_context import (  # noqa: E402
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
-from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
+
+
+def _v2_document(payload: dict[str, Any]) -> OperatorV2Result:
+    """Build the shared v2 envelope while retaining Doctor's public fields."""
+    status = OperatorV2Status(str(payload.get("status") or "error"))
+    failure = None
+    if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
+        finding = next((item for item in payload.get("findings", ()) if isinstance(item, dict)), {})
+        failure = OperatorFailure(
+            code=str(finding.get("id") or "doctor_error"),
+            message=str(finding.get("message") or "Doctor reported an error"),
+            details=finding.get("details") if isinstance(finding.get("details"), dict) else {},
+        )
+    return OperatorV2Result(
+        schema=_JSON_SCHEMA,
+        operation="diagnose",
+        status=status,
+        payload={key: value for key, value in payload.items() if key not in {"schema", "status"}},
+        failure=failure,
+    )
 
 REQUIRED_UDAS = {
     "cp": "string",
@@ -1076,7 +1097,7 @@ def _check_reconcile_plans(
 
     hook = None
     generation = None
-    plans: list[lifecycle.LifecycleRecoveryDecision] = []
+    plans: list[Any] = []
     delayed_expiration_candidates: list[dict[str, Any]] = []
     unavailable = ""
     try:
@@ -1103,7 +1124,7 @@ def _check_reconcile_plans(
             existing_children = _existing_reconcile_children(rows, parent)
             # Recovery planning belongs to the integrity engine.  Doctor only
             # supplies the current snapshot evidence and formats the result.
-            plan = integrity_engine.plan_recovery(
+            plan = integrity_engine.plan_recovery_plan(
                 parent,
                 existing_children=existing_children,
                 hook=hook,
@@ -1117,10 +1138,10 @@ def _check_reconcile_plans(
                 for child in existing_children
             )
             planned_until_elapsed = False
-            if plan.action == "spawn" and plan.child_draft is not None and hook is not None:
+            if getattr(plan.action, "value", plan.action) == "spawn_child" and hook is not None:
                 try:
                     until_dt, until_err = _safe_parse_datetime(
-                        hook, plan.child_draft.field_value("until")
+                        hook, plan.child_dict().get("until")
                     )
                     now_utc = getattr(hook, "now_utc", None)
                     planned_until_elapsed = (
@@ -1175,8 +1196,11 @@ def _check_reconcile_plans(
             ),
             "plans": [
                 {
-                    "action": plan.action,
-                    **lifecycle.describe_plan(plan, fmt_dt_local=fmt_dt_local),
+                    "action": getattr(plan.action, "value", str(plan.action)),
+                    "reason": plan.expected_postconditions,
+                    "chainID": plan.identity.chain_id,
+                    "parent": plan.identity.parent_uuid,
+                    "link": plan.identity.source_link,
                 }
                 for plan in plans[:10]
             ],
@@ -1213,18 +1237,40 @@ def _check_chains(
     configuration = unit_of_work.context.configuration if unit_of_work is not None else None
     integrity = None
     if unit_of_work is not None and configuration is not None:
-        integrity = ChainIntegrityEngine(
-            ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint),
+        snapshot_service = ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint)
+        engine = ChainIntegrityEngine(
+            snapshot_service,
             configuration_fingerprint=configuration.fingerprint,
             schedule_fingerprint=configuration.scheduler_fingerprint,
-        ).audit(
-            IntegritySnapshotRequest.candidates(complete_chain_history=True),
-            outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
-            mutation_epoch=unit_of_work.mutation_epoch,
         )
+        snapshot_request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
+        normalized = snapshot_service.from_rows(snapshot_request, rows, source="doctor.authoritative_export")
+        if isinstance(normalized, Unavailable):
+            from nautical_core.chain_integrity_engine import IntegrityEngineResult
+            from nautical_core.chain_integrity_models import IntegrityReportStatus
+            integrity = IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=normalized.evidence.detail)
+        else:
+            operator_scope = OperatorScope(OperatorScopeKind.SYSTEM)
+            operator_context = OperatorInvocationContext.from_unit_of_work(
+                OperatorRequest(OperatorOperation.INSPECT, operator_scope), unit_of_work,
+            )
+            reader = ChainSnapshotReader(lambda _request: Found(normalized, "doctor authoritative export"))
+            projected = reader.read_chain_snapshot(
+                operator_context,
+                SnapshotReadRequest(operator_scope),
+            )
+            if isinstance(projected, OperatorFailure):
+                from nautical_core.chain_integrity_engine import IntegrityEngineResult
+                from nautical_core.chain_integrity_models import IntegrityReportStatus
+                integrity = IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=projected.message)
+            else:
+                integrity = engine.audit_snapshot(
+                    projected,
+                    outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
+                    mutation_epoch=unit_of_work.mutation_epoch,
+                )
     if integrity is not None:
         findings.extend(doctor_findings(integrity))
-    _check_reconcile_plans(findings, rows=rows, unit_of_work=unit_of_work)
 
     nautical = [
         row for row in rows
@@ -1408,7 +1454,7 @@ def _historical_summaries(findings: list[dict[str, Any]]) -> list[dict[str, Any]
 def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     stream = stream if stream is not None else sys.stdout
     enabled = _color_enabled(stream)
-    raw_findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+    raw_findings = list(ordered_findings(payload.get("findings") or []))
     historical = [
         item for item in raw_findings
         if item.get("severity") == "info"
@@ -1446,7 +1492,9 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     if timezone:
         write(f"Timezone: {timezone}")
     for section in ("error", "warn", "info", "ok"):
-        items = [item for item in findings if item.get("severity") == section]
+        items = list(ordered_findings(
+            [item for item in findings if item.get("severity") == section]
+        ))
         if not items:
             continue
         heading = f"{_status_label(section, enabled=enabled)} {section.upper()} ({len(items)})"
@@ -1510,18 +1558,14 @@ def main() -> int:
             message = f"Integration context unavailable: {exc}"
             if args.json:
                 print(
-                    json.dumps(
-                        {
+                    render_result(_v2_document({
                             "schema": _JSON_SCHEMA,
                             "schema_version": _JSON_SCHEMA_VERSION,
                             "status": "error",
                             "findings": [
                                 {"id": "integration.context", "severity": "error", "message": message}
                             ],
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
+                        }), "json")
                 )
             else:
                 print(f"Nautical doctor: ERROR\nContext: {message}")
@@ -1593,7 +1637,7 @@ def main() -> int:
         # Diagnostics may include timezone/provider objects supplied by an
         # optional backend. Keep the JSON boundary strict without allowing a
         # presentation-only value to make Doctor crash.
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+                print(render_result(_v2_document(payload), "json"))
     else:
         _render_text(payload)
     return 2 if status == "error" else 1 if status == "warn" else 0

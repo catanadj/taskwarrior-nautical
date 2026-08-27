@@ -58,7 +58,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
 from nautical_core.reconcile_report import exit_code, render_human  # noqa: E402
-from nautical_core.operator_presentation import key_value_lines, render_result  # noqa: E402
+from nautical_core.operator_presentation import key_value_lines, render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,

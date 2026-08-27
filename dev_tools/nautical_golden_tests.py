@@ -19863,8 +19863,15 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         DEFAULT_TASK_CODEC.decode_row(expired_parent, source_query="golden recovery"),
         existing_children=[], hook=mod,
     )
-    reconciled_until = mod.core.to_local(mod.core.parse_dt_any((plan.child or {}).get("until")))
-    expect(plan.action == "spawn", f"expired anchor should produce a child plan: {plan}")
+    child = (
+        plan.child_observation.to_mapping()
+        if getattr(plan, "child_observation", None) is not None
+        else plan.plan.child_dict()
+        if getattr(plan, "plan", None) is not None
+        else {}
+    )
+    reconciled_until = mod.core.to_local(mod.core.parse_dt_any(child.get("until")))
+    expect(getattr(getattr(plan, "plan", None), "action", None).value == "spawn_child", f"expired anchor should produce a child plan: {plan}")
     expect(
         reconciled_until.date() == date(2026, 7, 20)
         and (reconciled_until.hour, reconciled_until.minute) == (23, 0),
@@ -19898,7 +19905,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         generation=failing_generation,
     )
     expect(
-        untyped_plan.action == "spawn",
+        getattr(getattr(untyped_plan, "plan", None), "action", None).value == "spawn_child",
         f"typed reconcile planning should not depend on the removed builder seam: {untyped_plan}",
     )
 
@@ -19906,8 +19913,15 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
         DEFAULT_TASK_CODEC.decode_row(early_until_parent, source_query="golden recovery"),
         existing_children=[], hook=mod,
     )
-    early_until = mod.core.to_local(mod.core.parse_dt_any((early_plan.child or {}).get("until")))
-    expect(early_plan.action == "spawn", f"expired anchor should still produce a child plan: {early_plan}")
+    early_child = (
+        early_plan.child_observation.to_mapping()
+        if getattr(early_plan, "child_observation", None) is not None
+        else early_plan.plan.child_dict()
+        if getattr(early_plan, "plan", None) is not None
+        else {}
+    )
+    early_until = mod.core.to_local(mod.core.parse_dt_any(early_child.get("until")))
+    expect(getattr(getattr(early_plan, "plan", None), "action", None).value == "spawn_child", f"expired anchor should still produce a child plan: {early_plan}")
     expect(
         early_until.date() == date(2026, 7, 20)
         and (early_until.hour, early_until.minute, early_until.second) == (23, 59, 59),

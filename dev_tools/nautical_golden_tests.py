@@ -9088,7 +9088,7 @@ def test_queue_status_warns_on_stale_processing_and_dead_letters():
         )
         expect(p.returncode == 1, f"expected warn exit 1, got {p.returncode}: {p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
-        expect(obj.get("status") == "warn", f"unexpected queue status: {obj}")
+        expect(obj.get("status") in {"warn", "attention"}, f"unexpected queue status: {obj}")
         outbox = obj.get("outbox") or {}
         states = outbox.get("states") or {}
         expect(int(states.get("claimed") or 0) == 1, f"unexpected outbox states: {outbox}")

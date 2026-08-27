@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import sys
@@ -22,6 +21,8 @@ from nautical_core.lifecycle_outbox import (  # noqa: E402
     LifecycleOutboxRepository,
     lifecycle_outbox_path,
 )
+from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_presentation import ordered_records, render_result  # noqa: E402
 
 
 _JSON_SCHEMA = "nautical.lifecycle_outbox_status"
@@ -169,10 +170,27 @@ def main() -> int:
         if not maintenance["ok"]:
             payload["issues"].append(f"outbox maintenance failed: {maintenance['reason'] or maintenance['kind']}")
             payload["status"] = "error"
+    # Queue status retains its v1 ``warn`` spelling in the payload while the
+    # shared v2 envelope uses the canonical attention status.
+    result_status = OperatorV2Status.ATTENTION if payload["status"] == "warn" else OperatorV2Status(payload["status"])
+    result_failure = None
+    if result_status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
+        result_failure = OperatorFailure(
+            code="queue_status_error",
+            message=str((payload.get("issues") or ["queue status failed"])[0]),
+        )
+    result = OperatorV2Result(
+        schema=_JSON_SCHEMA,
+        operation="queue",
+        status=result_status,
+        payload={key: value for key, value in payload.items() if key not in {"schema", "status"}},
+        failure=result_failure,
+    )
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        print(render_result(result, "json"))
     else:
         outbox = payload["outbox"]
+        print(render_result(result, "text"))
         print(f"status={payload['status']} taskdata={payload['taskdata']}")
         print(
             "outbox:"
@@ -202,7 +220,10 @@ def main() -> int:
         )
         for issue in payload["issues"]:
             print(f"issue: {issue}")
-        for record in outbox.get("sample", []):
+        for record in ordered_records(
+            outbox.get("sample", []),
+            keys=("state", "stage", "intent_id"),
+        ):
             print(
                 "intent:"
                 f" id={record.get('intent_id')} state={record.get('state')}"

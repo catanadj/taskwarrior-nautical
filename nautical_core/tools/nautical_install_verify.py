@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from nautical_core.operator_presentation import bounded_text, ordered_findings, render_json_document
+
 
 def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
     return [
@@ -35,7 +37,7 @@ def build_report(
     platform: str,
     launcher: Path,
 ) -> dict[str, Any]:
-    findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+    findings = list(ordered_findings(payload.get("findings") or []))
     checks = [
         {"name": "Platform", "status": "passed", "detail": platform},
         {"name": "Taskwarrior", "status": _group_status(_items(payload, "taskwarrior.")), "detail": "command available"},
@@ -113,17 +115,17 @@ def render(report: dict[str, Any]) -> None:
     for check in report.get("checks") or []:
         status = str(check.get("status") or "failed")
         style = styles.get(status, styles["failed"])
-        print(f"  {style}{symbols.get(status, '?')}{styles['reset']} {check.get('name')}: {check.get('detail')}")
+        print(f"  {style}{symbols.get(status, '?')}{styles['reset']} {bounded_text(check.get('name'), width=32)}: {bounded_text(check.get('detail'))}")
     manual = report.get("manual_actions") or []
     optional = report.get("optional_actions") or []
     if manual:
         print("\nManual action")
         for item in manual:
-            print(f"  ! {item.get('action')}")
+            print(f"  ! {bounded_text(item.get('action'))}")
     if optional:
         print("\nOptional")
         for item in optional:
-            print(f"  ! {item.get('action')}")
+            print(f"  ! {bounded_text(item.get('action'))}")
     status = str(report.get("status") or "failed")
     if status == "failed":
         print("\nInstallation verification failed. Resolve the required actions before using Nautical.")
@@ -154,7 +156,7 @@ def main() -> int:
         print(f"Post-install verification could not be read: {exc}", file=sys.stderr)
         return 2
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, separators=(",", ":")))
+        print(render_json_document(report))
     else:
         render(report)
     return 2 if report["status"] == "failed" else 1 if report["status"] == "attention" else 0

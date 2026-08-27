@@ -25278,7 +25278,7 @@ def test_domain_scheduler_parity_across_operational_consumers():
     finally:
         core.LOCAL_TZ_NAME = previous_tz_name
         core._LOCAL_TZ = previous_tz
-    expect(recovery.action == "spawn", f"reconcile parity did not plan a successor: {recovery!r}")
+    expect(recovery.plan.action.value == "spawn_child", f"reconcile parity did not plan a successor: {recovery!r}")
     expect(recovery.child_due == expected_local.astimezone(dt_timezone.utc), "reconcile target diverged from direct scheduler")
 
 

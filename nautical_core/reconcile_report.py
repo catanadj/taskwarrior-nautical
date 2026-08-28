@@ -10,6 +10,33 @@ from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
 
 
 _JSON_SCHEMA = "nautical.reconcile"
+_JSON_SCHEMA_VERSION = 1
+
+
+class ReconcileReport(dict[str, Any]):
+    """Validated public reconcile document, including startup reports."""
+
+    def __init__(self, document: Mapping[str, Any]) -> None:
+        if not isinstance(document, Mapping):
+            raise ValueError("reconcile report must be an object")
+        if document.get("schema") != _JSON_SCHEMA:
+            raise ValueError("invalid reconcile report schema")
+        if document.get("schema_version") != _JSON_SCHEMA_VERSION:
+            raise ValueError("unsupported reconcile report version")
+        if str(document.get("status") or "") not in {"ok", "degraded", "error"}:
+            raise ValueError("invalid reconcile report status")
+        if str(document.get("mode") or "") not in {"dry-run", "apply"}:
+            raise ValueError("invalid reconcile report mode")
+        super().__init__(document)
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "ReconcileReport":
+        if not isinstance(value, Mapping):
+            raise ValueError("reconcile report must be an object")
+        return cls(value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self)
 
 
 def to_operator_result(summary: Mapping[str, Any]) -> OperatorV2Result:
@@ -86,4 +113,4 @@ def exit_code(summary: Mapping[str, Any]) -> int:
     return 0
 
 
-__all__ = ["exit_code", "render_human", "to_operator_result"]
+__all__ = ["ReconcileReport", "exit_code", "render_human", "to_operator_result"]

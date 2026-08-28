@@ -191,6 +191,58 @@ class OperatorControlPlane:
 
         return audit_authoritative_rows(unit_of_work, rows)
 
+    def diagnose_chains(self, unit_of_work: object) -> tuple[dict[str, int], list[dict[str, object]]]:
+        """Export and audit chain state as one read-only diagnosis request."""
+        from .integration_models import Absent, Found, Unavailable
+
+        repository = getattr(unit_of_work, "repository", None)
+        if repository is None:
+            return {"tasks": 0, "nautical_tasks": 0, "chains": 0}, [{
+                "id": "chains.export",
+                "severity": "error",
+                "message": "Task data could not be exported for chain inspection.",
+                "details": {"error": "validated repository is unavailable"},
+            }]
+        from .task_read_repository import ALL_TASK_STATUSES
+
+        repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+        read = repository.lifecycle_candidates(
+            statuses=ALL_TASK_STATUSES,
+            scope_filter=None,
+            bounded=False,
+        )
+        if isinstance(read, Unavailable):
+            return {"tasks": 0, "nautical_tasks": 0, "chains": 0}, [{
+                "id": "chains.export",
+                "severity": "error",
+                "message": "Task data could not be exported for chain inspection.",
+                "details": {"error": read.evidence.detail},
+            }]
+        rows: list[TaskObservation] = list(read.value) if isinstance(read, Found) else []
+        if not isinstance(read, (Found, Absent)):
+            return {"tasks": 0, "nautical_tasks": 0, "chains": 0}, [{
+                "id": "chains.export",
+                "severity": "error",
+                "message": "Task data could not be exported for chain inspection.",
+                "details": {"error": "task repository returned an invalid result"},
+            }]
+        _, findings = self.audit_integrity(unit_of_work, rows)
+        recurrence_fields = ("cp", "anchor", "anchor_file")
+        def value(row: TaskObservation, field: str) -> object:
+            raw = row.field(field).value
+            return getattr(raw, "value", raw)
+        nautical = [
+            row for row in rows
+            if any(str(value(row, field) or "").strip() for field in recurrence_fields)
+            or str(value(row, "chainID") or "").strip()
+        ]
+        counts = {
+            "tasks": len(rows),
+            "nautical_tasks": len(nautical),
+            "chains": len({str(value(row, "chainID")) for row in nautical if value(row, "chainID")}),
+        }
+        return counts, findings
+
     @staticmethod
     def health_report(findings: Sequence[OperatorFinding]) -> OperatorHealthReport:
         """Aggregate already-observed health findings without performing I/O."""

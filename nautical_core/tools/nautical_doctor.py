@@ -48,9 +48,7 @@ from nautical_core.operator_presentation import finding_display, finding_status,
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
-from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
-from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.integration_context import (  # noqa: E402
     IntegrationAccess,
     IntegrationContext,
@@ -59,7 +57,6 @@ from nautical_core.integration_context import (  # noqa: E402
     ValidatedNauticalConfiguration,
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
-from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_health_service import OperatorHealthService  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
@@ -106,7 +103,6 @@ REQUIRED_UDAS = {
     "link": "numeric",
     "chainID": "string",
 }
-RECURRENCE_FIELDS = ("cp", "anchor", "anchor_file")
 _ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -188,22 +184,6 @@ def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]
         retry_delay=0.1,
     )
     return proc.ok, proc.stdout.strip()
-
-
-def _task_export(unit_of_work: TaskwarriorUnitOfWork) -> tuple[bool, list[TaskObservation], str]:
-    unit_of_work.repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    read = unit_of_work.repository.lifecycle_candidates(
-        statuses=ALL_TASK_STATUSES,
-        scope_filter=None,
-        bounded=False,
-    )
-    if isinstance(read, Found):
-        return True, list(read.value), ""
-    if isinstance(read, Absent):
-        return True, [], ""
-    if isinstance(read, Unavailable):
-        return False, [], read.evidence.detail
-    return False, [], "task repository returned an invalid result"
 
 
 def _diagnostic_read_uow(
@@ -716,34 +696,11 @@ def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) 
     return sorted(set(paths))
 
 
-def _task_value(row: TaskObservation, field: str) -> Any:
-    state = row.field(field)
-    if state.presence is FieldPresence.ABSENT:
-        return None
-    return getattr(state.value, "value", state.value)
-
-
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
     unit_of_work: TaskwarriorUnitOfWork | None,
 ) -> dict[str, int]:
-    if unit_of_work is None:
-        ok = False
-        rows: list[TaskObservation] = []
-        err = "validated integration context is unavailable"
-    else:
-        ok, rows, err = _task_export(unit_of_work)
-    if not ok:
-        _finding(
-            findings,
-            "chains.export",
-            "error",
-            "Task data could not be exported for chain inspection.",
-            details={"error": err},
-        )
-        return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
-
     if unit_of_work is None:
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
     configuration = unit_of_work.context.configuration
@@ -751,21 +708,9 @@ def _check_chains(
         configuration,
         DomainApplicationRegistry(),
     )
-    integrity, integrity_findings = control_plane.audit_integrity(unit_of_work, rows)
-    if integrity is not None:
-        findings.extend(integrity_findings)
-
-    nautical = [
-        row for row in rows
-        if any(str(_task_value(row, field) or "").strip() for field in RECURRENCE_FIELDS)
-        or str(_task_value(row, "chainID") or "").strip()
-    ]
-
-    return {
-        "tasks": len(rows),
-        "nautical_tasks": len(nautical),
-        "chains": len({_task_value(row, "chainID") for row in nautical if _task_value(row, "chainID")}),
-    }
+    counts, chain_findings = control_plane.diagnose_chains(unit_of_work)
+    findings.extend(chain_findings)
+    return counts
 
 
 def _format_task(task: dict[str, Any]) -> str:

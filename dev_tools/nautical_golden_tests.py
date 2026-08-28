@@ -9899,7 +9899,7 @@ def test_doctor_reports_missing_timezone_data():
     try:
         mod.ZONEINFO_FACTORY = _missing_zoneinfo
         findings = []
-        mod._check_timezone(findings, {"tz": "Europe/Bucharest"})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.timezone_findings({"tz": "Europe/Bucharest"}, mod.ZONEINFO_FACTORY))
     finally:
         mod.ZONEINFO_FACTORY = prev_zoneinfo
 
@@ -9914,7 +9914,7 @@ def test_doctor_reports_missing_timezone_configuration():
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
     mod = _load_hook_module(path, "_nautical_doctor_missing_timezone_config_test")
     findings = []
-    mod._check_timezone(findings, {})
+    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.timezone_findings({}, mod.ZONEINFO_FACTORY))
     item = next((item for item in findings if item.get("id") == "config.timezone.missing"), None)
     expect(item is not None, f"missing timezone configuration was not reported: {findings!r}")
     expect(((item.get("details") or {}).get("observed") or {}).get("tz") == "UTC", f"missing timezone did not use UTC fallback: {item!r}")
@@ -9928,7 +9928,7 @@ def test_doctor_reports_astronomy_preflight_health():
     try:
         mod.effective_config_snapshot = lambda: {"values": {}, "source": "defaults"}
         findings = []
-        mod._check_astronomy(findings, {})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.astronomy_findings({}, effective_timezone="UTC", source_hint="defaults", preflight=mod.astronomy.preflight))
     finally:
         mod.effective_config_snapshot = previous
     item = next((item for item in findings if item.get("id") == "astronomy.not_configured"), None)
@@ -9943,7 +9943,8 @@ def test_doctor_reports_season_backend_and_astronomical_events():
     try:
         mod.effective_config_snapshot = lambda: {"values": {}, "source": "defaults"}
         findings = []
-        mod._check_season_mode(findings, {"season_mode": "astronomical", "season_hemisphere": "north", "tz": "UTC"})
+        from nautical_core.astronomical_seasons import seasonal_events_utc
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.season_findings({"season_mode": "astronomical", "season_hemisphere": "north", "tz": "UTC"}, {}, mod.ZONEINFO_FACTORY, seasonal_events_utc))
     finally:
         mod.effective_config_snapshot = previous
     item = next((item for item in findings if item.get("id") == "config.season_mode"), None)
@@ -9954,7 +9955,7 @@ def test_doctor_reports_season_backend_and_astronomical_events():
     expect("spring_equinox" in (observed.get("events") or {}), f"season event dates missing: {item!r}")
 
     findings = []
-    mod._check_season_mode(findings, {"season_mode": "sidereal", "tz": "UTC"})
+    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.season_findings({"season_mode": "sidereal", "tz": "UTC"}, {}, mod.ZONEINFO_FACTORY, seasonal_events_utc))
     invalid = next((item for item in findings if item.get("id") == "config.season_mode.invalid"), None)
     expect(invalid is not None and invalid.get("fix"), f"invalid season mode lacked an actionable fix: {findings!r}")
 
@@ -9974,7 +9975,7 @@ def test_doctor_reports_matching_config_drift():
             "current_fingerprint": "abc",
         }
         findings = []
-        mod._check_config_drift(findings, source)
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.configuration_drift_findings(source, mod.configuration_drift))
         expect(findings and findings[0].get("severity") == "info", f"healthy config drift finding missing: {findings!r}")
 
         mod.configuration_drift = lambda: {
@@ -9985,7 +9986,7 @@ def test_doctor_reports_matching_config_drift():
             "current_fingerprint": "def",
         }
         findings = []
-        mod._check_config_drift(findings, source)
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.configuration_drift_findings(source, mod.configuration_drift))
         expect(findings and findings[0].get("severity") == "warning", f"changed config drift finding missing: {findings!r}")
         expect("Restart Navigator" in findings[0].get("fix", ""), f"drift restart guidance missing: {findings!r}")
     finally:
@@ -10123,7 +10124,7 @@ def test_doctor_reports_missing_navigator_dependencies():
     try:
         mod.RICH_SPEC_FACTORY = lambda name: None if name in {"rich", "dateutil"} else object()
         findings = []
-        mod._check_navigator_dependencies(findings, {})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.navigator_dependency_findings({}, lambda name: mod.RICH_SPEC_FACTORY(name) is not None, python_executable=sys.executable))
     finally:
         mod.RICH_SPEC_FACTORY = previous
     item = next((item for item in findings if item.get("id") == "navigator.dependencies"), None)
@@ -10216,7 +10217,7 @@ def test_doctor_reports_live_panel_configuration_health():
         mod.RICH_SPEC_FACTORY = lambda _name: object()
 
         findings = []
-        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 275})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": 275}, mod.RICH_SPEC_FACTORY))
         live = next(item for item in findings if item.get("id") == "config.panel.live")
         details = live.get("details") or {}
         expect(live.get("severity") == "info", f"valid live config should be healthy: {findings!r}")
@@ -10228,7 +10229,7 @@ def test_doctor_reports_live_panel_configuration_health():
         expect("Rich is available" in str(live.get("message") or ""), f"text finding omits Rich health: {findings!r}")
 
         findings = []
-        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": "slow"})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": "slow"}, mod.RICH_SPEC_FACTORY))
         invalid = next(item for item in findings if item.get("id") == "config.panel.duration.invalid")
         expect(invalid.get("severity") == "warning", f"malformed duration should warn: {findings!r}")
         expect(
@@ -10237,7 +10238,7 @@ def test_doctor_reports_live_panel_configuration_health():
         )
 
         findings = []
-        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 5000})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": 5000}, mod.RICH_SPEC_FACTORY))
         clamped = next(item for item in findings if item.get("id") == "config.panel.duration.clamped")
         expect(clamped.get("severity") == "warning", f"out-of-range duration should warn: {findings!r}")
         expect(
@@ -10247,7 +10248,7 @@ def test_doctor_reports_live_panel_configuration_health():
 
         mod.RICH_SPEC_FACTORY = lambda _name: None
         findings = []
-        mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 160})
+        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": 160}, mod.RICH_SPEC_FACTORY))
         missing = next(item for item in findings if item.get("id") == "config.panel.rich_missing")
         expect(missing.get("severity") == "warning", f"missing Rich should warn in live mode: {findings!r}")
         expect("pip install rich" in str(missing.get("fix") or ""), f"missing Rich fix is not actionable: {findings!r}")
@@ -10260,15 +10261,14 @@ def test_doctor_reports_authoritative_config_schema_findings():
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
     mod = _load_hook_module(path, "_nautical_doctor_config_schema_test")
     findings = []
-    mod._check_config_schema(
-        findings,
+    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.configuration_schema_findings(
         {
             "verify_import": False,
             "outbox_drain_max_items": 0,
             "panel_mode": "sparkle",
             "setting_typo": True,
         },
-    )
+    ))
     ids = {item.get("id") for item in findings}
     expect(
         {
@@ -10293,7 +10293,7 @@ def test_doctor_reports_uda_alias_configuration():
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
     mod = _load_hook_module(path, "_nautical_doctor_uda_aliases_test")
     findings = []
-    mod._check_uda_aliases(findings, {"enable_uda_aliases": True})
+    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.uda_alias_findings({"enable_uda_aliases": True}))
     item = next(item for item in findings if item.get("id") == "config.uda_aliases")
     expect(item.get("severity") == "info", f"UDA alias config should be healthy: {findings!r}")
     observed = (item.get("details") or {}).get("observed") or {}

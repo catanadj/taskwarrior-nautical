@@ -80,6 +80,7 @@ class SchedulerTrace:
     max_events: int = 128
     _events: list[SchedulerTraceEvent] = field(default_factory=list, repr=False)
     _dropped: int = field(default=0, repr=False)
+    _decision_count: int = field(default=0, repr=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.max_events, bool) or not isinstance(self.max_events, int) or self.max_events <= 0:
@@ -100,6 +101,7 @@ class SchedulerTrace:
     def record(self, phase: str, **kwargs: object) -> None:
         if not self.enabled:
             return
+        self._decision_count += 1
         if len(self._events) >= self.max_events:
             self._dropped += 1
             return
@@ -113,10 +115,16 @@ class SchedulerTrace:
     def dropped(self) -> int:
         return self._dropped
 
+    @property
+    def decision_count(self) -> int:
+        """Number of scheduler decisions, including events beyond the cap."""
+        return self._decision_count
+
     def summary(self) -> dict[str, object]:
         return {
             "events": [event.to_dict() for event in self._events],
             "count": len(self._events),
+            "decision_count": self._decision_count,
             "dropped": self._dropped,
         }
 
@@ -146,6 +154,7 @@ class SchedulerTrace:
         """Discard emitted events so one service call cannot replay history."""
         self._events.clear()
         self._dropped = 0
+        self._decision_count = 0
 
 
 @contextmanager

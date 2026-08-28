@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core.operator_presentation import ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_presentation import group_findings_by_severity, ordered_findings, render_result  # noqa: E402
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding, status_for_findings  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
@@ -1547,10 +1547,9 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     timezone = _timezone_summary([_render_finding(item) for item in source_findings])
     if timezone:
         write(f"Timezone: {timezone}")
+    grouped = group_findings_by_severity(findings)
     for section in ("error", "warn", "info", "ok"):
-        items = list(ordered_findings(
-            [item for item in findings if item.get("severity") == section]
-        ))
+        items = list(grouped.get(section, ()))
         if not items:
             continue
         heading = f"{_status_label(section, enabled=enabled)} {section.upper()} ({len(items)})"

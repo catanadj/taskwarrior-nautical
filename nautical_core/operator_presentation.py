@@ -172,4 +172,13 @@ def finding_status(findings: object, *, empty: str = "failed") -> str:
     return "passed"
 
 
-__all__ = ("ProgressView", "bounded_text", "finding_status", "key_value_lines", "ordered_findings", "ordered_records", "render_contract_json", "render_json", "render_json_document", "render_result", "render_text")
+def group_findings_by_severity(findings: object) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Group finding mappings in shared deterministic severity order."""
+    values = ordered_findings(findings)
+    return {
+        severity: tuple(item for item in values if str(item.get("severity") or "").lower() == severity)
+        for severity in ("error", "warn", "warning", "info", "ok")
+    }
+
+
+__all__ = ("ProgressView", "bounded_text", "finding_status", "group_findings_by_severity", "key_value_lines", "ordered_findings", "ordered_records", "render_contract_json", "render_json", "render_json_document", "render_result", "render_text")

@@ -1542,12 +1542,14 @@ class _ReconcileSession:
         """Hydrate child-slot evidence once for the candidate wave."""
         self.lifecycle_service.preflight_wave(candidates)
 
-    def plan_candidate(self, task_bin: str, hook: Any, parent: dict[str, Any], *, taskdata: Path | None,
+    def plan_candidate(self, task_bin: str, hook: Any, parent: TaskObservation, *, taskdata: Path | None,
                        apply: bool, max_expiration_hops: int, recovery_at: Any,
                        lease_held: bool, generation: Any) -> list[tuple[RecoveryResult, str]]:
         """Plan one candidate through the session's shared lifecycle context."""
+        if not isinstance(parent, TaskObservation):
+            raise TypeError("reconcile planning requires a typed task observation")
         return _reconcile_candidate(
-            task_bin, hook, parent, taskdata=taskdata, apply=apply,
+            task_bin, hook, parent.to_mapping(), taskdata=taskdata, apply=apply,
             max_expiration_hops=max_expiration_hops, recovery_at=recovery_at,
             lease_held=lease_held, generation=generation,
             reconciliation_service=self.lifecycle_service,
@@ -1815,7 +1817,7 @@ def main(
                 planned_outcomes = session.plan_candidate(
                     args.task_bin,
                     hook,
-                    parent,
+                    parent_observation,
                     taskdata=taskdata,
                     apply=False,
                     max_expiration_hops=args.max_expiration_hops,
@@ -1872,7 +1874,7 @@ def main(
                 outcomes = session.plan_candidate(
                     args.task_bin,
                     hook,
-                    parent,
+                    parent_observation,
                     taskdata=taskdata,
                     apply=args.apply,
                     max_expiration_hops=args.max_expiration_hops,

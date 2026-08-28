@@ -58,7 +58,9 @@ def _doctor_finding(
             else FindingSeverity.INFO
         ),
         actionability=(
-            FindingActionability.INFORMATIONAL
+            FindingActionability.BLOCKING
+            if severity == "error"
+            else FindingActionability.INFORMATIONAL
             if severity in {"ok", "info"} and not guidance
             else FindingActionability.ACTIONABLE
         ),

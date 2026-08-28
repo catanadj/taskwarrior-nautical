@@ -161,7 +161,13 @@ class OperatorFinding:
             domain=str(value.get("id", "doctor")).split(".", 1)[0] or "doctor",
             severity=(FindingSeverity.ERROR if severity == "error" else FindingSeverity.WARNING
                       if severity in {"warn", "warning"} else FindingSeverity.INFO),
-            actionability=FindingActionability.INFORMATIONAL if not guidance else FindingActionability.ACTIONABLE,
+            actionability=(
+                FindingActionability.BLOCKING
+                if severity == "error"
+                else FindingActionability.INFORMATIONAL
+                if not guidance
+                else FindingActionability.ACTIONABLE
+            ),
             message=value.get("message", ""),
             affected=tuple(affected),
             observed=details_map.get("observed", {}),

@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core.operator_presentation import ordered_findings, render_result  # noqa: E402
-from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding  # noqa: E402
+from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding, status_for_findings  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
@@ -1312,8 +1312,13 @@ def _check_chains(
 
 
 def _overall_status(findings: list[dict[str, Any]]) -> str:
-    worst = max((SEVERITY_RANK.get(str(item.get("severity")), 0) for item in findings), default=0)
-    return "error" if worst >= 2 else "warn" if worst == 1 else "ok"
+    canonical = tuple(
+        OperatorFinding.from_doctor_mapping(item)
+        for item in findings
+        if isinstance(item, dict)
+    )
+    status = status_for_findings(canonical).value
+    return "error" if status in {"error", "unavailable"} else "warn" if status != "ok" else "ok"
 
 
 def _format_task(task: dict[str, Any]) -> str:

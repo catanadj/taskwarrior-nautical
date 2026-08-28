@@ -36493,10 +36493,17 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
         outbox2 = LifecycleOutboxRepository(Path(td))
         plan2 = make_plan("00000000-0000-4000-8000-000000000203", "00000000-0000-4000-8000-000000000204")
         staged = outbox2.enqueue(plan2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-        outbox2.claim_intent(owner="owner-a", lease_seconds=0.2, intent_id=staged.record.intent_id)
-        outbox2.advance_stage(intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.CHILD_PRESENT)
-        outbox2.advance_stage(intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.PARENT_LINKED)
-        time.sleep(0.3)
+        # Keep the lease longer than the two SQLite updates even on loaded
+        # CI workers; the crash is simulated after both stages are durable.
+        outbox2.claim_intent(owner="owner-a", lease_seconds=1.0, intent_id=staged.record.intent_id)
+        advanced_child = outbox2.advance_stage(
+            intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.CHILD_PRESENT
+        )
+        advanced_parent = outbox2.advance_stage(
+            intent_id=staged.record.intent_id, owner="owner-a", stage=ExecutionStage.PARENT_LINKED
+        )
+        expect(advanced_child.ok and advanced_parent.ok, "crash fixture could not persist both completed stages")
+        time.sleep(1.1)
         m3 = _Scripted([])  # no mutations should run
         svc3 = LifecycleApplicationService(unit_of_work=uow, mutations=m3, outbox=outbox2, owner="owner-b", lease_seconds=30)
         d3 = svc3.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")

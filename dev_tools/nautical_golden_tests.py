@@ -8554,6 +8554,7 @@ def test_delete_chain_summary_uses_stopped_title():
 
 def test_on_modify_expiration_panel_explains_carry():
     """The immediate expiration panel should explain the child's carry policy."""
+    from nautical_core.lifecycle_models import LifecycleAction
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_expiration_carry_panel_test")
     expiration = mod._module("modify_expiration")
@@ -8577,7 +8578,10 @@ def test_on_modify_expiration_panel_explains_carry():
         }
     )
     plan = SimpleNamespace(
-        action="spawn",
+        plan=SimpleNamespace(
+            action=LifecycleAction.SPAWN_CHILD,
+            child_dict=lambda: {"until": mod.core.fmt_isoz(child_until)},
+        ),
         child_due=child_due,
         child_draft=child_draft,
         next_link=2,
@@ -35004,7 +35008,7 @@ def test_query_contract_models_round_trip_and_reject_invalid():
     )
 
     invalid_cases = (
-        lambda: QuerySelector(all_tasks=True, chain_id="query-chain"),
+        lambda: QuerySelector.from_mapping({"all_tasks": True, "chain_id": "query-chain"}),
         lambda: OccurrenceQueryRequest.from_mapping(
             {
                 "selector": {"all_tasks": True},

@@ -64,6 +64,7 @@ from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E4
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
+from nautical_core.operator_health_service import OperatorHealthService  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -585,50 +586,10 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
 
 
 def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
-    for issue in config_schema.validate_config(data, skip_keys={"live_panel_duration_ms"}):
-        kind = str(issue["kind"])
-        key = str(issue["key"])
-        details = {name: value for name, value in issue.items() if name not in {"kind", "message"}}
-        if kind == "unknown":
-            message = f"Unknown Nautical config key: {key}."
-            fix = f"Remove or correct '{key}'."
-        elif kind == "deprecated":
-            message = f"Retired Nautical config key '{key}': {issue['message']}"
-            fix = f"Remove '{key}' from the config."
-        elif kind == "type":
-            message = (
-                f"Config key '{key}' has the wrong type; expected {issue['expected']} "
-                f"and will use {issue['effective']!r}."
-            )
-            fix = f"Set '{key}' to a TOML {issue['expected']} value."
-        elif kind == "range":
-            message = (
-                f"Config key '{key}' is outside its supported range; "
-                f"{issue['effective']!r} will be used."
-            )
-            bounds = [
-                text
-                for text in (
-                    f"at least {issue['min']}" if issue.get("min") is not None else "",
-                    f"at most {issue['max']}" if issue.get("max") is not None else "",
-                )
-                if text
-            ]
-            fix = f"Set '{key}' to {' and '.join(bounds)}."
-        else:
-            message = (
-                f"Config key '{key}' has unsupported value {issue['configured']!r}; "
-                f"{issue['effective']!r} will be used."
-            )
-            fix = f"Set '{key}' to one of: {', '.join(issue['choices'])}."
-        _finding(
-            findings,
-            f"config.schema.{kind}",
-            "warn",
-            message,
-            fix=fix,
-            details=details,
-        )
+    findings.extend(
+        item.to_doctor_dict()
+        for item in OperatorHealthService.configuration_schema_findings(data)
+    )
 
 
 def _check_uda_aliases(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

@@ -1371,6 +1371,33 @@ def _apply_component_budgets(result: dict, timing_samples: list[dict[str, float]
         )
 
 
+def _apply_resource_budgets(result: dict, name: str, budgets: dict) -> None:
+    """Enforce bounded memory/import resources when the benchmark exposes them."""
+    if not isinstance(budgets, dict):
+        return
+    checks: dict[str, dict[str, object]] = {}
+    if name == "task_snapshot_memory":
+        measurements = RESOURCE_DETAILS.get(name, {})
+        for row_count, values in measurements.items():
+            if not isinstance(values, dict):
+                continue
+            key = f"peak_bytes_{row_count}"
+            if key not in budgets:
+                continue
+            observed = int(values.get("peak_bytes", 0) or 0)
+            limit = int(budgets[key])
+            checks[key] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    elif name in {"cold_core_import", "cold_modify_impl_import"} and "module_count" in budgets:
+        observed = int(result.get("module_count", 0) or 0)
+        limit = int(budgets["module_count"])
+        checks["module_count"] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    if checks:
+        result["resource_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
 def _workflow_outbox_pending(taskdata: Path) -> list[dict]:
     """Read active lifecycle outbox records for benchmark mutation assertions."""
     result, status = lifecycle_outbox.LifecycleOutboxRepository(taskdata).status(limit=100)
@@ -3022,6 +3049,9 @@ def main() -> int:
         elif name == "cold_modify_impl_import":
             r["module_count"] = IMPORT_PROFILES.get("modify_impl", 0)
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)
+        resource_budgets = cfg.get("resource_budgets")
+        if isinstance(resource_budgets, dict):
+            _apply_resource_budgets(r, name, resource_budgets.get(name, {}))
         if name in RESOURCE_DETAILS:
             r["details"] = RESOURCE_DETAILS[name]
         results[name] = r

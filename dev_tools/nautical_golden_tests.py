@@ -9328,7 +9328,7 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
         expect(not runtimes, f"incomplete core should not produce validated runtimes: {runtimes!r}")
         expect(len(incompatible) == 3, f"incomplete runtime findings missing: {findings!r}")
         expect(
-            all((item.get("details") or {}).get("missing") for item in incompatible),
+            all(((item.get("details") or {}).get("observed") or {}).get("missing") for item in incompatible),
             f"missing runtime files were not identified: {findings!r}",
         )
 
@@ -9352,8 +9352,8 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
         mismatch = next(item for item in findings if item.get("id") == "hook.on-add.incompatible")
         details = mismatch.get("details") or {}
         expect("on-add" not in runtimes, f"mismatched on-add runtime should not be selected: {runtimes!r}")
-        expect(details.get("expected_api") == 999, f"wrapper API missing from mismatch: {findings!r}")
-        expect(details.get("actual_api") == 1, f"implementation API missing from mismatch: {findings!r}")
+        expect((details.get("observed") or {}).get("expected_api") == 999, f"wrapper API missing from mismatch: {findings!r}")
+        expect((details.get("observed") or {}).get("actual_api") == 1, f"implementation API missing from mismatch: {findings!r}")
 
 
 def test_installer_dry_run_fresh_install_and_idempotent_reinstall():
@@ -9685,7 +9685,7 @@ def test_installer_cli_and_doctor_managed_runtime_diagnostics():
         findings = []
         doctor._check_managed_runtime(findings, taskdata / "hooks")
         active = next(item for item in findings if item.get("id") == "install.runtime")
-        expect(active.get("severity") == "ok", f"Doctor did not recognize active runtime: {findings!r}")
+        expect(active.get("severity") == "info", f"Doctor did not recognize active runtime: {findings!r}")
 
         abandoned = taskdata / ".nautical-runtime/.staging-abandoned"
         abandoned.mkdir()
@@ -9724,7 +9724,7 @@ def test_doctor_reports_retired_queue_state_without_migrating_it():
         found = nautical_doctor._check_obsolete_queue_state(findings, taskdata)
         expect(set(found) == {str(path) for path in retired}, f"retired queue paths were not reported: {found!r}")
         issue = next(item for item in findings if item.get("id") == "outbox.obsolete_state")
-        expect(issue.get("severity") == "warn", f"retired queue state had the wrong severity: {issue!r}")
+        expect(issue.get("severity") == "warning", f"retired queue state had the wrong severity: {issue!r}")
         expect("quarantine" in str(issue.get("fix") or "").lower(), f"missing quarantine guidance: {issue!r}")
         expect(all(path.read_text(encoding="utf-8") == "retired\n" for path in retired), "doctor modified retired state")
 
@@ -9917,7 +9917,7 @@ def test_doctor_reports_missing_timezone_configuration():
     mod._check_timezone(findings, {})
     item = next((item for item in findings if item.get("id") == "config.timezone.missing"), None)
     expect(item is not None, f"missing timezone configuration was not reported: {findings!r}")
-    expect((item.get("details") or {}).get("tz") == "UTC", f"missing timezone did not use UTC fallback: {item!r}")
+    expect(((item.get("details") or {}).get("observed") or {}).get("tz") == "UTC", f"missing timezone did not use UTC fallback: {item!r}")
 
 
 def test_doctor_reports_astronomy_preflight_health():
@@ -9932,7 +9932,7 @@ def test_doctor_reports_astronomy_preflight_health():
     finally:
         mod.effective_config_snapshot = previous
     item = next((item for item in findings if item.get("id") == "astronomy.not_configured"), None)
-    expect(item is not None and item.get("severity") == "ok", f"doctor astronomy status missing: {findings!r}")
+    expect(item is not None and item.get("severity") == "info", f"doctor astronomy status missing: {findings!r}")
 
 
 def test_doctor_reports_season_backend_and_astronomical_events():
@@ -9947,10 +9947,11 @@ def test_doctor_reports_season_backend_and_astronomical_events():
     finally:
         mod.effective_config_snapshot = previous
     item = next((item for item in findings if item.get("id") == "config.season_mode"), None)
-    expect(item is not None and item.get("severity") == "ok", f"season backend status missing: {findings!r}")
+    expect(item is not None and item.get("severity") == "info", f"season backend status missing: {findings!r}")
     details = item.get("details") or {}
-    expect(details.get("mode") == "astronomical", f"season mode missing from doctor details: {item!r}")
-    expect("spring_equinox" in (details.get("events") or {}), f"season event dates missing: {item!r}")
+    observed = details.get("observed") or {}
+    expect(observed.get("mode") == "astronomical", f"season mode missing from doctor details: {item!r}")
+    expect("spring_equinox" in (observed.get("events") or {}), f"season event dates missing: {item!r}")
 
     findings = []
     mod._check_season_mode(findings, {"season_mode": "sidereal", "tz": "UTC"})
@@ -9974,7 +9975,7 @@ def test_doctor_reports_matching_config_drift():
         }
         findings = []
         mod._check_config_drift(findings, source)
-        expect(findings and findings[0].get("severity") == "ok", f"healthy config drift finding missing: {findings!r}")
+        expect(findings and findings[0].get("severity") == "info", f"healthy config drift finding missing: {findings!r}")
 
         mod.configuration_drift = lambda: {
             "changed": True,
@@ -9985,7 +9986,7 @@ def test_doctor_reports_matching_config_drift():
         }
         findings = []
         mod._check_config_drift(findings, source)
-        expect(findings and findings[0].get("severity") == "warn", f"changed config drift finding missing: {findings!r}")
+        expect(findings and findings[0].get("severity") == "warning", f"changed config drift finding missing: {findings!r}")
         expect("Restart Navigator" in findings[0].get("fix", ""), f"drift restart guidance missing: {findings!r}")
     finally:
         mod.configuration_drift = previous
@@ -10126,8 +10127,8 @@ def test_doctor_reports_missing_navigator_dependencies():
     finally:
         mod.RICH_SPEC_FACTORY = previous
     item = next((item for item in findings if item.get("id") == "navigator.dependencies"), None)
-    expect(item is not None and item.get("severity") == "warn", f"missing Navigator packages were not reported: {findings!r}")
-    expect(set((item.get("details") or {}).get("missing") or []) == {"rich", "dateutil"}, f"wrong missing packages: {item!r}")
+    expect(item is not None and item.get("severity") == "warning", f"missing Navigator packages were not reported: {findings!r}")
+    expect(set(((item.get("details") or {}).get("observed") or {}).get("missing") or []) == {"rich", "dateutil"}, f"wrong missing packages: {item!r}")
 
 
 def test_installer_initializes_explicit_timezone_config():
@@ -10192,30 +10193,37 @@ def test_doctor_reports_live_panel_configuration_health():
         mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 275})
         live = next(item for item in findings if item.get("id") == "config.panel.live")
         details = live.get("details") or {}
-        expect(live.get("severity") == "ok", f"valid live config should be healthy: {findings!r}")
-        expect(details.get("configured_duration_ms") == 275, f"configured duration missing: {findings!r}")
-        expect(details.get("effective_duration_ms") == 275, f"effective duration missing: {findings!r}")
-        expect(details.get("non_tty_fallback") == "static", f"non-TTY fallback missing: {findings!r}")
-        expect(details.get("rich_available") is True, f"Rich availability missing: {findings!r}")
+        expect(live.get("severity") == "info", f"valid live config should be healthy: {findings!r}")
+        observed = details.get("observed") or {}
+        expect(observed.get("configured_duration_ms") == 275, f"configured duration missing: {findings!r}")
+        expect(observed.get("effective_duration_ms") == 275, f"effective duration missing: {findings!r}")
+        expect(observed.get("non_tty_fallback") == "static", f"non-TTY fallback missing: {findings!r}")
+        expect(observed.get("rich_available") is True, f"Rich availability missing: {findings!r}")
         expect("Rich is available" in str(live.get("message") or ""), f"text finding omits Rich health: {findings!r}")
 
         findings = []
         mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": "slow"})
         invalid = next(item for item in findings if item.get("id") == "config.panel.duration.invalid")
-        expect(invalid.get("severity") == "warn", f"malformed duration should warn: {findings!r}")
-        expect((invalid.get("details") or {}).get("effective_duration_ms") == 160, f"invalid duration default missing: {findings!r}")
+        expect(invalid.get("severity") == "warning", f"malformed duration should warn: {findings!r}")
+        expect(
+            ((invalid.get("details") or {}).get("observed") or {}).get("effective_duration_ms") == 160,
+            f"invalid duration default missing: {findings!r}",
+        )
 
         findings = []
         mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 5000})
         clamped = next(item for item in findings if item.get("id") == "config.panel.duration.clamped")
-        expect(clamped.get("severity") == "warn", f"out-of-range duration should warn: {findings!r}")
-        expect((clamped.get("details") or {}).get("effective_duration_ms") == 1000, f"clamped duration missing: {findings!r}")
+        expect(clamped.get("severity") == "warning", f"out-of-range duration should warn: {findings!r}")
+        expect(
+            ((clamped.get("details") or {}).get("observed") or {}).get("effective_duration_ms") == 1000,
+            f"clamped duration missing: {findings!r}",
+        )
 
         mod.RICH_SPEC_FACTORY = lambda _name: None
         findings = []
         mod._check_panel_config(findings, {"panel_mode": "live", "live_panel_duration_ms": 160})
         missing = next(item for item in findings if item.get("id") == "config.panel.rich_missing")
-        expect(missing.get("severity") == "warn", f"missing Rich should warn in live mode: {findings!r}")
+        expect(missing.get("severity") == "warning", f"missing Rich should warn in live mode: {findings!r}")
         expect("pip install rich" in str(missing.get("fix") or ""), f"missing Rich fix is not actionable: {findings!r}")
     finally:
         mod.RICH_SPEC_FACTORY = original_rich_spec
@@ -10247,9 +10255,9 @@ def test_doctor_reports_authoritative_config_schema_findings():
         f"doctor schema findings were incomplete: {findings!r}",
     )
     expect(all(item.get("fix") for item in findings), f"schema finding lacked an actionable fix: {findings!r}")
-    drain = next(item for item in findings if (item.get("details") or {}).get("key") == "outbox_drain_max_items")
+    drain = next(item for item in findings if ((item.get("details") or {}).get("observed") or {}).get("key") == "outbox_drain_max_items")
     expect(
-        (drain.get("details") or {}).get("effective") == 1,
+        ((drain.get("details") or {}).get("observed") or {}).get("effective") == 1,
         f"doctor omitted the effective drain limit: {findings!r}",
     )
 
@@ -10261,9 +10269,10 @@ def test_doctor_reports_uda_alias_configuration():
     findings = []
     mod._check_uda_aliases(findings, {"enable_uda_aliases": True})
     item = next(item for item in findings if item.get("id") == "config.uda_aliases")
-    expect(item.get("severity") == "ok", f"UDA alias config should be healthy: {findings!r}")
-    expect((item.get("details") or {}).get("enabled") is True, f"enabled state missing: {item!r}")
-    expect((item.get("details") or {}).get("clear_syntax") == "alias:", f"clear syntax missing: {item!r}")
+    expect(item.get("severity") == "info", f"UDA alias config should be healthy: {findings!r}")
+    observed = (item.get("details") or {}).get("observed") or {}
+    expect(observed.get("enabled") is True, f"enabled state missing: {item!r}")
+    expect(observed.get("clear_syntax") == "alias:", f"clear syntax missing: {item!r}")
     expect("Description UDA aliases are enabled" in str(item.get("message") or ""), f"message is unclear: {item!r}")
     with tempfile.TemporaryDirectory() as td:
         previous_home = os.environ.get("HOME")
@@ -10278,7 +10287,7 @@ def test_doctor_reports_uda_alias_configuration():
             missing_findings = []
             mod._check_config(missing_findings, Path(td))
             missing = next(item for item in missing_findings if item.get("id") == "config.uda_aliases")
-            expect((missing.get("details") or {}).get("enabled") is False, f"missing config should default aliases off: {missing!r}")
+            expect(((missing.get("details") or {}).get("observed") or {}).get("enabled") is False, f"missing config should default aliases off: {missing!r}")
         finally:
             if previous_home is None:
                 os.environ.pop("HOME", None)
@@ -33623,9 +33632,22 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
         "until": stamp(date(2026, 7, 23), (22, 0)),
     })
     original_rows = tool._active_chain_rows
+    class _ControlPlane:
+        def audit_native_until(self, rows, **_kwargs):
+            del rows
+            return SimpleNamespace(
+                native_until=SimpleNamespace(
+                    repairs=[{"action": "manual_review", "task": "00000000"}],
+                    errors=[],
+                ),
+                candidates=[],
+            )
+
     try:
         tool._active_chain_rows = lambda *_args, **_kwargs: [row]
-        repairs, errors = tool._native_until_repairs("task", hook, apply=False)
+        repairs, errors = tool._native_until_repairs(
+            "task", hook, apply=False, control_plane=_ControlPlane()
+        )
     finally:
         tool._active_chain_rows = original_rows
     expect(not errors, f"manual review was reported as a failed mutation: {errors!r}")

@@ -6,7 +6,7 @@ from pathlib import Path
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.operator_inspectors import inspect_operator_snapshot, standard_inspector_bundle, run_inspectors
-from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCoverage, OperatorLimits,
+from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCapabilities, OperatorCoverage, OperatorFailure, OperatorLimits,
     OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorV2Result, OperatorV2Status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
@@ -143,6 +143,20 @@ class OperatorConformanceTests(unittest.TestCase):
         ):
             encoded = render_contract_json(value)
             self.assertEqual(decoder(json.loads(encoded)), value)
+
+        result = OperatorV2Result(
+            "nautical.query.integrity", "integrity", OperatorV2Status.UNAVAILABLE,
+            payload={"snapshot": None},
+            failure=OperatorFailure("snapshot_unavailable", "snapshot unavailable", True),
+        )
+        decoded_result = OperatorV2Result.from_mapping(json.loads(render_contract_json(result)))
+        self.assertEqual(decoded_result, result)
+
+        capabilities = OperatorCapabilities(taskwarrior_version="3.4.2")
+        decoded_capabilities = OperatorCapabilities.from_mapping(
+            json.loads(render_contract_json(capabilities))
+        )
+        self.assertEqual(decoded_capabilities, capabilities)
 
     def test_snapshot_unavailable_evidence_is_retryable(self) -> None:
         configuration = ValidatedNauticalConfiguration(

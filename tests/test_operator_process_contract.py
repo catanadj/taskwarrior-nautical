@@ -57,6 +57,17 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertIsInstance(failure, dict)
         self.assertEqual(failure.get("code"), "invalid_request")
 
+    def test_malformed_unicode_escape_keeps_json_boundary(self) -> None:
+        """A lone surrogate in request JSON must not produce a traceback."""
+        request = (
+            '{"selector":{"all_tasks":true},"from":"2026-08-24",'
+            '"count":1,"label":"\\ud800"}'
+        )
+        process = self._run(QUERY, "occurrences", "--request", request)
+        self.assertIn(process.returncode, {0, 1, 2, 3})
+        payload = self._json(process)
+        self.assertTrue(str(payload.get("schema", "")).startswith("nautical."))
+
     def test_empty_taskdata_integrity_is_unavailable_not_healthy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             environment = {"TASKDATA": directory, "TASKRC": str(Path(directory) / "taskrc")}

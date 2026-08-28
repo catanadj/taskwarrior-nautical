@@ -1528,6 +1528,18 @@ class _ReconcileSession:
             self.snapshot.invalidate()
         return engine, audit, audit_seconds, applications, application_seconds
 
+    def audit_native_until(self, request: ReconcileRequest, *, hook: Any, taskdata: Path | None, lease_held: bool) -> tuple[list[dict[str, Any]], list[str], str]:
+        """Prepare native-until repairs through the shared control plane."""
+        repairs, errors = _native_until_repairs(
+            request.task_bin,
+            hook,
+            apply=request.apply,
+            taskdata=taskdata,
+            lease_held=lease_held,
+            control_plane=self.control_plane,
+        )
+        return repairs, errors, _native_until_audit_result(repairs, errors).status
+
 
 def _build_reconcile_session(
     request: ReconcileRequest,
@@ -1701,17 +1713,9 @@ def main(
         native_until_errors: list[str] = []
     else:
         try:
-            native_until_repairs, native_until_errors = _native_until_repairs(
-                args.task_bin,
-                hook,
-                apply=args.apply,
-                taskdata=taskdata,
-                lease_held=_apply_lease_held,
-                control_plane=operator_control_plane,
+            native_until_repairs, native_until_errors, native_until_audit_status = session.audit_native_until(
+                args, hook=hook, taskdata=taskdata, lease_held=_apply_lease_held,
             )
-            native_until_audit_status = _native_until_audit_result(
-                native_until_repairs, native_until_errors
-            ).status
         except Exception as exc:
             # Dry-run can still report planned work, but apply must not mutate
             # after the authoritative integrity read became unavailable.

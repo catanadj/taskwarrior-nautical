@@ -1398,6 +1398,25 @@ def _apply_resource_budgets(result: dict, name: str, budgets: dict) -> None:
         )
 
 
+def _apply_outbox_budgets(result: dict, samples: list[dict[str, float]], budget: dict) -> None:
+    """Enforce SQLite/outbox health budgets from exit diagnostics."""
+    if not isinstance(budget, dict) or not samples:
+        return
+    checks: dict[str, dict[str, object]] = {}
+    for key, raw_limit in budget.items():
+        try:
+            limit = float(raw_limit)
+            observed = max(float(sample.get(key, 0.0) or 0.0) for sample in samples)
+        except (TypeError, ValueError):
+            continue
+        checks[str(key)] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    if checks:
+        result["sqlite_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
 def _workflow_outbox_pending(taskdata: Path) -> list[dict]:
     """Read active lifecycle outbox records for benchmark mutation assertions."""
     result, status = lifecycle_outbox.LifecycleOutboxRepository(taskdata).status(limit=100)
@@ -2197,6 +2216,9 @@ def _bench_expensive_workflows(
         queue_result["task_call_stats"] = queue_call_stats
         queue_result["outbox_stats"] = queue_outbox_stats
         _attach_timing_breakdown(queue_result, queue_samples, queue_timing_stats)
+        sqlite_budgets = workflow_cfg.get("sqlite_budgets")
+        if isinstance(sqlite_budgets, dict):
+            _apply_outbox_budgets(queue_result, queue_outbox_stats, sqlite_budgets.get("workflow_queue_drain", {}))
         component_budgets = workflow_cfg.get("component_budgets_seconds")
         if isinstance(component_budgets, dict):
             _apply_component_budgets(
@@ -2219,6 +2241,8 @@ def _bench_expensive_workflows(
         queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
         queue_idempotent_result["outbox_stats"] = queue_idempotent_outbox_stats
         _attach_timing_breakdown(queue_idempotent_result, queue_idempotent_samples, queue_idempotent_timing_stats)
+        if isinstance(sqlite_budgets, dict):
+            _apply_outbox_budgets(queue_idempotent_result, queue_idempotent_outbox_stats, sqlite_budgets.get("workflow_queue_drain_idempotent", {}))
         if isinstance(component_budgets, dict):
             _apply_component_budgets(
                 queue_idempotent_result, queue_idempotent_result["timing_breakdown"],
@@ -2243,6 +2267,8 @@ def _bench_expensive_workflows(
         queue_partial_result["task_call_stats"] = queue_partial_call_stats
         queue_partial_result["outbox_stats"] = queue_partial_outbox_stats
         _attach_timing_breakdown(queue_partial_result, queue_partial_samples, queue_partial_timing_stats)
+        if isinstance(sqlite_budgets, dict):
+            _apply_outbox_budgets(queue_partial_result, queue_partial_outbox_stats, sqlite_budgets.get("workflow_queue_drain_partial_recovery", {}))
         if isinstance(component_budgets, dict):
             _apply_component_budgets(
                 queue_partial_result, queue_partial_result["timing_breakdown"],

@@ -165,6 +165,11 @@
         "run_task_calls": 8
       }
     },
+    "sqlite_budgets": {
+      "workflow_queue_drain": {"outbox_lock_failures": 0},
+      "workflow_queue_drain_idempotent": {"outbox_lock_failures": 0},
+      "workflow_queue_drain_partial_recovery": {"outbox_lock_failures": 0}
+    },
     "component_budgets_seconds": {
       "workflow_queue_drain": {
         "taskwarrior_seconds": 3.0,

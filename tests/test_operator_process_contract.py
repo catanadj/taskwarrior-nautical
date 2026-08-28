@@ -17,6 +17,7 @@ QUERY = ROOT / "nautical_core" / "tools" / "nautical_query.py"
 DOCTOR = ROOT / "nautical_core" / "tools" / "nautical_doctor.py"
 QUEUE_STATUS = ROOT / "nautical_core" / "tools" / "nautical_queue_status.py"
 RECONCILE = ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"
+NAVIGATOR = ROOT / "nautical_navigator.py"
 
 
 class OperatorProcessContractTests(unittest.TestCase):
@@ -138,6 +139,17 @@ class OperatorProcessContractTests(unittest.TestCase):
             self.assertNotEqual(reconcile.returncode, 0)
             reconcile_payload = self._json(reconcile)
             self.assertEqual(reconcile_payload.get("schema"), "nautical.reconcile")
+
+    def test_navigator_validation_keeps_diagnostics_off_stdout_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            process = self._run(
+                NAVIGATOR, "--validate", "w:mon",
+                env={"TASKDATA": str(taskdata), "TASKRC": str(taskdata / "taskrc")},
+            )
+        self.assertEqual(process.returncode, 0, process.stderr or process.stdout)
+        self.assertEqual(process.stderr, "", process.stderr)
+        self.assertTrue(process.stdout.strip())
 
 
 if __name__ == "__main__":

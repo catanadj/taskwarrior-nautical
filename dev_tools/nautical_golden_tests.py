@@ -39,6 +39,32 @@ _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 
 # -------- Helpers -------------------------------------------------------------
 
+def _doctor_findings(payload):
+    """Project canonical Doctor findings for stable golden assertions."""
+    values = payload.get("operator_findings") or []
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+        details = dict(evidence)
+        if isinstance(item.get("observed"), dict) and item["observed"]:
+            details["observed"] = item["observed"]
+        if isinstance(item.get("expected"), dict) and item["expected"]:
+            details["expected"] = item["expected"]
+        normalized.append({
+            "id": item.get("code"),
+            "severity": (
+                "warn" if item.get("severity") == "warning"
+                else "ok" if item.get("severity") == "info"
+                else item.get("severity")
+            ),
+            "message": item.get("message"),
+            "fix": item.get("guidance") or "",
+            "details": details,
+        })
+    return normalized
+
 @contextlib.contextmanager
 def _test_term(value: str):
     """Run terminal-sensitive tests with an explicit TERM and restore it."""
@@ -9202,7 +9228,7 @@ def test_doctor_reports_healthy_installation():
         obj = json.loads((p.stdout or "").strip() or "{}")
         expect(obj.get("status") == "ok", f"unexpected doctor status: {obj}")
         expect((obj.get("counts") or {}).get("chains") == 1, f"unexpected doctor counts: {obj}")
-        findings = obj.get("findings") or []
+        findings = _doctor_findings(obj)
         expect(
             any(item.get("id") == "uda.registration" and item.get("severity") == "ok" for item in findings),
             f"healthy UDA registration evidence is missing: {obj}",
@@ -9784,7 +9810,7 @@ def test_operator_doctor_loads_colocated_queue_helper():
         )
         expect(p.returncode == 2, f"operator doctor returned {p.returncode}: {p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
-        ids = {item.get("id") for item in obj.get("findings") or []}
+        ids = {item.get("id") for item in _doctor_findings(obj)}
         expect("outbox.state" in ids, f"operator doctor did not inspect outbox state: {obj}")
         expect("outbox.unreadable" not in ids, f"operator doctor could not load outbox helper: {obj}")
 
@@ -10392,7 +10418,7 @@ def test_doctor_reports_actionable_broken_installation():
         )
         expect(p.returncode == 2, f"expected doctor error exit 2, got {p.returncode}: {p.stderr!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
-        ids = {item.get("id") for item in obj.get("findings") or []}
+        ids = {item.get("id") for item in _doctor_findings(obj)}
         expected = {
             "hook.on-add.missing",
             "hook.on-modify.missing",
@@ -10472,7 +10498,7 @@ def test_doctor_reports_chain_repair_plan_findings():
         )
         expect(p.returncode == 1, f"expected doctor warn exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
-        findings = {item.get("id"): item for item in obj.get("findings") or []}
+        findings = {item.get("id"): item for item in _doctor_findings(obj)}
         expect(any(item_id.startswith("chains.") for item_id in findings), f"missing integrity findings: {obj}")
         review_details = findings.get("chains.repair_review", {}).get("details") or {}
         if review_details:
@@ -10607,7 +10633,7 @@ def test_doctor_reports_reconcile_backfill_plans():
         )
         expect(p.returncode == 1, f"expected doctor warning exit 1, got {p.returncode}: {p.stderr!r} {p.stdout!r}")
         obj = json.loads((p.stdout or "").strip() or "{}")
-        findings = {item.get("id"): item for item in obj.get("findings") or []}
+        findings = {item.get("id"): item for item in _doctor_findings(obj)}
         expect("chains.reconcile_available" in findings, f"missing reconcile finding: {obj}")
         details = findings["chains.reconcile_available"].get("details") or {}
         expect((details.get("actions") or {}).get("backfill_nextlink") == 2, f"bad reconcile action counts: {details}")

@@ -70,6 +70,27 @@ class OperatorControlPlane:
             generation=generation,
         )
 
+    def plan_recovery_candidates(
+        self,
+        candidates: Sequence[TaskSnapshot],
+        children_for: object,
+        *,
+        hook: object,
+        generation: ChainGenerationService | None = None,
+    ) -> tuple[LifecyclePlan, ...]:
+        """Plan each recovery candidate through one shared control-plane owner."""
+        if not callable(children_for):
+            raise TypeError("children_for must be callable")
+        return tuple(
+            self.plan_recovery(
+                parent,
+                existing_children=children_for(parent),
+                hook=hook,
+                generation=generation,
+            )
+            for parent in candidates
+        )
+
     def drain_integrity(
         self,
         outbox: object,

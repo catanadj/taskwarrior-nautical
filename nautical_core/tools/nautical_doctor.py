@@ -1159,17 +1159,18 @@ def _check_reconcile_plans(
             configuration,
             DomainApplicationRegistry(),
         )
-        for parent in candidates:
-            existing_children = _existing_reconcile_children(rows, parent)
-            # Recovery planning belongs to the integrity engine.  Doctor only
-            # supplies the current snapshot evidence and formats the result.
-            plan = control_plane.plan_recovery(
-                parent,
-                existing_children=existing_children,
-                hook=hook,
-                generation=generation,
-            )
-            plans.append(plan)
+        children_by_uuid = {
+            str(_task_value(parent, "uuid")): _existing_reconcile_children(rows, parent)
+            for parent in candidates
+        }
+        plans = list(control_plane.plan_recovery_candidates(
+            candidates,
+            lambda parent: children_by_uuid.get(str(_task_value(parent, "uuid")), ()),
+            hook=hook,
+            generation=generation,
+        ))
+        for parent, plan in zip(candidates, plans):
+            existing_children = children_by_uuid.get(str(_task_value(parent, "uuid")), ())
             if str(_task_value(parent, "status") or "").strip().lower() != "deleted":
                 continue
             continues_through_deleted = any(

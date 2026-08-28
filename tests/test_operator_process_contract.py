@@ -10,6 +10,7 @@ import unittest
 import shutil
 
 from nautical_core.integration_models import CommandFailureKind
+from nautical_core.operator_models import OperatorV2Result
 from nautical_core.query_models import QueryCapabilities
 from nautical_core.taskwarrior_client import TaskwarriorClient
 
@@ -173,6 +174,33 @@ class OperatorProcessContractTests(unittest.TestCase):
             self.assertNotEqual(reconcile.returncode, 0)
             reconcile_payload = self._json(reconcile)
             self.assertEqual(reconcile_payload.get("schema"), "nautical.reconcile")
+
+    def test_operator_documents_round_trip_through_public_decoders(self) -> None:
+        """Doctor and queue use v2; reconcile remains JSON-native and stable."""
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            queue = self._run(QUEUE_STATUS, "--taskdata", str(taskdata), "--json")
+            queue_payload = self._json(queue)
+            queue_decoded = OperatorV2Result.from_mapping(queue_payload)
+            self.assertEqual(queue_decoded.to_dict(), queue_payload)
+
+            reconcile = self._run(
+                RECONCILE, "--json", "--task-bin", str(taskdata / "missing-task"),
+                env={"TASKDATA": str(taskdata)},
+            )
+            reconcile_payload = self._json(reconcile)
+            self.assertEqual(
+                json.loads(json.dumps(reconcile_payload, ensure_ascii=False)),
+                reconcile_payload,
+            )
+
+            doctor = self._run(
+                DOCTOR, "--taskdata", str(taskdata), "--task-bin",
+                str(taskdata / "missing-task"), "--json", "--installation-only",
+            )
+            doctor_payload = self._json(doctor)
+            doctor_decoded = OperatorV2Result.from_mapping(doctor_payload)
+            self.assertEqual(doctor_decoded.to_dict(), doctor_payload)
 
     def test_navigator_validation_keeps_diagnostics_off_stdout_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

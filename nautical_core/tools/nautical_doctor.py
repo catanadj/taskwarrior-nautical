@@ -1687,6 +1687,8 @@ def main() -> int:
         "outbox": outbox,
         "obsolete_queue_state": obsolete_queue_state,
         "scope": "installation" if args.installation_only else "full",
+        # Retained until the remaining external assertions migrate to the
+        # canonical operator_findings field.
         "findings": findings,
         "operator_findings": [
             OperatorFinding.from_doctor_mapping(item).to_dict()

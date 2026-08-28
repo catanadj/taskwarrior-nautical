@@ -58,11 +58,11 @@ def _v2_document(payload: dict[str, Any]) -> OperatorV2Result:
     status = OperatorV2Status.ATTENTION if raw_status == "warn" else OperatorV2Status(raw_status)
     failure = None
     if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
-        finding = next((item for item in payload.get("findings", ()) if isinstance(item, dict)), {})
+        finding = next((item for item in payload.get("operator_findings", ()) if isinstance(item, dict)), {})
         failure = OperatorFailure(
-            code=str(finding.get("id") or "doctor_error"),
+            code=str(finding.get("code") or "doctor_error"),
             message=str(finding.get("message") or "Doctor reported an error"),
-            details=finding.get("details") if isinstance(finding.get("details"), dict) else {},
+            details=finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {},
         )
     return OperatorV2Result(
         schema=_JSON_SCHEMA,
@@ -89,7 +89,6 @@ REQUIRED_UDAS = {
     "chainID": "string",
 }
 RECURRENCE_FIELDS = ("cp", "anchor", "anchor_file")
-SEVERITY_RANK = {"ok": 0, "warn": 1, "error": 2}
 _ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -1545,7 +1544,7 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
         f"{len(findings) - len(historical_summaries)} current | "
         f"{ok_text} | {warn_text} | {error_text} | {info_text}"
     )
-    timezone = _timezone_summary(payload.get("findings") or [])
+    timezone = _timezone_summary([_render_finding(item) for item in source_findings])
     if timezone:
         write(f"Timezone: {timezone}")
     for section in ("error", "warn", "info", "ok"):

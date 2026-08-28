@@ -452,12 +452,14 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "warn",
             "No Nautical config file was found; built-in defaults will be used.",
         )
-        _check_timezone(findings, {})
-        _check_season_mode(findings, {})
-        _check_astronomy(findings, {}, source_hint="defaults")
-        _check_uda_aliases(findings, {})
-        _check_config_drift(findings, "")
-        _check_navigator_dependencies(findings, {})
+        from nautical_core.astronomical_seasons import seasonal_events_utc
+        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.configuration_findings(
+            {}, effective={}, config_dir=taskdata, timezone_factory=ZONEINFO_FACTORY,
+            seasonal_events=seasonal_events_utc,
+            astronomy_preflight=astronomy.preflight, source_path="defaults",
+            drift_loader=configuration_drift, dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
+            python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
+        ))
         return
     try:
         data = tomllib.loads(config.read_text(encoding="utf-8"))
@@ -472,18 +474,17 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         )
         return
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
-    _check_config_schema(findings, data)
-    _check_uda_aliases(findings, data)
-    _check_timezone(findings, data)
-    _check_season_mode(findings, data)
-    _check_astronomy(findings, data, source_hint=str(config))
-    _check_config_drift(findings, str(config))
-    _check_navigator_dependencies(findings, data)
-    _check_panel_config(findings, data)
-    findings.extend(
-        item.to_doctor_dict()
-        for item in OperatorHealthService.directory_findings(data, config.parent)
-    )
+    snapshot = effective_config_snapshot()
+    effective_value = snapshot.get("values")
+    effective = effective_value if isinstance(effective_value, dict) else {}
+    from nautical_core.astronomical_seasons import seasonal_events_utc
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.configuration_findings(
+        data, effective=effective, config_dir=config.parent, timezone_factory=ZONEINFO_FACTORY,
+        seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy.preflight,
+        source_path=str(config), drift_loader=configuration_drift,
+        dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
+        python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
+    ))
 
 
 def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

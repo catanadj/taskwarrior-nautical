@@ -50,6 +50,42 @@ class OperatorHealthService:
         return OperatorHealthReport(tuple(findings))
 
     @staticmethod
+    def configuration_findings(
+        data: dict[str, Any],
+        *,
+        effective: dict[str, Any],
+        config_dir: object,
+        timezone_factory: Callable[[str], object] | None,
+        seasonal_events: Callable[[int], dict[str, Any]],
+        astronomy_preflight: Callable[[object], dict[str, Any]],
+        source_path: str,
+        drift_loader: Callable[[], dict[str, Any]],
+        dependency_available: Callable[[str], bool],
+        python_executable: str,
+        rich_factory: Callable[[str], object],
+    ) -> tuple[OperatorFinding, ...]:
+        """Build all read-only configuration findings through one request."""
+        findings: list[OperatorFinding] = []
+        findings.extend(OperatorHealthService.configuration_schema_findings(data))
+        findings.extend(OperatorHealthService.uda_alias_findings(data))
+        findings.extend(OperatorHealthService.timezone_findings(data, timezone_factory))
+        findings.extend(OperatorHealthService.season_findings(data, effective, timezone_factory, seasonal_events))
+        timezone_name = str(data.get("tz", effective.get("tz", "UTC")) or "UTC")
+        findings.extend(OperatorHealthService.astronomy_findings(
+            data.get("astronomy") if data else effective.get("astronomy"),
+            effective_timezone=timezone_name,
+            source_hint=source_path,
+            preflight=astronomy_preflight,
+        ))
+        findings.extend(OperatorHealthService.configuration_drift_findings(source_path, drift_loader))
+        findings.extend(OperatorHealthService.navigator_dependency_findings(
+            data, dependency_available, python_executable=python_executable,
+        ))
+        findings.extend(OperatorHealthService.panel_findings(data, rich_factory))
+        findings.extend(OperatorHealthService.directory_findings(data, config_dir))
+        return tuple(findings)
+
+    @staticmethod
     def configuration_schema_findings(data: dict[str, Any]) -> tuple[OperatorFinding, ...]:
         """Validate configuration schema and return typed findings."""
         findings: list[OperatorFinding] = []

@@ -26,7 +26,25 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import nautical_core as nautical_core_package  # noqa: E402
+try:
+    import nautical_core as nautical_core_package  # noqa: E402
+except Exception as exc:  # configuration can fail while the package is importing
+    # Keep the Doctor process contract intact even when startup configuration
+    # cannot be loaded: callers still receive a structured, actionable result.
+    if __name__ == "__main__":
+        print(json.dumps({
+            "schema": "nautical.doctor",
+            "schema_version": 1,
+            "status": "error",
+            "findings": [{
+                "id": "integration.startup",
+                "severity": "error",
+                "message": f"Nautical configuration could not be loaded: {exc}",
+                "fix": "Correct the reported configuration, then rerun nautical doctor.",
+            }],
+        }, ensure_ascii=False, separators=(",", ":")))
+        raise SystemExit(1)
+    raise
 from nautical_core.operator_presentation import finding_display, finding_status, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402

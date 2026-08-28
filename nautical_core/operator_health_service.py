@@ -119,6 +119,40 @@ class OperatorHealthService:
         return tuple(findings)
 
     @staticmethod
+    def uda_registration_findings(
+        required: dict[str, str],
+        read_type: Callable[[str], tuple[bool, str]],
+    ) -> tuple[OperatorFinding, ...]:
+        """Validate Taskwarrior UDA registration through a typed read callback."""
+        result: list[OperatorFinding] = []
+        valid = True
+        for name, expected in required.items():
+            ok, actual = read_type(name)
+            if not ok or not actual:
+                valid = False
+                result.append(OperatorFinding(
+                    f"uda.{name}.missing", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"Required UDA '{name}' is not defined.",
+                    guidance="Include Nautical's uda.conf from your Taskwarrior configuration.",
+                ))
+            elif actual.lower() != expected:
+                valid = False
+                result.append(OperatorFinding(
+                    f"uda.{name}.type", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"UDA '{name}' has type '{actual}', expected '{expected}'.",
+                    guidance=f"Set uda.{name}.type={expected}.",
+                ))
+        if valid:
+            result.append(OperatorFinding(
+                "uda.registration", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"All {len(required)} required Nautical UDAs are registered.",
+            ))
+        return tuple(result)
+
+    @staticmethod
     def uda_alias_findings(data: dict[str, Any]) -> tuple[OperatorFinding, ...]:
         """Describe the opt-in description alias configuration."""
         enabled = data.get("enable_uda_aliases") is True

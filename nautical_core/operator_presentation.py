@@ -133,7 +133,10 @@ def ordered_records(
         return ()
     values = [item for item in records if isinstance(item, Mapping)]
     if not keys:
-        keys = ("domain", "severity", "status", "chain_id", "link", "task_uuid", "code")
+        keys = (
+            "domain", "severity", "actionability", "status",
+            "chain_id", "chainID", "link", "task_uuid", "uuid", "code", "id",
+        )
     return tuple(sorted(values, key=lambda item: tuple(str(item.get(key) or "") for key in keys)))
 
 

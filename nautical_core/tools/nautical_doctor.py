@@ -302,18 +302,6 @@ def _check_runtime(
         attempts=2,
         retry_delay=0.1,
     )
-    # Real Taskwarrior accepts the neutral invocation even with an explicit
-    # data-location override. Keep a narrow fallback for minimal test/tool
-    # shims that only implement the historical version probe.
-    if not proc.ok:
-        version_probe = unit_of_work.client.execute(
-            ["--version"],
-            purpose="doctor Taskwarrior version fallback",
-            timeout=30.0,
-            attempts=1,
-        )
-        if version_probe.ok:
-            proc = version_probe
     if not proc.ok:
         _finding(
             findings,

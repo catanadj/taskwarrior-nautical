@@ -922,57 +922,26 @@ def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repos
     """Audit the authoritative lifecycle export without issuing another export."""
     if _UNIT_OF_WORK is None:
         raise RuntimeError("integrity audit requires an integration unit of work")
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.chain_integrity_models import SnapshotCoverage
+    from nautical_core.integrity_audit_service import audit_authoritative_rows_with_engine
 
     unit_of_work = _UNIT_OF_WORK
     if unit_of_work is None:
         raise RuntimeError("integrity audit requires an integration unit of work")
-    configuration = unit_of_work.context.configuration
-    snapshot_result = ChainSnapshotService(
-        _UNIT_OF_WORK,
-        configuration_fingerprint=configuration.fingerprint,
-    ).from_rows(
-        IntegritySnapshotRequest.candidates(complete_chain_history=True),
-        tuple(
-            DEFAULT_TASK_CODEC.decode_row(row, source_query="reconcile integrity snapshot")
-            for row in rows
-        ),
+    decoded = tuple(
+        DEFAULT_TASK_CODEC.decode_row(row, source_query="reconcile integrity snapshot")
+        for row in rows
+    )
+    bundle = audit_authoritative_rows_with_engine(
+        unit_of_work,
+        decoded,
         source="lifecycle.lifecycle_candidates",
         coverage=SnapshotCoverage.CHAIN,
+        outbox_repository=outbox_repository,
     )
-    if not isinstance(snapshot_result, ChainSnapshot):
-        raise RuntimeError(
-            f"reconcile lifecycle snapshot rejected: "
-            f"{snapshot_result.evidence.detail}"
-        )
-    operator_scope = OperatorScope(OperatorScopeKind.SYSTEM)
-    operator_context = OperatorInvocationContext.from_unit_of_work(
-        OperatorRequest(OperatorOperation.INTEGRITY, operator_scope), unit_of_work,
-    )
-    reader = ChainSnapshotReader(lambda _request: Found(snapshot_result, "reconcile lifecycle snapshot"))
-    projected = reader.read_chain_snapshot(operator_context, SnapshotReadRequest(operator_scope))
-    if isinstance(projected, OperatorFailure):
-        raise RuntimeError(f"reconcile lifecycle snapshot rejected: {projected.message}")
-    snapshot = projected
-
-    class _NoopProvider:
-        def collect(self, _request: Any) -> Any:
-            raise RuntimeError("reconcile integrity audit uses its supplied snapshot")
-
-    engine = ChainIntegrityEngine(
-        _NoopProvider(),
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
-    outbox = outbox_repository or LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
-    return engine, engine.audit_snapshot(
-        snapshot,
-        outbox_repository=outbox,
-        mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
-    )
+    if bundle is None:
+        raise RuntimeError("reconcile lifecycle snapshot rejected: configuration unavailable")
+    return bundle.engine, bundle.result
 
 
 def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:

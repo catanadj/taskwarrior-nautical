@@ -8,7 +8,7 @@ from nautical_core.operator_inspectors import (ChainIntegrityInspector, Configur
     classify_historical, inspect_component_availability, inspect_component_validity, inspect_snapshot,
     inspect_snapshot_consistency, inspect_snapshot_coverage, inspect_snapshot_limits, inspect_standard_components,
     inspect_integrity_findings, inspect_lifecycle_outcomes, inspect_occurrence_collection,
-    prioritize_findings, run_inspectors)
+    inspect_operator_snapshot, prioritize_findings, run_inspectors, standard_inspector_bundle)
 from nautical_core.operator_findings import FindingSeverity, OperatorFinding
 from nautical_core.operator_models import CoverageKind, CoverageRequirement, OperatorLimits, OperatorScope, OperatorScopeKind
 from nautical_core.operator_snapshot import OperatorSnapshot, SnapshotComponent, SnapshotIndexes
@@ -143,6 +143,13 @@ class OperatorInspectorTests(unittest.TestCase):
         findings = inspect_standard_components(snapshot)
         self.assertEqual(len(findings), len(STANDARD_COMPONENTS) - 1)
         self.assertEqual(findings[0].domain, "dependencies")
+
+    def test_standard_pipeline_has_one_inspector_per_domain(self) -> None:
+        bundle = standard_inspector_bundle()
+        self.assertEqual(
+            tuple(item.component for item in bundle),
+            ("installation", "configuration", "dependencies", "task_domain", "schedule", "chain_integrity", "lifecycle", "performance"),
+        )
 
     def test_historical_aggregation_groups_related_findings(self) -> None:
         first = OperatorFinding("carry", "chain", FindingSeverity.INFO, "deferred", "old", affected=("a",), guidance="review")

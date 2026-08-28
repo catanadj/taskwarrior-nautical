@@ -426,6 +426,34 @@ def inspect_standard_components(
     return tuple(findings)
 
 
+def standard_inspector_bundle(*, scope: OperatorScope | None = None) -> tuple[OperatorInspector, ...]:
+    """Return the deterministic pure-inspector bundle for one invocation."""
+    return (
+        InstallationInspector(scope),
+        ConfigurationInspector(scope),
+        DependenciesInspector(scope),
+        TaskDomainInspector(scope),
+        ScheduleAvailabilityInspector(scope),
+        ChainIntegrityInspector(scope),
+        LifecycleOutboxInspector(scope),
+        PerformanceInspector(scope),
+    )
+
+
+def inspect_operator_snapshot(
+    snapshot: OperatorSnapshot,
+    requirement: CoverageRequirement,
+    limits: OperatorLimits,
+    *,
+    scope: OperatorScope | None = None,
+) -> tuple[OperatorFinding, ...]:
+    """Run the shared snapshot checks and all standard domain inspectors."""
+    return (
+        *inspect_snapshot(snapshot, requirement, limits, scope=scope),
+        *run_inspectors(snapshot, standard_inspector_bundle(scope=scope)),
+    )
+
+
 def aggregate_historical(findings: Sequence[OperatorFinding]) -> tuple[OperatorFinding, ...]:
     """Aggregate deferred findings by invariant while retaining affected IDs."""
     groups: dict[tuple[str, str, str], OperatorFinding] = {}
@@ -468,4 +496,4 @@ def _severity_rank(value: FindingSeverity) -> int:
     return {FindingSeverity.INFO: 0, FindingSeverity.WARNING: 1, FindingSeverity.ERROR: 2}[value]
 
 
-__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_integrity_findings", "inspect_lifecycle_outcomes", "inspect_occurrence_collection", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]
+__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_integrity_findings", "inspect_lifecycle_outcomes", "inspect_occurrence_collection", "inspect_snapshot", "inspect_operator_snapshot", "standard_inspector_bundle", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]

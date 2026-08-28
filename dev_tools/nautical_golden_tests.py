@@ -10181,6 +10181,32 @@ def test_doctor_text_timezone_summary():
     expect("Timezone: Europe/Bucharest unavailable; UTC fallback active" in out, f"missing timezone summary: {out!r}")
 
 
+def test_doctor_text_large_history_is_actionable_and_compact():
+    """Default Doctor text must not dump healthy inventory from large histories."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_large_history_output_test")
+    findings = [
+        {
+            "code": f"healthy.{index}", "domain": "configuration", "severity": "info",
+            "actionability": "informational", "message": f"healthy {index}",
+            "observed": {}, "expected": {}, "evidence": {}, "guidance": "",
+        }
+        for index in range(1000)
+    ]
+    findings.append({
+        "code": "chains.active_issue", "domain": "chains", "severity": "error",
+        "actionability": "actionable", "message": "one active issue", "observed": {},
+        "expected": {}, "evidence": {}, "guidance": "Run nautical query integrity --all.",
+    })
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._render_text({"status": "error", "taskdata": "/tmp/task", "operator_findings": findings})
+    output = buf.getvalue()
+    expect("one active issue" in output, f"actionable finding missing: {output!r}")
+    expect("healthy 0" not in output and "healthy 999" not in output, "healthy inventory leaked into default Doctor text")
+    expect(len(output.splitlines()) < 20, f"large-history Doctor output was not compact: {len(output.splitlines())} lines")
+
+
 def test_doctor_reports_live_panel_configuration_health():
     """Doctor should explain effective live duration, fallback behavior, and Rich availability."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
@@ -36294,6 +36320,7 @@ TESTS.extend([
     test_hint_cache_keys_include_semantic_fingerprint,
     test_configuration_drift_detects_edit_and_removal,
     test_doctor_reports_missing_navigator_dependencies,
+    test_doctor_text_large_history_is_actionable_and_compact,
     test_installer_initializes_explicit_timezone_config,
 ])
 

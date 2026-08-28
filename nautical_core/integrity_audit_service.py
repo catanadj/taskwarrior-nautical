@@ -35,34 +35,12 @@ def audit_authoritative_rows(
     coverage: SnapshotCoverage = SnapshotCoverage.COMPLETE,
 ) -> tuple[IntegrityEngineResult | None, list[dict[str, object]]]:
     """Audit one already-exported Taskwarrior snapshot through the engine."""
-    configuration = getattr(getattr(unit_of_work, "context", None), "configuration", None)
-    if configuration is None:
+    bundle = audit_authoritative_rows_with_engine(
+        unit_of_work, rows, source=source, coverage=coverage,
+    )
+    if bundle is None:
         return None, []
-    snapshots = ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint)
-    engine = ChainIntegrityEngine(
-        snapshots,
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
-    request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
-    normalized = snapshots.from_rows(request, tuple(rows), source=source, coverage=coverage)
-    if isinstance(normalized, Unavailable):
-        return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=normalized.evidence.detail), []
-    scope = OperatorScope(OperatorScopeKind.SYSTEM)
-    context = OperatorInvocationContext.from_unit_of_work(
-        OperatorRequest(OperatorOperation.INSPECT, scope), unit_of_work,
-    )
-    projected = ChainSnapshotReader(lambda _request: Found(normalized, "doctor authoritative export")).read_chain_snapshot(
-        context, SnapshotReadRequest(scope),
-    )
-    if isinstance(projected, OperatorFailure):
-        return IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=projected.message), []
-    result = engine.audit_snapshot(
-        projected,
-        outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
-        mutation_epoch=unit_of_work.mutation_epoch,
-    )
-    return result, doctor_findings(result)
+    return bundle.result, bundle.findings
 
 
 def audit_authoritative_rows_with_engine(

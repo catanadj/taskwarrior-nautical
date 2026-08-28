@@ -461,6 +461,7 @@ class OccurrenceQueryResponse:
     failure: QueryFailure | None = None
     cursor: OperatorCursor | None = None
     complete: bool = True
+    coverage: Mapping[str, Any] = field(default_factory=dict)
     schema: str = OCCURRENCES_SCHEMA
     version: int = QUERY_API_VERSION
 
@@ -480,6 +481,9 @@ class OccurrenceQueryResponse:
             raise QueryContractError("query response complete must be boolean")
         if self.complete and self.cursor is not None:
             raise QueryContractError("complete query response cannot contain a cursor")
+        if not isinstance(self.coverage, Mapping):
+            raise QueryContractError("query response coverage must be an object")
+        object.__setattr__(self, "coverage", _json_value(self.coverage))
         expected_schema = OCCURRENCES_SCHEMA if self.request.operation == OCCURRENCE_OPERATION else NEXT_SCHEMA
         if self.schema == OCCURRENCES_SCHEMA and expected_schema == NEXT_SCHEMA:
             object.__setattr__(self, "schema", NEXT_SCHEMA)
@@ -501,6 +505,7 @@ class OccurrenceQueryResponse:
                 "complete": self.complete,
                 "cursor": None if self.cursor is None else self.cursor.to_dict(),
             },
+            "coverage": _json_value(self.coverage),
             "failure": self.failure.to_dict() if self.failure is not None else None,
         }
 

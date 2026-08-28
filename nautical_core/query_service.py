@@ -311,13 +311,7 @@ class OccurrenceQueryService:
             if request.cursor is not None:
                 raise QueryServiceError("query cursors are supported only for --all task queries")
             return rows, None, True
-        evidence = [
-            row.to_mapping() if isinstance(row, TaskObservation) else {"uuid": row.uuid}
-            for row in rows
-        ]
-        snapshot_id = "query-snapshot-" + hashlib.sha256(
-            json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()[:32]
+        snapshot_id = self._snapshot_id(rows)
         configuration = str(getattr(self._uow.context.configuration, "fingerprint", ""))
         epoch = str(getattr(self._uow, "mutation_epoch", 0))
         if request.cursor is not None:
@@ -340,6 +334,16 @@ class OccurrenceQueryService:
             page_size=page_size,
         )
         return page, next_cursor, complete
+
+    @staticmethod
+    def _snapshot_id(rows: tuple[TaskRow, ...]) -> str:
+        evidence = [
+            row.to_mapping() if isinstance(row, TaskObservation) else {"uuid": row.uuid}
+            for row in rows
+        ]
+        return "query-snapshot-" + hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:32]
 
     def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
         records: list[OccurrenceRecord] = []
@@ -546,6 +550,7 @@ class OccurrenceQueryService:
                 status="unavailable",
                 configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
                 failure=_failure("cursor_unavailable", str(exc), retryable=False),
+                coverage={"kind": "unavailable", "reason": str(exc)},
             )
         raw_results = tuple(self._query_task(row, request) for row in page_rows)
         if request.selector.all_tasks:
@@ -610,6 +615,18 @@ class OccurrenceQueryService:
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
             cursor=next_cursor,
             complete=complete,
+            coverage={
+                "kind": "complete" if complete else "bounded",
+                "source": "taskwarrior.authoritative_export",
+                "observed": tuple(
+                    str(_task_value(row, "uuid") or row.uuid)
+                    for row in page_rows
+                    if isinstance(row, TaskObservation) or isinstance(row, (_AbsentTask, _AmbiguousTask))
+                ),
+                "omitted_count": max(0, len(rows) - len(page_rows)),
+                "snapshot_id": self._snapshot_id(rows),
+                "mutation_epoch": str(getattr(self._uow, "mutation_epoch", 0)),
+            },
         )
 
     def _reference_utc(self, task: TaskObservation) -> datetime:

@@ -99,10 +99,12 @@ class QueryPaginationTests(unittest.TestCase):
             status="empty",
             cursor=cursor,
             complete=False,
+            coverage={"kind": "bounded", "observed": ["task-0"], "omitted_count": 1},
         )
         payload = response.to_dict()
         self.assertFalse(payload["pagination"]["complete"])
         self.assertEqual(payload["pagination"]["cursor"]["position"], 2)
+        self.assertEqual(payload["coverage"]["kind"], "bounded")
         with self.assertRaises(ValueError):
             OccurrenceQueryResponse(request=request, timezone="UTC", cursor=cursor, complete=True)
 

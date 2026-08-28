@@ -14,6 +14,20 @@ from .operator_presentation import ProgressView
 class ExitDrainProgress:
     """Render lifecycle drain events without participating in mutation."""
 
+    _TITLE = "⚓ Updating recurring tasks"
+    _DETAIL_LABELS = {
+        "starting intent": "Preparing update",
+        "child mutation": "Next task created",
+        "child verified": "Next task confirmed",
+        "child mutation and verification": "Next task created and confirmed",
+        "parent mutation": "Task sequence linked",
+        "parent verified": "Task link confirmed",
+        "parent mutation and verification": "Task sequence linked and confirmed",
+        "intent verified": "Update verified",
+        "intent acknowledged": "Completion recorded",
+        "intent finished": "Update complete",
+    }
+
     def __init__(self, *, core: Any, diagnostic=None) -> None:
         self._core = core
         self._diagnostic = diagnostic
@@ -26,12 +40,13 @@ class ExitDrainProgress:
     def presentation_ms(self) -> float:
         return round(self._presentation_seconds * 1000.0, 3)
 
-    @staticmethod
-    def _bound_label(value: object, *, limit: int = 72) -> str:
-        text = str(value or "").replace("_", " ").strip()
-        if len(text) <= limit:
-            return text
-        return text[: max(1, limit - 1)].rstrip() + "…"
+    @classmethod
+    def _description(cls, value: object = "") -> str:
+        detail = str(value or "").replace("_", " ").strip().lower()
+        if not detail:
+            return cls._TITLE
+        label = cls._DETAIL_LABELS.get(detail, "Processing update")
+        return f"{cls._TITLE} · {label}"
 
     def _is_enabled(self) -> bool:
         if not sys.stderr.isatty() or os.environ.get("TERM", "").strip().lower() == "dumb":
@@ -71,7 +86,7 @@ class ExitDrainProgress:
             )
             progress.start()
             self._progress = progress
-            self._task_id = progress.add_task("⚓ Nautical drain", total=total)
+            self._task_id = progress.add_task(self._description(), total=total)
         except Exception as exc:
             if self._diagnostic is not None:
                 self._diagnostic(f"exit progress startup failed: {type(exc).__name__}: {exc}")
@@ -95,14 +110,10 @@ class ExitDrainProgress:
             if self._progress is None or self._task_id is None:
                 return
             completed = view.completed
-            detail = self._bound_label(view.label)
-            description = "⚓ Nautical drain"
-            if detail:
-                description += f" · {detail}"
             self._progress.update(
                 self._task_id,
                 completed=completed,
-                description=description,
+                description=self._description(view.label),
                 refresh=False,
             )
         except Exception as exc:

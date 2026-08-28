@@ -23,6 +23,7 @@ from nautical_core.lifecycle_outbox import (  # noqa: E402
 )
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.operator_presentation import ordered_records, render_result  # noqa: E402
+from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 
 
 _JSON_SCHEMA = "nautical.lifecycle_outbox_status"
@@ -114,19 +115,7 @@ def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict
 
 
 def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[str, Any]:
-    taskdata = Path(taskdata).expanduser().resolve()
-    outbox_path = lifecycle_outbox_path(taskdata)
-    outbox, issues = _outbox_summary(outbox_path, stale_after=stale_after, limit=limit)
-    status = "error" if outbox["schema"].get("status") == "error" or outbox["integrity"] not in {"ok", "not_checked"} else ("warn" if issues else "ok")
-    return {
-        "schema": _JSON_SCHEMA,
-        "schema_version": _JSON_SCHEMA_VERSION,
-        "status": status,
-        "taskdata": str(taskdata),
-        "paths": {"state_dir": str(outbox_path.parent), "outbox_db": str(outbox_path)},
-        "outbox": outbox,
-        "issues": issues,
-    }
+    return QueueStatusService().status_payload(taskdata, stale_after=stale_after, limit=limit)
 
 
 def main() -> int:

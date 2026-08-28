@@ -601,41 +601,10 @@ def _check_uda_aliases(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
 
 
 def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
-    raw_tz = data.get("tz")
-    tz_name = str(raw_tz or "UTC").strip() or "UTC"
-    if not str(raw_tz or "").strip():
-        _finding(
-            findings,
-            "config.timezone.missing",
-            "warn",
-            "No explicit Nautical timezone is configured; UTC fallback is active.",
-            fix="Run Nautical install on a fresh target or set tz to an explicit IANA timezone in config-nautical.toml.",
-            details={"tz": tz_name},
-        )
-        return
-    if ZONEINFO_FACTORY is None:
-        _finding(
-            findings,
-            "config.timezone.unavailable",
-            "warn",
-            "Python zoneinfo support is unavailable; Nautical will use UTC fallback.",
-            fix="Use Python 3.9+ with zoneinfo support, or install timezone support for your Python build.",
-            details={"tz": tz_name},
-        )
-        return
-    try:
-        ZONEINFO_FACTORY(tz_name)
-    except Exception as exc:
-        _finding(
-            findings,
-            "config.timezone.invalid",
-            "warn",
-            f"Nautical timezone '{tz_name}' is not available; hooks will use UTC fallback.",
-            fix="Install system tzdata, or on Termux/Python environments run: python3 -m pip install tzdata.",
-            details={"tz": tz_name, "error": str(exc)},
-        )
-        return
-    _finding(findings, "config.timezone", "ok", f"Nautical timezone is available: {tz_name}")
+    findings.extend(
+        item.to_doctor_dict()
+        for item in OperatorHealthService.timezone_findings(data, ZONEINFO_FACTORY)
+    )
 
 
 def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

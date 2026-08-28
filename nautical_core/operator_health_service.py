@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .operator_findings import (
     FindingActionability,
@@ -97,6 +97,45 @@ class OperatorHealthService:
                 "aliases": dict(ALIAS_TO_FIELD),
                 "clear_syntax": "alias:",
             },
+        ),)
+
+    @staticmethod
+    def timezone_findings(
+        data: dict[str, Any], zoneinfo_factory: Callable[[str], object] | None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Validate the configured IANA timezone through an injected resolver."""
+        raw_tz = data.get("tz")
+        tz_name = str(raw_tz or "UTC").strip() or "UTC"
+        if not str(raw_tz or "").strip():
+            return (OperatorFinding(
+                "config.timezone.missing", "configuration", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "No explicit Nautical timezone is configured; UTC fallback is active.",
+                observed={"tz": tz_name},
+                guidance="Run Nautical install on a fresh target or set tz to an explicit IANA timezone in config-nautical.toml.",
+            ),)
+        if zoneinfo_factory is None:
+            return (OperatorFinding(
+                "config.timezone.unavailable", "configuration", FindingSeverity.WARNING,
+                FindingActionability.RETRYABLE,
+                "Python zoneinfo support is unavailable; Nautical will use UTC fallback.",
+                observed={"tz": tz_name},
+                guidance="Use Python 3.9+ with zoneinfo support, or install timezone support for your Python build.",
+            ),)
+        try:
+            zoneinfo_factory(tz_name)
+        except Exception as exc:
+            return (OperatorFinding(
+                "config.timezone.invalid", "configuration", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                f"Nautical timezone '{tz_name}' is not available; hooks will use UTC fallback.",
+                observed={"tz": tz_name, "error": str(exc)},
+                guidance="Install system tzdata, or on Termux/Python environments run: python3 -m pip install tzdata.",
+            ),)
+        return (OperatorFinding(
+            "config.timezone", "configuration", FindingSeverity.INFO,
+            FindingActionability.INFORMATIONAL,
+            f"Nautical timezone is available: {tz_name}", observed={"tz": tz_name},
         ),)
 
 

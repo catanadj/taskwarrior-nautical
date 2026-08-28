@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
+from datetime import date
 
 from .operator_findings import (
     FindingActionability,
@@ -223,6 +224,55 @@ class OperatorHealthService:
                 guidance="" if valid else f"Create or correct the configured {key} directory.",
             ))
         return tuple(result)
+
+    @staticmethod
+    def season_findings(
+        data: dict[str, Any], effective: dict[str, Any],
+        zoneinfo_factory: Callable[[str], object] | None,
+        events_provider: Callable[[int], dict[str, Any]],
+        *, year: int | None = None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Validate seasonal settings without changing effective-config semantics."""
+        mode = str((data or {}).get("season_mode", effective.get("season_mode", "fixed")) or "fixed").strip().lower()
+        hemisphere = str((data or {}).get("season_hemisphere", effective.get("season_hemisphere", "north")) or "north").strip().lower()
+        timezone_name = str((data or {}).get("tz", effective.get("tz", "UTC")) or "UTC").strip() or "UTC"
+        if mode not in {"fixed", "astronomical"}:
+            return (OperatorFinding(
+                "config.season_mode.invalid", "configuration", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING, f"Unsupported seasonal boundary backend: {mode!r}.",
+                observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
+                guidance="Set season_mode to 'fixed' or 'astronomical'.",
+            ),)
+        if mode == "fixed":
+            return (OperatorFinding(
+                "config.season_mode", "configuration", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"Seasonal boundaries use the fixed backend ({hemisphere} hemisphere).",
+                observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
+            ),)
+        event_year = date.today().year if year is None else year
+        try:
+            if zoneinfo_factory is None:
+                raise RuntimeError("zoneinfo support is unavailable")
+            events = events_provider(event_year)
+            local_events = {
+                name: event.astimezone(zoneinfo_factory(timezone_name)).date().isoformat()
+                for name, event in events.items()
+            }
+        except Exception as exc:
+            return (OperatorFinding(
+                "config.season_mode.astronomical_invalid", "configuration", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                f"Astronomical seasonal boundaries are unavailable for {event_year}: {exc}",
+                observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name},
+                guidance="Verify timezone data and use a supported season year/backend, then rerun doctor.",
+            ),)
+        return (OperatorFinding(
+            "config.season_mode", "configuration", FindingSeverity.INFO,
+            FindingActionability.INFORMATIONAL,
+            f"Seasonal boundaries use astronomical transitions ({hemisphere} hemisphere, {timezone_name}).",
+            observed={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name, "events": local_events},
+        ),)
 
 
 __all__ = ["OperatorHealthReport", "OperatorHealthService"]

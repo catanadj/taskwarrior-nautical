@@ -596,7 +596,7 @@ def _check_timezone(findings: list[dict[str, Any]], data: dict[str, Any]) -> Non
     )
 
 
-def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+def _check_season_mode_legacy(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
     """Report the active seasonal backend and preflight astronomical data."""
     snapshot = effective_config_snapshot()
     effective_value = snapshot.get("values")
@@ -652,6 +652,16 @@ def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
         f"Seasonal boundaries use astronomical transitions ({hemisphere} hemisphere, {timezone_name}).",
         details={"mode": mode, "hemisphere": hemisphere, "timezone": timezone_name, "events": local_events},
     )
+
+
+def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
+    snapshot = effective_config_snapshot()
+    effective_value = snapshot.get("values")
+    effective = effective_value if isinstance(effective_value, dict) else {}
+    from nautical_core.astronomical_seasons import seasonal_events_utc
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.season_findings(
+        data, effective, ZONEINFO_FACTORY, seasonal_events_utc,
+    ))
 
 
 def _check_astronomy(

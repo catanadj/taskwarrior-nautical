@@ -21,7 +21,11 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import nautical_core as core  # noqa: E402
+from nautical_core.operator_presentation import render_json_document  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
+from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
     OCCURRENCES_SCHEMA,
     CAPABILITIES_SCHEMA,
@@ -145,11 +149,36 @@ def _capabilities_payload() -> dict[str, Any]:
 
 
 def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
+    if str(payload.get("schema") or "").startswith("nautical.query.") and payload.get("version") == 1:
+        payload = _v2_document(payload)
     try:
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        sys.stdout.write(render_json_document(payload) + "\n")
     except BrokenPipeError:
         return 0
     return exit_code
+
+
+def _v2_document(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Upgrade a validated public query document to the shared v2 envelope."""
+    reserved = {"schema", "version", "operation", "status", "failure"}
+    failure_value = payload.get("failure")
+    failure = None
+    if isinstance(failure_value, Mapping):
+        failure = OperatorFailure(
+            code=str(failure_value.get("code") or "query_failure"),
+            message=str(failure_value.get("message") or "query failed"),
+            retryable=bool(failure_value.get("retryable", False)),
+            details=failure_value.get("details") if isinstance(failure_value.get("details"), Mapping) else {},
+        )
+    status = OperatorV2Status(str(payload.get("status") or "error"))
+    result = OperatorV2Result(
+        schema=str(payload.get("schema") or "nautical.query.unknown"),
+        operation=str(payload.get("operation") or "query"),
+        status=status,
+        payload={key: value for key, value in payload.items() if key not in reserved},
+        failure=failure,
+    )
+    return result.to_dict()
 
 
 def _diagnostic(message: str) -> None:
@@ -159,8 +188,9 @@ def _diagnostic(message: str) -> None:
 
 def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     """Run a read-only integrity audit through the shared engine boundary."""
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+    from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
     from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.chain_integrity_models import IntegrityReportStatus
     from nautical_core.integrity_report import public_payload
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
@@ -185,22 +215,39 @@ def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         access=IntegrationAccess.READ_ONLY,
     )
     configuration = unit_of_work.context.configuration
+    snapshot_service = ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint)
     engine = ChainIntegrityEngine(
-        ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint),
+        snapshot_service,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
     )
-    result = engine.audit(
-        request,
-        outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
-        mutation_epoch=unit_of_work.mutation_epoch,
+    scope = OperatorScope.from_selector(
+        chain_id=request.chain_id or None,
+        uuid=request.task_uuid or None,
+        all_tasks=request.kind.value == "candidates",
     )
+    operator_request = OperatorRequest(OperatorOperation.INTEGRITY, scope)
+    operator_context = OperatorInvocationContext.from_unit_of_work(operator_request, unit_of_work)
+    reader = ChainSnapshotReader(snapshot_service.collect)
+    read_result = reader.read_chain_snapshot(
+        operator_context,
+        SnapshotReadRequest(scope),
+    )
+    if isinstance(read_result, OperatorFailure):
+        result = IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=read_result.message)
+    else:
+        result = engine.audit_snapshot(
+            read_result,
+            outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
+            mutation_epoch=unit_of_work.mutation_epoch,
+        )
     payload = public_payload(
         result,
         query={"kind": request.kind.value, "chainID": request.chain_id or None, "uuid": request.task_uuid or None},
         configuration_fingerprint=configuration.fingerprint,
     )
-    return payload, 3 if result.status.value == "unavailable" else 0
+    upgraded = _v2_document(payload)
+    return upgraded, 3 if result.status.value == "unavailable" else 0
 
 
 def _decode_request(raw: str, source: str) -> Mapping[str, Any]:
@@ -268,21 +315,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--omissions", choices=("exclude", "include", "report"), dest="omission_policy", default="exclude")
     args = parser.parse_args(argv)
     if args.operation == "capabilities":
-        return _emit(_capabilities_payload())
+        return _emit(_v2_document(_capabilities_payload()))
     if args.operation == "integrity":
         try:
             payload, exit_code = _integrity_payload(args)
             return _emit(payload, exit_code=exit_code)
         except QueryContractError as exc:
             _diagnostic(str(exc))
-            return _emit({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
+            return _emit(_v2_document({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
                           "status": "invalid", "findings": [], "plans": [],
-                          "failure": {"code": "invalid_request", "message": str(exc)}}, exit_code=2)
+                          "failure": {"code": "invalid_request", "message": str(exc)}}), exit_code=2)
         except (OSError, RuntimeError, ValueError) as exc:
             _diagnostic(str(exc))
-            return _emit({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
+            return _emit(_v2_document({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
                           "status": "unavailable", "findings": [], "plans": [],
-                          "failure": {"code": "query_unavailable", "message": str(exc)}}, exit_code=3)
+                          "failure": {"code": "query_unavailable", "message": str(exc)}}), exit_code=3)
     try:
         flag_values = (
             args.uuids,
@@ -338,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         service = OccurrenceQueryService(unit_of_work, core=core)
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
-        return _emit(response.to_dict(), exit_code=exit_code)
+        return _emit(response.to_operator_v2().to_dict(), exit_code=exit_code)
     except QueryContractError as exc:
         _diagnostic(str(exc))
         return _emit(_error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)

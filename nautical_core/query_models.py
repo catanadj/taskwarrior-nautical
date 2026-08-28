@@ -459,6 +459,8 @@ class OccurrenceQueryResponse:
     status: QueryStatus = "empty"
     configuration_fingerprint: str = ""
     failure: QueryFailure | None = None
+    cursor: OperatorCursor | None = None
+    complete: bool = True
     schema: str = OCCURRENCES_SCHEMA
     version: int = QUERY_API_VERSION
 
@@ -472,6 +474,12 @@ class OccurrenceQueryResponse:
             raise QueryContractError("query response contains an invalid task result")
         if self.failure is not None and not isinstance(self.failure, QueryFailure):
             raise QueryContractError("query response failure is invalid")
+        if self.cursor is not None and not isinstance(self.cursor, OperatorCursor):
+            raise QueryContractError("query response cursor is invalid")
+        if not isinstance(self.complete, bool):
+            raise QueryContractError("query response complete must be boolean")
+        if self.complete and self.cursor is not None:
+            raise QueryContractError("complete query response cannot contain a cursor")
         expected_schema = OCCURRENCES_SCHEMA if self.request.operation == OCCURRENCE_OPERATION else NEXT_SCHEMA
         if self.schema == OCCURRENCES_SCHEMA and expected_schema == NEXT_SCHEMA:
             object.__setattr__(self, "schema", NEXT_SCHEMA)
@@ -489,6 +497,10 @@ class OccurrenceQueryResponse:
             "query": self.request.to_dict(),
             "configuration_fingerprint": self.configuration_fingerprint or None,
             "results": [item.to_dict() for item in self.results],
+            "pagination": {
+                "complete": self.complete,
+                "cursor": None if self.cursor is None else self.cursor.to_dict(),
+            },
             "failure": self.failure.to_dict() if self.failure is not None else None,
         }
 

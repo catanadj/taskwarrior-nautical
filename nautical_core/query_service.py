@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+import hashlib
+import json
 from types import ModuleType
 from typing import Any, Literal, Mapping, TypeAlias, cast
 
@@ -29,6 +31,7 @@ from .query_models import (
     TaskIdentity,
     TaskOccurrenceResult,
 )
+from .operator_models import OperatorCursor, OperatorContractError
 from .parser_models import ParseError
 from .hook_validation_pipeline import ValidationStatus, validate_task_mapping
 from .hook_workflow_models import WorkflowRoute
@@ -239,7 +242,7 @@ class OccurrenceQueryService:
                     if _has_recurrence_identity(row) and not self._starts_after_request_end(row, request):
                         selected.append(row)
                 rows = tuple(selected)
-                return _ordered_rows(rows)[: request.max_tasks]
+                return _ordered_rows(rows)
             if isinstance(read, Absent):
                 return ()
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
@@ -248,7 +251,7 @@ class OccurrenceQueryService:
             if isinstance(read, Found):
                 return _ordered_rows(
                     tuple(_decode_repository_row(row, source_query="query chain") for row in read.value)
-                )[: request.max_tasks]
+                )
             if isinstance(read, Absent):
                 return _failure("chain_absent", read.reason)
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
@@ -272,7 +275,7 @@ class OccurrenceQueryService:
                     uuid_rows.append(_decode_repository_row(matches[0], source_query="query UUID snapshot"))
                 else:
                     uuid_rows.append(_AmbiguousTask(uuid_value))
-            return tuple(uuid_rows[: request.max_tasks])
+            return tuple(uuid_rows)
         single_rows: list[TaskRow] = []
         for uuid_value in selector.uuids:
             read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
@@ -288,7 +291,47 @@ class OccurrenceQueryService:
                 task_uuid=uuid_value,
                 retryable=read.retryable,
             )
-        return tuple(single_rows[: request.max_tasks])
+        return tuple(single_rows)
+
+    def _page_rows(
+        self,
+        rows: tuple[TaskRow, ...],
+        request: OccurrenceQueryRequest,
+    ) -> tuple[tuple[TaskRow, ...], OperatorCursor | None, bool]:
+        """Slice a deterministic task snapshot and bind continuation to its content."""
+        if not request.selector.all_tasks:
+            if request.cursor is not None:
+                raise QueryServiceError("query cursors are supported only for --all task queries")
+            return rows, None, True
+        evidence = [
+            row.to_mapping() if isinstance(row, TaskObservation) else {"uuid": row.uuid}
+            for row in rows
+        ]
+        snapshot_id = "query-snapshot-" + hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:32]
+        configuration = str(getattr(self._uow.context.configuration, "fingerprint", ""))
+        epoch = str(getattr(self._uow, "mutation_epoch", 0))
+        if request.cursor is not None:
+            try:
+                request.cursor.assert_compatible(snapshot_id, configuration, epoch)
+            except OperatorContractError as exc:
+                raise QueryServiceError(str(exc)) from exc
+            page_size = request.cursor.page_size
+            position = request.cursor.position
+        else:
+            page_size = request.max_tasks
+            position = 0
+        page = rows[position : position + page_size]
+        complete = position + len(page) >= len(rows)
+        next_cursor = None if complete else OperatorCursor(
+            snapshot_id,
+            configuration,
+            epoch,
+            position=position + len(page),
+            page_size=page_size,
+        )
+        return page, next_cursor, complete
 
     def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
         records: list[OccurrenceRecord] = []
@@ -486,7 +529,17 @@ class OccurrenceQueryService:
                 configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
                 failure=rows,
             )
-        raw_results = tuple(self._query_task(row, request) for row in rows)
+        try:
+            page_rows, next_cursor, complete = self._page_rows(rows, request)
+        except QueryServiceError as exc:
+            return OccurrenceQueryResponse(
+                request=request,
+                timezone=_timezone_name(self._timezone),
+                status="unavailable",
+                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                failure=_failure("cursor_unavailable", str(exc), retryable=False),
+            )
+        raw_results = tuple(self._query_task(row, request) for row in page_rows)
         if request.selector.all_tasks:
             raw_results = tuple(
                 result
@@ -547,6 +600,8 @@ class OccurrenceQueryService:
                 status,
             ),
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            cursor=next_cursor,
+            complete=complete,
         )
 
     def _reference_utc(self, task: TaskObservation) -> datetime:

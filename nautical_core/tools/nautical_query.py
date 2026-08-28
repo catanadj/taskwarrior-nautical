@@ -109,6 +109,10 @@ def _capabilities_payload() -> dict[str, Any]:
                 "file_skips": HARD_MAX_FILE_SKIPS,
             },
         },
+        "pagination": {
+            "cursor": "Opaque JSON cursor returned by a paged query; reuse it with the same selector and evidence.",
+            "deterministic": True,
+        },
         "providers": {
             "astronomy": bool(importlib.util.find_spec("astral")),
         },
@@ -312,6 +316,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--to", help="inclusive local date or RFC 3339 timestamp")
     parser.add_argument("--count", type=int, help="maximum number of occurrences per task")
     parser.add_argument("--max-total-occurrences", type=int, help="aggregate occurrence safety cap")
+    parser.add_argument(
+        "--cursor",
+        help="opaque JSON continuation cursor returned by a previous paged query",
+    )
     parser.add_argument("--omissions", choices=("exclude", "include", "report"), dest="omission_policy", default="exclude")
     args = parser.parse_args(argv)
     if args.operation == "capabilities":
@@ -341,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
             args.to,
             args.count,
             args.max_total_occurrences,
+            args.cursor,
             args.omission_policy if args.omission_policy != "exclude" else None,
         )
         has_flags = any(value not in (None, False, []) for value in flag_values)
@@ -374,6 +383,9 @@ def main(argv: list[str] | None = None) -> int:
                     mapping["at"] = args.at
                 if args.max_total_occurrences is not None:
                     mapping["max_total_occurrences"] = args.max_total_occurrences
+                if args.cursor is not None:
+                    cursor = _decode_request(args.cursor, "--cursor")
+                    mapping["cursor"] = cursor
         mapping.setdefault("operation", args.operation)
         request = OccurrenceQueryRequest.from_mapping(mapping)
         unit_of_work = build_operator_uow(

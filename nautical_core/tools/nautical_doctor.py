@@ -1268,9 +1268,12 @@ def _check_chains(
         )
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
 
-    from nautical_core.integrity_audit_service import audit_authoritative_rows
-
-    integrity, integrity_findings = audit_authoritative_rows(unit_of_work, rows)
+    configuration = unit_of_work.context.configuration
+    control_plane = OperatorControlPlane.from_configuration(
+        configuration,
+        DomainApplicationRegistry(),
+    )
+    integrity, integrity_findings = control_plane.audit_integrity(unit_of_work, rows)
     if integrity is not None:
         findings.extend(integrity_findings)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from collections.abc import Sequence
 
 from .chain_integrity_models import IntegrityFinding, IntegrityRepairPlan
 from .chain_repair_planner import IntegrityPlanningResult
@@ -22,6 +23,7 @@ from .operator_findings import OperatorFinding
 from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
 from .occurrence_outcomes import OccurrenceCollectionResult
+from .task_models import TaskObservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,14 @@ class OperatorControlPlane:
     ) -> tuple[OperatorFinding, ...]:
         """Project one typed scheduler collection through the operator boundary."""
         return inspect_occurrence_collection(collection, scope=scope)
+
+    def audit_integrity(
+        self, unit_of_work: object, rows: Sequence[TaskObservation]
+    ) -> tuple[object | None, list[dict[str, object]]]:
+        """Audit an authoritative task snapshot through the shared integrity service."""
+        from .integrity_audit_service import audit_authoritative_rows
+
+        return audit_authoritative_rows(unit_of_work, rows)
 
 
 __all__ = ["OperatorControlPlane"]

@@ -158,6 +158,50 @@ def inspect_lifecycle_outcomes(
     return deduplicate_findings(result)
 
 
+def inspect_occurrence_collection(
+    collection: Any,
+    *,
+    scope: OperatorScope | None = None,
+) -> tuple[OperatorFinding, ...]:
+    """Project one typed scheduler collection into actionable availability facts."""
+    from .occurrence_outcomes import OccurrenceCollectionResult
+
+    if not isinstance(collection, OccurrenceCollectionResult):
+        raise TypeError("occurrence collection must be a typed result")
+    if collection.status in {"found", "empty"}:
+        return ()
+    if collection.failure is not None:
+        failure = collection.failure
+        actionability = (
+            FindingActionability.RETRYABLE if failure.status == "unavailable"
+            else FindingActionability.ACTIONABLE
+        )
+        return (OperatorFinding(
+            code=f"schedule.{failure.status}",
+            domain="schedule",
+            severity=FindingSeverity.ERROR,
+            actionability=actionability,
+            message=failure.reason,
+            scope=scope,
+            observed={"status": failure.status, "error_type": failure.error_type},
+            expected={"status": "found or empty"},
+            guidance="Retry with an available, valid scheduler context." if failure.status == "unavailable" else "Correct the recurrence expression and retry.",
+        ),)
+    terminal = collection.terminal
+    return (OperatorFinding(
+        code="schedule.exhausted",
+        domain="schedule",
+        severity=FindingSeverity.WARNING,
+        actionability=FindingActionability.ACTIONABLE,
+        message="Scheduler search reached its safety limit without a matching occurrence.",
+        scope=scope,
+        observed={"status": collection.status},
+        expected={"status": "found or empty"},
+        evidence={} if terminal is None else {"scope": terminal.scope, "kind": terminal.kind, "limit": terminal.limit},
+        guidance="Narrow the recurrence range or raise the explicit scheduler limit.",
+    ),)
+
+
 def inspect_snapshot_coverage(
     snapshot: OperatorSnapshot,
     requirement: CoverageRequirement,
@@ -424,4 +468,4 @@ def _severity_rank(value: FindingSeverity) -> int:
     return {FindingSeverity.INFO: 0, FindingSeverity.WARNING: 1, FindingSeverity.ERROR: 2}[value]
 
 
-__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_integrity_findings", "inspect_lifecycle_outcomes", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]
+__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_integrity_findings", "inspect_lifecycle_outcomes", "inspect_occurrence_collection", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]

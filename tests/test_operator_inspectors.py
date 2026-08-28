@@ -7,7 +7,8 @@ from nautical_core.operator_inspectors import (ChainIntegrityInspector, Configur
     STANDARD_COMPONENTS, ScheduleAvailabilityInspector, TaskDomainInspector, aggregate_historical,
     classify_historical, inspect_component_availability, inspect_component_validity, inspect_snapshot,
     inspect_snapshot_consistency, inspect_snapshot_coverage, inspect_snapshot_limits, inspect_standard_components,
-    inspect_integrity_findings, inspect_lifecycle_outcomes, prioritize_findings, run_inspectors)
+    inspect_integrity_findings, inspect_lifecycle_outcomes, inspect_occurrence_collection,
+    prioritize_findings, run_inspectors)
 from nautical_core.operator_findings import FindingSeverity, OperatorFinding
 from nautical_core.operator_models import CoverageKind, CoverageRequirement, OperatorLimits, OperatorScope, OperatorScopeKind
 from nautical_core.operator_snapshot import OperatorSnapshot, SnapshotComponent, SnapshotIndexes
@@ -187,6 +188,19 @@ class OperatorInspectorTests(unittest.TestCase):
         self.assertEqual(projected[0].code, "lifecycle.manual_review")
         self.assertEqual(projected[0].actionability, FindingActionability.MANUAL_REVIEW)
         self.assertEqual(projected[0].affected, ("task-a",))
+
+    def test_typed_schedule_failure_maps_to_retryable_finding(self) -> None:
+        from datetime import datetime, timezone
+        from nautical_core.occurrence_outcomes import OccurrenceCollectionResult, UnavailableOccurrence
+        from nautical_core.scheduler_cursor import OccurrenceCursor
+
+        collection = OccurrenceCollectionResult(
+            (), OccurrenceCursor(datetime(2026, 1, 1, tzinfo=timezone.utc), timezone=timezone.utc),
+            failure=UnavailableOccurrence("astronomy provider unavailable", "LookupError"),
+        )
+        projected = inspect_occurrence_collection(collection)
+        self.assertEqual(projected[0].code, "schedule.unavailable")
+        self.assertEqual(projected[0].actionability, FindingActionability.RETRYABLE)
 
 
 if __name__ == "__main__":

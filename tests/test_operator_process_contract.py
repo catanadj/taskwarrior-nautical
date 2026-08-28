@@ -62,6 +62,25 @@ class OperatorProcessContractTests(unittest.TestCase):
             payload = self._json(process)
             self.assertEqual(payload.get("status"), "unavailable")
 
+    def test_malformed_taskwarrior_export_is_unavailable(self) -> None:
+        """Invalid export JSON must fail closed at the operator process boundary."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "task"
+            task.write_text("#!/bin/sh\nprintf '{not-json\\n'\n", encoding="utf-8")
+            task.chmod(0o755)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            environment = {
+                "TASKDATA": str(taskdata),
+                "TASKRC": str(root / "taskrc"),
+                "PATH": f"{root}:{os.environ.get('PATH', '')}",
+            }
+            process = self._run(QUERY, "integrity", "--all", env=environment)
+            self.assertEqual(process.returncode, 3)
+            payload = self._json(process)
+            self.assertEqual(payload.get("status"), "unavailable")
+
     def test_missing_taskwarrior_doctor_reports_json_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             process = self._run(

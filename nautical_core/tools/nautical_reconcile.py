@@ -46,7 +46,7 @@ from nautical_core.integration_models import (  # noqa: E402
     MutationOutcomeKind,
     Unavailable,
 )
-from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
+from nautical_core.task_read_repository import TaskReadRepository  # noqa: E402
 from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload  # noqa: E402
 from nautical_core.task_codec import DEFAULT_TASK_CODEC  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402

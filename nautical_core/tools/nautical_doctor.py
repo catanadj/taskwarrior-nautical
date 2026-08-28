@@ -791,72 +791,10 @@ def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str
 
 
 def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
-    mode = str(data.get("panel_mode") or "rich").strip().lower() or "rich"
-    duration_spec = config_schema.CONFIG_SPECS["live_panel_duration_ms"]
-    default_duration = int(duration_spec["default"])
-    min_duration = int(duration_spec["min"])
-    max_duration = int(duration_spec["max"])
-    raw_duration = data.get("live_panel_duration_ms", default_duration)
-    duration_valid = True
-    try:
-        configured_duration = int(str(raw_duration).strip())
-    except Exception:
-        configured_duration = default_duration
-        duration_valid = False
-
-    effective_duration = max(min_duration, min(max_duration, configured_duration))
-    if not duration_valid:
-        _finding(
-            findings,
-            "config.panel.duration.invalid",
-            "warn",
-            f"live_panel_duration_ms is invalid ({raw_duration!r}); "
-            f"the effective duration is {default_duration} ms.",
-            fix=f"Set live_panel_duration_ms to an integer from {min_duration} to {max_duration}.",
-            details={"configured_duration_ms": raw_duration, "effective_duration_ms": default_duration},
-        )
-    elif effective_duration != configured_duration:
-        _finding(
-            findings,
-            "config.panel.duration.clamped",
-            "warn",
-            f"live_panel_duration_ms is {configured_duration}; Nautical clamps it to {effective_duration} ms.",
-            fix=f"Set live_panel_duration_ms to an integer from {min_duration} to {max_duration}.",
-            details={
-                "configured_duration_ms": configured_duration,
-                "effective_duration_ms": effective_duration,
-            },
-        )
-
-    if mode != "live":
-        return
-
-    try:
-        rich_available = RICH_SPEC_FACTORY("rich") is not None
-    except Exception:
-        rich_available = False
-    motion = "disabled" if effective_duration == 0 else f"{effective_duration} ms"
-    rich_state = "available" if rich_available else "unavailable"
-    _finding(
-        findings,
-        "config.panel.live",
-        "ok",
-        f"Live panels use {motion} effective duration; Rich is {rich_state}; non-TTY output uses static fallback.",
-        details={
-            "configured_duration_ms": raw_duration if not duration_valid else configured_duration,
-            "effective_duration_ms": effective_duration,
-            "rich_available": rich_available,
-            "non_tty_fallback": "static",
-        },
+    findings.extend(
+        item.to_doctor_dict()
+        for item in OperatorHealthService.panel_findings(data, RICH_SPEC_FACTORY)
     )
-    if not rich_available:
-        _finding(
-            findings,
-            "config.panel.rich_missing",
-            "warn",
-            "panel_mode is live, but Rich is not installed; panels will use the static fallback.",
-            fix="Run python3 -m pip install rich.",
-        )
 
 
 def _load_queue_status() -> ModuleType:

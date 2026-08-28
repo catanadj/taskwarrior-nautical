@@ -14,7 +14,7 @@ from .operator_findings import (
     status_for_findings,
 )
 from .operator_models import OperatorStatus
-from .config_schema import validate_config
+from .config_schema import CONFIG_SPECS, validate_config
 from .description_aliases import ALIAS_TO_FIELD
 
 
@@ -137,6 +137,67 @@ class OperatorHealthService:
             FindingActionability.INFORMATIONAL,
             f"Nautical timezone is available: {tz_name}", observed={"tz": tz_name},
         ),)
+
+    @staticmethod
+    def panel_findings(
+        data: dict[str, Any], rich_factory: Callable[[str], object],
+    ) -> tuple[OperatorFinding, ...]:
+        """Validate live-panel settings and optional Rich availability."""
+        mode = str(data.get("panel_mode") or "rich").strip().lower() or "rich"
+        spec = CONFIG_SPECS["live_panel_duration_ms"]
+        default = int(spec["default"])
+        minimum, maximum = int(spec["min"]), int(spec["max"])
+        raw = data.get("live_panel_duration_ms", default)
+        valid = True
+        try:
+            configured = int(str(raw).strip())
+        except Exception:
+            configured, valid = default, False
+        effective = max(minimum, min(maximum, configured))
+        result: list[OperatorFinding] = []
+        if not valid:
+            result.append(OperatorFinding(
+                "config.panel.duration.invalid", "configuration", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                f"live_panel_duration_ms is invalid ({raw!r}); the effective duration is {default} ms.",
+                observed={"configured_duration_ms": raw, "effective_duration_ms": default},
+                guidance=f"Set live_panel_duration_ms to an integer from {minimum} to {maximum}.",
+            ))
+        elif effective != configured:
+            result.append(OperatorFinding(
+                "config.panel.duration.clamped", "configuration", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                f"live_panel_duration_ms is {configured}; Nautical clamps it to {effective} ms.",
+                observed={"configured_duration_ms": configured, "effective_duration_ms": effective},
+                guidance=f"Set live_panel_duration_ms to an integer from {minimum} to {maximum}.",
+            ))
+        if mode != "live":
+            return tuple(result)
+        try:
+            rich_available = rich_factory("rich") is not None
+        except Exception:
+            rich_available = False
+        motion = "disabled" if effective == 0 else f"{effective} ms"
+        state = "available" if rich_available else "unavailable"
+        result.append(OperatorFinding(
+            "config.panel.live", "configuration", FindingSeverity.INFO,
+            FindingActionability.INFORMATIONAL,
+            f"Live panels use {motion} effective duration; Rich is {state}; non-TTY output uses static fallback.",
+            observed={
+                "configured_duration_ms": raw if not valid else configured,
+                "effective_duration_ms": effective,
+                "rich_available": rich_available,
+                "non_tty_fallback": "static",
+            },
+        ))
+        if not rich_available:
+            result.append(OperatorFinding(
+                "config.panel.rich_missing", "configuration", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "panel_mode is live, but Rich is not installed; panels will use the static fallback.",
+                guidance="Run python3 -m pip install rich.",
+            ))
+        return tuple(result)
 
 
 __all__ = ["OperatorHealthReport", "OperatorHealthService"]

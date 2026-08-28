@@ -2,7 +2,8 @@ import unittest
 from datetime import timezone
 from types import SimpleNamespace
 
-from nautical_core.query_models import OccurrenceQueryRequest
+from nautical_core.query_models import OccurrenceQueryRequest, OccurrenceQueryResponse
+from nautical_core.operator_models import OperatorCursor
 from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
 
 
@@ -88,6 +89,22 @@ class QueryPaginationTests(unittest.TestCase):
         self.assertEqual(tuple(row.uuid for row in tail), ("task-2",))
         self.assertTrue(tail_complete)
         self.assertIsNone(tail_cursor)
+
+    def test_response_envelope_exposes_incomplete_cursor(self) -> None:
+        request = self._request(max_tasks=2)
+        cursor = OperatorCursor("snapshot", "config-1", "0", position=2, page_size=2)
+        response = OccurrenceQueryResponse(
+            request=request,
+            timezone="UTC",
+            status="empty",
+            cursor=cursor,
+            complete=False,
+        )
+        payload = response.to_dict()
+        self.assertFalse(payload["pagination"]["complete"])
+        self.assertEqual(payload["pagination"]["cursor"]["position"], 2)
+        with self.assertRaises(ValueError):
+            OccurrenceQueryResponse(request=request, timezone="UTC", cursor=cursor, complete=True)
 
     def test_many_chain_page_preserves_all_identity_rows(self) -> None:
         service = self._service()

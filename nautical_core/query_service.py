@@ -195,6 +195,22 @@ class OccurrenceQueryService:
         if not isinstance(local_timezone, tzinfo):
             raise QueryServiceError("validated local timezone is unavailable")
         self._timezone: tzinfo = local_timezone
+        self._scheduler_cache: dict[tuple[str, tuple[tuple[str, str], ...]], SchedulerService] = {}
+
+    def _scheduler_for(self, task: TaskObservation, domain_task: NauticalTask, context: RecurrenceContext) -> SchedulerService:
+        """Reuse one scheduler session for identical recurrence inputs in this invocation."""
+        key = (
+            str(_task_value(task, "chainID") or "").strip().lower(),
+            tuple(
+                (field, TaskCodec.normalize_text(_task_value(task, field)))
+                for field in ("anchor", "anchor_file", "anchor_mode", "omit", "omit_file", "cp")
+            ),
+        )
+        scheduler = self._scheduler_cache.get(key)
+        if scheduler is None:
+            scheduler = SchedulerService.from_task(domain_task, context=context)
+            self._scheduler_cache[key] = scheduler
+        return scheduler
 
     def _context_for(self, task: TaskObservation) -> RecurrenceContext:
         chain_id = str(_task_value(task, "chainID") or "").strip()
@@ -480,7 +496,7 @@ class OccurrenceQueryService:
                 return self._query_cp_task(task, identity, request)
             domain_task = NauticalTask.from_observation(task)
             context = self._context_for(task)
-            scheduler = SchedulerService.from_task(domain_task, context=context)
+            scheduler = self._scheduler_for(task, domain_task, context)
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
             task_reference = self._task_reference_local(task)
@@ -785,7 +801,7 @@ class OccurrenceQueryService:
                     source="cp",
                 )
                 return TaskOccurrenceResult(identity, "found", (record,), chain=chain_metadata, lifecycle=lifecycle_metadata)
-            scheduler = SchedulerService.from_task(domain_task, context=context)
+            scheduler = self._scheduler_for(task, domain_task, context)
             lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             if request.evaluation_at is not None:

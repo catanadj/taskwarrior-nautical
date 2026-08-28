@@ -1,16 +1,19 @@
 import unittest
 from datetime import timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from nautical_core.query_models import HARD_MAX_TASKS, OccurrenceQueryRequest, OccurrenceQueryResponse, QueryContractError
 from nautical_core.operator_models import OperatorCursor
 from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
+from nautical_core.task_models import TaskObservation
 
 
 class QueryPaginationTests(unittest.TestCase):
     def _service(self) -> OccurrenceQueryService:
         service = object.__new__(OccurrenceQueryService)
         service._timezone = timezone.utc
+        service._scheduler_cache = {}
         service._uow = SimpleNamespace(
             mutation_epoch=0,
             context=SimpleNamespace(configuration=SimpleNamespace(fingerprint="config-1")),
@@ -128,6 +131,20 @@ class QueryPaginationTests(unittest.TestCase):
                 "from": "2026-08-24",
                 "count": 1,
             })
+
+    def test_scheduler_sessions_are_reused_for_identical_recurrence_inputs(self) -> None:
+        service = self._service()
+        task = TaskObservation.from_mapping(
+            {"uuid": "task-a", "chainID": "chain-a", "anchor": "w:mon", "status": "pending"},
+            source_query="pagination-test",
+        )
+        context = SimpleNamespace()
+        domain_task = SimpleNamespace()
+        scheduler = SimpleNamespace(fingerprint="schedule-1")
+        with patch("nautical_core.query_service.SchedulerService.from_task", return_value=scheduler) as factory:
+            self.assertIs(service._scheduler_for(task, domain_task, context), scheduler)
+            self.assertIs(service._scheduler_for(task, domain_task, context), scheduler)
+            factory.assert_called_once()
 
     def test_many_chain_page_preserves_all_identity_rows(self) -> None:
         service = self._service()

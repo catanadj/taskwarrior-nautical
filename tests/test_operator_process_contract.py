@@ -11,6 +11,7 @@ import shutil
 
 from nautical_core.integration_models import CommandFailureKind
 from nautical_core.doctor_report import DoctorReport
+from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_models import OperatorV2Result
 from nautical_core.query_models import QueryCapabilities
 from nautical_core.reconcile_report import ReconcileReport
@@ -201,6 +202,19 @@ class OperatorProcessContractTests(unittest.TestCase):
             doctor_payload = self._json(doctor)
             doctor_decoded = DoctorReport.from_mapping(doctor_payload)
             self.assertEqual(doctor_decoded.to_dict(), doctor_payload)
+
+    def test_installation_report_round_trips_through_public_decoder(self) -> None:
+        report = {
+            "schema": "nautical.install.verification",
+            "version": 1,
+            "status": "attention",
+            "checks": [{"name": "Runtime", "status": "passed", "detail": "active"}],
+            "manual_actions": [],
+            "optional_actions": [{"id": "launcher.path", "message": "path", "action": "add it"}],
+            "future": {"revision": 2},
+        }
+        decoded = InstallationVerificationReport.from_mapping(report)
+        self.assertEqual(decoded.to_dict(), report)
 
     def test_navigator_validation_keeps_diagnostics_off_stdout_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

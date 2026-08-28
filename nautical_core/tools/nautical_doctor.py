@@ -958,7 +958,18 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     stream = stream if stream is not None else sys.stdout
     enabled = _color_enabled(stream)
     source_findings = payload.get("operator_findings") or []
-    raw_findings = list(ordered_findings([_render_finding(item) for item in source_findings]))
+    # Text is the operator-facing view: keep blocking/actionable observations
+    # visible while leaving healthy inventory available through ``--json``.
+    visible_source = [
+        item for item in source_findings
+        if isinstance(item, dict)
+        and (
+            str(item.get("severity") or "").lower() in {"error", "warning", "warn"}
+            or str(item.get("actionability") or "").lower() in {"actionable", "blocking"}
+            or (isinstance(item.get("evidence"), dict) and item["evidence"].get("historical"))
+        )
+    ]
+    raw_findings = list(ordered_findings([_render_finding(item) for item in visible_source]))
     historical = [
         item for item in raw_findings
         if item.get("severity") == "info"

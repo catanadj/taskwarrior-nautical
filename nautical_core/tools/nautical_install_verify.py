@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from nautical_core.operator_presentation import bounded_text, ordered_findings, render_json_document
+from nautical_core.operator_presentation import bounded_text, finding_status, ordered_findings, render_json_document
 def _findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Return canonical finding mappings from a Doctor payload."""
     source = payload.get("operator_findings") or []
@@ -26,13 +26,7 @@ def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
 
 
 def _group_status(items: list[dict[str, Any]], *, empty_status: str = "failed") -> str:
-    if not items:
-        return empty_status
-    if any(item.get("severity") == "error" for item in items):
-        return "failed"
-    if any(item.get("severity") == "warning" for item in items):
-        return "attention"
-    return "passed"
+    return finding_status(items, empty=empty_status)
 
 
 def build_report(

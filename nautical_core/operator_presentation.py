@@ -160,4 +160,16 @@ def ordered_findings(findings: object) -> tuple[Mapping[str, Any], ...]:
     ))
 
 
-__all__ = ("ProgressView", "bounded_text", "key_value_lines", "ordered_findings", "ordered_records", "render_contract_json", "render_json", "render_json_document", "render_result", "render_text")
+def finding_status(findings: object, *, empty: str = "failed") -> str:
+    """Map canonical finding severities to a concise check status."""
+    values = [item for item in findings if isinstance(item, Mapping)] if isinstance(findings, (list, tuple)) else []
+    if not values:
+        return empty
+    if any(str(item.get("severity") or "").lower() == "error" for item in values):
+        return "failed"
+    if any(str(item.get("severity") or "").lower() in {"warn", "warning"} for item in values):
+        return "attention"
+    return "passed"
+
+
+__all__ = ("ProgressView", "bounded_text", "finding_status", "key_value_lines", "ordered_findings", "ordered_records", "render_contract_json", "render_json", "render_json_document", "render_result", "render_text")

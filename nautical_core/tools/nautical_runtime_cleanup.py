@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -15,6 +14,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nautical_core import install_runtime  # noqa: E402
+from nautical_core.operator_presentation import render_json_document  # noqa: E402
+from nautical_core.operator_presentation import key_value_lines  # noqa: E402
 
 
 def main() -> int:
@@ -35,13 +36,16 @@ def main() -> int:
     except Exception as exc:
         result = {"status": "error", "error": str(exc)}
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        print(render_json_document(result))
     else:
-        print(f"Nautical runtime cleanup: {result.get('status', 'error')}")
-        print(f"Active release: {result.get('active_release') or 'none'}")
-        print(f"Kept releases: {len(result.get('kept_releases') or [])}")
-        print(f"Releases to remove: {len(result.get('remove_releases') or [])}")
-        print(f"Abandoned paths to remove: {len(result.get('remove_abandoned') or [])}")
+        summary = {
+            "Nautical runtime cleanup": result.get("status", "error"),
+            "Active release": result.get("active_release") or "none",
+            "Kept releases": len(result.get("kept_releases") or []),
+            "Releases to remove": len(result.get("remove_releases") or []),
+            "Abandoned paths to remove": len(result.get("remove_abandoned") or []),
+        }
+        print("\n".join(key_value_lines(summary)))
         if result.get("errors"):
             print("Errors:")
             for error in result["errors"]:

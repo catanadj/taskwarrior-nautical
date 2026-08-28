@@ -41,7 +41,8 @@ from .integration_models import (
 from .lifecycle_outbox import LifecycleOutboxRepository, OutboxFailure
 from .task_models import TaskObservation
 from .chain_generation import ChainGenerationService
-from .chain_integrity_lifecycle import LifecycleRecoveryDecision
+from .lifecycle_models import LifecyclePlan
+from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryResult
 
 
 class _SnapshotProvider(Protocol):
@@ -119,8 +120,8 @@ class ChainIntegrityEngine:
         existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
         hook: object,
         generation: ChainGenerationService | None = None,
-    ) -> LifecycleRecoveryDecision:
-        """Build one successor/expiration decision through the engine owner."""
+    ) -> RecoveryResult:
+        """Build one typed successor/expiration result through the engine owner."""
         from .chain_integrity_lifecycle import plan_recovery_decision
 
         return plan_recovery_decision(
@@ -129,6 +130,25 @@ class ChainIntegrityEngine:
             hook=hook,
             generation=generation,
         )
+
+    def plan_recovery_plan(
+        self,
+        parent: TaskObservation,
+        *,
+        existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
+        hook: object,
+        generation: ChainGenerationService | None = None,
+    ) -> LifecyclePlan:
+        """Return the direct typed lifecycle plan for one recovery decision."""
+        result = self.plan_recovery(
+            parent,
+            existing_children=existing_children,
+            hook=hook,
+            generation=generation,
+        )
+        if not isinstance(result, RecoveryPlanResult):
+            raise ValueError(f"recovery planning did not produce a lifecycle plan: {result.reason}")
+        return result.plan
 
     def audit_native_until(self, rows, *, predecessor, safe_parse_datetime, fmt_isoz, utc_to_local_naive, local_naive_to_utc) -> RecoveryAudit:
         """Delegate recovery evidence through the single integrity owner."""

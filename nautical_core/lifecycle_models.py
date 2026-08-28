@@ -95,33 +95,6 @@ class LifecycleDrainProgress:
         object.__setattr__(self, "elapsed_seconds", max(0.0, float(self.elapsed_seconds or 0.0)))
 
 
-@dataclass(frozen=True, slots=True)
-class LifecycleRecoveryDecision:
-    """Typed successor/expiration decision consumed by reconcile and UI."""
-
-    action: str
-    parent: TaskObservation
-    next_link: int
-    reason: str
-    child: dict[str, Any] | None = None
-    child_short: str = ""
-    child_due: Any = None
-    terminal_kind: str | None = None
-    lifecycle_plan: "LifecyclePlan | None" = None
-    child_observation: TaskObservation | None = None
-    child_draft: "TaskDraft | None" = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.parent, TaskObservation):
-            raise TypeError("lifecycle recovery decision requires a TaskObservation parent")
-        if self.child_observation is not None and not isinstance(self.child_observation, TaskObservation):
-            raise TypeError("lifecycle recovery child evidence requires a TaskObservation")
-        if self.child_draft is not None:
-            from .task_models import TaskDraft
-            if not isinstance(self.child_draft, TaskDraft):
-                raise TypeError("lifecycle recovery child draft requires a TaskDraft")
-
-
 class LifecycleAction(str, Enum):
     NOOP = "noop"
     UPDATE_PARENT = "update_parent"
@@ -779,7 +752,6 @@ __all__ = (
     "LifecycleOutcome",
     "LifecycleOutcomeKind",
     "LifecyclePlan",
-    "LifecycleRecoveryDecision",
     "ParentGuard",
     "TaskLifecycleState",
     "TaskSnapshot",

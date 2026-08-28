@@ -7,6 +7,9 @@ import sys
 import time
 from typing import Any
 
+from .lifecycle_models import LifecycleDrainProgress
+from .operator_presentation import ProgressView
+
 
 class ExitDrainProgress:
     """Render lifecycle drain events without participating in mutation."""
@@ -83,19 +86,19 @@ class ExitDrainProgress:
     def on_event(self, event: object) -> None:
         started = time.perf_counter()
         try:
-            stage = str(getattr(getattr(event, "stage", None), "value", getattr(event, "stage", "")))
-            total = max(0, int(getattr(event, "total", 0) or 0))
+            view = ProgressView.from_event(event) if isinstance(event, LifecycleDrainProgress) else None
+            if view is None:
+                raise TypeError("drain progress event is not a LifecycleDrainProgress")
+            stage = view.stage
+            total = view.total
             self._start(total if stage == "claimed" else 0)
             if self._progress is None or self._task_id is None:
                 return
-            completed = max(0, int(getattr(event, "completed", 0) or 0))
-            outcome = self._bound_label(getattr(event, "outcome", ""))
-            detail = self._bound_label(getattr(event, "detail", ""))
+            completed = view.completed
+            detail = self._bound_label(view.label)
             description = "⚓ Nautical drain"
             if detail:
                 description += f" · {detail}"
-            elif outcome:
-                description += f" · {outcome}"
             self._progress.update(
                 self._task_id,
                 completed=completed,

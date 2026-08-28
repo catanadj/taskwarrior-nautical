@@ -19,6 +19,8 @@ from .lifecycle_models import DeletionDisposition, VirtualExpiredChild
 from .lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path
 from .cache_locking import safe_lock
 from .task_models import FieldPresence, TaskObservation, TaskPayload
+from .lifecycle_models import LifecycleAction, LifecyclePlan
+from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 from .task_set_reads import ChainSlot, ChainSlotSetRequest, SetReadStatus
 
 
@@ -41,10 +43,11 @@ class LifecycleRecoveryOperations(Protocol):
     """Policy operations used by the service-owned recovery loop."""
 
     def apply_parent(self, parent: TaskPayload, *, taskdata: Path, lease_held: bool,
-                     verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[Any, str]: ...
+                     verified_children: dict[str, dict[str, Any]], generation: ChainGenerationService | None) -> tuple[RecoveryResult, str]: ...
     def plan_parent(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
     def next_child(self, parent: TaskObservation, child_short: str) -> TaskObservation: ...
-    def virtual_child(self, plan: Any, *, recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
+    def virtual_child(self, plan: LifecyclePlan, *, parent: TaskObservation,
+                      recovery_at: Any) -> tuple[VirtualExpiredChild | None, str]: ...
     def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str: ...
     def is_orphan_deleted(self, child: TaskObservation) -> bool: ...
     def recovery_error(self, parent: TaskPayload, reason: str) -> Any: ...
@@ -57,9 +60,11 @@ class LifecycleRecoveryOperations(Protocol):
 class LifecycleApplyOperations(Protocol):
     def configuration_state(self, hook: Any) -> tuple[str, str]: ...
     def refresh_plan(self, parent: TaskPayload, *, generation: ChainGenerationService | None) -> Any: ...
-    def execute_plan(self, plan: Any, *, verified_children: dict[str, dict[str, Any]] | None,
+    def execute_plan(self, plan: LifecyclePlan, *, parent: TaskObservation,
+                     child_observation: TaskObservation | None,
+                     verified_children: dict[str, dict[str, Any]] | None,
                      label: str, strict_uuid: bool) -> str: ...
-    def terminal_plan(self, plan: Any) -> str: ...
+    def terminal_plan(self, plan: LifecyclePlan) -> str: ...
     def lock_busy(self, kind: str) -> None: ...
 
 
@@ -79,9 +84,14 @@ class CallbackLifecycleApplyOperations:
     def refresh_plan(self, parent, *, generation):
         return self.refresh_callback(parent, generation=generation)
 
-    def execute_plan(self, plan, *, verified_children, label, strict_uuid):
+    def execute_plan(self, plan, *, parent, child_observation, verified_children, label, strict_uuid):
         return self.execute_callback(
-            plan, verified_children=verified_children, label=label, strict_uuid=strict_uuid,
+            plan,
+            parent=parent,
+            child_observation=child_observation,
+            verified_children=verified_children,
+            label=label,
+            strict_uuid=strict_uuid,
         )
 
     def terminal_plan(self, plan):
@@ -100,7 +110,7 @@ class CallbackLifecycleRecoveryOperations:
     class.
     """
 
-    apply_parent_callback: Callable[..., tuple[Any, str]]
+    apply_parent_callback: Callable[..., tuple[RecoveryResult, str]]
     plan_parent_callback: Callable[..., Any]
     next_child_callback: Callable[..., TaskObservation]
     virtual_child_callback: Callable[..., tuple[VirtualExpiredChild | None, str]]
@@ -243,11 +253,11 @@ class LifecycleReconciliationService:
 
     def execute_lifecycle_plan(
         self,
-        plan: Any,
+        plan: LifecyclePlan,
         *,
         configuration_fingerprint: str,
         schedule_fingerprint: str,
-        resolve_plan: Any,
+        resolve_plan: Callable[[LifecyclePlan], LifecyclePlan],
         verify_child: Any,
         verified_children: dict[str, dict[str, Any]] | None,
         strict_uuid: bool,
@@ -255,10 +265,11 @@ class LifecycleReconciliationService:
     ) -> tuple[Any, Any, str, dict[str, Any] | None]:
         """Stage, execute, and verify one successor lifecycle plan."""
         service = self.application_service()
-        resolved = resolve_plan(plan)
-        lifecycle_plan = getattr(resolved, "lifecycle_plan", None)
-        if lifecycle_plan is None:
-            raise RuntimeError(f"reconcile {label} plan has no typed lifecycle plan: {resolved!r}")
+        if not isinstance(plan, LifecyclePlan):
+            raise TypeError(f"reconcile {label} requires a typed lifecycle plan")
+        lifecycle_plan = resolve_plan(plan)
+        if not isinstance(lifecycle_plan, LifecyclePlan):
+            raise TypeError(f"reconcile {label} resolver returned an invalid lifecycle plan")
         staged = service.stage(
             lifecycle_plan,
             configuration_fingerprint=configuration_fingerprint,
@@ -273,7 +284,7 @@ class LifecycleReconciliationService:
         )
         if not outcome.ok:
             return staged, outcome, "", None
-        child_short = lifecycle_plan.parent_patch_dict().get("nextLink") or resolved.child_short
+        child_short = lifecycle_plan.parent_patch_dict().get("nextLink")
         if not child_short:
             return staged, outcome, "", None
         # ``LifecycleApplicationService.execute_staged`` has already
@@ -285,10 +296,11 @@ class LifecycleReconciliationService:
             verified_children[str(child_short).strip().lower()] = verified
         return staged, outcome, str(child_short), verified
 
-    def apply_terminal_plan(self, plan: Any, *, terminal_plan_factory: Any) -> Any:
+    def apply_terminal_plan(self, plan: LifecyclePlan) -> Any:
         """Apply a typed terminal lifecycle plan through the shared service."""
-        outcome = self.application_service().apply_immediate(terminal_plan_factory(plan))
-        return outcome
+        if not isinstance(plan, LifecyclePlan):
+            raise TypeError("reconcile terminal application requires a typed lifecycle plan")
+        return self.application_service().apply_immediate(plan)
 
     def apply_parent(
         self,
@@ -318,18 +330,35 @@ class LifecycleReconciliationService:
                 if status != "valid":
                     raise RuntimeError(reason)
                 plan = operations.refresh_plan(parent, generation=generation)
-                if plan.action == "spawn":
+                if isinstance(plan, RecoveryRefusal):
+                    return plan, ""
+                if not isinstance(plan, RecoveryPlanResult):
+                    raise RuntimeError("reconcile refresh returned an invalid recovery result")
+                lifecycle_plan = plan.plan
+                typed_action = lifecycle_plan.action
+                if typed_action is LifecycleAction.SPAWN_CHILD:
                     return plan, operations.execute_plan(
-                        plan, verified_children=verified_children,
+                        lifecycle_plan,
+                        parent=plan.parent,
+                        child_observation=plan.child_observation,
+                        verified_children=verified_children,
                         label="transition", strict_uuid=True,
                     )
-                if plan.action == "backfill_nextlink":
+                if typed_action is LifecycleAction.UPDATE_PARENT:
+                    if not isinstance(lifecycle_plan, LifecyclePlan):
+                        raise RuntimeError("reconcile backfill has no typed lifecycle plan")
                     return plan, operations.execute_plan(
-                        plan, verified_children=verified_children,
+                        lifecycle_plan,
+                        parent=plan.parent,
+                        child_observation=plan.child_observation,
+                        verified_children=verified_children,
                         label="backfill", strict_uuid=False,
                     )
-                if plan.action in {"legitimate_final", "manual_stop"}:
-                    return plan, operations.terminal_plan(plan)
+                if typed_action in {
+                    LifecycleAction.FINALIZE_CHAIN,
+                    LifecycleAction.DISABLE_CHAIN,
+                }:
+                    return plan, operations.terminal_plan(lifecycle_plan)
                 return plan, ""
 
 
@@ -354,7 +383,7 @@ class LifecycleReconciliationService:
         hook: Any,
         generation: ChainGenerationService,
         safe_parse_datetime: Any,
-    ) -> lifecycle.LifecycleRecoveryDecision:
+    ) -> RecoveryResult:
         existing_children = self.existing_children(
             parent,
             safe_parse_datetime=safe_parse_datetime,
@@ -364,6 +393,27 @@ class LifecycleReconciliationService:
             schedule_fingerprint=self.schedule_fingerprint,
         )
         return engine.plan_recovery(
+            parent,
+            existing_children=existing_children,
+            hook=hook,
+            generation=generation,
+        )
+
+    def plan_typed(
+        self,
+        parent: TaskObservation,
+        *,
+        hook: Any,
+        generation: ChainGenerationService,
+        safe_parse_datetime: Any,
+    ) -> LifecyclePlan:
+        """Return the direct lifecycle plan for one recovery candidate."""
+        existing_children = self.existing_children(parent, safe_parse_datetime=safe_parse_datetime)
+        engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint=self.configuration_fingerprint,
+            schedule_fingerprint=self.schedule_fingerprint,
+        )
+        return engine.plan_recovery_plan(
             parent,
             existing_children=existing_children,
             hook=hook,
@@ -411,7 +461,7 @@ class LifecycleReconciliationService:
         generation: ChainGenerationService | None = None,
     ) -> list[tuple[Any, str]]:
         """Run bounded successor recovery; policy and mutation stay typed ports."""
-        outcomes: list[tuple[Any, str]] = []
+        outcomes: list[tuple[RecoveryResult, str]] = []
         current = parent
         visited: set[tuple[str, int]] = set()
         expiration_hops = 0
@@ -445,27 +495,48 @@ class LifecycleReconciliationService:
                     break
                 applied_short = ""
             outcomes.append((plan, applied_short))
-            if not is_deleted or plan.action not in {"spawn", "backfill_nextlink"}:
+            if not isinstance(plan, RecoveryPlanResult):
+                break
+            typed_plan = plan.plan
+            typed_action = typed_plan.action.value
+            successor_action = typed_action in {"spawn_child", "update_parent"}
+            if not is_deleted or not successor_action:
                 break
             expiration_hops += 1
-            child_short = applied_short or plan.child_short
+            child_short = applied_short
+            if not child_short and isinstance(typed_plan, LifecyclePlan):
+                child_short = str(
+                    typed_plan.parent_patch_dict().get("nextLink")
+                    or typed_plan.child_dict().get("uuid")
+                    or ""
+                )
+            if not child_short:
+                child_short = plan.child_short
             plan_parent = plan.parent.to_mapping()
             try:
-                child = operations.next_child(plan.parent, child_short) if (apply or plan.action == "backfill_nextlink") else None
+                child = operations.next_child(plan.parent, child_short) if (
+                    apply or typed_action == "update_parent"
+                ) else None
                 if child is None:
-                    virtual_child, child_error = operations.virtual_child(plan, recovery_at=recovery_at)
+                    typed_plan = getattr(plan, "lifecycle_plan", None)
+                    if not isinstance(typed_plan, LifecyclePlan):
+                        break
+                    virtual_child, child_error = operations.virtual_child(
+                        typed_plan,
+                        parent=plan.parent,
+                        recovery_at=recovery_at,
+                    )
                     if child_error:
                         outcomes.append((operations.recovery_error(plan_parent, child_error), ""))
                         break
                     if virtual_child is None:
-                        if plan.child_draft is not None:
-                            child = TaskObservation.from_mapping(
-                                plan.child_draft.to_mapping(),
-                                source_query="reconcile planned child verification",
-                            )
-                            terminal_error = operations.terminal_error(child, recovery_at)
-                            if terminal_error:
-                                outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
+                        child = TaskObservation.from_mapping(
+                            typed_plan.child_dict(),
+                            source_query="reconcile planned child verification",
+                        )
+                        terminal_error = operations.terminal_error(child, recovery_at)
+                        if terminal_error:
+                            outcomes.append((operations.recovery_terminal(plan_parent, terminal_error), ""))
                         break
                     child = virtual_child.observation
             except Exception as exc:

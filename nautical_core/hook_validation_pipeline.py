@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Mapping, MutableMapping, Protocol, cast, Any, Callable
 
@@ -275,7 +276,14 @@ def validate_chain_limits_domain(value: ValidationInput) -> tuple[ValidationFind
     raw = value.current.get("chainMax")
     if raw in (None, ""):
         return ()
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+    valid = False
+    if not isinstance(raw, bool):
+        try:
+            number = Decimal(str(raw).strip())
+            valid = number.is_finite() and number == number.to_integral_value() and number > 0
+        except (InvalidOperation, ValueError, TypeError):
+            valid = False
+    if not valid:
         return (_finding(
             "chain_max_invalid", "chainMax", "chainMax must be a positive integer",
             "Set chainMax to a positive whole number or clear it.",

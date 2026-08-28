@@ -64,6 +64,16 @@ class ValidationPipelineTests(unittest.TestCase):
         self.assertEqual(report.status, ValidationStatus.INVALID)
         self.assertTrue(report.findings)
 
+    def test_mapping_validation_accepts_taskwarrior_numeric_chain_max(self) -> None:
+        _observation_value, report = __import__(
+            "nautical_core.hook_validation_pipeline", fromlist=["validate_task_mapping"]
+        ).validate_task_mapping(
+            {"status": "pending", "chain": "on", "chainID": "abcd1234", "link": 1, "chainMax": 3.0},
+            route=WorkflowRoute.RECURRING_EDIT,
+            source_query="taskwarrior-export",
+        )
+        self.assertEqual(report.status, ValidationStatus.VALID)
+
     def test_transition_policy_rejects_identity_edits(self) -> None:
         old = _observation()
         changed = old.to_mapping()

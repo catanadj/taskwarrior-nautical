@@ -376,6 +376,7 @@ def _check_removed_ownership(root: Path) -> list[dict]:
                 "ok": not violations,
                 "message": "mutation-free" if not violations else f"forbidden mutation dependency: {', '.join(violations)}",
             })
+
         except Exception as exc:
             results.append({
                 "kind": "ownership",

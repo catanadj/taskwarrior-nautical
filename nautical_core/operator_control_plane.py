@@ -11,6 +11,7 @@ from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
 from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .chain_repair_planner import IntegrityRepairPlanner
 from .chain_integrity_engine import ChainIntegrityEngine
+from .chain_integrity_recovery import RecoveryAudit
 from .chain_generation import ChainGenerationService
 from .operator_application import DomainApplicationRegistry
 from .operator_domain_planner import OperatorDomainPlanner
@@ -98,7 +99,7 @@ class OperatorControlPlane:
         )
 
     def audit_native_until(self, rows: object, *, predecessor: object, safe_parse_datetime: object,
-                           fmt_isoz: object, utc_to_local_naive: object, local_naive_to_utc: object) -> object:
+                           fmt_isoz: object, utc_to_local_naive: object, local_naive_to_utc: object) -> RecoveryAudit:
         """Audit native-until windows through the shared integrity engine."""
         engine = ChainIntegrityEngine.lifecycle_only(
             configuration_fingerprint="reconcile-recovery",

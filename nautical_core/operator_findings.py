@@ -112,7 +112,10 @@ class OperatorFinding:
     def to_doctor_dict(self) -> dict[str, Any]:
         """Serialize for the pre-v2 Doctor envelope during migration."""
         details = dict(self.evidence)
-        details.update({"observed": dict(self.observed), "expected": dict(self.expected)})
+        if self.observed:
+            details["observed"] = dict(self.observed)
+        if self.expected:
+            details["expected"] = dict(self.expected)
         return {
             "id": self.code,
             "severity": self.severity.value,
@@ -156,6 +159,8 @@ class OperatorFinding:
             affected = ()
         severity = str(value.get("severity") or "info").strip().lower()
         guidance = str(value.get("fix") or "").strip()
+        if severity == "error" and not guidance:
+            guidance = "Inspect the reported evidence."
         return cls(
             code=value.get("id", ""),
             domain=str(value.get("id", "doctor")).split(".", 1)[0] or "doctor",

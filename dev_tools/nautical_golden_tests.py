@@ -10437,7 +10437,7 @@ def test_doctor_reports_chain_repair_plan_findings():
                 "status": "completed",
                 "cp": "1d",
                 "chain": "on",
-                "chainID": "safe",
+                "chainID": "safe0001",
                 "link": 1,
             },
             {
@@ -10445,7 +10445,7 @@ def test_doctor_reports_chain_repair_plan_findings():
                 "status": "pending",
                 "cp": "1d",
                 "chain": "on",
-                "chainID": "safe",
+                "chainID": "safe0001",
                 "link": 2,
                 "prevLink": "wrong",
             },
@@ -10454,7 +10454,7 @@ def test_doctor_reports_chain_repair_plan_findings():
                 "status": "pending",
                 "cp": "1d",
                 "chain": "on",
-                "chainID": "review",
+                "chainID": "review01",
                 "prevLink": "missing1",
             },
         ]

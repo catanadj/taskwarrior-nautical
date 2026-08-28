@@ -65,7 +65,8 @@ def _doctor_finding(
             else FindingActionability.ACTIONABLE
         ),
         message=message,
-        observed=details or {},
+        observed={},
+        evidence=details or {},
         guidance=guidance or ("Inspect the reported evidence." if severity == "error" else ""),
     )
     payload = canonical.to_doctor_dict()
@@ -121,9 +122,9 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             actionability=FindingActionability.INFORMATIONAL if historical else FindingActionability.ACTIONABLE,
             message=finding.message,
             affected=tuple(finding.subject_uuids),
-            observed=finding.observed,
-            expected=finding.expected,
-            evidence=details,
+            observed=finding.observed if isinstance(finding.observed, dict) else {},
+            expected=finding.expected if isinstance(finding.expected, dict) else {},
+        evidence=details or {},
             guidance=guidance,
         )
         findings.append(canonical.to_doctor_dict())

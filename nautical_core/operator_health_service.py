@@ -289,7 +289,8 @@ class OperatorHealthService:
             FindingActionability.INFORMATIONAL,
             f"Managed Nautical runtime is active: {release_id}.", observed=status,
         ))
-        manifest = status.get("manifest") if isinstance(status.get("manifest"), dict) else {}
+        manifest_value = status.get("manifest")
+        manifest: dict[str, Any] = manifest_value if isinstance(manifest_value, dict) else {}
         current_root = Path(str(status.get("runtime_root") or runtime_root)).expanduser() / "current"
         errors = []
         for event, record in (hook_runtimes or {}).items():

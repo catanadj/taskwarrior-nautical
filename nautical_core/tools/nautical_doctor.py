@@ -12,7 +12,7 @@ import shutil
 import sys
 import tomllib
 import zoneinfo
-from datetime import date, timezone
+from datetime import timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Mapping
@@ -541,55 +541,6 @@ def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
     ))
 
 
-def _check_astronomy_legacy(
-    findings: list[dict[str, Any]],
-    data: dict[str, Any],
-    *,
-    source_hint: str = "",
-) -> None:
-    """Check optional astronomy setup without touching Taskwarrior state."""
-    snapshot = effective_config_snapshot()
-    effective_value = snapshot.get("values")
-    effective: dict[str, Any] = effective_value if isinstance(effective_value, dict) else {}
-    if isinstance(data, dict) and data:
-        config = data.get("astronomy")
-        effective_timezone = data.get("tz", effective.get("tz", "UTC"))
-    else:
-        config = effective.get("astronomy")
-        effective_timezone = effective.get("tz", "UTC")
-    result = astronomy.preflight(config)
-    status = str(result.get("status") or "error")
-    if status == "not_configured":
-        _finding(
-            findings,
-            "astronomy.not_configured",
-            "ok",
-            "Astronomy is not configured; astronomical anchor times are disabled.",
-            fix="Define [astronomy] locations only if using sunrise, sunset, moonrise, or moonset anchors.",
-        )
-        return
-    severity = {"ok": "ok", "warning": "warn", "error": "error"}.get(status, "error")
-    details = {key: value for key, value in result.items() if key not in {"status", "message"}}
-    details["config_source"] = source_hint or snapshot.get("source", "unknown")
-    details["effective_timezone"] = effective_timezone
-    _finding(
-        findings,
-        "astronomy.preflight",
-        severity,
-        "Astronomy provider and location profile are usable."
-        if status == "ok"
-        else str(result.get("message") or "Astronomy preflight failed."),
-        fix=(
-            "Install astral in the active interpreter and verify the selected profile."
-            if status == "error"
-            else "Review the astronomy location and event availability before scheduling."
-            if status == "warning"
-            else ""
-        ),
-        details=details,
-    )
-
-
 def _check_astronomy(
     findings: list[dict[str, Any]],
     data: dict[str, Any],
@@ -1026,6 +977,8 @@ def _check_chains(
         )
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
 
+    if unit_of_work is None:
+        return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
     configuration = unit_of_work.context.configuration
     control_plane = OperatorControlPlane.from_configuration(
         configuration,

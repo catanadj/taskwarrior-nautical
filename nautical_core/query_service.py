@@ -24,6 +24,7 @@ from .query_models import (
     HARD_MAX_FILE_SKIPS,
     HARD_MAX_ITERATIONS,
     HARD_MAX_OCCURRENCES,
+    HARD_MAX_TASKS,
     OccurrenceQueryRequest,
     OccurrenceQueryResponse,
     OccurrenceRecord,
@@ -236,6 +237,13 @@ class OccurrenceQueryService:
                 complete_chain_history=False,
             )
             if isinstance(read, Found):
+                if len(read.value.rows) > HARD_MAX_TASKS:
+                    return _failure(
+                        "task_scope_exhausted",
+                        f"whole-system snapshot contains {len(read.value.rows)} tasks; limit is {HARD_MAX_TASKS}; use an explicit chain or UUID scope",
+                        limit=HARD_MAX_TASKS,
+                        observed=len(read.value.rows),
+                    )
                 selected: list[TaskObservation] = []
                 for raw_row in read.value.rows:
                     row = _decode_repository_row(raw_row, source_query="query all-active")

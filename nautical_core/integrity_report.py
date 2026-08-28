@@ -40,6 +40,37 @@ def _finding_payload(finding: Any) -> dict[str, Any]:
     }
 
 
+def _doctor_finding(
+    code: str,
+    severity: str,
+    message: str,
+    *,
+    guidance: str = "",
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a Doctor record through the canonical finding contract."""
+    canonical = OperatorFinding(
+        code=code,
+        domain=code.split(".", 1)[0] or "doctor",
+        severity=(
+            FindingSeverity.ERROR if severity == "error"
+            else FindingSeverity.WARNING if severity in {"warn", "warning"}
+            else FindingSeverity.INFO
+        ),
+        actionability=(
+            FindingActionability.INFORMATIONAL
+            if severity in {"ok", "info"} and not guidance
+            else FindingActionability.ACTIONABLE
+        ),
+        message=message,
+        observed=details or {},
+        guidance=guidance or ("Inspect the reported evidence." if severity == "error" else ""),
+    )
+    payload = canonical.to_doctor_dict()
+    payload["severity"] = severity
+    return payload
+
+
 def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
     """Map stable engine findings to Doctor's presentation contract."""
     findings: list[dict[str, Any]] = []
@@ -95,35 +126,35 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
         )
         findings.append(canonical.to_doctor_dict())
     if result.status.value == "unavailable":
-        findings.append({
-            "id": "chains.integrity_unavailable",
-            "severity": "error",
-            "message": "Chain integrity could not be evaluated.",
-            "fix": "Retry after resolving the reported Taskwarrior or configuration error.",
-            "details": {"reason": result.reason},
-        })
+        findings.append(_doctor_finding(
+            "chains.integrity_unavailable",
+            "error",
+            "Chain integrity could not be evaluated.",
+            guidance="Retry after resolving the reported Taskwarrior or configuration error.",
+            details={"reason": result.reason},
+        ))
     elif result.status.value == "healthy" and not findings:
-        findings.append({
-            "id": "chains.integrity",
-            "severity": "ok",
-            "message": "Chain integrity is clean.",
-            "details": {"snapshot": result.snapshot.snapshot_id if result.snapshot is not None else None},
-        })
+        findings.append(_doctor_finding(
+            "chains.integrity",
+            "ok",
+            "Chain integrity is clean.",
+            details={"snapshot": result.snapshot.snapshot_id if result.snapshot is not None else None},
+        ))
     if result.plans:
-        findings.append({
-            "id": "chains.repair_available",
-            "severity": "warn",
-            "message": f"{len(result.plans)} safe chain repair(s) are available.",
-            "fix": "Run nautical reconcile --apply after reviewing the dry-run output.",
-            "details": {"repairs": [plan.to_dict() for plan in result.plans[:10]]},
-        })
+        findings.append(_doctor_finding(
+            "chains.repair_available",
+            "warn",
+            f"{len(result.plans)} safe chain repair(s) are available.",
+            guidance="Run nautical reconcile --apply after reviewing the dry-run output.",
+            details={"repairs": [plan.to_dict() for plan in result.plans[:10]]},
+        ))
     if result.refusals:
-        findings.append({
-            "id": "chains.repair_review",
-            "severity": "warn",
-            "message": f"{len(result.refusals)} chain repair issue(s) need review.",
-            "fix": "Run nautical query integrity --all for evidence, then use reconcile for applicable repairs.",
-            "details": {
+        findings.append(_doctor_finding(
+            "chains.repair_review",
+            "warn",
+            f"{len(result.refusals)} chain repair issue(s) need review.",
+            guidance="Run nautical query integrity --all for evidence, then use reconcile for applicable repairs.",
+            details={
                 "reasons": {
                     str(item.reason or item.reason_code).strip(): sum(
                         1 for candidate in result.refusals
@@ -144,7 +175,7 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
                     for item in result.refusals[:10]
                 ],
             },
-        })
+        ))
     return findings
 
 

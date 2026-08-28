@@ -688,6 +688,7 @@ def _refresh_plan(
     original_parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
+    reconciliation_service: LifecycleReconciliationService,
 ) -> RecoveryResult:
     parent = _fresh_parent(original_parent)
     if parent is None:
@@ -715,6 +716,7 @@ def _refresh_plan(
         hook,
         parent,
         generation=generation or _chain_generation_for_hook(hook),
+        reconciliation_service=reconciliation_service,
     )
 
 
@@ -724,6 +726,7 @@ def _plan_for_parent(
     parent: TaskPayload,
     *,
     generation: ChainGenerationService | None = None,
+    reconciliation_service: LifecycleReconciliationService,
 ) -> RecoveryResult:
     """Build the one reconcile plan used by both preview and apply paths."""
     configuration_status, configuration_reason = _configuration_state(hook)
@@ -735,7 +738,7 @@ def _plan_for_parent(
             parent,
             source_query="reconcile lifecycle planning",
         )
-        return _lifecycle_reconciliation_service().plan(
+        return reconciliation_service.plan(
             observation,
             hook=hook,
             generation=generation or _chain_generation_for_hook(hook),
@@ -912,6 +915,7 @@ def _execute_reconcile_lifecycle_plan(
     verified_children: dict[str, dict[str, Any]] | None,
     label: str,
     strict_uuid: bool,
+    reconciliation_service: LifecycleReconciliationService,
 ) -> str:
     """Stage and execute one reconcile spawn/backfill through the shared
     lifecycle application service -- the same staging and execution path the
@@ -922,7 +926,7 @@ def _execute_reconcile_lifecycle_plan(
     if unit_of_work is None:
         raise RuntimeError("reconcile lifecycle execution requires an integration unit of work")
     configuration = unit_of_work.context.configuration
-    staged, outcome, child_short, _verified = _lifecycle_reconciliation_service().execute_lifecycle_plan(
+    staged, outcome, child_short, _verified = reconciliation_service.execute_lifecycle_plan(
         plan,
         configuration_fingerprint=configuration.fingerprint,
         schedule_fingerprint=configuration.scheduler_fingerprint,
@@ -1045,9 +1049,11 @@ def _execute_reconcile_terminal_plan(
     task_bin: str,
     hook: Any,
     plan: LifecyclePlan,
+    *,
+    reconciliation_service: LifecycleReconciliationService,
 ) -> str:
     """Apply a guarded terminal plan through the shared lifecycle application service."""
-    outcome = _lifecycle_reconciliation_service().apply_terminal_plan(
+    outcome = reconciliation_service.apply_terminal_plan(
         plan,
     )
     _raise_for_lifecycle_outcome(outcome, label="terminal transition")
@@ -1064,6 +1070,7 @@ def _apply_parent_atomic(
     lease_held: bool = False,
     verified_children: dict[str, dict[str, Any]] | None = None,
     generation: ChainGenerationService | None = None,
+    reconciliation_service: LifecycleReconciliationService,
 ) -> tuple[RecoveryResult, str]:
     def lock_busy(kind: str) -> None:
         _LOCK_STATS[f"{kind}_busy"] += 1
@@ -1092,18 +1099,22 @@ def _apply_parent_atomic(
             verified_children=verified_children,
             label=label,
             strict_uuid=strict_uuid,
+            reconciliation_service=reconciliation_service,
         )
 
     operations = CallbackLifecycleApplyOperations(
         configuration_callback=validated_configuration,
         refresh_callback=lambda parent, *, generation: _refresh_plan(
             task_bin, hook, parent, generation=generation,
+            reconciliation_service=reconciliation_service,
         ),
         execute_callback=execute_plan,
-        terminal_callback=lambda plan: _execute_reconcile_terminal_plan(task_bin, hook, plan),
+        terminal_callback=lambda plan: _execute_reconcile_terminal_plan(
+            task_bin, hook, plan, reconciliation_service=reconciliation_service,
+        ),
         lock_callback=lock_busy,
     )
-    return _lifecycle_reconciliation_service().apply_parent(
+    return reconciliation_service.apply_parent(
         original_parent,
         operations=operations,
         taskdata=taskdata,
@@ -1296,10 +1307,10 @@ def _reconcile_candidate(
         parent,
         operations=CallbackLifecycleRecoveryOperations(
             apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(
-                task_bin, hook, candidate, **kwargs,
+                task_bin, hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
             plan_parent_callback=lambda candidate, **kwargs: _plan_for_parent(
-                task_bin, hook, candidate, **kwargs,
+                task_bin, hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
             next_child_callback=_next_recovery_child,
             virtual_child_callback=lambda candidate, **kwargs: _virtual_expired_child(

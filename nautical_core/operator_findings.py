@@ -144,6 +144,32 @@ class OperatorFinding:
             guidance=value.get("guidance", "") or "",
         )
 
+    @classmethod
+    def from_doctor_mapping(cls, value: object) -> "OperatorFinding":
+        """Normalize a legacy Doctor finding into the canonical contract."""
+        if not isinstance(value, Mapping):
+            raise OperatorContractError("doctor finding must be an object")
+        details = value.get("details")
+        details_map = dict(details) if isinstance(details, Mapping) else {}
+        affected = details_map.get("subjects") or details_map.get("subject_uuids") or ()
+        if isinstance(affected, str) or not isinstance(affected, (list, tuple)):
+            affected = ()
+        severity = str(value.get("severity") or "info").strip().lower()
+        guidance = str(value.get("fix") or "").strip()
+        return cls(
+            code=value.get("id", ""),
+            domain=str(value.get("id", "doctor")).split(".", 1)[0] or "doctor",
+            severity=(FindingSeverity.ERROR if severity == "error" else FindingSeverity.WARNING
+                      if severity in {"warn", "warning"} else FindingSeverity.INFO),
+            actionability=FindingActionability.INFORMATIONAL if not guidance else FindingActionability.ACTIONABLE,
+            message=value.get("message", ""),
+            affected=tuple(affected),
+            observed=details_map.get("observed", {}),
+            expected=details_map.get("expected", {}),
+            evidence=details_map,
+            guidance=guidance,
+        )
+
 
 def deduplicate_findings(findings: tuple[OperatorFinding, ...] | list[OperatorFinding]) -> tuple[OperatorFinding, ...]:
     """Collapse identical findings while preserving deterministic ordering."""

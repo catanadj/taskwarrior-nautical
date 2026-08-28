@@ -1658,6 +1658,11 @@ def main() -> int:
         "obsolete_queue_state": obsolete_queue_state,
         "scope": "installation" if args.installation_only else "full",
         "findings": findings,
+        "operator_findings": [
+            OperatorFinding.from_doctor_mapping(item).to_dict()
+            for item in findings
+            if isinstance(item, dict)
+        ],
     }
     if args.json:
         # Diagnostics may include timezone/provider objects supplied by an

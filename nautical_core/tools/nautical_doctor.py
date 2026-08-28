@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import importlib.util
 import json
 import os
@@ -61,8 +60,6 @@ from nautical_core.integration_context import (  # noqa: E402
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
-from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
-from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_health_service import OperatorHealthService  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
@@ -724,180 +721,6 @@ def _task_value(row: TaskObservation, field: str) -> Any:
     if state.presence is FieldPresence.ABSENT:
         return None
     return getattr(state.value, "value", state.value)
-
-
-def _task_detail(row: TaskObservation) -> dict[str, Any]:
-    detail = {
-        "uuid": str(_task_value(row, "uuid") or ""),
-        "description": str(_task_value(row, "description") or ""),
-        "status": str(_task_value(row, "status") or ""),
-        "chainID": str(_task_value(row, "chainID") or ""),
-        "link": _task_value(row, "link"),
-    }
-    if row.issues:
-        detail["decode_issues"] = [
-            {
-                "field": issue.field,
-                "code": issue.code,
-                "message": issue.message,
-                "severity": issue.severity.value,
-                "raw": issue.raw,
-            }
-            for issue in row.issues
-        ]
-    return detail
-
-
-def _existing_reconcile_children(rows: list[TaskObservation], parent: TaskObservation) -> tuple[TaskObservation, ...]:
-    chain_id = str(_task_value(parent, "chainID") or "").strip()
-    next_link = lifecycle.int_or_default(_task_value(parent, "link"), 1) + 1
-    include_deleted = str(_task_value(parent, "status") or "").strip() == "deleted"
-    return tuple(
-        row
-        for row in rows
-        if str(_task_value(row, "chainID") or "").strip() == chain_id
-        and lifecycle.int_or_default(_task_value(row, "link"), -1) == next_link
-        and (include_deleted or str(_task_value(row, "status") or "").strip() != "deleted")
-    )
-
-
-def _safe_parse_datetime(runtime: Any, value: Any) -> tuple[Any, str | None]:
-    parser = getattr(runtime, "safe_parse_datetime", None) or getattr(runtime, "_safe_parse_datetime", None)
-    if callable(parser):
-        return parser(value)
-    parser = getattr(runtime, "parse_dt_any", None)
-    if not callable(parser):
-        return None, "datetime parser unavailable"
-    try:
-        parsed = parser(value)
-    except Exception as exc:
-        return None, str(exc).strip() or type(exc).__name__
-    return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
-
-
-def _check_reconcile_plans(
-    findings: list[dict[str, Any]],
-    *,
-    rows: list[TaskObservation],
-    unit_of_work: TaskwarriorUnitOfWork | None = None,
-) -> None:
-    completion_candidates = [row for row in rows if lifecycle.is_orphan_completion_candidate(row)]
-    deleted_candidates = [row for row in rows if lifecycle.is_orphan_deleted_chain_candidate(row)]
-    if not completion_candidates and not deleted_candidates:
-        return
-
-    hook = None
-    generation = None
-    plans: list[Any] = []
-    delayed_expiration_candidates: list[dict[str, Any]] = []
-    unavailable = ""
-    try:
-        import nautical_core as core
-
-        hook = core
-        generation = ChainGenerationService.from_core(
-            core,
-            recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
-            debug_wait_sched=bool(getattr(core, "DEBUG_WAIT_SCHED", False)),
-        )
-    except Exception as exc:
-        unavailable = str(exc)
-    candidates = [*completion_candidates, *deleted_candidates]
-    if not unavailable:
-        configuration = unit_of_work.context.configuration if unit_of_work is not None else None
-        if configuration is None:
-            raise RuntimeError("validated configuration is unavailable")
-        control_plane = OperatorControlPlane.from_configuration(
-            configuration,
-            DomainApplicationRegistry(),
-        )
-        children_by_uuid = {
-            str(_task_value(parent, "uuid")): _existing_reconcile_children(rows, parent)
-            for parent in candidates
-        }
-        plans = list(control_plane.plan_recovery_candidates(
-            candidates,
-            lambda parent: children_by_uuid.get(str(_task_value(parent, "uuid")), ()),
-            hook=hook,
-            generation=generation,
-        ))
-        for parent, plan in zip(candidates, plans):
-            existing_children = children_by_uuid.get(str(_task_value(parent, "uuid")), ())
-            if str(_task_value(parent, "status") or "").strip().lower() != "deleted":
-                continue
-            continues_through_deleted = any(
-                str(_task_value(child, "status") or "").strip().lower() == "deleted"
-                for child in existing_children
-            )
-            planned_until_elapsed = False
-            if getattr(plan.action, "value", plan.action) == "spawn_child" and hook is not None:
-                try:
-                    until_dt, until_err = _safe_parse_datetime(
-                        hook, plan.child_dict().get("until")
-                    )
-                    now_utc = getattr(hook, "now_utc", None)
-                    planned_until_elapsed = (
-                        not until_err
-                        and until_dt is not None
-                        and callable(now_utc)
-                        and compare_datetimes(until_dt, now_utc()) <= 0
-                    )
-                except Exception:
-                    planned_until_elapsed = False
-            if continues_through_deleted or planned_until_elapsed:
-                delayed_expiration_candidates.append(_task_detail(parent))
-
-    if unavailable:
-        _finding(
-            findings,
-            "chains.reconcile_unavailable",
-            "warn",
-            f"{len(candidates)} recurrence candidate(s) were found, but reconcile planning could not load on-modify.",
-            fix="Run nautical reconcile for full diagnostics.",
-            details={
-                "error": unavailable,
-                "candidates": [
-                    _task_detail(row)
-                    for row in candidates[:10]
-                ],
-            },
-        )
-        return
-
-    if not plans:
-        return
-
-    action_counts: dict[str, int] = defaultdict(int)
-    for plan in plans:
-        action_counts[plan.action] += 1
-    fmt_dt_local = getattr(getattr(hook, "core", None), "fmt_dt_local", None) if hook is not None else None
-    _finding(
-        findings,
-        "chains.reconcile_available",
-        "warn",
-        f"{len(plans)} recurrence reconcile plan(s) are available.",
-        fix="Run nautical reconcile --apply after reviewing the dry-run output.",
-        details={
-            "actions": dict(sorted(action_counts.items())),
-            "delayed_expiration_candidates": delayed_expiration_candidates[:10],
-            "delayed_recovery": (
-                "nautical reconcile --apply will continue through expired successors "
-                "up to its configured hop limit."
-                if delayed_expiration_candidates
-                else ""
-            ),
-            "plans": [
-                {
-                    "action": getattr(plan.action, "value", str(plan.action)),
-                    "reason": plan.expected_postconditions,
-                    "chainID": plan.identity.chain_id,
-                    "parent": plan.identity.parent_uuid,
-                    "link": plan.identity.source_link,
-                }
-                for plan in plans[:10]
-            ],
-        },
-    )
 
 
 def _check_chains(

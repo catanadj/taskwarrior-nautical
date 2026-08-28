@@ -8,6 +8,9 @@ import sys
 import tempfile
 import unittest
 
+from nautical_core.integration_models import CommandFailureKind
+from nautical_core.taskwarrior_client import TaskwarriorClient
+
 
 ROOT = Path(__file__).resolve().parents[1]
 QUERY = ROOT / "nautical_core" / "tools" / "nautical_query.py"
@@ -89,6 +92,33 @@ class OperatorProcessContractTests(unittest.TestCase):
             self.assertNotEqual(process.returncode, 0)
             payload = self._json(process)
             self.assertEqual(payload.get("schema"), "nautical.doctor")
+
+    def test_missing_binary_is_typed_and_non_retryable(self) -> None:
+        result = TaskwarriorClient(("/missing/task",)).execute([], purpose="probe", timeout=1.0)
+        self.assertEqual(result.kind, CommandFailureKind.MISSING_BINARY)
+        self.assertNotIn(result.kind, {CommandFailureKind.TIMEOUT, CommandFailureKind.BUSY})
+
+    def test_timeout_is_typed_and_retryable(self) -> None:
+        result = TaskwarriorClient((sys.executable,)).execute(
+            ("-c", "import time; time.sleep(1)"), purpose="timeout", timeout=0.01,
+        )
+        self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
+        self.assertIn(result.kind, {CommandFailureKind.TIMEOUT, CommandFailureKind.BUSY})
+
+    def test_lock_output_is_retryable_and_bounded(self) -> None:
+        result = TaskwarriorClient((sys.executable,)).execute(
+            ("-c", "import sys; sys.stderr.write('database is locked') ; sys.exit(1)"),
+            purpose="lock", timeout=1.0, attempts=2,
+        )
+        self.assertEqual(result.kind, CommandFailureKind.BUSY)
+        self.assertEqual(result.attempt, 2)
+
+    def test_noisy_stderr_does_not_change_success_classification(self) -> None:
+        result = TaskwarriorClient((sys.executable,)).execute(
+            ("-c", "import sys; sys.stderr.write('informational noise')"), purpose="noise", timeout=1.0,
+        )
+        self.assertEqual(result.kind, CommandFailureKind.SUCCESS)
+        self.assertEqual(result.stderr, "informational noise")
 
 
 if __name__ == "__main__":

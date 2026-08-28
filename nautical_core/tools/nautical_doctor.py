@@ -226,59 +226,11 @@ def _check_hook_installation(
     hooks_dir: Path,
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
-    validated: dict[str, dict[str, Any]] = {}
-    for event in install_runtime.HOOK_RUNTIME_FILES:
-        candidates = _hook_candidates(hooks_dir, event)
-        active = [hook for hook in candidates if os.access(str(hook), os.X_OK)]
-        if not candidates:
-            _finding(
-                findings,
-                f"hook.{event}.missing",
-                "error",
-                f"No Nautical {event} hook was found in {hooks_dir}.",
-                fix="Install the Nautical hook files and make them executable.",
-            )
-            continue
-        if not active:
-            _finding(
-                findings,
-                f"hook.{event}.inactive",
-                "error",
-                f"Nautical {event} hook is not executable: {candidates[0]}",
-                fix=f"Run chmod +x {candidates[0]}",
-                details={"hooks": [str(path) for path in candidates]},
-            )
-            continue
-        if len(active) > 1:
-            _finding(
-                findings,
-                f"hook.{event}.duplicate",
-                "error",
-                f"{len(active)} active Nautical {event} hooks were found; Taskwarrior may run all of them.",
-                fix="Keep exactly one executable Nautical hook for this event.",
-                details={"hooks": [str(path) for path in active]},
-            )
-            continue
-
-        record, error, details = install_runtime.inspect_hook_runtime(active[0], event, env)
-        if record is None:
-            _finding(
-                findings,
-                f"hook.{event}.incompatible",
-                "error",
-                error,
-                fix="Install the matching Nautical wrappers and nautical_core from the same release.",
-                details=details,
-            )
-            continue
-        validated[event] = record
-        _finding(
-            findings,
-            f"hook.{event}",
-            "ok",
-            f"{event} hook and core are compatible: {active[0]}",
-            details=details,
-        )
+    typed, validated = OperatorHealthService.hook_installation_findings(
+        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, _hook_candidates,
+        install_runtime.inspect_hook_runtime, env,
+    )
+    findings.extend(item.to_doctor_dict() for item in typed)
     return validated
 
 

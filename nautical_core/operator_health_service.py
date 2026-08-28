@@ -248,6 +248,62 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def hook_installation_findings(
+        hooks_dir: object,
+        events: Iterable[str],
+        candidates_for: Callable[[Any, str], Iterable[Any]],
+        inspect_runtime: Callable[[Any, str, dict[str, str]], tuple[dict[str, Any] | None, str, dict[str, Any]]],
+        env: dict[str, str],
+    ) -> tuple[tuple[OperatorFinding, ...], dict[str, dict[str, Any]]]:
+        """Validate hook layout and provenance through injected installers."""
+        import os
+        result: list[OperatorFinding] = []
+        validated: dict[str, dict[str, Any]] = {}
+        for event in events:
+            candidates = list(candidates_for(hooks_dir, event))
+            active = [path for path in candidates if os.access(str(path), os.X_OK)]
+            if not candidates:
+                result.append(OperatorFinding(
+                    f"hook.{event}.missing", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING, f"No Nautical {event} hook was found in {hooks_dir}.",
+                    guidance="Install the Nautical hook files and make them executable.",
+                ))
+                continue
+            if not active:
+                result.append(OperatorFinding(
+                    f"hook.{event}.inactive", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING, f"Nautical {event} hook is not executable: {candidates[0]}",
+                    observed={"hooks": [str(path) for path in candidates]},
+                    guidance=f"Run chmod +x {candidates[0]}",
+                ))
+                continue
+            if len(active) > 1:
+                result.append(OperatorFinding(
+                    f"hook.{event}.duplicate", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"{len(active)} active Nautical {event} hooks were found; Taskwarrior may run all of them.",
+                    observed={"hooks": [str(path) for path in active]},
+                    guidance="Keep exactly one executable Nautical hook for this event.",
+                ))
+                continue
+            record, error, details = inspect_runtime(active[0], event, env)
+            if record is None:
+                result.append(OperatorFinding(
+                    f"hook.{event}.incompatible", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING, error,
+                    observed=details,
+                    guidance="Install the matching Nautical wrappers and nautical_core from the same release.",
+                ))
+                continue
+            validated[event] = record
+            result.append(OperatorFinding(
+                f"hook.{event}", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"{event} hook and core are compatible: {active[0]}", observed=details,
+            ))
+        return tuple(result), validated
+
+    @staticmethod
     def uda_alias_findings(data: dict[str, Any]) -> tuple[OperatorFinding, ...]:
         """Describe the opt-in description alias configuration."""
         enabled = data.get("enable_uda_aliases") is True

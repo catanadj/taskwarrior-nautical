@@ -10,6 +10,7 @@ import unittest
 import shutil
 
 from nautical_core.integration_models import CommandFailureKind
+from nautical_core.doctor_report import DoctorReport
 from nautical_core.operator_models import OperatorV2Result
 from nautical_core.query_models import QueryCapabilities
 from nautical_core.reconcile_report import ReconcileReport
@@ -198,7 +199,7 @@ class OperatorProcessContractTests(unittest.TestCase):
                 str(taskdata / "missing-task"), "--json", "--installation-only",
             )
             doctor_payload = self._json(doctor)
-            doctor_decoded = OperatorV2Result.from_mapping(doctor_payload)
+            doctor_decoded = DoctorReport.from_mapping(doctor_payload)
             self.assertEqual(doctor_decoded.to_dict(), doctor_payload)
 
     def test_navigator_validation_keeps_diagnostics_off_stdout_contract(self) -> None:

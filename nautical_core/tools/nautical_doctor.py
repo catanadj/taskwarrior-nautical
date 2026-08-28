@@ -13,7 +13,6 @@ import tomllib
 import zoneinfo
 from datetime import timezone
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Callable, Mapping
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
@@ -60,6 +59,7 @@ from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_health_service import ConfigurationDiagnosisRequest, OperatorHealthService, TaskwarriorDiagnosisRequest  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
+from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
@@ -364,20 +364,9 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     findings.extend(item.to_doctor_dict() for item in report.findings)
 
 
-def _load_queue_status() -> ModuleType:
-    path = TOOLS_DIR / "nautical_queue_status.py"
-    spec = importlib.util.spec_from_file_location("_nautical_doctor_queue_status", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("could not load queue status helper")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stale_after: float) -> dict[str, Any]:
     try:
-        module = _load_queue_status()
-        payload = module._status_payload(taskdata, stale_after=stale_after, limit=5)
+        payload = QueueStatusService().status_payload(taskdata, stale_after=stale_after, limit=5)
         if not isinstance(payload, dict):
             raise RuntimeError("lifecycle outbox status returned an invalid payload")
     except Exception as exc:

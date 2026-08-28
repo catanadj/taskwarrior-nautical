@@ -199,5 +199,30 @@ class OperatorHealthService:
             ))
         return tuple(result)
 
+    @staticmethod
+    def directory_findings(data: dict[str, Any], config_dir: object) -> tuple[OperatorFinding, ...]:
+        """Validate configured file-provider directories without performing writes."""
+        from pathlib import Path
+        import os
+        base = Path(str(config_dir)).expanduser()
+        result: list[OperatorFinding] = []
+        for key in ("anchor_file_dir", "omit_file_dir"):
+            raw = str(data.get(key) or "").strip()
+            if not raw:
+                continue
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                path = base / path
+            resolved = path.resolve()
+            valid = resolved.is_dir() and os.access(str(resolved), os.R_OK | os.X_OK)
+            result.append(OperatorFinding(
+                f"config.{key}", "configuration",
+                FindingSeverity.INFO if valid else FindingSeverity.ERROR,
+                FindingActionability.INFORMATIONAL if valid else FindingActionability.BLOCKING,
+                f"{key} {'is accessible' if valid else 'is not accessible'}: {resolved}",
+                guidance="" if valid else f"Create or correct the configured {key} directory.",
+            ))
+        return tuple(result)
+
 
 __all__ = ["OperatorHealthReport", "OperatorHealthService"]

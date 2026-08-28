@@ -568,21 +568,10 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     _check_config_drift(findings, str(config))
     _check_navigator_dependencies(findings, data)
     _check_panel_config(findings, data)
-    for key in ("anchor_file_dir", "omit_file_dir"):
-        raw = str(data.get(key) or "").strip()
-        if not raw:
-            continue
-        path = Path(raw).expanduser()
-        if not path.is_absolute():
-            path = config.parent / path
-        valid = path.is_dir() and os.access(str(path), os.R_OK | os.X_OK)
-        _finding(
-            findings,
-            f"config.{key}",
-            "ok" if valid else "error",
-            f"{key} {'is accessible' if valid else 'is not accessible'}: {path.resolve()}",
-            fix="" if valid else f"Create or correct the configured {key} directory.",
-        )
+    findings.extend(
+        item.to_doctor_dict()
+        for item in OperatorHealthService.directory_findings(data, config.parent)
+    )
 
 
 def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

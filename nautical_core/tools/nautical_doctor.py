@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import importlib.util
 import json
 import os
@@ -42,6 +43,10 @@ from nautical_core.integration_context import (  # noqa: E402
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
+from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
+from nautical_core.timeutil import compare_datetimes  # noqa: E402
+from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
+from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
@@ -1086,7 +1091,7 @@ def _existing_reconcile_children(rows: list[TaskObservation], parent: TaskObserv
     )
 
 
-def _safe_parse_datetime(runtime: Any, value: Any):
+def _safe_parse_datetime(runtime: Any, value: Any) -> tuple[Any, str | None]:
     parser = getattr(runtime, "safe_parse_datetime", None) or getattr(runtime, "_safe_parse_datetime", None)
     if callable(parser):
         return parser(value)
@@ -1129,18 +1134,18 @@ def _check_reconcile_plans(
         unavailable = str(exc)
     candidates = [*completion_candidates, *deleted_candidates]
     if not unavailable:
-        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-
         configuration = unit_of_work.context.configuration if unit_of_work is not None else None
-        integrity_engine = ChainIntegrityEngine.lifecycle_only(
-            configuration_fingerprint=configuration.fingerprint if configuration is not None else "doctor",
-            schedule_fingerprint=configuration.scheduler_fingerprint if configuration is not None else "doctor",
+        if configuration is None:
+            raise RuntimeError("validated configuration is unavailable")
+        control_plane = OperatorControlPlane.from_configuration(
+            configuration,
+            DomainApplicationRegistry(),
         )
         for parent in candidates:
             existing_children = _existing_reconcile_children(rows, parent)
             # Recovery planning belongs to the integrity engine.  Doctor only
             # supplies the current snapshot evidence and formats the result.
-            plan = integrity_engine.plan_recovery_plan(
+            plan = control_plane.plan_recovery(
                 parent,
                 existing_children=existing_children,
                 hook=hook,

@@ -148,6 +148,8 @@ OPERATOR_RUNTIME_FILES = (
     "nautical",
     "nautical_navigator.py",
     "nautical_core/operator_presentation.py",
+    "nautical_core/operator_control_plane.py",
+    "nautical_core/operator_application.py",
     "nautical_core/integrity_query_service.py",
     "nautical_core/integrity_audit_service.py",
     "nautical_core/queue_status_service.py",

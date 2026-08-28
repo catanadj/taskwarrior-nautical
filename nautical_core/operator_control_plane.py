@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .chain_integrity_models import IntegrityFinding, IntegrityRepairPlan
 from .chain_repair_planner import IntegrityPlanningResult
 from .lifecycle_models import LifecycleEvent, LifecyclePlan, TaskSnapshot
 from .lifecycle_planner import CarryValidator, LifecyclePlanner, LifecyclePreflight
 from .chain_repair_planner import IntegrityRepairPlanner
+from .chain_integrity_engine import ChainIntegrityEngine
+from .chain_generation import ChainGenerationService
 from .operator_application import DomainApplicationRegistry
 from .operator_domain_planner import OperatorDomainPlanner
 from .operator_domain_plans import DomainApplicationAuthorization
@@ -26,6 +29,7 @@ class OperatorControlPlane:
 
     planner: OperatorDomainPlanner
     applications: DomainApplicationRegistry
+    configuration: Any | None = None
 
     @classmethod
     def from_configuration(cls, configuration: object, applications: DomainApplicationRegistry) -> "OperatorControlPlane":
@@ -37,6 +41,30 @@ class OperatorControlPlane:
         return cls(
             OperatorDomainPlanner(LifecyclePlanner(configuration), IntegrityRepairPlanner()),
             applications,
+            configuration,
+        )
+
+    def plan_recovery(
+        self,
+        parent: TaskSnapshot,
+        *,
+        existing_children: tuple[TaskSnapshot, ...] | list[TaskSnapshot],
+        hook: object,
+        generation: ChainGenerationService | None = None,
+    ) -> LifecyclePlan:
+        """Build one lifecycle recovery plan through the central control plane."""
+        configuration = self.configuration
+        if configuration is None:
+            raise ValueError("recovery planning requires validated configuration")
+        engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint=str(configuration.fingerprint),
+            schedule_fingerprint=str(configuration.scheduler_fingerprint),
+        )
+        return engine.plan_recovery_plan(
+            parent,
+            existing_children=existing_children,
+            hook=hook,
+            generation=generation,
         )
 
     def plan_lifecycle(

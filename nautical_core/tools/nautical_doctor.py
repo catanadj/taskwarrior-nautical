@@ -605,27 +605,9 @@ _OBSOLETE_QUEUE_STATE_NAMES = (
 
 
 def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) -> list[str]:
-    """Report retired queue artifacts without reading or migrating them."""
-    paths: list[str] = []
-    roots = (taskdata, taskdata / ".nautical-state")
-    for root in roots:
-        for name in _OBSOLETE_QUEUE_STATE_NAMES:
-            path = root / name
-            if os.path.lexists(path):
-                paths.append(str(path))
-    if paths:
-        _finding(
-            findings,
-            "outbox.obsolete_state",
-            "warn",
-            "Retired Nautical queue state was found; it is not used by this runtime.",
-            fix=(
-                "Back up any required records, then quarantine or remove the listed files; "
-                "the lifecycle outbox is the only supported work store."
-            ),
-            details={"paths": sorted(set(paths))},
-        )
-    return sorted(set(paths))
+    paths = sorted({str(root / name) for root in (taskdata, taskdata / ".nautical-state") for name in _OBSOLETE_QUEUE_STATE_NAMES if os.path.lexists(root / name)})
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.obsolete_queue_findings(taskdata, _OBSOLETE_QUEUE_STATE_NAMES))
+    return paths
 
 
 def _check_chains(

@@ -380,6 +380,26 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def obsolete_queue_findings(
+        taskdata: object,
+        names: Iterable[str],
+    ) -> tuple[OperatorFinding, ...]:
+        """Report retired queue artifacts without reading or migrating them."""
+        from pathlib import Path
+        root = Path(str(taskdata)).expanduser()
+        paths = sorted({str(root / name) for base in (root, root / ".nautical-state") for name in names if (base / name).exists()})
+        if not paths:
+            return ()
+        return (OperatorFinding(
+            "outbox.obsolete_state", "outbox", FindingSeverity.WARNING,
+            FindingActionability.ACTIONABLE,
+            "Retired Nautical queue state was found; it is not used by this runtime.",
+            observed={"paths": paths},
+            guidance=("Back up any required records, then quarantine or remove the listed files; "
+                      "the lifecycle outbox is the only supported work store."),
+        ),)
+
+    @staticmethod
     def runtime_findings(
         status: dict[str, Any], runtime_root: object,
         hook_runtimes: dict[str, dict[str, Any]] | None = None,

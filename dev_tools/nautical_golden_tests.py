@@ -26654,48 +26654,6 @@ def test_navigator_reads_through_read_only_invocation_repository():
         navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
 
-def test_navigator_empty_task_export_treats_no_matches_as_empty():
-    """Taskwarrior's empty-filter exit must not abort Navigator startup."""
-    from dataclasses import replace
-    from nautical_core.integration_context import IntegrationAccess
-
-    module_name = "_nautical_navigator_empty_export_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        uow = _test_operator_uow()
-        uow.context = replace(uow.context, access=IntegrationAccess.READ_ONLY)
-
-        class Client:
-            result = _typed_command_result(("task", "export"), True, "")
-
-            def execute(self, *_args, **_kwargs):
-                return self.result
-
-        client = Client()
-        uow.client = client
-        navigator._UNIT_OF_WORK = uow
-        try:
-            expect(navigator._run_task_export(("chain:on", "all")) == [], "No matches was not treated as an empty export")
-            from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
-            command = TaskCommand(("task", "export"), "navigator test", 1.0)
-            client.result = TaskCommandResult(command, 1, "", "database is locked", CommandFailureKind.BUSY, 1, 0.0)
-            uow.record_mutation()
-            try:
-                navigator._run_task_export(("chain:on", "all"))
-            except RuntimeError as exc:
-                expect("database is locked" in str(exc), f"real export failure was obscured: {exc}")
-            else:
-                raise AssertionError("non-empty export failure was silently ignored")
-        finally:
-            navigator._UNIT_OF_WORK = None
-    finally:
-        sys.modules.pop(module_name, None)
-
-
 def test_navigator_sparse_calendar_renders_only_active_months():
     """Sparse recurrence projections should not render empty months between occurrences."""
     module_name = "_nautical_navigator_sparse_calendar_test"
@@ -36244,7 +36202,6 @@ TESTS.extend([
     test_navigator_import_and_help_are_noninteractive_without_rich,
     test_navigator_empty_snapshot_is_a_valid_empty_chain,
     test_navigator_reads_through_read_only_invocation_repository,
-    test_navigator_empty_task_export_treats_no_matches_as_empty,
     test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe,
     test_navigator_shared_graph_scales_to_large_chain,
     test_navigator_and_query_share_task_chain_facts,

@@ -1,15 +1,26 @@
 import unittest
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.operator_inspectors import inspect_operator_snapshot, standard_inspector_bundle, run_inspectors
 from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCoverage, OperatorLimits,
-    OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status)
+    OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorV2Result, OperatorV2Status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 from nautical_core.operator_presentation import ordered_findings, render_contract_json
 from nautical_core.operator_snapshot import OperatorSnapshot
+from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
+from nautical_core.integration_context import (
+    IntegrationAccess, IntegrationContext, SilentDiagnostics,
+    SystemClock, ValidatedNauticalConfiguration,
+)
+from nautical_core.integration_models import (
+    CommandFailureKind, FailureEvidence, TaskCommand, Unavailable,
+)
+from nautical_core.operator_models import OperatorFailure
+from nautical_core.operator_context import OperatorInvocationContext
 
 
 class OperatorConformanceTests(unittest.TestCase):
@@ -85,6 +96,44 @@ class OperatorConformanceTests(unittest.TestCase):
         encoded = render_contract_json(result)
         decoded = OperatorV2Result.from_mapping(json.loads(encoded))
         self.assertEqual(decoded, result)
+
+    def test_snapshot_unavailable_evidence_is_retryable(self) -> None:
+        configuration = ValidatedNauticalConfiguration(
+            source="test", fingerprint="config-1", scheduler_fingerprint="schedule-1",
+            timezone_name="UTC", values=(),
+        )
+        integration = IntegrationContext(
+            Path("/tmp/operator-conformance"), "test", ("task",), configuration,
+            timezone.utc, SilentDiagnostics(), SystemClock(), "conformance", 8,
+            IntegrationAccess.READ_ONLY,
+        )
+        request = OperatorRequest(OperatorOperation.INTEGRITY, OperatorScope.system())
+        context = OperatorInvocationContext.from_integration(request, integration)
+        command = TaskCommand(("task", "export"), "snapshot", 1.0)
+        evidence = FailureEvidence(command, CommandFailureKind.TIMEOUT, 124, 1, 1.0, True, "timed out")
+        reader = ChainSnapshotReader(lambda _request: Unavailable("snapshot", evidence))
+        result = reader.read(context, SnapshotReadRequest(OperatorScope.system()))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_unavailable")
+        self.assertTrue(result.retryable)
+
+    def test_invalid_snapshot_collector_result_fails_closed(self) -> None:
+        configuration = ValidatedNauticalConfiguration(
+            source="test", fingerprint="config-1", scheduler_fingerprint="schedule-1",
+            timezone_name="UTC", values=(),
+        )
+        integration = IntegrationContext(
+            Path("/tmp/operator-conformance"), "test", ("task",), configuration,
+            timezone.utc, SilentDiagnostics(), SystemClock(), "conformance", 8,
+            IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(
+            OperatorRequest(OperatorOperation.INTEGRITY, OperatorScope.system()), integration,
+        )
+        reader = ChainSnapshotReader(lambda _request: object())
+        result = reader.read(context, SnapshotReadRequest(OperatorScope.system()))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "invalid_snapshot_read")
 
 
 if __name__ == "__main__":

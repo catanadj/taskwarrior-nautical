@@ -15,6 +15,8 @@ from nautical_core.taskwarrior_client import TaskwarriorClient
 ROOT = Path(__file__).resolve().parents[1]
 QUERY = ROOT / "nautical_core" / "tools" / "nautical_query.py"
 DOCTOR = ROOT / "nautical_core" / "tools" / "nautical_doctor.py"
+QUEUE_STATUS = ROOT / "nautical_core" / "tools" / "nautical_queue_status.py"
+RECONCILE = ROOT / "nautical_core" / "tools" / "nautical_reconcile.py"
 
 
 class OperatorProcessContractTests(unittest.TestCase):
@@ -119,6 +121,23 @@ class OperatorProcessContractTests(unittest.TestCase):
         )
         self.assertEqual(result.kind, CommandFailureKind.SUCCESS)
         self.assertEqual(result.stderr, "informational noise")
+
+    def test_operator_json_entry_points_keep_stdout_machine_readable(self) -> None:
+        """Queue and reconcile startup failures use the same JSON-only boundary."""
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            queue = self._run(QUEUE_STATUS, "--taskdata", str(taskdata), "--json")
+            self.assertIn(queue.returncode, {0, 1, 2, 3})
+            queue_payload = self._json(queue)
+            self.assertTrue(str(queue_payload.get("schema", "")).startswith("nautical."))
+
+            reconcile = self._run(
+                RECONCILE, "--json", "--task-bin", str(taskdata / "missing-task"),
+                env={"TASKDATA": str(taskdata)},
+            )
+            self.assertNotEqual(reconcile.returncode, 0)
+            reconcile_payload = self._json(reconcile)
+            self.assertEqual(reconcile_payload.get("schema"), "nautical.reconcile")
 
 
 if __name__ == "__main__":

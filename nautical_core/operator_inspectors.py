@@ -59,6 +59,27 @@ class DependenciesInspector(ComponentValidityInspector):
         super().__init__("dependencies", scope)
 
 
+class ChainIntegrityInspector(ComponentValidityInspector):
+    """Inspect chain-integrity evidence captured in the snapshot."""
+
+    def __init__(self, scope: OperatorScope | None = None) -> None:
+        super().__init__("chain_integrity", scope)
+
+
+class LifecycleOutboxInspector(ComponentValidityInspector):
+    """Inspect lifecycle/outbox evidence captured in the snapshot."""
+
+    def __init__(self, scope: OperatorScope | None = None) -> None:
+        super().__init__("lifecycle", scope)
+
+
+class PerformanceInspector(ComponentValidityInspector):
+    """Inspect bounded operational performance evidence."""
+
+    def __init__(self, scope: OperatorScope | None = None) -> None:
+        super().__init__("performance", scope)
+
+
 def inspect_snapshot_coverage(
     snapshot: OperatorSnapshot,
     requirement: CoverageRequirement,
@@ -325,4 +346,4 @@ def _severity_rank(value: FindingSeverity) -> int:
     return {FindingSeverity.INFO: 0, FindingSeverity.WARNING: 1, FindingSeverity.ERROR: 2}[value]
 
 
-__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]
+__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]

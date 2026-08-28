@@ -2,7 +2,8 @@ import unittest
 from datetime import datetime, timezone
 
 from nautical_core.operator_findings import FindingActionability
-from nautical_core.operator_inspectors import (ConfigurationInspector, DependenciesInspector, InstallationInspector,
+from nautical_core.operator_inspectors import (ChainIntegrityInspector, ConfigurationInspector, DependenciesInspector,
+    InstallationInspector, LifecycleOutboxInspector, PerformanceInspector,
     STANDARD_COMPONENTS, ScheduleAvailabilityInspector, TaskDomainInspector, aggregate_historical,
     classify_historical, inspect_component_availability, inspect_component_validity, inspect_snapshot,
     inspect_snapshot_consistency, inspect_snapshot_coverage, inspect_snapshot_limits, inspect_standard_components,
@@ -116,6 +117,9 @@ class OperatorInspectorTests(unittest.TestCase):
         self.assertEqual(InstallationInspector().component, "installation")
         self.assertEqual(ConfigurationInspector().component, "configuration")
         self.assertEqual(DependenciesInspector().component, "dependencies")
+        self.assertEqual(ChainIntegrityInspector().component, "chain_integrity")
+        self.assertEqual(LifecycleOutboxInspector().component, "lifecycle")
+        self.assertEqual(PerformanceInspector().component, "performance")
 
     def test_historical_classification_preserves_evidence_but_defers_action(self) -> None:
         finding = OperatorFinding("x", "chain", FindingSeverity.ERROR, FindingActionability.BLOCKING, "old", guidance="inspect")

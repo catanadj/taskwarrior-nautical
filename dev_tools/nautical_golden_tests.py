@@ -9010,16 +9010,16 @@ def test_doctor_installation_json_and_verifier_contract():
         launcher.chmod(0o700)
         verifier_payload = {
             "taskdata": td,
-            "findings": [
-                {"id": "taskwarrior.version", "severity": "ok"},
-                {"id": "taskdata.access", "severity": "ok"},
-                {"id": "install.runtime", "severity": "ok"},
-                {"id": "hook.add", "severity": "ok"},
-                {"id": "hook.modify", "severity": "ok"},
-                {"id": "hook.exit", "severity": "ok"},
-                {"id": "uda.anchor", "severity": "ok"},
-                {"id": "config.timezone", "severity": "ok"},
-                {"id": "chains.carry.child_relative_offset", "severity": "error", "fix": "ignore history"},
+            "operator_findings": [
+                {"code": "taskwarrior.version", "domain": "taskwarrior", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "taskdata.access", "domain": "taskdata", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "install.runtime", "domain": "install", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "hook.add", "domain": "hook", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "hook.modify", "domain": "hook", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "hook.exit", "domain": "hook", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "uda.anchor", "domain": "uda", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "config.timezone", "domain": "config", "severity": "info", "actionability": "informational", "message": "ok"},
+                {"code": "chains.carry.child_relative_offset", "domain": "chains", "severity": "error", "actionability": "actionable", "message": "historical", "guidance": "ignore history"},
             ],
         }
         report = build_report(verifier_payload, platform="Termux", launcher=launcher)
@@ -9030,12 +9030,12 @@ def test_doctor_installation_json_and_verifier_contract():
             render(report)
         expect("\x1b[" not in rendered.getvalue(), "redirected installation report contains terminal styling")
 
-        legacy_payload = dict(verifier_payload)
-        legacy_payload["findings"] = [
-            item for item in verifier_payload["findings"] if not str(item.get("id") or "").startswith("uda.")
+        canonical_payload = dict(verifier_payload)
+        canonical_payload["operator_findings"] = [
+            item for item in verifier_payload["operator_findings"] if not str(item.get("code") or "").startswith("uda.")
         ]
-        legacy_report = build_report(legacy_payload, platform="Linux", launcher=launcher)
-        expect(legacy_report.get("status") == "passed", f"healthy legacy UDA evidence was rejected: {legacy_report!r}")
+        canonical_report = build_report(canonical_payload, platform="Linux", launcher=launcher)
+        expect(canonical_report.get("status") == "passed", f"healthy canonical evidence was rejected: {canonical_report!r}")
 
 
 def test_operator_queue_status_json_ok_empty_taskdata():

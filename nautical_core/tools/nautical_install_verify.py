@@ -12,23 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from nautical_core.operator_presentation import bounded_text, ordered_findings, render_json_document
-from nautical_core.operator_findings import OperatorFinding
-
-
 def _findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return canonical finding mappings, accepting direct legacy callers."""
-    source = payload.get("operator_findings")
-    if not isinstance(source, list):
-        source = payload.get("findings") or []
-    normalized: list[dict[str, Any]] = []
-    for item in source:
-        if not isinstance(item, dict):
-            continue
-        if "code" in item:
-            normalized.append(item)
-        else:
-            normalized.append(OperatorFinding.from_doctor_mapping(item).to_dict())
-    return normalized
+    """Return canonical finding mappings from a Doctor payload."""
+    source = payload.get("operator_findings") or []
+    return [item for item in source if isinstance(item, dict) and "code" in item]
 
 
 def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:

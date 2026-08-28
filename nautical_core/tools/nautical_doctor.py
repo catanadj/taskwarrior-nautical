@@ -58,7 +58,7 @@ from nautical_core.integration_context import (  # noqa: E402
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
-from nautical_core.operator_health_service import ConfigurationDiagnosisRequest, OperatorHealthService  # noqa: E402
+from nautical_core.operator_health_service import ConfigurationDiagnosisRequest, OperatorHealthService, TaskwarriorDiagnosisRequest  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -261,10 +261,14 @@ def _check_runtime(
             proc = version_probe
     if not proc.ok:
         task_error = str(proc.stderr or proc.stdout or "").strip() or f"{proc.kind.value} (exit code {proc.returncode})"
-    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.taskdata_findings(
-        proc.ok, taskdata, task_error=task_error,
+    report, hooks_dir = OperatorHealthService.diagnose_taskwarrior(TaskwarriorDiagnosisRequest(
+        probe=lambda: (proc.ok, task_error),
+        taskdata=taskdata,
+        hooks_location=lambda: _task_get(unit_of_work, "rc.hooks.location")[1],
+        default_hooks_dir=taskdata / "hooks",
     ))
-    return _resolve_hooks_dir(unit_of_work, taskdata)
+    findings.extend(item.to_doctor_dict() for item in report.findings)
+    return Path(str(hooks_dir))
 
 
 def _check_hooks_and_udas(

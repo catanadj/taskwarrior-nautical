@@ -69,6 +69,21 @@ class ConfigurationDiagnosisRequest:
                 raise TypeError(f"configuration diagnosis requires callable {name}")
 
 
+@dataclass(frozen=True, slots=True)
+class TaskwarriorDiagnosisRequest:
+    """Inputs for one read-only Taskwarrior invocation diagnosis."""
+
+    probe: Callable[[], tuple[bool, str]]
+    taskdata: object
+    hooks_location: Callable[[], str]
+    default_hooks_dir: object
+
+    def __post_init__(self) -> None:
+        for name in ("probe", "hooks_location"):
+            if not callable(getattr(self, name)):
+                raise TypeError(f"Taskwarrior diagnosis requires callable {name}")
+
+
 class OperatorHealthService:
     """Aggregate health observations without performing I/O or mutations."""
 
@@ -426,6 +441,7 @@ class OperatorHealthService:
         """Validate configured file-provider directories without performing writes."""
         from pathlib import Path
         import os
+        import os
         base = Path(str(config_dir)).expanduser()
         result: list[OperatorFinding] = []
         for key in ("anchor_file_dir", "omit_file_dir"):
@@ -700,6 +716,19 @@ class OperatorHealthService:
         return OperatorHealthService.report(
             OperatorHealthService.runtime_findings(status, runtime_root, hook_runtimes)
         )
+
+    @staticmethod
+    def diagnose_taskwarrior(request: TaskwarriorDiagnosisRequest) -> tuple[OperatorHealthReport, object]:
+        """Evaluate Taskwarrior availability and resolve its hooks directory."""
+        from pathlib import Path
+        import os
+        available, error = request.probe()
+        findings = list(OperatorHealthService.taskdata_findings(
+            available, request.taskdata, task_error=error,
+        ))
+        configured = request.hooks_location().strip()
+        hooks_dir = Path(configured).expanduser().resolve() if configured else Path(str(request.default_hooks_dir)).expanduser().resolve()
+        return OperatorHealthService.report(findings), hooks_dir
 
     @staticmethod
     def season_findings(

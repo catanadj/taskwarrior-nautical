@@ -1282,7 +1282,7 @@ def _reconcile_candidate(
     recovery_at: Any,
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
-    reconciliation_service: LifecycleReconciliationService | None = None,
+    reconciliation_service: LifecycleReconciliationService,
 ) -> list[tuple[RecoveryResult, str]]:
     def recovery_from_exception(candidate: dict[str, Any], exc: Exception) -> Any:
         reason = str(exc).strip() or type(exc).__name__
@@ -1292,8 +1292,7 @@ def _reconcile_candidate(
             return _recovery_manual_review(candidate, reason)
         return _recovery_error(candidate, reason)
 
-    service = reconciliation_service or _lifecycle_reconciliation_service()
-    return service.recover_candidate(
+    return reconciliation_service.recover_candidate(
         parent,
         operations=CallbackLifecycleRecoveryOperations(
             apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(

@@ -240,6 +240,39 @@ class OperatorProcessContractTests(unittest.TestCase):
             payload = self._json(process)
             self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
 
+    def test_installed_layout_operator_roots_keep_json_contracts(self) -> None:
+        """All core operator roots resolve from an isolated managed release."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            shutil.copytree(ROOT / "nautical_core", release / "nautical_core")
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            environment = {"PYTHONPATH": "", "TASKDATA": str(taskdata)}
+
+            doctor = self._run(
+                release / "nautical_core" / "tools" / "nautical_doctor.py",
+                "--taskdata", str(taskdata), "--task-bin", str(root / "missing-task"),
+                "--json", "--installation-only", env=environment,
+            )
+            self.assertNotEqual(doctor.returncode, 0)
+            self.assertEqual(self._json(doctor).get("schema"), "nautical.doctor")
+
+            queue = self._run(
+                release / "nautical_core" / "tools" / "nautical_queue_status.py",
+                "--taskdata", str(taskdata), "--json", env=environment,
+            )
+            self.assertIn(queue.returncode, {0, 1, 2, 3})
+            self.assertTrue(str(self._json(queue).get("schema", "")).startswith("nautical."))
+
+            reconcile = self._run(
+                release / "nautical_core" / "tools" / "nautical_reconcile.py",
+                "--json", "--task-bin", str(root / "missing-task"), "--no-housekeeping",
+                env=environment,
+            )
+            self.assertNotEqual(reconcile.returncode, 0)
+            self.assertEqual(self._json(reconcile).get("schema"), "nautical.reconcile")
+
 
 if __name__ == "__main__":
     unittest.main()

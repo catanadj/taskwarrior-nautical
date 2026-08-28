@@ -1509,7 +1509,7 @@ def _render_finding(item: object) -> dict[str, Any]:
 def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     stream = stream if stream is not None else sys.stdout
     enabled = _color_enabled(stream)
-    source_findings = payload.get("operator_findings") or payload.get("findings") or []
+    source_findings = payload.get("operator_findings") or []
     raw_findings = list(ordered_findings([_render_finding(item) for item in source_findings]))
     historical = [
         item for item in raw_findings

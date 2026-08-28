@@ -10155,12 +10155,17 @@ def test_doctor_text_timezone_summary():
     payload = {
         "status": "warn",
         "taskdata": "/tmp/task",
-        "findings": [
+        "operator_findings": [
             {
-                "id": "config.timezone.invalid",
-                "severity": "warn",
+                "code": "config.timezone.invalid",
+                "domain": "config",
+                "severity": "warning",
+                "actionability": "actionable",
                 "message": "Nautical timezone 'Europe/Bucharest' is not available; hooks will use UTC fallback.",
-                "details": {"tz": "Europe/Bucharest"},
+                "observed": {},
+                "expected": {},
+                "evidence": {"tz": "Europe/Bucharest"},
+                "guidance": "Use an available timezone.",
             }
         ],
     }

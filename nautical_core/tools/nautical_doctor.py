@@ -58,7 +58,7 @@ from nautical_core.integration_context import (  # noqa: E402
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
-from nautical_core.operator_health_service import OperatorHealthService  # noqa: E402
+from nautical_core.operator_health_service import ConfigurationDiagnosisRequest, OperatorHealthService  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -396,13 +396,14 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "No Nautical config file was found; built-in defaults will be used.",
         )
         from nautical_core.astronomical_seasons import seasonal_events_utc
-        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.configuration_findings(
+        report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
             {}, effective={}, config_dir=taskdata, timezone_factory=ZONEINFO_FACTORY,
             seasonal_events=seasonal_events_utc,
             astronomy_preflight=astronomy.preflight, source_path="defaults",
             drift_loader=configuration_drift, dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
             python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
         ))
+        findings.extend(item.to_doctor_dict() for item in report.findings)
         return
     try:
         data = tomllib.loads(config.read_text(encoding="utf-8"))
@@ -421,13 +422,14 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     effective_value = snapshot.get("values")
     effective = effective_value if isinstance(effective_value, dict) else {}
     from nautical_core.astronomical_seasons import seasonal_events_utc
-    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.configuration_findings(
+    report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
         data, effective=effective, config_dir=config.parent, timezone_factory=ZONEINFO_FACTORY,
         seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy.preflight,
         source_path=str(config), drift_loader=configuration_drift,
         dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
         python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
     ))
+    findings.extend(item.to_doctor_dict() for item in report.findings)
 
 
 def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

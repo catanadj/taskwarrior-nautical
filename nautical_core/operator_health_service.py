@@ -42,12 +42,57 @@ class OperatorHealthReport:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ConfigurationDiagnosisRequest:
+    """Validated inputs for one read-only configuration diagnosis."""
+
+    data: dict[str, Any]
+    effective: dict[str, Any]
+    config_dir: object
+    timezone_factory: Callable[[str], object] | None
+    seasonal_events: Callable[[int], dict[str, Any]]
+    astronomy_preflight: Callable[[object], dict[str, Any]]
+    source_path: str
+    drift_loader: Callable[[], dict[str, Any]]
+    dependency_available: Callable[[str], bool]
+    python_executable: str
+    rich_factory: Callable[[str], object]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.data, dict) or not isinstance(self.effective, dict):
+            raise TypeError("configuration diagnosis requires mapping data")
+        for name in (
+            "seasonal_events", "astronomy_preflight", "drift_loader",
+            "dependency_available", "rich_factory",
+        ):
+            if not callable(getattr(self, name)):
+                raise TypeError(f"configuration diagnosis requires callable {name}")
+
+
 class OperatorHealthService:
     """Aggregate health observations without performing I/O or mutations."""
 
     @staticmethod
     def report(findings: Iterable[OperatorFinding]) -> OperatorHealthReport:
         return OperatorHealthReport(tuple(findings))
+
+    @staticmethod
+    def diagnose_configuration(request: ConfigurationDiagnosisRequest) -> OperatorHealthReport:
+        """Evaluate one typed configuration diagnosis request."""
+        findings = OperatorHealthService.configuration_findings(
+            request.data,
+            effective=request.effective,
+            config_dir=request.config_dir,
+            timezone_factory=request.timezone_factory,
+            seasonal_events=request.seasonal_events,
+            astronomy_preflight=request.astronomy_preflight,
+            source_path=request.source_path,
+            drift_loader=request.drift_loader,
+            dependency_available=request.dependency_available,
+            python_executable=request.python_executable,
+            rich_factory=request.rich_factory,
+        )
+        return OperatorHealthService.report(findings)
 
     @staticmethod
     def configuration_findings(

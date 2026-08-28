@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import shutil
 
 from nautical_core.integration_models import CommandFailureKind
 from nautical_core.taskwarrior_client import TaskwarriorClient
@@ -150,6 +151,19 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr or process.stdout)
         self.assertEqual(process.stderr, "", process.stderr)
         self.assertTrue(process.stdout.strip())
+
+    def test_installed_layout_query_runs_outside_source_checkout(self) -> None:
+        """A managed release must resolve its package from its own directory."""
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory) / "release"
+            shutil.copytree(ROOT / "nautical_core", release / "nautical_core")
+            query = release / "nautical_core" / "tools" / "nautical_query.py"
+            environment = {"TASKDATA": str(Path(directory) / "taskdata")}
+            environment["PYTHONPATH"] = ""
+            process = self._run(query, "capabilities", env=environment)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            payload = self._json(process)
+            self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
 
 
 if __name__ == "__main__":

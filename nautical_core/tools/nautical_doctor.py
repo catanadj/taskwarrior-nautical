@@ -1504,8 +1504,9 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     findings = [item for item in raw_findings if item not in historical]
     historical_summaries = _historical_summaries(historical)
     findings.extend(historical_summaries)
+    grouped = group_findings_by_severity(findings)
     counts = {
-        severity: sum(1 for item in findings if item.get("severity") == severity)
+        severity: len(grouped.get(severity, ()))
         for severity in ("ok", "warn", "error", "info")
     }
     status = str(payload.get("status") or "unknown")
@@ -1531,7 +1532,6 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     timezone = _timezone_summary([_render_finding(item) for item in source_findings])
     if timezone:
         write(f"Timezone: {timezone}")
-    grouped = group_findings_by_severity(findings)
     for section in ("error", "warn", "info", "ok"):
         items = list(grouped.get(section, ()))
         if not items:

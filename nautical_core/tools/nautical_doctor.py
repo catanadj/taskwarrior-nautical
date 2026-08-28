@@ -297,6 +297,7 @@ def _check_runtime(
     )
     # Minimal Taskwarrior shims may only support the version probe. Keep this
     # narrow compatibility path; real command failures remain reported.
+    task_error = ""
     if not proc.ok:
         version_probe = unit_of_work.client.execute(
             ["--version"],
@@ -307,44 +308,10 @@ def _check_runtime(
         if version_probe.ok:
             proc = version_probe
     if not proc.ok:
-        _finding(
-            findings,
-            "taskwarrior.unavailable",
-            "error",
-            "Taskwarrior could not be executed.",
-            fix="Install Taskwarrior or pass --task-bin.",
-            details={
-                "error": str(proc.stderr or proc.stdout or "").strip()
-                or f"{proc.kind.value} (exit code {proc.returncode})"
-            },
-        )
-    else:
-        _finding(
-            findings,
-            "taskwarrior.version",
-            "ok",
-            "Taskwarrior command is available.",
-        )
-
-    if not taskdata.exists():
-        _finding(
-            findings,
-            "taskdata.missing",
-            "error",
-            f"Taskwarrior data directory does not exist: {taskdata}",
-            fix="Check TASKDATA, TASKRC, or pass --taskdata.",
-        )
-    elif not taskdata.is_dir():
-        _finding(findings, "taskdata.invalid", "error", f"Taskwarrior data path is not a directory: {taskdata}")
-    else:
-        writable = os.access(str(taskdata), os.R_OK | os.W_OK | os.X_OK)
-        _finding(
-            findings,
-            "taskdata.access",
-            "ok" if writable else "error",
-            f"Taskwarrior data directory is {'accessible' if writable else 'not fully accessible'}: {taskdata}",
-            fix="" if writable else "Correct ownership and directory permissions.",
-        )
+        task_error = str(proc.stderr or proc.stdout or "").strip() or f"{proc.kind.value} (exit code {proc.returncode})"
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.taskdata_findings(
+        proc.ok, taskdata, task_error=task_error,
+    ))
     return _resolve_hooks_dir(unit_of_work, taskdata)
 
 

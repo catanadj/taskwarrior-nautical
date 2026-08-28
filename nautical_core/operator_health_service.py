@@ -153,6 +153,56 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def taskdata_findings(
+        task_available: bool,
+        taskdata: object,
+        *,
+        task_error: str = "",
+    ) -> tuple[OperatorFinding, ...]:
+        """Classify Taskwarrior command and data-directory health."""
+        from pathlib import Path
+        import os
+        result: list[OperatorFinding] = []
+        if not task_available:
+            result.append(OperatorFinding(
+                "taskwarrior.unavailable", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Taskwarrior could not be executed.",
+                observed={"error": task_error},
+                guidance="Install Taskwarrior or pass --task-bin.",
+            ))
+        else:
+            result.append(OperatorFinding(
+                "taskwarrior.version", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Taskwarrior command is available.",
+            ))
+        path = Path(str(taskdata)).expanduser()
+        if not path.exists():
+            result.append(OperatorFinding(
+                "taskdata.missing", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                f"Taskwarrior data directory does not exist: {path}",
+                guidance="Check TASKDATA, TASKRC, or pass --taskdata.",
+            ))
+        elif not path.is_dir():
+            result.append(OperatorFinding(
+                "taskdata.invalid", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                f"Taskwarrior data path is not a directory: {path}",
+            ))
+        else:
+            writable = os.access(str(path), os.R_OK | os.W_OK | os.X_OK)
+            result.append(OperatorFinding(
+                "taskdata.access", "installation",
+                FindingSeverity.INFO if writable else FindingSeverity.ERROR,
+                FindingActionability.INFORMATIONAL if writable else FindingActionability.BLOCKING,
+                f"Taskwarrior data directory is {'accessible' if writable else 'not fully accessible'}: {path}",
+                guidance="" if writable else "Correct ownership and directory permissions.",
+            ))
+        return tuple(result)
+
+    @staticmethod
     def uda_alias_findings(data: dict[str, Any]) -> tuple[OperatorFinding, ...]:
         """Describe the opt-in description alias configuration."""
         enabled = data.get("enable_uda_aliases") is True

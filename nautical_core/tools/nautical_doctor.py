@@ -562,32 +562,9 @@ def _check_astronomy(
 
 def _check_config_drift(findings: list[dict[str, Any]], source_path: str) -> None:
     """Report runtime config drift when Doctor and core use the same source."""
-    drift = configuration_drift()
-    loaded_source = str(drift.get("source") or "")
-    expected_source = os.path.abspath(str(source_path)) if source_path else "defaults"
-    if loaded_source != expected_source:
-        return
-    if drift.get("changed"):
-        _finding(
-            findings,
-            "config.drift",
-            "warn",
-            "The loaded Nautical configuration differs from the current file.",
-            fix="Restart Navigator; Taskwarrior hooks will use the new configuration on their next invocation.",
-            details={
-                "source": loaded_source,
-                "loaded_fingerprint": drift.get("loaded_fingerprint", ""),
-                "current_fingerprint": drift.get("current_fingerprint", ""),
-            },
-        )
-    else:
-        _finding(
-            findings,
-            "config.drift",
-            "ok",
-            "Loaded Nautical configuration matches the current file.",
-            details={"source": loaded_source, "fingerprint": drift.get("current_fingerprint", "")},
-        )
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.configuration_drift_findings(
+        source_path, configuration_drift,
+    ))
 
 
 def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

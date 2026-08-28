@@ -255,6 +255,37 @@ class OperatorHealthService:
         ),)
 
     @staticmethod
+    def configuration_drift_findings(
+        source_path: str,
+        drift_loader: Callable[[], dict[str, Any]],
+    ) -> tuple[OperatorFinding, ...]:
+        """Project runtime/file configuration drift into a typed finding."""
+        from pathlib import Path
+        drift = drift_loader()
+        loaded_source = str(drift.get("source") or "")
+        expected_source = str(Path(source_path).expanduser().resolve()) if source_path else "defaults"
+        if loaded_source != expected_source:
+            return ()
+        if drift.get("changed"):
+            return (OperatorFinding(
+                "config.drift", "configuration", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "The loaded Nautical configuration differs from the current file.",
+                observed={
+                    "source": loaded_source,
+                    "loaded_fingerprint": drift.get("loaded_fingerprint", ""),
+                    "current_fingerprint": drift.get("current_fingerprint", ""),
+                },
+                guidance="Restart Navigator; Taskwarrior hooks will use the new configuration on their next invocation.",
+            ),)
+        return (OperatorFinding(
+            "config.drift", "configuration", FindingSeverity.INFO,
+            FindingActionability.INFORMATIONAL,
+            "Loaded Nautical configuration matches the current file.",
+            observed={"source": loaded_source, "fingerprint": drift.get("current_fingerprint", "")},
+        ),)
+
+    @staticmethod
     def runtime_findings(
         status: dict[str, Any], runtime_root: object,
         hook_runtimes: dict[str, dict[str, Any]] | None = None,

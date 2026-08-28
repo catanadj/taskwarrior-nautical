@@ -1502,6 +1502,32 @@ class _ReconcileSession:
         """Load the bounded candidate set for this invocation."""
         return tuple(self.lifecycle_service.candidates())
 
+    def audit_integrity(self, *, hook: Any, apply: bool) -> tuple[Any, Any, float, tuple[Any, ...], float]:
+        """Audit and, when authorized, apply integrity plans for this snapshot."""
+        if self.snapshot._rows is None:
+            return None, None, 0.0, (), 0.0
+        started = time.perf_counter()
+        engine, audit = _audit_reconcile_integrity(
+            tuple(row.to_mapping() for row in self.snapshot._rows),
+            outbox_repository=self.integrity_outbox,
+        )
+        audit_seconds = time.perf_counter() - started
+        if not (apply and audit is not None and audit.plans):
+            return engine, audit, audit_seconds, (), 0.0
+        started = time.perf_counter()
+        application = engine.apply(
+            audit,
+            executor=self.mutation_gateway,
+            request_factory=_integrity_request_factory,
+            outbox_repository=self.integrity_outbox,
+            owner=f"reconcile-integrity-{os.getpid()}",
+        )
+        applications = application.applications
+        application_seconds = time.perf_counter() - started
+        if applications:
+            self.snapshot.invalidate()
+        return engine, audit, audit_seconds, applications, application_seconds
+
 
 def _build_reconcile_session(
     request: ReconcileRequest,
@@ -1625,27 +1651,14 @@ def main(
     }
     try:
         if snapshot._rows is not None:
-            integrity_started = time.perf_counter()
-            integrity_engine, integrity_audit_result = _audit_reconcile_integrity(
-                tuple(row.to_mapping() for row in snapshot._rows), outbox_repository=integrity_outbox,
+            integrity_engine, integrity_audit_result, integrity_seconds, integrity_application_results, integrity_application_seconds = session.audit_integrity(
+                hook=hook, apply=args.apply,
             )
-            integrity_seconds = time.perf_counter() - integrity_started
         if integrity_audit_result is not None and integrity_audit_result.status.value == "unavailable":
             configuration_status = "unavailable"
             configuration_drift_reason = integrity_audit_result.reason or "integrity audit unavailable"
         elif integrity_audit_result is not None and args.apply and integrity_audit_result.plans:
-            application_started = time.perf_counter()
-            integrity_application = integrity_engine.apply(
-                integrity_audit_result,
-                executor=mutation_gateway,
-                request_factory=_integrity_request_factory,
-                outbox_repository=integrity_outbox,
-                owner=f"reconcile-integrity-{os.getpid()}",
-            )
-            integrity_application_results = integrity_application.applications
-            integrity_application_seconds = time.perf_counter() - application_started
             if integrity_application_results:
-                snapshot.invalidate()
                 candidates = session.collect_candidates()
     except Exception as exc:
         if os.environ.get("NAUTICAL_DIAG") == "1":

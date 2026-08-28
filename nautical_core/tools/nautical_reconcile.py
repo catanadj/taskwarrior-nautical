@@ -1481,6 +1481,66 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
     return 1
 
 
+class _ReconcileSession:
+    """Validated, task-scoped services shared by one reconcile invocation."""
+
+    __slots__ = ("unit_of_work", "repository", "snapshot", "control_plane", "mutation_gateway", "integrity_outbox", "lifecycle_service", "lifecycle_application", "runtime_state")
+
+    def __init__(self, unit_of_work, repository, snapshot, control_plane, mutation_gateway,
+                 integrity_outbox, lifecycle_service, lifecycle_application, runtime_state):
+        self.unit_of_work = unit_of_work
+        self.repository = repository
+        self.snapshot = snapshot
+        self.control_plane = control_plane
+        self.mutation_gateway = mutation_gateway
+        self.integrity_outbox = integrity_outbox
+        self.lifecycle_service = lifecycle_service
+        self.lifecycle_application = lifecycle_application
+        self.runtime_state = runtime_state
+
+
+def _build_reconcile_session(
+    request: ReconcileRequest,
+    unit_of_work: TaskwarriorUnitOfWork,
+) -> _ReconcileSession:
+    repository = unit_of_work.repository
+    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+    scope_filter = f"chainID:{request.chain_id}" if request.chain_id else f"uuid:{request.uuid}" if request.uuid else None
+    snapshot = ReconcileSnapshotService(
+        repository,
+        scope_filter=scope_filter,
+        full_audit=bool(request.full_audit),
+        read_value=_read_value,
+        stats=_EXPORT_STATS,
+    )
+    configuration = unit_of_work.context.configuration
+    control_plane = OperatorControlPlane.from_configuration(configuration, DomainApplicationRegistry())
+    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    mutation_gateway = TaskwarriorMutationService(unit_of_work)
+    integrity_outbox = LifecycleOutboxRepository(unit_of_work.outbox.taskdata)
+    lifecycle_application = LifecycleApplicationService(
+        unit_of_work=unit_of_work,
+        mutations=mutation_gateway,
+        outbox=integrity_outbox,
+        owner=f"reconcile-{os.getpid()}",
+        lease_seconds=120.0,
+    )
+    lifecycle_service = LifecycleReconciliationService(
+        snapshot,
+        repository,
+        configuration_fingerprint=configuration.fingerprint,
+        schedule_fingerprint=configuration.scheduler_fingerprint,
+        unit_of_work=unit_of_work,
+        application=lifecycle_application,
+    )
+    return _ReconcileSession(
+        unit_of_work, repository, snapshot, control_plane, mutation_gateway,
+        integrity_outbox, lifecycle_service, lifecycle_application,
+        _ReconcileRuntimeState(repository, snapshot, lifecycle_service),
+    )
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -1532,41 +1592,16 @@ def main(
         return _startup_failure(args, "runtime", exc)
     global _UNIT_OF_WORK
     _UNIT_OF_WORK = _unit_of_work
-    repository = _unit_of_work.repository
-    repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    scope_filter = f"chainID:{args.chain_id}" if args.chain_id else f"uuid:{args.uuid}" if args.uuid else None
-    snapshot = ReconcileSnapshotService(
-        repository,
-        scope_filter=scope_filter,
-        full_audit=bool(args.full_audit),
-        read_value=_read_value,
-        stats=_EXPORT_STATS,
-    )
+    session = _build_reconcile_session(args, _UNIT_OF_WORK)
+    repository = session.repository
+    snapshot = session.snapshot
+    operator_control_plane = session.control_plane
+    mutation_gateway = session.mutation_gateway
+    integrity_outbox = session.integrity_outbox
+    lifecycle_service = session.lifecycle_service
+    lifecycle_application = session.lifecycle_application
     configuration = _UNIT_OF_WORK.context.configuration
-    operator_control_plane = OperatorControlPlane.from_configuration(
-        configuration, DomainApplicationRegistry(),
-    )
-    from nautical_core.lifecycle_application import LifecycleApplicationService
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
-    mutation_gateway = TaskwarriorMutationService(_UNIT_OF_WORK)
-    integrity_outbox = LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
-    lifecycle_application = LifecycleApplicationService(
-        unit_of_work=_UNIT_OF_WORK,
-        mutations=mutation_gateway,
-        outbox=integrity_outbox,
-        owner=f"reconcile-{os.getpid()}",
-        lease_seconds=120.0,
-    )
-    lifecycle_service = LifecycleReconciliationService(
-        snapshot,
-        repository,
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-        unit_of_work=_UNIT_OF_WORK,
-        application=lifecycle_application,
-    )
-    runtime_state = _ReconcileRuntimeState(repository, snapshot, lifecycle_service)
+    runtime_state = session.runtime_state
     _RECONCILE_RUNTIME.set(runtime_state)
     try:
         candidates = lifecycle_service.candidates()

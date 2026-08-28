@@ -406,7 +406,7 @@ def _native_until_repairs(
     *,
     apply: bool,
     taskdata: Path | None = None,
-    snapshot: _ReconcileSnapshot | None = None,
+    snapshot: ReconcileSnapshotService | None = None,
     lease_held: bool = False,
     control_plane: OperatorControlPlane,
 ) -> tuple[list[dict[str, Any]], list[str]]:

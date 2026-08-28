@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import hashlib
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, TypeAlias
 
 from .operator_models import (
     CoverageRequirement,
@@ -323,7 +323,7 @@ class SnapshotReader(Protocol):
         ...
 
 
-SnapshotReadResult = OperatorSnapshot | OperatorFailure
+SnapshotReadResult: TypeAlias = OperatorSnapshot | OperatorFailure
 
 
 class ChainSnapshotReader:

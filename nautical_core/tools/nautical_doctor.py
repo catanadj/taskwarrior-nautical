@@ -15,7 +15,7 @@ import zoneinfo
 from datetime import date, timezone
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
 RICH_SPEC_FACTORY: Callable[[str], Any] = importlib.util.find_spec
@@ -1408,7 +1408,7 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
         write(f"    {field} -> {target_text}{suffix}")
 
 
-def _historical_summaries(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _historical_summaries(findings: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Collapse completed-link evidence while leaving JSON output lossless."""
     groups: dict[tuple[str, str, str], dict[str, Any]] = {}
     for item in findings:

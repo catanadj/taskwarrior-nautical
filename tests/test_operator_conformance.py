@@ -6,8 +6,8 @@ from pathlib import Path
 from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.operator_inspectors import inspect_operator_snapshot, standard_inspector_bundle, run_inspectors
-from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCapabilities, OperatorCoverage, OperatorFailure, OperatorLimits,
-    OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorV2Result, OperatorV2Status)
+from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCapabilities, OperatorCoverage, OperatorCursor, OperatorFailure, OperatorLimits,
+    OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
 from nautical_core.operator_snapshot import OperatorSnapshot
@@ -157,6 +157,17 @@ class OperatorConformanceTests(unittest.TestCase):
             json.loads(render_contract_json(capabilities))
         )
         self.assertEqual(decoded_capabilities, capabilities)
+
+        cursor = OperatorCursor("snapshot-roundtrip", "config-1", "epoch-1", position=2, page_size=2)
+        page = OperatorPage(items=({"uuid": "task-2"},), cursor=cursor, complete=False)
+        legacy = OperatorResult(
+            OperatorOperation.INSPECT, OperatorStatus.OK,
+            data={"count": 1}, page=page,
+        )
+        self.assertEqual(
+            OperatorResult.from_mapping(json.loads(render_contract_json(legacy))),
+            legacy,
+        )
 
     def test_snapshot_unavailable_evidence_is_retryable(self) -> None:
         configuration = ValidatedNauticalConfiguration(

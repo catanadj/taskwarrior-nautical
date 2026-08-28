@@ -31,9 +31,7 @@ from nautical_core.operator_findings import FindingActionability, FindingSeverit
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
-from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
-from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
-from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
+from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.task_read_repository import ALL_TASK_STATUSES, TaskReadRepository  # noqa: E402
 from nautical_core.integration_context import (  # noqa: E402
     IntegrationAccess,
@@ -43,7 +41,6 @@ from nautical_core.integration_context import (  # noqa: E402
     ValidatedNauticalConfiguration,
 )
 from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork, build_operator_uow  # noqa: E402
-from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest  # noqa: E402
 from nautical_core.task_models import FieldPresence, TaskObservation  # noqa: E402
 
 _JSON_SCHEMA = "nautical.doctor"
@@ -1248,48 +1245,11 @@ def _check_chains(
         )
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
 
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_snapshot import IntegritySnapshotRequest
-    from nautical_core.integrity_report import doctor_findings
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.integrity_audit_service import audit_authoritative_rows
 
-    configuration = unit_of_work.context.configuration if unit_of_work is not None else None
-    integrity = None
-    if unit_of_work is not None and configuration is not None:
-        snapshot_service = ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint)
-        engine = ChainIntegrityEngine(
-            snapshot_service,
-            configuration_fingerprint=configuration.fingerprint,
-            schedule_fingerprint=configuration.scheduler_fingerprint,
-        )
-        snapshot_request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
-        normalized = snapshot_service.from_rows(snapshot_request, rows, source="doctor.authoritative_export")
-        if isinstance(normalized, Unavailable):
-            from nautical_core.chain_integrity_engine import IntegrityEngineResult
-            from nautical_core.chain_integrity_models import IntegrityReportStatus
-            integrity = IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=normalized.evidence.detail)
-        else:
-            operator_scope = OperatorScope(OperatorScopeKind.SYSTEM)
-            operator_context = OperatorInvocationContext.from_unit_of_work(
-                OperatorRequest(OperatorOperation.INSPECT, operator_scope), unit_of_work,
-            )
-            reader = ChainSnapshotReader(lambda _request: Found(normalized, "doctor authoritative export"))
-            projected = reader.read_chain_snapshot(
-                operator_context,
-                SnapshotReadRequest(operator_scope),
-            )
-            if isinstance(projected, OperatorFailure):
-                from nautical_core.chain_integrity_engine import IntegrityEngineResult
-                from nautical_core.chain_integrity_models import IntegrityReportStatus
-                integrity = IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=projected.message)
-            else:
-                integrity = engine.audit_snapshot(
-                    projected,
-                    outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
-                    mutation_epoch=unit_of_work.mutation_epoch,
-                )
+    integrity, integrity_findings = audit_authoritative_rows(unit_of_work, rows)
     if integrity is not None:
-        findings.extend(doctor_findings(integrity))
+        findings.extend(integrity_findings)
 
     nautical = [
         row for row in rows

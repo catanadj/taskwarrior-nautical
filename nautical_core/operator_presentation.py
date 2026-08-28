@@ -181,4 +181,12 @@ def group_findings_by_severity(findings: object) -> dict[str, tuple[Mapping[str,
     }
 
 
-__all__ = ("ProgressView", "bounded_text", "finding_status", "group_findings_by_severity", "key_value_lines", "ordered_findings", "ordered_records", "render_contract_json", "render_json", "render_json_document", "render_result", "render_text")
+def finding_display(item: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Return stable code, message, and guidance fields for renderers."""
+    code = str(item.get("code") or item.get("id") or "?")
+    message = str(item.get("message") or "").strip()
+    guidance = str(item.get("guidance") or item.get("fix") or "").strip()
+    return code, message, guidance
+
+
+__all__ = ("ProgressView", "bounded_text", "finding_display", "finding_status", "group_findings_by_severity", "key_value_lines", "ordered_findings", "ordered_records", "render_contract_json", "render_json", "render_json_document", "render_result", "render_text")

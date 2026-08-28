@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core.operator_presentation import group_findings_by_severity, ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_presentation import finding_display, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding, status_for_findings  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
@@ -1557,13 +1557,14 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
         for index, item in enumerate(items):
             if index:
                 write()
-            write(f"  {_status_label(section, enabled=enabled)} {item.get('id') or '?'}")
-            write(f"    {item.get('message') or ''}")
+            code, message, guidance = finding_display(item)
+            write(f"  {_status_label(section, enabled=enabled)} {code}")
+            write(f"    {message}")
             details = item.get("details")
             if isinstance(details, dict):
                 _render_details(details, stream=stream, enabled=enabled)
-            if item.get("fix"):
-                write(f"    Fix: {_paint(str(item['fix']), 'yellow', enabled=enabled)}")
+            if guidance:
+                write(f"    Fix: {_paint(guidance, 'yellow', enabled=enabled)}")
 
 
 def _timezone_summary(findings: list[dict[str, Any]]) -> str:

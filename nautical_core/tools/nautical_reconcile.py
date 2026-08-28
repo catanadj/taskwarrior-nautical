@@ -31,7 +31,7 @@ from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
-from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_models import OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind  # noqa: E402
 from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,
@@ -57,7 +57,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import build_parser  # noqa: E402
-from nautical_core.reconcile_report import exit_code, render_human  # noqa: E402
+from nautical_core.reconcile_report import exit_code, render_human, to_operator_result  # noqa: E402
 from nautical_core.operator_presentation import key_value_lines, render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
@@ -79,25 +79,6 @@ _JSON_SCHEMA_VERSION = 1
 _EXPORT_STATS = {"calls": 0, "rows": 0, "seconds": 0.0, "slowest_seconds": 0.0, "snapshot_hits": 0}
 _LOCK_STATS = {"reconcile_busy": 0, "parent_busy": 0}
 _UNIT_OF_WORK: TaskwarriorUnitOfWork | None = None
-
-
-def _v2_result(summary: dict[str, Any]) -> OperatorV2Result:
-    """Build the shared v2 envelope without changing reconcile evidence."""
-    status = OperatorV2Status(str(summary.get("status") or "error"))
-    failure = None
-    if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
-        reason = str(summary.get("configuration_drift") or "")
-        if not reason:
-            errors = summary.get("errors") or summary.get("native_until_errors") or ()
-            reason = str(errors[0] if isinstance(errors, (list, tuple)) and errors else "reconcile reported an error")
-        failure = OperatorFailure(code="reconcile_error", message=reason)
-    return OperatorV2Result(
-        schema=_JSON_SCHEMA,
-        operation="reconcile",
-        status=status,
-        payload={key: value for key, value in summary.items() if key not in {"schema", "status"}},
-        failure=failure,
-    )
 
 
 def _opportunistic_housekeeping(taskdata: Path) -> dict[str, Any]:
@@ -2169,7 +2150,7 @@ def main(
         "housekeeping": housekeeping,
     }
     if args.json:
-        print(render_result(_v2_result(summary), "json"))
+        print(render_result(to_operator_result(summary), "json"))
     else:
         summary_line, diagnostics_line = render_human(summary, _style)
         print(summary_line)

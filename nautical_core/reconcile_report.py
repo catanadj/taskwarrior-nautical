@@ -6,6 +6,29 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .operator_presentation import bounded_text
+from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
+
+
+_JSON_SCHEMA = "nautical.reconcile"
+
+
+def to_operator_result(summary: Mapping[str, Any]) -> OperatorV2Result:
+    """Convert one reconcile summary into the shared operator envelope."""
+    status = OperatorV2Status(str(summary.get("status") or "error"))
+    failure = None
+    if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
+        reason = str(summary.get("configuration_drift") or "")
+        if not reason:
+            errors = summary.get("errors") or summary.get("native_until_errors") or ()
+            reason = str(errors[0] if isinstance(errors, (list, tuple)) and errors else "reconcile reported an error")
+        failure = OperatorFailure(code="reconcile_error", message=reason)
+    return OperatorV2Result(
+        schema=_JSON_SCHEMA,
+        operation="reconcile",
+        status=status,
+        payload={key: value for key, value in summary.items() if key not in {"schema", "status"}},
+        failure=failure,
+    )
 
 
 def _count(summary: Mapping[str, Any], key: str) -> int:
@@ -63,4 +86,4 @@ def exit_code(summary: Mapping[str, Any]) -> int:
     return 0
 
 
-__all__ = ["exit_code", "render_human"]
+__all__ = ["exit_code", "render_human", "to_operator_result"]

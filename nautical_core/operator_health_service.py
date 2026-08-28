@@ -226,6 +226,35 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def astronomy_findings(
+        config: object,
+        *,
+        effective_timezone: object,
+        source_hint: str,
+        preflight: Callable[[object], dict[str, Any]],
+    ) -> tuple[OperatorFinding, ...]:
+        """Project astronomy-provider preflight into typed findings."""
+        result = preflight(config)
+        status = str(result.get("status") or "error")
+        if status == "not_configured":
+            return (OperatorFinding(
+                "astronomy.not_configured", "configuration", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Astronomy is not configured; astronomical anchor times are disabled.",
+                guidance="Define [astronomy] locations only if using sunrise, sunset, moonrise, or moonset anchors.",
+            ),)
+        severity = FindingSeverity.INFO if status == "ok" else FindingSeverity.WARNING if status == "warning" else FindingSeverity.ERROR
+        actionability = FindingActionability.INFORMATIONAL if status == "ok" else FindingActionability.ACTIONABLE
+        details = {key: value for key, value in result.items() if key not in {"status", "message"}}
+        details.update({"config_source": source_hint, "effective_timezone": effective_timezone})
+        return (OperatorFinding(
+            "astronomy.preflight", "configuration", severity, actionability,
+            "Astronomy provider and location profile are usable." if status == "ok" else str(result.get("message") or "Astronomy preflight failed."),
+            observed=details,
+            guidance=("Install astral in the active interpreter and verify the selected profile." if status == "error" else "Review the astronomy location and event availability before scheduling." if status == "warning" else ""),
+        ),)
+
+    @staticmethod
     def runtime_findings(
         status: dict[str, Any], runtime_root: object,
         hook_runtimes: dict[str, dict[str, Any]] | None = None,

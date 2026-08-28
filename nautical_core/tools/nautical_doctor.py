@@ -541,7 +541,7 @@ def _check_season_mode(findings: list[dict[str, Any]], data: dict[str, Any]) -> 
     ))
 
 
-def _check_astronomy(
+def _check_astronomy_legacy(
     findings: list[dict[str, Any]],
     data: dict[str, Any],
     *,
@@ -588,6 +588,25 @@ def _check_astronomy(
         ),
         details=details,
     )
+
+
+def _check_astronomy(
+    findings: list[dict[str, Any]],
+    data: dict[str, Any],
+    *,
+    source_hint: str = "",
+) -> None:
+    snapshot = effective_config_snapshot()
+    effective_value = snapshot.get("values")
+    effective = effective_value if isinstance(effective_value, dict) else {}
+    config = data.get("astronomy") if isinstance(data, dict) and data else effective.get("astronomy")
+    effective_timezone = data.get("tz", effective.get("tz", "UTC")) if isinstance(data, dict) and data else effective.get("tz", "UTC")
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.astronomy_findings(
+        config,
+        effective_timezone=effective_timezone,
+        source_hint=source_hint or snapshot.get("source", "unknown"),
+        preflight=astronomy.preflight,
+    ))
 
 
 def _check_config_drift(findings: list[dict[str, Any]], source_path: str) -> None:

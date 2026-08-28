@@ -54,6 +54,7 @@ from nautical_core.operator_models import (
     CoverageRequirement,
     exit_code_for_status,
 )
+from nautical_core.query_models import QueryCapabilities, QueryContractError
 
 
 class OperatorModelsTests(unittest.TestCase):
@@ -167,6 +168,25 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(restored, capabilities)
         self.assertIn("integrity", capabilities.to_dict()["operations"])
         self.assertIn("nautical.operator.integrity", capabilities.schemas)
+
+    def test_query_capabilities_rejects_incomplete_discovery_documents(self) -> None:
+        base = {
+            "schema": "nautical.query.capabilities",
+            "version": 2,
+            "operation": "query",
+            "status": "ok",
+            "operations": ["occurrences", "next", "integrity"],
+            "selectors": ["uuid", "chain_id", "all"],
+            "omission_policies": ["exclude", "include", "report"],
+            "next": {},
+            "future": {"supported": True},
+        }
+        self.assertEqual(QueryCapabilities.from_mapping(base).to_dict(), base)
+        for field, value in (("status", "warn"), ("selectors", ["uuid"]), ("next", None)):
+            invalid = dict(base)
+            invalid[field] = value
+            with self.assertRaises(QueryContractError):
+                QueryCapabilities.from_mapping(invalid)
 
     def test_coverage_rejects_false_completeness_and_round_trips(self) -> None:
         with self.assertRaises(OperatorContractError):

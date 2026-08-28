@@ -56,12 +56,26 @@ class QueryCapabilities:
             raise QueryContractError("unsupported capabilities version")
         if self.document.get("operation") != "query":
             raise QueryContractError("invalid capabilities operation")
+        if self.document.get("status") != "ok":
+            raise QueryContractError("capabilities status must be ok")
         operations = self.document.get("operations")
         required_operations = {OCCURRENCE_OPERATION, NEXT_OPERATION, "integrity"}
         if not isinstance(operations, list) or not required_operations.issubset(
             {str(item) for item in operations}
         ):
             raise QueryContractError("capabilities operations are incomplete")
+        selectors = self.document.get("selectors")
+        if not isinstance(selectors, list) or not {str(item) for item in selectors}.issuperset(
+            {"uuid", "chain_id", "all"}
+        ):
+            raise QueryContractError("capabilities selectors are incomplete")
+        omission_policies = self.document.get("omission_policies")
+        if not isinstance(omission_policies, list) or not {str(item) for item in omission_policies}.issuperset(
+            {"exclude", "include", "report"}
+        ):
+            raise QueryContractError("capabilities omission policies are incomplete")
+        if not isinstance(self.document.get("next"), Mapping):
+            raise QueryContractError("capabilities next operation details are required")
         object.__setattr__(self, "document", dict(self.document))
 
     @classmethod

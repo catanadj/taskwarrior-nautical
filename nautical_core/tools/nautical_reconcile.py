@@ -145,17 +145,6 @@ class _ConfigurationVerification:
         self.reason = reason
 
 
-class _ConfigurationReason(str):
-    """String-compatible reason retaining the tri-state verification result."""
-
-    status: str
-
-    def __new__(cls, reason: str, status: str):
-        value = str.__new__(cls, reason)
-        value.status = status
-        return value
-
-
 from nautical_core.native_until_integrity import NativeUntilAudit, audit_result
 from nautical_core.chain_integrity_engine import ChainIntegrityEngine
 
@@ -285,14 +274,6 @@ def _read_value(
     raise _PlanReadUnavailable(f"{subject} returned an invalid typed result")
 
 
-def _configuration_drift_reason(hook: Any) -> str:
-    """Compatibility string for callers; failures are never treated as valid."""
-    check = _configuration_verification(hook)
-    if check.status == "valid":
-        return ""
-    return _ConfigurationReason(check.reason, check.status)
-
-
 def _configuration_verification(hook: Any) -> _ConfigurationVerification:
     """Return valid, drifted, or unavailable configuration state."""
     core = _runtime_core(hook)
@@ -329,9 +310,9 @@ def _configuration_verification(hook: Any) -> _ConfigurationVerification:
 
 
 def _configuration_state(hook: Any) -> tuple[str, str]:
-    """Resolve the compatibility reason while retaining its tri-state status."""
-    reason = _configuration_drift_reason(hook)
-    return str(getattr(reason, "status", "drifted" if reason else "valid")), str(reason)
+    """Return the validated configuration state and actionable reason."""
+    check = _configuration_verification(hook)
+    return check.status, check.reason
 
 
 def _observation_text(observation: TaskObservation, field: str) -> str:

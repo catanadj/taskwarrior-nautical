@@ -118,6 +118,32 @@ class OperatorConformanceTests(unittest.TestCase):
         decoded = OperatorV2Result.from_mapping(json.loads(encoded))
         self.assertEqual(decoded, result)
 
+    def test_public_operator_contracts_round_trip_through_json(self) -> None:
+        """Representative request, finding, plan, and snapshot documents stay decodable."""
+        request = OperatorRequest(OperatorOperation.INTEGRITY, OperatorScope.system())
+        finding = OperatorFinding(
+            "snapshot.test", "snapshot", FindingSeverity.WARNING,
+            FindingActionability.INFORMATIONAL, "test finding",
+        )
+        snapshot = OperatorSnapshot(
+            "snapshot-roundtrip",
+            OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "epoch-1", "config-1",
+        )
+        plan = OperatorPlan(
+            "noop", "snapshot-roundtrip", "config-1", OperatorScope.system(),
+            snapshot.coverage,
+        )
+        for value, decoder in (
+            (request, OperatorRequest.from_mapping),
+            (finding, OperatorFinding.from_mapping),
+            (snapshot, OperatorSnapshot.from_mapping),
+            (plan, OperatorPlan.from_mapping),
+        ):
+            encoded = render_contract_json(value)
+            self.assertEqual(decoder(json.loads(encoded)), value)
+
     def test_snapshot_unavailable_evidence_is_retryable(self) -> None:
         configuration = ValidatedNauticalConfiguration(
             source="test", fingerprint="config-1", scheduler_fingerprint="schedule-1",

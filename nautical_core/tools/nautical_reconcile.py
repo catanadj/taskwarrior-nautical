@@ -676,7 +676,6 @@ def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
 
 
 def _refresh_plan(
-    task_bin: str,
     hook: Any,
     original_parent: TaskPayload,
     *,
@@ -1051,7 +1050,6 @@ def _execute_reconcile_terminal_plan(
 
 
 def _apply_parent_atomic(
-    task_bin: str,
     hook: Any,
     original_parent: TaskPayload,
     *,
@@ -1093,7 +1091,7 @@ def _apply_parent_atomic(
     operations = CallbackLifecycleApplyOperations(
         configuration_callback=validated_configuration,
         refresh_callback=lambda parent, *, generation: _refresh_plan(
-            task_bin, hook, parent, generation=generation,
+            hook, parent, generation=generation,
             reconciliation_service=reconciliation_service,
         ),
         execute_callback=execute_plan,
@@ -1295,7 +1293,7 @@ def _reconcile_candidate(
         parent,
         operations=CallbackLifecycleRecoveryOperations(
             apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(
-                task_bin, hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
+                hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
             plan_parent_callback=lambda candidate, **kwargs: _plan_for_parent(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,

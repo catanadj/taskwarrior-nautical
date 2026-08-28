@@ -328,13 +328,6 @@ def _reconcile_runtime_state() -> _ReconcileRuntimeState | None:
     return _RECONCILE_RUNTIME.get()
 
 
-def _lifecycle_reconciliation_service() -> LifecycleReconciliationService:
-    state = _reconcile_runtime_state()
-    if state is not None:
-        return state.lifecycle_service
-    raise RuntimeError("lifecycle reconciliation service requires an invocation snapshot")
-
-
 def _active_chain_rows(
     task_bin: str,
     *,

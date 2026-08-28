@@ -30302,7 +30302,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
             apply=False,
             max_expiration_hops=8,
             recovery_at=recovery_at,
-            reconciliation_service=tool._lifecycle_reconciliation_service(),
+            reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
         )
         limited = tool._reconcile_candidate(
             "task",
@@ -30312,7 +30312,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
             apply=False,
             max_expiration_hops=2,
             recovery_at=recovery_at,
-            reconciliation_service=tool._lifecycle_reconciliation_service(),
+            reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
         )
         capped = tool._reconcile_candidate(
             "task",
@@ -30322,7 +30322,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
             apply=False,
             max_expiration_hops=8,
             recovery_at=recovery_at,
-            reconciliation_service=tool._lifecycle_reconciliation_service(),
+            reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
         )
         anchor_parent = {
             **parent,
@@ -30341,7 +30341,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
             apply=False,
             max_expiration_hops=8,
             recovery_at=hook.core.build_local_datetime(date(2026, 7, 21), (14, 30)),
-            reconciliation_service=tool._lifecycle_reconciliation_service(),
+            reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
         )
     finally:
         tool._existing_children_for_plan = original
@@ -30454,7 +30454,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
             apply=True,
             max_expiration_hops=8,
             recovery_at=datetime(2026, 7, 22, 9, 30, tzinfo=timezone.utc),
-            reconciliation_service=tool._lifecycle_reconciliation_service(),
+            reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
         )
     finally:
         tool._apply_parent_atomic = original_apply
@@ -30820,7 +30820,7 @@ def test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review():
                 apply=True,
                 max_expiration_hops=4,
                 recovery_at=datetime.now(timezone.utc),
-                reconciliation_service=tool._lifecycle_reconciliation_service(),
+                reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
             )
             expect(len(outcomes) == 1, f"typed outcome produced extra reconcile work: {outcomes!r}")
             plan, applied = outcomes[0]
@@ -30857,7 +30857,7 @@ def test_reconcile_planning_configuration_drift_is_partial():
         max_expiration_hops=4,
         recovery_at=datetime.now(timezone.utc),
         generation=object(),
-        reconciliation_service=tool._lifecycle_reconciliation_service(),
+        reconciliation_service=tool._reconcile_runtime_state().lifecycle_service,
     )
     expect(len(outcomes) == 1, f"configuration drift produced extra work: {outcomes!r}")
     plan, applied = outcomes[0]

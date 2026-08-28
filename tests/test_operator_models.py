@@ -99,6 +99,23 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(restored.page, page)
         self.assertEqual(restored.extensions["future_field"], {"enabled": True})
 
+    def test_decoding_preserves_unknown_response_fields(self) -> None:
+        result = OperatorResult(OperatorOperation.INSPECT, OperatorStatus.OK)
+        encoded = result.to_dict()
+        encoded["future_contract_field"] = {"revision": 2}
+        restored = OperatorResult.from_mapping(encoded)
+        self.assertEqual(restored.extensions["future_contract_field"], {"revision": 2})
+        self.assertEqual(restored.to_dict()["future_contract_field"], {"revision": 2})
+
+    def test_request_rejects_unsupported_schema_version(self) -> None:
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.SYSTEM),
+        ).to_dict()
+        request["version"] = 999
+        with self.assertRaises(OperatorContractError):
+            OperatorRequest.from_mapping(request)
+
     def test_unavailable_requires_structured_failure(self) -> None:
         with self.assertRaises(OperatorContractError):
             OperatorResult(OperatorOperation.OCCURRENCES, OperatorStatus.UNAVAILABLE)

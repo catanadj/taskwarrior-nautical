@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .chain_integrity_engine import IntegrityEngineResult
+from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 
 
 def _snapshot_payload(snapshot: Any) -> dict[str, Any] | None:
@@ -72,20 +73,27 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             "snapshot": finding.snapshot_id,
             "historical": historical,
         }
-        findings.append({
-            "id": f"chains.{finding.invariant_id}",
-            "severity": severity,
-            "message": finding.message,
-            "fix": (
+        guidance = (
                 "Historical finding retained for audit; no action is required unless the chain is reactivated."
                 if historical
                 else
                 "Review the integrity evidence and run nautical reconcile --apply."
                 if finding.status.value == "repairable"
                 else "Inspect the invariant evidence before modifying tasks."
-            ),
-            "details": details,
-        })
+            )
+        canonical = OperatorFinding(
+            code=f"chains.{finding.invariant_id}",
+            domain="chains",
+            severity=FindingSeverity.INFO if historical else FindingSeverity.ERROR if severity == "error" else FindingSeverity.WARNING,
+            actionability=FindingActionability.INFORMATIONAL if historical else FindingActionability.ACTIONABLE,
+            message=finding.message,
+            affected=tuple(finding.subject_uuids),
+            observed=finding.observed,
+            expected=finding.expected,
+            evidence=details,
+            guidance=guidance,
+        )
+        findings.append(canonical.to_doctor_dict())
     if result.status.value == "unavailable":
         findings.append({
             "id": "chains.integrity_unavailable",

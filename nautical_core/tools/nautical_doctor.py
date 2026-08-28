@@ -26,8 +26,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core.operator_presentation import finding_display, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
-from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding, status_for_findings  # noqa: E402
+from nautical_core.operator_presentation import finding_display, finding_status, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
@@ -1310,16 +1310,6 @@ def _check_chains(
     }
 
 
-def _overall_status(findings: list[dict[str, Any]]) -> str:
-    canonical = tuple(
-        OperatorFinding.from_doctor_mapping(item)
-        for item in findings
-        if isinstance(item, dict)
-    )
-    status = status_for_findings(canonical).value
-    return "error" if status in {"error", "unavailable"} else "warn" if status != "ok" else "ok"
-
-
 def _format_task(task: dict[str, Any]) -> str:
     uuid = str(task.get("uuid") or "")
     short = lifecycle.short_uuid(uuid) or "unknown"
@@ -1676,7 +1666,7 @@ def main() -> int:
             unit_of_work=unit_of_work,
         )
 
-    status = _overall_status(findings)
+    status = {"failed": "error", "attention": "warn", "passed": "ok"}[finding_status(findings, empty="passed")]
     payload = {
         "schema": _JSON_SCHEMA,
         "schema_version": _JSON_SCHEMA_VERSION,

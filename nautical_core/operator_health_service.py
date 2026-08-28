@@ -286,6 +286,43 @@ class OperatorHealthService:
         ),)
 
     @staticmethod
+    def navigator_dependency_findings(
+        data: dict[str, Any],
+        available: Callable[[str], bool],
+        *,
+        python_executable: str,
+    ) -> tuple[OperatorFinding, ...]:
+        """Report optional Navigator and astronomy runtime dependencies."""
+        required = ("rich", "prompt_toolkit", "dateutil")
+        missing = [name for name in required if not available(name)]
+        result: list[OperatorFinding] = []
+        if missing:
+            result.append(OperatorFinding(
+                "navigator.dependencies", "installation", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "Navigator dependencies are incomplete: " + ", ".join(missing) + ".",
+                observed={"missing": missing, "python": python_executable},
+                guidance="Run python3 -m pip install -r requirements.txt.",
+            ))
+        else:
+            result.append(OperatorFinding(
+                "navigator.dependencies", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Navigator dependencies are available.",
+                observed={"python": python_executable},
+            ))
+        astronomy = data.get("astronomy")
+        if isinstance(astronomy, dict) and astronomy.get("locations") and not available("astral"):
+            result.append(OperatorFinding(
+                "navigator.astronomy_dependency", "installation", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "Astronomy locations are configured, but Astral is not installed.",
+                observed={"python": python_executable},
+                guidance="Run python3 -m pip install -r requirements.txt.",
+            ))
+        return tuple(result)
+
+    @staticmethod
     def runtime_findings(
         status: dict[str, Any], runtime_root: object,
         hook_runtimes: dict[str, dict[str, Any]] | None = None,

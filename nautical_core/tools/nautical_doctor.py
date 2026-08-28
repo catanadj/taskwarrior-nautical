@@ -575,42 +575,9 @@ def _check_navigator_dependencies(findings: list[dict[str, Any]], data: dict[str
         except Exception:
             return False
 
-    required = {
-        "rich": "formatted panels",
-        "prompt_toolkit": "interactive chain selection",
-        "dateutil": "datetime parsing",
-    }
-    missing = [name for name in required if not available(name)]
-    if missing:
-        _finding(
-            findings,
-            "navigator.dependencies",
-            "warn",
-            "Navigator dependencies are incomplete: " + ", ".join(missing) + ".",
-            fix="Run python3 -m pip install -r requirements.txt.",
-            details={"missing": missing, "python": sys.executable},
-        )
-    else:
-        _finding(
-            findings,
-            "navigator.dependencies",
-            "ok",
-            "Navigator dependencies are available.",
-            details={"python": sys.executable},
-        )
-
-    astronomy = data.get("astronomy")
-    astronomy_configured = isinstance(astronomy, dict) and bool(astronomy.get("locations"))
-    astral_available = available("astral")
-    if astronomy_configured and not astral_available:
-        _finding(
-            findings,
-            "navigator.astronomy_dependency",
-            "warn",
-            "Astronomy locations are configured, but Astral is not installed.",
-            fix="Run python3 -m pip install -r requirements.txt.",
-            details={"python": sys.executable},
-        )
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.navigator_dependency_findings(
+        data, available, python_executable=sys.executable,
+    ))
 
 
 def _check_panel_config(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:

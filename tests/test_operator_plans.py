@@ -304,6 +304,38 @@ class OperatorPlanTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             OperatorDomainPlanner(Planner(), object()).plan_lifecycle(object(), "complete")
 
+    def test_domain_planner_propagates_planning_failure(self) -> None:
+        class Planner:
+            def plan(self, *args, **kwargs):
+                raise RuntimeError("injected planning failure")
+
+        with self.assertRaisesRegex(RuntimeError, "planning failure"):
+            OperatorDomainPlanner(Planner(), object()).plan_lifecycle(object(), "complete")
+
+    def test_application_owner_failure_never_reaches_postcondition(self) -> None:
+        plan = OperatorPlan(
+            "apply", "snap-1", "config-1", OperatorScope.system(),
+            OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            operations=({"kind": "repair"},),
+        )
+        request = OperatorRequest(OperatorOperation.APPLY, plan.scope, apply=True,
+                                  coverage=CoverageRequirement(CoverageKind.COMPLETE))
+
+        class Guard:
+            def verify(self, authorization):
+                return None
+
+        class Owner:
+            def apply(self, authorization):
+                raise RuntimeError("injected delegation failure")
+
+        class Postcondition:
+            def verify(self, authorization, result):
+                raise AssertionError("postcondition must not run")
+
+        with self.assertRaisesRegex(RuntimeError, "delegation failure"):
+            apply_authorized(plan, request, Guard(), Owner(), Postcondition())
+
     def test_control_plane_factory_requires_validated_dependencies(self) -> None:
         with self.assertRaises(ValueError):
             OperatorControlPlane.from_configuration(None, OperatorApplicationRegistry())

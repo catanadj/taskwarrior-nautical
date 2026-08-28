@@ -1647,7 +1647,19 @@ def main() -> int:
             unit_of_work=unit_of_work,
         )
 
-    status = {"failed": "error", "attention": "warn", "passed": "ok"}[finding_status(findings, empty="passed")]
+    typed_findings = tuple(
+        OperatorFinding.from_mapping(item)
+        for item in findings
+        if isinstance(item, dict)
+    )
+    health = OperatorControlPlane.health_report(typed_findings)
+    status = (
+        "error"
+        if health.status.value in {"error", "unavailable"}
+        else "warn"
+        if health.status.value in {"attention", "deferred", "partial"}
+        else "ok"
+    )
     payload = {
         "schema": _JSON_SCHEMA,
         "schema_version": _JSON_SCHEMA_VERSION,
@@ -1658,11 +1670,7 @@ def main() -> int:
         "outbox": outbox,
         "obsolete_queue_state": obsolete_queue_state,
         "scope": "installation" if args.installation_only else "full",
-        "operator_findings": [
-            OperatorFinding.from_mapping(item).to_dict()
-            for item in findings
-            if isinstance(item, dict)
-        ],
+        "operator_findings": [item.to_dict() for item in health.findings],
     }
     if args.json:
         # Diagnostics may include timezone/provider objects supplied by an

@@ -1348,6 +1348,29 @@ def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget
     result["pass"] = bool(result.get("pass", True)) and all(item["pass"] for item in checks.values())
 
 
+def _apply_component_budgets(result: dict, timing_samples: list[dict[str, float]], budget: dict) -> None:
+    """Enforce independent timing budgets for expensive workflow components."""
+    if not isinstance(budget, dict) or not timing_samples:
+        return
+    checks: dict[str, dict[str, object]] = {}
+    for key, raw_limit in budget.items():
+        try:
+            limit = float(raw_limit)
+            observed = max(float(sample.get(key, 0.0) or 0.0) for sample in timing_samples)
+        except (TypeError, ValueError):
+            continue
+        checks[str(key)] = {
+            "max_observed_s": observed,
+            "budget_s": limit,
+            "pass": limit <= 0.0 or observed <= limit,
+        }
+    if checks:
+        result["component_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
 def _workflow_outbox_pending(taskdata: Path) -> list[dict]:
     """Read active lifecycle outbox records for benchmark mutation assertions."""
     result, status = lifecycle_outbox.LifecycleOutboxRepository(taskdata).status(limit=100)
@@ -2147,6 +2170,12 @@ def _bench_expensive_workflows(
         queue_result["task_call_stats"] = queue_call_stats
         queue_result["outbox_stats"] = queue_outbox_stats
         _attach_timing_breakdown(queue_result, queue_samples, queue_timing_stats)
+        component_budgets = workflow_cfg.get("component_budgets_seconds")
+        if isinstance(component_budgets, dict):
+            _apply_component_budgets(
+                queue_result, queue_result["timing_breakdown"],
+                component_budgets.get("workflow_queue_drain", {}),
+            )
         call_budgets = workflow_cfg.get("task_call_budgets")
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
@@ -2163,6 +2192,11 @@ def _bench_expensive_workflows(
         queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
         queue_idempotent_result["outbox_stats"] = queue_idempotent_outbox_stats
         _attach_timing_breakdown(queue_idempotent_result, queue_idempotent_samples, queue_idempotent_timing_stats)
+        if isinstance(component_budgets, dict):
+            _apply_component_budgets(
+                queue_idempotent_result, queue_idempotent_result["timing_breakdown"],
+                component_budgets.get("workflow_queue_drain_idempotent", {}),
+            )
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
                 queue_idempotent_result,
@@ -2182,6 +2216,11 @@ def _bench_expensive_workflows(
         queue_partial_result["task_call_stats"] = queue_partial_call_stats
         queue_partial_result["outbox_stats"] = queue_partial_outbox_stats
         _attach_timing_breakdown(queue_partial_result, queue_partial_samples, queue_partial_timing_stats)
+        if isinstance(component_budgets, dict):
+            _apply_component_budgets(
+                queue_partial_result, queue_partial_result["timing_breakdown"],
+                component_budgets.get("workflow_queue_drain_partial_recovery", {}),
+            )
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
                 queue_partial_result,

@@ -156,6 +156,23 @@
         "run_task_calls": 8
       }
     },
+    "component_budgets_seconds": {
+      "workflow_queue_drain": {
+        "taskwarrior_seconds": 3.0,
+        "startup_seconds": 1.0,
+        "drain_seconds": 2.0,
+        "presentation_seconds": 0.5,
+        "non_taskwarrior_seconds": 2.0
+      },
+      "workflow_queue_drain_idempotent": {
+        "taskwarrior_seconds": 1.0,
+        "non_taskwarrior_seconds": 1.0
+      },
+      "workflow_queue_drain_partial_recovery": {
+        "taskwarrior_seconds": 8.0,
+        "non_taskwarrior_seconds": 4.0
+      }
+    },
     "reconcile_candidate_chains": 32,
     "reconcile_candidate_apply_counts": [1, 8, 32, 200],
     "queue_background_history_rows": 5000,

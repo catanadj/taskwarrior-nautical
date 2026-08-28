@@ -10208,6 +10208,32 @@ def test_doctor_text_large_history_is_actionable_and_compact():
     expect(len(output.splitlines()) < 20, f"large-history Doctor output was not compact: {len(output.splitlines())} lines")
 
 
+def test_doctor_text_groups_historical_findings_across_chains():
+    """Historical summaries must not produce one line per affected chain."""
+    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
+    mod = _load_hook_module(path, "_nautical_doctor_historical_grouping_test")
+    findings = [
+        {
+            "code": "chains.carry.child_relative_offset",
+            "domain": "chains",
+            "severity": "info",
+            "actionability": "informational",
+            "message": "historical carry difference",
+            "observed": {"field": "scheduled"},
+            "expected": {},
+            "evidence": {"historical": True, "chainID": f"chain-{index}"},
+            "guidance": "No action is required; current pending-chain findings are reported separately.",
+        }
+        for index in range(100)
+    ]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        mod._render_text({"status": "ok", "taskdata": "/tmp/task", "operator_findings": findings})
+    output = buf.getvalue()
+    expect("100 completed-link scheduled observation(s)" in output, f"historical findings were not aggregated: {output!r}")
+    expect(output.count("chains.historical_summary") == 1, "historical findings were grouped per chain")
+
+
 def test_doctor_reports_live_panel_configuration_health():
     """Doctor should explain effective live duration, fallback behavior, and Rich availability."""
     path = os.path.join(CORE_TOOLS, "nautical_doctor.py")

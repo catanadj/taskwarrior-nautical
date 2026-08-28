@@ -539,7 +539,7 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
 
 def _historical_summaries(findings: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Collapse completed-link evidence while leaving JSON output lossless."""
-    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
     for item in findings:
         if item.get("severity") != "info":
             continue
@@ -547,31 +547,35 @@ def _historical_summaries(findings: list[Mapping[str, Any]]) -> list[dict[str, A
         details: dict[str, Any] = dict(details_value) if isinstance(details_value, dict) else {}
         if not details.get("historical"):
             continue
-        chain_id = str(details.get("chainID") or "").strip() or "unassigned"
         invariant_id = str(details.get("invariant_id") or item.get("id") or "historical")
         observed_value = details.get("observed")
         observed: dict[str, Any] = dict(observed_value) if isinstance(observed_value, dict) else {}
         field = str(observed.get("field") or "").strip()
-        key = (chain_id, invariant_id, field)
-        group = groups.setdefault(key, {"count": 0, "subjects": set()})
+        chain_id = str(details.get("chainID") or "").strip()
+        key = (invariant_id, field)
+        group = groups.setdefault(key, {"count": 0, "chains": set(), "subjects": set()})
         group["count"] += 1
+        if chain_id:
+            group["chains"].add(chain_id)
         group["subjects"].update(str(value) for value in details.get("subjects") or () if value)
 
     summaries: list[dict[str, Any]] = []
-    for (chain_id, invariant_id, field), group in sorted(groups.items()):
+    for (invariant_id, field), group in sorted(groups.items()):
         count = int(group["count"])
         label = f" {field}" if field else ""
+        chains = sorted(group["chains"])
         summaries.append({
             "id": "chains.historical_summary",
             "severity": "info",
             "message": f"{count} completed-link{label} observation(s) retained for audit.",
             "fix": "No action is required; current pending-chain findings are reported separately.",
             "details": {
-                "chainID": chain_id,
                 "invariant_id": invariant_id,
                 "historical_count": count,
+                "chain_count": len(chains),
+                "chains": chains[:8],
                 "subjects": sorted(group["subjects"])[:8],
-                "detail_command": f"nautical query integrity --chain-id {chain_id}",
+                "detail_command": "nautical query integrity --all",
             },
         })
     return summaries

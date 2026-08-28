@@ -13,6 +13,7 @@ from nautical_core.integration_context import (
     SystemClock,
     ValidatedNauticalConfiguration,
 )
+from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
 from nautical_core.operator_context import (
     OperatorContextError,
     OperatorInvocationCache,
@@ -491,6 +492,23 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(len(batch), 2)
         self.assertIsInstance(batch[0], OperatorSnapshot)
         self.assertIsInstance(batch[1], OperatorFailure)
+
+    def test_multi_scope_hydration_stops_on_unavailable_evidence(self) -> None:
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "hydration-failure", 10, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        command = TaskCommand(("task", "export"), "hydration", 1.0)
+        evidence = FailureEvidence(command, CommandFailureKind.TIMEOUT, 124, 1, 1.0, True, "hydration timed out")
+        reader = ChainSnapshotReader(lambda _request: Unavailable("hydration", evidence))
+        scope = OperatorScope(OperatorScopeKind.CHAINS, ("a", "b", "c", "d", "e"))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_unavailable")
+        self.assertTrue(result.retryable)
 
     def test_dependency_evidence_requires_reason_when_unavailable(self) -> None:
         available = OperatorDependency("astral", True, version="3.2")

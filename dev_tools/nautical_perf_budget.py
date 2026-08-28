@@ -1792,7 +1792,10 @@ def _bench_expensive_workflows(
                 # exported task would.
                 "modified": "20260101T090000Z",
             }
-            new = dict(old, status="deleted", end="20260102T090000Z")
+            # An expiration deletion ends at the native until boundary.  A
+            # later end timestamp is a manual/ambiguous deletion and should
+            # be deferred by the hook rather than staged for recovery.
+            new = dict(old, status="deleted", end="20260101T200000Z")
             taskdata = root / f"expiration-recovery-{sample_index}"
             taskdata.mkdir()
             env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")

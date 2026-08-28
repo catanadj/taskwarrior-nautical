@@ -64,6 +64,7 @@ from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleRecoveryOperations,
     LifecycleReconciliationService,
 )
+from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -302,72 +303,6 @@ def _observation_text(observation: TaskObservation, field: str) -> str:
     return str(value or "").strip()
 
 
-class _ReconcileSnapshot:
-    """Immutable read-phase views for active links and recovery candidates.
-
-    By default completed/deleted history is limited to rows without a successor;
-    ``full_audit`` explicitly restores complete history for deep validation.
-    Native-until repair reads a predecessor by chain/link only when an active
-    row actually needs repair.
-    """
-
-    def __init__(
-        self,
-        repository: TaskReadRepository,
-        *,
-        scope_filter: str | None = None,
-        full_audit: bool = False,
-    ):
-        self.repository = repository
-        self.scope_filter = str(scope_filter or "").strip() or None
-        self.full_audit = bool(full_audit)
-        self._rows: tuple[TaskObservation, ...] | None = None
-        self._active: tuple[TaskObservation, ...] | None = None
-        self._candidates: tuple[TaskObservation, ...] | None = None
-
-    def _all_rows(self) -> tuple[TaskObservation, ...]:
-        if self._rows is None:
-            value = _read_value(
-                self.repository.lifecycle_candidates(
-                    statuses=ALL_TASK_STATUSES,
-                    scope_filter=self.scope_filter,
-                    bounded=not self.full_audit,
-                ),
-                "reconcile lifecycle snapshot",
-            )
-            self._rows = (
-                value if isinstance(value, tuple) else (value,) if isinstance(value, TaskObservation) else ()
-            )
-        else:
-            _EXPORT_STATS["snapshot_hits"] += 1
-        return self._rows
-
-    def active_rows(self) -> list[TaskObservation]:
-        if self._active is None:
-            self._active = tuple(
-                row for row in self._all_rows()
-                if _observation_text(row, "chainID")
-                and _observation_text(row, "status").lower() not in {"completed", "deleted"}
-            )
-        return list(self._active)
-
-    def candidate_rows(self) -> list[TaskObservation]:
-        if self._candidates is None:
-            self._candidates = tuple(
-                row for row in self._all_rows()
-                if _observation_text(row, "chainID")
-                and not _observation_text(row, "nextLink")
-                and _observation_text(row, "status").lower() in {"completed", "deleted"}
-            )
-        return list(self._candidates)
-
-    def invalidate(self) -> None:
-        """Discard projections after a mutation changes authoritative rows."""
-        self._rows = None
-        self._active = None
-        self._candidates = None
-
-
 class _ReconcileRuntimeState:
     """Invocation-scoped read/service state; never shared between runs."""
 
@@ -376,7 +311,7 @@ class _ReconcileRuntimeState:
     def __init__(
         self,
         repository: TaskReadRepository,
-        snapshot: _ReconcileSnapshot,
+        snapshot: ReconcileSnapshotService,
         lifecycle_service: LifecycleReconciliationService,
     ) -> None:
         self.repository = repository
@@ -404,7 +339,7 @@ def _active_chain_rows(
     task_bin: str,
     *,
     include_inactive: bool = False,
-    snapshot: _ReconcileSnapshot | None = None,
+    snapshot: ReconcileSnapshotService | None = None,
 ) -> list[TaskObservation]:
     """Export live Nautical links for integrity checks, independently of recovery candidates."""
     if snapshot is None:
@@ -1600,10 +1535,12 @@ def main(
     repository = _unit_of_work.repository
     repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
     scope_filter = f"chainID:{args.chain_id}" if args.chain_id else f"uuid:{args.uuid}" if args.uuid else None
-    snapshot = _ReconcileSnapshot(
+    snapshot = ReconcileSnapshotService(
         repository,
         scope_filter=scope_filter,
         full_audit=bool(args.full_audit),
+        read_value=_read_value,
+        stats=_EXPORT_STATS,
     )
     configuration = _UNIT_OF_WORK.context.configuration
     operator_control_plane = OperatorControlPlane.from_configuration(

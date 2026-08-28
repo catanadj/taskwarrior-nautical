@@ -18,6 +18,7 @@ QUERY_API_VERSION = 1
 OCCURRENCES_SCHEMA = "nautical.query.occurrences"
 NEXT_SCHEMA = "nautical.query.next"
 CAPABILITIES_SCHEMA = "nautical.query.capabilities"
+CAPABILITIES_API_VERSION = 2
 OCCURRENCE_OPERATION = "occurrences"
 NEXT_OPERATION = "next"
 
@@ -38,6 +39,39 @@ OmissionPolicy = Literal["exclude", "include", "report"]
 
 class QueryContractError(ValueError):
     """Raised when a public query contract value is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class QueryCapabilities:
+    """Validated discovery document for the query CLI surface."""
+
+    document: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.document, Mapping):
+            raise QueryContractError("capabilities document must be an object")
+        if self.document.get("schema") != CAPABILITIES_SCHEMA:
+            raise QueryContractError("invalid capabilities schema")
+        if self.document.get("version") != CAPABILITIES_API_VERSION:
+            raise QueryContractError("unsupported capabilities version")
+        if self.document.get("operation") != "query":
+            raise QueryContractError("invalid capabilities operation")
+        operations = self.document.get("operations")
+        required_operations = {OCCURRENCE_OPERATION, NEXT_OPERATION, "integrity"}
+        if not isinstance(operations, list) or not required_operations.issubset(
+            {str(item) for item in operations}
+        ):
+            raise QueryContractError("capabilities operations are incomplete")
+        object.__setattr__(self, "document", dict(self.document))
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "QueryCapabilities":
+        if not isinstance(value, Mapping):
+            raise QueryContractError("capabilities must be an object")
+        return cls(value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.document)
 
 
 def _text(value: object, field: str, *, required: bool = True) -> str:
@@ -545,6 +579,7 @@ class OccurrenceQueryResponse:
 
 __all__ = (
     "CAPABILITIES_SCHEMA",
+    "CAPABILITIES_API_VERSION",
     "DEFAULT_MAX_FILE_SKIPS",
     "DEFAULT_MAX_ITERATIONS",
     "DEFAULT_MAX_OCCURRENCES",
@@ -558,6 +593,7 @@ __all__ = (
     "OCCURRENCES_SCHEMA",
     "NEXT_SCHEMA",
     "NEXT_OPERATION",
+    "QueryCapabilities",
     "OccurrenceQueryRequest",
     "OccurrenceQueryResponse",
     "OccurrenceRecord",

@@ -10,6 +10,7 @@ import unittest
 import shutil
 
 from nautical_core.integration_models import CommandFailureKind
+from nautical_core.query_models import QueryCapabilities
 from nautical_core.taskwarrior_client import TaskwarriorClient
 
 
@@ -44,6 +45,8 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
         payload = self._json(process)
         self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
+        decoded = QueryCapabilities.from_mapping(payload)
+        self.assertEqual(decoded.to_dict(), payload)
 
     def test_malformed_request_fails_with_json_and_exit_code(self) -> None:
         process = self._run(QUERY, "occurrences", "--request", "{not-json")

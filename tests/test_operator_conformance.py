@@ -9,7 +9,7 @@ from nautical_core.operator_inspectors import inspect_operator_snapshot, standar
 from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCoverage, OperatorLimits,
     OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorV2Result, OperatorV2Status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
-from nautical_core.operator_presentation import ordered_findings, render_contract_json
+from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
 from nautical_core.operator_snapshot import OperatorSnapshot
 from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
 from nautical_core.integration_context import (
@@ -20,6 +20,7 @@ from nautical_core.integration_models import (
     CommandFailureKind, FailureEvidence, TaskCommand, Unavailable,
 )
 from nautical_core.operator_models import OperatorFailure
+from nautical_core.operator_plans import OperatorPlan
 from nautical_core.operator_context import OperatorInvocationContext
 
 
@@ -56,6 +57,26 @@ class OperatorConformanceTests(unittest.TestCase):
         records = [item.to_dict() for item in findings]
         reversed_records = list(reversed(records))
         self.assertEqual(ordered_findings(records), ordered_findings(reversed_records))
+
+    def test_shuffled_operator_domains_have_stable_projection(self) -> None:
+        """Task, chain, outbox, and plan records remain deterministic when input order varies."""
+        records = [
+            {"chain_id": "chain-b", "link": 2, "uuid": "task-b", "status": "pending"},
+            {"chain_id": "chain-a", "link": 1, "uuid": "task-a", "status": "completed"},
+        ]
+        self.assertEqual(ordered_records(records), ordered_records(list(reversed(records))))
+
+        plan = OperatorPlan(
+            action="repair",
+            snapshot_id="snapshot-1",
+            configuration_fingerprint="config-1",
+            scope=OperatorScope.system(),
+            coverage=OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snapshot-1"),
+            operations=({"kind": "link", "uuid": "task-a", "fields": {"nextLink": "task-b"}},),
+        )
+        equivalent = OperatorPlan.from_mapping(json.loads(json.dumps(plan.to_dict(), ensure_ascii=False)))
+        self.assertEqual(plan.fingerprint, equivalent.fingerprint)
+        self.assertEqual(render_contract_json(plan), render_contract_json(equivalent))
 
     def test_cross_interface_projection_matrix_preserves_snapshot_facts(self) -> None:
         """The operator clients must project one snapshot identically for each scope."""

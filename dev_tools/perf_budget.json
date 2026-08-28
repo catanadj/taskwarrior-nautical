@@ -90,6 +90,7 @@
   "resource_budgets": {
     "cold_core_import": {"module_count": 120},
     "cold_modify_impl_import": {"module_count": 220},
+    "scheduler_decisions": {"decision_count": 128},
     "task_snapshot_memory": {
       "peak_bytes_100": 20000000,
       "peak_bytes_1000": 60000000,

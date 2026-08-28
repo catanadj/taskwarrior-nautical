@@ -28,7 +28,7 @@ import time
 import tracemalloc
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -108,6 +108,33 @@ def _bench_next_after(exprs: list[str], rounds: int) -> float:
         for dnf in dnfs:
             core.next_after_expr(dnf, ref)
     return time.perf_counter() - t0
+
+
+def _bench_scheduler_decisions(exprs: list[str]) -> float:
+    """Measure scheduler-service decisions without affecting wall-time samples."""
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.scheduler_trace import SchedulerTrace
+
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000099",
+        "description": "scheduler decision benchmark",
+        "status": "pending", "chain": "on", "chainID": "scheduler-perf",
+        "link": 1, "due": "20260824T090000Z",
+    }
+    started = time.perf_counter()
+    decisions: dict[str, int] = {}
+    for expr in exprs:
+        observation = task_codec.DEFAULT_TASK_CODEC.decode_row(
+            {**row, "anchor": expr}, source_query="perf:scheduler-decisions",
+        )
+        trace = SchedulerTrace(enabled=True, max_events=1)
+        service = SchedulerService.from_observation(observation, trace=trace)
+        cursor = OccurrenceCursor.strict_after(datetime(2026, 1, 1, tzinfo=timezone.utc), timezone=timezone.utc)
+        service.next(cursor)
+        decisions[expr] = trace.last_decision_count
+    RESOURCE_DETAILS["scheduler_decisions"] = decisions
+    return time.perf_counter() - started
 
 
 def _bench_task_codec(rounds: int) -> float:
@@ -1391,6 +1418,12 @@ def _apply_resource_budgets(result: dict, name: str, budgets: dict) -> None:
         observed = int(result.get("module_count", 0) or 0)
         limit = int(budgets["module_count"])
         checks["module_count"] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    elif name == "scheduler_decisions" and "decision_count" in budgets:
+        values = RESOURCE_DETAILS.get(name, {})
+        if isinstance(values, dict):
+            observed = max((int(value) for value in values.values()), default=0)
+            limit = int(budgets["decision_count"])
+            checks["decision_count"] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
     if checks:
         result["resource_budget"] = checks
         result["pass"] = bool(result.get("pass", True)) and all(
@@ -2883,6 +2916,7 @@ def main() -> int:
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
         ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),
+        ("scheduler_decisions", lambda: _bench_scheduler_decisions(exprs), 1),
         ("task_codec_decode", lambda: _bench_task_codec(codec_rounds), repeats),
         (
             "task_snapshot_reuse",

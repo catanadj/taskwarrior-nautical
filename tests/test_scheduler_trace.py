@@ -13,6 +13,7 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertEqual(trace.summary()["decision_count"], 2)
         trace.clear()
         self.assertEqual(trace.decision_count, 0)
+        self.assertEqual(trace.last_decision_count, 2)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,44 @@ class QueryPaginationTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertIsNone(cursor)
 
+    def test_empty_scope_is_a_complete_page(self) -> None:
+        service = self._service()
+        page, cursor, complete = service._page_rows((), self._request())
+        self.assertEqual(page, ())
+        self.assertTrue(complete)
+        self.assertIsNone(cursor)
+
+    def test_exact_maximum_has_no_continuation(self) -> None:
+        service = self._service()
+        rows = tuple(SimpleNamespace(uuid=f"task-{index}") for index in range(2))
+        page, cursor, complete = service._page_rows(rows, self._request(max_tasks=2))
+        self.assertEqual(len(page), 2)
+        self.assertTrue(complete)
+        self.assertIsNone(cursor)
+
+    def test_maximum_plus_one_emits_one_continuation(self) -> None:
+        service = self._service()
+        rows = tuple(SimpleNamespace(uuid=f"task-{index}") for index in range(3))
+        page, cursor, complete = service._page_rows(rows, self._request(max_tasks=2))
+        self.assertEqual(tuple(row.uuid for row in page), ("task-0", "task-1"))
+        self.assertFalse(complete)
+        self.assertIsNotNone(cursor)
+        tail, tail_cursor, tail_complete = service._page_rows(rows, self._request(cursor=cursor))
+        self.assertEqual(tuple(row.uuid for row in tail), ("task-2",))
+        self.assertTrue(tail_complete)
+        self.assertIsNone(tail_cursor)
+
+    def test_many_chain_page_preserves_all_identity_rows(self) -> None:
+        service = self._service()
+        rows = tuple(
+            SimpleNamespace(uuid=uuid)
+            for uuid in ("chain-b-task", "chain-a-task", "chain-c-task")
+        )
+        page, cursor, complete = service._page_rows(rows, self._request(max_tasks=10))
+        self.assertEqual(tuple(row.uuid for row in page), ("chain-b-task", "chain-a-task", "chain-c-task"))
+        self.assertTrue(complete)
+        self.assertIsNone(cursor)
+
 
 if __name__ == "__main__":
     unittest.main()

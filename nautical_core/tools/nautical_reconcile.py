@@ -33,6 +33,8 @@ from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
 from nautical_core.operator_models import OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind  # noqa: E402
 from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
+from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
+from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,
     LifecycleAction,
@@ -890,34 +892,6 @@ def _integrity_request_factory(operation: Any) -> Any:
     return MutationRequest.metadata_repair(guard, patch, expected=expected)
 
 
-def _drain_integrity_work(*, outbox_repository: Any = None, executor: Any = None) -> tuple[Any, ...]:
-    """Drain only integrity work through the chain engine's typed boundary."""
-    if _UNIT_OF_WORK is None:
-        raise RuntimeError("integrity drain requires an integration unit of work")
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_snapshot import ChainSnapshotService
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
-
-    unit_of_work = _UNIT_OF_WORK
-    if unit_of_work is None:
-        raise RuntimeError("integrity drain requires an integration unit of work")
-    configuration = unit_of_work.context.configuration
-    engine = ChainIntegrityEngine(
-        ChainSnapshotService(_UNIT_OF_WORK, configuration_fingerprint=configuration.fingerprint),
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
-    outbox = outbox_repository or LifecycleOutboxRepository(_UNIT_OF_WORK.outbox.taskdata)
-    mutation_gateway = executor or TaskwarriorMutationService(_UNIT_OF_WORK)
-    return engine.drain(
-        outbox,
-        owner=f"reconcile-integrity-{os.getpid()}",
-        executor=mutation_gateway,
-        request_factory=_integrity_request_factory,
-    )
-
-
 def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repository: Any = None) -> Any:
     """Audit the authoritative lifecycle export without issuing another export."""
     if _UNIT_OF_WORK is None:
@@ -1673,6 +1647,9 @@ def main(
         full_audit=bool(args.full_audit),
     )
     configuration = _UNIT_OF_WORK.context.configuration
+    operator_control_plane = OperatorControlPlane.from_configuration(
+        configuration, DomainApplicationRegistry(),
+    )
     from nautical_core.lifecycle_application import LifecycleApplicationService
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
     from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
@@ -1754,9 +1731,12 @@ def main(
     integrity_drain_results: tuple[Any, ...] = ()
     if args.apply and configuration_status == "valid":
         try:
-            integrity_drain_results = _drain_integrity_work(
-                outbox_repository=integrity_outbox,
+            integrity_drain_results = operator_control_plane.drain_integrity(
+                integrity_outbox,
+                unit_of_work=_UNIT_OF_WORK,
                 executor=mutation_gateway,
+                request_factory=_integrity_request_factory,
+                owner=f"reconcile-integrity-{os.getpid()}",
             )
         except Exception as exc:
             configuration_status = "unavailable"

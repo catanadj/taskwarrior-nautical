@@ -67,6 +67,37 @@ class OperatorControlPlane:
             generation=generation,
         )
 
+    def drain_integrity(
+        self,
+        outbox: object,
+        *,
+        unit_of_work: object,
+        executor: object,
+        request_factory: object,
+        owner: str,
+    ) -> tuple[object, ...]:
+        """Drain durable integrity work through the control-plane engine."""
+        configuration = self.configuration
+        if configuration is None:
+            raise ValueError("integrity drain requires validated configuration")
+        from .chain_snapshot import ChainSnapshotService
+
+        engine = ChainIntegrityEngine(
+            ChainSnapshotService(
+                unit_of_work,
+                configuration_fingerprint=str(configuration.fingerprint),
+            ),
+            configuration_fingerprint=str(configuration.fingerprint),
+            schedule_fingerprint=str(configuration.scheduler_fingerprint),
+        )
+        return engine.drain(
+            outbox,
+            owner=owner,
+            executor=executor,
+            request_factory=request_factory,
+        )
+
+
     def plan_lifecycle(
         self,
         snapshot: TaskSnapshot,

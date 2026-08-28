@@ -410,7 +410,7 @@ def _check_hooks_and_udas(
     return validated
 
 
-def _check_managed_runtime(
+def _check_managed_runtime_legacy(
     findings: list[dict[str, Any]],
     hooks_dir: Path,
     hook_runtimes: dict[str, dict[str, Any]] | None = None,
@@ -490,6 +490,23 @@ def _check_managed_runtime(
             fix=("Reinstall Nautical so wrappers and nautical_core come from the same release." if provenance_errors else ""),
             details={**provenance_details, "errors": provenance_errors},
         )
+
+
+def _check_managed_runtime(
+    findings: list[dict[str, Any]],
+    hooks_dir: Path,
+    hook_runtimes: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    try:
+        status = install_runtime.runtime_status(hooks_dir.parent)
+    except Exception as exc:
+        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.runtime_findings(
+            {"managed": True, "errors": [str(exc)]}, hooks_dir.parent, hook_runtimes,
+        ))
+        return
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.runtime_findings(
+        status, hooks_dir.parent, hook_runtimes,
+    ))
 
 
 def _config_candidates(taskdata: Path) -> list[Path]:

@@ -226,6 +226,71 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def runtime_findings(
+        status: dict[str, Any], runtime_root: object,
+        hook_runtimes: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Project managed-runtime status into typed installation findings."""
+        from pathlib import Path
+        result: list[OperatorFinding] = []
+        abandoned = list(status.get("abandoned") or [])
+        if abandoned:
+            result.append(OperatorFinding(
+                "install.runtime_abandoned", "installation", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                f"{len(abandoned)} abandoned install transaction path(s) were found.",
+                observed={"paths": abandoned},
+                guidance="Confirm no install is running, then remove the listed .staging/.rollback paths.",
+            ))
+        if not status.get("managed"):
+            return tuple(result)
+        errors = list(status.get("errors") or [])
+        if errors:
+            result.append(OperatorFinding(
+                "install.runtime", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Managed Nautical runtime is incomplete or has a broken active pointer.",
+                observed={"errors": errors, **status},
+                guidance="Reinstall from a valid local release; the installer will preserve the previous active release.",
+            ))
+            return tuple(result)
+        release_id = str(status.get("active_release") or "unknown")
+        result.append(OperatorFinding(
+            "install.runtime", "installation", FindingSeverity.INFO,
+            FindingActionability.INFORMATIONAL,
+            f"Managed Nautical runtime is active: {release_id}.", observed=status,
+        ))
+        manifest = status.get("manifest") if isinstance(status.get("manifest"), dict) else {}
+        current_root = Path(str(status.get("runtime_root") or runtime_root)).expanduser() / "current"
+        errors = []
+        for event, record in (hook_runtimes or {}).items():
+            implementation = record.get("implementation")
+            if not implementation:
+                errors.append(f"{event} implementation path is missing")
+                continue
+            try:
+                Path(str(implementation)).resolve().relative_to(current_root.resolve())
+            except Exception:
+                errors.append(f"{event} implementation is outside the active release")
+        evidence = {
+            "release_id": release_id,
+            "source": manifest.get("source", ""),
+            "content_sha256": manifest.get("content_sha256", ""),
+            "created_at": manifest.get("created_at", ""),
+            "hook_impl_api": manifest.get("hook_impl_api", {}),
+            "errors": errors,
+        }
+        result.append(OperatorFinding(
+            "install.provenance", "installation",
+            FindingSeverity.ERROR if errors else FindingSeverity.INFO,
+            FindingActionability.BLOCKING if errors else FindingActionability.INFORMATIONAL,
+            "Active hooks do not share the managed Nautical release." if errors else "Active hooks resolve to one managed Nautical release.",
+            observed=evidence,
+            guidance="Reinstall Nautical so wrappers and nautical_core come from the same release." if errors else "",
+        ))
+        return tuple(result)
+
+    @staticmethod
     def season_findings(
         data: dict[str, Any], effective: dict[str, Any],
         zoneinfo_factory: Callable[[str], object] | None,

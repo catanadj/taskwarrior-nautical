@@ -6,6 +6,7 @@ from typing import Any
 
 from .chain_integrity_engine import IntegrityEngineResult
 from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding
+from .operator_presentation import ordered_records
 
 
 def _snapshot_payload(snapshot: Any) -> dict[str, Any] | None:
@@ -196,24 +197,38 @@ def summary(result: IntegrityEngineResult) -> dict[str, Any]:
 
 def components(result: IntegrityEngineResult) -> dict[str, Any]:
     """Return the stable evidence components shared by all consumers."""
-    return {
-        "status": result.status.value,
-        "snapshot": _snapshot_payload(result.snapshot),
-        "findings": [_finding_payload(finding) for finding in result.findings],
-        "plans": [plan.to_dict() for plan in result.plans],
-        "refusals": [
+    finding_rows = ordered_records(
+        [_finding_payload(finding) for finding in result.findings],
+        keys=("chain_id", "severity", "invariant_id", "reason_code", "snapshot_id"),
+    )
+    plan_rows = ordered_records(
+        [plan.to_dict() for plan in result.plans],
+        keys=("chainID", "parent_link", "action", "trigger", "child"),
+    )
+    refusal_rows = ordered_records(
+        [
             {
                 "invariant_id": item.invariant_id,
                 "reason_code": item.reason_code,
                 "reason": item.reason,
                 "snapshot_id": item.snapshot_id,
+                "chain_id": item.chain_id,
             }
             for item in result.refusals
         ],
-        "chain_statuses": [
-            {"chainID": chain_id, "status": status.value}
-            for chain_id, status in result.chain_statuses
-        ],
+        keys=("chain_id", "invariant_id", "reason_code", "snapshot_id"),
+    )
+    chain_rows = ordered_records(
+        [{"chainID": chain_id, "status": status.value} for chain_id, status in result.chain_statuses],
+        keys=("chainID", "status"),
+    )
+    return {
+        "status": result.status.value,
+        "snapshot": _snapshot_payload(result.snapshot),
+        "findings": list(finding_rows),
+        "plans": list(plan_rows),
+        "refusals": list(refusal_rows),
+        "chain_statuses": list(chain_rows),
         "failure": {"message": result.reason} if result.reason else None,
     }
 

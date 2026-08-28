@@ -594,15 +594,9 @@ def _check_config_schema(findings: list[dict[str, Any]], data: dict[str, Any]) -
 
 def _check_uda_aliases(findings: list[dict[str, Any]], data: dict[str, Any]) -> None:
     """Report whether description-based UDA aliases are active."""
-    enabled = data.get("enable_uda_aliases") is True
-    aliases = {alias: field for alias, field in description_aliases.ALIAS_TO_FIELD.items()}
-    state = "enabled" if enabled else "disabled"
-    _finding(
-        findings,
-        "config.uda_aliases",
-        "ok",
-        f"Description UDA aliases are {state}.",
-        details={"enabled": enabled, "aliases": aliases, "clear_syntax": "alias:"},
+    findings.extend(
+        item.to_doctor_dict()
+        for item in OperatorHealthService.uda_alias_findings(data)
     )
 
 

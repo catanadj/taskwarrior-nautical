@@ -15,6 +15,7 @@ from .operator_findings import (
 )
 from .operator_models import OperatorStatus
 from .config_schema import validate_config
+from .description_aliases import ALIAS_TO_FIELD
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,24 @@ class OperatorHealthService:
                 message=message, observed=details, guidance=guidance,
             ))
         return tuple(findings)
+
+    @staticmethod
+    def uda_alias_findings(data: dict[str, Any]) -> tuple[OperatorFinding, ...]:
+        """Describe the opt-in description alias configuration."""
+        enabled = data.get("enable_uda_aliases") is True
+        state = "enabled" if enabled else "disabled"
+        return (OperatorFinding(
+            code="config.uda_aliases",
+            domain="configuration",
+            severity=FindingSeverity.INFO,
+            actionability=FindingActionability.INFORMATIONAL,
+            message=f"Description UDA aliases are {state}.",
+            observed={
+                "enabled": enabled,
+                "aliases": dict(ALIAS_TO_FIELD),
+                "clear_syntax": "alias:",
+            },
+        ),)
 
 
 __all__ = ["OperatorHealthReport", "OperatorHealthService"]

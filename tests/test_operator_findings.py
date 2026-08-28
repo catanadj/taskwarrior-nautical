@@ -35,7 +35,7 @@ class OperatorFindingTests(unittest.TestCase):
         self.assertEqual(finding.affected, ("task-1",))
 
     def test_doctor_mapping_normalizes_to_canonical_fields(self) -> None:
-        finding = OperatorFinding.from_doctor_mapping({
+        finding = OperatorFinding.from_mapping({
             "id": "chains.repair_review",
             "severity": "warn",
             "message": "Review chain evidence.",

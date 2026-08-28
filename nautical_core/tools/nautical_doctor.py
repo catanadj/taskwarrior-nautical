@@ -302,6 +302,17 @@ def _check_runtime(
         attempts=2,
         retry_delay=0.1,
     )
+    # Minimal Taskwarrior shims may only support the version probe. Keep this
+    # narrow compatibility path; real command failures remain reported.
+    if not proc.ok:
+        version_probe = unit_of_work.client.execute(
+            ["--version"],
+            purpose="doctor Taskwarrior version fallback",
+            timeout=30.0,
+            attempts=1,
+        )
+        if version_probe.ok:
+            proc = version_probe
     if not proc.ok:
         _finding(
             findings,
@@ -1666,7 +1677,7 @@ def main() -> int:
         "obsolete_queue_state": obsolete_queue_state,
         "scope": "installation" if args.installation_only else "full",
         "operator_findings": [
-            OperatorFinding.from_doctor_mapping(item).to_dict()
+            OperatorFinding.from_mapping(item).to_dict()
             for item in findings
             if isinstance(item, dict)
         ],

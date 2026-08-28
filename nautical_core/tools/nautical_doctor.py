@@ -287,16 +287,12 @@ def _check_managed_runtime(
     hooks_dir: Path,
     hook_runtimes: dict[str, dict[str, Any]] | None = None,
 ) -> None:
-    try:
-        status = install_runtime.runtime_status(hooks_dir.parent)
-    except Exception as exc:
-        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.runtime_findings(
-            {"managed": True, "errors": [str(exc)]}, hooks_dir.parent, hook_runtimes,
-        ))
-        return
-    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.runtime_findings(
-        status, hooks_dir.parent, hook_runtimes,
-    ))
+    report = OperatorHealthService.diagnose_runtime(
+        lambda: install_runtime.runtime_status(hooks_dir.parent),
+        hooks_dir.parent,
+        hook_runtimes,
+    )
+    findings.extend(item.to_doctor_dict() for item in report.findings)
 
 
 def _config_candidates(taskdata: Path) -> list[Path]:

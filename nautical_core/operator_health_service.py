@@ -687,6 +687,21 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def diagnose_runtime(
+        runtime_loader: Callable[[], dict[str, Any]],
+        runtime_root: object,
+        hook_runtimes: dict[str, dict[str, Any]] | None = None,
+    ) -> OperatorHealthReport:
+        """Acquire managed-runtime state and classify probe failures uniformly."""
+        try:
+            status = runtime_loader()
+        except Exception as exc:
+            status = {"managed": True, "errors": [str(exc)]}
+        return OperatorHealthService.report(
+            OperatorHealthService.runtime_findings(status, runtime_root, hook_runtimes)
+        )
+
+    @staticmethod
     def season_findings(
         data: dict[str, Any], effective: dict[str, Any],
         zoneinfo_factory: Callable[[str], object] | None,

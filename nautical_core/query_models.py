@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Literal, Mapping, cast
 
+from .operator_models import OperatorCursor
+
 
 QUERY_API_VERSION = 1
 OCCURRENCES_SCHEMA = "nautical.query.occurrences"
@@ -172,6 +174,7 @@ class OccurrenceQueryRequest:
     end: QueryBoundary | None = None
     evaluation_at: QueryBoundary | None = None
     count: int | None = None
+    cursor: OperatorCursor | None = None
     start_inclusive: bool = True
     omission_policy: OmissionPolicy = "exclude"
     max_tasks: int = DEFAULT_MAX_TASKS
@@ -194,6 +197,8 @@ class OccurrenceQueryRequest:
                 raise QueryContractError("query at must be an RFC 3339 timestamp with explicit offset")
             if self.operation != NEXT_OPERATION:
                 raise QueryContractError("query at is supported only for the next operation")
+        if self.cursor is not None and not isinstance(self.cursor, OperatorCursor):
+            raise QueryContractError("query cursor must be an OperatorCursor")
         if self.end is not None:
             start_value = self.start.value
             end_value = self.end.value
@@ -248,6 +253,11 @@ class OccurrenceQueryRequest:
                 if value.get("count") is not None
                 else (1 if operation == NEXT_OPERATION and at_value is not None else None)
             ),
+            cursor=(
+                OperatorCursor.from_mapping(value["cursor"])
+                if value.get("cursor") is not None
+                else None
+            ),
             start_inclusive=_bool(value.get("start_inclusive", True), "start_inclusive"),
             omission_policy=cast(
                 Literal["exclude", "include", "report"],
@@ -271,6 +281,7 @@ class OccurrenceQueryRequest:
             "to": self.end.to_text() if self.end is not None else None,
             "at": self.evaluation_at.to_text() if self.evaluation_at is not None else None,
             "count": self.count,
+            "cursor": None if self.cursor is None else self.cursor.to_dict(),
             "start_inclusive": self.start_inclusive,
             "omission_policy": self.omission_policy,
             "max_tasks": self.max_tasks,
@@ -480,6 +491,29 @@ class OccurrenceQueryResponse:
             "results": [item.to_dict() for item in self.results],
             "failure": self.failure.to_dict() if self.failure is not None else None,
         }
+
+    def to_operator_v2(self) -> object:
+        """Return this response in the shared v2 operator envelope."""
+        from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
+
+        status = OperatorV2Status(self.status)
+        failure = None
+        if self.failure is not None:
+            failure = OperatorFailure(
+                code=self.failure.code,
+                message=self.failure.message,
+                retryable=self.failure.retryable,
+                details=self.failure.details,
+            )
+        document = self.to_dict()
+        payload = {key: value for key, value in document.items() if key not in {"schema", "version", "operation", "status", "failure"}}
+        return OperatorV2Result(
+            schema=self.schema,
+            operation=self.request.operation,
+            status=status,
+            payload=payload,
+            failure=failure,
+        )
 
 
 __all__ = (

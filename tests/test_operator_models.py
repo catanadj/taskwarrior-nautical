@@ -189,6 +189,22 @@ class OperatorModelsTests(unittest.TestCase):
         with self.assertRaises(OperatorContractError):
             OperatorPage((object(),))
 
+    def test_query_cursor_round_trips_with_evidence_binding(self) -> None:
+        from nautical_core.query_models import OccurrenceQueryRequest
+
+        cursor = OperatorCursor("snap-1", "config-1", "epoch-1", page_size=20)
+        request = OccurrenceQueryRequest.from_mapping({
+            "selector": {"all_tasks": True},
+            "from": "2026-08-24",
+            "count": 1,
+            "cursor": cursor.to_dict(),
+        })
+        self.assertEqual(request.cursor, cursor)
+        self.assertEqual(
+            OccurrenceQueryRequest.from_mapping(request.to_dict()).cursor,
+            cursor,
+        )
+
     def test_coverage_requirement_rejects_insufficient_evidence(self) -> None:
         coverage = OperatorCoverage(CoverageKind.BOUNDED, "taskwarrior", omitted_count=1)
         self.assertTrue(CoverageRequirement(CoverageKind.BOUNDED).accepts(coverage))

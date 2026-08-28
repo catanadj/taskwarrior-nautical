@@ -307,6 +307,52 @@ class OperatorModelsTests(unittest.TestCase):
         cache.clear()
         self.assertEqual(cache.size, 0)
 
+    def test_repeated_invocations_do_not_leak_state(self) -> None:
+        """Each invocation gets independent evidence, cursor, cache, and policy state."""
+        base_configuration = ValidatedNauticalConfiguration(
+            "/tmp/config", "config-0", "schedule-0", "UTC", (),
+        )
+        base_integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), base_configuration,
+            ZoneInfo("UTC"), SilentDiagnostics(), SystemClock(), "inv-0", 10,
+            IntegrationAccess.READ_ONLY,
+        )
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
+        contexts = []
+        for index in range(3):
+            configuration = replace(
+                base_configuration,
+                fingerprint=f"config-{index}",
+                scheduler_fingerprint=f"schedule-{index}",
+            )
+            integration = replace(base_integration, configuration=configuration)
+            context = OperatorInvocationContext.from_integration(
+                request,
+                integration,
+                mutation_epoch=f"epoch-{index}",
+                policy=OperatorPresentationPolicy(
+                    OperatorOutputMode.JSON if index % 2 == 0 else OperatorOutputMode.TEXT,
+                    diagnostics=bool(index % 2),
+                ),
+            )
+            cursor = OperatorCursor(
+                f"snapshot-{index}", f"config-{index}", f"epoch-{index}", position=index,
+            )
+            context.cache.put("invocation", index)
+            contexts.append((context, cursor))
+
+        for index, (context, cursor) in enumerate(contexts):
+            self.assertEqual(context.configuration_fingerprint, f"config-{index}")
+            self.assertEqual(context.mutation_epoch, f"epoch-{index}")
+            self.assertEqual(context.cache.get("invocation"), index)
+            cursor.assert_compatible(
+                f"snapshot-{index}", f"config-{index}", f"epoch-{index}",
+            )
+            for other_index, (other, _) in enumerate(contexts):
+                if other_index != index:
+                    self.assertIsNone(other.cache.get("not-present"))
+                    self.assertNotEqual(other.configuration_fingerprint, context.configuration_fingerprint)
+
     def test_snapshot_preserves_provenance_and_rejects_naive_time(self) -> None:
         coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", snapshot_id="snap-1", mutation_epoch="epoch-1")
         snapshot = OperatorSnapshot(

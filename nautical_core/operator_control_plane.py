@@ -13,10 +13,11 @@ from .operator_application import DomainApplicationRegistry
 from .operator_domain_planner import OperatorDomainPlanner
 from .operator_domain_plans import DomainApplicationAuthorization
 from .operator_models import OperatorResult
-from .operator_inspectors import inspect_operator_snapshot
+from .operator_inspectors import inspect_occurrence_collection, inspect_operator_snapshot
 from .operator_findings import OperatorFinding
 from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
+from .occurrence_outcomes import OccurrenceCollectionResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +65,15 @@ class OperatorControlPlane:
     ) -> tuple[OperatorFinding, ...]:
         """Inspect one immutable snapshot through the shared pure pipeline."""
         return inspect_operator_snapshot(snapshot, requirement, limits, scope=scope)
+
+    def inspect_occurrences(
+        self,
+        collection: OccurrenceCollectionResult,
+        *,
+        scope: OperatorScope | None = None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Project one typed scheduler collection through the operator boundary."""
+        return inspect_occurrence_collection(collection, scope=scope)
 
 
 __all__ = ["OperatorControlPlane"]

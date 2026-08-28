@@ -112,6 +112,9 @@ def _capabilities_payload() -> dict[str, Any]:
         "pagination": {
             "cursor": "Opaque JSON cursor returned by a paged query; reuse it with the same selector and evidence.",
             "deterministic": True,
+            "whole_system_snapshot_limit": HARD_MAX_TASKS,
+            "overflow_code": "task_scope_exhausted",
+            "overflow_guidance": "Use an explicit chain or UUID scope when the whole-system snapshot exceeds the limit.",
         },
         "providers": {
             "astronomy": bool(importlib.util.find_spec("astral")),

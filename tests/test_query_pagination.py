@@ -2,7 +2,7 @@ import unittest
 from datetime import timezone
 from types import SimpleNamespace
 
-from nautical_core.query_models import OccurrenceQueryRequest, OccurrenceQueryResponse
+from nautical_core.query_models import HARD_MAX_TASKS, OccurrenceQueryRequest, OccurrenceQueryResponse, QueryContractError
 from nautical_core.operator_models import OperatorCursor
 from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
 
@@ -107,6 +107,12 @@ class QueryPaginationTests(unittest.TestCase):
         self.assertEqual(payload["coverage"]["kind"], "bounded")
         with self.assertRaises(ValueError):
             OccurrenceQueryResponse(request=request, timezone="UTC", cursor=cursor, complete=True)
+
+    def test_whole_system_task_limit_is_explicit(self) -> None:
+        request = self._request(max_tasks=HARD_MAX_TASKS)
+        self.assertEqual(request.max_tasks, HARD_MAX_TASKS)
+        with self.assertRaises(QueryContractError):
+            self._request(max_tasks=HARD_MAX_TASKS + 1)
 
     def test_many_chain_page_preserves_all_identity_rows(self) -> None:
         service = self._service()

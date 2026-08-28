@@ -77,7 +77,7 @@ def exit_code_for_v2_status(status: OperatorV2Status | str) -> OperatorExitCode:
         return OperatorExitCode.SUCCESS
     if normalized is OperatorV2Status.EXHAUSTED:
         return OperatorExitCode.PARTIAL
-    if normalized in {OperatorV2Status.ATTENTION, OperatorV2Status.WARN, OperatorV2Status.DEGRADED, OperatorV2Status.REPAIRABLE, OperatorV2Status.DEFERRED}:
+    if normalized in {OperatorV2Status.ATTENTION, OperatorV2Status.REPAIRABLE, OperatorV2Status.DEFERRED}:
         return OperatorExitCode.FINDINGS
     if normalized is OperatorV2Status.INVALID:
         return OperatorExitCode.INVALID_REQUEST
@@ -161,7 +161,7 @@ def _positive(value: object, field_name: str, maximum: int) -> int:
     if isinstance(value, bool):
         raise OperatorContractError(f"{field_name} must be a positive integer")
     try:
-        result = int(value)
+        result = int(value) if isinstance(value, (int, str, bytes, bytearray)) else int(str(value))
     except (TypeError, ValueError) as exc:
         raise OperatorContractError(f"{field_name} must be a positive integer") from exc
     if result < 1 or result > maximum:

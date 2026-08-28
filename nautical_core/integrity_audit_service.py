@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from .taskwarrior_uow import TaskwarriorUnitOfWork
 
 from .chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from .chain_integrity_models import IntegrityReportStatus
@@ -16,7 +17,7 @@ from .operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
 from .task_models import TaskObservation
 
 
-def audit_authoritative_rows(unit_of_work: object, rows: Sequence[TaskObservation]) -> tuple[IntegrityEngineResult | None, list[dict[str, object]]]:
+def audit_authoritative_rows(unit_of_work: TaskwarriorUnitOfWork, rows: Sequence[TaskObservation]) -> tuple[IntegrityEngineResult | None, list[dict[str, object]]]:
     """Audit one already-exported Taskwarrior snapshot through the engine."""
     configuration = getattr(getattr(unit_of_work, "context", None), "configuration", None)
     if configuration is None:

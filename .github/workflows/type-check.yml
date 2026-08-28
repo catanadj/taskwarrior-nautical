@@ -72,5 +72,32 @@ jobs:
           --enable-error-code=operator
           nautical_core
 
+      - name: Run strict operator control-plane mypy
+        run: >-
+          python3 -m mypy --config-file mypy.ini
+          --disallow-untyped-defs
+          --disallow-incomplete-defs
+          --enable-error-code=union-attr
+          --enable-error-code=attr-defined
+          --enable-error-code=assignment
+          --enable-error-code=arg-type
+          --enable-error-code=return-value
+          --enable-error-code=operator
+          nautical_core/operator_models.py
+          nautical_core/operator_findings.py
+          nautical_core/operator_snapshot.py
+          nautical_core/operator_inspectors.py
+          nautical_core/operator_plans.py
+          nautical_core/operator_domain_plans.py
+          nautical_core/operator_domain_planner.py
+          nautical_core/operator_application.py
+          nautical_core/operator_control_plane.py
+          nautical_core/operator_context.py
+          nautical_core/operator_presentation.py
+          nautical_core/integrity_query_service.py
+          nautical_core/integrity_audit_service.py
+          nautical_core/queue_status_service.py
+          nautical_core/reconcile_report.py
+
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

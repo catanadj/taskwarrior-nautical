@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .chain_integrity_engine import IntegrityEngineResult
-from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding
+from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding, doctor_finding
 from .operator_presentation import ordered_records
 
 
@@ -50,27 +50,9 @@ def _doctor_finding(
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a Doctor record through the canonical finding contract."""
-    canonical = OperatorFinding(
-        code=code,
-        domain=code.split(".", 1)[0] or "doctor",
-        severity=(
-            FindingSeverity.ERROR if severity == "error"
-            else FindingSeverity.WARNING if severity in {"warn", "warning"}
-            else FindingSeverity.INFO
-        ),
-        actionability=(
-            FindingActionability.BLOCKING
-            if severity == "error"
-            else FindingActionability.INFORMATIONAL
-            if severity in {"ok", "info"} and not guidance
-            else FindingActionability.ACTIONABLE
-        ),
-        message=message,
-        observed={},
-        evidence=details or {},
-        guidance=guidance or ("Inspect the reported evidence." if severity == "error" else ""),
-    )
-    payload = canonical.to_doctor_dict()
+    payload = doctor_finding(
+        code, severity, message, guidance=guidance, details=details,
+    ).to_doctor_dict()
     payload["severity"] = severity
     return payload
 

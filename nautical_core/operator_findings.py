@@ -239,4 +239,28 @@ def sort_findings(findings: tuple[OperatorFinding, ...] | list[OperatorFinding])
     ))
 
 
-__all__ = ["FindingSeverity", "FindingActionability", "OperatorFinding", "deduplicate_findings", "highest_severity", "status_for_findings", "sort_findings"]
+def doctor_finding(
+    code: str,
+    severity: str,
+    message: str,
+    *,
+    guidance: str = "",
+    details: Mapping[str, Any] | None = None,
+) -> OperatorFinding:
+    """Build the canonical finding used by Doctor's compatibility envelope."""
+    normalized = str(severity or "info").strip().lower()
+    level = FindingSeverity.ERROR if normalized == "error" else FindingSeverity.WARNING if normalized in {"warn", "warning"} else FindingSeverity.INFO
+    actionable = level is not FindingSeverity.INFO or bool(guidance)
+    actionability = FindingActionability.BLOCKING if level is FindingSeverity.ERROR else FindingActionability.ACTIONABLE if actionable else FindingActionability.INFORMATIONAL
+    return OperatorFinding(
+        code=code,
+        domain=str(code).split(".", 1)[0] or "doctor",
+        severity=level,
+        actionability=actionability,
+        message=message,
+        evidence=details or {},
+        guidance=guidance or ("Inspect the reported evidence." if level is FindingSeverity.ERROR else ""),
+    )
+
+
+__all__ = ["FindingSeverity", "FindingActionability", "OperatorFinding", "deduplicate_findings", "doctor_finding", "highest_severity", "status_for_findings", "sort_findings"]

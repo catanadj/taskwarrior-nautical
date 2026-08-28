@@ -45,7 +45,7 @@ except Exception as exc:  # configuration can fail while the package is importin
         raise SystemExit(1)
     raise
 from nautical_core.operator_presentation import finding_display, finding_status, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
-from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding  # noqa: E402
+from nautical_core.operator_findings import OperatorFinding, doctor_finding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
@@ -149,29 +149,9 @@ def _finding(
     fix: str = "",
     details: dict[str, Any] | None = None,
 ) -> None:
-    # Validate every Doctor observation through the shared operator contract.
-    # The v1 Doctor envelope is retained until its dedicated serialization pass.
-    normalized_severity = (
-        FindingSeverity.ERROR
-        if severity == "error"
-        else FindingSeverity.WARNING
-        if severity == "warn"
-        else FindingSeverity.INFO
-    )
-    canonical = OperatorFinding(
-        code=check_id,
-        domain=check_id.split(".", 1)[0] or "doctor",
-        severity=normalized_severity,
-        actionability=(
-            FindingActionability.INFORMATIONAL
-            if severity == "info" and not fix
-            else FindingActionability.ACTIONABLE
-        ),
-        message=message,
-        observed=details or {},
-        guidance=fix or ("Inspect the reported evidence." if severity != "info" else ""),
-    )
-    findings.append(canonical.to_doctor_dict())
+    findings.append(doctor_finding(
+        check_id, severity, message, guidance=fix, details=details,
+    ).to_doctor_dict())
 
 
 def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]:

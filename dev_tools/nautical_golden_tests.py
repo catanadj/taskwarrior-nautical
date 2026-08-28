@@ -36360,6 +36360,7 @@ TESTS.extend([
 TESTS.append(test_core_explicit_facade_all_contains_supported_symbols)
 TESTS.append(test_all_golden_tests_are_registered)
 TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result)
+TESTS.append(test_doctor_text_groups_historical_findings_across_chains)
 
 
 # =============================================================================

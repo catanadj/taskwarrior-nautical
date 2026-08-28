@@ -1282,6 +1282,7 @@ def _reconcile_candidate(
     recovery_at: Any,
     lease_held: bool = False,
     generation: ChainGenerationService | None = None,
+    reconciliation_service: LifecycleReconciliationService | None = None,
 ) -> list[tuple[RecoveryResult, str]]:
     def recovery_from_exception(candidate: dict[str, Any], exc: Exception) -> Any:
         reason = str(exc).strip() or type(exc).__name__
@@ -1291,7 +1292,8 @@ def _reconcile_candidate(
             return _recovery_manual_review(candidate, reason)
         return _recovery_error(candidate, reason)
 
-    return _lifecycle_reconciliation_service().recover_candidate(
+    service = reconciliation_service or _lifecycle_reconciliation_service()
+    return service.recover_candidate(
         parent,
         operations=CallbackLifecycleRecoveryOperations(
             apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(
@@ -1552,6 +1554,7 @@ class _ReconcileSession:
             task_bin, hook, parent, taskdata=taskdata, apply=apply,
             max_expiration_hops=max_expiration_hops, recovery_at=recovery_at,
             lease_held=lease_held, generation=generation,
+            reconciliation_service=self.lifecycle_service,
         )
 
     def execute_wave(self, *, hook: Any, taskdata: Path, wave_plans: dict[str, tuple[RecoveryPlanResult, str]],

@@ -1477,10 +1477,36 @@ def _historical_summaries(findings: list[dict[str, Any]]) -> list[dict[str, Any]
     return summaries
 
 
+def _render_finding(item: object) -> dict[str, Any]:
+    """Project a canonical finding into the renderer's detail-oriented view."""
+    if not isinstance(item, dict):
+        return {}
+    if "code" not in item:
+        return item
+    severity = str(item.get("severity") or "info")
+    severity = "warn" if severity == "warning" else severity
+    evidence = item.get("evidence")
+    details = dict(evidence) if isinstance(evidence, dict) else {}
+    observed = item.get("observed")
+    expected = item.get("expected")
+    if isinstance(observed, dict):
+        details["observed"] = observed
+    if isinstance(expected, dict):
+        details["expected"] = expected
+    return {
+        "id": item.get("code"),
+        "severity": severity,
+        "message": item.get("message"),
+        "fix": item.get("guidance") or "",
+        "details": details,
+    }
+
+
 def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     stream = stream if stream is not None else sys.stdout
     enabled = _color_enabled(stream)
-    raw_findings = list(ordered_findings(payload.get("findings") or []))
+    source_findings = payload.get("operator_findings") or payload.get("findings") or []
+    raw_findings = list(ordered_findings([_render_finding(item) for item in source_findings]))
     historical = [
         item for item in raw_findings
         if item.get("severity") == "info"

@@ -24,7 +24,7 @@ import nautical_core as core  # noqa: E402
 from nautical_core.operator_presentation import render_json_document  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
-from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
     OCCURRENCES_SCHEMA,
@@ -299,6 +299,27 @@ def _request_mapping(args: argparse.Namespace) -> Mapping[str, Any]:
     return value
 
 
+def _cli_scope(args: argparse.Namespace) -> OperatorScope | None:
+    """Normalize command-line selectors through the shared operator scope model."""
+    if args.uuids:
+        return OperatorScope.uuids(args.uuids)
+    if args.chain_id:
+        return OperatorScope.from_selector(chain_id=args.chain_id)
+    if args.all_tasks:
+        return OperatorScope.from_selector(all_tasks=True)
+    return None
+
+
+def _query_selector(scope: OperatorScope) -> Mapping[str, Any]:
+    if scope.kind is OperatorScopeKind.UUIDS:
+        return {"uuids": list(scope.values)}
+    if scope.kind is OperatorScopeKind.CHAIN:
+        return {"chainID": scope.values[0]}
+    if scope.kind is OperatorScopeKind.SYSTEM:
+        return {"all_tasks": True}
+    raise QueryContractError(f"scope {scope.kind.value} cannot be used for occurrence queries")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Nautical's versioned read-only query API")
     parser.add_argument("operation", choices=("capabilities", "occurrences", "next", "integrity"), help="query operation")
@@ -358,20 +379,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.request is not None or args.request_file is not None:
             mapping = dict(_request_mapping(args))
         else:
-            if args.uuids:
-                selector_mapping = {"uuids": args.uuids}
-            elif args.chain_id:
-                selector_mapping = {"chainID": args.chain_id}
-            elif args.all_tasks:
-                selector_mapping = {"all_tasks": True}
-            else:
+            scope = _cli_scope(args)
+            if scope is None:
                 # Preserve stdin as the default transport when no flags were supplied.
                 mapping = dict(_request_mapping(args))
-                selector_mapping = None
-            if selector_mapping is not None:
+            else:
                 start = args.after or args.start or args.at
                 mapping = {
-                    "selector": selector_mapping,
+                    "selector": _query_selector(scope),
                     "from": start,
                     "to": args.to,
                     "count": args.count,

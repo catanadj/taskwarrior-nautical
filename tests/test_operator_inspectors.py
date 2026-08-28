@@ -7,7 +7,7 @@ from nautical_core.operator_inspectors import (ChainIntegrityInspector, Configur
     STANDARD_COMPONENTS, ScheduleAvailabilityInspector, TaskDomainInspector, aggregate_historical,
     classify_historical, inspect_component_availability, inspect_component_validity, inspect_snapshot,
     inspect_snapshot_consistency, inspect_snapshot_coverage, inspect_snapshot_limits, inspect_standard_components,
-    prioritize_findings, run_inspectors)
+    inspect_integrity_findings, inspect_lifecycle_outcomes, prioritize_findings, run_inspectors)
 from nautical_core.operator_findings import FindingSeverity, OperatorFinding
 from nautical_core.operator_models import CoverageKind, CoverageRequirement, OperatorLimits, OperatorScope, OperatorScopeKind
 from nautical_core.operator_snapshot import OperatorSnapshot, SnapshotComponent, SnapshotIndexes
@@ -158,6 +158,35 @@ class OperatorInspectorTests(unittest.TestCase):
         )
         findings = inspect_snapshot(snapshot, CoverageRequirement(CoverageKind.COMPLETE), OperatorLimits())
         self.assertEqual([item.code for item in findings], ["snapshot.coverage_insufficient"])
+
+    def test_typed_integrity_finding_preserves_reason_and_evidence(self) -> None:
+        from nautical_core.chain_integrity_models import FindingSeverity as IntegritySeverity, FindingStatus, IntegrityFinding
+
+        finding = IntegrityFinding(
+            "continuity.child", FindingStatus.REPAIRABLE, IntegritySeverity.ERROR,
+            "snap-1", chain_id="chain-a", subject_uuids=("task-a",),
+            reason_code="missing_successor", message="successor is missing",
+            observed=(('nextLink', ''),), expected=(('nextLink', 'successor'),),
+            evidence=(('coverage', 'complete'),),
+        )
+        projected = inspect_integrity_findings((finding,))
+        self.assertEqual(projected[0].code, "missing_successor")
+        self.assertEqual(projected[0].actionability, FindingActionability.REPAIRABLE)
+        self.assertEqual(projected[0].observed["nextLink"], "")
+
+    def test_typed_lifecycle_outcome_preserves_manual_review(self) -> None:
+        from nautical_core.lifecycle_application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
+        from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
+
+        outcome = LifecycleApplicationOutcome(
+            LifecycleApplicationOutcomeKind.MANUAL_REVIEW,
+            LifecycleIdentity("chain-a", "task-a", 1, 2, LifecycleEvent.COMPLETE),
+            reason="parent guard changed", intent_id="intent-1",
+        )
+        projected = inspect_lifecycle_outcomes((outcome,))
+        self.assertEqual(projected[0].code, "lifecycle.manual_review")
+        self.assertEqual(projected[0].actionability, FindingActionability.MANUAL_REVIEW)
+        self.assertEqual(projected[0].affected, ("task-a",))
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding, deduplicate_findings
 from .operator_models import CoverageKind, CoverageRequirement, OperatorContractError, OperatorLimits, OperatorScope
@@ -78,6 +78,84 @@ class PerformanceInspector(ComponentValidityInspector):
 
     def __init__(self, scope: OperatorScope | None = None) -> None:
         super().__init__("performance", scope)
+
+
+def inspect_integrity_findings(
+    findings: Sequence[Any],
+    *,
+    scope: OperatorScope | None = None,
+) -> tuple[OperatorFinding, ...]:
+    """Project typed chain-integrity findings without losing their evidence."""
+    from .chain_integrity_models import FindingSeverity as IntegritySeverity, FindingStatus
+
+    result: list[OperatorFinding] = []
+    for finding in findings:
+        if not hasattr(finding, "to_dict"):
+            raise TypeError("integrity findings must be typed model values")
+        raw = finding.to_dict()
+        status = FindingStatus(raw["status"])
+        if status is FindingStatus.HEALTHY:
+            continue
+        actionability = {
+            FindingStatus.REPAIRABLE: FindingActionability.REPAIRABLE,
+            FindingStatus.BLOCKED: FindingActionability.BLOCKING,
+            FindingStatus.MANUAL_REVIEW: FindingActionability.MANUAL_REVIEW,
+            FindingStatus.UNAVAILABLE: FindingActionability.RETRYABLE,
+        }[status]
+        severity = {
+            IntegritySeverity.INFO: FindingSeverity.INFO,
+            IntegritySeverity.WARNING: FindingSeverity.WARNING,
+            IntegritySeverity.ERROR: FindingSeverity.ERROR,
+        }[IntegritySeverity(raw["severity"])]
+        result.append(OperatorFinding(
+            code=str(raw["reason_code"]),
+            domain="chain_integrity",
+            severity=severity,
+            actionability=actionability,
+            message=str(raw["message"]),
+            scope=scope,
+            affected=tuple(raw.get("subject_uuids", ())),
+            observed=raw.get("observed", {}),
+            expected=raw.get("expected", {}),
+            evidence={"snapshot_id": raw["snapshot_id"], "invariant_id": raw["invariant_id"], **raw.get("evidence", {})},
+            guidance="Apply the associated guarded repair plan or inspect the chain evidence.",
+        ))
+    return deduplicate_findings(result)
+
+
+def inspect_lifecycle_outcomes(
+    outcomes: Sequence[Any],
+    *,
+    scope: OperatorScope | None = None,
+) -> tuple[OperatorFinding, ...]:
+    """Project typed lifecycle application outcomes into stable findings."""
+    from .lifecycle_application import LifecycleApplicationOutcomeKind
+
+    result: list[OperatorFinding] = []
+    for outcome in outcomes:
+        if not hasattr(outcome, "kind") or not hasattr(outcome, "identity"):
+            raise TypeError("lifecycle outcomes must be typed model values")
+        kind = LifecycleApplicationOutcomeKind(outcome.kind)
+        if kind in {LifecycleApplicationOutcomeKind.APPLIED, LifecycleApplicationOutcomeKind.ALREADY_APPLIED, LifecycleApplicationOutcomeKind.NOOP}:
+            continue
+        actionability = {
+            LifecycleApplicationOutcomeKind.RETRYABLE: FindingActionability.RETRYABLE,
+            LifecycleApplicationOutcomeKind.CONFLICT: FindingActionability.MANUAL_REVIEW,
+            LifecycleApplicationOutcomeKind.MANUAL_REVIEW: FindingActionability.MANUAL_REVIEW,
+            LifecycleApplicationOutcomeKind.QUARANTINED: FindingActionability.BLOCKING,
+        }[kind]
+        result.append(OperatorFinding(
+            code=f"lifecycle.{kind.value}",
+            domain="lifecycle",
+            severity=FindingSeverity.ERROR,
+            actionability=actionability,
+            message=outcome.reason or f"Lifecycle operation is {kind.value}.",
+            scope=scope,
+            affected=(str(outcome.identity.parent_uuid),),
+            evidence={"intent_id": outcome.intent_id, "chainID": outcome.identity.chain_id, "event": outcome.identity.event.value},
+            guidance="Retry the lifecycle operation or inspect the durable intent evidence.",
+        ))
+    return deduplicate_findings(result)
 
 
 def inspect_snapshot_coverage(
@@ -346,4 +424,4 @@ def _severity_rank(value: FindingSeverity) -> int:
     return {FindingSeverity.INFO: 0, FindingSeverity.WARNING: 1, FindingSeverity.ERROR: 2}[value]
 
 
-__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]
+__all__ = ["STANDARD_COMPONENTS", "OperatorInspector", "ComponentValidityInspector", "InstallationInspector", "ConfigurationInspector", "DependenciesInspector", "ChainIntegrityInspector", "LifecycleOutboxInspector", "PerformanceInspector", "TaskDomainInspector", "ScheduleAvailabilityInspector", "inspect_integrity_findings", "inspect_lifecycle_outcomes", "inspect_snapshot", "inspect_snapshot_coverage", "inspect_snapshot_consistency", "inspect_snapshot_limits", "inspect_component_availability", "inspect_component_validity", "inspect_standard_components", "classify_historical", "prioritize_findings", "aggregate_historical", "run_inspectors"]

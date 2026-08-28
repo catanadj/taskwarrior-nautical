@@ -114,6 +114,21 @@ class QueryPaginationTests(unittest.TestCase):
         with self.assertRaises(QueryContractError):
             self._request(max_tasks=HARD_MAX_TASKS + 1)
 
+    def test_query_selector_exposes_shared_scope(self) -> None:
+        request = OccurrenceQueryRequest.from_mapping({
+            "selector": {"uuids": ["TASK-A", "TASK-B"]},
+            "from": "2026-08-24",
+            "count": 1,
+        })
+        self.assertEqual(request.selector.scope.kind.value, "uuids")
+        self.assertEqual(request.selector.uuids, ("task-a", "task-b"))
+        with self.assertRaises(QueryContractError):
+            OccurrenceQueryRequest.from_mapping({
+                "selector": {"uuids": ["task-a"], "all_tasks": True},
+                "from": "2026-08-24",
+                "count": 1,
+            })
+
     def test_many_chain_page_preserves_all_identity_rows(self) -> None:
         service = self._service()
         rows = tuple(

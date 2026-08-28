@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Literal, Mapping, cast
 
-from .operator_models import OperatorCursor
+from .operator_models import OperatorCursor, OperatorScope, OperatorScopeKind
 
 
 QUERY_API_VERSION = 1
@@ -123,24 +123,27 @@ class QueryBoundary:
 
 @dataclass(frozen=True, slots=True)
 class QuerySelector:
-    """One explicit task selection mode."""
+    """Query selection backed by the shared operator scope contract."""
 
-    uuids: tuple[str, ...] = ()
-    chain_id: str = ""
-    all_tasks: bool = False
+    scope: OperatorScope
 
     def __post_init__(self) -> None:
-        uuids = tuple(dict.fromkeys(_text(item, "task UUID").lower() for item in self.uuids))
-        chain_id = _text(self.chain_id, "chainID", required=False).lower()
-        if not isinstance(self.all_tasks, bool):
-            raise QueryContractError("all_tasks must be boolean")
-        modes = bool(uuids) + bool(chain_id) + self.all_tasks
-        if modes != 1:
-            raise QueryContractError("query selector requires exactly one of UUIDs, chainID, or all_tasks")
-        if len(uuids) > HARD_MAX_TASKS:
+        if not isinstance(self.scope, OperatorScope):
+            raise QueryContractError("query selector requires an OperatorScope")
+        if self.scope.kind is OperatorScopeKind.UUIDS and len(self.scope.values) > HARD_MAX_TASKS:
             raise QueryContractError(f"query selector cannot contain more than {HARD_MAX_TASKS} UUIDs")
-        object.__setattr__(self, "uuids", uuids)
-        object.__setattr__(self, "chain_id", chain_id)
+
+    @property
+    def uuids(self) -> tuple[str, ...]:
+        return self.scope.values if self.scope.kind is OperatorScopeKind.UUIDS else ()
+
+    @property
+    def chain_id(self) -> str:
+        return self.scope.values[0] if self.scope.kind is OperatorScopeKind.CHAIN else ""
+
+    @property
+    def all_tasks(self) -> bool:
+        return self.scope.kind is OperatorScopeKind.SYSTEM
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "QuerySelector":
@@ -151,11 +154,18 @@ class QuerySelector:
             raw_uuids = (raw_uuids,)
         if not isinstance(raw_uuids, (list, tuple)):
             raise QueryContractError("query selector uuids must be a list")
-        return cls(
-            uuids=tuple(str(item) for item in raw_uuids),
-            chain_id=str(value.get("chain_id", value.get("chainID", "")) or ""),
-            all_tasks=_bool(value.get("all_tasks", False), "all_tasks"),
-        )
+        chain_id = str(value.get("chain_id", value.get("chainID", "")) or "")
+        all_tasks = _bool(value.get("all_tasks", False), "all_tasks")
+        selected = bool(raw_uuids) + bool(chain_id) + all_tasks
+        if selected != 1:
+            raise QueryContractError("query selector requires exactly one of UUIDs, chainID, or all_tasks")
+        if raw_uuids:
+            scope = OperatorScope.uuids(tuple(str(item).lower() for item in raw_uuids))
+        elif chain_id:
+            scope = OperatorScope.from_selector(chain_id=chain_id.lower())
+        else:
+            scope = OperatorScope.from_selector(all_tasks=True)
+        return cls(scope)
 
     def to_dict(self) -> dict[str, Any]:
         return {

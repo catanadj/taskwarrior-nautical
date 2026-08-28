@@ -129,7 +129,6 @@ class _ConfigurationVerification:
 
 
 from nautical_core.native_until_integrity import NativeUntilAudit, audit_result
-from nautical_core.chain_integrity_engine import ChainIntegrityEngine
 
 
 def _native_until_audit_result(
@@ -477,6 +476,7 @@ def _native_until_repairs(
     taskdata: Path | None = None,
     snapshot: _ReconcileSnapshot | None = None,
     lease_held: bool = False,
+    control_plane: OperatorControlPlane,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Find invalid native windows and repair only those with a reliable predecessor."""
     runtime_state = _reconcile_runtime_state()
@@ -487,11 +487,7 @@ def _native_until_repairs(
         snapshot=snapshot or runtime_snapshot,
     )
     rows = active_rows
-    recovery_engine = ChainIntegrityEngine.lifecycle_only(
-        configuration_fingerprint="reconcile-recovery",
-        schedule_fingerprint="reconcile-recovery",
-    )
-    recovery_audit = recovery_engine.audit_native_until(
+    recovery_audit = control_plane.audit_native_until(
         active_rows,
         predecessor=_fresh_native_until_previous,
         safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
@@ -523,7 +519,7 @@ def _native_until_repairs(
         if apply:
             if taskdata is None:
                 raise RuntimeError("native-until repair requires Taskwarrior data location")
-            error = recovery_engine.apply_native_until_candidate(
+            error = control_plane.apply_native_until(
                 row,
                 previous,
                 item,
@@ -1759,6 +1755,7 @@ def main(
                 apply=args.apply,
                 taskdata=taskdata,
                 lease_held=_apply_lease_held,
+                control_plane=operator_control_plane,
             )
             native_until_audit_status = _native_until_audit_result(
                 native_until_repairs, native_until_errors

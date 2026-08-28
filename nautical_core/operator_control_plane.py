@@ -97,6 +97,30 @@ class OperatorControlPlane:
             request_factory=request_factory,
         )
 
+    def audit_native_until(self, rows: object, *, predecessor: object, safe_parse_datetime: object,
+                           fmt_isoz: object, utc_to_local_naive: object, local_naive_to_utc: object) -> object:
+        """Audit native-until windows through the shared integrity engine."""
+        engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint="reconcile-recovery",
+            schedule_fingerprint="reconcile-recovery",
+        )
+        return engine.audit_native_until(
+            rows,
+            predecessor=predecessor,
+            safe_parse_datetime=safe_parse_datetime,
+            fmt_isoz=fmt_isoz,
+            utc_to_local_naive=utc_to_local_naive,
+            local_naive_to_utc=local_naive_to_utc,
+        )
+
+    def apply_native_until(self, candidate: object, previous: object, item: object, **kwargs: object) -> object:
+        """Apply one guarded native-until repair through the shared engine."""
+        engine = ChainIntegrityEngine.lifecycle_only(
+            configuration_fingerprint="reconcile-recovery",
+            schedule_fingerprint="reconcile-recovery",
+        )
+        return engine.apply_native_until_candidate(candidate, previous, item, **kwargs)
+
 
     def plan_lifecycle(
         self,

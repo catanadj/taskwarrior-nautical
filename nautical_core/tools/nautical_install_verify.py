@@ -12,12 +12,29 @@ from pathlib import Path
 from typing import Any
 
 from nautical_core.operator_presentation import bounded_text, ordered_findings, render_json_document
+from nautical_core.operator_findings import OperatorFinding
+
+
+def _findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return canonical finding mappings, accepting direct legacy callers."""
+    source = payload.get("operator_findings")
+    if not isinstance(source, list):
+        source = payload.get("findings") or []
+    normalized: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        if "code" in item:
+            normalized.append(item)
+        else:
+            normalized.append(OperatorFinding.from_doctor_mapping(item).to_dict())
+    return normalized
 
 
 def _items(payload: dict[str, Any], prefix: str) -> list[dict[str, Any]]:
     return [
-        item for item in payload.get("findings") or []
-        if isinstance(item, dict) and str(item.get("id") or "").startswith(prefix)
+        item for item in _findings(payload)
+        if str(item.get("code") or "").startswith(prefix)
     ]
 
 
@@ -26,7 +43,7 @@ def _group_status(items: list[dict[str, Any]], *, empty_status: str = "failed") 
         return empty_status
     if any(item.get("severity") == "error" for item in items):
         return "failed"
-    if any(item.get("severity") == "warn" for item in items):
+    if any(item.get("severity") == "warning" for item in items):
         return "attention"
     return "passed"
 
@@ -37,7 +54,7 @@ def build_report(
     platform: str,
     launcher: Path,
 ) -> dict[str, Any]:
-    findings = list(ordered_findings(payload.get("findings") or []))
+    findings = list(ordered_findings(_findings(payload)))
     checks = [
         {"name": "Platform", "status": "passed", "detail": platform},
         {"name": "Taskwarrior", "status": _group_status(_items(payload, "taskwarrior.")), "detail": "command available"},
@@ -60,12 +77,12 @@ def build_report(
     seen: set[tuple[str, str]] = set()
     for item in findings:
         severity = str(item.get("severity") or "")
-        if severity == "ok":
+        if severity == "info":
             continue
-        check_id = str(item.get("id") or "")
+        check_id = str(item.get("code") or "")
         if not check_id.startswith(required_prefixes + optional_prefixes):
             continue
-        action = str(item.get("fix") or item.get("message") or "Inspect this finding.").strip()
+        action = str(item.get("guidance") or item.get("message") or "Inspect this finding.").strip()
         key = (check_id, action)
         if key in seen:
             continue
@@ -85,7 +102,7 @@ def build_report(
 
     failed = any(check["status"] == "failed" for check in checks) or any(
         item.get("severity") == "error"
-        and str(item.get("id") or "").startswith(required_prefixes + ("astronomy.",))
+        and str(item.get("code") or "").startswith(required_prefixes + ("astronomy.",))
         for item in findings
     )
     # Optional environment hints must not make an otherwise valid install

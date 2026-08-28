@@ -134,7 +134,7 @@ class OperatorFinding:
             domain=value.get("domain", ""),
             severity=value.get("severity", ""),
             actionability=value.get("actionability", ""),
-            message=value.get("message", ""),
+            message=value.get("message") or value.get("id") or "Doctor finding",
             scope=None if scope is None else OperatorScope.from_mapping(scope),
             affected=tuple(affected),
             observed=value.get("observed", {}),
@@ -168,7 +168,7 @@ class OperatorFinding:
                 if not guidance
                 else FindingActionability.ACTIONABLE
             ),
-            message=value.get("message", ""),
+            message=value.get("message") or value.get("id") or "Doctor finding",
             affected=tuple(affected),
             observed=details_map.get("observed", {}),
             expected=details_map.get("expected", {}),

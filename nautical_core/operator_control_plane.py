@@ -24,6 +24,7 @@ from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
+from .operator_health_service import OperatorHealthReport, OperatorHealthService
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +190,11 @@ class OperatorControlPlane:
         from .integrity_audit_service import audit_authoritative_rows
 
         return audit_authoritative_rows(unit_of_work, rows)
+
+    @staticmethod
+    def health_report(findings: Sequence[OperatorFinding]) -> OperatorHealthReport:
+        """Aggregate already-observed health findings without performing I/O."""
+        return OperatorHealthService.report(findings)
 
 
 __all__ = ["OperatorControlPlane"]

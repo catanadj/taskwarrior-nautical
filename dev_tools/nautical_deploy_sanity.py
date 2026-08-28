@@ -315,10 +315,12 @@ def _check_removed_ownership(root: Path) -> list[dict]:
     forbidden_imports = frozenset(
         str(name) for name in getattr(manifest, "OPERATOR_FORBIDDEN_HOOK_IMPORTS", ())
     )
-    for relative in (
-        "nautical_core/tools/nautical_reconcile.py",
-        "nautical_core/tools/nautical_doctor.py",
-    ):
+    operator_files = tuple(
+        str(relative)
+        for relative in getattr(manifest, "OPERATOR_RUNTIME_FILES", ())
+        if str(relative).startswith("nautical_core/") and str(relative).endswith(".py")
+    )
+    for relative in operator_files:
         path = root / relative
         if not path.is_file():
             continue

@@ -705,7 +705,6 @@ def _refresh_plan(
         )
         return _stale_plan(parent, reason)
     return _plan_for_parent(
-        task_bin,
         hook,
         parent,
         generation=generation or _chain_generation_for_hook(hook),
@@ -714,7 +713,6 @@ def _refresh_plan(
 
 
 def _plan_for_parent(
-    task_bin: str,
     hook: Any,
     parent: TaskPayload,
     *,
@@ -899,7 +897,6 @@ def _raise_for_lifecycle_outcome(outcome: Any, *, label: str) -> None:
 
 
 def _execute_reconcile_lifecycle_plan(
-    task_bin: str,
     hook: Any,
     plan: LifecyclePlan,
     *,
@@ -1039,7 +1036,6 @@ def _execute_reconcile_lifecycle_wave(
 
 
 def _execute_reconcile_terminal_plan(
-    task_bin: str,
     hook: Any,
     plan: LifecyclePlan,
     *,
@@ -1084,7 +1080,6 @@ def _apply_parent_atomic(
         strict_uuid: bool,
     ) -> str:
         return _execute_reconcile_lifecycle_plan(
-            task_bin,
             hook,
             plan,
             parent=parent,
@@ -1103,7 +1098,7 @@ def _apply_parent_atomic(
         ),
         execute_callback=execute_plan,
         terminal_callback=lambda plan: _execute_reconcile_terminal_plan(
-            task_bin, hook, plan, reconciliation_service=reconciliation_service,
+            hook, plan, reconciliation_service=reconciliation_service,
         ),
         lock_callback=lock_busy,
     )
@@ -1303,7 +1298,7 @@ def _reconcile_candidate(
                 task_bin, hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
             plan_parent_callback=lambda candidate, **kwargs: _plan_for_parent(
-                task_bin, hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
+                hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
             next_child_callback=_next_recovery_child,
             virtual_child_callback=lambda candidate, **kwargs: _virtual_expired_child(

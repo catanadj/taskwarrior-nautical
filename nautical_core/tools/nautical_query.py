@@ -23,9 +23,7 @@ if str(BASE_DIR) not in sys.path:
 import nautical_core as core  # noqa: E402
 from nautical_core.operator_presentation import render_json_document  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
-from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
-from nautical_core.operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
-from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
+from nautical_core.operator_models import OperatorFailure, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
     OCCURRENCES_SCHEMA,
     CAPABILITIES_SCHEMA,
@@ -46,6 +44,8 @@ from nautical_core.query_models import (  # noqa: E402
     QueryContractError,
 )
 from nautical_core.query_service import OccurrenceQueryService  # noqa: E402
+from nautical_core.integrity_query_service import IntegrityQueryService  # noqa: E402
+from nautical_core.chain_snapshot import IntegritySnapshotRequest  # noqa: E402
 from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 
 INTEGRITY_SCHEMA = "nautical.query.integrity"
@@ -194,13 +194,7 @@ def _diagnostic(message: str) -> None:
 
 
 def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    """Run a read-only integrity audit through the shared engine boundary."""
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
-    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
-    from nautical_core.chain_integrity_models import IntegrityReportStatus
-    from nautical_core.integrity_report import public_payload
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
+    """Validate the selector and delegate the audit to the shared service."""
     selected = sum(bool(value) for value in (args.uuids, args.chain_id, args.all_tasks))
     if selected != 1:
         raise QueryContractError("integrity query requires exactly one of --uuid, --chain-id, or --all")
@@ -215,46 +209,14 @@ def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         # authoritative history. Avoid bounded hydration of every chain,
         # which would otherwise stop at the per-engine safety cap.
         request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
-    unit_of_work = build_operator_uow(
+    payload, exit_code = IntegrityQueryService(
         core=core,
         task_binary=shutil.which("task") or "task",
         env=os.environ,
-        access=IntegrationAccess.READ_ONLY,
-    )
-    configuration = unit_of_work.context.configuration
-    snapshot_service = ChainSnapshotService(unit_of_work, configuration_fingerprint=configuration.fingerprint)
-    engine = ChainIntegrityEngine(
-        snapshot_service,
-        configuration_fingerprint=configuration.fingerprint,
-        schedule_fingerprint=configuration.scheduler_fingerprint,
-    )
-    scope = OperatorScope.from_selector(
-        chain_id=request.chain_id or None,
-        uuid=request.task_uuid or None,
-        all_tasks=request.kind.value == "candidates",
-    )
-    operator_request = OperatorRequest(OperatorOperation.INTEGRITY, scope)
-    operator_context = OperatorInvocationContext.from_unit_of_work(operator_request, unit_of_work)
-    reader = ChainSnapshotReader(snapshot_service.collect)
-    read_result = reader.read_chain_snapshot(
-        operator_context,
-        SnapshotReadRequest(scope),
-    )
-    if isinstance(read_result, OperatorFailure):
-        result = IntegrityEngineResult(IntegrityReportStatus.UNAVAILABLE, reason=read_result.message)
-    else:
-        result = engine.audit_snapshot(
-            read_result,
-            outbox_repository=LifecycleOutboxRepository(unit_of_work.outbox.taskdata),
-            mutation_epoch=unit_of_work.mutation_epoch,
-        )
-    payload = public_payload(
-        result,
-        query={"kind": request.kind.value, "chainID": request.chain_id or None, "uuid": request.task_uuid or None},
-        configuration_fingerprint=configuration.fingerprint,
-    )
+        uow_builder=build_operator_uow,
+    ).query(request)
     upgraded = _v2_document(payload)
-    return upgraded, 3 if result.status.value == "unavailable" else 0
+    return upgraded, exit_code
 
 
 def _decode_request(raw: str, source: str) -> Mapping[str, Any]:

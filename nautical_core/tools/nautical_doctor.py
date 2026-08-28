@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 
 import nautical_core as nautical_core_package  # noqa: E402
 from nautical_core.operator_presentation import ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
 from nautical_core.integration_models import Absent, Found, Unavailable  # noqa: E402
@@ -135,6 +136,28 @@ def _finding(
     fix: str = "",
     details: dict[str, Any] | None = None,
 ) -> None:
+    # Validate every Doctor observation through the shared operator contract.
+    # The v1 Doctor envelope is retained until its dedicated serialization pass.
+    normalized_severity = (
+        FindingSeverity.ERROR
+        if severity == "error"
+        else FindingSeverity.WARNING
+        if severity == "warn"
+        else FindingSeverity.INFO
+    )
+    OperatorFinding(
+        code=check_id,
+        domain=check_id.split(".", 1)[0] or "doctor",
+        severity=normalized_severity,
+        actionability=(
+            FindingActionability.INFORMATIONAL
+            if severity == "info" and not fix
+            else FindingActionability.ACTIONABLE
+        ),
+        message=message,
+        observed=details or {},
+        guidance=fix or ("Inspect the reported evidence." if severity != "info" else ""),
+    )
     item: dict[str, Any] = {"id": check_id, "severity": severity, "message": message}
     if fix:
         item["fix"] = fix

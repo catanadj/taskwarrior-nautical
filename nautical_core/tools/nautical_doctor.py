@@ -144,7 +144,7 @@ def _finding(
         if severity == "warn"
         else FindingSeverity.INFO
     )
-    OperatorFinding(
+    canonical = OperatorFinding(
         code=check_id,
         domain=check_id.split(".", 1)[0] or "doctor",
         severity=normalized_severity,
@@ -157,12 +157,7 @@ def _finding(
         observed=details or {},
         guidance=fix or ("Inspect the reported evidence." if severity != "info" else ""),
     )
-    item: dict[str, Any] = {"id": check_id, "severity": severity, "message": message}
-    if fix:
-        item["fix"] = fix
-    if details:
-        item["details"] = details
-    findings.append(item)
+    findings.append(canonical.to_doctor_dict())
 
 
 def _task_get(unit_of_work: TaskwarriorUnitOfWork, key: str) -> tuple[bool, str]:

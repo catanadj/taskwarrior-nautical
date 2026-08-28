@@ -30,9 +30,6 @@ from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
-from nautical_core.operator_context import OperatorInvocationContext  # noqa: E402
-from nautical_core.operator_models import OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind  # noqa: E402
-from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402

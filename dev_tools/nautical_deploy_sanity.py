@@ -350,6 +350,38 @@ def _check_removed_ownership(root: Path) -> list[dict]:
                 "message": f"{type(exc).__name__}: {exc}",
             })
 
+    pure_modules = tuple(getattr(manifest, "OPERATOR_PURE_MODULES", ()))
+    forbidden_mutation = frozenset(str(name) for name in getattr(manifest, "OPERATOR_FORBIDDEN_MUTATION_IMPORTS", ()))
+    for relative in pure_modules:
+        path = root / str(relative)
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            imports: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imports.update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imports.add(node.module)
+            violations = sorted(
+                name for name in imports
+                if name in forbidden_mutation or any(name.startswith(f"{prefix}.") for prefix in forbidden_mutation)
+            )
+            results.append({
+                "kind": "ownership",
+                "name": f"operator-pure-dependencies:{relative}",
+                "ok": not violations,
+                "message": "mutation-free" if not violations else f"forbidden mutation dependency: {', '.join(violations)}",
+            })
+        except Exception as exc:
+            results.append({
+                "kind": "ownership",
+                "name": f"operator-pure-dependencies:{relative}",
+                "ok": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+
     pure_modules = tuple(getattr(manifest, "PURE_INTEGRITY_MODULES", ()))
     forbidden_pure_tokens = ("hooks", "hook_runtime", "taskwarrior", "sqlite", "rich", "tools")
     for relative in pure_modules:

@@ -55,7 +55,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
     build_operator_uow,
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
-from nautical_core.reconcile_cli import build_parser  # noqa: E402
+from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
 from nautical_core.reconcile_report import exit_code, render_human, to_operator_result  # noqa: E402
 from nautical_core.operator_presentation import key_value_lines, render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
@@ -1493,7 +1493,7 @@ def main(
         default_expiration_hops=_DEFAULT_EXPIRATION_HOPS,
         max_expiration_hops=_MAX_EXPIRATION_HOPS,
     )
-    args = parser.parse_args(argv)
+    args = ReconcileRequest.from_namespace(parser.parse_args(argv))
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
     if _unit_of_work is None:

@@ -258,7 +258,6 @@ class LifecycleReconciliationService:
         configuration_fingerprint: str,
         schedule_fingerprint: str,
         resolve_plan: Callable[[LifecyclePlan], LifecyclePlan],
-        verify_child: Any,
         verified_children: dict[str, dict[str, Any]] | None,
         strict_uuid: bool,
         label: str,

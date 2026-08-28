@@ -725,37 +725,6 @@ def _verify_disabled_parent(task_bin: str, parent: TaskPayload) -> None:
         )
 
 
-def _verify_applied_child(
-    task_bin: str,
-    parent: TaskPayload,
-    child_short: str,
-    *,
-    hook: Any = None,
-    strict_uuid: bool = False,
-) -> dict[str, Any]:
-    """Verify one applied child through the exact UUID read boundary.
-
-    Parent-link and child-import mutations already verify their own guarded
-    postconditions.  Recovery needs only the child observation for the next
-    hop, so avoid repeating a broad parent/chain export here.
-    """
-    expected_child = str(child_short or "").strip().lower()
-    if not expected_child:
-        raise RuntimeError("post-apply verification has no child identity")
-    parent_observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile post-apply parent context")
-    matched = _next_recovery_child(parent_observation, expected_child)
-    matched_mapping = matched.to_mapping()
-    if callable(getattr(hook, "stable_child_uuid", None)):
-        expected_uuid = _stable_child_uuid(hook, parent, matched_mapping).strip().lower()
-        actual_uuid = str(matched.field("uuid").raw_value() or "").strip().lower()
-        if strict_uuid and expected_uuid and actual_uuid != expected_uuid:
-            raise RuntimeError(
-                f"post-apply child UUID {actual_uuid[:8] or '<empty>'} "
-                f"does not match deterministic slot identity {expected_uuid[:8]}"
-            )
-    return matched_mapping
-
-
 def _stale_plan(parent: TaskPayload, reason: str) -> RecoveryRefusal:
     return RecoveryRefusal(
         DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile stale plan"),
@@ -1030,9 +999,6 @@ def _execute_reconcile_lifecycle_plan(
             parent,
             hook,
             child_observation=child_observation,
-        ),
-        verify_child=lambda parent, short, strict_uuid: _verify_applied_child(
-            task_bin, parent.to_mapping(), short, hook=hook, strict_uuid=strict_uuid,
         ),
         verified_children=verified_children,
         strict_uuid=strict_uuid,

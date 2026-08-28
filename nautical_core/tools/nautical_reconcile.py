@@ -1859,7 +1859,7 @@ def main(
         else:
             mutation_started = time.perf_counter() if args.apply else 0.0
             try:
-                outcomes = _reconcile_candidate(
+                outcomes = session.plan_candidate(
                     args.task_bin,
                     hook,
                     parent,

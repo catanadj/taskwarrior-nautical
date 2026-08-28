@@ -3277,7 +3277,9 @@ class TaskAnalyzer:
             upcoming=tuple(upcoming_dates),
             pending_due=tuple(pending_due_dates),
         )
-        trace_view = _trace_view(trace) if trace is not None else None
+        # Chain analysis does not request an explain trace; keep the view
+        # explicitly empty rather than reaching for an undefined local.
+        trace_view = None
         analysis_view = NavigatorAnalysisView(
             chain_size=len(full_chain),
             calendar=calendar_view,

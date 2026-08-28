@@ -323,6 +323,63 @@ class OperatorHealthService:
         return tuple(result)
 
     @staticmethod
+    def lifecycle_outbox_findings(payload: dict[str, Any]) -> tuple[OperatorFinding, ...]:
+        """Project a queue-status payload into stable typed findings."""
+        outbox_value = payload.get("outbox")
+        outbox: dict[str, Any] = dict(outbox_value) if isinstance(outbox_value, dict) else {}
+        states_value = outbox.get("states")
+        states: dict[str, Any] = dict(states_value) if isinstance(states_value, dict) else {}
+        result: list[OperatorFinding] = []
+        quarantined = int(states.get("quarantined") or 0)
+        if quarantined:
+            result.append(OperatorFinding(
+                "outbox.poison_rows", "outbox", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                f"{quarantined} malformed lifecycle intent{'s' if quarantined != 1 else ''} quarantined.",
+                observed={"count": quarantined, "sample": outbox.get("sample") or []},
+                guidance="Inspect nautical queue-status and resolve the quarantined lifecycle intents.",
+            ))
+        schema_value = outbox.get("schema")
+        schema: dict[str, Any] = dict(schema_value) if isinstance(schema_value, dict) else {}
+        schema_status = str(schema.get("status") or "absent")
+        result.append(OperatorFinding(
+            "outbox.schema", "outbox",
+            FindingSeverity.ERROR if schema_status == "error" else FindingSeverity.INFO,
+            FindingActionability.BLOCKING if schema_status == "error" else FindingActionability.INFORMATIONAL,
+            "Lifecycle outbox schema is incompatible with this Nautical runtime." if schema_status == "error" else (
+                f"Lifecycle outbox schema v{schema.get('version')} is compatible." if schema_status == "ok"
+                else "Lifecycle outbox has not been created yet."
+            ), observed=schema,
+            guidance=("Preserve the database, then upgrade Nautical or restore a compatible lifecycle outbox." if schema_status == "error" else ""),
+        ))
+        issues = payload.get("issues") or []
+        outbox_status = str(payload.get("status") or "ok")
+        result.append(OperatorFinding(
+            "outbox.state", "outbox",
+            FindingSeverity.ERROR if outbox_status == "error" else FindingSeverity.WARNING if issues else FindingSeverity.INFO,
+            FindingActionability.ACTIONABLE if issues or outbox_status == "error" else FindingActionability.INFORMATIONAL,
+            "Lifecycle outbox has findings." if issues else "Lifecycle outbox is clean.",
+            observed={"issues": issues} if issues else {},
+            guidance="Run nautical queue-status for lifecycle outbox details." if issues else "",
+        ))
+        retention_value = outbox.get("retention")
+        retention: dict[str, Any] = dict(retention_value) if isinstance(retention_value, dict) else {}
+        eligible = int(retention.get("eligible") or 0)
+        if eligible:
+            result.append(OperatorFinding(
+                "outbox.retention", "outbox", FindingSeverity.WARNING, FindingActionability.ACTIONABLE,
+                f"{eligible} acknowledged lifecycle intent{'s' if eligible != 1 else ''} exceed the retention policy.",
+                observed=retention,
+                guidance="Run nautical queue-status --prune-acknowledged to remove only expired acknowledgements.",
+            ))
+        elif outbox.get("exists"):
+            result.append(OperatorFinding(
+                "outbox.retention", "outbox", FindingSeverity.INFO, FindingActionability.INFORMATIONAL,
+                "Lifecycle outbox retention is within policy.", observed=retention,
+            ))
+        return tuple(result)
+
+    @staticmethod
     def runtime_findings(
         status: dict[str, Any], runtime_root: object,
         hook_runtimes: dict[str, dict[str, Any]] | None = None,

@@ -589,75 +589,7 @@ def _check_lifecycle_outbox(findings: list[dict[str, Any]], taskdata: Path, stal
             details={"error": str(exc)},
         )
         return {}
-    outbox_value = payload.get("outbox")
-    outbox: dict[str, Any] = dict(outbox_value) if isinstance(outbox_value, dict) else {}
-    states_value = outbox.get("states")
-    states: dict[str, Any] = dict(states_value) if isinstance(states_value, dict) else {}
-    quarantined = int(states.get("quarantined") or 0)
-    if quarantined:
-        _finding(
-            findings,
-            "outbox.poison_rows",
-            "error",
-            f"{quarantined} malformed lifecycle intent{'s' if quarantined != 1 else ''} quarantined.",
-            fix="Inspect nautical queue-status and resolve the quarantined lifecycle intents.",
-            details={"count": quarantined, "sample": outbox.get("sample") or []},
-        )
-    schema_value = outbox.get("schema")
-    schema: dict[str, Any] = dict(schema_value) if isinstance(schema_value, dict) else {}
-    schema_status = str(schema.get("status") or "absent")
-    if schema_status == "error":
-        _finding(
-            findings,
-            "outbox.schema",
-            "error",
-            "Lifecycle outbox schema is incompatible with this Nautical runtime.",
-            fix="Preserve the database, then upgrade Nautical or restore a compatible lifecycle outbox.",
-            details=schema,
-        )
-    else:
-        _finding(
-            findings,
-            "outbox.schema",
-            "ok",
-            (
-                f"Lifecycle outbox schema v{schema.get('version')} is compatible."
-                if schema_status == "ok"
-                else "Lifecycle outbox has not been created yet."
-            ),
-            details=schema,
-        )
-
-    issues = payload.get("issues") or []
-    outbox_status = str(payload.get("status") or "ok")
-    _finding(
-        findings,
-        "outbox.state",
-        "error" if outbox_status == "error" else ("warn" if issues else "ok"),
-        "Lifecycle outbox has findings." if issues else "Lifecycle outbox is clean.",
-        fix="Run nautical queue-status for lifecycle outbox details." if issues else "",
-        details={"issues": issues} if issues else None,
-    )
-    retention_value = outbox.get("retention")
-    retention: dict[str, Any] = dict(retention_value) if isinstance(retention_value, dict) else {}
-    eligible = int(retention.get("eligible") or 0)
-    if eligible:
-        _finding(
-            findings,
-            "outbox.retention",
-            "warn",
-            f"{eligible} acknowledged lifecycle intent{'s' if eligible != 1 else ''} exceed the retention policy.",
-            fix="Run nautical queue-status --prune-acknowledged to remove only expired acknowledgements.",
-            details=retention,
-        )
-    elif outbox.get("exists"):
-        _finding(
-            findings,
-            "outbox.retention",
-            "ok",
-            "Lifecycle outbox retention is within policy.",
-            details=retention,
-        )
+    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.lifecycle_outbox_findings(payload))
     return dict(payload)
 
 

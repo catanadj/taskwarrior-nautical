@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from . import file_resource_limits as resource_limits
+from .operator_context import OperatorBudgetLedger
 
 
 _FILE_CACHE_MAX_ENTRIES = 32
@@ -156,9 +157,16 @@ def _parse_text_dates(text: str, *, label: str) -> frozenset[date]:
     return frozenset(out)
 
 
-def load_file_date_data(path: str, *, label: str) -> tuple[frozenset[date], dict[date, str]]:
+def load_file_date_data(
+    path: str,
+    *,
+    label: str,
+    budget: OperatorBudgetLedger | None = None,
+) -> tuple[frozenset[date], dict[date, str]]:
     if not path:
         return frozenset(), {}
+    if budget is not None and not budget.consume("file_records"):
+        raise ValueError("operator file-record budget exhausted")
     st = os.stat(path)
     if st.st_size > resource_limits.MAX_FILE_BYTES:
         raise ValueError(

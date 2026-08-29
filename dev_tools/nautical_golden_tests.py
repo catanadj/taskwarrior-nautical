@@ -734,7 +734,22 @@ class _BoundPresentationEffects:
 
     def __init__(self, hook):
         object.__setattr__(self, "_hook", hook)
-        object.__setattr__(self, "_module", importlib.import_module("nautical_core.modify_presentation_effects"))
+        module = importlib.import_module("nautical_core.modify_presentation_effects")
+        object.__setattr__(self, "_module", module)
+        originals = getattr(type(self), "_originals", None)
+        if originals is None:
+            originals = {
+                name: getattr(module, name)
+                for name in (
+                    "render_anchor_completion_feedback",
+                    "render_cp_completion_feedback",
+                    "render_recurrence_updated_panel",
+                )
+            }
+            setattr(type(self), "_originals", originals)
+        else:
+            for name, fn in originals.items():
+                setattr(module, name, fn)
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)

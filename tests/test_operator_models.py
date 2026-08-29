@@ -291,6 +291,17 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertTrue(budget.consume("taskwarrior_calls"))
         self.assertTrue(budget.exceeded("taskwarrior_calls"))
 
+    def test_task_command_budget_rejects_before_process_spawn(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+        from nautical_core.task_command import run_task_command
+
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        self.assertTrue(budget.consume("taskwarrior_calls"))
+        result = run_task_command("/path/that/does/not/exist", [], budget=budget)
+        self.assertEqual(result.kind.value, "rejected")
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(budget.usage("taskwarrior_calls"), 1)
+
     def test_invocation_context_captures_one_immutable_basis(self) -> None:
         configuration = ValidatedNauticalConfiguration(
             "/tmp/config", "config-1", "schedule-1", "UTC", (),

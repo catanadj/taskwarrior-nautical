@@ -7,6 +7,7 @@ from typing import Mapping, Sequence
 
 from .integration_models import CommandFailureKind, TaskCommandResult
 from .taskwarrior_client import TaskwarriorClient
+from .operator_context import OperatorBudgetLedger
 
 
 class TaskCommandFailure(RuntimeError):
@@ -29,10 +30,13 @@ def run_command_once(
     env: Mapping[str, str] | None = None,
     timeout: float = 60.0,
     purpose: str = "Taskwarrior command",
+    budget: OperatorBudgetLedger | None = None,
 ) -> TaskCommandResult:
     normalized = tuple(str(arg) for arg in argv)
     if not normalized:
         raise ValueError("Taskwarrior command is empty")
+    if budget is not None and not budget.consume("taskwarrior_calls"):
+        return _budget_rejection(normalized, purpose, timeout)
     return TaskwarriorClient(normalized[:1], env=env).execute(
         normalized[1:],
         purpose=purpose,
@@ -51,8 +55,12 @@ def run_task_command(
     retry_locks: bool = False,
     retry_delay: float = 0.1,
     purpose: str = "Taskwarrior command",
+    budget: OperatorBudgetLedger | None = None,
 ) -> TaskCommandResult:
     """Execute an operator command through the single process boundary."""
+    normalized = (str(task_bin), *(str(arg) for arg in args))
+    if budget is not None and not budget.consume("taskwarrior_calls"):
+        return _budget_rejection(normalized, purpose, timeout)
     return TaskwarriorClient((task_bin,), env=env).execute(
         args,
         purpose=purpose,
@@ -61,6 +69,14 @@ def run_task_command(
         attempts=2 if retry_locks else 1,
         retry_delay=retry_delay,
     )
+
+
+def _budget_rejection(argv: Sequence[str], purpose: str, timeout: float) -> TaskCommandResult:
+    """Return typed evidence without spawning after a pre-effect budget refusal."""
+    from .integration_models import TaskCommand
+
+    command = TaskCommand(tuple(argv), purpose, timeout)
+    return TaskCommandResult(command, 125, "", "operator Taskwarrior call budget exhausted", CommandFailureKind.REJECTED, 1, 0.0)
 
 
 def failure_message(result: TaskCommandResult, operation: str) -> str:

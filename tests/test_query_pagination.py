@@ -7,6 +7,7 @@ from nautical_core.query_models import HARD_MAX_TASKS, OccurrenceQueryRequest, O
 from nautical_core.operator_models import OperatorCursor
 from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
 from nautical_core.task_models import TaskObservation
+from nautical_core.integration_models import Found
 
 
 class QueryPaginationTests(unittest.TestCase):
@@ -49,6 +50,34 @@ class QueryPaginationTests(unittest.TestCase):
         self.assertEqual(tuple(row.uuid for row in final), ("task-4",))
         self.assertTrue(complete)
         self.assertIsNone(next_cursor)
+
+    def test_single_uuid_query_uses_one_authoritative_read(self) -> None:
+        service = self._service()
+        uuid = "00000000-0000-4000-8000-000000000701"
+        calls = []
+
+        class Repository:
+            def by_uuid(self, value, *, statuses):
+                calls.append((value, tuple(statuses)))
+                return Found(
+                    {
+                        "uuid": uuid,
+                        "chainID": "query-single",
+                        "link": 1,
+                        "anchor": "w:mon",
+                        "anchor_mode": "skip",
+                        "status": "pending",
+                    },
+                    "uuid:query-single",
+                )
+
+        service._uow.repository = Repository()
+        request = OccurrenceQueryRequest.from_mapping(
+            {"selector": {"uuids": [uuid]}, "from": "2026-08-24", "count": 1}
+        )
+        rows = service._rows_for(request)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(calls), 1)
 
     def test_cursor_rejects_changed_snapshot(self) -> None:
         service = self._service()

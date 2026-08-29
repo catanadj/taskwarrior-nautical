@@ -8,6 +8,14 @@ from dev_tools import nautical_perf_budget as budget
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
+    def test_measure_records_cpu_and_wall_attribution(self) -> None:
+        result = budget._measure("contract", lambda: 0.001, 2)
+        self.assertEqual(result["name"], "contract")
+        self.assertEqual(len(result["samples_s"]), 2)
+        self.assertEqual(len(result["cpu_samples_s"]), 2)
+        self.assertGreaterEqual(result["cpu_median_s"], 0.0)
+        self.assertGreaterEqual(result["measured_wall_median_s"], 0.0)
+
     def test_task_call_budget_is_independent_from_wall_time(self) -> None:
         result = {"pass": True}
         budget._apply_task_call_budgets(

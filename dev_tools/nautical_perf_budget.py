@@ -892,17 +892,33 @@ def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
 
 def _measure(name: str, fn, repeats: int) -> dict:
     samples = []
+    cpu_samples = []
+    wall_samples = []
     # Warmup once for interpreter/cache stabilization.
     _ = fn()
     for _ in range(max(1, repeats)):
-        samples.append(float(fn()))
+        started_wall = time.perf_counter()
+        started_cpu = time.process_time()
+        reported = float(fn())
+        elapsed_wall = time.perf_counter() - started_wall
+        elapsed_cpu = time.process_time() - started_cpu
+        # Existing checks return their own wall duration. Preserve that value
+        # while recording measured CPU/wall attribution alongside it.
+        samples.append(reported)
+        cpu_samples.append(max(0.0, elapsed_cpu))
+        wall_samples.append(max(0.0, elapsed_wall))
     samples = sorted(samples)
+    cpu_samples = sorted(cpu_samples)
+    wall_samples = sorted(wall_samples)
     return {
         "name": name,
         "samples_s": samples,
         "min_s": samples[0],
         "median_s": statistics.median(samples),
         "max_s": samples[-1],
+        "cpu_samples_s": cpu_samples,
+        "cpu_median_s": statistics.median(cpu_samples),
+        "measured_wall_median_s": statistics.median(wall_samples),
     }
 
 

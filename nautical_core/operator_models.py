@@ -538,6 +538,13 @@ class OperatorPage:
 
 
 OPERATOR_LIMIT_ENFORCEMENT_OWNERS: Mapping[str, str] = {
+    "taskwarrior_calls": "taskwarrior_client",
+    "exported_rows": "taskwarrior_client",
+    "decoded_rows": "snapshot_reader",
+    "hydration_identities": "snapshot_reader",
+    "sqlite_transactions": "outbox_reader",
+    "cache_entries": "cache_provider",
+    "peak_memory_bytes": "invocation_context",
     "tasks": "snapshot_reader",
     "chains": "snapshot_reader",
     "occurrences": "occurrence_service",
@@ -554,6 +561,13 @@ OPERATOR_LIMIT_ENFORCEMENT_OWNERS: Mapping[str, str] = {
 class OperatorLimits:
     """Independent safety limits for one operator invocation."""
 
+    taskwarrior_calls: int = 256
+    exported_rows: int = 10000
+    decoded_rows: int = 10000
+    hydration_identities: int = 100
+    sqlite_transactions: int = 256
+    cache_entries: int = 10000
+    peak_memory_bytes: int = 64 * 1024 * 1024
     tasks: int = 100
     chains: int = 100
     occurrences: int = 1000
@@ -574,10 +588,13 @@ class OperatorLimits:
 
     def __post_init__(self) -> None:
         for name in (
+            "taskwarrior_calls", "exported_rows", "decoded_rows", "hydration_identities",
+            "sqlite_transactions", "cache_entries", "peak_memory_bytes",
             "tasks", "chains", "occurrences", "history_links", "findings",
             "outbox_rows", "file_records", "scheduler_iterations", "wall_time_seconds",
         ):
-            object.__setattr__(self, name, _positive(getattr(self, name), name, 100_000))
+            maximum = 1_000_000_000_000 if name == "peak_memory_bytes" else 100_000
+            object.__setattr__(self, name, _positive(getattr(self, name), name, maximum))
 
     def to_dict(self) -> dict[str, int]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}

@@ -257,6 +257,8 @@ class OperatorModelsTests(unittest.TestCase):
     def test_every_operator_limit_has_an_enforcement_owner(self) -> None:
         limits = OperatorLimits()
         fields = (
+            "taskwarrior_calls", "exported_rows", "decoded_rows", "hydration_identities",
+            "sqlite_transactions", "cache_entries", "peak_memory_bytes",
             "tasks", "chains", "occurrences", "history_links", "findings",
             "outbox_rows", "file_records", "scheduler_iterations", "wall_time_seconds",
         )

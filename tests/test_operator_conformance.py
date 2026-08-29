@@ -85,6 +85,24 @@ class OperatorConformanceTests(unittest.TestCase):
             tuple(item.to_dict() for item in control_plane.inspect(snapshot, requirement, limits, scope=OperatorScope.system())),
         )
 
+    def test_control_plane_inspection_exposes_ordered_typed_phases(self) -> None:
+        snapshot = OperatorSnapshot(
+            "phase-snapshot", OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc), "epoch-1", "config-1",
+        )
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        phases = control_plane.inspect_phases(snapshot, CoverageRequirement(CoverageKind.COMPLETE), OperatorLimits())
+        self.assertEqual(
+            tuple(phase.phase for phase in phases),
+            (OperatorPhase.VALIDATE_REQUEST, OperatorPhase.COMPILE_SCOPE, OperatorPhase.INSPECT, OperatorPhase.RESULT),
+        )
+        self.assertTrue(phases[0].value)
+
     def test_shuffled_findings_have_one_stable_order(self) -> None:
         findings = [
             OperatorFinding("b", "chain", FindingSeverity.WARNING, FindingActionability.INFORMATIONAL, "b", affected=("z",), guidance="inspect"),

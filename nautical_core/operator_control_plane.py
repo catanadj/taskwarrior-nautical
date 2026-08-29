@@ -17,7 +17,7 @@ from .chain_generation import ChainGenerationService
 from .operator_application import DomainApplicationRegistry
 from .operator_domain_planner import OperatorDomainPlanner
 from .operator_domain_plans import DomainApplicationAuthorization
-from .operator_models import OperatorResult
+from .operator_models import OperatorContractError, OperatorFailure, OperatorPhase, OperatorPhaseResult, OperatorResult
 from .operator_inspectors import inspect_occurrence_collection, inspect_operator_snapshot
 from .operator_findings import OperatorFinding
 from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
@@ -173,6 +173,40 @@ class OperatorControlPlane:
     ) -> tuple[OperatorFinding, ...]:
         """Inspect one immutable snapshot through the shared pure pipeline."""
         return inspect_operator_snapshot(snapshot, requirement, limits, scope=scope)
+
+    def inspect_phases(
+        self,
+        snapshot: OperatorSnapshot,
+        requirement: CoverageRequirement,
+        limits: OperatorLimits,
+        *,
+        scope: OperatorScope | None = None,
+    ) -> tuple[OperatorPhaseResult, ...]:
+        """Run the read-only inspection slice with explicit typed phases."""
+        try:
+            if not isinstance(snapshot, OperatorSnapshot):
+                raise OperatorContractError("inspection requires an OperatorSnapshot")
+            if not isinstance(requirement, CoverageRequirement):
+                raise OperatorContractError("inspection requires a coverage requirement")
+            if not isinstance(limits, OperatorLimits):
+                raise OperatorContractError("inspection requires operator limits")
+            resolved_scope = scope or OperatorScope.system()
+            if not isinstance(resolved_scope, OperatorScope):
+                raise OperatorContractError("inspection scope is invalid")
+        except (OperatorContractError, TypeError, ValueError) as exc:
+            failure = OperatorFailure("invalid_request", str(exc), retryable=False)
+            return (OperatorPhaseResult(OperatorPhase.VALIDATE_REQUEST, failure=failure),)
+
+        phases: list[OperatorPhaseResult] = [
+            OperatorPhaseResult(OperatorPhase.VALIDATE_REQUEST, value=True),
+            OperatorPhaseResult(OperatorPhase.COMPILE_SCOPE, value=resolved_scope),
+        ]
+        findings = self.inspect(snapshot, requirement, limits, scope=resolved_scope)
+        phases.extend((
+            OperatorPhaseResult(OperatorPhase.INSPECT, value=findings),
+            OperatorPhaseResult(OperatorPhase.RESULT, value=findings),
+        ))
+        return tuple(phases)
 
     def inspect_occurrences(
         self,

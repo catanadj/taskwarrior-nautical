@@ -23,6 +23,7 @@ from .operator_findings import OperatorFinding
 from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
 from .operator_snapshot import OperatorSnapshotSession, SnapshotReadRequest, SnapshotReader
+from .operator_snapshot_provider import OperatorSnapshotProvider
 from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
@@ -107,13 +108,9 @@ class OperatorControlPlane:
         configuration = self.configuration
         if configuration is None:
             raise ValueError("integrity drain requires validated configuration")
-        from .chain_snapshot import ChainSnapshotService
-
+        snapshots = OperatorSnapshotProvider.for_unit_of_work(cast(Any, unit_of_work))
         engine = ChainIntegrityEngine(
-            ChainSnapshotService(
-                cast(Any, unit_of_work),
-                configuration_fingerprint=str(configuration.fingerprint),
-            ),
+            snapshots,
             configuration_fingerprint=str(configuration.fingerprint),
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )

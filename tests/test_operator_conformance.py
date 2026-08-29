@@ -31,6 +31,28 @@ from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_integrity_drain_uses_canonical_snapshot_provider(self) -> None:
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        provider = object()
+        engine = SimpleNamespace(drain=lambda *args, **kwargs: ())
+        with patch(
+            "nautical_core.operator_control_plane.OperatorSnapshotProvider.for_unit_of_work",
+            return_value=provider,
+        ) as make_provider, patch(
+            "nautical_core.operator_control_plane.ChainIntegrityEngine",
+            return_value=engine,
+        ) as make_engine:
+            result = control_plane.drain_integrity(
+                object(), unit_of_work=object(), executor=object(), request_factory=object(), owner="test",
+            )
+        self.assertEqual(result, ())
+        make_provider.assert_called_once()
+        self.assertIs(make_engine.call_args.args[0], provider)
+
     def test_operator_phase_result_is_typed_and_fail_closed(self) -> None:
         successful = OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, value={"snapshot": "s1"})
         self.assertEqual(successful.phase, OperatorPhase.ACQUIRE_SNAPSHOT)
@@ -138,7 +160,7 @@ class OperatorConformanceTests(unittest.TestCase):
             scheduler_fingerprint = "schedule-1"
 
         control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
-        phases = control_plane.apply_domain_phases("repair", object())  # type: ignore[arg-type]
+        phases = control_plane.apply_domain_phases("repair", object())
         self.assertEqual(tuple(phase.phase for phase in phases), (OperatorPhase.AUTHORIZE,))
         self.assertEqual(phases[0].failure.code, "invalid_authorization")
 
@@ -148,7 +170,7 @@ class OperatorConformanceTests(unittest.TestCase):
             scheduler_fingerprint = "schedule-1"
 
         control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
-        phases = control_plane.inspect_request_phases(object(), object(), object())  # type: ignore[arg-type]
+        phases = control_plane.inspect_request_phases(object(), object(), object())
         self.assertEqual(phases[0].phase, OperatorPhase.VALIDATE_REQUEST)
         self.assertEqual(phases[0].failure.code, "invalid_request")
 

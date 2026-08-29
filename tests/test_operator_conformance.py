@@ -1,6 +1,7 @@
 import unittest
 import json
 from unittest.mock import patch
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,9 @@ from nautical_core.integration_models import (
 from nautical_core.operator_models import OperatorFailure
 from nautical_core.operator_plans import OperatorPlan
 from nautical_core.operator_context import OperatorInvocationContext
+from nautical_core.operator_context import OperatorInvocationBudget
+from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
@@ -147,6 +151,19 @@ class OperatorConformanceTests(unittest.TestCase):
         phases = control_plane.inspect_request_phases(object(), object(), object())  # type: ignore[arg-type]
         self.assertEqual(phases[0].phase, OperatorPhase.VALIDATE_REQUEST)
         self.assertEqual(phases[0].failure.code, "invalid_request")
+
+    def test_scheduler_budget_exhaustion_is_terminal_before_evaluator_work(self) -> None:
+        evaluator = SimpleNamespace(kind="anchor", context=SimpleNamespace(timezone=None))
+        session = SimpleNamespace(evaluator=evaluator)
+        scheduler = SchedulerService(session)
+        budget = OperatorInvocationBudget(OperatorLimits(scheduler_iterations=1))
+        self.assertTrue(budget.consume("scheduler_iterations"))
+        cursor = OccurrenceCursor.inclusive_at(datetime(2026, 1, 1))
+        result = scheduler.collect_request(
+            OccurrenceRangeRequest(cursor), budget=budget,
+        )
+        self.assertEqual(result.status, "exhausted")
+        self.assertEqual(result.terminal.kind, "search_limit")
 
     def test_control_plane_domain_application_emits_ordered_effect_phases(self) -> None:
         from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard

@@ -124,6 +124,10 @@ class ReconcileSnapshotService:
             )
         return list(self._candidates)
 
+    def loaded_rows(self) -> tuple[TaskObservation, ...] | None:
+        """Return the already-loaded authoritative rows without exposing state."""
+        return self._rows
+
     def invalidate(self) -> None:
         self._rows = None
         self._active = None

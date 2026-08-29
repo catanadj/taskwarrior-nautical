@@ -1404,14 +1404,15 @@ class _ReconcileSession:
 
     def audit_integrity(self, *, hook: Any, apply: bool) -> tuple[Any, Any, float, tuple[Any, ...], float]:
         """Audit and, when authorized, apply integrity plans for this snapshot."""
-        if self.snapshot._rows is None:
+        rows = self.snapshot.loaded_rows()
+        if rows is None:
             return None, None, 0.0, (), 0.0
         started = time.perf_counter()
         from nautical_core.chain_integrity_models import SnapshotCoverage
         from nautical_core.integrity_audit_service import audit_authoritative_mappings_with_engine
         bundle = audit_authoritative_mappings_with_engine(
             self.unit_of_work,
-            tuple(row.to_mapping() for row in self.snapshot._rows),
+            tuple(row.to_mapping() for row in rows),
             source="lifecycle.lifecycle_candidates",
             coverage=SnapshotCoverage.CHAIN,
             outbox_repository=self.integrity_outbox,

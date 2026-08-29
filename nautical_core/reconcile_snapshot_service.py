@@ -7,6 +7,7 @@ from typing import Any
 
 from .task_models import TaskObservation
 from .task_read_repository import ALL_TASK_STATUSES, TaskReadRepository
+from .operator_context import OperatorBudgetLedger
 
 
 class ReconcileSnapshotService:
@@ -20,12 +21,14 @@ class ReconcileSnapshotService:
         full_audit: bool = False,
         read_value: Callable[[object, str], object],
         stats: dict[str, Any] | None = None,
+        budget: OperatorBudgetLedger | None = None,
     ) -> None:
         self.repository = repository
         self.scope_filter = str(scope_filter or "").strip() or None
         self.full_audit = bool(full_audit)
         self._read_value = read_value
         self._stats = stats
+        self._budget = budget
         self._rows: tuple[TaskObservation, ...] | None = None
         self._active: tuple[TaskObservation, ...] | None = None
         self._candidates: tuple[TaskObservation, ...] | None = None
@@ -38,6 +41,8 @@ class ReconcileSnapshotService:
 
     def _all_rows(self) -> tuple[TaskObservation, ...]:
         if self._rows is None:
+            if self._budget is not None and not self._budget.consume("taskwarrior_calls"):
+                raise RuntimeError("operator Taskwarrior call budget exhausted before reconcile snapshot")
             value = self._read_value(
                 self.repository.lifecycle_candidates(
                     statuses=ALL_TASK_STATUSES,
@@ -49,6 +54,13 @@ class ReconcileSnapshotService:
             self._rows = (
                 value if isinstance(value, tuple) else (value,) if isinstance(value, TaskObservation) else ()
             )
+            if self._budget is not None:
+                row_count = len(self._rows)
+                if row_count and (
+                    not self._budget.consume("exported_rows", row_count)
+                    or not self._budget.consume("decoded_rows", row_count)
+                ):
+                    raise RuntimeError("operator reconcile snapshot row budget exhausted")
         elif self._stats is not None:
             self._stats["snapshot_hits"] = int(self._stats.get("snapshot_hits", 0)) + 1
         return self._rows

@@ -343,7 +343,12 @@ class OperatorControlPlane:
 
         return audit_authoritative_rows(cast(Any, unit_of_work), rows)
 
-    def diagnose_chains(self, unit_of_work: object) -> tuple[dict[str, int], list[dict[str, object]]]:
+    def diagnose_chains(
+        self,
+        unit_of_work: object,
+        *,
+        budget: OperatorBudgetLedger | None = None,
+    ) -> tuple[dict[str, int], list[dict[str, object]]]:
         """Export and audit chain state as one read-only diagnosis request."""
         from .integration_models import Absent, Found, Unavailable
 
@@ -358,6 +363,13 @@ class OperatorControlPlane:
         from .task_read_repository import ALL_TASK_STATUSES
 
         repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
+        if budget is not None and not budget.consume("taskwarrior_calls"):
+            return {"tasks": 0, "nautical_tasks": 0, "chains": 0}, [{
+                "id": "chains.budget",
+                "severity": "error",
+                "message": "Taskwarrior call budget exhausted before chain export.",
+                "details": {"resource": "taskwarrior_calls", "observed": budget.usage("taskwarrior_calls")},
+            }]
         read = repository.lifecycle_candidates(
             statuses=ALL_TASK_STATUSES,
             scope_filter=None,
@@ -377,6 +389,17 @@ class OperatorControlPlane:
                 "severity": "error",
                 "message": "Task data could not be exported for chain inspection.",
                 "details": {"error": "task repository returned an invalid result"},
+            }]
+        chain_count = len({row.field("chainID").raw_value() for row in rows if row.field("chainID").raw_value()})
+        if budget is not None and (
+            not budget.consume("tasks", len(rows))
+            or (chain_count and not budget.consume("chains", chain_count))
+        ):
+            return {"tasks": len(rows), "nautical_tasks": len(rows), "chains": chain_count}, [{
+                "id": "chains.budget",
+                "severity": "error",
+                "message": "Chain audit resource budget exhausted before integrity inspection.",
+                "details": {"resource": "tasks/chains", "observed_tasks": len(rows), "observed_chains": chain_count},
             }]
         _, findings = self.audit_integrity(unit_of_work, rows)
         recurrence_fields = ("cp", "anchor", "anchor_file")

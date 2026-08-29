@@ -408,6 +408,7 @@ def _check_chains(
     findings: list[dict[str, Any]],
     *,
     unit_of_work: TaskwarriorUnitOfWork | None,
+    budget: OperatorInvocationBudget | None = None,
 ) -> dict[str, int]:
     if unit_of_work is None:
         return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
@@ -416,7 +417,7 @@ def _check_chains(
         configuration,
         DomainApplicationRegistry(),
     )
-    counts, chain_findings = control_plane.diagnose_chains(unit_of_work)
+    counts, chain_findings = control_plane.diagnose_chains(unit_of_work, budget=budget)
     findings.extend(chain_findings)
     return counts
 
@@ -719,7 +720,9 @@ def main() -> int:
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
     parser.add_argument("--clean-cache", action="store_true", help="prune expired and orphaned anchor cache files")
     args = parser.parse_args()
-    budget = OperatorInvocationBudget(OperatorLimits())
+    # Doctor audits the full task database, so use bounded full-system limits
+    # rather than the smaller scoped-query defaults.
+    budget = OperatorInvocationBudget(OperatorLimits(tasks=10_000, chains=1_000))
 
     env = os.environ.copy()
     findings: list[dict[str, Any]] = []
@@ -799,6 +802,7 @@ def main() -> int:
         counts = _check_chains(
             findings,
             unit_of_work=unit_of_work,
+            budget=budget,
         )
 
     typed_findings = tuple(

@@ -22,6 +22,8 @@ from .operator_inspectors import inspect_occurrence_collection, inspect_operator
 from .operator_findings import OperatorFinding
 from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
+from .operator_snapshot import OperatorSnapshotSession, SnapshotReadRequest, SnapshotReader
+from .operator_context import OperatorInvocationContext
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
 from .operator_health_service import OperatorHealthReport, OperatorHealthService
@@ -238,6 +240,46 @@ class OperatorControlPlane:
             OperatorPhaseResult(OperatorPhase.COMPILE_SCOPE, value=resolved_scope),
         ]
         findings = self.inspect(snapshot, requirement, limits, scope=resolved_scope)
+        phases.extend((
+            OperatorPhaseResult(OperatorPhase.INSPECT, value=findings),
+            OperatorPhaseResult(OperatorPhase.RESULT, value=findings),
+        ))
+        return tuple(phases)
+
+    def inspect_request_phases(
+        self,
+        context: OperatorInvocationContext,
+        reader: SnapshotReader,
+        request: SnapshotReadRequest,
+    ) -> tuple[OperatorPhaseResult, ...]:
+        """Acquire and inspect one exact snapshot within one invocation basis."""
+        try:
+            if not isinstance(context, OperatorInvocationContext):
+                raise OperatorContractError("inspection requires an invocation context")
+            if not callable(getattr(reader, "read", None)):
+                raise OperatorContractError("inspection requires a snapshot reader")
+            if not isinstance(request, SnapshotReadRequest):
+                raise OperatorContractError("inspection requires a snapshot request")
+            if request.scope != context.request.scope:
+                raise OperatorContractError("snapshot scope differs from invocation request")
+        except (OperatorContractError, TypeError, ValueError) as exc:
+            return (
+                OperatorPhaseResult(
+                    OperatorPhase.VALIDATE_REQUEST,
+                    failure=OperatorFailure("invalid_request", str(exc), retryable=False),
+                ),
+            )
+        phases: list[OperatorPhaseResult] = [
+            OperatorPhaseResult(OperatorPhase.VALIDATE_REQUEST, value=True),
+            OperatorPhaseResult(OperatorPhase.CAPTURE_CONTEXT, value=context),
+            OperatorPhaseResult(OperatorPhase.COMPILE_SCOPE, value=request.scope),
+        ]
+        snapshot = OperatorSnapshotSession(context, reader).read(request)
+        if isinstance(snapshot, OperatorFailure):
+            phases.append(OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, failure=snapshot))
+            return tuple(phases)
+        phases.append(OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, value=snapshot))
+        findings = self.inspect(snapshot, request.requirement, request.limits, scope=request.scope)
         phases.extend((
             OperatorPhaseResult(OperatorPhase.INSPECT, value=findings),
             OperatorPhaseResult(OperatorPhase.RESULT, value=findings),

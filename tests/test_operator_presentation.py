@@ -36,6 +36,13 @@ class OperatorPresentationTests(unittest.TestCase):
         self.assertIn('"budget"', rendered)
         self.assertEqual(result.extensions, {})
 
+    def test_expired_wall_time_is_visible_during_presentation(self) -> None:
+        result = OperatorResult(OperatorOperation.INSPECT, OperatorStatus.OK)
+        budget = OperatorInvocationBudget(OperatorLimits(wall_time_seconds=1))
+        budget._started_monotonic -= 2
+        rendered = render_result(result, budget=budget)
+        self.assertIn('"wall_time_exceeded": true', rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

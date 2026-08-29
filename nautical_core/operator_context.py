@@ -164,6 +164,7 @@ class OperatorInvocationBudget:
             "exceeded": tuple(name for name, value in usage.items() if value > limits[name]),
             "effect_started": self.effect_started,
             "wall_time_elapsed_s": round(self.wall_time_elapsed, 6),
+            "wall_time_exceeded": self.wall_time_exceeded,
         }
 
     def observe_peak_memory(self, bytes_used: int) -> bool:

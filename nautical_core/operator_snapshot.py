@@ -436,6 +436,22 @@ class ChainSnapshotReader:
                     row for row in source.rows
                     if (row.chain_id in wanted if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid in wanted)
                 )
+                observed = {
+                    row.chain_id if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid
+                    for row in rows
+                }
+                missing = tuple(sorted(wanted - observed))
+                if missing:
+                    # A broad candidate export cannot prove authoritative
+                    # absence for arbitrary requested identities. Do not
+                    # project it as complete coverage.
+                    return OperatorFailure(
+                        "snapshot_unavailable",
+                        "broad snapshot cannot prove requested identity absence",
+                        retryable=True,
+                        scope=scope,
+                        details={"missing": missing, "source_snapshot": source.snapshot_id},
+                    )
                 return ChainSnapshot(
                     source.snapshot_id + ":multi",
                     source.coverage,

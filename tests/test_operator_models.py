@@ -576,6 +576,60 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertIsInstance(batch[0], OperatorSnapshot)
         self.assertIsInstance(batch[1], OperatorFailure)
 
+    def test_large_multi_scope_does_not_claim_complete_absence(self) -> None:
+        """Broad exports must fail closed when requested identities are missing."""
+        from nautical_core.integration_models import Found
+
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-large-scope", 32, IntegrationAccess.READ_ONLY,
+        )
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.CHAINS, ("chain-a", "chain-b", "chain-c", "chain-d", "chain-e")),
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        source = ChainSnapshot(
+            "broad-snapshot", SnapshotCoverage.CANDIDATES, "taskwarrior",
+            (ChainNode("task-a", "chain-a", 1, "pending", ()),), "config-1", True,
+        )
+        reader = ChainSnapshotReader(lambda _request: Found(source, "broad export"))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(request.scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_unavailable")
+        self.assertTrue(result.retryable)
+        self.assertEqual(result.details["missing"], ("chain-b", "chain-c", "chain-d", "chain-e"))
+        uuid_scope = OperatorScope(
+            OperatorScopeKind.UUIDS,
+            ("task-a", "task-b", "task-c", "task-d", "task-e"),
+        )
+        uuid_result = reader.read_chain_snapshot(context, SnapshotReadRequest(uuid_scope))
+        self.assertIsInstance(uuid_result, OperatorFailure)
+        self.assertEqual(uuid_result.code, "snapshot_unavailable")
+        self.assertEqual(uuid_result.details["missing"], ("task-b", "task-c", "task-d", "task-e"))
+
+    def test_multi_scope_reader_preserves_authoritative_identity_coverage(self) -> None:
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
+        from nautical_core.integration_models import Found
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-large-scope", 32, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        scope = OperatorScope(OperatorScopeKind.CHAINS, ("chain-a", "chain-b", "chain-c", "chain-d", "chain-e"))
+        source = ChainSnapshot(
+            "broad-snapshot", SnapshotCoverage.CANDIDATES, "taskwarrior",
+            (ChainNode("task-a", "chain-a", 1, "pending", ()),), "config-1", True,
+        )
+        reader = ChainSnapshotReader(lambda _request: Found(source, "broad export"))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_unavailable")
+        self.assertTrue(result.retryable)
+        self.assertEqual(result.details["missing"], ("chain-b", "chain-c", "chain-d", "chain-e"))
+
     def test_multi_scope_hydration_stops_on_unavailable_evidence(self) -> None:
         request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
         configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())

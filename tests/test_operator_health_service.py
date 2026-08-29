@@ -10,10 +10,13 @@ class OperatorHealthServiceTests(unittest.TestCase):
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",
-            preflight=lambda _: {"status": "ok", "event": "sunrise"},
+            preflight=lambda _: {
+                "status": "ok", "event": "sunrise", "provider_timezone": ZoneInfo("UTC")
+            },
         )
         payload = findings[0].to_dict()
         self.assertEqual(payload["observed"]["effective_timezone"], "Europe/Bucharest")
+        self.assertEqual(payload["observed"]["provider_timezone"], "UTC")
 
     def test_report_is_deterministic_and_deduplicated(self) -> None:
         finding = OperatorFinding(

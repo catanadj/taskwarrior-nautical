@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
-from datetime import date
+from typing import Any, Callable, Iterable, Mapping
+from datetime import date, datetime
+from pathlib import Path
 
 from .operator_findings import (
     FindingActionability,
@@ -17,6 +18,22 @@ from .operator_findings import (
 from .operator_models import OperatorStatus
 from .config_schema import CONFIG_SPECS, validate_config
 from .description_aliases import ALIAS_TO_FIELD
+
+
+def _json_safe(value: object) -> object:
+    """Normalize provider evidence before it enters the strict finding model."""
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (datetime, date, Path)):
+        return value.isoformat() if isinstance(value, (datetime, date)) else str(value)
+    zone_key = getattr(value, "key", None)
+    if zone_key is not None:
+        return str(zone_key)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,7 +499,11 @@ class OperatorHealthService:
             ),)
         severity = FindingSeverity.INFO if status == "ok" else FindingSeverity.WARNING if status == "warning" else FindingSeverity.ERROR
         actionability = FindingActionability.INFORMATIONAL if status == "ok" else FindingActionability.ACTIONABLE
-        details = {key: value for key, value in result.items() if key not in {"status", "message"}}
+        details = {
+            key: _json_safe(value)
+            for key, value in result.items()
+            if key not in {"status", "message"}
+        }
         timezone_value = getattr(effective_timezone, "key", None) or str(effective_timezone)
         details.update({"config_source": source_hint, "effective_timezone": timezone_value})
         return (OperatorFinding(

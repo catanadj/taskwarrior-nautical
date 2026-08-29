@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import shutil
 
-from nautical_core.integration_models import CommandFailureKind
+from nautical_core.integration_models import CommandFailureKind, FailureEvidence
 from nautical_core.doctor_report import DoctorReport
 from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_models import OperatorV2Result
@@ -51,6 +51,18 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
+
+    def test_process_interruption_is_typed_and_retryable(self) -> None:
+        client = TaskwarriorClient((sys.executable, "-c", "import time; time.sleep(1)"))
+        result = client.execute((), purpose="interruption-test", timeout=0.01, attempts=1)
+        self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
+        self.assertEqual(result.returncode, 124)
+        self.assertGreaterEqual(result.duration, 0.0)
+        evidence = FailureEvidence(
+            result.command, result.kind, result.returncode, result.attempt,
+            result.duration, retryable=True, detail="process timeout",
+        )
+        self.assertTrue(evidence.retryable)
 
     def test_integrity_unavailable_result_keeps_failure_evidence(self) -> None:
         from nautical_core.tools.nautical_query import _v2_document

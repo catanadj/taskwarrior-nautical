@@ -554,6 +554,7 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "nautical_core/recurrence_context.py",
         "nautical_core/task_codec.py",
         "nautical_core/tools/nautical_doctor.py",
+        "nautical_core/doctor_report.py",
     }
     for path in package.rglob("*.py") if package.is_dir() else ():
         relative = str(path.relative_to(root))

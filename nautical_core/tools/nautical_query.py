@@ -44,7 +44,6 @@ from nautical_core.query_models import (  # noqa: E402
 )
 from nautical_core.query_service import OccurrenceQueryService  # noqa: E402
 from nautical_core.integrity_query_service import IntegrityQueryService  # noqa: E402
-from nautical_core.chain_snapshot import IntegritySnapshotRequest  # noqa: E402
 from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 
 INTEGRITY_SCHEMA = "nautical.query.integrity"
@@ -154,26 +153,14 @@ def _diagnostic(message: str) -> None:
 
 def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     """Validate the selector and delegate the audit to the shared service."""
-    selected = sum(bool(value) for value in (args.uuids, args.chain_id, args.all_tasks))
-    if selected != 1:
-        raise QueryContractError("integrity query requires exactly one of --uuid, --chain-id, or --all")
-    if args.uuids:
-        if len(args.uuids) != 1:
-            raise QueryContractError("integrity query accepts one --uuid")
-        request = IntegritySnapshotRequest.uuid(args.uuids[0], complete_chain_history=True)
-    elif args.chain_id:
-        request = IntegritySnapshotRequest.chain(args.chain_id)
-    else:
-        # An explicit whole-system audit already requests the complete
-        # authoritative history. Avoid bounded hydration of every chain,
-        # which would otherwise stop at the per-engine safety cap.
-        request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
-    payload, exit_code = IntegrityQueryService(
+    service = IntegrityQueryService(
         core=core,
         task_binary=shutil.which("task") or "task",
         env=os.environ,
         uow_builder=build_operator_uow,
-    ).query(request)
+    )
+    request = service.request_from_selector(uuids=args.uuids, chain_id=args.chain_id, all_tasks=args.all_tasks)
+    payload, exit_code = service.query(request)
     upgraded = to_operator_result(payload)
     return upgraded, exit_code
 

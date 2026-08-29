@@ -8,7 +8,7 @@ from typing import Any, cast
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
 
 
-def format_task(task: Mapping[str, Any]) -> str:
+def format_task(task: dict[str, Any]) -> str:
     """Format a task reference for human-facing Doctor details."""
     uuid = str(task.get("uuid") or "")
     short = uuid[:8] if uuid else "unknown"

@@ -11,6 +11,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# When invoked directly from a staging directory, Python only places the
+# ``tools`` directory on sys.path. Add the packaged core root explicitly.
+CORE_ROOT = Path(__file__).resolve().parents[1].parent
+if str(CORE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CORE_ROOT))
+
 from nautical_core.operator_presentation import bounded_text, finding_status, ordered_findings, render_json_document
 def _findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Return canonical finding mappings from a Doctor payload."""

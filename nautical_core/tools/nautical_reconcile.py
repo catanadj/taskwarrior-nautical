@@ -59,7 +59,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
-from nautical_core.reconcile_report import action_style, describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
+from nautical_core.reconcile_report import action_style, describe_plan, describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
 from nautical_core.operator_presentation import render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
@@ -1225,45 +1225,6 @@ def _reconcile_candidate(
         generation=generation,
     )
 
-def _describe_plan(plan: RecoveryResult, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
-    if isinstance(plan, RecoveryRefusal):
-        return describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
-    evidence = describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
-    child_until = plan.plan.child_dict().get("until")
-    if not child_until:
-        return evidence
-    try:
-        until_dt, until_err = _safe_parse_datetime(hook, child_until)
-    except Exception:
-        return evidence
-    if until_err or until_dt is None:
-        return evidence
-
-    if callable(fmt_dt_local):
-        try:
-            evidence["child_expires"] = str(fmt_dt_local(until_dt))
-        except Exception:
-            evidence["child_expires"] = str(child_until)
-    else:
-        evidence["child_expires"] = str(child_until)
-
-    if plan.child_due is None:
-        return evidence
-    try:
-        core = _runtime_core(hook)
-        add_validation = core._import_sibling("add_validation")
-        carry = add_validation.describe_native_until_carry(
-            until_dt,
-            plan.child_due,
-            to_local=core.to_local,
-        )
-    except Exception:
-        carry = None
-    if carry:
-        evidence["expiration"] = carry
-    return evidence
-
-
 def _print_plan(
     plan: RecoveryResult,
     evidence: dict[str, Any] | None = None,
@@ -1799,7 +1760,15 @@ def main(
                 )
             )
             plans.append(plan)
-            evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
+            core_runtime = _runtime_core(hook)
+            evidence = describe_plan(
+                plan,
+                fmt_dt_local=fmt_dt_local,
+                parse_until=lambda value: _safe_parse_datetime(hook, value),
+                describe_carry=lambda until, due: core_runtime._import_sibling("add_validation").describe_native_until_carry(
+                    until, due, to_local=core_runtime.to_local,
+                ),
+            )
             plan_evidence.append(evidence)
             rendered.append((plan, evidence, applied_short))
             if args.apply and applied_short:

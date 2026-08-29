@@ -8,7 +8,7 @@ from typing import Any
 from .operator_presentation import bounded_text, key_value_lines
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
 from .lifecycle_models import LifecycleAction, LifecycleEvent
-from .lifecycle_recovery_models import RecoveryRefusal, RecoveryResult
+from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 
 
 _JSON_SCHEMA = "nautical.reconcile"
@@ -66,6 +66,37 @@ def action_style(action: str) -> str:
         "partial": "yellow", "error": "red", "repair_error": "red",
         "manual_review": "yellow",
     }.get(action, "cyan")
+
+
+def describe_plan(
+    plan: RecoveryResult,
+    *,
+    fmt_dt_local: Any = None,
+    parse_until: Callable[[object], tuple[Any, str | None]] | None = None,
+    describe_carry: Callable[[Any, Any], str | None] | None = None,
+) -> dict[str, Any]:
+    """Enrich recovery evidence for human output without owning policy."""
+    evidence = describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
+    if isinstance(plan, RecoveryRefusal) or not isinstance(plan, RecoveryPlanResult):
+        return evidence
+    child_until = plan.plan.child_dict().get("until")
+    if not child_until or not callable(parse_until):
+        return evidence
+    try:
+        until_dt, until_err = parse_until(child_until)
+    except Exception:
+        return evidence
+    if until_err or until_dt is None:
+        return evidence
+    evidence["child_expires"] = str(fmt_dt_local(until_dt)) if callable(fmt_dt_local) else str(child_until)
+    if plan.child_due is not None and callable(describe_carry):
+        try:
+            carry = describe_carry(until_dt, plan.child_due)
+        except Exception:
+            carry = None
+        if carry:
+            evidence["expiration"] = carry
+    return evidence
 
 
 def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
@@ -224,4 +255,4 @@ def exit_code(summary: Mapping[str, Any]) -> int:
     return 0
 
 
-__all__ = ["ReconcileReport", "action_style", "describe_recovery_result", "evidence_lines", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]
+__all__ = ["ReconcileReport", "action_style", "describe_plan", "describe_recovery_result", "evidence_lines", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]

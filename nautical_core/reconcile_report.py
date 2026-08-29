@@ -36,6 +36,18 @@ def _recurrence_kind(parent: object) -> str:
     return "cp"
 
 
+def format_parent(parent: Mapping[str, Any]) -> str:
+    """Format a parent task reference for reconcile's human renderer."""
+    uuid = str(parent.get("uuid") or "").strip()[:8] or "????????"
+    chain_id = str(parent.get("chainID") or "?")
+    try:
+        link = int(parent.get("link") or 0)
+    except (TypeError, ValueError):
+        link = 0
+    description = str(parent.get("description") or "").strip()
+    return f"{uuid} chain {chain_id} link {link}" + (f" · {description}" if description else "")
+
+
 def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     """Render typed recovery evidence for reconcile output."""
     parent = result.parent.to_mapping()
@@ -192,4 +204,4 @@ def exit_code(summary: Mapping[str, Any]) -> int:
     return 0
 
 
-__all__ = ["ReconcileReport", "exit_code", "render_human", "to_operator_result"]
+__all__ = ["ReconcileReport", "describe_recovery_result", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]

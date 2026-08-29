@@ -59,7 +59,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
-from nautical_core.reconcile_report import describe_recovery_result, exit_code, recovery_action, render_human, to_operator_result  # noqa: E402
+from nautical_core.reconcile_report import describe_recovery_result, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
 from nautical_core.operator_presentation import key_value_lines, render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
@@ -1241,11 +1241,7 @@ def _reconcile_candidate(
     )
 
 def _fmt_parent(parent: TaskPayload) -> str:
-    uuid = lifecycle.short_uuid(parent.get("uuid")) or "????????"
-    chain_id = str(parent.get("chainID") or "?")
-    link = lifecycle.int_or_default(parent.get("link"), 0)
-    desc = str(parent.get("description") or "").strip()
-    return f"{uuid} chain {chain_id} link {link}" + (f" · {desc}" if desc else "")
+    return format_parent(parent)
 
 
 def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:

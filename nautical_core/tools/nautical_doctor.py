@@ -326,6 +326,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             "config.missing",
             "warn",
             "No Nautical config file was found; built-in defaults will be used.",
+            fix="Create config-nautical.toml or set NAUTICAL_CONFIG to a valid configuration file.",
         )
         from nautical_core.astronomical_seasons import seasonal_events_utc
         report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(

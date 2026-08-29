@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from .operator_presentation import bounded_text
+from .operator_presentation import bounded_text, key_value_lines
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
 from .lifecycle_models import LifecycleAction, LifecycleEvent
 from .lifecycle_recovery_models import RecoveryRefusal, RecoveryResult
@@ -46,6 +46,16 @@ def format_parent(parent: Mapping[str, Any]) -> str:
         link = 0
     description = str(parent.get("description") or "").strip()
     return f"{uuid} chain {chain_id} link {link}" + (f" · {description}" if description else "")
+
+
+def evidence_lines(evidence: Mapping[str, Any], keys: tuple[str, ...]) -> tuple[str, ...]:
+    """Render selected recovery evidence as stable human-readable lines."""
+    values = {
+        key.replace("_", " "): evidence[key]
+        for key in keys
+        if evidence.get(key) not in (None, "")
+    }
+    return tuple(key_value_lines(values))
 
 
 def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
@@ -204,4 +214,4 @@ def exit_code(summary: Mapping[str, Any]) -> int:
     return 0
 
 
-__all__ = ["ReconcileReport", "describe_recovery_result", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]
+__all__ = ["ReconcileReport", "describe_recovery_result", "evidence_lines", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]

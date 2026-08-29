@@ -59,8 +59,8 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
-from nautical_core.reconcile_report import describe_recovery_result, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
-from nautical_core.operator_presentation import key_value_lines, render_json_document, render_result  # noqa: E402
+from nautical_core.reconcile_report import describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
+from nautical_core.operator_presentation import render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
@@ -1240,16 +1240,6 @@ def _reconcile_candidate(
         generation=generation,
     )
 
-def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
-    values = {
-        key.replace("_", " "): evidence[key]
-        for key in keys
-        if evidence.get(key) not in (None, "")
-    }
-    for line in key_value_lines(values):
-        print(f"  {line}")
-
-
 def _describe_plan(plan: RecoveryResult, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
     if isinstance(plan, RecoveryRefusal):
         return describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
@@ -1301,19 +1291,23 @@ def _print_plan(
     if isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.SPAWN_CHILD:
         suffix = f" -> created {applied_short}" if applied_short else ""
         print(_style(f"spawn: {parent}{suffix}", _action_style("spawn")))
-        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration"))
+        for line in evidence_lines(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration")):
+            print(f"  {line}")
     elif isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.UPDATE_PARENT:
         suffix = " (applied)" if applied_short else ""
         print(_style(f"backfill nextLink: {parent}{suffix}", _action_style("backfill_nextlink")))
-        _print_evidence(evidence, ("reason", "next_link", "existing_child"))
+        for line in evidence_lines(evidence, ("reason", "next_link", "existing_child")):
+            print(f"  {line}")
     elif isinstance(plan, RecoveryPlanResult) and plan.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}:
         suffix = " -> set chain:off" if applied_short else ""
         print(_style(f"terminal: {parent} ({plan.reason}){suffix}", _action_style("legitimate_final")))
-        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+        for line in evidence_lines(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration")):
+            print(f"  {line}")
     else:
         status = plan.status.value if isinstance(plan, RecoveryRefusal) else "error"
         print(_style(f"{status}: {parent} ({plan.reason})", _action_style(status)))
-        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+        for line in evidence_lines(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration")):
+            print(f"  {line}")
 
 
 def _print_recovery_group(
@@ -1337,7 +1331,8 @@ def _print_recovery_group(
         return
     if applied_short:
         print(f"  child: {applied_short}")
-    _print_evidence(evidence, ("next_link", "child_local", "child_due", "child_expires"))
+    for line in evidence_lines(evidence, ("next_link", "child_local", "child_due", "child_expires")):
+        print(f"  {line}")
 
 
 def _startup_failure(args: Any, stage: str, exc: Exception) -> int:

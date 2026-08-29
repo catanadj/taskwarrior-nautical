@@ -363,6 +363,8 @@ class ChainSnapshotReader:
                 details={"snapshot_id": snapshot.snapshot_id, "source": snapshot.coverage.source},
             )
         observed_limits = (
+            ("exported_rows", len(outcome.rows), request.limits.exported_rows),
+            ("decoded_rows", len(outcome.rows), request.limits.decoded_rows),
             ("tasks", len(snapshot.indexes.task_uuids), request.limits.tasks),
             ("chains", len(snapshot.indexes.chain_ids), request.limits.chains),
             ("history_links", len(snapshot.indexes.links), request.limits.history_links),
@@ -373,7 +375,7 @@ class ChainSnapshotReader:
                     "snapshot_limit_exceeded",
                     f"snapshot contains {observed} {name}, exceeding limit {limit}",
                     scope=scope,
-                    details={"snapshot_id": snapshot.snapshot_id, "observed": observed, "limit": limit},
+                    details={"resource": name, "snapshot_id": snapshot.snapshot_id, "observed": observed, "limit": limit},
                 )
         if snapshot.cacheable and not request.refresh:
             cache_key = "operator-snapshot:" + json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))

@@ -13,7 +13,7 @@ import tomllib
 import zoneinfo
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 ZONEINFO_FACTORY: Callable[[str], Any] | None = getattr(zoneinfo, "ZoneInfo", None)
 RICH_SPEC_FACTORY: Callable[[str], Any] = importlib.util.find_spec
@@ -77,7 +77,7 @@ def _v2_document(payload: dict[str, Any]) -> OperatorV2Result:
         failure = OperatorFailure(
             code=str(finding.get("code") or "doctor_error"),
             message=str(finding.get("message") or "Doctor reported an error"),
-            details=finding.get("evidence") if isinstance(finding.get("evidence"), dict) else {},
+            details=cast(Mapping[str, Any], finding.get("evidence")) if isinstance(finding.get("evidence"), dict) else {},
         )
     return OperatorV2Result(
         schema=_JSON_SCHEMA,
@@ -329,10 +329,11 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             fix="Create config-nautical.toml or set NAUTICAL_CONFIG to a valid configuration file.",
         )
         from nautical_core.astronomical_seasons import seasonal_events_utc
+        astronomy_preflight = cast(Callable[[object], dict[str, Any]], astronomy.preflight)
         report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
             {}, effective={}, config_dir=taskdata, timezone_factory=ZONEINFO_FACTORY,
             seasonal_events=seasonal_events_utc,
-            astronomy_preflight=astronomy.preflight, source_path="defaults",
+            astronomy_preflight=astronomy_preflight, source_path="defaults",
             drift_loader=configuration_drift, dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
             python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
         ))
@@ -355,9 +356,10 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     effective_value = snapshot.get("values")
     effective = effective_value if isinstance(effective_value, dict) else {}
     from nautical_core.astronomical_seasons import seasonal_events_utc
+    astronomy_preflight = cast(Callable[[object], dict[str, Any]], astronomy.preflight)
     report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
         data, effective=effective, config_dir=config.parent, timezone_factory=ZONEINFO_FACTORY,
-        seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy.preflight,
+        seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy_preflight,
         source_path=str(config), drift_loader=configuration_drift,
         dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
         python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,

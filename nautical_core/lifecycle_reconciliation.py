@@ -517,11 +517,11 @@ class LifecycleReconciliationService:
                     apply or typed_action == "update_parent"
                 ) else None
                 if child is None:
-                    typed_plan = getattr(plan, "lifecycle_plan", None)
-                    if not isinstance(typed_plan, LifecyclePlan):
+                    candidate_plan = getattr(plan, "lifecycle_plan", None)
+                    if not isinstance(candidate_plan, LifecyclePlan):
                         break
                     virtual_child, child_error = operations.virtual_child(
-                        typed_plan,
+                        candidate_plan,
                         parent=plan.parent,
                         recovery_at=recovery_at,
                     )

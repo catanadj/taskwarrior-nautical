@@ -168,7 +168,7 @@ def main() -> int:
             code="queue_status_error",
             message=str((payload.get("issues") or ["queue status failed"])[0]),
         )
-    result = OperatorV2Result(
+    operator_result: OperatorV2Result = OperatorV2Result(
         schema=_JSON_SCHEMA,
         operation="queue",
         status=result_status,
@@ -176,10 +176,10 @@ def main() -> int:
         failure=result_failure,
     )
     if args.json:
-        print(render_result(result, "json"))
+        print(render_result(operator_result, "json"))
     else:
         outbox = payload["outbox"]
-        print(render_result(result, "text"))
+        print(render_result(operator_result, "text"))
         print(f"status={payload['status']} taskdata={payload['taskdata']}")
         print(
             "outbox:"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from .chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from .chain_integrity_models import IntegrityReportStatus
@@ -58,7 +58,7 @@ class IntegrityQueryService:
         )
         operator_request = OperatorRequest(OperatorOperation.INTEGRITY, scope)
         operator_context = OperatorInvocationContext.from_unit_of_work(operator_request, unit_of_work)
-        read_result = ChainSnapshotReader(snapshots.collect).read_chain_snapshot(
+        read_result = ChainSnapshotReader(cast(Any, snapshots.collect)).read_chain_snapshot(
             operator_context,
             SnapshotReadRequest(scope),
         )

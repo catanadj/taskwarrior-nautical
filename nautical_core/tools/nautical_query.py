@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 
 CORE_DIR = Path(__file__).resolve().parents[1]
@@ -175,7 +175,9 @@ def _v2_document(payload: Mapping[str, Any]) -> dict[str, Any]:
             code=str(failure_value.get("code") or "query_failure"),
             message=str(failure_value.get("message") or "query failed"),
             retryable=bool(failure_value.get("retryable", False)),
-            details=failure_value.get("details") if isinstance(failure_value.get("details"), Mapping) else {},
+            details=cast(Mapping[str, Any], failure_value.get("details"))
+            if isinstance(failure_value.get("details"), Mapping)
+            else {},
         )
     status = OperatorV2Status(str(payload.get("status") or "error"))
     result = OperatorV2Result(
@@ -377,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         service = OccurrenceQueryService(unit_of_work, core=core)
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
-        return _emit(response.to_operator_v2().to_dict(), exit_code=exit_code)
+        return _emit(cast(OperatorV2Result, response.to_operator_v2()).to_dict(), exit_code=exit_code)
     except QueryContractError as exc:
         _diagnostic(str(exc))
         return _emit(_error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)

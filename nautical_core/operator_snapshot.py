@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import hashlib
-from typing import Any, Callable, Mapping, Protocol, TypeAlias
+from typing import Any, Callable, Mapping, Protocol, TypeAlias, cast
 
 from .operator_models import (
     CoverageRequirement,
@@ -430,19 +430,20 @@ class ChainSnapshotReader:
                         retryable=outcome.retryable if isinstance(outcome, Unavailable) else False,
                         scope=scope,
                     )
+                source = cast(ChainSnapshot, outcome.value)
                 wanted = set(scope.values)
                 rows = tuple(
-                    row for row in outcome.value.rows
+                    row for row in source.rows
                     if (row.chain_id in wanted if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid in wanted)
                 )
                 return ChainSnapshot(
-                    outcome.value.snapshot_id + ":multi",
-                    outcome.value.coverage,
-                    outcome.value.source,
+                    source.snapshot_id + ":multi",
+                    source.coverage,
+                    source.source,
                     rows,
-                    outcome.value.configuration_fingerprint,
-                    outcome.value.complete_chain_history,
-                    outcome.value.reason,
+                    source.configuration_fingerprint,
+                    source.complete_chain_history,
+                    source.reason,
                 )
             snapshots: list[ChainSnapshot] = []
             for value in scope.values:
@@ -481,7 +482,7 @@ class ChainSnapshotReader:
                 return OperatorFailure("invalid_snapshot", "snapshot provider returned an invalid value", scope=scope)
             if not request.refresh:
                 context.cache.put(cache_key, outcome.value)
-            return outcome.value
+            return cast(ChainSnapshot, outcome.value)
         if isinstance(outcome, Unavailable):
             return OperatorFailure(
                 "snapshot_unavailable",

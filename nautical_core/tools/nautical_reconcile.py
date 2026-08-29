@@ -1827,12 +1827,13 @@ def main(
                 )
             except Exception:
                 continue
-            if (
-                len(planned_outcomes) == 1
-                and isinstance(planned_outcomes[0][0], RecoveryPlanResult)
-                and planned_outcomes[0][0].plan.action is LifecycleAction.SPAWN_CHILD
-            ):
-                wave_plans[parent_uuid] = planned_outcomes[0]
+            if len(planned_outcomes) == 1:
+                planned_outcome = planned_outcomes[0]
+                if (
+                    isinstance(planned_outcome[0], RecoveryPlanResult)
+                    and planned_outcome[0].plan.action is LifecycleAction.SPAWN_CHILD
+                ):
+                    wave_plans[parent_uuid] = (planned_outcome[0], planned_outcome[1])
         stage_seconds["planning"] += time.perf_counter() - planning_started
         if wave_plans:
             mutation_started = time.perf_counter()

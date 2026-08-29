@@ -635,7 +635,7 @@ class OccurrenceQueryService:
                 "kind": "complete" if complete else "bounded",
                 "source": "taskwarrior.authoritative_export",
                 "observed": tuple(
-                    str(_task_value(row, "uuid") or row.uuid)
+                    str(_task_value(row, "uuid") or "")
                     for row in page_rows
                     if isinstance(row, TaskObservation) or isinstance(row, (_AbsentTask, _AmbiguousTask))
                 ),

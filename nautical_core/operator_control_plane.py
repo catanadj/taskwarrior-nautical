@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from collections.abc import Sequence
 
 from .chain_integrity_models import IntegrityFinding, IntegrityRepairPlan
@@ -65,8 +65,8 @@ class OperatorControlPlane:
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )
         return engine.plan_recovery_plan(
-            parent,
-            existing_children=existing_children,
+            cast(Any, parent),
+            existing_children=cast(Any, existing_children),
             hook=hook,
             generation=generation,
         )
@@ -109,17 +109,17 @@ class OperatorControlPlane:
 
         engine = ChainIntegrityEngine(
             ChainSnapshotService(
-                unit_of_work,
+                cast(Any, unit_of_work),
                 configuration_fingerprint=str(configuration.fingerprint),
             ),
             configuration_fingerprint=str(configuration.fingerprint),
             schedule_fingerprint=str(configuration.scheduler_fingerprint),
         )
         return engine.drain(
-            outbox,
+            cast(Any, outbox),
             owner=owner,
-            executor=executor,
-            request_factory=request_factory,
+            executor=cast(Any, executor),
+            request_factory=cast(Any, request_factory),
         )
 
     def audit_native_until(self, rows: object, *, predecessor: object, safe_parse_datetime: object,
@@ -189,7 +189,7 @@ class OperatorControlPlane:
         """Audit an authoritative task snapshot through the shared integrity service."""
         from .integrity_audit_service import audit_authoritative_rows
 
-        return audit_authoritative_rows(unit_of_work, rows)
+        return audit_authoritative_rows(cast(Any, unit_of_work), rows)
 
     def diagnose_chains(self, unit_of_work: object) -> tuple[dict[str, int], list[dict[str, object]]]:
         """Export and audit chain state as one read-only diagnosis request."""

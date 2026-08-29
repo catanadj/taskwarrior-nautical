@@ -179,20 +179,6 @@ def _hook_candidates(hooks_dir: Path, event: str) -> list[Path]:
     return install_runtime.hook_candidates(hooks_dir, event)
 
 
-def _check_hook_installation(
-    findings: list[dict[str, Any]],
-    *,
-    hooks_dir: Path,
-    env: dict[str, str],
-) -> dict[str, dict[str, Any]]:
-    typed, validated = OperatorHealthService.hook_installation_findings(
-        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, _hook_candidates,
-        install_runtime.inspect_hook_runtime, env,
-    )
-    findings.extend(item.to_doctor_dict() for item in typed)
-    return validated
-
-
 def _check_runtime(
     findings: list[dict[str, Any]],
     *,
@@ -237,7 +223,11 @@ def _check_hooks_and_udas(
     hooks_dir: Path,
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
-    validated = _check_hook_installation(findings, hooks_dir=hooks_dir, env=env)
+    typed, validated = OperatorHealthService.hook_installation_findings(
+        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, _hook_candidates,
+        install_runtime.inspect_hook_runtime, env,
+    )
+    findings.extend(item.to_doctor_dict() for item in typed)
     findings.extend(item.to_doctor_dict() for item in OperatorHealthService.uda_registration_findings(
         REQUIRED_UDAS,
         lambda name: _task_get(unit_of_work, f"rc.uda.{name}.type"),

@@ -2,6 +2,8 @@ import unittest
 
 from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
 from nautical_core.operator_presentation import ordered_records, render_result
+from nautical_core.operator_context import OperatorInvocationBudget
+from nautical_core.operator_models import OperatorLimits
 
 
 class OperatorPresentationTests(unittest.TestCase):
@@ -25,6 +27,14 @@ class OperatorPresentationTests(unittest.TestCase):
         rendered = render_result(result, "rich", rich_renderer=failing_renderer)
         self.assertIn("inspect: ok", rendered)
         self.assertIn("presentation unavailable", rendered)
+
+    def test_render_budget_telemetry_is_an_extension_on_a_copy(self) -> None:
+        result = OperatorResult(OperatorOperation.INSPECT, OperatorStatus.OK, data={"message": "stable"})
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=2))
+        budget.consume("taskwarrior_calls")
+        rendered = render_result(result, budget=budget)
+        self.assertIn('"budget"', rendered)
+        self.assertEqual(result.extensions, {})
 
 
 if __name__ == "__main__":

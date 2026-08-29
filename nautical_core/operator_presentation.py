@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .operator_models import OperatorResult, OperatorV2Result
+from .operator_context import OperatorBudgetLedger
 from .lifecycle_models import LifecycleDrainProgress
 
 
@@ -28,10 +29,23 @@ def key_value_lines(values: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(f"{bounded_text(key, width=32)}: {bounded_text(value)}" for key, value in values.items())
 
 
-def render_result(result: OperatorResult | OperatorV2Result, mode: str = "json", *, rich_renderer: Any = None) -> str:
+def render_result(
+    result: OperatorResult | OperatorV2Result,
+    mode: str = "json",
+    *,
+    rich_renderer: Any = None,
+    budget: OperatorBudgetLedger | None = None,
+) -> str:
     """Route one immutable result to a presentation mode without changing it."""
     if not isinstance(result, (OperatorResult, OperatorV2Result)):
         raise TypeError("operator presentation requires an operator result")
+    if budget is not None:
+        report = getattr(budget, "report", None)
+        if not callable(report):
+            raise TypeError("operator presentation budget must provide report()")
+        extensions = dict(result.extensions)
+        extensions["budget"] = report()
+        result = replace(result, extensions=extensions)
     normalized = str(mode or "json").strip().lower()
     if normalized == "json":
         return render_json(result)

@@ -1493,7 +1493,7 @@ def _build_reconcile_session(
 ) -> _ReconcileSession:
     repository = unit_of_work.repository
     repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    scope_filter = f"chainID:{request.chain_id}" if request.chain_id else f"uuid:{request.uuid}" if request.uuid else None
+    scope_filter = ReconcileSnapshotService.scope_filter_for(request)
     snapshot = ReconcileSnapshotService(
         repository,
         scope_filter=scope_filter,

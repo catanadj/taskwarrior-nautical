@@ -8,6 +8,7 @@ from typing import Any
 from .task_models import TaskObservation
 from .task_read_repository import ALL_TASK_STATUSES, TaskReadRepository
 from .operator_context import OperatorBudgetLedger
+from .reconcile_cli import ReconcileRequest
 
 
 class ReconcileSnapshotService:
@@ -32,6 +33,15 @@ class ReconcileSnapshotService:
         self._rows: tuple[TaskObservation, ...] | None = None
         self._active: tuple[TaskObservation, ...] | None = None
         self._candidates: tuple[TaskObservation, ...] | None = None
+
+    @staticmethod
+    def scope_filter_for(request: ReconcileRequest) -> str | None:
+        """Compile reconcile's explicit scope into the repository selector."""
+        if request.chain_id:
+            return f"chainID:{request.chain_id}"
+        if request.uuid:
+            return f"uuid:{request.uuid}"
+        return None
 
     @staticmethod
     def _text(row: TaskObservation, field: str) -> str:

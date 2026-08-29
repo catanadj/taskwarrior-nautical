@@ -2300,6 +2300,12 @@ def _bench_expensive_workflows(
             )
             queue_samples.append(queue_elapsed)
             queue_call_stats.append(_read_exit_task_call_stats(stats_path))
+            child_slot_reads = queue_call_stats[-1].get("run_task_calls_purpose_task_read_child_slot", 0)
+            if child_slot_reads > 1:
+                raise RuntimeError(
+                    "queue drain preflight regressed to per-candidate child-slot reads: "
+                    f"{child_slot_reads} subprocesses for {len(queue_plans)} candidates"
+                )
             queue_timing_stats.append(_read_exit_task_timing_stats(stats_path))
             queue_outbox_stats.append(_read_exit_outbox_stats(stats_path))
 

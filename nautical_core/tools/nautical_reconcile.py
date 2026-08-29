@@ -1240,10 +1240,6 @@ def _reconcile_candidate(
         generation=generation,
     )
 
-def _fmt_parent(parent: TaskPayload) -> str:
-    return format_parent(parent)
-
-
 def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
     values = {
         key.replace("_", " "): evidence[key]
@@ -1299,7 +1295,7 @@ def _print_plan(
     *,
     applied_short: str = "",
 ) -> None:
-    parent = _fmt_parent(plan.parent.to_mapping())
+    parent = format_parent(plan.parent.to_mapping())
     if evidence is None:
         evidence = describe_recovery_result(plan)
     if isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.SPAWN_CHILD:
@@ -1331,7 +1327,7 @@ def _print_recovery_group(
         and plan.plan.action in {LifecycleAction.SPAWN_CHILD, LifecycleAction.UPDATE_PARENT}
     )
     noun = "occurrence" if hops == 1 else "occurrences"
-    print(_style(f"recover: {_fmt_parent(first.parent.to_mapping())} -> advanced {hops} {noun}", "cyan"))
+    print(_style(f"recover: {format_parent(first.parent.to_mapping())} -> advanced {hops} {noun}", "cyan"))
     if isinstance(last, RecoveryRefusal) or (
         isinstance(last, RecoveryPlanResult)
         and last.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}

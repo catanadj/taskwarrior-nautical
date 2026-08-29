@@ -1574,6 +1574,8 @@ class _ReconcileSession:
 def _build_reconcile_session(
     request: ReconcileRequest,
     unit_of_work: TaskwarriorUnitOfWork,
+    *,
+    budget: OperatorInvocationBudget | None = None,
 ) -> _ReconcileSession:
     repository = unit_of_work.repository
     repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
@@ -1584,6 +1586,7 @@ def _build_reconcile_session(
         full_audit=bool(request.full_audit),
         read_value=_read_value,
         stats=_EXPORT_STATS,
+        budget=budget,
     )
     configuration = unit_of_work.context.configuration
     control_plane = OperatorControlPlane.from_configuration(configuration, DomainApplicationRegistry())
@@ -1626,7 +1629,9 @@ def main(
         max_expiration_hops=_MAX_EXPIRATION_HOPS,
     )
     args = ReconcileRequest.from_namespace(parser.parse_args(argv))
-    budget = OperatorInvocationBudget(OperatorLimits())
+    # Reconcile is intentionally broader than a scoped query, but remains
+    # bounded so a corrupt/unbounded export cannot consume the process.
+    budget = OperatorInvocationBudget(OperatorLimits(tasks=10_000, chains=1_000))
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
     if _unit_of_work is None:
@@ -1665,7 +1670,7 @@ def main(
         return _startup_failure(args, "runtime", exc)
     global _UNIT_OF_WORK
     _UNIT_OF_WORK = _unit_of_work
-    session = _build_reconcile_session(args, _UNIT_OF_WORK)
+    session = _build_reconcile_session(args, _UNIT_OF_WORK, budget=budget)
     repository = session.repository
     snapshot = session.snapshot
     operator_control_plane = session.control_plane

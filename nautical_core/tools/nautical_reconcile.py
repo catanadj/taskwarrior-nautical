@@ -64,10 +64,10 @@ from nautical_core.operator_presentation import key_value_lines, render_json_doc
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
-    CallbackLifecycleRecoveryOperations,
     LifecycleReconciliationService,
 )
 from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService  # noqa: E402
+from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks, ReconcileRecoveryCoordinator  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -1207,29 +1207,31 @@ def _reconcile_candidate(
             return _recovery_manual_review(candidate, reason)
         return _recovery_error(candidate, reason)
 
-    return reconciliation_service.recover_candidate(
-        parent,
-        operations=CallbackLifecycleRecoveryOperations(
-            apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(
+    coordinator = ReconcileRecoveryCoordinator(
+        reconciliation_service,
+        ReconcileRecoveryCallbacks(
+            apply_parent=lambda candidate, **kwargs: _apply_parent_atomic(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
-            plan_parent_callback=lambda candidate, **kwargs: _plan_for_parent(
+            plan_parent=lambda candidate, **kwargs: _plan_for_parent(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
-            next_child_callback=_next_recovery_child,
-            virtual_child_callback=lambda candidate, **kwargs: _virtual_expired_child(
+            next_child=_next_recovery_child,
+            virtual_child=lambda candidate, **kwargs: _virtual_expired_child(
                 candidate, hook=hook, **kwargs,
             ),
-            terminal_error_callback=lambda child, recovery_at: _terminal_recovery_error(
+            terminal_error=lambda child, recovery_at: _terminal_recovery_error(
                 child, hook, recovery_at,
             ),
-            is_orphan_deleted_callback=lifecycle.is_orphan_deleted_chain_candidate,
-            recovery_error_callback=_recovery_error,
-            recovery_partial_callback=_recovery_partial,
-            recovery_manual_review_callback=_recovery_manual_review,
-            recovery_terminal_callback=_recovery_terminal,
-            recovery_exception_callback=recovery_from_exception,
+            recovery_error=_recovery_error,
+            recovery_partial=_recovery_partial,
+            recovery_manual_review=_recovery_manual_review,
+            recovery_terminal=_recovery_terminal,
+            recovery_exception=recovery_from_exception,
         ),
+    )
+    return coordinator.recover(
+        parent,
         taskdata=taskdata,
         apply=apply,
         max_expiration_hops=max_expiration_hops,

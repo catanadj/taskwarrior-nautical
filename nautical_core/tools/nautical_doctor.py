@@ -44,6 +44,8 @@ except Exception as exc:  # configuration can fail while the package is importin
         raise SystemExit(1)
     raise
 from nautical_core.operator_presentation import finding_display, finding_status, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
+from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_findings import OperatorFinding, doctor_finding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
 from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
@@ -717,6 +719,7 @@ def main() -> int:
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
     parser.add_argument("--clean-cache", action="store_true", help="prune expired and orphaned anchor cache files")
     args = parser.parse_args()
+    budget = OperatorInvocationBudget(OperatorLimits())
 
     env = os.environ.copy()
     findings: list[dict[str, Any]] = []
@@ -743,7 +746,7 @@ def main() -> int:
                             "findings": [
                                 {"id": "integration.context", "severity": "error", "message": message}
                             ],
-                        }), "json")
+                        }), "json", budget=budget)
                 )
             else:
                 print(f"Nautical doctor: ERROR\nContext: {message}")
@@ -827,7 +830,7 @@ def main() -> int:
         # Diagnostics may include timezone/provider objects supplied by an
         # optional backend. Keep the JSON boundary strict without allowing a
         # presentation-only value to make Doctor crash.
-                print(render_result(_v2_document(payload), "json"))
+                print(render_result(_v2_document(payload), "json", budget=budget))
     else:
         _render_text(payload)
     return 2 if status == "error" else 1 if status == "warn" else 0

@@ -13,14 +13,6 @@ def _snapshot_payload(snapshot: Any) -> dict[str, Any] | None:
     """Serialize the immutable snapshot model without depending on graph APIs."""
     if snapshot is None:
         return None
-    failure = None
-    if result.status.value == "unavailable":
-        failure = {
-            "code": "integrity_unavailable",
-            "message": result.reason or "integrity evidence is unavailable",
-            "retryable": True,
-            "details": {},
-        }
     return {
         "snapshot_id": snapshot.snapshot_id,
         "coverage": snapshot.coverage.value,
@@ -212,6 +204,14 @@ def components(result: IntegrityEngineResult) -> dict[str, Any]:
         [{"chainID": chain_id, "status": status.value} for chain_id, status in result.chain_statuses],
         keys=("chainID", "status"),
     )
+    failure = None
+    if result.status.value == "unavailable":
+        failure = {
+            "code": "integrity_unavailable",
+            "message": result.reason or "integrity evidence is unavailable",
+            "retryable": True,
+            "details": {},
+        }
     return {
         "status": result.status.value,
         "snapshot": _snapshot_payload(result.snapshot),

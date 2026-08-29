@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
+import hashlib
+import json
 from types import ModuleType
 from typing import Any, Literal, Mapping, TypeAlias, cast
 
@@ -22,6 +24,7 @@ from .query_models import (
     HARD_MAX_FILE_SKIPS,
     HARD_MAX_ITERATIONS,
     HARD_MAX_OCCURRENCES,
+    HARD_MAX_TASKS,
     OccurrenceQueryRequest,
     OccurrenceQueryResponse,
     OccurrenceRecord,
@@ -29,6 +32,7 @@ from .query_models import (
     TaskIdentity,
     TaskOccurrenceResult,
 )
+from .operator_models import OperatorCursor, OperatorContractError
 from .parser_models import ParseError
 from .hook_validation_pipeline import ValidationStatus, validate_task_mapping
 from .hook_workflow_models import WorkflowRoute
@@ -191,6 +195,22 @@ class OccurrenceQueryService:
         if not isinstance(local_timezone, tzinfo):
             raise QueryServiceError("validated local timezone is unavailable")
         self._timezone: tzinfo = local_timezone
+        self._scheduler_cache: dict[tuple[str, tuple[tuple[str, str], ...]], SchedulerService] = {}
+
+    def _scheduler_for(self, task: TaskObservation, domain_task: NauticalTask, context: RecurrenceContext) -> SchedulerService:
+        """Reuse one scheduler session for identical recurrence inputs in this invocation."""
+        key = (
+            str(_task_value(task, "chainID") or "").strip().lower(),
+            tuple(
+                (field, TaskCodec.normalize_text(_task_value(task, field)))
+                for field in ("anchor", "anchor_file", "anchor_mode", "omit", "omit_file", "cp")
+            ),
+        )
+        scheduler = self._scheduler_cache.get(key)
+        if scheduler is None:
+            scheduler = SchedulerService.from_task(domain_task, context=context)
+            self._scheduler_cache[key] = scheduler
+        return scheduler
 
     def _context_for(self, task: TaskObservation) -> RecurrenceContext:
         chain_id = str(_task_value(task, "chainID") or "").strip()
@@ -233,13 +253,20 @@ class OccurrenceQueryService:
                 complete_chain_history=False,
             )
             if isinstance(read, Found):
+                if len(read.value.rows) > HARD_MAX_TASKS:
+                    return _failure(
+                        "task_scope_exhausted",
+                        f"whole-system snapshot contains {len(read.value.rows)} tasks; limit is {HARD_MAX_TASKS}; use an explicit chain or UUID scope",
+                        limit=HARD_MAX_TASKS,
+                        observed=len(read.value.rows),
+                    )
                 selected: list[TaskObservation] = []
                 for raw_row in read.value.rows:
                     row = _decode_repository_row(raw_row, source_query="query all-active")
                     if _has_recurrence_identity(row) and not self._starts_after_request_end(row, request):
                         selected.append(row)
                 rows = tuple(selected)
-                return _ordered_rows(rows)[: request.max_tasks]
+                return _ordered_rows(rows)
             if isinstance(read, Absent):
                 return ()
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
@@ -248,7 +275,7 @@ class OccurrenceQueryService:
             if isinstance(read, Found):
                 return _ordered_rows(
                     tuple(_decode_repository_row(row, source_query="query chain") for row in read.value)
-                )[: request.max_tasks]
+                )
             if isinstance(read, Absent):
                 return _failure("chain_absent", read.reason)
             return _failure("task_read_unavailable", read.evidence.detail, retryable=read.retryable)
@@ -272,7 +299,7 @@ class OccurrenceQueryService:
                     uuid_rows.append(_decode_repository_row(matches[0], source_query="query UUID snapshot"))
                 else:
                     uuid_rows.append(_AmbiguousTask(uuid_value))
-            return tuple(uuid_rows[: request.max_tasks])
+            return tuple(uuid_rows)
         single_rows: list[TaskRow] = []
         for uuid_value in selector.uuids:
             read = repository.by_uuid(uuid_value, statuses=ALL_TASK_STATUSES)
@@ -288,7 +315,51 @@ class OccurrenceQueryService:
                 task_uuid=uuid_value,
                 retryable=read.retryable,
             )
-        return tuple(single_rows[: request.max_tasks])
+        return tuple(single_rows)
+
+    def _page_rows(
+        self,
+        rows: tuple[TaskRow, ...],
+        request: OccurrenceQueryRequest,
+    ) -> tuple[tuple[TaskRow, ...], OperatorCursor | None, bool]:
+        """Slice a deterministic task snapshot and bind continuation to its content."""
+        if not request.selector.all_tasks:
+            if request.cursor is not None:
+                raise QueryServiceError("query cursors are supported only for --all task queries")
+            return rows, None, True
+        snapshot_id = self._snapshot_id(rows)
+        configuration = str(getattr(self._uow.context.configuration, "fingerprint", ""))
+        epoch = str(getattr(self._uow, "mutation_epoch", 0))
+        if request.cursor is not None:
+            try:
+                request.cursor.assert_compatible(snapshot_id, configuration, epoch)
+            except OperatorContractError as exc:
+                raise QueryServiceError(str(exc)) from exc
+            page_size = request.cursor.page_size
+            position = request.cursor.position
+        else:
+            page_size = request.max_tasks
+            position = 0
+        page = rows[position : position + page_size]
+        complete = position + len(page) >= len(rows)
+        next_cursor = None if complete else OperatorCursor(
+            snapshot_id,
+            configuration,
+            epoch,
+            position=position + len(page),
+            page_size=page_size,
+        )
+        return page, next_cursor, complete
+
+    @staticmethod
+    def _snapshot_id(rows: tuple[TaskRow, ...]) -> str:
+        evidence = [
+            row.to_mapping() if isinstance(row, TaskObservation) else {"uuid": row.uuid}
+            for row in rows
+        ]
+        return "query-snapshot-" + hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:32]
 
     def _records(self, items: Any, timezone_name: str) -> tuple[OccurrenceRecord, ...]:
         records: list[OccurrenceRecord] = []
@@ -425,7 +496,7 @@ class OccurrenceQueryService:
                 return self._query_cp_task(task, identity, request)
             domain_task = NauticalTask.from_observation(task)
             context = self._context_for(task)
-            scheduler = SchedulerService.from_task(domain_task, context=context)
+            scheduler = self._scheduler_for(task, domain_task, context)
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             start = _boundary_local(request.start.value, request.start.date_only, self._timezone, end=False)
             task_reference = self._task_reference_local(task)
@@ -486,7 +557,18 @@ class OccurrenceQueryService:
                 configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
                 failure=rows,
             )
-        raw_results = tuple(self._query_task(row, request) for row in rows)
+        try:
+            page_rows, next_cursor, complete = self._page_rows(rows, request)
+        except QueryServiceError as exc:
+            return OccurrenceQueryResponse(
+                request=request,
+                timezone=_timezone_name(self._timezone),
+                status="unavailable",
+                configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+                failure=_failure("cursor_unavailable", str(exc), retryable=False),
+                coverage={"kind": "unavailable", "reason": str(exc)},
+            )
+        raw_results = tuple(self._query_task(row, request) for row in page_rows)
         if request.selector.all_tasks:
             raw_results = tuple(
                 result
@@ -547,6 +629,20 @@ class OccurrenceQueryService:
                 status,
             ),
             configuration_fingerprint=str(getattr(self._uow.context.configuration, "fingerprint", "")),
+            cursor=next_cursor,
+            complete=complete,
+            coverage={
+                "kind": "complete" if complete else "bounded",
+                "source": "taskwarrior.authoritative_export",
+                "observed": tuple(
+                    str(_task_value(row, "uuid") or "")
+                    for row in page_rows
+                    if isinstance(row, TaskObservation) or isinstance(row, (_AbsentTask, _AmbiguousTask))
+                ),
+                "omitted_count": max(0, len(rows) - len(page_rows)),
+                "snapshot_id": self._snapshot_id(rows),
+                "mutation_epoch": str(getattr(self._uow, "mutation_epoch", 0)),
+            },
         )
 
     def _reference_utc(self, task: TaskObservation) -> datetime:
@@ -705,7 +801,7 @@ class OccurrenceQueryService:
                     source="cp",
                 )
                 return TaskOccurrenceResult(identity, "found", (record,), chain=chain_metadata, lifecycle=lifecycle_metadata)
-            scheduler = SchedulerService.from_task(domain_task, context=context)
+            scheduler = self._scheduler_for(task, domain_task, context)
             lifecycle_metadata["basis_detail"] = "calendar-schedule"
             identity = replace(identity, schedule_fingerprint=scheduler.fingerprint)
             if request.evaluation_at is not None:

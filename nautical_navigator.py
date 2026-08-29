@@ -34,21 +34,58 @@ from dateutil import parser as date_parser, tz
 from datetime import date, timedelta
 from collections import defaultdict, deque
 
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.columns import Columns
-from rich.text import Text
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.align import Align
-from rich import box
-
-from prompt_toolkit import prompt
-from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
 try:
     import asciichartpy as asciichart  
 except Exception:
     asciichart = None
+
+
+class _LazyRichSymbol:
+    """Resolve Rich only when an interactive renderer actually uses it."""
+
+    def __init__(self, module: str, name: str | None = None) -> None:
+        self._module = module
+        self._name = name
+        self._value: Any = None
+
+    def _resolve(self) -> Any:
+        if self._value is None:
+            module = importlib.import_module(self._module)
+            self._value = getattr(module, self._name) if self._name else module
+        return self._value
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._resolve()(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolve(), name)
+
+
+class _LazyRichInstance(_LazyRichSymbol):
+    """Lazy proxy for a Rich object instance such as the process console."""
+
+    def _resolve(self) -> Any:
+        if self._value is None:
+            self._value = super()._resolve()()
+        return self._value
+
+    def __enter__(self) -> Any:
+        return self._resolve().__enter__()
+
+    def __exit__(self, *args: Any) -> Any:
+        return self._resolve().__exit__(*args)
+
+
+Console = _LazyRichSymbol("rich.console", "Console")
+Table = _LazyRichSymbol("rich.table", "Table")
+Panel = _LazyRichSymbol("rich.panel", "Panel")
+Columns = _LazyRichSymbol("rich.columns", "Columns")
+Text = _LazyRichSymbol("rich.text", "Text")
+Progress = _LazyRichSymbol("rich.progress", "Progress")
+SpinnerColumn = _LazyRichSymbol("rich.progress", "SpinnerColumn")
+TextColumn = _LazyRichSymbol("rich.progress", "TextColumn")
+Align = _LazyRichSymbol("rich.align", "Align")
+box = _LazyRichSymbol("rich.box")
 
 
 
@@ -67,7 +104,7 @@ def _add_months(d: date, n: int) -> date:
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants / styling
 # ──────────────────────────────────────────────────────────────────────────────
-console = Console()
+console = _LazyRichInstance("rich.console", "Console")
 UTC_ZONE = tz.tzutc()
 
 COLORS = {
@@ -154,6 +191,328 @@ except Exception:
     build_operator_uow = None
     TaskView = None
 
+
+@dataclass(frozen=True, slots=True)
+class NavigatorTaskMetadata:
+    """Typed chain/lifecycle metadata used by Navigator decisions.
+
+    Taskwarrior rows remain mappings for rendering, but control-flow decisions
+    should not repeatedly interpret optional UDA values ad hoc.
+    """
+
+    uuid: str
+    chain_id: str
+    link: int | None
+    previous: str | None
+    following: str | None
+    status: str
+    chain_enabled: bool
+    due: Any = None
+    scheduled: Any = None
+    end: Any = None
+    chain_max: Any = None
+    chain_until: Any = None
+    anchor: str = ""
+    anchor_file: str = ""
+    cp: str = ""
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "NavigatorTaskMetadata":
+        if TaskView is not None:
+            try:
+                view = TaskView.from_mapping(values)
+                identity = view.chain_identity
+                if identity is not None:
+                    return cls(
+                        uuid=str(identity.task_uuid),
+                        chain_id=str(identity.chain_id),
+                        link=int(identity.link),
+                        previous=str(identity.previous) if identity.previous else None,
+                        following=str(identity.next) if identity.next else None,
+                        status=str(view.get("status") or "unknown").lower(),
+                        chain_enabled=str(view.get("chain") or "on").lower() == "on",
+                        due=view.get("due"),
+                        scheduled=view.get("scheduled"),
+                        end=view.get("end"),
+                        chain_max=view.get("chainMax"),
+                        chain_until=view.get("chainUntil"),
+                        anchor=str(view.get("anchor") or "").strip(),
+                        anchor_file=str(view.get("anchor_file") or "").strip(),
+                        cp=str(view.get("cp") or "").strip(),
+                    )
+            except (TypeError, ValueError):
+                pass
+        raw_link = values.get("link")
+        link = raw_link if isinstance(raw_link, int) and not isinstance(raw_link, bool) else None
+        return cls(
+            uuid=str(values.get("uuid") or ""),
+            chain_id=str(values.get("chainID") or "").strip(),
+            link=link,
+            previous=str(values.get("prevLink") or "").strip() or None,
+            following=str(values.get("nextLink") or "").strip() or None,
+            status=str(values.get("status") or "unknown").lower(),
+            chain_enabled=str(values.get("chain") or "on").lower() == "on",
+            due=values.get("due"),
+            scheduled=values.get("scheduled"),
+            end=values.get("end"),
+            chain_max=values.get("chainMax"),
+            chain_until=values.get("chainUntil"),
+            anchor=str(values.get("anchor") or "").strip(),
+            anchor_file=str(values.get("anchor_file") or "").strip(),
+            cp=str(values.get("cp") or "").strip(),
+        )
+
+    @property
+    def is_active(self) -> bool:
+        return self.chain_enabled and self.status in {"pending", "waiting"}
+
+    @property
+    def has_anchor(self) -> bool:
+        return bool(self.anchor or self.anchor_file)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return renderer-neutral chain metadata."""
+        return {
+            "uuid": self.uuid,
+            "chainID": self.chain_id,
+            "link": self.link,
+            "prevLink": self.previous,
+            "nextLink": self.following,
+            "status": self.status,
+            "chain": "on" if self.chain_enabled else "off",
+            "due": self.due,
+            "scheduled": self.scheduled,
+            "end": self.end,
+            "chainMax": self.chain_max,
+            "chainUntil": self.chain_until,
+            "anchor": self.anchor,
+            "anchor_file": self.anchor_file,
+            "cp": self.cp,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorSnapshot:
+    """Typed, read-only chain facts plus their observation provenance."""
+
+    rows: tuple[TaskView, ...]
+    snapshot_id: str
+    coverage: str
+    configuration_fingerprint: str
+    graph: Any = None
+
+    def ordered_rows(self) -> tuple[TaskView, ...]:
+        """Return rows in the shared chain-graph order."""
+        if self.graph is not None:
+            rows: list[TaskView] = []
+            for node in self.graph.nodes:
+                if node.observation is not None and TaskView is not None:
+                    rows.append(TaskView.from_observation(node.observation))
+            return tuple(rows)
+        return self.rows
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a deterministic, read-only snapshot document for views."""
+        rows = self.ordered_rows()
+        return {
+            "snapshot_id": self.snapshot_id,
+            "coverage": self.coverage,
+            "configuration_fingerprint": self.configuration_fingerprint,
+            "rows": [NavigatorTaskMetadata.from_mapping(row).to_dict() for row in rows],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorPresentationResult:
+    """Immutable view data consumed by Navigator renderers."""
+
+    kind: str
+    expression: str
+    natural: str = ""
+    next_dates: tuple[str, ...] = ()
+    terminal_note: str | None = None
+    trace_summary: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "expression": self.expression,
+            "natural": self.natural,
+            "next": list(self.next_dates),
+            "terminal": self.terminal_note,
+            "trace": self.trace_summary,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorCalendarView:
+    """Immutable date sets supplied to the calendar renderer."""
+
+    completed: tuple[date, ...] = ()
+    upcoming: tuple[date, ...] = ()
+    pending_due: tuple[date, ...] = ()
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {
+            "completed": [item.isoformat() for item in self.completed],
+            "upcoming": [item.isoformat() for item in self.upcoming],
+            "pending_due": [item.isoformat() for item in self.pending_due],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorChainSummary:
+    """Immutable finished-chain facts for the summary panel."""
+
+    total_links: int
+    completed_links: int
+    first_end: date | None
+    last_end: date | None
+    span_days: int
+    median_cadence_days: float
+    mean_cadence_days: float
+    anchor_adherence: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_links": self.total_links,
+            "completed_links": self.completed_links,
+            "first_end": None if self.first_end is None else self.first_end.isoformat(),
+            "last_end": None if self.last_end is None else self.last_end.isoformat(),
+            "span_days": self.span_days,
+            "median_cadence_days": self.median_cadence_days,
+            "mean_cadence_days": self.mean_cadence_days,
+            "anchor_adherence": self.anchor_adherence,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorChainChoice:
+    """Immutable chain selector entry presented to interactive navigation."""
+
+    index: int
+    chain_id: str
+    label: str
+    tail_uuid: str
+    tail_reference: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "chainID": self.chain_id,
+            "label": self.label,
+            "tail_uuid": self.tail_uuid,
+            "tail_reference": self.tail_reference,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorChangeRow:
+    """Immutable change-table row supplied to the Navigator renderer."""
+
+    uuid: str
+    when: str
+    changes: tuple[TaskChange, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "uuid": self.uuid,
+            "when": self.when,
+            "changes": [
+                {
+                    "field": change.field,
+                    "change_type": change.change_type,
+                    "from": change.from_value,
+                    "to": change.to_value,
+                    "delta": change.delta,
+                }
+                for change in self.changes
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorTaskDetailView:
+    """Immutable baseline task fields prepared for the detail panel."""
+
+    fields: tuple[tuple[str, str], ...]
+    truncated: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"fields": [{"label": label, "value": value} for label, value in self.fields], "truncated": self.truncated}
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorProjectionView:
+    """Immutable projection evidence supplied to Navigator feedback panels."""
+
+    warnings: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {"warnings": list(self.warnings)}
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorTraceView:
+    """Immutable scheduler trace evidence for Navigator presentation."""
+
+    event_count: int
+    providers: tuple[str, ...] = ()
+    phases: tuple[tuple[str, int], ...] = ()
+    rejected: tuple[tuple[str, int], ...] = ()
+    selected: str = ""
+    terminal: str = ""
+    dropped: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "events": self.event_count,
+            "providers": list(self.providers),
+            "phases": dict(self.phases),
+            "rejected": dict(self.rejected),
+            "selected": self.selected or None,
+            "terminal": self.terminal or None,
+            "dropped": self.dropped,
+        }
+
+    def summary(self) -> str:
+        if not self.event_count:
+            return "No scheduler decisions captured"
+        parts = [f"{self.event_count} events"]
+        if self.providers:
+            parts.append(f"providers={','.join(self.providers)}")
+        if self.phases:
+            parts.append("phases=" + ",".join(f"{key}:{value}" for key, value in self.phases))
+        if self.rejected:
+            parts.append("rejected=" + ",".join(f"{key}:{value}" for key, value in self.rejected))
+        if self.selected:
+            parts.append(f"selected={self.selected}")
+        if self.terminal:
+            parts.append(f"terminal={self.terminal}")
+        if self.dropped:
+            parts.append(f"dropped={self.dropped}")
+        return " · ".join(parts)
+
+
+@dataclass(frozen=True, slots=True)
+class NavigatorAnalysisView:
+    """Immutable aggregate consumed by Navigator's chain analysis views."""
+
+    chain_size: int
+    calendar: NavigatorCalendarView
+    projection: NavigatorProjectionView
+    trace: NavigatorTraceView | None = None
+    change_rows: tuple[NavigatorChangeRow, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "chain_size": self.chain_size,
+            "calendar": self.calendar.to_dict(),
+            "projection": self.projection.to_dict(),
+            "trace": None if self.trace is None else self.trace.to_dict(),
+            "changes": [row.to_dict() for row in self.change_rows],
+        }
+
 _UNIT_OF_WORK = None
 
 # Resolve the display timezone only after Nautical core has loaded.  The core
@@ -167,34 +526,61 @@ except Exception:
     LOCAL_ZONE = tz.tzlocal()
 
 
-def _run_task_export(filters: tuple[str, ...]) -> Any:
-    """Run a read-only Taskwarrior export through Nautical's command boundary."""
-    if _UNIT_OF_WORK is None:
+def _run_chain_snapshot() -> NavigatorSnapshot:
+    """Read complete chain history through the operator snapshot contract."""
+    if _UNIT_OF_WORK is None or core is None:
         raise RuntimeError("Navigator integration context is unavailable")
-    context = getattr(_UNIT_OF_WORK, "context", None)
-    access = getattr(context, "access", None)
-    if IntegrationAccess is not None and access is not None and access is not IntegrationAccess.READ_ONLY:
+    access = getattr(getattr(_UNIT_OF_WORK, "context", None), "access", None)
+    if IntegrationAccess is not None and access is not IntegrationAccess.READ_ONLY:
         raise RuntimeError("Navigator requires a read-only integration context")
-    repository = getattr(_UNIT_OF_WORK, "repository", None)
-    if repository is None or not callable(getattr(repository, "broad_snapshot", None)):
-        raise RuntimeError("Navigator typed task-read repository is unavailable")
-    repository.configure_commands(timeout=30.0, attempts=2, retry_delay=0.05)
-    identity = "navigator:" + (" ".join(filters) if filters else "all")
-    read = repository.broad_snapshot(
-        identity=identity,
-        filters=filters,
-        statuses=("completed", "deleted", "pending", "recurring", "waiting"),
-        complete_chain_history=True,
+    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.operator_context import OperatorInvocationContext
+    from nautical_core.operator_models import OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind
+
+    scope = OperatorScope(OperatorScopeKind.SYSTEM)
+    request = OperatorRequest(
+        OperatorOperation.CHAIN,
+        scope,
+        include_history=True,
+        detail="standard",
     )
-    if Found is not None and isinstance(read, Found):
+    OperatorInvocationContext.from_unit_of_work(request, _UNIT_OF_WORK)
+    configuration = _UNIT_OF_WORK.context.configuration
+    service = ChainSnapshotService(
+        _UNIT_OF_WORK,
+        configuration_fingerprint=configuration.fingerprint,
+    )
+    result = service.collect(IntegritySnapshotRequest.candidates(complete_chain_history=True))
+    if Found is not None and isinstance(result, Found):
         if TaskView is None:
             raise RuntimeError("Nautical typed task-view support is unavailable")
-        return [TaskView.from_observation(row) for row in read.value.rows]
-    if Absent is not None and isinstance(read, Absent):
+        if not result.value.complete_chain_history:
+            raise RuntimeError(
+                "Navigator chain snapshot is partial; complete chain history is required"
+            )
+        rows = [
+            TaskView.from_observation(node.observation)
+            for node in result.value.rows
+            if getattr(node, "observation", None) is not None
+        ]
+        def sort_key(row: TaskView) -> tuple[str, int, str]:
+            metadata = NavigatorTaskMetadata.from_mapping(row)
+            return metadata.chain_id.lower(), metadata.link or 2**31 - 1, metadata.uuid.lower()
+        ordered = tuple(sorted(rows, key=sort_key))
+        graph = ChainGraph.from_snapshot(result.value)
+        return NavigatorSnapshot(
+            rows=ordered,
+            snapshot_id=str(result.value.snapshot_id),
+            coverage=str(result.value.coverage.value),
+            configuration_fingerprint=str(result.value.configuration_fingerprint),
+            graph=graph,
+        )
+    if Unavailable is not None and isinstance(result, Unavailable):
+        raise RuntimeError(f"Navigator chain snapshot unavailable: {result.evidence.detail}")
+    if Absent is not None and isinstance(result, Absent):
         return []
-    if Unavailable is not None and isinstance(read, Unavailable):
-        raise RuntimeError(f"Navigator task read unavailable: {read.evidence.detail}")
-    raise RuntimeError("Navigator task repository returned an invalid result")
+    raise RuntimeError("Navigator chain snapshot returned an invalid result")
 
 
 def _reload_navigator_configuration() -> None:
@@ -215,6 +601,25 @@ def _reload_navigator_configuration() -> None:
     global LOCAL_ZONE, _UNIT_OF_WORK
     _UNIT_OF_WORK = unit_of_work
     LOCAL_ZONE = unit_of_work.context.local_timezone
+
+
+def _build_navigator_scheduler(task: Mapping[str, Any], *, source_query: str, trace: Any = None):
+    """Build the shared scheduler from one validated Navigator task view."""
+    if core is None:
+        raise RuntimeError("Nautical core package is unavailable")
+    business_calendar = core.business_calendar_for_task(task)
+    codec = core._import_sibling("task_codec")
+    context_module = core._import_sibling("recurrence_context")
+    scheduler_module = core._import_sibling("scheduler_service")
+    observation = codec.DEFAULT_TASK_CODEC.decode_row(task, source_query=source_query)
+    context = context_module.RecurrenceContext.from_observation(
+        observation,
+        timezone=LOCAL_ZONE,
+        business_calendar=business_calendar,
+        astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+    )
+    return scheduler_module.SchedulerService.from_observation(observation, context=context, trace=trace), context
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Navigator helpers (explain/validate/self-check)
@@ -257,7 +662,9 @@ def _reset_navigator_runtime_state() -> None:
     for analyzer in list(_ACTIVE_ANALYZERS):
         analyzer._task_cache.clear()
         analyzer._uuid_cache.clear()
+        analyzer._metadata_cache.clear()
         analyzer._children.clear()
+        analyzer._operator_graph = None
         analyzer._meaningful_changes.clear()
     analyzer_cls = globals().get("TaskAnalyzer")
     if analyzer_cls is None:
@@ -477,22 +884,14 @@ def _anchor_preview_details(
         # minute, matching the historical next-date explain behavior rather
         # than exposing a partial set of today's time slots.
         after_local = core.build_local_datetime(now_local.date(), (23, 59))
-        context = RecurrenceContext(
-            chain_id="preview",
-            timezone=getattr(core, "_LOCAL_TZ", None),
-            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        )
-        observation = DEFAULT_TASK_CODEC.decode_row(
-            {
-                "uuid": "00000000-0000-4000-8000-000000000002",
-                "status": "pending",
-                "link": 1,
-                "anchor": expr,
-                "chainID": "preview",
-            },
-            source_query="navigator expression preview",
-        )
+        preview_task = {
+            "uuid": "00000000-0000-4000-8000-000000000002",
+            "status": "pending",
+            "link": 1,
+            "anchor": expr,
+            "chainID": "preview",
+        }
+        observation = DEFAULT_TASK_CODEC.decode_row(preview_task, source_query="navigator expression preview")
         from nautical_core.hook_validation_pipeline import ValidationStatus, validate_task_mapping
         from nautical_core.hook_workflow_models import WorkflowRoute
         _validated, validation_report = validate_task_mapping(
@@ -503,9 +902,9 @@ def _anchor_preview_details(
         if validation_report.status is not ValidationStatus.VALID:
             finding = validation_report.findings[0]
             raise ValueError(f"{finding.reason} {finding.correction}".strip())
-        service = SchedulerService.from_observation(
-            observation,
-            context=context,
+        service, context = _build_navigator_scheduler(
+            preview_task,
+            source_query="navigator expression preview",
             trace=trace,
         )
         try:
@@ -540,6 +939,20 @@ def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
     return natural, next_dates
 
 
+def _anchor_presentation_result(
+    expr: str, *, count: int = 5, trace: Any = None
+) -> NavigatorPresentationResult:
+    natural, next_dates, terminal_note = _anchor_preview_details(expr, count=count, trace=trace)
+    return NavigatorPresentationResult(
+        kind="anchor_explain",
+        expression=expr,
+        natural=natural,
+        next_dates=tuple(next_dates),
+        terminal_note=terminal_note,
+        trace_summary=None if trace is None else _trace_summary(trace),
+    )
+
+
 class _NavigatorTrace:
     """Keep an explicit explain trace available for the concise UI summary."""
 
@@ -562,10 +975,10 @@ class _NavigatorTrace:
         return None
 
 
-def _trace_summary(trace: Any) -> str:
+def _trace_view(trace: Any) -> NavigatorTraceView | None:
     events = list(trace.events)
     if not events:
-        return "No scheduler decisions captured"
+        return None
     counts: dict[str, int] = {}
     providers: set[str] = set()
     selected: list[str] = []
@@ -585,21 +998,20 @@ def _trace_summary(trace: Any) -> str:
             rejected[reason] = rejected.get(reason, 0) + 1
         if phase == "terminal":
             terminal = str(data.get("reason") or "terminal")
-    parts = [f"{len(events)} events"]
-    if providers:
-        parts.append(f"providers={','.join(sorted(providers))}")
-    if counts:
-        parts.append("phases=" + ",".join(f"{key}:{counts[key]}" for key in sorted(counts)))
-    if rejected:
-        parts.append("rejected=" + ",".join(f"{key}:{rejected[key]}" for key in sorted(rejected)))
-    if selected:
-        parts.append(f"selected={selected[-1]}")
-    if terminal:
-        parts.append(f"terminal={terminal}")
-    dropped = int(getattr(trace, "dropped", 0) or 0)
-    if dropped:
-        parts.append(f"dropped={dropped}")
-    return " · ".join(parts)
+    return NavigatorTraceView(
+        event_count=len(events),
+        providers=tuple(sorted(providers)),
+        phases=tuple((key, counts[key]) for key in sorted(counts)),
+        rejected=tuple((key, rejected[key]) for key in sorted(rejected)),
+        selected=selected[-1] if selected else "",
+        terminal=terminal,
+        dropped=int(getattr(trace, "dropped", 0) or 0),
+    )
+
+
+def _trace_summary(trace: Any) -> str:
+    view = _trace_view(trace)
+    return "No scheduler decisions captured" if view is None else view.summary()
 
 
 def _anchor_explain(expr: str, *, trace_enabled: bool = False) -> int:
@@ -611,20 +1023,20 @@ def _anchor_explain(expr: str, *, trace_enabled: bool = False) -> int:
 
     try:
         trace = _NavigatorTrace() if trace_enabled else None
-        natural, next_dates, terminal_note = _anchor_preview_details(expr, count=5, trace=trace)
+        presentation = _anchor_presentation_result(expr, count=5, trace=trace)
     except Exception as exc:
         console.print(f"[{COLORS['error']}]Unable to project anchor:[/] {_format_runtime_error(exc)}")
         return 1
     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     table.add_row("Expression", expr)
-    table.add_row("Natural", natural or "—")
-    if next_dates:
-        nxt = "\n".join([f"{i}. {d}" for i, d in enumerate(next_dates, 1)])
+    table.add_row("Natural", presentation.natural or "—")
+    if presentation.next_dates:
+        nxt = "\n".join([f"{i}. {d}" for i, d in enumerate(presentation.next_dates, 1)])
         table.add_row("Next", nxt)
-    if terminal_note:
-        table.add_row("Chain", terminal_note)
-    if trace is not None:
-        table.add_row("Trace", _trace_summary(trace))
+    if presentation.terminal_note:
+        table.add_row("Chain", presentation.terminal_note)
+    if presentation.trace_summary:
+        table.add_row("Trace", presentation.trace_summary)
     console.print(Panel(table, title="Anchor explain", border_style=COLORS["secondary"], expand=False))
     return 0
 
@@ -652,27 +1064,6 @@ class TaskChange:
     group: int = 99
 
 
-class _ResolvedTaskView(Mapping[str, Any]):
-    """Immutable Navigator view with resolved chain references."""
-
-    __slots__ = ("_task", "_refs")
-
-    def __init__(self, task: Mapping[str, Any], refs: Mapping[str, str]) -> None:
-        self._task = task
-        self._refs = dict(refs)
-
-    def __getitem__(self, key: str) -> Any:
-        if key in self._refs:
-            return self._refs[key]
-        return self._task[key]
-
-    def __iter__(self):
-        return iter(self._task)
-
-    def __len__(self) -> int:
-        return len(self._task)
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Analyzer
 # ──────────────────────────────────────────────────────────────────────────────
@@ -682,9 +1073,12 @@ class TaskAnalyzer:
     def __init__(self):
         self._task_cache: Dict[int, Dict] = {}
         self._uuid_cache: Dict[str, Dict] = {}
+        self._metadata_cache: Dict[int, NavigatorTaskMetadata] = {}
+        self._operator_graph: Any = None
         self._children: Dict[str, List[Dict]] = {}  # prev_uuid -> [children]
         self._meaningful_changes: Dict[str, List[TaskChange]] = {}
         self._projection_warnings: List[str] = []
+        self._last_analysis_view: NavigatorAnalysisView | None = None
         _ACTIVE_ANALYZERS.add(self)
 
     def _record_projection_warning(self, message: str) -> None:
@@ -692,6 +1086,18 @@ class TaskAnalyzer:
         text = str(message or "").strip()
         if text and text not in self._projection_warnings:
             self._projection_warnings.append(text)
+
+    def _metadata(self, task: Mapping[str, Any] | None) -> NavigatorTaskMetadata | None:
+        """Decode one row at the Navigator's chain/lifecycle boundary."""
+        if task is None:
+            return None
+        key = id(task)
+        cached = self._metadata_cache.get(key)
+        if cached is not None:
+            return cached
+        metadata = NavigatorTaskMetadata.from_mapping(task)
+        self._metadata_cache[key] = metadata
+        return metadata
 
     # ── Task retrieval ───────────────────────────────────────────────────────
     @lru_cache(maxsize=1)
@@ -703,24 +1109,18 @@ class TaskAnalyzer:
                 # chainID is the authoritative chain marker.  ``chain:on``
                 # excludes completed/disabled history because Nautical
                 # intentionally turns chain off at those lifecycle points.
-                tasks = self._export_tasks("chainID.not:")
-                # Some Taskwarrior configurations do not make UDA ``.not:``
-                # queries match reliably.  Keep the indexed path fast, but
-                # recover valid chain history from a broad export once.
-                if not tasks:
-                    tasks = [
-                        task for task in self._export_tasks()
-                        if str(task.get("chainID") or "").strip()
-                    ]
+                snapshot = _run_chain_snapshot()
+                self._operator_graph = snapshot.graph
+                tasks = list(snapshot.ordered_rows())
 
                 for t in tasks:
                     if t.get("id"):
                         self._task_cache[int(t["id"])] = t
                     if t.get("uuid"):
                         self._uuid_cache[t["uuid"]] = t
-                    prev = t.get("prevLink")
-                    if prev:
-                        self._children.setdefault(prev, []).append(t)
+                    metadata = self._metadata(t)
+                    if metadata and metadata.previous:
+                        self._children.setdefault(metadata.previous, []).append(t)
 
                 progress.update(spinner, description=f"✅ Loaded {len(tasks)} chained tasks")
                 return tasks
@@ -732,7 +1132,8 @@ class TaskAnalyzer:
     # ── Chain discovery ──────────────────────────────────────────────────────
     def _is_root(self, task: Dict) -> bool:
         """A root has no prevLink (or prev not present in our uuid set)."""
-        prev = task.get("prevLink")
+        metadata = self._metadata(task)
+        prev = metadata.previous if metadata else None
         return not prev or prev not in self._uuid_cache
 
     def build_all_chains(self) -> List[List[Dict]]:
@@ -794,7 +1195,9 @@ class TaskAnalyzer:
         chains = [sorted(ch, key=self._entry_key) for ch in chains]
 
         # Active chains first (pending/waiting), then finished; stable by tail desc
-        def is_active(ch): return ch[-1].get("status") in ("pending", "waiting")
+        def is_active(ch):
+            metadata = self._metadata(ch[-1])
+            return bool(metadata and metadata.is_active)
         def tail_desc(ch): return (ch[-1].get("description") or "").lower()
 
         chains.sort(key=lambda ch: (0 if is_active(ch) else 1, tail_desc(ch)))
@@ -816,18 +1219,25 @@ class TaskAnalyzer:
         last = chain[-1]
 
         # --- basic parsed fields
-        anchor_expr = (last.get("anchor") or "").strip()
-        cp_period   = (last.get("cp") or "").strip()
-        cpmax       = core.coerce_int(last.get("chainMax"), 0) or 0
-        cur_link    = core.coerce_int(last.get("link"), 1) or 1
+        metadata = self._metadata(last)
+        anchor_expr = metadata.anchor if metadata else ""
+        cp_period   = metadata.cp if metadata else ""
+        cpmax       = core.coerce_int(metadata.chain_max, 0) if metadata else 0
+        cpmax       = cpmax or 0
+        cur_link    = metadata.link if metadata and metadata.link is not None else 1
         left        = max(cpmax - cur_link, 0) if cpmax else None
-        until_utc   = core.parse_dt_any(last.get("chainUntil")) if last.get("chainUntil") else None
+        until_utc   = (
+            core.parse_dt_any(metadata.chain_until)
+            if metadata and metadata.chain_until
+            else None
+        )
         now_local   = core.to_local(core.now_utc()).date()
 
         # --- completion window seed (so we cover the past where completions exist)
         comp_days: Set[date] = set()
         for t in chain:
-            e = t.get("end")
+            task_metadata = self._metadata(t)
+            e = task_metadata.end if task_metadata else None
             if e:
                 edt = core.parse_dt_any(e)
                 if edt:
@@ -844,29 +1254,16 @@ class TaskAnalyzer:
         scheduled: Set[date] = set()
 
         if anchor_expr:
-            try:
-                business_calendar = core.business_calendar_for_task(last)
-            except Exception:
-                return scheduled
             # ---------- ANCHOR ----------
             try:
-                from nautical_core.recurrence_context import RecurrenceContext
                 from nautical_core.scheduler_cursor import OccurrenceCursor
-                from nautical_core.scheduler_service import SchedulerService
-                from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
-                due_dt = core.parse_dt_any(last.get("due")) if last.get("due") else None
+                due_dt = core.parse_dt_any(metadata.due) if metadata and metadata.due else None
                 due_local = core.to_local(due_dt) if due_dt else None
                 clock = (due_local.hour, due_local.minute) if due_local else (core.DEFAULT_DUE_HOUR, 0)
-                observation = DEFAULT_TASK_CODEC.decode_row(last, source_query="navigator anchor projection")
-                context = RecurrenceContext.from_observation(
-                    observation,
-                    timezone=getattr(core, "_LOCAL_TZ", None),
-                    business_calendar=business_calendar,
-                    astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-                    anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                scheduler_service, context = _build_navigator_scheduler(
+                    last, source_query="navigator anchor projection"
                 )
-                scheduler_service = SchedulerService.from_observation(observation, context=context)
                 cursor = OccurrenceCursor.strict_after(
                     core.build_local_datetime(window_start - timedelta(days=1), (23, 59)),
                     timezone=context.timezone,
@@ -879,7 +1276,10 @@ class TaskAnalyzer:
                     max_iterations=max(512, MAX_CAL_FUTURE_STEPS),
                     max_file_skips=max(512, MAX_CAL_FUTURE_STEPS),
                 )
-            except Exception:
+            except Exception as exc:
+                self._record_projection_warning(
+                    f"Anchor scheduling: {_format_runtime_error(exc)}"
+                )
                 return scheduled
 
             future_taken = 0
@@ -902,36 +1302,46 @@ class TaskAnalyzer:
 
         elif cp_period:
             # ---------- CLASSIC CP ----------
-            td = core.parse_cp_duration(cp_period)
-            if not td:
+            try:
+                from nautical_core.scheduler_cursor import OccurrenceCursor
+
+                due_dt = core.parse_dt_any(metadata.due) if metadata and metadata.due else None
+                due_local = core.to_local(due_dt) if due_dt else None
+                clock = (due_local.hour, due_local.minute) if due_local else (core.DEFAULT_DUE_HOUR, 0)
+                scheduler_service, context = _build_navigator_scheduler(
+                    last, source_query="navigator cp projection"
+                )
+                result = scheduler_service.collect(
+                    OccurrenceCursor.strict_after(
+                        core.build_local_datetime(window_start - timedelta(days=1), (23, 59)),
+                        timezone=context.timezone,
+                    ),
+                    limit=MAX_CAL_FUTURE_STEPS,
+                    fallback_hhmm=clock,
+                    default_seed_date=(due_local.date() if due_local else window_start),
+                    max_iterations=max(512, MAX_CAL_FUTURE_STEPS),
+                    max_file_skips=max(512, MAX_CAL_FUTURE_STEPS),
+                )
+            except Exception as exc:
+                self._record_projection_warning(
+                    f"CP scheduling: {_format_runtime_error(exc)}"
+                )
                 return scheduled
 
-            # start from earliest known 'due' in the chain, else last 'due', else now
-            dues = []
-            for t in chain:
-                if t.get("due"):
-                    dt = core.parse_dt_any(t["due"])
-                    if dt:
-                        dues.append(dt)
-            base = min(dues) if dues else (core.parse_dt_any(last.get("due")) or core.now_utc())
-            base = base.replace(microsecond=0)
-
-            # step forward
-            cur_dt = base
             future_taken = 0
-            for _ in range(MAX_CAL_FUTURE_STEPS):
-                cur_dt = cur_dt + td
-                if until_utc and cur_dt > until_utc:
+            for occurrence in result.occurrences:
+                if occurrence.local_datetime is None:
                     break
-                dloc = core.to_local(cur_dt).date()
+                dloc = occurrence.local_datetime.date()
                 if dloc > window_end:
                     break
+                if until_utc and occurrence.local_datetime.astimezone(UTC_ZONE) > until_utc:
+                    break
+                if left is not None and dloc >= now_local:
+                    if future_taken >= left:
+                        break
+                    future_taken += 1
                 if dloc >= window_start:
-                    # chainMax only for future
-                    if left is not None and dloc >= now_local:
-                        if future_taken >= left:
-                            break
-                        future_taken += 1
                     scheduled.add(dloc)
         return scheduled
 
@@ -1075,57 +1485,8 @@ class TaskAnalyzer:
 
 
     def _build_indexes(self) -> None:
-        """Index all chained tasks by full and short UUIDs."""
+        """Populate task indexes from the authoritative operator snapshot."""
         _ = self.get_all_chained_tasks()
-        self._uuid_by_short = {}
-        for u in list(self._uuid_cache.keys()):
-            self._uuid_by_short[u[:8]] = self._uuid_by_short.get(u[:8], u)
-
-    def _export_tasks(self, *args: str) -> List[Dict]:
-        payload = _run_task_export(tuple(str(arg) for arg in args))
-        if isinstance(payload, dict):
-            payload = [payload]
-        if not isinstance(payload, list):
-            return []
-        tasks = [t for t in payload if isinstance(t, Mapping)]
-        for t in tasks:
-            if t.get("id"):
-                self._task_cache[int(t["id"])] = t
-            if t.get("uuid"):
-                self._uuid_cache[t["uuid"]] = t
-        return tasks
-
-    def _normalize_task_refs(self, tasks: List[Dict]) -> List[Dict]:
-        by_uuid = {str(t.get("uuid") or "").strip(): t for t in tasks if str(t.get("uuid") or "").strip()}
-
-        def resolve(ref: str | None) -> str:
-            raw = str(ref or "").strip()
-            if not raw:
-                return ""
-            if raw in by_uuid:
-                return raw
-            matches = [u for u in by_uuid if u.startswith(raw)]
-            if len(matches) == 1:
-                return matches[0]
-            if len(raw) >= 8:
-                short = raw[:8]
-                matches = [u for u in by_uuid if u.startswith(short)]
-                if len(matches) == 1:
-                    return matches[0]
-            return raw
-
-        normalized: List[Mapping[str, Any]] = []
-        for task in tasks:
-            normalized.append(
-                _ResolvedTaskView(
-                    task,
-                    {
-                        "prevLink": resolve(task.get("prevLink")),
-                        "nextLink": resolve(task.get("nextLink")),
-                    },
-                )
-            )
-        return normalized
 
     def _render_line_plot(self, x_labels: List[str], series: Dict[str, List[Optional[float]]], height: int = 10, width: int = 60) -> Panel:
         """
@@ -1272,33 +1633,19 @@ class TaskAnalyzer:
         Only add edges where child's prevLink resolves to a parent present in by_uuid.
         """
         tasks = self.get_all_chained_tasks() if tasks is None else tasks
-        tasks = self._normalize_task_refs(tasks)
-        by_uuid = {t.get("uuid"): t for t in tasks if t.get("uuid")}
-        children = defaultdict(list)
-        indeg = defaultdict(int)
-
-        for t in tasks:
-            u = t.get("uuid")
-            if u:
-                indeg.setdefault(u, 0)
-            p = self._resolve_prev_uuid(t.get("prevLink"))
-            if p and p in by_uuid and u:
-                children[p].append(t)
-                indeg[u] = indeg.get(u, 0) + 1
-
-        # keep for finished-chain detection
-        self._children = children
-        return by_uuid, children, indeg
-
-    def _resolve_prev_uuid(self, prev: str | None) -> str | None:
-        """Resolve prevLink (full or short) to a full UUID present in our cache."""
-        if not prev:
-            return None
-        if prev in self._uuid_cache:
-            return prev
-        key = prev[:8]
-        full = self._uuid_by_short.get(key)
-        return full if full and full in self._uuid_cache else None
+        if self._operator_graph is not None:
+            by_uuid = {t.get("uuid"): t for t in tasks if t.get("uuid")}
+            children = defaultdict(list)
+            indeg = defaultdict(int)
+            for uuid in by_uuid:
+                indeg.setdefault(uuid, 0)
+                reference = self._operator_graph.reference(uuid, "prevLink")
+                if reference.state.value == "resolved" and reference.target_uuid in by_uuid:
+                    children[reference.target_uuid].append(by_uuid[uuid])
+                    indeg[uuid] += 1
+            self._children = children
+            return by_uuid, children, indeg
+        raise RuntimeError("Navigator chain graph is unavailable; refresh the operator snapshot")
 
     def _entry_key(self, t: Dict) -> tuple:
         """Sort key: entry then uuid for stability."""
@@ -1309,12 +1656,19 @@ class TaskAnalyzer:
         seen = set()
         cur = t
         while True:
-            pu = self._resolve_prev_uuid(cur.get("prevLink"))
+            metadata = self._metadata(cur)
+            if self._operator_graph is None:
+                raise RuntimeError("Navigator chain graph is unavailable; refresh the operator snapshot")
+            reference = self._operator_graph.reference(
+                metadata.uuid if metadata else "", "prevLink"
+            )
+            pu = reference.target_uuid if reference.state.value == "resolved" else None
             if not pu or pu in seen or pu not in self._uuid_cache:
                 break
             seen.add(pu)
             cur = self._uuid_cache[pu]
-        return cur.get("uuid")
+        metadata = self._metadata(cur)
+        return metadata.uuid if metadata else cur.get("uuid")
 
     def _chain_key(self, t: Dict) -> str:
         """
@@ -1323,9 +1677,9 @@ class TaskAnalyzer:
         2) Else use the ultimate root uuid (via prevLink, prefix-safe)
         3) Else fall back to this task's uuid (singleton)
         """
-        link = t.get("link") or t.get("chainedLink")
-        if link:
-            return str(link)
+        metadata = self._metadata(t)
+        if metadata and metadata.link is not None:
+            return str(metadata.link)
         root = self._ultimate_root_uuid(t)
         return root or t.get("uuid") or f"singleton:{id(t)}"
 
@@ -1333,15 +1687,22 @@ class TaskAnalyzer:
         """Backtrack using prevLink; return chain oldest→newest."""
         seed = self._task_cache.get(start_id)
         if not seed:
-            seed_tasks = self._export_tasks(str(start_id))
-            seed = seed_tasks[0] if seed_tasks else None
+            seed = next(
+                (task for task in self.get_all_chained_tasks() if task.get("id") == start_id),
+                None,
+            )
         if not seed:
             console.print(f"[{COLORS['error']}]Task ID {start_id} not found in chained tasks[/]")
             sys.exit(1)
 
-        chain_id = str(seed.get("chainID") or "").strip()
+        seed_metadata = self._metadata(seed)
+        chain_id = seed_metadata.chain_id if seed_metadata else ""
         if chain_id:
-            tasks = self._export_tasks(f"chainID:{chain_id}")
+            tasks = [
+                task for task in self.get_all_chained_tasks()
+                if (metadata := self._metadata(task)) is not None
+                and metadata.chain_id == chain_id
+            ]
         else:
             tasks = self.get_all_chained_tasks()
 
@@ -1349,12 +1710,16 @@ class TaskAnalyzer:
             console.print(f"[{COLORS['error']}]No chained tasks found for task ID {start_id}[/]")
             sys.exit(1)
 
-        tasks = self._normalize_task_refs(tasks)
         by_uuid = {t.get("uuid"): t for t in tasks if t.get("uuid")}
         children = defaultdict(list)
         for task in tasks:
             u = task.get("uuid")
-            prev_uuid = str(task.get("prevLink") or "").strip()
+            if self._operator_graph is not None and u:
+                reference = self._operator_graph.reference(u, "prevLink")
+                prev_uuid = reference.target_uuid if reference.state.value == "resolved" else None
+            else:
+                metadata = self._metadata(task)
+                prev_uuid = metadata.previous if metadata else None
             if u and prev_uuid and prev_uuid in by_uuid:
                 children[prev_uuid].append(task)
 
@@ -1372,7 +1737,12 @@ class TaskAnalyzer:
                 break
             chain.append(current)
             seen.add(cur_uuid)
-            prev_uuid = str(current.get("prevLink") or "").strip()
+            if self._operator_graph is not None and cur_uuid:
+                reference = self._operator_graph.reference(cur_uuid, "prevLink")
+                prev_uuid = reference.target_uuid if reference.state.value == "resolved" else None
+            else:
+                metadata = self._metadata(current)
+                prev_uuid = metadata.previous if metadata else None
             if not prev_uuid or prev_uuid not in by_uuid:
                 break
             current = by_uuid[prev_uuid]
@@ -1777,7 +2147,8 @@ class TaskAnalyzer:
         Return the chain link number for a task.
         Prefers UDAs 'link' or 'chainedLink'; falls back to the 1-based index we pass in.
         """
-        v = t.get("link")
+        metadata = self._metadata(t)
+        v = metadata.link if metadata else t.get("link")
         if v is None:
             v = t.get("chainedLink")
         try:
@@ -2186,8 +2557,9 @@ class TaskAnalyzer:
         Project the next anchor and anchor_file datetimes in LOCAL TZ, strictly after
         `start_from_date` (exclusive). If start_from_date is None, we fall back to *today*.
         """
-        anchor_expr = (task.get("anchor") or "").strip()
-        anchor_file = (task.get("anchor_file") or "").strip()
+        metadata = self._metadata(task)
+        anchor_expr = metadata.anchor if metadata else ""
+        anchor_file = metadata.anchor_file if metadata else ""
         if not core or (not anchor_expr and not anchor_file):
             return []
         try:
@@ -2195,18 +2567,8 @@ class TaskAnalyzer:
         except Exception as exc:
             self._record_projection_warning(f"Business calendar: {_format_runtime_error(exc)}")
             return []
-        codec = core._import_sibling("task_codec")
-        observation = codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator anchor projection")
-        context = core._import_sibling("recurrence_context").RecurrenceContext.from_observation(
-            observation,
-                timezone=LOCAL_ZONE,
-                business_calendar=business_calendar,
-                astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        )
-        scheduler_service = core._import_sibling("scheduler_service").SchedulerService.from_observation(
-            observation,
-            context=context,
+        scheduler_service, context = _build_navigator_scheduler(
+            task, source_query="navigator anchor projection"
         )
         recurrence_evaluator = scheduler_service.session.evaluator
         recurrence_context = recurrence_evaluator.context
@@ -2217,13 +2579,14 @@ class TaskAnalyzer:
             now_loc = core.to_local(now_utc) if hasattr(core, "to_local") else now_utc.astimezone(LOCAL_ZONE)
             start_from_date = now_loc.date()
 
-        due_local_dt = self.convert_to_local(task.get("due") or "")
+        due_local_dt = self.convert_to_local(metadata.due if metadata else "")
         default_hhmm = (due_local_dt.hour, due_local_dt.minute) if due_local_dt else (9, 0)
         after_dt_local = due_local_dt if due_local_dt else core.build_local_datetime(start_from_date, default_hhmm)
 
         anchor_out: List[datetime.datetime] = []
         file_out: List[datetime.datetime] = []
         projection_terminal_note: str | None = None
+        projection_terminal = None
 
         if anchor_expr:
             try:
@@ -2254,6 +2617,7 @@ class TaskAnalyzer:
                     if occurrence.local_datetime is not None
                 ]
                 if isinstance(result.terminal, ExhaustedOccurrence):
+                    projection_terminal = result.terminal
                     projection_terminal_note = _format_runtime_error(result.terminal.error)
             except Exception as exc:
                 self._record_projection_warning(f"Anchor expression: {_format_runtime_error(exc)}")
@@ -2291,7 +2655,8 @@ class TaskAnalyzer:
         out = sorted(set(anchor_out + file_out))
         if len(out) > limit:
             out = out[:limit]
-        return out
+        from nautical_core.occurrence_provider import OccurrenceBatch
+        return OccurrenceBatch(out, terminal=projection_terminal)
 
 
     def _project_cp_dates(
@@ -2304,45 +2669,46 @@ class TaskAnalyzer:
         Project next cp-based occurrences strictly AFTER `start_from_dt_local`.
         If None, we fall back to now().
         """
-        period = (task.get("cp") or "").strip()
-        if not period:
+        metadata = self._metadata(task)
+        if not core or not (metadata and metadata.cp):
             return []
-
-        # duration
-        if core and hasattr(core, "parse_cp_duration"):
-            td = core.parse_cp_duration(period)
-            if not td:
-                return []
-        else:
-            import re
-            m = re.match(r"^\s*(\d+)\s*([dwmyh])\s*$", period, re.I)
-            if not m:
-                return []
-            n = int(m.group(1)); u = m.group(2).lower()
-            mult = {'d':86400,'w':604800,'h':3600}.get(u)
-            if u == 'm': mult = 30*86400
-            if u == 'y': mult = 365*86400
-            td = datetime.timedelta(seconds=n*mult)
-
-        # base local datetime
         if start_from_dt_local is None:
             start_from_dt_local = datetime.datetime.now(tz=LOCAL_ZONE)
+        try:
+            from nautical_core.scheduler_cursor import OccurrenceCursor
 
-        # First occurrence after base
-        occurrences = []
-        base = start_from_dt_local
-        for _ in range(limit):
-            base = (base + td).replace(microsecond=0)
-            occurrences.append(base)
-        return occurrences
+            service, context = _build_navigator_scheduler(
+                task, source_query="navigator cp date projection"
+            )
+            due_dt = core.parse_dt_any(metadata.due) if metadata and metadata.due else None
+            due_local = core.to_local(due_dt) if due_dt else None
+            fallback_hhmm = (due_local.hour, due_local.minute) if due_local else (9, 0)
+            result = service.collect(
+                OccurrenceCursor.strict_after(start_from_dt_local, timezone=context.timezone),
+                limit=limit,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=start_from_dt_local.date(),
+                max_iterations=max(512, limit * 8),
+                max_file_skips=max(512, limit * 8),
+            )
+            from nautical_core.occurrence_provider import OccurrenceBatch
+            return OccurrenceBatch([
+                occurrence.local_datetime.replace(microsecond=0)
+                for occurrence in result.occurrences
+                if occurrence.local_datetime is not None
+            ], terminal=getattr(result, "terminal", None))
+        except Exception as exc:
+            self._record_projection_warning(f"CP scheduling: {_format_runtime_error(exc)}")
+            return []
 
 
     def _due_is_anchor_day(self, due_dt_utc: str, task: Dict) -> Optional[bool]:
         """Check if a due (UTC string) falls on an anchor day (local date)."""
         if not core:
             return None
-        anchor_expr = (task.get("anchor") or "").strip()
-        anchor_file = (task.get("anchor_file") or "").strip()
+        metadata = self._metadata(task)
+        anchor_expr = metadata.anchor if metadata else ""
+        anchor_file = metadata.anchor_file if metadata else ""
         if not anchor_expr and not anchor_file:
             return None
         try:
@@ -2356,20 +2722,10 @@ class TaskAnalyzer:
         if anchor_expr:
             try:
                 from nautical_core.occurrence_outcomes import FoundOccurrence
-                from nautical_core.recurrence_context import RecurrenceContext
                 from nautical_core.scheduler_cursor import OccurrenceCursor
-                from nautical_core.scheduler_service import SchedulerService
-                from nautical_core.task_codec import DEFAULT_TASK_CODEC
-
-                observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="navigator due check")
-                context = RecurrenceContext.from_observation(
-                    observation,
-                    timezone=getattr(core, "_LOCAL_TZ", None),
-                    business_calendar=business_calendar,
-                    astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-                    anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+                service, context = _build_navigator_scheduler(
+                    task, source_query="navigator due check"
                 )
-                service = SchedulerService.from_observation(observation, context=context)
                 cursor_dt = core.build_local_datetime(due_day - timedelta(days=1), (23, 59))
                 outcome = service.next(
                     OccurrenceCursor.strict_after(cursor_dt, timezone=context.timezone),
@@ -2593,7 +2949,11 @@ class TaskAnalyzer:
             n = len(baseline_task["annotations"])
             fields.append(("Annotations", f"{n} annotation{'s' if n != 1 else ''}"))
 
-        for field, value in fields:
+        detail_view = NavigatorTaskDetailView(
+            fields=tuple((str(field), str(value)) for field, value in fields),
+            truncated=is_truncated,
+        )
+        for field, value in detail_view.fields:
             if field.lower() in FIELD_COLORS:
                 field_text = Text(field, style=FIELD_COLORS[field.lower()])
             else:
@@ -2612,23 +2972,23 @@ class TaskAnalyzer:
             details.add_row(field_text, value_text)
 
         title = "📋 Baseline Task Details"
-        if is_truncated:
+        if detail_view.truncated:
             title += " (showing last tasks in chain)"
 
         console.print(Panel(details, title=title, border_style=COLORS['primary'], padding=(1, 2)))
         console.print()
 
-    def _display_chain_table(self, chain: List[Dict]):
+    def _display_chain_table(self, chain: List[Dict], analysis_view: NavigatorAnalysisView | None = None):
         # Keep only rows that *actually* have non-timing changes after our filters
-        rows = [
-            (
-                t.get("uuid", "")[:8],
-                self._context_datetime_for_task(t),
-                self._meaningful_changes.get(str(t.get("uuid") or ""), []),
+        rows = list(analysis_view.change_rows) if analysis_view is not None else [
+            NavigatorChangeRow(
+                uuid=str(t.get("uuid", ""))[:8],
+                when=self._context_datetime_for_task(t),
+                changes=tuple(self._meaningful_changes.get(str(t.get("uuid") or ""), [])),
             )
             for t in chain
         ]
-        rows = [(u, d, ch) for (u, d, ch) in rows if ch]  # drop "no changes"
+        rows = [row for row in rows if row.changes]  # drop "no changes"
 
         table = Table(
             show_header=True,
@@ -2645,9 +3005,9 @@ class TaskAnalyzer:
             console.print(table)
             return
 
-        for short_uuid, when_str, changes in rows:
-            pretty = self.format_changes_beautifully(changes)
-            table.add_row(short_uuid, when_str, pretty)
+        for row in rows:
+            pretty = self.format_changes_beautifully(row.changes)
+            table.add_row(row.uuid, row.when, pretty)
 
         console.print(table)
 
@@ -2657,8 +3017,9 @@ class TaskAnalyzer:
     def _get_completion_dates(self, chain: List[Dict]) -> List[date]:
         dates: List[date] = []
         for task in chain:
-            if task.get("status") == "completed" and task.get("end"):
-                local_time = self.convert_to_local(task["end"])
+            metadata = self._metadata(task)
+            if metadata and metadata.status == "completed" and metadata.end:
+                local_time = self.convert_to_local(metadata.end)
                 if local_time:
                     dates.append(local_time.date())
         return sorted(set(dates))
@@ -2666,8 +3027,9 @@ class TaskAnalyzer:
     def _get_pending_due_dates(self, chain: List[Dict]) -> List[date]:
         dates: List[date] = []
         for task in chain:
-            if task.get("status") in ("pending","waiting") and task.get("due"):
-                local_time = self.convert_to_local(task["due"])
+            metadata = self._metadata(task)
+            if metadata and metadata.is_active and metadata.due:
+                local_time = self.convert_to_local(metadata.due)
                 if local_time:
                     dates.append(local_time.date())
         return sorted(set(dates))
@@ -2675,19 +3037,24 @@ class TaskAnalyzer:
     def _finished_chain_brief(self, chain: List[Dict]):
         """Compact in-depth summary when a chain is finished."""
         total = len(chain)
-        completed = [t for t in chain if t.get("status") == "completed" and t.get("end")]
+        completed = [
+            t for t in chain
+            if (metadata := self._metadata(t)) is not None
+            and metadata.status == "completed"
+            and metadata.end
+        ]
         if not completed:
             return
 
-        first_end = self.convert_to_local(completed[0]["end"])
-        last_end  = self.convert_to_local(completed[-1]["end"])
+        first_end = self.convert_to_local(self._metadata(completed[0]).end)
+        last_end  = self.convert_to_local(self._metadata(completed[-1]).end)
         span_days = (last_end.date() - first_end.date()).days if first_end and last_end else 0
 
         # Cadence based on end-to-end gaps (in days)
         gaps = []
         for i in range(1, len(completed)):
-            a = self.convert_to_local(completed[i-1]["end"])
-            b = self.convert_to_local(completed[i]["end"])
+            a = self.convert_to_local(self._metadata(completed[i - 1]).end)
+            b = self.convert_to_local(self._metadata(completed[i]).end)
             if a and b:
                 gaps.append((b - a).total_seconds() / 86400.0)
 
@@ -2696,10 +3063,11 @@ class TaskAnalyzer:
 
         # Anchor adherence (% completed tasks whose due fell on an anchor day)
         adherence_txt = "N/A"
-        if any((t.get("anchor") or t.get("anchor_file") for t in chain)) and core:
+        if any((metadata := self._metadata(t)) is not None and metadata.has_anchor for t in chain) and core:
             checks = []
             for t in completed:
-                due = t.get("due")
+                task_metadata = self._metadata(t)
+                due = task_metadata.due if task_metadata else None
                 if due:
                     ok = self._due_is_anchor_day(due, t)
                     if ok is not None:
@@ -2707,15 +3075,26 @@ class TaskAnalyzer:
             if checks:
                 adherence_txt = f"{100.0 * sum(checks)/len(checks):.0f}% on-anchor"
 
+        summary = NavigatorChainSummary(
+            total_links=total,
+            completed_links=len(completed),
+            first_end=first_end.date() if first_end else None,
+            last_end=last_end.date() if last_end else None,
+            span_days=span_days,
+            median_cadence_days=float(med),
+            mean_cadence_days=float(mean),
+            anchor_adherence=adherence_txt,
+        )
+
         grid = Table.grid(padding=(0,2))
         grid.add_column(style="bold white")
         grid.add_column(style="white")
-        grid.add_row("Total links", str(total))
-        grid.add_row("Completed",   str(len(completed)))
-        if first_end and last_end:
-            grid.add_row("First→Last", f"{first_end.date()} → {last_end.date()}  ({span_days} days)")
-        grid.add_row("Cadence", f"median {med:.1f}d • mean {mean:.1f}d")
-        grid.add_row("Anchor adherence", adherence_txt)
+        grid.add_row("Total links", str(summary.total_links))
+        grid.add_row("Completed",   str(summary.completed_links))
+        if summary.first_end and summary.last_end:
+            grid.add_row("First→Last", f"{summary.first_end} → {summary.last_end}  ({summary.span_days} days)")
+        grid.add_row("Cadence", f"median {summary.median_cadence_days:.1f}d • mean {summary.mean_cadence_days:.1f}d")
+        grid.add_row("Anchor adherence", summary.anchor_adherence)
 
         console.print(Panel(grid, title="📦 Finished Chain Summary", border_style=COLORS['accent'], expand=False))
 
@@ -2724,20 +3103,31 @@ class TaskAnalyzer:
         """One fuzzy choice per chain (tail desc). Collisions resolved to newest tail."""
         chains = self.build_all_chains()
 
+        choices: list[NavigatorChainChoice] = []
+        for index, chain in enumerate(chains):
+            tail = chain[-1]
+            metadata = self._metadata(tail)
+            choices.append(NavigatorChainChoice(
+                index=index,
+                chain_id=metadata.chain_id if metadata else str(tail.get("chainID") or ""),
+                label=f"[{metadata.status if metadata else tail.get('status', 'unknown')}] {tail.get('description', '<no description>')}",
+                tail_uuid=str(tail.get("uuid") or ""),
+                tail_reference=str(((metadata.end or metadata.due) if metadata else None) or tail.get("entry") or ""),
+            ))
+
         from prompt_toolkit import prompt
         from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
 
         # Map base label -> list of chain indexes sharing same text
         bucket = defaultdict(list)
-        for i, ch in enumerate(chains):
-            tail = ch[-1]
-            label = f"[{tail.get('status','unknown')}] {tail.get('description','<no description>')}"
-            bucket[label].append(i)
+        for choice in choices:
+            bucket[choice.label].append(choice.index)
 
         # Keep newest tail when labels collide
         def tail_when(idx: int):
             tail = chains[idx][-1]
-            when = (tail.get("end") or tail.get("due") or tail.get("entry") or "")
+            metadata = self._metadata(tail)
+            when = ((metadata.end or metadata.due) if metadata else None) or tail.get("entry") or ""
             return (when, tail.get("uuid") or "")
 
         labels = []
@@ -2748,7 +3138,9 @@ class TaskAnalyzer:
             label_to_index[label] = winner
 
         # Active first
-        def is_active(idx): return chains[idx][-1].get("status") in ("pending", "waiting")
+        def is_active(idx):
+            metadata = self._metadata(chains[idx][-1])
+            return bool(metadata and metadata.is_active)
         labels.sort(key=lambda lbl: (0 if is_active(label_to_index[lbl]) else 1, lbl.lower()))
 
         completer = FuzzyCompleter(WordCompleter(labels, match_middle=True))
@@ -2767,6 +3159,9 @@ class TaskAnalyzer:
 
 
     def select_task_interactively(self) -> int:
+        from prompt_toolkit import prompt
+        from prompt_toolkit.completion import FuzzyCompleter, WordCompleter
+
         tasks = self.get_all_chained_tasks()
         choices: Dict[str, int] = {}
         for task in tasks:
@@ -2817,7 +3212,8 @@ class TaskAnalyzer:
         if display_chain:
             self._display_baseline_task(display_chain[0], len(full_chain) > len(display_chain))
 
-        is_chain_active = bool(full_chain and full_chain[-1].get("status") in ("pending", "waiting"))
+        tail_metadata = self._metadata(full_chain[-1]) if full_chain else None
+        is_chain_active = bool(tail_metadata and tail_metadata.is_active)
 
         for i, task in enumerate(display_chain):
             if i > 0:
@@ -2846,17 +3242,18 @@ class TaskAnalyzer:
 
         # upcoming link dates: anchor / anchor_file preferred; else cp
         tail = full_chain[-1] if full_chain else None
+        tail_metadata = self._metadata(tail)
         upcoming_local_datetimes: List[datetime.datetime] = []
         is_active = False
 
         if tail:
             self._projection_warnings = []
-            is_active = tail.get("status") in ("pending", "waiting")
+            is_active = bool(tail_metadata and tail_metadata.is_active)
 
             if is_active:
-                due_local_dt = self.convert_to_local(tail.get("due") or "")
+                due_local_dt = self.convert_to_local(tail_metadata.due if tail_metadata else "")
                 # For anchors: start strictly AFTER the due *date* (so overdue tasks show next anchors right away)
-                if ((tail.get("anchor") or tail.get("anchor_file")) and core):
+                if (tail_metadata and tail_metadata.has_anchor and core):
                     start_from_date = due_local_dt.date() if due_local_dt else None
                     try:
                         upcoming_local_datetimes = self._project_anchor_dates(
@@ -2866,7 +3263,7 @@ class TaskAnalyzer:
                         self._record_projection_warning(f"Anchor projection: {_format_runtime_error(exc)}")
                         upcoming_local_datetimes = []
                 # For cp: start strictly AFTER the due *datetime*
-                elif (tail.get("cp") or "").strip():
+                elif tail_metadata and tail_metadata.cp:
                     start_from_dt_local = due_local_dt if due_local_dt else None
                     upcoming_local_datetimes = self._project_cp_dates(
                         tail, limit=UPCOMING_MAX, start_from_dt_local=start_from_dt_local
@@ -2875,7 +3272,46 @@ class TaskAnalyzer:
 
 
         upcoming_dates = sorted(set(dt.date() for dt in upcoming_local_datetimes))
-        console.print(self.create_enhanced_calendar(completed_dates, upcoming_dates, pending_due_dates))
+        calendar_view = NavigatorCalendarView(
+            completed=tuple(completed_dates),
+            upcoming=tuple(upcoming_dates),
+            pending_due=tuple(pending_due_dates),
+        )
+        # Chain analysis does not request an explain trace; keep the view
+        # explicitly empty rather than reaching for an undefined local.
+        trace_view = None
+        analysis_view = NavigatorAnalysisView(
+            chain_size=len(full_chain),
+            calendar=calendar_view,
+            projection=NavigatorProjectionView(tuple(self._projection_warnings)),
+            trace=trace_view,
+            change_rows=tuple(
+                NavigatorChangeRow(
+                    uuid=str(task.get("uuid", ""))[:8],
+                    when=self._context_datetime_for_task(task),
+                    changes=tuple(self._meaningful_changes.get(str(task.get("uuid") or ""), [])),
+                )
+                for task in display_chain
+                if self._meaningful_changes.get(str(task.get("uuid") or ""), [])
+            ),
+        )
+        self._last_analysis_view = analysis_view
+        console.print(self.create_enhanced_calendar(
+            list(calendar_view.completed),
+            list(calendar_view.upcoming),
+            list(calendar_view.pending_due),
+        ))
+        projection_view = analysis_view.projection
+        if projection_view.warnings:
+            warning_text = "\n".join(f"• {warning}" for warning in projection_view.warnings)
+            console.print(
+                Panel(
+                    warning_text,
+                    title="⚠ Projection evidence unavailable",
+                    border_style=COLORS["warning"],
+                    expand=False,
+                )
+            )
 
         # anchor panel (if present)
         anchor_info = self._anchor_summary(tail) if tail else None
@@ -2884,8 +3320,8 @@ class TaskAnalyzer:
             rows = [("Pattern", pat)]
             if nat:
                 rows.append(("Natural", nat))
-            if is_active and tail.get("due"):
-                rows.append(("Current due", self.format_local_time(tail.get("due"), "%a %Y-%m-%d %H:%M %Z")))
+            if is_active and tail_metadata and tail_metadata.due:
+                rows.append(("Current due", self.format_local_time(tail_metadata.due, "%a %Y-%m-%d %H:%M %Z")))
 
             if core and is_active and upcoming_local_datetimes:
                 rows.append((
@@ -2897,22 +3333,19 @@ class TaskAnalyzer:
                 ))
             elif not core:
                 rows.append(("Note", "Anchors present but chained_core.py not found — anchor projection disabled."))
-            for warning in self._projection_warnings:
-                rows.append(("Warning", warning))
-
             console.print()  # simple blank line spacer
             self._panel("⛵ Anchor Analysis", rows, "bright_cyan", "bright_cyan")
 
 
         # chain table + summary
-        self._display_chain_table(display_chain)
+        self._display_chain_table(display_chain, analysis_view)
         # Show CP performance chart for classic CP chains (no anchors)
         tail = full_chain[-1] if full_chain else None
-        if tail and (tail.get("cp") or "").strip() and not ((tail.get("anchor") or tail.get("anchor_file"))):
+        if tail and tail_metadata and tail_metadata.cp and not tail_metadata.has_anchor:
             self._cp_performance_panel(full_chain)
 
         # finished-chain brief
-        if tail and tail.get("status") == "completed":
+        if tail and tail_metadata and tail_metadata.status == "completed":
             if not self._children.get(tail.get("uuid"), []):
                 self._finished_chain_brief(full_chain)
         self._display_summary(len(full_chain), len(display_chain), completed_dates)

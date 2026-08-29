@@ -14,7 +14,6 @@ from nautical_core.lifecycle_models import (
     LifecycleAction,
     LifecycleEvent,
     LifecycleIdentity,
-    LifecycleRecoveryDecision,
     LifecyclePlan,
     ParentGuard,
     TaskSnapshot,
@@ -30,9 +29,84 @@ from nautical_core.lifecycle_planner import (
 from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.lifecycle_models import DeletionDisposition, DeletionEvidence
+from nautical_core.lifecycle_recovery_models import (
+    RecoveryPlanResult,
+    RecoveryRefusal,
+    RecoveryResult,
+    RecoveryStatus,
+)
 
 
 RECURRENCE_FIELDS = ("anchor", "anchor_file", "cp")
+
+
+def _recovery_refusal(
+    parent: TaskObservation,
+    status: RecoveryStatus,
+    reason: str,
+    *,
+    evidence: dict[str, Any] | None = None,
+) -> RecoveryRefusal:
+    return RecoveryRefusal(parent, status, reason, evidence or {})
+
+
+def _recovery_plan_result(
+    parent: TaskObservation,
+    plan: LifecyclePlan,
+    *,
+    reason: str = "",
+    child_short: str = "",
+    child_due: Any = None,
+    child_observation: TaskObservation | None = None,
+    terminal_kind: str | None = None,
+) -> RecoveryPlanResult:
+    return RecoveryPlanResult(
+        parent,
+        plan,
+        reason=reason,
+        child_short=child_short,
+        child_due=child_due,
+        child_observation=child_observation,
+        terminal_kind=terminal_kind,
+    )
+
+
+def _terminal_recovery_result(
+    parent: TaskObservation,
+    *,
+    source_link: int,
+    reason: str,
+    terminal_kind: str,
+) -> RecoveryPlanResult | RecoveryRefusal:
+    """Build a typed finalization plan for a terminal recovery decision."""
+    values = parent.to_mapping()
+    chain_id = str(values.get("chainID") or "").strip()
+    parent_uuid = str(values.get("uuid") or "").strip()
+    try:
+        guard = ParentGuard(
+            status=str(values.get("status") or "pending"),
+            chain=str(values.get("chain") or "on"),
+            chain_id=chain_id,
+            link=source_link,
+            recurrence_fingerprint=recurrence_fingerprint(values),
+            modified=str(values.get("modified") or ""),
+        )
+        identity = LifecycleIdentity(
+            chain_id=chain_id,
+            parent_uuid=parent_uuid,
+            source_link=source_link,
+            target_link=None,
+            event=LifecycleEvent.EXPIRE if str(values.get("status") or "").strip() == "deleted" else LifecycleEvent.COMPLETE,
+        )
+        plan = LifecyclePlan(
+            identity=identity,
+            action=LifecycleAction.FINALIZE_CHAIN,
+            parent_guard=guard,
+            terminal_kind=terminal_kind,
+        )
+    except Exception as exc:
+        return _recovery_refusal(parent, RecoveryStatus.ERROR, f"failed to build terminal lifecycle plan: {exc}")
+    return _recovery_plan_result(parent, plan, reason=reason, terminal_kind=terminal_kind)
 
 
 def _child_draft(child: TaskPayload) -> TaskDraft:
@@ -65,16 +139,6 @@ def _generation_service(hook: Any = None) -> ChainGenerationService:
 def scheduling_error_message(exc: BaseException) -> str:
     """Keep astronomy failures actionable in dry-run and apply plans."""
     return astronomy.scheduling_error_message(exc)
-
-
-def is_terminal_plan(plan: LifecycleRecoveryDecision) -> bool:
-    """Return whether a final plan carries a durable terminal provenance."""
-    return plan.action == "legitimate_final" and plan.terminal_kind in {
-        "date_limit",
-        "search_limit",
-        "chain_max",
-        "chain_until",
-    }
 
 
 def short_uuid(value: object) -> str:
@@ -381,46 +445,52 @@ def recurrence_kind(task: TaskObservation | NauticalTask) -> str:
     return "cp"
 
 
-def describe_plan(plan: LifecycleRecoveryDecision, *, fmt_dt_local: Any = None) -> dict[str, Any]:
-    parent = plan.parent
-    parent_values = parent.to_mapping() if isinstance(parent, TaskObservation) else parent
-    parent_observation = (
-        parent
-        if isinstance(parent, TaskObservation)
-        else DEFAULT_TASK_CODEC.decode_row(parent_values, source_query="lifecycle plan description")
-    )
-    if plan.action == "manual_stop":
-        trigger = "manual_deletion"
-    elif str(parent_values.get("status") or "").strip() == "deleted":
-        trigger = "expiration"
-    else:
-        trigger = "completion"
+def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
+    """Describe a typed recovery result without reconstructing a decision."""
+    if isinstance(result, RecoveryRefusal):
+        parent = result.parent.to_mapping()
+        return {
+            "parent": short_uuid(parent.get("uuid")),
+            "chainID": str(parent.get("chainID") or ""),
+            "parent_link": int_or_default(parent.get("link"), 0),
+            "kind": recurrence_kind(result.parent),
+            "reason": result.reason,
+            "status": result.status.value,
+            **dict(result.evidence),
+        }
+    parent = result.parent.to_mapping()
+    plan = result.plan
     evidence: dict[str, Any] = {
-        "parent": short_uuid(parent_values.get("uuid")),
-        "chainID": str(parent_values.get("chainID") or ""),
-        "parent_link": int_or_default(parent_values.get("link"), 0),
-        "next_link": plan.next_link,
-        "kind": recurrence_kind(parent_observation),
-        "trigger": trigger,
-        "reason": plan.reason,
+        "parent": short_uuid(parent.get("uuid")),
+        "chainID": str(parent.get("chainID") or ""),
+        "parent_link": int_or_default(parent.get("link"), 0),
+        "next_link": plan.identity.target_link,
+        "kind": recurrence_kind(result.parent),
+        "trigger": (
+            "expiration"
+            if plan.identity.event is LifecycleEvent.EXPIRE
+            else "completion"
+        ),
+        "reason": result.reason,
+        "action": plan.action.value,
     }
-    if is_terminal_plan(plan):
+    if result.terminal_kind:
         evidence["terminal"] = True
-        evidence["terminal_kind"] = plan.terminal_kind
-    if plan.child_due is not None:
-        evidence["child_due"] = str(plan.child_due)
+        evidence["terminal_kind"] = result.terminal_kind
+    if result.child_due is not None:
+        evidence["child_due"] = str(result.child_due)
         if callable(fmt_dt_local):
             try:
-                evidence["child_local"] = str(fmt_dt_local(plan.child_due))
+                evidence["child_local"] = str(fmt_dt_local(result.child_due))
             except Exception:
                 pass
-    if plan.child_short:
-        evidence["existing_child"] = plan.child_short
-    child_draft = plan.child_draft
-    if child_draft is not None:
-        field = child_draft.target_field
+    if result.child_short:
+        evidence["existing_child"] = result.child_short
+    if plan.action is LifecycleAction.SPAWN_CHILD:
+        child = plan.child_dict()
+        field = "scheduled" if child.get("scheduled") and not child.get("due") else "due"
         evidence["child_field"] = field
-        evidence["child_target"] = str(child_draft.field_value(field, ""))
+        evidence["child_target"] = str(child.get(field) or "")
     return evidence
 
 
@@ -466,17 +536,16 @@ def _plan_recovery_decision_unscoped(
     existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
     hook: Any,
     generation: ChainGenerationService | None = None,
-) -> LifecycleRecoveryDecision:
+) -> RecoveryResult:
     generation = generation or _generation_service(hook)
     observation = DEFAULT_TASK_CODEC.decode_row(parent, source_query="reconcile recovery")
     meta: dict[str, Any] = {}
     try:
         operational_parent = NauticalTask.from_observation(observation)
     except (TypeError, ValueError) as exc:
-        return LifecycleRecoveryDecision(
-            "error",
+        return _recovery_refusal(
             observation,
-            int_or_default(parent.get("link"), 1) + 1,
+            RecoveryStatus.ERROR,
             f"parent task validation failed: {exc}",
         )
     decision_parent = observation
@@ -489,12 +558,11 @@ def _plan_recovery_decision_unscoped(
             safe_parse_datetime=generation.safe_parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
-            return LifecycleRecoveryDecision("manual_stop", decision_parent, next_link, evidence.reason)
+            return _recovery_refusal(decision_parent, RecoveryStatus.MANUAL_REVIEW, evidence.reason)
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
-            return LifecycleRecoveryDecision(
-                "error",
+            return _recovery_refusal(
                 decision_parent,
-                next_link,
+                RecoveryStatus.MANUAL_REVIEW,
                 evidence.reason or "deleted task has no reliable native-until expiration evidence",
             )
 
@@ -504,7 +572,7 @@ def _plan_recovery_decision_unscoped(
         include_deleted=is_expiration,
     )
     if child_error:
-        return LifecycleRecoveryDecision("error", decision_parent, next_link, child_error)
+        return _recovery_refusal(decision_parent, RecoveryStatus.MANUAL_REVIEW, child_error)
     if child_short:
         existing_child = next(
             (
@@ -515,12 +583,11 @@ def _plan_recovery_decision_unscoped(
             None,
         )
         if not isinstance(existing_child, TaskObservation):
-            return LifecycleRecoveryDecision(
-                "error",
+            return _recovery_refusal(
                 decision_parent,
-                next_link,
+                RecoveryStatus.MANUAL_REVIEW,
                 "existing successor identity could not be loaded",
-                child_short=child_short,
+                evidence={"child_short": child_short},
             )
         try:
             guard = ParentGuard(
@@ -547,23 +614,18 @@ def _plan_recovery_decision_unscoped(
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
         except Exception as exc:
-            return LifecycleRecoveryDecision(
-                "error",
+            return _recovery_refusal(
                 decision_parent,
-                next_link,
+                RecoveryStatus.ERROR,
                 f"failed to build successor recovery plan: {scheduling_error_message(exc)}",
-                child_short=child_short,
+                evidence={"child_short": child_short},
             )
-        return LifecycleRecoveryDecision(
-            "backfill_nextlink",
+        return _recovery_plan_result(
             decision_parent,
-            next_link,
-            "next link already exists",
+            lifecycle_plan,
+            reason="next link already exists",
             child_short=child_short,
-            child=existing_child.to_mapping(),
-            lifecycle_plan=lifecycle_plan,
             child_observation=existing_child,
-            child_draft=lifecycle_plan.child_draft(),
         )
 
     try:
@@ -583,11 +645,11 @@ def _plan_recovery_decision_unscoped(
         until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
         cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
-        return LifecycleRecoveryDecision("error", decision_parent, next_link, f"invalid chainUntil: {until_err}")
+        return _recovery_refusal(decision_parent, RecoveryStatus.MANUAL_REVIEW, f"invalid chainUntil: {until_err}")
 
     if cpmax and next_link > cpmax:
-        return LifecycleRecoveryDecision(
-            "legitimate_final", decision_parent, next_link, "reached chainMax", terminal_kind="chain_max",
+        return _terminal_recovery_result(
+            decision_parent, source_link=link, reason="reached chainMax", terminal_kind="chain_max",
         )
 
     try:
@@ -606,21 +668,26 @@ def _plan_recovery_decision_unscoped(
             meta = dict(raw_meta or {})
     except Exception as exc:
         if isinstance(exc, OccurrenceSearchExhausted) and exc.is_date_limit:
-            return LifecycleRecoveryDecision(
-                "legitimate_final",
+            return _terminal_recovery_result(
                 decision_parent,
-                next_link,
-                occurrence_exhaustion_message(exc),
+                source_link=link,
+                reason=occurrence_exhaustion_message(exc),
                 terminal_kind=exc.kind,
             )
-        return LifecycleRecoveryDecision("error", decision_parent, next_link, scheduling_error_message(exc))
+        return _recovery_refusal(decision_parent, RecoveryStatus.ERROR, scheduling_error_message(exc))
 
     if not child_due:
-        return LifecycleRecoveryDecision("error", decision_parent, next_link, "could not compute next recurrence timestamp")
+        return _recovery_refusal(
+            decision_parent,
+            RecoveryStatus.ERROR,
+            "could not compute next recurrence timestamp",
+        )
     if until_dt and compare_datetimes(child_due, until_dt) > 0:
-        return LifecycleRecoveryDecision(
-            "legitimate_final", decision_parent, next_link, "reached chainUntil",
-            child_due=child_due, terminal_kind="chain_until",
+        return _terminal_recovery_result(
+            decision_parent,
+            source_link=link,
+            reason="reached chainUntil",
+            terminal_kind="chain_until",
         )
 
     child_field = "scheduled" if isinstance(meta, dict) and meta.get("target_field") == "scheduled" else "due"
@@ -667,12 +734,11 @@ def _plan_recovery_decision_unscoped(
             )
         )
         if recovery_plan.action is LifecycleAction.FINALIZE_CHAIN:
-            return LifecycleRecoveryDecision(
-                "legitimate_final",
+            return _terminal_recovery_result(
                 decision_parent,
-                next_link,
-                "reached lifecycle successor limit",
-                child_due=child_due,
+                source_link=link,
+                reason="reached lifecycle successor limit",
+                terminal_kind="search_limit",
             )
         child = recovery_plan.child_dict()
     except Exception as exc:
@@ -701,9 +767,19 @@ def _plan_recovery_decision_unscoped(
                     generation=generation,
                 )
             except Exception as fallback_exc:
-                return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(fallback_exc)}", child_due=child_due)
+                return _recovery_refusal(
+                    decision_parent,
+                    RecoveryStatus.ERROR,
+                    f"failed to build child: {scheduling_error_message(fallback_exc)}",
+                    evidence={"child_due": child_due},
+                )
         else:
-            return LifecycleRecoveryDecision("error", decision_parent, next_link, f"failed to build child: {scheduling_error_message(exc)}", child_due=child_due)
+            return _recovery_refusal(
+                decision_parent,
+                RecoveryStatus.ERROR,
+                f"failed to build child: {scheduling_error_message(exc)}",
+                evidence={"child_due": child_due},
+            )
     if recovery_plan is None:
         try:
             guard = ParentGuard(
@@ -730,23 +806,24 @@ def _plan_recovery_decision_unscoped(
                 expected_postconditions=("child_present", "parent_linked", "verified"),
             )
         except Exception as exc:
-            return LifecycleRecoveryDecision(
-                "error",
+            return _recovery_refusal(
                 decision_parent,
-                next_link,
+                RecoveryStatus.ERROR,
                 f"failed to build lifecycle plan: {scheduling_error_message(exc)}",
-                child_due=child_due,
+                evidence={"child_due": child_due},
             )
     reason = "expired link missing next link" if is_expiration else "missing next link"
-    return LifecycleRecoveryDecision(
-        "spawn",
+    if recovery_plan is None:
+        return _recovery_refusal(
+            decision_parent,
+            RecoveryStatus.ERROR,
+            "recovery plan was not produced",
+        )
+    return _recovery_plan_result(
         decision_parent,
-        next_link,
-        reason,
-        child=child,
+        recovery_plan,
+        reason=reason,
         child_due=child_due,
-        lifecycle_plan=recovery_plan,
-        child_draft=recovery_plan.child_draft() if recovery_plan is not None else None,
     )
 
 
@@ -756,7 +833,7 @@ def plan_recovery_decision(
     existing_children: list[TaskObservation] | tuple[TaskObservation, ...],
     hook: Any,
     generation: ChainGenerationService | None = None,
-) -> LifecycleRecoveryDecision:
+) -> RecoveryResult:
     """Build one plan inside the parent task's business-calendar context."""
     if not isinstance(parent, TaskObservation):
         raise TypeError("recovery planning requires a TaskObservation parent")
@@ -776,12 +853,7 @@ def plan_recovery_decision(
     try:
         calendar_context = use_task_calendar(parent_values)
     except Exception as exc:
-        return LifecycleRecoveryDecision(
-            "error",
-            parent,
-            next_link,
-            f"invalid business calendar: {exc}",
-        )
+        return _recovery_refusal(parent, RecoveryStatus.ERROR, f"invalid business calendar: {exc}")
     with calendar_context:
         return _plan_recovery_decision_unscoped(
             parent_values,

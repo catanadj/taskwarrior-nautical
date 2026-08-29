@@ -11,11 +11,14 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Literal, Mapping, cast
 
+from .operator_models import OperatorCursor, OperatorScope, OperatorScopeKind
+
 
 QUERY_API_VERSION = 1
 OCCURRENCES_SCHEMA = "nautical.query.occurrences"
 NEXT_SCHEMA = "nautical.query.next"
 CAPABILITIES_SCHEMA = "nautical.query.capabilities"
+CAPABILITIES_API_VERSION = 2
 OCCURRENCE_OPERATION = "occurrences"
 NEXT_OPERATION = "next"
 
@@ -36,6 +39,53 @@ OmissionPolicy = Literal["exclude", "include", "report"]
 
 class QueryContractError(ValueError):
     """Raised when a public query contract value is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class QueryCapabilities:
+    """Validated discovery document for the query CLI surface."""
+
+    document: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.document, Mapping):
+            raise QueryContractError("capabilities document must be an object")
+        if self.document.get("schema") != CAPABILITIES_SCHEMA:
+            raise QueryContractError("invalid capabilities schema")
+        if self.document.get("version") != CAPABILITIES_API_VERSION:
+            raise QueryContractError("unsupported capabilities version")
+        if self.document.get("operation") != "query":
+            raise QueryContractError("invalid capabilities operation")
+        if self.document.get("status") != "ok":
+            raise QueryContractError("capabilities status must be ok")
+        operations = self.document.get("operations")
+        required_operations = {OCCURRENCE_OPERATION, NEXT_OPERATION, "integrity"}
+        if not isinstance(operations, list) or not required_operations.issubset(
+            {str(item) for item in operations}
+        ):
+            raise QueryContractError("capabilities operations are incomplete")
+        selectors = self.document.get("selectors")
+        if not isinstance(selectors, list) or not {str(item) for item in selectors}.issuperset(
+            {"uuid", "chain_id", "all"}
+        ):
+            raise QueryContractError("capabilities selectors are incomplete")
+        omission_policies = self.document.get("omission_policies")
+        if not isinstance(omission_policies, list) or not {str(item) for item in omission_policies}.issuperset(
+            {"exclude", "include", "report"}
+        ):
+            raise QueryContractError("capabilities omission policies are incomplete")
+        if not isinstance(self.document.get("next"), Mapping):
+            raise QueryContractError("capabilities next operation details are required")
+        object.__setattr__(self, "document", dict(self.document))
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "QueryCapabilities":
+        if not isinstance(value, Mapping):
+            raise QueryContractError("capabilities must be an object")
+        return cls(value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.document)
 
 
 def _text(value: object, field: str, *, required: bool = True) -> str:
@@ -121,24 +171,27 @@ class QueryBoundary:
 
 @dataclass(frozen=True, slots=True)
 class QuerySelector:
-    """One explicit task selection mode."""
+    """Query selection backed by the shared operator scope contract."""
 
-    uuids: tuple[str, ...] = ()
-    chain_id: str = ""
-    all_tasks: bool = False
+    scope: OperatorScope
 
     def __post_init__(self) -> None:
-        uuids = tuple(dict.fromkeys(_text(item, "task UUID").lower() for item in self.uuids))
-        chain_id = _text(self.chain_id, "chainID", required=False).lower()
-        if not isinstance(self.all_tasks, bool):
-            raise QueryContractError("all_tasks must be boolean")
-        modes = bool(uuids) + bool(chain_id) + self.all_tasks
-        if modes != 1:
-            raise QueryContractError("query selector requires exactly one of UUIDs, chainID, or all_tasks")
-        if len(uuids) > HARD_MAX_TASKS:
+        if not isinstance(self.scope, OperatorScope):
+            raise QueryContractError("query selector requires an OperatorScope")
+        if self.scope.kind is OperatorScopeKind.UUIDS and len(self.scope.values) > HARD_MAX_TASKS:
             raise QueryContractError(f"query selector cannot contain more than {HARD_MAX_TASKS} UUIDs")
-        object.__setattr__(self, "uuids", uuids)
-        object.__setattr__(self, "chain_id", chain_id)
+
+    @property
+    def uuids(self) -> tuple[str, ...]:
+        return self.scope.values if self.scope.kind is OperatorScopeKind.UUIDS else ()
+
+    @property
+    def chain_id(self) -> str:
+        return self.scope.values[0] if self.scope.kind is OperatorScopeKind.CHAIN else ""
+
+    @property
+    def all_tasks(self) -> bool:
+        return self.scope.kind is OperatorScopeKind.SYSTEM
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "QuerySelector":
@@ -149,11 +202,18 @@ class QuerySelector:
             raw_uuids = (raw_uuids,)
         if not isinstance(raw_uuids, (list, tuple)):
             raise QueryContractError("query selector uuids must be a list")
-        return cls(
-            uuids=tuple(str(item) for item in raw_uuids),
-            chain_id=str(value.get("chain_id", value.get("chainID", "")) or ""),
-            all_tasks=_bool(value.get("all_tasks", False), "all_tasks"),
-        )
+        chain_id = str(value.get("chain_id", value.get("chainID", "")) or "")
+        all_tasks = _bool(value.get("all_tasks", False), "all_tasks")
+        selected = bool(raw_uuids) + bool(chain_id) + all_tasks
+        if selected != 1:
+            raise QueryContractError("query selector requires exactly one of UUIDs, chainID, or all_tasks")
+        if raw_uuids:
+            scope = OperatorScope.uuids(tuple(str(item).lower() for item in raw_uuids))
+        elif chain_id:
+            scope = OperatorScope.from_selector(chain_id=chain_id.lower())
+        else:
+            scope = OperatorScope.from_selector(all_tasks=True)
+        return cls(scope)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -172,6 +232,7 @@ class OccurrenceQueryRequest:
     end: QueryBoundary | None = None
     evaluation_at: QueryBoundary | None = None
     count: int | None = None
+    cursor: OperatorCursor | None = None
     start_inclusive: bool = True
     omission_policy: OmissionPolicy = "exclude"
     max_tasks: int = DEFAULT_MAX_TASKS
@@ -194,6 +255,8 @@ class OccurrenceQueryRequest:
                 raise QueryContractError("query at must be an RFC 3339 timestamp with explicit offset")
             if self.operation != NEXT_OPERATION:
                 raise QueryContractError("query at is supported only for the next operation")
+        if self.cursor is not None and not isinstance(self.cursor, OperatorCursor):
+            raise QueryContractError("query cursor must be an OperatorCursor")
         if self.end is not None:
             start_value = self.start.value
             end_value = self.end.value
@@ -248,6 +311,11 @@ class OccurrenceQueryRequest:
                 if value.get("count") is not None
                 else (1 if operation == NEXT_OPERATION and at_value is not None else None)
             ),
+            cursor=(
+                OperatorCursor.from_mapping(value["cursor"])
+                if value.get("cursor") is not None
+                else None
+            ),
             start_inclusive=_bool(value.get("start_inclusive", True), "start_inclusive"),
             omission_policy=cast(
                 Literal["exclude", "include", "report"],
@@ -271,6 +339,7 @@ class OccurrenceQueryRequest:
             "to": self.end.to_text() if self.end is not None else None,
             "at": self.evaluation_at.to_text() if self.evaluation_at is not None else None,
             "count": self.count,
+            "cursor": None if self.cursor is None else self.cursor.to_dict(),
             "start_inclusive": self.start_inclusive,
             "omission_policy": self.omission_policy,
             "max_tasks": self.max_tasks,
@@ -448,6 +517,9 @@ class OccurrenceQueryResponse:
     status: QueryStatus = "empty"
     configuration_fingerprint: str = ""
     failure: QueryFailure | None = None
+    cursor: OperatorCursor | None = None
+    complete: bool = True
+    coverage: Mapping[str, Any] = field(default_factory=dict)
     schema: str = OCCURRENCES_SCHEMA
     version: int = QUERY_API_VERSION
 
@@ -461,6 +533,15 @@ class OccurrenceQueryResponse:
             raise QueryContractError("query response contains an invalid task result")
         if self.failure is not None and not isinstance(self.failure, QueryFailure):
             raise QueryContractError("query response failure is invalid")
+        if self.cursor is not None and not isinstance(self.cursor, OperatorCursor):
+            raise QueryContractError("query response cursor is invalid")
+        if not isinstance(self.complete, bool):
+            raise QueryContractError("query response complete must be boolean")
+        if self.complete and self.cursor is not None:
+            raise QueryContractError("complete query response cannot contain a cursor")
+        if not isinstance(self.coverage, Mapping):
+            raise QueryContractError("query response coverage must be an object")
+        object.__setattr__(self, "coverage", _json_value(self.coverage))
         expected_schema = OCCURRENCES_SCHEMA if self.request.operation == OCCURRENCE_OPERATION else NEXT_SCHEMA
         if self.schema == OCCURRENCES_SCHEMA and expected_schema == NEXT_SCHEMA:
             object.__setattr__(self, "schema", NEXT_SCHEMA)
@@ -478,12 +559,41 @@ class OccurrenceQueryResponse:
             "query": self.request.to_dict(),
             "configuration_fingerprint": self.configuration_fingerprint or None,
             "results": [item.to_dict() for item in self.results],
+            "pagination": {
+                "complete": self.complete,
+                "cursor": None if self.cursor is None else self.cursor.to_dict(),
+            },
+            "coverage": _json_value(self.coverage),
             "failure": self.failure.to_dict() if self.failure is not None else None,
         }
+
+    def to_operator_v2(self) -> object:
+        """Return this response in the shared v2 operator envelope."""
+        from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
+
+        status = OperatorV2Status(self.status)
+        failure = None
+        if self.failure is not None:
+            failure = OperatorFailure(
+                code=self.failure.code,
+                message=self.failure.message,
+                retryable=self.failure.retryable,
+                details=self.failure.details,
+            )
+        document = self.to_dict()
+        payload = {key: value for key, value in document.items() if key not in {"schema", "version", "operation", "status", "failure"}}
+        return OperatorV2Result(
+            schema=self.schema,
+            operation=self.request.operation,
+            status=status,
+            payload=payload,
+            failure=failure,
+        )
 
 
 __all__ = (
     "CAPABILITIES_SCHEMA",
+    "CAPABILITIES_API_VERSION",
     "DEFAULT_MAX_FILE_SKIPS",
     "DEFAULT_MAX_ITERATIONS",
     "DEFAULT_MAX_OCCURRENCES",
@@ -497,6 +607,7 @@ __all__ = (
     "OCCURRENCES_SCHEMA",
     "NEXT_SCHEMA",
     "NEXT_OPERATION",
+    "QueryCapabilities",
     "OccurrenceQueryRequest",
     "OccurrenceQueryResponse",
     "OccurrenceRecord",

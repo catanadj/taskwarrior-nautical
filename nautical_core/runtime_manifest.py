@@ -147,6 +147,12 @@ HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
 OPERATOR_RUNTIME_FILES = (
     "nautical",
     "nautical_navigator.py",
+    "nautical_core/operator_presentation.py",
+    "nautical_core/operator_control_plane.py",
+    "nautical_core/operator_application.py",
+    "nautical_core/integrity_query_service.py",
+    "nautical_core/integrity_audit_service.py",
+    "nautical_core/queue_status_service.py",
     "nautical_core/tools/nautical_install.py",
     "nautical_core/tools/nautical_runtime_cleanup.py",
     "nautical_core/tools/nautical_doctor.py",
@@ -154,6 +160,8 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/tools/nautical_reconcile.py",
     "nautical_core/reconcile_cli.py",
     "nautical_core/reconcile_report.py",
+    "nautical_core/doctor_report.py",
+    "nautical_core/installation_report.py",
     "nautical_core/lifecycle_reconciliation.py",
     "nautical_core/integrity_report.py",
     "nautical_core/chain_integrity_recovery.py",
@@ -183,6 +191,20 @@ OPERATOR_FORBIDDEN_HOOK_IMPORTS = (
     "nautical_core.hooks.exit_impl",
     "nautical_core.hook_runtime",
 )
+# Pure operator layers must not acquire mutation or Taskwarrior ownership.
+OPERATOR_PURE_MODULES = (
+    "nautical_core/operator_inspectors.py",
+    "nautical_core/operator_snapshot.py",
+    "nautical_core/operator_presentation.py",
+    "nautical_core/operator_domain_planner.py",
+    "nautical_core/chain_repair_planner.py",
+)
+OPERATOR_FORBIDDEN_MUTATION_IMPORTS = (
+    "nautical_core.taskwarrior_mutations",
+    "nautical_core.chain_integrity_application",
+    "nautical_core.lifecycle_application",
+    "nautical_core.taskwarrior_uow",
+)
 PURE_INTEGRITY_MODULES = (
     "nautical_core/chain_graph.py",
     "nautical_core/chain_integrity_models.py",
@@ -201,5 +223,7 @@ __all__ = (
     "HOOK_RUNTIME_FILES",
     "OPERATOR_RUNTIME_FILES",
     "OPERATOR_FORBIDDEN_HOOK_IMPORTS",
+    "OPERATOR_PURE_MODULES",
+    "OPERATOR_FORBIDDEN_MUTATION_IMPORTS",
     "PURE_INTEGRITY_MODULES",
 )

@@ -46,6 +46,11 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/lifecycle_application.py",
     "nautical_core/query_models.py",
     "nautical_core/query_service.py",
+    "nautical_core/operator_control_plane.py",
+    "nautical_core/operator_application.py",
+    "nautical_core/integrity_query_service.py",
+    "nautical_core/integrity_audit_service.py",
+    "nautical_core/queue_status_service.py",
     "nautical_core/tools/nautical_query.py",
     "nautical_core/tools/nautical_install.py",
     "nautical_core/tools/nautical_install_verify.py",
@@ -312,10 +317,12 @@ def _check_removed_ownership(root: Path) -> list[dict]:
     forbidden_imports = frozenset(
         str(name) for name in getattr(manifest, "OPERATOR_FORBIDDEN_HOOK_IMPORTS", ())
     )
-    for relative in (
-        "nautical_core/tools/nautical_reconcile.py",
-        "nautical_core/tools/nautical_doctor.py",
-    ):
+    operator_files = tuple(
+        str(relative)
+        for relative in getattr(manifest, "OPERATOR_RUNTIME_FILES", ())
+        if str(relative).startswith("nautical_core/") and str(relative).endswith(".py")
+    )
+    for relative in operator_files:
         path = root / relative
         if not path.is_file():
             continue
@@ -341,6 +348,39 @@ def _check_removed_ownership(root: Path) -> list[dict]:
             results.append({
                 "kind": "ownership",
                 "name": f"operator-hook-imports:{relative}",
+                "ok": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+
+    pure_modules = tuple(getattr(manifest, "OPERATOR_PURE_MODULES", ()))
+    forbidden_mutation = frozenset(str(name) for name in getattr(manifest, "OPERATOR_FORBIDDEN_MUTATION_IMPORTS", ()))
+    for relative in pure_modules:
+        path = root / str(relative)
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            imports: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imports.update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imports.add(node.module)
+            violations = sorted(
+                name for name in imports
+                if name in forbidden_mutation or any(name.startswith(f"{prefix}.") for prefix in forbidden_mutation)
+            )
+            results.append({
+                "kind": "ownership",
+                "name": f"operator-pure-dependencies:{relative}",
+                "ok": not violations,
+                "message": "mutation-free" if not violations else f"forbidden mutation dependency: {', '.join(violations)}",
+            })
+
+        except Exception as exc:
+            results.append({
+                "kind": "ownership",
+                "name": f"operator-pure-dependencies:{relative}",
                 "ok": False,
                 "message": f"{type(exc).__name__}: {exc}",
             })

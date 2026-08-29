@@ -1,0 +1,74 @@
+"""Typed read-only lifecycle outbox status service."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from .lifecycle_outbox import OUTBOX_ACK_RETENTION_SECONDS, OUTBOX_SCHEMA_VERSION, LifecycleOutboxRepository, lifecycle_outbox_path
+
+
+class QueueStatusService:
+    """Collect lifecycle outbox health without presentation concerns."""
+
+    def outbox_summary(self, path: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], list[str]]:
+        summary: dict[str, Any] = {
+            "exists": False,
+            "schema": {"status": "absent", "version": 0, "expected_version": OUTBOX_SCHEMA_VERSION},
+            "integrity": "not_checked", "states": {}, "stale_claims": 0, "max_attempts": 0,
+            "retention": {"retention_seconds": OUTBOX_ACK_RETENTION_SECONDS, "acknowledged": 0, "eligible": 0, "oldest_age_s": 0},
+            "sample": [],
+        }
+        issues: list[str] = []
+        if not path.exists():
+            return summary, issues
+        summary["exists"] = True
+        result, data = LifecycleOutboxRepository(path.parent.parent).status(limit=limit, stale_after=stale_after)
+        summary["integrity"] = str(data.get("integrity") or "not_checked")
+        summary["states"] = dict(data.get("states") or {})
+        summary["stale_claims"] = int(data.get("stale_claims") or 0)
+        summary["max_attempts"] = int(data.get("max_attempts") or 0)
+        summary["retention"] = dict(data.get("retention") or summary["retention"])
+        schema = summary["schema"]
+        version = int(data.get("schema_version") or 0)
+        schema["version"] = version
+        if result.ok and version == OUTBOX_SCHEMA_VERSION:
+            schema["status"] = "ok"
+        else:
+            schema["status"] = "error"
+            reason = result.reason or f"lifecycle outbox schema v{version} is incompatible"
+            summary["error"] = reason
+            issues.append(f"lifecycle outbox error: {reason}")
+            return summary, issues
+        if summary["integrity"].lower() != "ok":
+            issues.append(f"lifecycle outbox integrity check failed: {summary['integrity']}")
+        stale = summary["stale_claims"]
+        if stale:
+            issues.append(f"{stale} stale lifecycle outbox claim{'s' if stale != 1 else ''}")
+        for state in ("retry", "manual_review", "quarantined"):
+            count = int(summary["states"].get(state, 0))
+            if count:
+                issues.append(f"{count} lifecycle intent{'s' if count != 1 else ''} in {state}")
+        eligible = int(summary["retention"].get("eligible") or 0)
+        if eligible:
+            issues.append(f"{eligible} acknowledged lifecycle intent{'s' if eligible != 1 else ''} exceed retention; run nautical queue-status --prune-acknowledged")
+        for record in data.get("records") or []:
+            item: dict[str, Any] = {"intent_id": str(record.get("intent_id") or ""), "state": str(record.get("state") or ""), "stage": str(record.get("stage") or ""), "attempts": int(record.get("attempts") or 0), "lease_age_s": int(record.get("lease_age_s") or 0)}
+            failure = record.get("failure")
+            if isinstance(failure, dict):
+                item["reason"] = str(failure.get("message") or "")
+                item["failure_code"] = str(failure.get("code") or "")
+            elif record.get("reason"):
+                item["reason"] = str(record["reason"])
+            summary["sample"].append(item)
+        return summary, issues
+
+    def status_payload(self, taskdata: Path, *, stale_after: float, limit: int) -> dict[str, Any]:
+        resolved = Path(taskdata).expanduser().resolve()
+        outbox_path = lifecycle_outbox_path(resolved)
+        outbox, issues = self.outbox_summary(outbox_path, stale_after=stale_after, limit=limit)
+        status = "error" if outbox["schema"].get("status") == "error" or outbox["integrity"] not in {"ok", "not_checked"} else ("warn" if issues else "ok")
+        return {"schema": "nautical.lifecycle_outbox_status", "schema_version": 1, "status": status, "taskdata": str(resolved), "paths": {"state_dir": str(outbox_path.parent), "outbox_db": str(outbox_path)}, "outbox": outbox, "issues": issues}
+
+
+__all__ = ["QueueStatusService"]

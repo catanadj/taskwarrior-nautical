@@ -87,6 +87,16 @@
     },
     "managed_layout_max_ratio": 1.5
   },
+  "resource_budgets": {
+    "cold_core_import": {"module_count": 120},
+    "cold_modify_impl_import": {"module_count": 220},
+    "scheduler_decisions": {"decision_count": 128},
+    "task_snapshot_memory": {
+      "peak_bytes_100": 20000000,
+      "peak_bytes_1000": 60000000,
+      "peak_bytes_10000": 250000000
+    }
+  },
   "workflow_perf": {
     "enabled": true,
     "repeats": 3,
@@ -154,6 +164,28 @@
       },
       "workflow_anchor_completion_nonfinal_idempotent": {
         "run_task_calls": 8
+      }
+    },
+    "sqlite_budgets": {
+      "workflow_queue_drain": {"outbox_lock_failures": 0},
+      "workflow_queue_drain_idempotent": {"outbox_lock_failures": 0},
+      "workflow_queue_drain_partial_recovery": {"outbox_lock_failures": 0}
+    },
+    "component_budgets_seconds": {
+      "workflow_queue_drain": {
+        "taskwarrior_seconds": 3.0,
+        "startup_seconds": 1.0,
+        "drain_seconds": 2.0,
+        "presentation_seconds": 0.5,
+        "non_taskwarrior_seconds": 2.0
+      },
+      "workflow_queue_drain_idempotent": {
+        "taskwarrior_seconds": 1.0,
+        "non_taskwarrior_seconds": 1.0
+      },
+      "workflow_queue_drain_partial_recovery": {
+        "taskwarrior_seconds": 8.0,
+        "non_taskwarrior_seconds": 4.0
       }
     },
     "reconcile_candidate_chains": 32,

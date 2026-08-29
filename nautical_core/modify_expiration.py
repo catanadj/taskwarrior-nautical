@@ -8,7 +8,7 @@ from .task_models import TaskPayload
 from .task_models import TaskObservation
 
 from nautical_core.timeutil import compare_datetimes
-from nautical_core.lifecycle_models import DeletionEvidence
+from nautical_core.lifecycle_models import DeletionEvidence, LifecycleAction
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
@@ -100,10 +100,9 @@ def _render_recovery_panel(
     if result:
         rows.append(("Result", result))
     if plan.child_due is not None:
-        next_label = "Blocked next" if plan.action == "legitimate_final" else "Next"
+        next_label = "Blocked next" if plan.plan.action is LifecycleAction.FINALIZE_CHAIN else "Next"
         rows.append((next_label, services.core.fmt_dt_local(plan.child_due)))
-    child_draft = plan.child_draft
-    child_until = child_draft.field_value("until") if child_draft is not None else None
+    child_until = plan.plan.child_dict().get("until")
     child_until_dt, child_until_err = services.safe_parse_datetime(child_until)
     if child_until_dt is not None and not child_until_err:
         if plan.child_due is not None:
@@ -122,9 +121,9 @@ def _render_recovery_panel(
     rows.append(("Link", f"#{plan.next_link}"))
     if child_short:
         rows.append(("Child", child_short))
-    if plan.action == "legitimate_final":
+    if plan.plan.action is LifecycleAction.FINALIZE_CHAIN:
         rows.append(("Boundary", plan.reason))
-    panel_kind = "summary" if plan.action == "legitimate_final" else "note"
+    panel_kind = "summary" if plan.plan.action is LifecycleAction.FINALIZE_CHAIN else "note"
     services.panel("⌛ Nautical occurrence expired", rows, kind=panel_kind)
 
 
@@ -154,19 +153,19 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
     )
     plan = reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook)
 
-    if plan.action == "legitimate_final":
+    if plan.plan.action is LifecycleAction.FINALIZE_CHAIN:
         render_recovery_warning(
             task,
             "The expired chain reached its terminal bound; lifecycle drain will finalize it.",
             services=services,
         )
         return True
-    if plan.action != "spawn" or plan.lifecycle_plan is None or plan.child_draft is None:
+    if plan.plan.action is not LifecycleAction.SPAWN_CHILD or not plan.plan.child_dict():
         render_recovery_warning(task, plan.reason, services=services)
         return True
 
     try:
-        staged, reason = services.stage_recovery_plan(plan.lifecycle_plan)
+        staged, reason = services.stage_recovery_plan(plan.plan)
     except Exception as exc:
         services.diag(f"expiration lifecycle staging failed: {exc}")
         render_recovery_warning(task, "The expired successor could not be staged for lifecycle drain.", services=services)

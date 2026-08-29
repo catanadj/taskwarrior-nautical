@@ -3,7 +3,44 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from collections.abc import Callable
+
+
+@dataclass(slots=True)
+class ReconcileRequest:
+    """Normalized reconcile operation submitted by the CLI front end."""
+
+    apply: bool
+    dry_run: bool
+    task_bin: str
+    json: bool
+    verbose: bool
+    full_audit: bool
+    chain_id: str | None
+    uuid: str | None
+    no_housekeeping: bool
+    max_expiration_hops: int
+
+    @classmethod
+    def from_namespace(cls, args: argparse.Namespace) -> "ReconcileRequest":
+        request = cls(
+            apply=bool(args.apply),
+            dry_run=bool(args.dry_run),
+            task_bin=str(args.task_bin),
+            json=bool(args.json),
+            verbose=bool(args.verbose),
+            full_audit=bool(args.full_audit),
+            chain_id=args.chain_id,
+            uuid=args.uuid,
+            no_housekeeping=bool(args.no_housekeeping),
+            max_expiration_hops=int(args.max_expiration_hops),
+        )
+        if request.apply and request.dry_run:
+            raise ValueError("reconcile request cannot apply and dry-run together")
+        if request.chain_id and request.uuid:
+            raise ValueError("reconcile request cannot combine chainID and UUID scope")
+        return request
 
 
 def build_parser(
@@ -47,4 +84,4 @@ def build_parser(
     return parser
 
 
-__all__ = ["build_parser"]
+__all__ = ["ReconcileRequest", "build_parser"]

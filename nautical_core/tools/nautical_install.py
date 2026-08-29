@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import tempfile
@@ -17,6 +16,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from nautical_core import install_runtime  # noqa: E402
+from nautical_core.operator_presentation import render_json_document  # noqa: E402
+from nautical_core.operator_presentation import key_value_lines  # noqa: E402
 
 
 _PLAN_LABELS = {
@@ -102,15 +103,18 @@ def _render(payload: dict) -> None:
     else:
         print("Nautical install: complete")
         print(f"Action: {_RESULT_LABELS.get(operation, operation.replace('_', ' ').title())}")
-    print(f"Release: {payload['release_id']}")
+    stable = {"Release": payload["release_id"]}
     previous = str(payload.get("previous_release") or "")
     if previous and payload.get("status") == "dry-run":
-        print(f"Current: {previous}")
+        stable["Current"] = previous
     elif previous and previous != payload.get("active_release"):
-        print(f"Previous: {previous}")
-    print(f"Target: {payload['base']}")
-    print(f"Hooks: {payload['hooks_dir']}")
-    print(f"Command: {payload.get('launcher_path') or Path(payload['base']) / 'nautical'}")
+        stable["Previous"] = previous
+    stable.update({
+        "Target": payload["base"],
+        "Hooks": payload["hooks_dir"],
+        "Command": payload.get("launcher_path") or Path(payload["base"]) / "nautical",
+    })
+    print("\n".join(key_value_lines(stable)))
     if payload.get("status") == "dry-run":
         print("Changes: none (dry run)")
     else:
@@ -177,13 +181,13 @@ def main() -> int:
             "taskdata": str(taskdata),
         }
         if args.json:
-            print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            print(render_json_document(payload))
         else:
             print(f"Nautical install failed: {exc}", file=sys.stderr)
         return 2
 
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        print(render_json_document(payload))
     else:
         _render(payload)
     return 0

@@ -502,6 +502,55 @@ def _scenario_operator_cutover(env: dict[str, str], data_dir: Path, cp_result: d
     dry_run = invoke("reconcile", "--json", "--chain-id", chain_id, allowed=(0, 1, 2))
     applied = invoke("reconcile", "--json", "--apply", "--chain-id", chain_id, allowed=(0, 1, 2))
     queue = invoke("queue", "--taskdata", str(data_dir), "--json", allowed=(0, 1))
+
+    # Exercise the public dispatcher against the same snapshot as the direct
+    # composition roots above.  This catches launcher argument rewriting and
+    # envelope drift without creating a second fixture or mutation path.
+    launcher = ROOT / "nautical"
+
+    def invoke_dispatch(*args: str, allowed: tuple[int, ...] = (0,)) -> tuple[int, dict | None, str]:
+        proc = subprocess.run(
+            [sys.executable, str(launcher), *args],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=30.0,
+        )
+        if proc.returncode not in allowed:
+            raise AssertionError(
+                f"dispatcher {' '.join(args)} failed ({proc.returncode}): "
+                f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+            )
+        text = (proc.stdout or "").strip()
+        try:
+            payload = json.loads(text) if text else None
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"dispatcher {' '.join(args)} did not emit JSON: {proc.stdout!r}") from exc
+        if payload is not None and not isinstance(payload, dict):
+            raise AssertionError(f"dispatcher emitted a non-object payload: {payload!r}")
+        return proc.returncode, payload, proc.stderr
+
+    _, capabilities, _ = invoke_dispatch("query", "capabilities")
+    if not isinstance(capabilities, dict) or capabilities.get("schema") != "nautical.query.capabilities":
+        raise AssertionError(f"dispatcher capabilities envelope mismatch: {capabilities!r}")
+    _, dispatched_integrity, _ = invoke_dispatch("query", "integrity", "--all", allowed=(0, 3))
+    if not isinstance(dispatched_integrity, dict) or dispatched_integrity.get("schema") != "nautical.query.integrity":
+        raise AssertionError(f"dispatcher integrity envelope mismatch: {dispatched_integrity!r}")
+    _, dispatched_doctor, _ = invoke_dispatch(
+        "doctor", "--taskdata", str(data_dir), "--task-bin", task_bin, "--json", "--installation-only",
+        allowed=(0, 1, 2),
+    )
+    if not isinstance(dispatched_doctor, dict) or dispatched_doctor.get("schema") != "nautical.doctor":
+        raise AssertionError(f"dispatcher Doctor envelope mismatch: {dispatched_doctor!r}")
+    nav_proc = subprocess.run(
+        [sys.executable, str(launcher), "navigator", "--id", str(cp_result.get("root_id") or "1"), "--count", "1"],
+        text=True,
+        capture_output=True,
+        env=env,
+        timeout=30.0,
+    )
+    if nav_proc.returncode != 0 or not (nav_proc.stdout or "").strip():
+        raise AssertionError(f"dispatcher Navigator failed: stdout={nav_proc.stdout!r} stderr={nav_proc.stderr!r}")
     return {
         "installation": installation.get("status"),
         "doctor": full_doctor.get("status"),
@@ -509,6 +558,12 @@ def _scenario_operator_cutover(env: dict[str, str], data_dir: Path, cp_result: d
         "reconcile_dry_run": dry_run.get("status"),
         "reconcile_apply": applied.get("status"),
         "queue": queue.get("status"),
+        "dispatcher": {
+            "capabilities": capabilities.get("schema"),
+            "integrity": dispatched_integrity.get("schema"),
+            "doctor": dispatched_doctor.get("schema"),
+            "navigator": "rendered",
+        },
     }
 
 

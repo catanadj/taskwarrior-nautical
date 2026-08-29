@@ -28,7 +28,7 @@ import time
 import tracemalloc
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -108,6 +108,33 @@ def _bench_next_after(exprs: list[str], rounds: int) -> float:
         for dnf in dnfs:
             core.next_after_expr(dnf, ref)
     return time.perf_counter() - t0
+
+
+def _bench_scheduler_decisions(exprs: list[str]) -> float:
+    """Measure scheduler-service decisions without affecting wall-time samples."""
+    from nautical_core.scheduler_cursor import OccurrenceCursor
+    from nautical_core.scheduler_service import SchedulerService
+    from nautical_core.scheduler_trace import SchedulerTrace
+
+    row = {
+        "uuid": "00000000-0000-4000-8000-000000000099",
+        "description": "scheduler decision benchmark",
+        "status": "pending", "chain": "on", "chainID": "scheduler-perf",
+        "link": 1, "due": "20260824T090000Z",
+    }
+    started = time.perf_counter()
+    decisions: dict[str, int] = {}
+    for expr in exprs:
+        observation = task_codec.DEFAULT_TASK_CODEC.decode_row(
+            {**row, "anchor": expr}, source_query="perf:scheduler-decisions",
+        )
+        trace = SchedulerTrace(enabled=True, max_events=1)
+        service = SchedulerService.from_observation(observation, trace=trace)
+        cursor = OccurrenceCursor.strict_after(datetime(2026, 1, 1, tzinfo=timezone.utc), timezone=timezone.utc)
+        service.next(cursor)
+        decisions[expr] = trace.last_decision_count
+    RESOURCE_DETAILS["scheduler_decisions"] = decisions
+    return time.perf_counter() - started
 
 
 def _bench_task_codec(rounds: int) -> float:
@@ -1348,6 +1375,81 @@ def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget
     result["pass"] = bool(result.get("pass", True)) and all(item["pass"] for item in checks.values())
 
 
+def _apply_component_budgets(result: dict, timing_samples: list[dict[str, float]], budget: dict) -> None:
+    """Enforce independent timing budgets for expensive workflow components."""
+    if not isinstance(budget, dict) or not timing_samples:
+        return
+    checks: dict[str, dict[str, object]] = {}
+    for key, raw_limit in budget.items():
+        try:
+            limit = float(raw_limit)
+            observed = max(float(sample.get(key, 0.0) or 0.0) for sample in timing_samples)
+        except (TypeError, ValueError):
+            continue
+        checks[str(key)] = {
+            "max_observed_s": observed,
+            "budget_s": limit,
+            "pass": limit <= 0.0 or observed <= limit,
+        }
+    if checks:
+        result["component_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
+def _apply_resource_budgets(result: dict, name: str, budgets: dict) -> None:
+    """Enforce bounded memory/import resources when the benchmark exposes them."""
+    if not isinstance(budgets, dict):
+        return
+    checks: dict[str, dict[str, object]] = {}
+    if name == "task_snapshot_memory":
+        measurements = RESOURCE_DETAILS.get(name, {})
+        for row_count, values in measurements.items():
+            if not isinstance(values, dict):
+                continue
+            key = f"peak_bytes_{row_count}"
+            if key not in budgets:
+                continue
+            observed = int(values.get("peak_bytes", 0) or 0)
+            limit = int(budgets[key])
+            checks[key] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    elif name in {"cold_core_import", "cold_modify_impl_import"} and "module_count" in budgets:
+        observed = int(result.get("module_count", 0) or 0)
+        limit = int(budgets["module_count"])
+        checks["module_count"] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    elif name == "scheduler_decisions" and "decision_count" in budgets:
+        values = RESOURCE_DETAILS.get(name, {})
+        if isinstance(values, dict):
+            observed = max((int(value) for value in values.values()), default=0)
+            limit = int(budgets["decision_count"])
+            checks["decision_count"] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    if checks:
+        result["resource_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
+def _apply_outbox_budgets(result: dict, samples: list[dict[str, float]], budget: dict) -> None:
+    """Enforce SQLite/outbox health budgets from exit diagnostics."""
+    if not isinstance(budget, dict) or not samples:
+        return
+    checks: dict[str, dict[str, object]] = {}
+    for key, raw_limit in budget.items():
+        try:
+            limit = float(raw_limit)
+            observed = max(float(sample.get(key, 0.0) or 0.0) for sample in samples)
+        except (TypeError, ValueError):
+            continue
+        checks[str(key)] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    if checks:
+        result["sqlite_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
 def _workflow_outbox_pending(taskdata: Path) -> list[dict]:
     """Read active lifecycle outbox records for benchmark mutation assertions."""
     result, status = lifecycle_outbox.LifecycleOutboxRepository(taskdata).status(limit=100)
@@ -1792,7 +1894,10 @@ def _bench_expensive_workflows(
                 # exported task would.
                 "modified": "20260101T090000Z",
             }
-            new = dict(old, status="deleted", end="20260102T090000Z")
+            # An expiration deletion ends at the native until boundary.  A
+            # later end timestamp is a manual/ambiguous deletion and should
+            # be deferred by the hook rather than staged for recovery.
+            new = dict(old, status="deleted", end="20260101T200000Z")
             taskdata = root / f"expiration-recovery-{sample_index}"
             taskdata.mkdir()
             env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
@@ -2144,6 +2249,15 @@ def _bench_expensive_workflows(
         queue_result["task_call_stats"] = queue_call_stats
         queue_result["outbox_stats"] = queue_outbox_stats
         _attach_timing_breakdown(queue_result, queue_samples, queue_timing_stats)
+        sqlite_budgets = workflow_cfg.get("sqlite_budgets")
+        if isinstance(sqlite_budgets, dict):
+            _apply_outbox_budgets(queue_result, queue_outbox_stats, sqlite_budgets.get("workflow_queue_drain", {}))
+        component_budgets = workflow_cfg.get("component_budgets_seconds")
+        if isinstance(component_budgets, dict):
+            _apply_component_budgets(
+                queue_result, queue_result["timing_breakdown"],
+                component_budgets.get("workflow_queue_drain", {}),
+            )
         call_budgets = workflow_cfg.get("task_call_budgets")
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
@@ -2160,6 +2274,13 @@ def _bench_expensive_workflows(
         queue_idempotent_result["task_call_stats"] = queue_idempotent_call_stats
         queue_idempotent_result["outbox_stats"] = queue_idempotent_outbox_stats
         _attach_timing_breakdown(queue_idempotent_result, queue_idempotent_samples, queue_idempotent_timing_stats)
+        if isinstance(sqlite_budgets, dict):
+            _apply_outbox_budgets(queue_idempotent_result, queue_idempotent_outbox_stats, sqlite_budgets.get("workflow_queue_drain_idempotent", {}))
+        if isinstance(component_budgets, dict):
+            _apply_component_budgets(
+                queue_idempotent_result, queue_idempotent_result["timing_breakdown"],
+                component_budgets.get("workflow_queue_drain_idempotent", {}),
+            )
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
                 queue_idempotent_result,
@@ -2179,6 +2300,13 @@ def _bench_expensive_workflows(
         queue_partial_result["task_call_stats"] = queue_partial_call_stats
         queue_partial_result["outbox_stats"] = queue_partial_outbox_stats
         _attach_timing_breakdown(queue_partial_result, queue_partial_samples, queue_partial_timing_stats)
+        if isinstance(sqlite_budgets, dict):
+            _apply_outbox_budgets(queue_partial_result, queue_partial_outbox_stats, sqlite_budgets.get("workflow_queue_drain_partial_recovery", {}))
+        if isinstance(component_budgets, dict):
+            _apply_component_budgets(
+                queue_partial_result, queue_partial_result["timing_breakdown"],
+                component_budgets.get("workflow_queue_drain_partial_recovery", {}),
+            )
         if isinstance(call_budgets, dict):
             _apply_task_call_budgets(
                 queue_partial_result,
@@ -2788,6 +2916,7 @@ def main() -> int:
         ("parse_validate", lambda: _bench_parse_validate(exprs, parse_rounds), repeats),
         ("describe_expr", lambda: _bench_describe_expr(exprs, describe_rounds), repeats),
         ("next_after", lambda: _bench_next_after(exprs, next_after_rounds), repeats),
+        ("scheduler_decisions", lambda: _bench_scheduler_decisions(exprs), 1),
         ("task_codec_decode", lambda: _bench_task_codec(codec_rounds), repeats),
         (
             "task_snapshot_reuse",
@@ -2980,6 +3109,9 @@ def main() -> int:
         elif name == "cold_modify_impl_import":
             r["module_count"] = IMPORT_PROFILES.get("modify_impl", 0)
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)
+        resource_budgets = cfg.get("resource_budgets")
+        if isinstance(resource_budgets, dict):
+            _apply_resource_budgets(r, name, resource_budgets.get(name, {}))
         if name in RESOURCE_DETAILS:
             r["details"] = RESOURCE_DETAILS[name]
         results[name] = r

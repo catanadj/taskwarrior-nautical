@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.lifecycle_models import LifecycleEvent, LifecycleRecoveryDecision, TaskSnapshot
+from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
 from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
-from nautical_core.chain_integrity_lifecycle import describe_plan
+from nautical_core.chain_integrity_lifecycle import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
@@ -61,14 +62,13 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
 
     def test_shared_description_preserves_terminal_provenance(self) -> None:
         plan = terminal_plan_for_snapshot(snapshot(), LifecycleEvent.CHAIN_MAX)
-        decision = LifecycleRecoveryDecision(
-            "legitimate_final",
+        result = RecoveryPlanResult(
             snapshot().observation,
-            5,
-            "reached chain maximum",
+            plan,
+            reason="reached chain maximum",
             terminal_kind=plan.terminal_kind,
         )
-        evidence = describe_plan(decision)
+        evidence = describe_recovery_result(result)
         self.assertEqual(evidence["terminal_kind"], "chain_max")
         self.assertEqual(evidence["trigger"], "completion")
 

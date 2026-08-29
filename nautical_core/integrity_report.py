@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from .chain_integrity_engine import IntegrityEngineResult
+from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding, doctor_finding
+from .operator_presentation import ordered_records
 
 
 def _snapshot_payload(snapshot: Any) -> dict[str, Any] | None:
@@ -37,6 +39,22 @@ def _finding_payload(finding: Any) -> dict[str, Any]:
         "expected": dict(finding.expected),
         "evidence": dict(finding.evidence),
     }
+
+
+def _doctor_finding(
+    code: str,
+    severity: str,
+    message: str,
+    *,
+    guidance: str = "",
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a Doctor record through the canonical finding contract."""
+    payload = doctor_finding(
+        code, severity, message, guidance=guidance, details=details,
+    ).to_doctor_dict()
+    payload["severity"] = severity
+    return payload
 
 
 def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
@@ -72,50 +90,57 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
             "snapshot": finding.snapshot_id,
             "historical": historical,
         }
-        findings.append({
-            "id": f"chains.{finding.invariant_id}",
-            "severity": severity,
-            "message": finding.message,
-            "fix": (
+        guidance = (
                 "Historical finding retained for audit; no action is required unless the chain is reactivated."
                 if historical
                 else
                 "Review the integrity evidence and run nautical reconcile --apply."
                 if finding.status.value == "repairable"
                 else "Inspect the invariant evidence before modifying tasks."
-            ),
-            "details": details,
-        })
+            )
+        canonical = OperatorFinding(
+            code=f"chains.{finding.invariant_id}",
+            domain="chains",
+            severity=FindingSeverity.INFO if historical else FindingSeverity.ERROR if severity == "error" else FindingSeverity.WARNING,
+            actionability=FindingActionability.INFORMATIONAL if historical else FindingActionability.ACTIONABLE,
+            message=finding.message,
+            affected=tuple(finding.subject_uuids),
+            observed=finding.observed if isinstance(finding.observed, dict) else {},
+            expected=finding.expected if isinstance(finding.expected, dict) else {},
+        evidence=details or {},
+            guidance=guidance,
+        )
+        findings.append(canonical.to_doctor_dict())
     if result.status.value == "unavailable":
-        findings.append({
-            "id": "chains.integrity_unavailable",
-            "severity": "error",
-            "message": "Chain integrity could not be evaluated.",
-            "fix": "Retry after resolving the reported Taskwarrior or configuration error.",
-            "details": {"reason": result.reason},
-        })
+        findings.append(_doctor_finding(
+            "chains.integrity_unavailable",
+            "error",
+            "Chain integrity could not be evaluated.",
+            guidance="Retry after resolving the reported Taskwarrior or configuration error.",
+            details={"reason": result.reason},
+        ))
     elif result.status.value == "healthy" and not findings:
-        findings.append({
-            "id": "chains.integrity",
-            "severity": "ok",
-            "message": "Chain integrity is clean.",
-            "details": {"snapshot": result.snapshot.snapshot_id if result.snapshot is not None else None},
-        })
+        findings.append(_doctor_finding(
+            "chains.integrity",
+            "ok",
+            "Chain integrity is clean.",
+            details={"snapshot": result.snapshot.snapshot_id if result.snapshot is not None else None},
+        ))
     if result.plans:
-        findings.append({
-            "id": "chains.repair_available",
-            "severity": "warn",
-            "message": f"{len(result.plans)} safe chain repair(s) are available.",
-            "fix": "Run nautical reconcile --apply after reviewing the dry-run output.",
-            "details": {"repairs": [plan.to_dict() for plan in result.plans[:10]]},
-        })
+        findings.append(_doctor_finding(
+            "chains.repair_available",
+            "warn",
+            f"{len(result.plans)} safe chain repair(s) are available.",
+            guidance="Run nautical reconcile --apply after reviewing the dry-run output.",
+            details={"repairs": [plan.to_dict() for plan in result.plans[:10]]},
+        ))
     if result.refusals:
-        findings.append({
-            "id": "chains.repair_review",
-            "severity": "warn",
-            "message": f"{len(result.refusals)} chain repair issue(s) need review.",
-            "fix": "Run nautical query integrity --all for evidence, then use reconcile for applicable repairs.",
-            "details": {
+        findings.append(_doctor_finding(
+            "chains.repair_review",
+            "warn",
+            f"{len(result.refusals)} chain repair issue(s) need review.",
+            guidance="Run nautical query integrity --all for evidence, then use reconcile for applicable repairs.",
+            details={
                 "reasons": {
                     str(item.reason or item.reason_code).strip(): sum(
                         1 for candidate in result.refusals
@@ -136,7 +161,7 @@ def doctor_findings(result: IntegrityEngineResult) -> list[dict[str, Any]]:
                     for item in result.refusals[:10]
                 ],
             },
-        })
+        ))
     return findings
 
 
@@ -154,24 +179,38 @@ def summary(result: IntegrityEngineResult) -> dict[str, Any]:
 
 def components(result: IntegrityEngineResult) -> dict[str, Any]:
     """Return the stable evidence components shared by all consumers."""
-    return {
-        "status": result.status.value,
-        "snapshot": _snapshot_payload(result.snapshot),
-        "findings": [_finding_payload(finding) for finding in result.findings],
-        "plans": [plan.to_dict() for plan in result.plans],
-        "refusals": [
+    finding_rows = ordered_records(
+        [_finding_payload(finding) for finding in result.findings],
+        keys=("chain_id", "severity", "invariant_id", "reason_code", "snapshot_id"),
+    )
+    plan_rows = ordered_records(
+        [plan.to_dict() for plan in result.plans],
+        keys=("chainID", "parent_link", "action", "trigger", "child"),
+    )
+    refusal_rows = ordered_records(
+        [
             {
                 "invariant_id": item.invariant_id,
                 "reason_code": item.reason_code,
                 "reason": item.reason,
                 "snapshot_id": item.snapshot_id,
+                "chain_id": item.chain_id,
             }
             for item in result.refusals
         ],
-        "chain_statuses": [
-            {"chainID": chain_id, "status": status.value}
-            for chain_id, status in result.chain_statuses
-        ],
+        keys=("chain_id", "invariant_id", "reason_code", "snapshot_id"),
+    )
+    chain_rows = ordered_records(
+        [{"chainID": chain_id, "status": status.value} for chain_id, status in result.chain_statuses],
+        keys=("chainID", "status"),
+    )
+    return {
+        "status": result.status.value,
+        "snapshot": _snapshot_payload(result.snapshot),
+        "findings": list(finding_rows),
+        "plans": list(plan_rows),
+        "refusals": list(refusal_rows),
+        "chain_statuses": list(chain_rows),
         "failure": {"message": result.reason} if result.reason else None,
     }
 

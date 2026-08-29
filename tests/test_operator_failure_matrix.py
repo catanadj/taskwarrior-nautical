@@ -23,6 +23,7 @@ from nautical_core.operator_models import (
     OperatorOperation,
     OperatorRequest,
     OperatorScope,
+    OperatorScopeKind,
     OperatorStatus,
 )
 from nautical_core.operator_plans import OperatorPlan
@@ -102,6 +103,32 @@ class OperatorFailureMatrixTests(unittest.TestCase):
                     coverage=CoverageRequirement(CoverageKind.COMPLETE),
                 )
             )
+
+    def test_interrupted_snapshot_budget_is_typed_unavailable(self) -> None:
+        """A budget interruption must stop before the collector and retain evidence."""
+        from nautical_core.operator_context import OperatorInvocationContext
+        from nautical_core.operator_models import OperatorLimits
+
+        request = OperatorRequest(
+            OperatorOperation.INTEGRITY,
+            OperatorScope(OperatorScopeKind.CHAIN, ("chain-x",)),
+            limits=OperatorLimits(taskwarrior_calls=1),
+        )
+        context = OperatorInvocationContext.from_integration(request, self.integration)
+        self.assertTrue(context.budget is not None and context.budget.consume("taskwarrior_calls"))
+        calls = []
+
+        def collector(_request):
+            calls.append(_request)
+            raise AssertionError("collector ran after the Taskwarrior budget was exhausted")
+
+        result = ChainSnapshotReader(collector).read(
+            context,
+            SnapshotReadRequest(OperatorScope(OperatorScopeKind.CHAIN, ("chain-x",))),
+        )
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_limit_exceeded")
+        self.assertFalse(calls)
 
     def test_delegation_and_verification_failures_never_report_success(self) -> None:
         plan = OperatorPlan(

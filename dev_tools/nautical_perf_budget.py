@@ -1916,6 +1916,21 @@ def _bench_expensive_workflows(
                     "workflow_expiration_recovery did not stage exactly one successor: "
                     f"result={result!r}; staged={staged!r}; stderr={_stderr.strip()!r}"
                 )
+            # Replaying the same deletion must be idempotent: a crash/retry
+            # after staging may not create a second successor intent.
+            replay_result = _run_workflow_hook_result(
+                ROOT / "on-modify.nautical",
+                input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
+                env=env,
+                expect_output=True,
+            )
+            replay_staged = _workflow_outbox_pending(taskdata)
+            if not isinstance(replay_result[1], dict) or len(replay_staged) != 1:
+                raise RuntimeError(
+                    "workflow_expiration_recovery replay was not idempotent: "
+                    f"result={replay_result[1]!r}; staged={replay_staged!r}; "
+                    f"stderr={replay_result[2].strip()!r}"
+                )
             expiration_samples.append(elapsed)
         results["workflow_expiration_recovery"] = _measure_workflow(
             "workflow_expiration_recovery",

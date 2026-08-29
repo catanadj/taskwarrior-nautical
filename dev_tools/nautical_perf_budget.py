@@ -20,6 +20,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -255,14 +256,29 @@ def _bench_doctor_installation_stage() -> float:
 
 
 def _bench_housekeeping_stage() -> float:
-    """Measure bounded housekeeping against an isolated absent outbox."""
+    """Measure bounded housekeeping against an isolated outbox."""
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 
     with tempfile.TemporaryDirectory(prefix="nautical-perf-housekeeping-") as td:
+        repository = LifecycleOutboxRepository(Path(td))
+        opened = repository.open()
+        if not opened.ok:
+            raise RuntimeError(f"housekeeping outbox setup failed: {opened.reason or opened.kind.value}")
+        now = time.time()
+        with sqlite3.connect(str(repository.path)) as connection:
+            for index in range(2):
+                connection.execute(
+                    "INSERT INTO lifecycle_outbox "
+                    "(intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json, "
+                    "configuration_fingerprint, schedule_fingerprint, lifecycle_stage, processing_state, "
+                    "lease_owner, lease_expires_at, attempts, failure_json, created_at, updated_at, acknowledged_at) "
+                    "VALUES (?, 'lifecycle', '{}', 'perf', '{}', 'perf', 'perf', 'finalized', ?, '', 0, 0, '', ?, ?, ?)",
+                    (f"perf-housekeeping-{index}", "acknowledged", now - 100, now - 100, now - 100),
+                )
         started = time.perf_counter()
-        result = LifecycleOutboxRepository(Path(td)).opportunistic_housekeeping()
-        if result.kind.value != "applied" or not result.skipped or result.reason != "outbox_absent":
-            raise RuntimeError("housekeeping stage returned an unexpected absent-outbox result")
+        result = repository.opportunistic_housekeeping(retention_seconds=0, interval_seconds=0, size_threshold_bytes=0)
+        if result.kind.value != "applied" or result.skipped or result.removed != 2:
+            raise RuntimeError(f"housekeeping stage removed an unexpected number of rows: {result}")
         return time.perf_counter() - started
 
 

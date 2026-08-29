@@ -193,6 +193,19 @@ class OperatorConformanceTests(unittest.TestCase):
                 else:
                     getattr(value, field)["nested"]["value"] = 2
 
+    def test_plan_fingerprint_is_detached_from_caller_inputs(self) -> None:
+        """Caller-owned nested mappings cannot change a constructed plan."""
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snapshot-inputs")
+        inputs = {"nested": {"value": 1}}
+        plan = OperatorPlan(
+            "inspect", "snapshot-inputs", "config-1", OperatorScope.system(), coverage,
+            immutable_inputs=inputs,
+        )
+        fingerprint = plan.fingerprint
+        inputs["nested"]["value"] = 99
+        self.assertEqual(plan.fingerprint, fingerprint)
+        self.assertEqual(plan.immutable_inputs["nested"]["value"], 1)
+
     def test_public_operator_contracts_round_trip_through_json(self) -> None:
         """Representative request, finding, plan, and snapshot documents stay decodable."""
         request = OperatorRequest(OperatorOperation.INTEGRITY, OperatorScope.system())

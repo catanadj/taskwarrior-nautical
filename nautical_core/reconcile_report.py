@@ -21,6 +21,8 @@ def _short_uuid(value: object) -> str:
 
 
 def _int_or_default(value: object, default: int = 0) -> int:
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -40,10 +42,7 @@ def format_parent(parent: Mapping[str, Any]) -> str:
     """Format a parent task reference for reconcile's human renderer."""
     uuid = str(parent.get("uuid") or "").strip()[:8] or "????????"
     chain_id = str(parent.get("chainID") or "?")
-    try:
-        link = int(parent.get("link") or 0)
-    except (TypeError, ValueError):
-        link = 0
+    link = _int_or_default(parent.get("link"), 0)
     description = str(parent.get("description") or "").strip()
     return f"{uuid} chain {chain_id} link {link}" + (f" · {description}" if description else "")
 

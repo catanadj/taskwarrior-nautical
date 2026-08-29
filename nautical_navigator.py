@@ -535,7 +535,8 @@ def _run_chain_snapshot() -> NavigatorSnapshot:
     access = getattr(getattr(_UNIT_OF_WORK, "context", None), "access", None)
     if IntegrationAccess is not None and access is not IntegrationAccess.READ_ONLY:
         raise RuntimeError("Navigator requires a read-only integration context")
-    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+    from nautical_core.chain_snapshot import IntegritySnapshotRequest
+    from nautical_core.operator_snapshot_provider import OperatorSnapshotProvider
     from nautical_core.chain_graph import ChainGraph
     from nautical_core.operator_context import OperatorInvocationContext
     from nautical_core.operator_models import OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind
@@ -549,11 +550,8 @@ def _run_chain_snapshot() -> NavigatorSnapshot:
     )
     OperatorInvocationContext.from_unit_of_work(request, _UNIT_OF_WORK)
     configuration = _UNIT_OF_WORK.context.configuration
-    service = ChainSnapshotService(
-        _UNIT_OF_WORK,
-        configuration_fingerprint=configuration.fingerprint,
-    )
-    result = service.collect(IntegritySnapshotRequest.candidates(complete_chain_history=True))
+    provider = OperatorSnapshotProvider.for_unit_of_work(_UNIT_OF_WORK)
+    result = provider.collect(IntegritySnapshotRequest.candidates(complete_chain_history=True))
     if Found is not None and isinstance(result, Found):
         if TaskView is None:
             raise RuntimeError("Nautical typed task-view support is unavailable")

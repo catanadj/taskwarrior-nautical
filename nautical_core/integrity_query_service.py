@@ -7,7 +7,7 @@ from typing import Any, Callable, Mapping, cast
 
 from .chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from .chain_integrity_models import IntegrityReportStatus
-from .chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
+from .chain_snapshot import IntegritySnapshotRequest
 from .integrity_report import public_payload
 from .integration_context import IntegrationAccess
 from .lifecycle_outbox import LifecycleOutboxRepository
@@ -20,6 +20,7 @@ from .operator_models import (
 )
 from .query_models import QueryContractError
 from .operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
+from .operator_snapshot_provider import OperatorSnapshotProvider
 from .taskwarrior_uow import build_operator_uow
 
 
@@ -61,12 +62,9 @@ class IntegrityQueryService:
             access=IntegrationAccess.READ_ONLY,
         )
         configuration = unit_of_work.context.configuration
-        snapshots = ChainSnapshotService(
-            unit_of_work,
-            configuration_fingerprint=configuration.fingerprint,
-        )
+        snapshots = OperatorSnapshotProvider.for_unit_of_work(unit_of_work)
         engine = ChainIntegrityEngine(
-            snapshots,
+            snapshots.service,
             configuration_fingerprint=configuration.fingerprint,
             schedule_fingerprint=configuration.scheduler_fingerprint,
         )

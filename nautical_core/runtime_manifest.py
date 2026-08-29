@@ -167,6 +167,7 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/reconcile_cli.py",
     "nautical_core/reconcile_report.py",
     "nautical_core/reconcile_snapshot_service.py",
+    "nautical_core/operator_snapshot_provider.py",
     "nautical_core/reconcile_operator_service.py",
     "nautical_core/doctor_report.py",
     "nautical_core/installation_report.py",

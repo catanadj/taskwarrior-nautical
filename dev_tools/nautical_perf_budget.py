@@ -101,6 +101,19 @@ def _bench_capabilities_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_queue_status_stage() -> float:
+    """Measure queue-status composition against an isolated empty outbox."""
+    from nautical_core.tools.nautical_queue_status import _status_payload
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-status-") as td:
+        taskdata = Path(td)
+        started = time.perf_counter()
+        payload, _budget = _status_payload(taskdata, stale_after=300.0, limit=5)
+        if not isinstance(payload, dict) or payload.get("taskdata") != str(taskdata):
+            raise RuntimeError("queue-status stage returned an invalid payload")
+        return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -2952,6 +2965,7 @@ def main() -> int:
 
     checks = [
         ("stage_capabilities", _bench_capabilities_stage, repeats),
+        ("stage_queue_status", _bench_queue_status_stage, repeats),
         ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
         (
             "cold_modify_impl_import",

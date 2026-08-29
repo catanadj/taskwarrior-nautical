@@ -1041,22 +1041,32 @@ def _measure(name: str, fn, repeats: int) -> dict:
     samples = []
     cpu_samples = []
     wall_samples = []
+    peak_memory_samples = []
     # Warmup once for interpreter/cache stabilization.
     _ = fn()
     for _ in range(max(1, repeats)):
         started_wall = time.perf_counter()
         started_cpu = time.process_time()
+        started_tracing = tracemalloc.is_tracing()
+        if not started_tracing:
+            tracemalloc.start()
+        tracemalloc.reset_peak()
         reported = float(fn())
         elapsed_wall = time.perf_counter() - started_wall
         elapsed_cpu = time.process_time() - started_cpu
+        _current, peak_memory = tracemalloc.get_traced_memory()
+        if not started_tracing:
+            tracemalloc.stop()
         # Existing checks return their own wall duration. Preserve that value
         # while recording measured CPU/wall attribution alongside it.
         samples.append(reported)
         cpu_samples.append(max(0.0, elapsed_cpu))
         wall_samples.append(max(0.0, elapsed_wall))
+        peak_memory_samples.append(max(0, int(peak_memory)))
     samples = sorted(samples)
     cpu_samples = sorted(cpu_samples)
     wall_samples = sorted(wall_samples)
+    peak_memory_samples = sorted(peak_memory_samples)
     return {
         "name": name,
         "samples_s": samples,
@@ -1066,6 +1076,8 @@ def _measure(name: str, fn, repeats: int) -> dict:
         "cpu_samples_s": cpu_samples,
         "cpu_median_s": statistics.median(cpu_samples),
         "measured_wall_median_s": statistics.median(wall_samples),
+        "peak_memory_samples_bytes": peak_memory_samples,
+        "peak_memory_median_bytes": statistics.median(peak_memory_samples),
     }
 
 

@@ -15,6 +15,7 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertEqual(len(result["cpu_samples_s"]), 2)
         self.assertGreaterEqual(result["cpu_median_s"], 0.0)
         self.assertGreaterEqual(result["measured_wall_median_s"], 0.0)
+        self.assertGreaterEqual(result["peak_memory_median_bytes"], 0)
 
     def test_capabilities_stage_has_a_correctness_guard(self) -> None:
         elapsed = budget._bench_capabilities_stage()

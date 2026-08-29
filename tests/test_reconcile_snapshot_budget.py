@@ -19,6 +19,33 @@ class ReconcileSnapshotBudgetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "call budget"):
             service.candidate_rows()
 
+    def test_snapshot_task_budget_blocks_projection_after_export(self) -> None:
+        class Value:
+            def __init__(self, value):
+                self.value = value
+
+            def raw_value(self):
+                return self.value
+
+        class Row:
+            def __init__(self, chain):
+                self.chain = chain
+
+            def field(self, name):
+                return Value(self.chain if name == "chainID" else "completed")
+
+        class Repository:
+            def lifecycle_candidates(self, **kwargs):
+                return object()
+
+        budget = OperatorInvocationBudget(OperatorLimits(tasks=1))
+        rows = (Row("chain-a"), Row("chain-b"))
+        service = ReconcileSnapshotService(
+            Repository(), read_value=lambda value, label: rows, budget=budget,
+        )
+        with self.assertRaisesRegex(RuntimeError, "task or chain budget"):
+            service.candidate_rows()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -61,6 +61,16 @@ class ReconcileSnapshotService:
                     or not self._budget.consume("decoded_rows", row_count)
                 ):
                     raise RuntimeError("operator reconcile snapshot row budget exhausted")
+                chain_count = len({
+                    self._text(row, "chainID")
+                    for row in self._rows
+                    if self._text(row, "chainID")
+                })
+                if (
+                    not self._budget.consume("tasks", row_count)
+                    or (chain_count and not self._budget.consume("chains", chain_count))
+                ):
+                    raise RuntimeError("operator reconcile snapshot task or chain budget exhausted")
         elif self._stats is not None:
             self._stats["snapshot_hits"] = int(self._stats.get("snapshot_hits", 0)) + 1
         return self._rows

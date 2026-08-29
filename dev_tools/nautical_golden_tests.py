@@ -19824,12 +19824,10 @@ def test_queue_claim_quarantines_poison_rows_and_queue_status_reports_them():
                 ("outbox-poison", json.dumps({"code": "poison_row", "message": "invalid lifecycle plan JSON"})),
             )
 
-        summary, issues = nautical_queue_status._outbox_summary(
-            repository.path,
-            stale_after=300.0,
-            limit=5,
-        )
-        expect(summary.get("states", {}).get("quarantined") == 1, f"outbox status missed quarantined row: {summary!r}")
+        summary, _budget = nautical_queue_status._status_payload(root, stale_after=300.0, limit=5)
+        issues = summary.get("issues", [])
+        outbox = summary.get("outbox", {})
+        expect(outbox.get("states", {}).get("quarantined") == 1, f"outbox status missed quarantined row: {summary!r}")
         expect(
             any("quarantined" in issue for issue in issues),
             f"queue status missed poison issue: {issues!r}",

@@ -155,6 +155,7 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/operator_domain_plans.py",
     "nautical_core/operator_domain_planner.py",
     "nautical_core/integrity_query_service.py",
+    "nautical_core/query_report.py",
     "nautical_core/integrity_operator_owner.py",
     "nautical_core/integrity_audit_service.py",
     "nautical_core/queue_status_service.py",

@@ -46,6 +46,7 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/lifecycle_application.py",
     "nautical_core/query_models.py",
     "nautical_core/query_service.py",
+    "nautical_core/query_report.py",
     "nautical_core/operator_control_plane.py",
     "nautical_core/operator_application.py",
     "nautical_core/integrity_query_service.py",

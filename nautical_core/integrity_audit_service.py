@@ -16,6 +16,7 @@ from .operator_context import OperatorInvocationContext
 from .operator_models import OperatorFailure, OperatorOperation, OperatorRequest, OperatorScope, OperatorScopeKind
 from .operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
 from .task_models import TaskObservation
+from .task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,4 +87,23 @@ def audit_authoritative_rows_with_engine(
     return IntegrityAuditBundle(engine, result, doctor_findings(result))
 
 
-__all__ = ["IntegrityAuditBundle", "audit_authoritative_rows", "audit_authoritative_rows_with_engine"]
+def audit_authoritative_mappings_with_engine(
+    unit_of_work: TaskwarriorUnitOfWork,
+    rows: Sequence[dict[str, object]],
+    *,
+    source: str,
+    coverage: SnapshotCoverage,
+    outbox_repository: LifecycleOutboxRepository | None = None,
+) -> IntegrityAuditBundle | None:
+    """Decode one authoritative export and audit it through the shared owner."""
+    decoded = tuple(DEFAULT_TASK_CODEC.decode_row(row, source_query=source) for row in rows)
+    return audit_authoritative_rows_with_engine(
+        unit_of_work,
+        decoded,
+        source=source,
+        coverage=coverage,
+        outbox_repository=outbox_repository,
+    )
+
+
+__all__ = ["IntegrityAuditBundle", "audit_authoritative_mappings_with_engine", "audit_authoritative_rows", "audit_authoritative_rows_with_engine"]

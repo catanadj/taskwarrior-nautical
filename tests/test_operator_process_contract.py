@@ -65,9 +65,9 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertTrue(evidence.retryable)
 
     def test_integrity_unavailable_result_keeps_failure_evidence(self) -> None:
-        from nautical_core.tools.nautical_query import _v2_document
+        from nautical_core.query_report import to_operator_result
 
-        payload = _v2_document({
+        payload = to_operator_result({
             "schema": "nautical.query.integrity",
             "version": 1,
             "operation": "integrity",

@@ -60,6 +60,20 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertEqual(breakdown["presentation_seconds"], 0.05)
         self.assertEqual(breakdown["non_taskwarrior_seconds"], 0.6)
 
+    def test_performance_result_exposes_all_cost_attribution_dimensions(self) -> None:
+        result = budget._measure("operator", lambda: 0.001, 1)
+        for key in ("measured_wall_median_s", "cpu_median_s", "peak_memory_median_bytes"):
+            self.assertIn(key, result)
+        breakdown = {}
+        budget._attach_timing_breakdown(
+            breakdown,
+            [0.01],
+            [{"run_task_seconds": 0.002, "startup_total_ms": 1.0, "drain_ms": 3.0, "presentation_ms": 1.0}],
+        )
+        dimensions = breakdown["timing_breakdown"][0]
+        for key in ("taskwarrior_seconds", "startup_seconds", "drain_seconds", "presentation_seconds", "non_taskwarrior_seconds"):
+            self.assertIn(key, dimensions)
+
     def test_capabilities_stage_has_a_correctness_guard(self) -> None:
         elapsed = budget._bench_capabilities_stage()
         self.assertGreaterEqual(elapsed, 0.0)

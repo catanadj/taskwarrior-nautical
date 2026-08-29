@@ -6,6 +6,47 @@ from .chain_integrity_application import IntegrityApplicationService, IntegrityM
 from .chain_integrity_models import IntegrityRepairPlan
 from .operator_domain_plans import DomainApplicationAuthorization, require_domain_effect_plan
 from .operator_models import OperatorFailure, OperatorOperation, OperatorResult, OperatorStatus
+from .integration_models import GuardTimestamp, GuardTimestampField, MutationGuard, MutationRequest, Found
+from .task_changes import TaskPatch
+from .task_models import FieldPresence, TaskObservation, TaskUUID
+from .lifecycle_models import recurrence_fingerprint
+
+
+def build_integrity_mutation_request(operation: object, *, unit_of_work: object) -> MutationRequest:
+    """Build one fresh guarded metadata request for an integrity operation."""
+    repository = getattr(unit_of_work, "repository", None)
+    if repository is None:
+        raise RuntimeError("integrity repair requires a task repository")
+    target_uuid = str(getattr(operation, "target_uuid", "") or "").strip()
+    read = repository.by_uuid(target_uuid, refresh=True)
+    if not isinstance(read, Found) or not isinstance(read.value, TaskObservation):
+        raise RuntimeError(f"integrity target {target_uuid} is unavailable")
+    row = read.value
+
+    def field_value(name: str) -> object:
+        state = row.field(name)
+        return None if state.presence is FieldPresence.ABSENT else state.raw_value()
+
+    modified = str(field_value("modified") or "").strip()
+    if not modified:
+        raise RuntimeError("integrity target has no modified timestamp")
+    link = int(field_value("link") or 0)
+    if link < 0:
+        raise RuntimeError("integrity target has an invalid link")
+    updates = dict(getattr(operation, "payload", {}) or {})
+    expected = {key: field_value(key) for key in updates}
+    guard = MutationGuard(
+        task_uuid=str(field_value("uuid") or target_uuid),
+        status=str(field_value("status") or "pending"),
+        chain_id=str(field_value("chainID") or getattr(operation, "chain_id", "")),
+        link=link,
+        recurrence_identity=recurrence_fingerprint(row.to_mapping()),
+        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
+        expected_mutation_epoch=int(getattr(unit_of_work, "mutation_epoch", 0)),
+        chain=str(field_value("chain") or "on"),
+    )
+    patch = TaskPatch.metadata_repair(TaskUUID(guard.task_uuid), **updates)
+    return MutationRequest.metadata_repair(guard, patch, expected=expected)
 
 
 class IntegrityOperatorOwner:
@@ -58,4 +99,4 @@ class IntegrityOperatorOwner:
         )
 
 
-__all__ = ["IntegrityOperatorOwner"]
+__all__ = ["IntegrityOperatorOwner", "build_integrity_mutation_request"]

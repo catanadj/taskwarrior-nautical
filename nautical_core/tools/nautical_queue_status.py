@@ -19,7 +19,6 @@ from nautical_core.lifecycle_outbox import (  # noqa: E402
     OUTBOX_SCHEMA_VERSION,
     OUTBOX_ACK_RETENTION_SECONDS,
     LifecycleOutboxRepository,
-    lifecycle_outbox_path,
 )
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
@@ -30,90 +29,6 @@ from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 
 _JSON_SCHEMA = "nautical.lifecycle_outbox_status"
 _JSON_SCHEMA_VERSION = 1
-
-
-def _safe_stat(path: Path) -> dict[str, object]:
-    try:
-        if not path.exists():
-            return {"path": str(path), "exists": False, "bytes": 0, "mtime": 0.0}
-        stat = path.stat()
-        return {"path": str(path), "exists": True, "bytes": int(stat.st_size), "mtime": float(stat.st_mtime)}
-    except OSError as exc:
-        return {"path": str(path), "exists": False, "bytes": -1, "mtime": 0.0, "error": str(exc)}
-
-
-def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], list[str]]:
-    summary: dict[str, Any] = {
-        "exists": False,
-        "schema": {"status": "absent", "version": 0, "expected_version": OUTBOX_SCHEMA_VERSION},
-        "integrity": "not_checked",
-        "states": {},
-        "stale_claims": 0,
-        "max_attempts": 0,
-        "retention": {
-            "retention_seconds": OUTBOX_ACK_RETENTION_SECONDS,
-            "acknowledged": 0,
-            "eligible": 0,
-            "oldest_age_s": 0,
-        },
-        "sample": [],
-    }
-    issues: list[str] = []
-    if not path.exists():
-        return summary, issues
-    summary["exists"] = True
-    # ``path`` is the derived .../.nautical-state/database path; the
-    # repository accepts the Taskdata root and owns that derivation.
-    repository = LifecycleOutboxRepository(path.parent.parent)
-    result, data = repository.status(limit=limit, stale_after=stale_after)
-    summary["integrity"] = str(data.get("integrity") or "not_checked")
-    summary["states"] = dict(data.get("states") or {})
-    summary["stale_claims"] = int(data.get("stale_claims") or 0)
-    summary["max_attempts"] = int(data.get("max_attempts") or 0)
-    summary["retention"] = dict(data.get("retention") or summary["retention"])
-    version = int(data.get("schema_version") or 0)
-    schema = summary["schema"]
-    schema["version"] = version
-    if result.ok and version == OUTBOX_SCHEMA_VERSION:
-        schema["status"] = "ok"
-    else:
-        schema["status"] = "error"
-        reason = result.reason or f"lifecycle outbox schema v{version} is incompatible"
-        summary["error"] = reason
-        issues.append(f"lifecycle outbox error: {reason}")
-        return summary, issues
-    if summary["integrity"].lower() != "ok":
-        issues.append(f"lifecycle outbox integrity check failed: {summary['integrity']}")
-    stale = summary["stale_claims"]
-    if stale:
-        issues.append(f"{stale} stale lifecycle outbox claim{'s' if stale != 1 else ''}")
-    states = summary["states"]
-    for state in ("retry", "manual_review", "quarantined"):
-        count = int(states.get(state, 0))
-        if count:
-            issues.append(f"{count} lifecycle intent{'s' if count != 1 else ''} in {state}")
-    eligible = int((summary.get("retention") or {}).get("eligible") or 0)
-    if eligible:
-        issues.append(
-            f"{eligible} acknowledged lifecycle intent{'s' if eligible != 1 else ''} exceed retention; "
-            "run nautical queue-status --prune-acknowledged"
-        )
-    for record in data.get("records") or []:
-        item: dict[str, Any] = {
-            "intent_id": str(record.get("intent_id") or ""),
-            "state": str(record.get("state") or ""),
-            "stage": str(record.get("stage") or ""),
-            "attempts": int(record.get("attempts") or 0),
-            "lease_age_s": int(record.get("lease_age_s") or 0),
-        }
-        failure = record.get("failure")
-        if isinstance(failure, dict):
-            item["reason"] = str(failure.get("message") or "")
-            item["failure_code"] = str(failure.get("code") or "")
-        elif record.get("reason"):
-            item["reason"] = str(record["reason"])
-        summary["sample"].append(item)
-    return summary, issues
 
 
 def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], OperatorInvocationBudget]:

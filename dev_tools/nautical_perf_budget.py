@@ -2608,6 +2608,16 @@ def _bench_expensive_workflows(
             queue_idempotent_call_stats.append(_read_exit_task_call_stats(stats_path))
             queue_idempotent_timing_stats.append(_read_exit_task_timing_stats(stats_path))
             queue_idempotent_outbox_stats.append(_read_exit_outbox_stats(stats_path))
+            replay_calls = queue_idempotent_call_stats[-1]
+            replay_task_calls = sum(
+                value for key, value in replay_calls.items() if key.startswith("run_task_calls")
+            )
+            replay_rows = replay_calls.get("task_read_rows", 0)
+            if replay_task_calls or replay_rows:
+                raise RuntimeError(
+                    "acknowledged exit replay performed Taskwarrior I/O: "
+                    f"calls={replay_task_calls}, rows={replay_rows}"
+                )
             if _workflow_outbox_pending(queue_data):
                 raise RuntimeError(
                     "idempotent outbox drain left active intents: "

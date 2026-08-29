@@ -100,6 +100,10 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         elapsed = budget._bench_exit_probe_fast_paths_stage()
         self.assertGreaterEqual(elapsed, 0.0)
 
+    def test_operator_scope_matrix_has_explicit_boundaries(self) -> None:
+        elapsed = budget._bench_operator_scope_matrix_stage()
+        self.assertGreaterEqual(elapsed, 0.0)
+
     def test_task_call_budget_is_independent_from_wall_time(self) -> None:
         result = {"pass": True}
         budget._apply_task_call_budgets(

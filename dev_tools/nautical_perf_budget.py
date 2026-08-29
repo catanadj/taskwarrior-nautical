@@ -478,6 +478,42 @@ def _bench_exit_probe_fast_paths_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_operator_scope_matrix_stage() -> float:
+    """Exercise empty, single-item, and page-boundary operator scopes."""
+    from types import SimpleNamespace
+
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    started = time.perf_counter()
+    service = object.__new__(OccurrenceQueryService)
+    service._timezone = timezone.utc
+    service._scheduler_cache = {}
+    service._uow = SimpleNamespace(
+        mutation_epoch=0,
+        context=SimpleNamespace(configuration=SimpleNamespace(fingerprint="scope-matrix")),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 2}
+    )
+    empty, empty_cursor, empty_complete = service._page_rows((), request)
+    if empty or empty_cursor is not None or not empty_complete:
+        raise RuntimeError("empty operator scope was not a complete page")
+    one = (SimpleNamespace(uuid="scope-one"),)
+    one_page, one_cursor, one_complete = service._page_rows(one, request)
+    if tuple(row.uuid for row in one_page) != ("scope-one",) or one_cursor is not None or not one_complete:
+        raise RuntimeError("single-item operator scope was not complete")
+    boundary = tuple(SimpleNamespace(uuid=f"scope-{index}") for index in range(2))
+    page, cursor, complete = service._page_rows(boundary, request)
+    if len(page) != 2 or cursor is not None or not complete:
+        raise RuntimeError("boundary-sized operator scope produced a continuation")
+    plus_one = boundary + (SimpleNamespace(uuid="scope-2"),)
+    page, cursor, complete = service._page_rows(plus_one, request)
+    if len(page) != 2 or cursor is None or complete:
+        raise RuntimeError("boundary-plus-one operator scope omitted its continuation")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3432,6 +3468,7 @@ def main() -> int:
     checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
     checks.append(("stage_operator_interrupted", _bench_operator_interrupted_stage, repeats))
     checks.append(("stage_exit_probe_fast_paths", _bench_exit_probe_fast_paths_stage, repeats))
+    checks.append(("stage_operator_scope_matrix", _bench_operator_scope_matrix_stage, repeats))
     if args.workflows_only:
         checks = []
 

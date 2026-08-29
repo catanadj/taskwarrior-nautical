@@ -1600,6 +1600,7 @@ def _build_reconcile_session(
         outbox=integrity_outbox,
         owner=f"reconcile-{os.getpid()}",
         lease_seconds=120.0,
+        budget=budget,
     )
     lifecycle_service = LifecycleReconciliationService(
         snapshot,

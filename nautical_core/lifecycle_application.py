@@ -65,6 +65,7 @@ from .lifecycle_outbox import (
     OutboxResultKind,
     LifecycleOutboxError,
 )
+from .operator_context import OperatorBudgetLedger
 
 
 class LifecycleApplicationError(RuntimeError):
@@ -366,12 +367,14 @@ class LifecycleApplicationService:
         outbox: LifecycleOutboxRepository,
         owner: str = "",
         lease_seconds: float = 30.0,
+        budget: OperatorBudgetLedger | None = None,
     ) -> None:
         self._uow = unit_of_work
         self._mutations = mutations
         self._outbox = outbox
         self._owner = str(owner or "").strip() or f"pid-{os.getpid()}"
         self._lease_seconds = max(1.0, float(lease_seconds))
+        self._budget = budget
 
     def _require_execution_deps(self) -> None:
         if self._uow is None or self._mutations is None:
@@ -1218,6 +1221,8 @@ class LifecycleApplicationService:
             return lease_failure
 
         if _SPAWN_STAGE_ORDER[stage] < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]:
+            if self._budget is not None and not self._budget.consume("taskwarrior_calls"):
+                return self._budget_retry(record, "operator Taskwarrior call budget exhausted before child import", tuple(mutations))
             lease_failure = self._renew_before_step(record, "child import", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
@@ -1237,6 +1242,8 @@ class LifecycleApplicationService:
             stage = ExecutionStage.CHILD_PRESENT
 
         if _SPAWN_STAGE_ORDER[stage] < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]:
+            if self._budget is not None and not self._budget.consume("taskwarrior_calls"):
+                return self._budget_retry(record, "operator Taskwarrior call budget exhausted before parent link", tuple(mutations))
             lease_failure = self._renew_before_step(record, "parent link", tuple(mutations))
             if lease_failure is not None:
                 return lease_failure
@@ -1407,6 +1414,25 @@ class LifecycleApplicationService:
             )
         return LifecycleApplicationOutcome(
             LifecycleApplicationOutcomeKind.MANUAL_REVIEW, plan.identity, reason=reason, intent_id=record.intent_id, mutations=mutations
+        )
+
+    def _budget_retry(
+        self, record: LifecycleOutboxRecord, reason: str, mutations: tuple[MutationOutcome, ...]
+    ) -> LifecycleApplicationOutcome:
+        """Release a claimed intent when a pre-effect budget defers the next step."""
+        try:
+            released = self._outbox.release_retry(
+                intent_id=record.intent_id,
+                owner=self._owner,
+                failure=OutboxFailure("budget_exhausted", reason),
+            )
+            if not released.ok:
+                reason = f"{reason}; retry persistence failed: {released.reason or released.kind.value}"
+        except Exception as exc:
+            reason = f"{reason}; retry persistence failed: {str(exc).strip() or type(exc).__name__}"
+        return LifecycleApplicationOutcome(
+            LifecycleApplicationOutcomeKind.RETRYABLE, record.plan.identity,
+            reason=reason, intent_id=record.intent_id, mutations=mutations,
         )
 
     def _manual_review(

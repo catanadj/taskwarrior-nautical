@@ -1450,10 +1450,6 @@ class _ReconcileSession:
         )
         return repairs, errors, _native_until_audit_result(repairs, errors).status
 
-    def preflight_wave(self, candidates: tuple[TaskObservation, ...]) -> None:
-        """Hydrate child-slot evidence once for the candidate wave."""
-        self.lifecycle_service.preflight_wave(candidates)
-
     def plan_candidate(self, task_bin: str, hook: Any, parent: TaskObservation, *, taskdata: Path | None,
                        apply: bool, max_expiration_hops: int, recovery_at: Any,
                        lease_held: bool, generation: Any) -> list[tuple[RecoveryResult, str]]:
@@ -1713,7 +1709,7 @@ def main(
     if configuration_status == "valid":
         hydration_started = time.perf_counter()
         try:
-            session.preflight_wave(candidates)
+            lifecycle_service.preflight_wave(candidates)
         except Exception as exc:
             configuration_status = "unavailable"
             configuration_drift_reason = f"wave child-slot evidence unavailable: {type(exc).__name__}: {exc}"

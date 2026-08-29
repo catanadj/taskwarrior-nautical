@@ -214,6 +214,11 @@ class OccurrenceQueryService:
             self._scheduler_cache[key] = scheduler
         return scheduler
 
+    @property
+    def budget(self) -> OperatorInvocationBudget | None:
+        """Return the current request ledger for envelope telemetry."""
+        return self._budget
+
     @staticmethod
     def _budget_for_request(request: OccurrenceQueryRequest) -> OperatorInvocationBudget:
         return OperatorInvocationBudget(OperatorLimits(

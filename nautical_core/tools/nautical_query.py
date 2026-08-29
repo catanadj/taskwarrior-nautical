@@ -155,9 +155,13 @@ def _capabilities_payload() -> dict[str, Any]:
     }
 
 
-def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
+def _emit(payload: Mapping[str, Any], *, exit_code: int = 0, budget: object | None = None) -> int:
     if str(payload.get("schema") or "").startswith("nautical.query.") and payload.get("version") == 1:
         payload = _v2_document(payload)
+    if budget is not None:
+        report = getattr(budget, "report", None)
+        if callable(report):
+            payload = {**payload, "budget": report()}
     try:
         sys.stdout.write(render_json_document(payload) + "\n")
     except BrokenPipeError:
@@ -389,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         service = OccurrenceQueryService(unit_of_work, core=core)
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
-        return _emit(cast(OperatorV2Result, response.to_operator_v2()).to_dict(), exit_code=exit_code)
+        return _emit(cast(OperatorV2Result, response.to_operator_v2()).to_dict(), exit_code=exit_code, budget=service.budget)
     except QueryContractError as exc:
         _diagnostic(str(exc))
         return _emit(_error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)

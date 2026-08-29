@@ -58,6 +58,16 @@ def evidence_lines(evidence: Mapping[str, Any], keys: tuple[str, ...]) -> tuple[
     return tuple(key_value_lines(values))
 
 
+def action_style(action: str) -> str:
+    """Return the terminal color name associated with a reconcile action."""
+    return {
+        "spawn": "green", "backfill_nextlink": "cyan", "repair_until": "green",
+        "legitimate_final": "yellow", "manual_stop": "yellow", "stale": "dim",
+        "partial": "yellow", "error": "red", "repair_error": "red",
+        "manual_review": "yellow",
+    }.get(action, "cyan")
+
+
 def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
     """Render typed recovery evidence for reconcile output."""
     parent = result.parent.to_mapping()
@@ -214,4 +224,4 @@ def exit_code(summary: Mapping[str, Any]) -> int:
     return 0
 
 
-__all__ = ["ReconcileReport", "describe_recovery_result", "evidence_lines", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]
+__all__ = ["ReconcileReport", "action_style", "describe_recovery_result", "evidence_lines", "exit_code", "format_parent", "recovery_action", "render_human", "to_operator_result"]

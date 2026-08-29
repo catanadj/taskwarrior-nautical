@@ -59,7 +59,7 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
-from nautical_core.reconcile_report import describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
+from nautical_core.reconcile_report import action_style, describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
 from nautical_core.operator_presentation import render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
@@ -154,21 +154,6 @@ def _style(text: str, color: str, *, stream: Any = None) -> str:
     if os.environ.get("NO_COLOR") or not getattr(stream, "isatty", lambda: False)():
         return text
     return f"{_ANSI.get(color, '')}{text}{_ANSI['reset']}"
-
-
-def _action_style(action: str) -> str:
-    return {
-        "spawn": "green",
-        "backfill_nextlink": "cyan",
-        "repair_until": "green",
-        "legitimate_final": "yellow",
-        "manual_stop": "yellow",
-        "stale": "dim",
-        "partial": "yellow",
-        "error": "red",
-        "repair_error": "red",
-        "manual_review": "yellow",
-    }.get(action, "cyan")
 
 
 def _runtime_core(runtime: Any) -> Any:
@@ -1290,22 +1275,22 @@ def _print_plan(
         evidence = describe_recovery_result(plan)
     if isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.SPAWN_CHILD:
         suffix = f" -> created {applied_short}" if applied_short else ""
-        print(_style(f"spawn: {parent}{suffix}", _action_style("spawn")))
+        print(_style(f"spawn: {parent}{suffix}", action_style("spawn")))
         for line in evidence_lines(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration")):
             print(f"  {line}")
     elif isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.UPDATE_PARENT:
         suffix = " (applied)" if applied_short else ""
-        print(_style(f"backfill nextLink: {parent}{suffix}", _action_style("backfill_nextlink")))
+        print(_style(f"backfill nextLink: {parent}{suffix}", action_style("backfill_nextlink")))
         for line in evidence_lines(evidence, ("reason", "next_link", "existing_child")):
             print(f"  {line}")
     elif isinstance(plan, RecoveryPlanResult) and plan.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}:
         suffix = " -> set chain:off" if applied_short else ""
-        print(_style(f"terminal: {parent} ({plan.reason}){suffix}", _action_style("legitimate_final")))
+        print(_style(f"terminal: {parent} ({plan.reason}){suffix}", action_style("legitimate_final")))
         for line in evidence_lines(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration")):
             print(f"  {line}")
     else:
         status = plan.status.value if isinstance(plan, RecoveryRefusal) else "error"
-        print(_style(f"{status}: {parent} ({plan.reason})", _action_style(status)))
+        print(_style(f"{status}: {parent} ({plan.reason})", action_style(status)))
         for line in evidence_lines(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration")):
             print(f"  {line}")
 
@@ -1327,7 +1312,7 @@ def _print_recovery_group(
         and last.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}
     ):
         result = last.status.value if isinstance(last, RecoveryRefusal) else "terminal"
-        print(_style(f"  result: {result} ({last.reason})", _action_style(result)))
+        print(_style(f"  result: {result} ({last.reason})", action_style(result)))
         return
     if applied_short:
         print(f"  child: {applied_short}")
@@ -1673,7 +1658,7 @@ def main(
                 f"chain={item.get('chainID') or '?'} link={item.get('link') or '?'}"
                 f"  {item.get('reason') or 'invalid native until'}{suffix}{outcome}"
             )
-            print(_style(line, _action_style(action)))
+            print(_style(line, action_style(action)))
         for error in native_until_errors:
             print(_style(f"error: native-until: {error}", "red", stream=sys.stderr), file=sys.stderr)
     plans: list[RecoveryResult] = []

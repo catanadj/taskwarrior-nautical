@@ -7,6 +7,7 @@ lifecycle, Taskwarrior, and integrity services remain the owners of decisions.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from types import MappingProxyType
@@ -176,18 +177,36 @@ def _mapping(value: object, field_name: str) -> Mapping[str, Any]:
     return value
 
 
-def _json_value(value: object) -> object:
+def _json_value(value: object, _seen: set[int] | None = None) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
     if isinstance(value, Enum):
         return value.value
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, Mapping):
+        marker = id(value)
+        if marker in seen:
+            raise OperatorContractError("cyclic JSON value is not supported")
+        seen.add(marker)
+        try:
+            return {str(key): _json_value(item, seen) for key, item in value.items()}
+        finally:
+            seen.remove(marker)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        marker = id(value)
+        if marker in seen:
+            raise OperatorContractError("cyclic JSON value is not supported")
+        seen.add(marker)
+        try:
+            values = [_json_value(item, seen) for item in value]
+        finally:
+            seen.remove(marker)
+        if isinstance(value, (set, frozenset)):
+            return sorted(values, key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+        return values
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
-        return _json_value(to_dict())
+        return _json_value(to_dict(), seen)
     raise OperatorContractError(f"value of type {type(value).__name__} is not JSON-native")
 
 
@@ -196,8 +215,11 @@ def _freeze_json_value(value: object) -> object:
     _json_value(value)
     if isinstance(value, Mapping):
         return MappingProxyType({str(key): _freeze_json_value(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_json_value(item) for item in value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        frozen = tuple(_freeze_json_value(item) for item in value)
+        if isinstance(value, (set, frozenset)):
+            return tuple(sorted(frozen, key=lambda item: json.dumps(_json_value(item), sort_keys=True, ensure_ascii=False, separators=(",", ":"))))
+        return frozen
     if isinstance(value, Enum):
         return value.value
     return value

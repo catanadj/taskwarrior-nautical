@@ -193,6 +193,23 @@ class OperatorConformanceTests(unittest.TestCase):
                 else:
                     getattr(value, field)["nested"]["value"] = 2
 
+    def test_operator_contracts_reject_cycles_and_order_sets(self) -> None:
+        cyclic: list[object] = []
+        cyclic.append(cyclic)
+        with self.assertRaises(OperatorContractError):
+            OperatorV2Result("nautical.query.test", "query", OperatorV2Status.OK, payload={"cycle": cyclic})
+
+        first = OperatorV2Result(
+            "nautical.query.test", "query", OperatorV2Status.OK,
+            payload={"values": {"b", "a"}},
+        )
+        second = OperatorV2Result(
+            "nautical.query.test", "query", OperatorV2Status.OK,
+            payload={"values": {"a", "b"}},
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first.to_dict()["values"], ["a", "b"])
+
     def test_plan_fingerprint_is_detached_from_caller_inputs(self) -> None:
         """Caller-owned nested mappings cannot change a constructed plan."""
         coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snapshot-inputs")

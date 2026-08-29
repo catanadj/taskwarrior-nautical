@@ -254,6 +254,18 @@ def _bench_doctor_installation_stage() -> float:
         return time.perf_counter() - started
 
 
+def _bench_housekeeping_stage() -> float:
+    """Measure bounded housekeeping against an isolated absent outbox."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-housekeeping-") as td:
+        started = time.perf_counter()
+        result = LifecycleOutboxRepository(Path(td)).opportunistic_housekeeping()
+        if result.kind.value != "applied" or not result.skipped or result.reason != "outbox_absent":
+            raise RuntimeError("housekeeping stage returned an unexpected absent-outbox result")
+        return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3200,6 +3212,7 @@ def main() -> int:
     ]
     if shutil.which("task"):
         checks.append(("stage_doctor_installation", _bench_doctor_installation_stage, repeats))
+    checks.append(("stage_housekeeping", _bench_housekeeping_stage, repeats))
     if args.workflows_only:
         checks = []
 

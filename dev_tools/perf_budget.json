@@ -129,6 +129,14 @@
       "workflow_queue_drain_partial_recovery": 16.0,
       "workflow_reconcile_candidates_apply": 30.0
     },
+    "reconcile_budgets": {
+      "default": {
+        "export_calls": 12,
+        "export_rows": 10000,
+        "task_command_calls": 96,
+        "task_command_attempts": 128
+      }
+    },
     "task_call_budgets": {
       "workflow_queue_drain": {
         "run_task_calls": 27,

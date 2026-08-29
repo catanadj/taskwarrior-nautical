@@ -70,6 +70,15 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertFalse(sqlite["pass"])
         self.assertFalse(sqlite["sqlite_budget"]["outbox_lock_failures"]["pass"])
 
+    def test_reconcile_budgets_are_independent_from_wall_time(self) -> None:
+        result = {"pass": True, "reconcile_reports": [
+            {"export_calls": 3, "export_rows": 12, "task_command_calls": 7, "task_command_attempts": 8}
+        ]}
+        budget._apply_reconcile_budgets(result, {"export_calls": 2, "task_command_calls": 8})
+        self.assertFalse(result["pass"])
+        self.assertFalse(result["reconcile_budget"]["export_calls"]["pass"])
+        self.assertTrue(result["reconcile_budget"]["task_command_calls"]["pass"])
+
 
 if __name__ == "__main__":
     unittest.main()

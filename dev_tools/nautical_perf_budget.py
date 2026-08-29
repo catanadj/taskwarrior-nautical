@@ -1529,6 +1529,28 @@ def _attach_reconcile_reports(result: dict, reports: list[dict]) -> None:
     result["reconcile_reports"] = reports
 
 
+def _apply_reconcile_budgets(result: dict, budget: dict) -> None:
+    """Enforce explicit reconcile export/call/row ceilings independently of time."""
+    reports = result.get("reconcile_reports")
+    if not isinstance(budget, dict) or not isinstance(reports, list) or not reports:
+        return
+    checks: dict[str, dict[str, object]] = {}
+    for key, raw_limit in budget.items():
+        if key not in {"export_calls", "export_rows", "task_command_calls", "task_command_attempts"}:
+            continue
+        try:
+            limit = int(raw_limit)
+            observed = max(int(report.get(key, 0) or 0) for report in reports if isinstance(report, dict))
+        except (TypeError, ValueError):
+            continue
+        checks[key] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    if checks:
+        result["reconcile_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
+
+
 def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget: dict) -> None:
     """Attach and enforce per-workflow Taskwarrior call-count budgets."""
     if not isinstance(budget, dict) or not samples:
@@ -3034,6 +3056,11 @@ def _bench_expensive_workflows(
             float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
         )
         _attach_reconcile_reports(results["workflow_reconcile_mixed"], mixed_reports)
+        reconcile_budgets = workflow_cfg.get("reconcile_budgets", {})
+        if isinstance(reconcile_budgets, dict):
+            for name, result in results.items():
+                if name.startswith("workflow_reconcile"):
+                    _apply_reconcile_budgets(result, reconcile_budgets.get(name, reconcile_budgets.get("default", {})))
         RESOURCE_DETAILS["reconcile_task_call_purposes"] = reconcile_call_purposes
         return results
 

@@ -227,6 +227,37 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertEqual(phases[0].phase, OperatorPhase.AUTHORIZE)
         self.assertEqual(phases[0].failure.code, "application_limit_exceeded")
 
+    def test_effect_owner_failure_is_retryable_after_effect_boundary(self) -> None:
+        from nautical_core.operator_domain_plans import DomainApplicationAuthorization
+        from nautical_core.operator_context import OperatorInvocationBudget
+        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        class Owner:
+            def apply(self, authorization):
+                raise RuntimeError("injected owner failure")
+
+        control_plane = OperatorControlPlane.from_configuration(
+            Configuration(), DomainApplicationRegistry({"lifecycle": Owner()}),
+        )
+        scope = OperatorScope.system()
+        request = OperatorRequest(OperatorOperation.APPLY, scope, apply=True, coverage=CoverageRequirement(CoverageKind.COMPLETE))
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snap-1")
+        plan = LifecyclePlan(
+            identity=LifecycleIdentity("chain-1", "task-1", 1, None, LifecycleEvent.DISABLE),
+            action=LifecycleAction.DISABLE_CHAIN,
+            parent_guard=ParentGuard("completed", "on", "chain-1", 1),
+        )
+        authorization = DomainApplicationAuthorization(plan, request, "snap-1", "config-1", scope, coverage, "schedule-1")
+        budget = OperatorInvocationBudget(OperatorLimits())
+        phases = control_plane.apply_domain_phases("lifecycle", authorization, budget=budget)
+        self.assertTrue(budget.effect_started)
+        self.assertEqual(phases[-1].phase, OperatorPhase.APPLY)
+        self.assertTrue(phases[-1].failure.retryable)
+
     def test_shuffled_findings_have_one_stable_order(self) -> None:
         findings = [
             OperatorFinding("b", "chain", FindingSeverity.WARNING, FindingActionability.INFORMATIONAL, "b", affected=("z",), guidance="inspect"),

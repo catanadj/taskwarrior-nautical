@@ -403,6 +403,11 @@ def _bench_queue_stale_stage() -> float:
 
 def _bench_operator_failure_matrix_stage() -> float:
     """Exercise fail-closed operator boundaries in one content-free matrix."""
+    from types import SimpleNamespace
+
+    from nautical_core.operator_health_service import OperatorHealthService
+    from nautical_core.tools.nautical_reconcile import _configuration_verification
+
     started = time.perf_counter()
     # Query covers malformed pagination and unavailable authoritative reads;
     # repair covers an unsafe finding; queue covers a stale claim.  Each
@@ -412,6 +417,18 @@ def _bench_operator_failure_matrix_stage() -> float:
     _bench_query_unavailable_stage()
     _bench_repair_planner_stage()
     _bench_queue_stale_stage()
+    doctor_findings = OperatorHealthService.configuration_schema_findings({"panel_mode": 17})
+    if not doctor_findings or not any(item.code == "config.schema.type" for item in doctor_findings):
+        raise RuntimeError("Doctor failure matrix accepted malformed configuration")
+
+    class BrokenCore:
+        @staticmethod
+        def configuration_drift():
+            raise RuntimeError("synthetic configuration read failure")
+
+    reconcile_state = _configuration_verification(SimpleNamespace(core=BrokenCore()))
+    if reconcile_state.status != "unavailable" or "configuration verification unavailable" not in reconcile_state.reason:
+        raise RuntimeError(f"reconcile failure matrix did not fail closed: {reconcile_state!r}")
     return time.perf_counter() - started
 
 

@@ -180,6 +180,16 @@ def _v2_document(payload: Mapping[str, Any]) -> dict[str, Any]:
             else {},
         )
     status = OperatorV2Status(str(payload.get("status") or "error"))
+    if failure is None and status in {
+        OperatorV2Status.INVALID,
+        OperatorV2Status.UNAVAILABLE,
+        OperatorV2Status.ERROR,
+    }:
+        failure = OperatorFailure(
+            code="query_unavailable" if status is OperatorV2Status.UNAVAILABLE else "query_failure",
+            message=str(payload.get("reason") or "operator result did not include failure evidence"),
+            retryable=status is OperatorV2Status.UNAVAILABLE,
+        )
     result = OperatorV2Result(
         schema=str(payload.get("schema") or "nautical.query.unknown"),
         operation=str(payload.get("operation") or "query"),

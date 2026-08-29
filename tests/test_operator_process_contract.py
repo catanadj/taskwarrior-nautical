@@ -52,6 +52,22 @@ class OperatorProcessContractTests(unittest.TestCase):
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
 
+    def test_integrity_unavailable_result_keeps_failure_evidence(self) -> None:
+        from nautical_core.tools.nautical_query import _v2_document
+
+        payload = _v2_document({
+            "schema": "nautical.query.integrity",
+            "version": 1,
+            "operation": "integrity",
+            "status": "unavailable",
+            "findings": [],
+            "plans": [],
+            "reason": "chain snapshot unavailable",
+        })
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["failure"]["code"], "query_unavailable")
+        self.assertEqual(payload["failure"]["message"], "chain snapshot unavailable")
+
     def test_valid_operator_matrix_emits_one_json_document(self) -> None:
         """Operational subprocesses keep stdout machine-readable and diagnostics separate."""
         with tempfile.TemporaryDirectory() as directory:

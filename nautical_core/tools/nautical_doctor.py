@@ -578,7 +578,15 @@ def _historical_summaries(findings: list[Mapping[str, Any]]) -> list[dict[str, A
                 "chain_count": len(chains),
                 "chains": chains[:8],
                 "subjects": sorted(group["subjects"])[:8],
-                "detail_command": "nautical query integrity --all",
+                "detail_command": (
+                    f"nautical query integrity --chain-id {chains[0]}"
+                    if len(chains) == 1
+                    else "nautical query integrity --all"
+                ),
+                "detail_commands": [
+                    f"nautical query integrity --chain-id {chain_id}"
+                    for chain_id in chains
+                ],
             },
         })
     return summaries

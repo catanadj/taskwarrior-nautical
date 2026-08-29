@@ -132,7 +132,14 @@ class OperatorInvocationContext:
         instant = captured_at
         if instant is None:
             instant = integration.clock.now_utc()
-        return cls(request, integration, instant, mutation_epoch, policy or OperatorPresentationPolicy(), OperatorInvocationCache())
+        return cls(
+            request,
+            integration,
+            instant,
+            mutation_epoch,
+            policy or OperatorPresentationPolicy(),
+            OperatorInvocationCache(max_entries=request.limits.cache_entries),
+        )
 
     @classmethod
     def from_unit_of_work(

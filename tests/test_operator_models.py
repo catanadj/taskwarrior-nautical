@@ -289,7 +289,11 @@ class OperatorModelsTests(unittest.TestCase):
             ZoneInfo("UTC"), SilentDiagnostics(), SystemClock(), "inv-1", 10,
             IntegrationAccess.READ_ONLY,
         )
-        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope(OperatorScopeKind.SYSTEM))
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.SYSTEM),
+            limits=OperatorLimits(cache_entries=3),
+        )
         context = OperatorInvocationContext.from_integration(
             request, integration,
             captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -299,6 +303,7 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(context.configuration_fingerprint, "config-1")
         self.assertFalse(context.mutation_capable)
         self.assertEqual(context.policy.output, OperatorOutputMode.TEXT)
+        self.assertEqual(context.cache.max_entries, 3)
         context.assert_compatible(integration)
         changed = replace(integration, configuration=replace(configuration, fingerprint="config-2"))
         with self.assertRaises(OperatorContextError):

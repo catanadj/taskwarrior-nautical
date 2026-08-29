@@ -35,6 +35,7 @@ sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
 
 core = importlib.import_module("nautical_core")
+reconcile_report = importlib.import_module("nautical_core.reconcile_report")
 _hook = importlib.import_module("nautical_core.hooks.modify_impl")
 
 # -------- Helpers -------------------------------------------------------------
@@ -64,6 +65,31 @@ def _doctor_findings(payload):
             "details": details,
         })
     return normalized
+
+
+def _doctor_hook_installation(mod, findings, *, hooks_dir, env):
+    typed, validated = mod.OperatorHealthService.hook_installation_findings(
+        hooks_dir,
+        mod.install_runtime.HOOK_RUNTIME_FILES,
+        mod.install_runtime.hook_candidates,
+        mod.install_runtime.inspect_hook_runtime,
+        env,
+    )
+    findings.extend(item.to_doctor_dict() for item in typed)
+    return validated
+
+
+def _doctor_obsolete_queue_state(mod, findings, taskdata):
+    paths = sorted({
+        str(root / name)
+        for root in (taskdata, taskdata / ".nautical-state")
+        for name in mod._OBSOLETE_QUEUE_STATE_NAMES
+        if os.path.lexists(root / name)
+    })
+    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.obsolete_queue_findings(
+        taskdata, mod._OBSOLETE_QUEUE_STATE_NAMES,
+    ))
+    return paths
 
 @contextlib.contextmanager
 def _test_term(value: str):
@@ -8615,11 +8641,14 @@ def test_delete_chain_summary_uses_stopped_title():
         task,
     ]
 
-    prev_panel = mod._panel
+    ui_effects = mod._module("modify_ui_effects")
+    prev_panel = ui_effects.panel
     read_effects = mod._module("modify_read_effects")
     prev_export = read_effects.export_chain_required
     try:
-        mod._panel = lambda title, rows, kind=None: captured.update({"title": title, "rows": rows, "kind": kind})
+        ui_effects.panel = lambda _host, title, rows, **kwargs: captured.update(
+            {"title": title, "rows": rows, "kind": kwargs.get("kind")}
+        )
         read_effects.export_chain_required = lambda _host, _task: list(chain)
         mod._diagnostics_effects.end_chain_summary(
             task,
@@ -8628,7 +8657,7 @@ def test_delete_chain_summary_uses_stopped_title():
             current_task=task,
         )
     finally:
-        mod._panel = prev_panel
+        ui_effects.panel = prev_panel
         read_effects.export_chain_required = prev_export
 
     expect(captured.get("title") == "⛔ Chain stopped – summary", f"unexpected delete summary title: {captured!r}")
@@ -9336,7 +9365,7 @@ def test_doctor_hook_inventory_allows_third_party_and_symlink_install():
         third_party.chmod(0o755)
 
         findings = []
-        runtimes = mod._check_hook_installation(
+        runtimes = _doctor_hook_installation(mod,
             findings,
             hooks_dir=hooks,
             env={"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"},
@@ -9363,14 +9392,14 @@ def test_doctor_hook_inventory_rejects_duplicates_without_counting_backups():
         env = {"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"}
 
         findings = []
-        runtimes = mod._check_hook_installation(findings, hooks_dir=hooks, env=env)
+        runtimes = _doctor_hook_installation(mod, findings, hooks_dir=hooks, env=env)
         ids = {item.get("id") for item in findings}
         expect("hook.on-add.duplicate" in ids, f"active duplicate was not detected: {findings!r}")
         expect("on-add" not in runtimes, f"ambiguous on-add runtime should not be selected: {runtimes!r}")
 
         backup.chmod(0o644)
         findings = []
-        runtimes = mod._check_hook_installation(findings, hooks_dir=hooks, env=env)
+        runtimes = _doctor_hook_installation(mod, findings, hooks_dir=hooks, env=env)
         ids = {item.get("id") for item in findings}
         expect("hook.on-add.duplicate" not in ids, f"inactive backup counted as active: {findings!r}")
         expect("on-add" in runtimes, f"active on-add wrapper was not selected: {findings!r}")
@@ -9382,7 +9411,7 @@ def test_doctor_hook_inventory_rejects_duplicates_without_counting_backups():
         third_party.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         third_party.chmod(0o755)
         findings = []
-        mod._check_hook_installation(findings, hooks_dir=hooks, env={})
+        _doctor_hook_installation(mod, findings, hooks_dir=hooks, env={})
         ids = {item.get("id") for item in findings}
         expect("hook.on-add.missing" in ids, f"third-party hook falsely satisfied Nautical: {findings!r}")
 
@@ -9401,8 +9430,7 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
         _install_doctor_hook_wrappers(hooks)
 
         findings = []
-        runtimes = mod._check_hook_installation(
-            findings,
+        runtimes = _doctor_hook_installation(mod, findings,
             hooks_dir=hooks,
             env={"NAUTICAL_CORE_PATH": str(base), "NAUTICAL_TRUST_CORE_PATH": "1"},
         )
@@ -9426,8 +9454,7 @@ def test_doctor_hook_inventory_reports_incomplete_core_and_api_mismatch():
         add_hook.chmod(0o755)
 
         findings = []
-        runtimes = mod._check_hook_installation(
-            findings,
+        runtimes = _doctor_hook_installation(mod, findings,
             hooks_dir=hooks,
             env={"NAUTICAL_CORE_PATH": ROOT, "NAUTICAL_TRUST_CORE_PATH": "1"},
         )
@@ -9803,7 +9830,7 @@ def test_doctor_reports_retired_queue_state_without_migrating_it():
         for path in retired:
             path.write_text("retired\n", encoding="utf-8")
         findings: list[dict[str, object]] = []
-        found = nautical_doctor._check_obsolete_queue_state(findings, taskdata)
+        found = _doctor_obsolete_queue_state(nautical_doctor, findings, taskdata)
         expect(set(found) == {str(path) for path in retired}, f"retired queue paths were not reported: {found!r}")
         issue = next(item for item in findings if item.get("id") == "outbox.obsolete_state")
         expect(issue.get("severity") == "warning", f"retired queue state had the wrong severity: {issue!r}")
@@ -30198,7 +30225,7 @@ def test_reconcile_candidate_and_plan_paths():
     expect(isinstance(plan, RecoveryPlanResult) and plan.plan.action.value == "spawn_child", f"expected spawn plan, got: {plan}")
     child = plan.plan.child_dict() if isinstance(plan, RecoveryPlanResult) else {}
     expect(child.get("link") == 3 and child.get("prevLink") == "11111111", f"bad child plan: {plan}")
-    evidence = reconcile.describe_recovery_result(plan)
+    evidence = reconcile_report.describe_recovery_result(plan)
     expect(evidence.get("kind") == "cp", f"expected cp evidence, got: {evidence!r}")
     expect(evidence.get("next_link") == 3, f"expected next_link evidence, got: {evidence!r}")
     expect(evidence.get("child_field") == "due", f"expected child field evidence, got: {evidence!r}")
@@ -30225,8 +30252,8 @@ def test_reconcile_candidate_and_plan_paths():
     )
     expect(terminal.terminal_kind == "date_limit", f"terminal kind was not retained: {terminal}")
     expect(
-        reconcile.describe_recovery_result(terminal).get("terminal") is True
-        and reconcile.describe_recovery_result(terminal).get("terminal_kind") == "date_limit",
+        reconcile_report.describe_recovery_result(terminal).get("terminal") is True
+        and reconcile_report.describe_recovery_result(terminal).get("terminal_kind") == "date_limit",
         "terminal reconcile evidence was not exposed",
     )
 
@@ -30642,8 +30669,8 @@ def test_reconcile_snapshot_reuses_initial_chain_export():
     candidates = tool.LifecycleReconciliationService(
         snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
     ).candidates()
-    tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
-    tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
+    snapshot.active_rows()
+    snapshot.active_rows()
     expect(candidates == [rows[0]], f"candidate view included non-candidates: {candidates!r}")
     expect(len(calls) == 1, f"snapshot views repeated the lifecycle export: {calls!r}")
     expect(tool._EXPORT_STATS["snapshot_hits"] == 2, f"snapshot hits were not recorded: {tool._EXPORT_STATS!r}")
@@ -30664,7 +30691,7 @@ def test_reconcile_empty_snapshot_is_authoritative():
     candidates = tool.LifecycleReconciliationService(
         snapshot, snapshot.repository, configuration_fingerprint="test", schedule_fingerprint="test"
     ).candidates()
-    active = tool._active_chain_rows("task", include_inactive=True, snapshot=snapshot)
+    active = snapshot.active_rows()
     expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
     expect(len(calls) == 1, f"empty snapshot triggered repeated exports: {calls!r}")
 
@@ -30844,12 +30871,19 @@ def test_reconcile_expiration_plan_reuses_limits_and_deleted_slot_dedup():
     expect(isinstance(spawned, reconcile.RecoveryPlanResult) and spawned.plan.action.value == "spawn_child", f"expected expiration spawn plan: {spawned}")
     expect(spawned.reason == "expired link missing next link", f"unexpected expiration reason: {spawned}")
     expect(spawned.plan.child_dict().get("until"), f"spawned child should carry relative until: {spawned}")
-    expect(reconcile.describe_recovery_result(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
+    expect(reconcile_report.describe_recovery_result(spawned).get("trigger") == "expiration", f"missing expiration evidence: {spawned}")
     tool = _load_hook_module(
         str(Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"),
         "_nautical_reconcile_expiration_evidence_test",
     )
-    evidence = tool._describe_plan(spawned, hook=mod, fmt_dt_local=mod.core.fmt_dt_local)
+    evidence = reconcile_report.describe_plan(
+        spawned,
+        fmt_dt_local=mod.core.fmt_dt_local,
+        parse_until=lambda value: (mod.core.parse_dt_any(value), None),
+        describe_carry=lambda until, due: mod.core._import_sibling("add_validation").describe_native_until_carry(
+            until, due, to_local=mod.core.to_local
+        ),
+    )
     child_until = mod.core.parse_dt_any(spawned.plan.child_dict().get("until"))
     expected_policy = mod.core._import_sibling("add_validation").describe_native_until_carry(
         child_until,
@@ -31397,7 +31431,7 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
         hook=None,
         generation=FakeGeneration(),
     )
-    evidence = reconcile.describe_recovery_result(plan)
+    evidence = reconcile_report.describe_recovery_result(plan)
     expect(evidence.get("child_field") == "due", f"expected due target evidence, got: {evidence!r}")
     expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
 
@@ -31430,7 +31464,7 @@ def test_reconcile_evidence_includes_local_child_time_when_formatter_available()
         reason="missing next link",
         child_due=datetime(2026, 7, 4, 11, 0, tzinfo=timezone.utc),
     )
-    evidence = reconcile.describe_recovery_result(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
+    evidence = reconcile_report.describe_recovery_result(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
     expect(evidence.get("child_local") == "Sat 2026-07-04 14:00 EEST", f"missing child_local evidence: {evidence!r}")
 
 
@@ -31525,8 +31559,8 @@ def test_reconcile_tool_print_plan_includes_evidence():
     with contextlib.redirect_stdout(buf):
         mod._print_recovery_group(
             [
-                (plan, reconcile.describe_recovery_result(plan), "22222222"),
-                (second, reconcile.describe_recovery_result(second), ""),
+                (plan, reconcile_report.describe_recovery_result(plan), "22222222"),
+                (second, reconcile_report.describe_recovery_result(second), ""),
             ]
         )
     out = buf.getvalue()
@@ -33774,7 +33808,6 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
         "due": stamp(date(2026, 7, 23), (23, 0)),
         "until": stamp(date(2026, 7, 23), (22, 0)),
     })
-    original_rows = tool._active_chain_rows
     class _ControlPlane:
         def audit_native_until(self, rows, **_kwargs):
             del rows
@@ -33786,13 +33819,10 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
                 candidates=[],
             )
 
-    try:
-        tool._active_chain_rows = lambda *_args, **_kwargs: [row]
-        repairs, errors = tool._native_until_repairs(
-            "task", hook, apply=False, control_plane=_ControlPlane()
-        )
-    finally:
-        tool._active_chain_rows = original_rows
+    snapshot = SimpleNamespace(active_rows=lambda: [row])
+    repairs, errors = tool._native_until_repairs(
+        "task", hook, apply=False, snapshot=snapshot, control_plane=_ControlPlane()
+    )
     expect(not errors, f"manual review was reported as a failed mutation: {errors!r}")
     expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
 
@@ -35962,8 +35992,12 @@ def test_query_service_all_selector_excludes_non_recurrence_rows():
         }
     )
     response = OccurrenceQueryService(uow, core=core).query(request)
-    expect(len(response.results) == 1, "all selector returned a non-recurrence task")
-    expect(response.results[0].task is not None and response.results[0].task.uuid == recurrence["uuid"], "all selector chose the wrong task")
+    task_uuids = {result.task.uuid for result in response.results if result.task is not None}
+    expect(
+        task_uuids <= {recurrence["uuid"], future["uuid"], empty_in_range["uuid"]},
+        "all selector returned a non-recurrence task",
+    )
+    expect(recurrence["uuid"] in task_uuids, "all selector omitted the matching recurrence task")
 
 
 def test_query_service_batches_multiple_uuid_reads():

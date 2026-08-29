@@ -1,6 +1,11 @@
 """Contract tests for extended performance telemetry comparisons."""
 
 import unittest
+import json
+import subprocess
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from dev_tools.nautical_perf_compare import _metric_value
 
@@ -21,6 +26,29 @@ class PerformanceCompareTests(unittest.TestCase):
         self.assertEqual(_metric_value(result, "peak_memory"), 512.0)
         self.assertEqual(_metric_value(result, "taskwarrior_time"), 0.1)
         self.assertEqual(_metric_value(result, "presentation_time"), 0.04)
+
+    def test_compare_enforces_extended_operator_safety_ceiling(self) -> None:
+        base = {"results": {"stage_operator_failure_matrix": {
+            "median_s": 0.01, "cpu_median_s": 0.01,
+            "peak_memory_median_bytes": 100,
+        }}}
+        head = {"results": {"stage_operator_failure_matrix": {
+            "median_s": 0.011, "cpu_median_s": 0.011,
+            "peak_memory_median_bytes": 200,
+        }}}
+        compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
+        with TemporaryDirectory(prefix="nautical-compare-") as td:
+            base_path = Path(td) / "base.json"
+            head_path = Path(td) / "head.json"
+            base_path.write_text(json.dumps(base), encoding="utf-8")
+            head_path.write_text(json.dumps(head), encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(compare), "--base", str(base_path), "--head", str(head_path), "--enforce", "--json",
+                ], capture_output=True, text=True, check=False,
+            )
+        self.assertEqual(proc.returncode, 1)
+        payload = json.loads(proc.stdout)
+        self.assertIn("stage_operator_failure_matrix:peak_memory", payload["metric_regressions"])
 
 
 if __name__ == "__main__":

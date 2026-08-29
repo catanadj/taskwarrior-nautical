@@ -46,6 +46,20 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "synthetic correctness failure"):
             budget._measure("broken", broken_check, 1)
 
+    def test_workflow_timing_breakdown_keeps_component_attribution(self) -> None:
+        result = {}
+        budget._attach_timing_breakdown(
+            result,
+            [1.0],
+            [{"run_task_seconds": 0.4, "startup_total_ms": 100.0, "drain_ms": 200.0, "presentation_ms": 50.0}],
+        )
+        breakdown = result["timing_breakdown"][0]
+        self.assertEqual(breakdown["taskwarrior_seconds"], 0.4)
+        self.assertEqual(breakdown["startup_seconds"], 0.1)
+        self.assertEqual(breakdown["drain_seconds"], 0.2)
+        self.assertEqual(breakdown["presentation_seconds"], 0.05)
+        self.assertEqual(breakdown["non_taskwarrior_seconds"], 0.6)
+
     def test_capabilities_stage_has_a_correctness_guard(self) -> None:
         elapsed = budget._bench_capabilities_stage()
         self.assertGreaterEqual(elapsed, 0.0)

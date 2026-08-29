@@ -143,6 +143,33 @@ class OperatorConformanceTests(unittest.TestCase):
         decoded = OperatorV2Result.from_mapping(json.loads(encoded))
         self.assertEqual(decoded, result)
 
+    def test_public_result_serializes_supported_nested_values(self) -> None:
+        """The public encoder keeps all supported evidence JSON-native and Unicode-safe."""
+        from datetime import date
+        from zoneinfo import ZoneInfo
+
+        class EvidenceDocument:
+            def to_dict(self):
+                return {
+                    "timezone": ZoneInfo("Europe/Bucharest"),
+                    "path": Path("/tmp/nautical-ă"),
+                    "captured_at": datetime(2026, 8, 29, 9, 30, tzinfo=timezone.utc),
+                    "date": date(2026, 8, 29),
+                    "status_value": OperatorV2Status.FOUND,
+                    "nested": {"message": "héllo", "values": [1, True, None]},
+                }
+
+        encoded = render_contract_json(EvidenceDocument())
+        self.assertIn("héllo", encoded)
+        document = json.loads(encoded)
+        payload = document
+        self.assertEqual(payload["timezone"], "Europe/Bucharest")
+        self.assertEqual(payload["path"], "/tmp/nautical-ă")
+        self.assertEqual(payload["captured_at"], "2026-08-29T09:30:00Z")
+        self.assertEqual(payload["date"], "2026-08-29")
+        self.assertEqual(payload["status_value"], "found")
+        self.assertEqual(payload["nested"]["values"], [1, True, None])
+
     def test_public_operator_contracts_round_trip_through_json(self) -> None:
         """Representative request, finding, plan, and snapshot documents stay decodable."""
         request = OperatorRequest(OperatorOperation.INTEGRITY, OperatorScope.system())

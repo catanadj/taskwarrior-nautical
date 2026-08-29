@@ -4380,6 +4380,73 @@ def test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot():
     expect(uow.repository.uuid_calls == [], f"child UUID was redundantly exported: {uow.repository.uuid_calls}")
 
 
+def test_lifecycle_batch_prefetch_uses_one_union_set_read():
+    """All child slots and parent guards share one bounded set read."""
+    from nautical_core.integration_models import ChildImportPayload
+    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+    from nautical_core.task_set_reads import SetReadResult, SetReadStatus
+
+    parent_uuids = tuple(f"00000000-0000-4000-8000-00000000093{i}" for i in range(0, 3))
+    child_uuids = tuple(f"00000000-0000-4000-8000-00000000094{i}" for i in range(0, 3))
+    parents = {
+        uuid: {
+            "uuid": uuid,
+            "status": "completed",
+            "chain": "on",
+            "chainID": "prefetch-batch",
+            "link": index + 1,
+            "modified": "20260813T120000Z",
+        }
+        for index, uuid in enumerate(parent_uuids)
+    }
+    payloads = tuple(
+        ChildImportPayload(
+            parent_uuid=parent_uuid,
+            child_uuid=child_uuid,
+            chain_id="prefetch-batch",
+            target_link=index + 2,
+            fields=(
+                ("uuid", child_uuid),
+                ("chainID", "prefetch-batch"),
+                ("link", index + 2),
+                ("prevLink", parent_uuid[:8]),
+            ),
+        )
+        for index, (parent_uuid, child_uuid) in enumerate(zip(parent_uuids, child_uuids))
+    )
+
+    class Repo:
+        def __init__(self):
+            self.requests = []
+
+        def read_uuid_set(self, request):
+            self.requests.append(request)
+            return SetReadResult(
+                SetReadStatus.COMPLETE,
+                request.uuids,
+                found=dict(parents),
+                absent=tuple(identity for identity in request.uuids if identity not in parents),
+                complete_for_requested_identities=True,
+            )
+
+    class Uow:
+        mutation_epoch = 0
+
+        def __init__(self):
+            self.repository = Repo()
+
+    uow = Uow()
+    TaskwarriorMutationService(uow).preflight_lifecycle_batch(
+        payloads,
+        parent_expectations=tuple((uuid, f"{index + 2:08x}") for index, uuid in enumerate(parent_uuids)),
+    )
+    expect(len(uow.repository.requests) == 1, f"batch preflight used {len(uow.repository.requests)} set reads")
+    expect(
+        set(uow.repository.requests[0].uuids) == set(parent_uuids + child_uuids),
+        f"batch preflight requested the wrong identities: {uow.repository.requests[0].uuids}",
+    )
+
+
 def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot():
     """A failed phase snapshot cannot be mistaken for a verified mutation."""
     from nautical_core.integration_models import (
@@ -34357,6 +34424,7 @@ TESTS = [
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
     test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
+    test_lifecycle_batch_prefetch_uses_one_union_set_read,
     test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot,
     test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,

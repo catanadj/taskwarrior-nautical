@@ -183,6 +183,18 @@ class OperatorControlPlane:
                     failure=OperatorFailure("invalid_authorization", str(exc), retryable=False),
                 ),
             )
+        if budget is not None and not budget.effect_started and budget.wall_time_exceeded:
+            return (
+                OperatorPhaseResult(
+                    OperatorPhase.AUTHORIZE,
+                    failure=OperatorFailure(
+                        "application_limit_exceeded",
+                        "operator wall-time budget expired before authorization",
+                        retryable=True,
+                        details={"resource": "wall_time_seconds"},
+                    ),
+                ),
+            )
         phases = [OperatorPhaseResult(OperatorPhase.AUTHORIZE, value=authorization)]
         try:
             if budget is not None:

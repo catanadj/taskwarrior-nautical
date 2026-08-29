@@ -599,7 +599,7 @@ class TaskDraft:
         if target is None:
             raise ValueError("task draft requires a due or scheduled target")
         excluded = {
-            "id", "uuid", "status", "modified", "end", "chainID", "link", "prevLink", "nextLink",
+            "id", "urgency", "uuid", "status", "modified", "end", "chainID", "link", "prevLink", "nextLink",
             "description", "chain", "anchor", "anchor_file", "anchor_mode", "cp", "omit", "omit_file",
             "bc", "chainMax", "chainUntil",
         }

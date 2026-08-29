@@ -7,6 +7,7 @@ from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
 from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
 from nautical_core.chain_integrity_lifecycle import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
+from nautical_core.task_models import NauticalTask, TaskDraft
 
 
 def snapshot() -> TaskSnapshot:
@@ -34,6 +35,20 @@ class ExhaustedService:
 
 
 class LifecycleTerminalPlanTests(unittest.TestCase):
+    def test_task_draft_drops_taskwarrior_native_urgency(self) -> None:
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "11111111-1111-4111-8111-111111111111",
+                "status": "pending", "chain": "on", "chainID": "abcd1234", "link": 4,
+                "description": "urgency carry regression", "anchor": "w:mon",
+                "due": "20260824T090000Z", "urgency": 7.25,
+            },
+            source_query="task-draft-urgency-test",
+        )
+        draft = TaskDraft.from_task(NauticalTask.from_observation(observation))
+        self.assertNotIn("urgency", draft.fields)
+        self.assertNotIn("urgency", draft.to_mapping())
+
     def test_bound_events_preserve_terminal_kind(self) -> None:
         self.assertEqual(
             terminal_plan_for_snapshot(snapshot(), LifecycleEvent.CHAIN_MAX).terminal_kind,

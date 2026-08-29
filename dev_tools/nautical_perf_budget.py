@@ -114,6 +114,17 @@ def _bench_queue_status_stage() -> float:
         return time.perf_counter() - started
 
 
+def _bench_navigator_stage() -> float:
+    """Measure one bounded Navigator anchor presentation."""
+    import nautical_navigator
+
+    started = time.perf_counter()
+    result = nautical_navigator._anchor_presentation_result("w:mon", count=1)
+    if not result.next_dates and not result.terminal_note:
+        raise RuntimeError("Navigator stage returned no preview or terminal evidence")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -2966,6 +2977,7 @@ def main() -> int:
     checks = [
         ("stage_capabilities", _bench_capabilities_stage, repeats),
         ("stage_queue_status", _bench_queue_status_stage, repeats),
+        ("stage_navigator", _bench_navigator_stage, repeats),
         ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
         (
             "cold_modify_impl_import",

@@ -96,7 +96,7 @@ class ReconcileSnapshotService:
                     for row in self._rows
                     if self._text(row, "chainID")
                 })
-                if (
+                if row_count and (
                     not self._budget.consume("tasks", row_count)
                     or (chain_count and not self._budget.consume("chains", chain_count))
                 ):

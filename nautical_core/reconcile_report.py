@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from datetime import date, datetime
 from typing import Any
 
 from .operator_presentation import bounded_text, key_value_lines
@@ -13,6 +14,17 @@ from .lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, Reco
 
 _JSON_SCHEMA = "nautical.reconcile"
 _JSON_SCHEMA_VERSION = 1
+
+
+def _json_safe(value: object) -> object:
+    """Normalize report evidence before it enters the strict JSON envelope."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _short_uuid(value: object) -> str:
@@ -194,7 +206,7 @@ def to_operator_result(summary: Mapping[str, Any]) -> OperatorV2Result:
         schema=_JSON_SCHEMA,
         operation="reconcile",
         status=status,
-        payload={key: value for key, value in summary.items() if key not in {"schema", "status"}},
+        payload=_json_safe({key: value for key, value in summary.items() if key not in {"schema", "status"}}),
         failure=failure,
     )
 

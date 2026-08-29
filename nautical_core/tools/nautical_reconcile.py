@@ -32,6 +32,8 @@ from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # n
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
+from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,
     LifecycleAction,
@@ -1624,6 +1626,7 @@ def main(
         max_expiration_hops=_MAX_EXPIRATION_HOPS,
     )
     args = ReconcileRequest.from_namespace(parser.parse_args(argv))
+    budget = OperatorInvocationBudget(OperatorLimits())
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
     if _unit_of_work is None:
@@ -2079,7 +2082,7 @@ def main(
         "housekeeping": housekeeping,
     }
     if args.json:
-        print(render_result(to_operator_result(summary), "json"))
+        print(render_result(to_operator_result(summary), "json", budget=budget))
     else:
         summary_line, diagnostics_line = render_human(summary, _style)
         print(summary_line)

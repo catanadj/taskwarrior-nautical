@@ -7,7 +7,8 @@ from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.operator_inspectors import inspect_operator_snapshot, standard_inspector_bundle, run_inspectors
 from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCapabilities, OperatorCoverage, OperatorCursor, OperatorFailure, OperatorLimits,
-    OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status)
+    OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status,
+    OperatorExitCode, OperatorContractError, exit_code_for_v2_status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
 from nautical_core.operator_snapshot import OperatorSnapshot
@@ -25,6 +26,30 @@ from nautical_core.operator_context import OperatorInvocationContext
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_v2_status_exit_code_matrix_is_exhaustive(self) -> None:
+        expected = {
+            OperatorV2Status.OK: OperatorExitCode.SUCCESS,
+            OperatorV2Status.FOUND: OperatorExitCode.SUCCESS,
+            OperatorV2Status.EMPTY: OperatorExitCode.SUCCESS,
+            OperatorV2Status.ABSENT: OperatorExitCode.SUCCESS,
+            OperatorV2Status.EXHAUSTED: OperatorExitCode.PARTIAL,
+            OperatorV2Status.ATTENTION: OperatorExitCode.FINDINGS,
+            OperatorV2Status.REPAIRABLE: OperatorExitCode.FINDINGS,
+            OperatorV2Status.DEFERRED: OperatorExitCode.FINDINGS,
+            OperatorV2Status.INVALID: OperatorExitCode.INVALID_REQUEST,
+            OperatorV2Status.UNAVAILABLE: OperatorExitCode.UNAVAILABLE,
+            OperatorV2Status.PARTIAL: OperatorExitCode.PARTIAL,
+            OperatorV2Status.MANUAL_REVIEW: OperatorExitCode.MANUAL_REVIEW,
+            OperatorV2Status.ERROR: OperatorExitCode.INTERNAL_FAILURE,
+        }
+        self.assertEqual(set(expected), set(OperatorV2Status))
+        self.assertEqual(
+            {status: exit_code_for_v2_status(status) for status in OperatorV2Status},
+            expected,
+        )
+        with self.assertRaises(OperatorContractError):
+            exit_code_for_v2_status("not-a-v2-status")
+
     def test_control_plane_and_direct_inspection_share_one_projection(self) -> None:
         snapshot = OperatorSnapshot(
             "conformance-1",

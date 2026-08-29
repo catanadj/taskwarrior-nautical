@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
-from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
+from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
 from nautical_core.chain_integrity_lifecycle import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
@@ -86,6 +86,21 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         evidence = describe_recovery_result(result)
         self.assertEqual(evidence["terminal_kind"], "chain_max")
         self.assertEqual(evidence["trigger"], "completion")
+
+    def test_refusal_description_preserves_typed_status_and_evidence(self) -> None:
+        refusal = RecoveryRefusal(
+            snapshot().observation,
+            RecoveryStatus.RETRYABLE,
+            "scheduler evidence is unavailable",
+            {"child": "deadbeef", "due": "2026-08-24T09:00:00Z"},
+        )
+        evidence = describe_recovery_result(refusal)
+        self.assertEqual(evidence["status"], "retryable")
+        self.assertEqual(evidence["reason"], "scheduler evidence is unavailable")
+        self.assertEqual(evidence["child"], "deadbeef")
+        self.assertEqual(evidence["due"], "2026-08-24T09:00:00Z")
+        self.assertNotIn("action", evidence)
+        self.assertNotIn("child_target", evidence)
 
 
 if __name__ == "__main__":

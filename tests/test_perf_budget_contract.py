@@ -78,6 +78,10 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         elapsed = budget._bench_operator_interrupted_stage()
         self.assertGreaterEqual(elapsed, 0.0)
 
+    def test_exit_probe_fast_paths_are_empty(self) -> None:
+        elapsed = budget._bench_exit_probe_fast_paths_stage()
+        self.assertGreaterEqual(elapsed, 0.0)
+
     def test_task_call_budget_is_independent_from_wall_time(self) -> None:
         result = {"pass": True}
         budget._apply_task_call_budgets(

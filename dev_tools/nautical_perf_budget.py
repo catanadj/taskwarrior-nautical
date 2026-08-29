@@ -458,6 +458,26 @@ def _bench_operator_interrupted_stage() -> float:
         return time.perf_counter() - started
 
 
+def _bench_exit_probe_fast_paths_stage() -> float:
+    """Verify empty and terminal outboxes are classified without Taskwarrior."""
+    from nautical_core.exit_probe import probe_exit_work
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-exit-probe-") as td:
+        taskdata = Path(td)
+        empty = probe_exit_work(taskdata)
+        if not empty.definitely_empty:
+            raise RuntimeError(f"empty exit probe reported possible work: {empty.reason}")
+        opened = LifecycleOutboxRepository(taskdata).open()
+        if not opened.ok:
+            raise RuntimeError("exit probe fixture outbox could not be initialized")
+        terminal = probe_exit_work(taskdata)
+        if not terminal.definitely_empty:
+            raise RuntimeError(f"terminal exit probe reported possible work: {terminal.reason}")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3411,6 +3431,7 @@ def main() -> int:
     checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
     checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
     checks.append(("stage_operator_interrupted", _bench_operator_interrupted_stage, repeats))
+    checks.append(("stage_exit_probe_fast_paths", _bench_exit_probe_fast_paths_stage, repeats))
     if args.workflows_only:
         checks = []
 

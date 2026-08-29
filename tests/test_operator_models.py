@@ -476,7 +476,19 @@ class OperatorModelsTests(unittest.TestCase):
         )
         seen = []
         from nautical_core.integration_models import Found
-        reader = ChainSnapshotReader(lambda source_request: (seen.append(source_request) or Found(source, "chain read")))
+        def collect(source_request):
+            seen.append(source_request)
+            if getattr(source_request, "chain_id", None) == "chain-2":
+                return Found(
+                    ChainSnapshot(
+                        "chain-snap-2", SnapshotCoverage.CHAIN, "taskwarrior",
+                        (ChainNode("task-2", "chain-2", 1, "pending", ()),), "config-1", True,
+                    ),
+                    "chain read",
+                )
+            return Found(source, "chain read")
+
+        reader = ChainSnapshotReader(collect)
         raw = reader.read_chain_snapshot(
             context,
             SnapshotReadRequest(OperatorScope(OperatorScopeKind.CHAIN, ("chain-1",))),
@@ -597,17 +609,17 @@ class OperatorModelsTests(unittest.TestCase):
         reader = ChainSnapshotReader(lambda _request: Found(source, "broad export"))
         result = reader.read_chain_snapshot(context, SnapshotReadRequest(request.scope))
         self.assertIsInstance(result, OperatorFailure)
-        self.assertEqual(result.code, "snapshot_unavailable")
-        self.assertTrue(result.retryable)
-        self.assertEqual(result.details["missing"], ("chain-b", "chain-c", "chain-d", "chain-e"))
+        self.assertEqual(result.code, "invalid_snapshot_scope")
+        self.assertFalse(result.retryable)
+        self.assertEqual(result.details["identity"], "chain-b")
         uuid_scope = OperatorScope(
             OperatorScopeKind.UUIDS,
             ("task-a", "task-b", "task-c", "task-d", "task-e"),
         )
         uuid_result = reader.read_chain_snapshot(context, SnapshotReadRequest(uuid_scope))
         self.assertIsInstance(uuid_result, OperatorFailure)
-        self.assertEqual(uuid_result.code, "snapshot_unavailable")
-        self.assertEqual(uuid_result.details["missing"], ("task-b", "task-c", "task-d", "task-e"))
+        self.assertEqual(uuid_result.code, "invalid_snapshot_scope")
+        self.assertEqual(uuid_result.details["identity"], "task-b")
 
     def test_multi_scope_reader_preserves_authoritative_identity_coverage(self) -> None:
         request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
@@ -626,9 +638,9 @@ class OperatorModelsTests(unittest.TestCase):
         reader = ChainSnapshotReader(lambda _request: Found(source, "broad export"))
         result = reader.read_chain_snapshot(context, SnapshotReadRequest(scope))
         self.assertIsInstance(result, OperatorFailure)
-        self.assertEqual(result.code, "snapshot_unavailable")
-        self.assertTrue(result.retryable)
-        self.assertEqual(result.details["missing"], ("chain-b", "chain-c", "chain-d", "chain-e"))
+        self.assertEqual(result.code, "invalid_snapshot_scope")
+        self.assertFalse(result.retryable)
+        self.assertEqual(result.details["identity"], "chain-b")
 
     def test_multi_scope_hydration_stops_on_unavailable_evidence(self) -> None:
         request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())

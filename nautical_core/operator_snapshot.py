@@ -417,52 +417,7 @@ class ChainSnapshotReader:
                 refresh=request.refresh,
             )
         elif scope.kind in {OperatorScopeKind.CHAINS, OperatorScopeKind.UUIDS}:
-            from .chain_integrity_models import SnapshotCoverage
             complete = request.requirement.minimum.value == "complete"
-            if len(scope.values) > 4:
-                source_request = IntegritySnapshotRequest.candidates(
-                    complete_chain_history=complete,
-                    refresh=request.refresh,
-                )
-                outcome = self._collector(source_request)
-                if not isinstance(outcome, Found):
-                    return OperatorFailure(
-                        "snapshot_unavailable" if isinstance(outcome, Unavailable) else "snapshot_absent",
-                        outcome.evidence.detail if isinstance(outcome, Unavailable) else outcome.reason,
-                        retryable=outcome.retryable if isinstance(outcome, Unavailable) else False,
-                        scope=scope,
-                    )
-                source = cast(ChainSnapshot, outcome.value)
-                wanted = set(scope.values)
-                rows = tuple(
-                    row for row in source.rows
-                    if (row.chain_id in wanted if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid in wanted)
-                )
-                observed = {
-                    row.chain_id if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid
-                    for row in rows
-                }
-                missing = tuple(sorted(wanted - observed))
-                if missing:
-                    # A broad candidate export cannot prove authoritative
-                    # absence for arbitrary requested identities. Do not
-                    # project it as complete coverage.
-                    return OperatorFailure(
-                        "snapshot_unavailable",
-                        "broad snapshot cannot prove requested identity absence",
-                        retryable=True,
-                        scope=scope,
-                        details={"missing": missing, "source_snapshot": source.snapshot_id},
-                    )
-                return ChainSnapshot(
-                    source.snapshot_id + ":multi",
-                    source.coverage,
-                    source.source,
-                    rows,
-                    source.configuration_fingerprint,
-                    source.complete_chain_history,
-                    source.reason,
-                )
             snapshots: list[ChainSnapshot] = []
             for value in scope.values:
                 source_request = (
@@ -477,9 +432,35 @@ class ChainSnapshotReader:
                     continue
                 if not isinstance(outcome, Found) or not isinstance(outcome.value, ChainSnapshot):
                     return OperatorFailure("invalid_snapshot_read", "snapshot provider returned an invalid result", scope=scope)
-                snapshots.append(outcome.value)
+                snapshot = outcome.value
+                identity_rows = tuple(
+                    row for row in snapshot.rows
+                    if (row.chain_id == value if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid == value)
+                )
+                if any(
+                    (row.chain_id != value if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid != value)
+                    for row in snapshot.rows
+                ):
+                    return OperatorFailure(
+                        "invalid_snapshot_scope",
+                        "snapshot provider returned rows outside the requested identity",
+                        scope=scope,
+                        details={"identity": value, "snapshot_id": snapshot.snapshot_id},
+                    )
+                snapshots.append(
+                    ChainSnapshot(
+                        snapshot.snapshot_id,
+                        snapshot.coverage,
+                        snapshot.source,
+                        identity_rows,
+                        snapshot.configuration_fingerprint,
+                        snapshot.complete_chain_history,
+                        snapshot.reason,
+                    )
+                )
             rows = tuple(row for snapshot in snapshots for row in snapshot.rows)
             digest = hashlib.sha256(":".join(snapshot.snapshot_id for snapshot in snapshots).encode()).hexdigest()[:16]
+            from .chain_integrity_models import SnapshotCoverage
             return ChainSnapshot(
                 "multi-" + digest,
                 SnapshotCoverage.CHAIN if scope.kind is OperatorScopeKind.CHAINS else SnapshotCoverage.NARROW,

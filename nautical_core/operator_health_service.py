@@ -483,7 +483,8 @@ class OperatorHealthService:
         severity = FindingSeverity.INFO if status == "ok" else FindingSeverity.WARNING if status == "warning" else FindingSeverity.ERROR
         actionability = FindingActionability.INFORMATIONAL if status == "ok" else FindingActionability.ACTIONABLE
         details = {key: value for key, value in result.items() if key not in {"status", "message"}}
-        details.update({"config_source": source_hint, "effective_timezone": effective_timezone})
+        timezone_value = getattr(effective_timezone, "key", None) or str(effective_timezone)
+        details.update({"config_source": source_hint, "effective_timezone": timezone_value})
         return (OperatorFinding(
             "astronomy.preflight", "configuration", severity, actionability,
             "Astronomy provider and location profile are usable." if status == "ok" else str(result.get("message") or "Astronomy preflight failed."),

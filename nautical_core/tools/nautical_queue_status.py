@@ -22,6 +22,8 @@ from nautical_core.lifecycle_outbox import (  # noqa: E402
     lifecycle_outbox_path,
 )
 from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_models import OperatorLimits  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
 from nautical_core.operator_presentation import ordered_records, render_result  # noqa: E402
 from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 
@@ -114,8 +116,9 @@ def _outbox_summary(path: Path, *, stale_after: float, limit: int) -> tuple[dict
     return summary, issues
 
 
-def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> dict[str, Any]:
-    return QueueStatusService().status_payload(taskdata, stale_after=stale_after, limit=limit)
+def _status_payload(taskdata: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], OperatorInvocationBudget]:
+    budget = OperatorInvocationBudget(OperatorLimits(outbox_rows=max(1, limit)))
+    return QueueStatusService().status_payload(taskdata, stale_after=stale_after, limit=limit, budget=budget), budget
 
 
 def main() -> int:
@@ -149,7 +152,7 @@ def main() -> int:
             "checkpoint": result.checkpoint,
             "reason": result.reason,
         }
-    payload = _status_payload(
+    payload, budget = _status_payload(
         Path(args.taskdata),
         stale_after=max(0.0, float(args.stale_after_seconds)),
         limit=max(0, int(args.limit)),
@@ -176,10 +179,10 @@ def main() -> int:
         failure=result_failure,
     )
     if args.json:
-        print(render_result(operator_result, "json"))
+        print(render_result(operator_result, "json", budget=budget))
     else:
         outbox = payload["outbox"]
-        print(render_result(operator_result, "text"))
+        print(render_result(operator_result, "text", budget=budget))
         print(f"status={payload['status']} taskdata={payload['taskdata']}")
         print(
             "outbox:"

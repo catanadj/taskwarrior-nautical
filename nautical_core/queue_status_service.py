@@ -34,8 +34,11 @@ class QueueStatusService:
         if budget is not None:
             if not budget.consume("sqlite_transactions"):
                 return summary, ["operator SQLite transaction budget exhausted"]
+            requested_limit = limit
             limit = min(limit, budget.remaining("outbox_rows"))
-            if limit < 1 or not budget.consume("outbox_rows", limit):
+            if requested_limit > 0 and limit == 0:
+                return summary, ["operator outbox row budget exhausted"]
+            if limit > 0 and not budget.consume("outbox_rows", limit):
                 return summary, ["operator outbox row budget exhausted"]
         result, data = LifecycleOutboxRepository(path.parent.parent).status(limit=limit, stale_after=stale_after)
         summary["integrity"] = str(data.get("integrity") or "not_checked")

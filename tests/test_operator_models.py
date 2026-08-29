@@ -254,6 +254,18 @@ class OperatorModelsTests(unittest.TestCase):
         with self.assertRaises(OperatorContractError):
             OperatorLimits(file_records=0)
 
+    def test_every_operator_limit_has_an_enforcement_owner(self) -> None:
+        limits = OperatorLimits()
+        fields = (
+            "tasks", "chains", "occurrences", "history_links", "findings",
+            "outbox_rows", "file_records", "scheduler_iterations", "wall_time_seconds",
+        )
+        for field in fields:
+            self.assertTrue(OperatorLimits.enforcement_owner(field))
+            self.assertTrue(hasattr(limits, field))
+        with self.assertRaises(OperatorContractError):
+            OperatorLimits.enforcement_owner("unknown")
+
     def test_invocation_context_captures_one_immutable_basis(self) -> None:
         configuration = ValidatedNauticalConfiguration(
             "/tmp/config", "config-1", "schedule-1", "UTC", (),

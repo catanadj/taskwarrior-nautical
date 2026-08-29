@@ -537,6 +537,19 @@ class OperatorPage:
         )
 
 
+OPERATOR_LIMIT_ENFORCEMENT_OWNERS: Mapping[str, str] = {
+    "tasks": "snapshot_reader",
+    "chains": "snapshot_reader",
+    "occurrences": "occurrence_service",
+    "history_links": "snapshot_reader",
+    "findings": "inspector",
+    "outbox_rows": "outbox_reader",
+    "file_records": "file_provider",
+    "scheduler_iterations": "scheduler_service",
+    "wall_time_seconds": "invocation_context",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorLimits:
     """Independent safety limits for one operator invocation."""
@@ -550,6 +563,14 @@ class OperatorLimits:
     file_records: int = 1000
     scheduler_iterations: int = 512
     wall_time_seconds: int = 120
+
+    @classmethod
+    def enforcement_owner(cls, field_name: str) -> str:
+        """Return the declared owner for one resource limit."""
+        try:
+            return OPERATOR_LIMIT_ENFORCEMENT_OWNERS[str(field_name)]
+        except KeyError as exc:
+            raise OperatorContractError(f"no enforcement owner for limit {field_name!r}") from exc
 
     def __post_init__(self) -> None:
         for name in (
@@ -957,6 +978,6 @@ __all__ = [
     "OPERATOR_API_VERSION", "OPERATOR_RESULT_VERSION", "OperatorContractError", "OperatorOperation",
     "OperatorStatus", "OperatorV2Status", "OperatorExitCode", "OperatorPhase", "OperatorPhaseResult", "exit_code_for_status",
     "exit_code_for_v2_status", "OperatorScopeKind",
-    "CoverageKind", "OperatorScope", "OperatorCoverage", "OperatorCursor", "OperatorPage", "CoverageRequirement", "OperatorLimits",
+    "CoverageKind", "OperatorScope", "OperatorCoverage", "OperatorCursor", "OperatorPage", "CoverageRequirement", "OperatorLimits", "OPERATOR_LIMIT_ENFORCEMENT_OWNERS",
     "OperatorRequest", "OperatorFailure", "OperatorResult", "OperatorV2Result", "OperatorCapabilities", "OperatorDependency",
 ]

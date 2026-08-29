@@ -43,6 +43,26 @@ class ReconcileSnapshotService:
             return f"uuid:{request.uuid}"
         return None
 
+    @classmethod
+    def for_request(
+        cls,
+        repository: TaskReadRepository,
+        request: ReconcileRequest,
+        *,
+        read_value: Callable[[object, str], object],
+        stats: dict[str, Any] | None = None,
+        budget: OperatorBudgetLedger | None = None,
+    ) -> "ReconcileSnapshotService":
+        """Build the invocation-scoped snapshot projection for a request."""
+        return cls(
+            repository,
+            scope_filter=cls.scope_filter_for(request),
+            full_audit=bool(request.full_audit),
+            read_value=read_value,
+            stats=stats,
+            budget=budget,
+        )
+
     @staticmethod
     def _text(row: TaskObservation, field: str) -> str:
         state = row.field(field)

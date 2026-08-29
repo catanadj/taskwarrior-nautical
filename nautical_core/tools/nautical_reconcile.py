@@ -1493,11 +1493,9 @@ def _build_reconcile_session(
 ) -> _ReconcileSession:
     repository = unit_of_work.repository
     repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    scope_filter = ReconcileSnapshotService.scope_filter_for(request)
-    snapshot = ReconcileSnapshotService(
+    snapshot = ReconcileSnapshotService.for_request(
         repository,
-        scope_filter=scope_filter,
-        full_audit=bool(request.full_audit),
+        request,
         read_value=_read_value,
         stats=_EXPORT_STATS,
         budget=budget,

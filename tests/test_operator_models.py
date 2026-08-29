@@ -309,6 +309,18 @@ class OperatorModelsTests(unittest.TestCase):
         budget.begin_effect()
         self.assertTrue(budget.effect_started)
 
+    def test_budget_report_is_json_native_and_identifies_overages(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        budget.begin_effect()
+        budget.consume("taskwarrior_calls", 2)
+        report = budget.report()
+        self.assertEqual(report["usage"]["taskwarrior_calls"], 2)
+        self.assertEqual(report["limits"]["taskwarrior_calls"], 1)
+        self.assertIn("taskwarrior_calls", report["exceeded"])
+        self.assertTrue(report["effect_started"])
+
     def test_task_command_budget_rejects_before_process_spawn(self) -> None:
         from nautical_core.operator_context import OperatorInvocationBudget
         from nautical_core.task_command import run_task_command

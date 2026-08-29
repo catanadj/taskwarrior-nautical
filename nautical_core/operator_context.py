@@ -154,6 +154,18 @@ class OperatorInvocationBudget:
     def snapshot(self) -> dict[str, int]:
         return {name: self.usage(name) for name in self.limits.to_dict()}
 
+    def report(self) -> dict[str, object]:
+        """Return JSON-native budget telemetry for diagnostics and renderers."""
+        usage = self.snapshot()
+        limits = self.limits.to_dict()
+        return {
+            "usage": usage,
+            "limits": limits,
+            "exceeded": tuple(name for name, value in usage.items() if value > limits[name]),
+            "effect_started": self.effect_started,
+            "wall_time_elapsed_s": round(self.wall_time_elapsed, 6),
+        }
+
     def observe_peak_memory(self, bytes_used: int) -> bool:
         """Record a measured peak and report whether the configured cap is exceeded."""
         if isinstance(bytes_used, bool) or not isinstance(bytes_used, int) or bytes_used < 0:

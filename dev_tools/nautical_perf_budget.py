@@ -130,7 +130,7 @@ def _bench_query_pagination_stage() -> float:
     from types import SimpleNamespace
 
     from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
+    from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
 
     service = object.__new__(OccurrenceQueryService)
     service._timezone = timezone.utc
@@ -164,6 +164,31 @@ def _bench_query_pagination_stage() -> float:
             break
     if seen != [row.uuid for row in rows]:
         raise RuntimeError("whole-system query pagination lost or reordered rows")
+    empty_page, empty_cursor, empty_complete = service._page_rows((), request)
+    if empty_page or empty_cursor is not None or not empty_complete:
+        raise RuntimeError("empty query pagination did not complete cleanly")
+    exact_rows = rows[:16]
+    exact_page, exact_cursor, exact_complete = service._page_rows(exact_rows, request)
+    if len(exact_page) != 16 or exact_cursor is not None or not exact_complete:
+        raise RuntimeError("exact query page produced an unexpected continuation")
+    plus_one_rows = rows[:17]
+    first_page, continuation, first_complete = service._page_rows(plus_one_rows, request)
+    if len(first_page) != 16 or continuation is None or first_complete:
+        raise RuntimeError("page-size-plus-one query did not produce a continuation")
+    incompatible = continuation.to_dict()
+    incompatible["snapshot_id"] = "query-snapshot-invalid"
+    try:
+        service._page_rows(
+            plus_one_rows,
+            OccurrenceQueryRequest.from_mapping(
+                {"selector": {"all_tasks": True}, "from": "2026-08-24",
+                 "count": 1, "max_tasks": 16, "cursor": incompatible}
+            ),
+        )
+    except QueryServiceError:
+        pass
+    else:
+        raise RuntimeError("incompatible query cursor was accepted")
     return time.perf_counter() - started
 
 

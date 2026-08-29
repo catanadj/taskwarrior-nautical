@@ -175,10 +175,6 @@ def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> P
     return (taskdata / "hooks").resolve()
 
 
-def _hook_candidates(hooks_dir: Path, event: str) -> list[Path]:
-    return install_runtime.hook_candidates(hooks_dir, event)
-
-
 def _check_runtime(
     findings: list[dict[str, Any]],
     *,
@@ -224,7 +220,7 @@ def _check_hooks_and_udas(
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
     typed, validated = OperatorHealthService.hook_installation_findings(
-        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, _hook_candidates,
+        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, install_runtime.hook_candidates,
         install_runtime.inspect_hook_runtime, env,
     )
     findings.extend(item.to_doctor_dict() for item in typed)

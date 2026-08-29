@@ -52,6 +52,48 @@ class OperatorProcessContractTests(unittest.TestCase):
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
 
+    def test_managed_runtime_operator_matrix_runs_outside_checkout(self) -> None:
+        """Installed operator clients resolve the staged package without source imports."""
+        with tempfile.TemporaryDirectory(prefix="nautical-managed-matrix-") as directory:
+            runtime = Path(directory)
+            shutil.copy2(ROOT / "nautical", runtime / "nautical")
+            shutil.copy2(NAVIGATOR, runtime / NAVIGATOR.name)
+            shutil.copytree(ROOT / "nautical_core", runtime / "nautical_core")
+            (runtime / "nautical").chmod(0o755)
+            environment = {
+                "TASKDATA": str(runtime / "taskdata"),
+                "TASKRC": str(runtime / "taskrc"),
+                "PYTHONPATH": "",
+                "PATH": os.environ.get("PATH", ""),
+            }
+            (runtime / "taskdata").mkdir()
+            commands = (
+                ("query", "capabilities"),
+                ("query", "integrity", "--all"),
+                ("queue-status", "--json"),
+                ("doctor", "--json"),
+                ("reconcile", "--json", "--task-bin", "/missing/task"),
+                ("navigator", "--help"),
+            )
+            for args in commands:
+                process = subprocess.run(
+                    [sys.executable, str(runtime / "nautical"), *args],
+                    cwd="/tmp",
+                    text=True,
+                    capture_output=True,
+                    env=environment,
+                    timeout=20,
+                )
+                self.assertNotIn("Traceback", process.stderr, args)
+                self.assertNotIn(str(ROOT), process.stderr + process.stdout, args)
+                if args[-1] == "--help":
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                else:
+                    self.assertTrue(process.stdout.strip(), args)
+                    payload = json.loads(process.stdout)
+                    self.assertIsInstance(payload, dict)
+                    self.assertTrue(str(payload.get("schema", "")).startswith("nautical."), args)
+
     def test_malformed_request_fails_with_json_and_exit_code(self) -> None:
         process = self._run(QUERY, "occurrences", "--request", "{not-json")
         self.assertEqual(process.returncode, 2)

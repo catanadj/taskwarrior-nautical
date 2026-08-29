@@ -1402,10 +1402,6 @@ class _ReconcileSession:
         self.lifecycle_application = lifecycle_application
         self.runtime_state = runtime_state
 
-    def collect_candidates(self) -> tuple[TaskObservation, ...]:
-        """Load the bounded candidate set for this invocation."""
-        return tuple(self.lifecycle_service.candidates())
-
     def audit_integrity(self, *, hook: Any, apply: bool) -> tuple[Any, Any, float, tuple[Any, ...], float]:
         """Audit and, when authorized, apply integrity plans for this snapshot."""
         if self.snapshot._rows is None:
@@ -1595,7 +1591,7 @@ def main(
     runtime_state = session.runtime_state
     _RECONCILE_RUNTIME.set(runtime_state)
     try:
-        candidates = session.collect_candidates()
+        candidates = tuple(lifecycle_service.candidates())
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
     integrity_audit_result: Any = None
@@ -1620,7 +1616,7 @@ def main(
             configuration_drift_reason = integrity_audit_result.reason or "integrity audit unavailable"
         elif integrity_audit_result is not None and args.apply and integrity_audit_result.plans:
             if integrity_application_results:
-                candidates = session.collect_candidates()
+                candidates = tuple(lifecycle_service.candidates())
     except Exception as exc:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             print(f"[nautical] integrity audit unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)

@@ -55,6 +55,10 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         elapsed = budget._bench_repair_application_stage()
         self.assertGreaterEqual(elapsed, 0.0)
 
+    def test_queue_stale_stage_has_a_correctness_guard(self) -> None:
+        elapsed = budget._bench_queue_stale_stage()
+        self.assertGreaterEqual(elapsed, 0.0)
+
     def test_task_call_budget_is_independent_from_wall_time(self) -> None:
         result = {"pass": True}
         budget._apply_task_call_budgets(

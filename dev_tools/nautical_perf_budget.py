@@ -375,6 +375,32 @@ def _bench_repair_application_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_queue_stale_stage() -> float:
+    """Measure queue-status detection of a stale claim with a valid plan."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.queue_status_service import QueueStatusService
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-stale-") as td:
+        taskdata = Path(td)
+        _init_empty_outbox(taskdata)
+        _parents, plans = _outbox_lifecycle_fixture("stale", 0, count=1)
+        _stage_workflow_plans(taskdata, plans, configuration_fingerprint="perf", schedule_fingerprint="perf")
+        repository = LifecycleOutboxRepository(taskdata)
+        claimed, records = repository.claim_batch(owner="perf-owner", lease_seconds=30.0, limit=1)
+        if not claimed.ok or len(records) != 1:
+            raise RuntimeError("stale queue fixture could not claim a valid lifecycle plan")
+        with sqlite3.connect(str(repository.path)) as connection:
+            connection.execute(
+                "UPDATE lifecycle_outbox SET lease_expires_at=? WHERE intent_id=?",
+                (time.time() - 10.0, records[0].intent_id),
+            )
+        started = time.perf_counter()
+        payload = QueueStatusService().status_payload(taskdata, stale_after=5.0, limit=5)
+        if int(payload.get("outbox", {}).get("stale_claims", 0) or 0) != 1:
+            raise RuntimeError(f"queue status did not report the valid stale claim: {payload!r}")
+        return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3325,6 +3351,7 @@ def main() -> int:
     checks.append(("stage_housekeeping", _bench_housekeeping_stage, repeats))
     checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
     checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
+    checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
     if args.workflows_only:
         checks = []
 

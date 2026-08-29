@@ -785,7 +785,9 @@ def _append_lifecycle_result_row(
     """Render immutable lifecycle facts without changing application state."""
     state = lifecycle_result.state
     facts = lifecycle_result_feedback_facts(lifecycle_result)
-    if not state:
+    # Deferred outbox work is an internal completion detail; on-exit owns its
+    # eventual result, so avoid exposing intent/child identifiers in panels.
+    if not state or state == "queued":
         return
     labels = {
         "applied": "[green]Applied now[/]",

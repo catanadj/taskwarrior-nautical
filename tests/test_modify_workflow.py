@@ -8,6 +8,7 @@ from nautical_core.task_changes import TaskTransition
 from nautical_core.task_models import TaskObservation
 from nautical_core.task_models import TaskTimestamp
 from nautical_core.modify_models import CompletionLifecycleResult
+from nautical_core.modify_feedback import _append_lifecycle_result_row
 from nautical_core.hook_context import OnModifyRequest
 from nautical_core.hook_validation_pipeline import (
     recurrence_kind_conflict,
@@ -205,6 +206,17 @@ class ModifyWorkflowTests(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             CompletionSpawnResult({}, "", [], False, True, None, outcome_state="queued")
+
+    def test_queued_lifecycle_detail_is_not_rendered_in_panel(self) -> None:
+        rows: list[tuple[str, object]] = []
+        _append_lifecycle_result_row(
+            rows,
+            CompletionLifecycleResult(
+                "queued", child_short="b3f9e04f", deferred_spawn=True,
+                spawn_intent_id="li1-ac60e24c0220f385491e1c95",
+            ),
+        )
+        self.assertNotIn("Result", [label for label, _ in rows])
 
     def test_recurrence_kind_exclusivity_is_shared_by_add_and_modify(self) -> None:
         self.assertEqual(recurrence_kind_conflict("P1D", "", ""), (True, None))

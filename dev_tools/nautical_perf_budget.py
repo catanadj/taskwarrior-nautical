@@ -201,6 +201,32 @@ def _bench_query_pagination_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_query_unavailable_stage() -> float:
+    """Measure fail-closed query handling for an unavailable snapshot."""
+    from types import SimpleNamespace
+
+    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    evidence = FailureEvidence(
+        TaskCommand(("task", "export"), "perf unavailable", 1.0),
+        CommandFailureKind.EXECUTION_FAILURE, 1, 1, 0.001, True, "synthetic failure",
+    )
+    service = object.__new__(OccurrenceQueryService)
+    service._uow = SimpleNamespace(repository=SimpleNamespace(
+        broad_snapshot=lambda **_kwargs: Unavailable("perf unavailable", evidence),
+    ))
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1}
+    )
+    started = time.perf_counter()
+    failure = service._rows_for(request)
+    if not getattr(failure, "code", "") == "task_read_unavailable":
+        raise RuntimeError("unavailable query snapshot did not fail closed")
+    return time.perf_counter() - started
+
+
 def _bench_doctor_installation_stage() -> float:
     """Measure the read-only Doctor installation composition root in isolation."""
     task_bin = shutil.which("task")
@@ -3248,6 +3274,7 @@ def main() -> int:
         ("stage_queue_status", _bench_queue_status_stage, repeats),
         ("stage_navigator", _bench_navigator_stage, repeats),
         ("stage_query_pagination", _bench_query_pagination_stage, repeats),
+        ("stage_query_unavailable", _bench_query_unavailable_stage, repeats),
         ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
         (
             "cold_modify_impl_import",

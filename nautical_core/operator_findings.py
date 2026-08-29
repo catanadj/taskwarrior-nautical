@@ -180,7 +180,7 @@ def deduplicate_findings(findings: tuple[OperatorFinding, ...] | list[OperatorFi
             raise OperatorContractError("finding collection contains an invalid item")
         key = (
             finding.code, finding.domain, finding.severity, finding.actionability,
-            finding.message, finding.scope.to_dict() if finding.scope else None,
+            finding.message, repr(finding.scope.to_dict()) if finding.scope else None,
             repr(finding.observed), repr(finding.expected), repr(finding.evidence),
             finding.command, finding.guidance,
         )

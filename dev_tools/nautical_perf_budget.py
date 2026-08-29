@@ -1876,6 +1876,8 @@ def _bench_expensive_workflows(
         )
 
         expiration_samples = []
+        expiration_day = datetime.now(timezone.utc).date() - timedelta(days=1)
+        expiration_date = expiration_day.strftime("%Y%m%d")
         for sample_index in range(repeats):
             key = f"nautical-perf/expiration/{sample_index}"
             parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, key + "/parent"))
@@ -1887,17 +1889,17 @@ def _bench_expensive_workflows(
                 "chain": "on",
                 "chainID": f"expiration-perf-{sample_index:04d}",
                 "link": 1,
-                "due": "20260101T090000Z",
-                "until": "20260101T200000Z",
+                "due": f"{expiration_date}T090000Z",
+                "until": f"{expiration_date}T200000Z",
                 # Lifecycle plans require the Taskwarrior modified guard;
                 # preserve it in the synthetic hook snapshot just as an
                 # exported task would.
-                "modified": "20260101T090000Z",
+                "modified": f"{expiration_date}T090000Z",
             }
             # An expiration deletion ends at the native until boundary.  A
             # later end timestamp is a manual/ambiguous deletion and should
             # be deferred by the hook rather than staged for recovery.
-            new = dict(old, status="deleted", end="20260101T200000Z")
+            new = dict(old, status="deleted", end=f"{expiration_date}T200000Z")
             taskdata = root / f"expiration-recovery-{sample_index}"
             taskdata.mkdir()
             env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")

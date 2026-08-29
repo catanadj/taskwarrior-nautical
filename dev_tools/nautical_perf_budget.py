@@ -266,6 +266,29 @@ def _bench_housekeeping_stage() -> float:
         return time.perf_counter() - started
 
 
+def _bench_repair_planner_stage() -> float:
+    """Measure deterministic repair planning without applying mutations."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
+    from nautical_core.chain_integrity_models import (
+        ChainSnapshot, FindingSeverity, FindingStatus, IntegrityFinding, SnapshotCoverage,
+    )
+    from nautical_core.chain_repair_planner import IntegrityRepairPlanner
+
+    snapshot = ChainSnapshot("perf-repair", SnapshotCoverage.COMPLETE, "perf", (), "perf-config", True)
+    context = IntegrityContext(ChainGraph.from_snapshot(snapshot), OutboxSnapshot.from_records(()), "perf-config")
+    finding = IntegrityFinding(
+        "continuity.child_temporal_order", FindingStatus.MANUAL_REVIEW, FindingSeverity.ERROR,
+        snapshot.snapshot_id, "perf-chain", ("11111111-1111-4111-8111-111111111111",),
+        "child_not_after_parent", "repair benchmark finding",
+    )
+    started = time.perf_counter()
+    result = IntegrityRepairPlanner().plan(context, (finding,))
+    if result.plans or len(result.refusals) != 1:
+        raise RuntimeError("repair planner did not preserve an unsafe finding as a refusal")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3213,6 +3236,7 @@ def main() -> int:
     if shutil.which("task"):
         checks.append(("stage_doctor_installation", _bench_doctor_installation_stage, repeats))
     checks.append(("stage_housekeeping", _bench_housekeeping_stage, repeats))
+    checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
     if args.workflows_only:
         checks = []
 

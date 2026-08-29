@@ -1386,19 +1386,6 @@ class _ReconcileSession:
         )
         return repairs, errors, _native_until_audit_result(repairs, errors).status
 
-    def plan_candidate(self, task_bin: str, hook: Any, parent: TaskObservation, *, taskdata: Path | None,
-                       apply: bool, max_expiration_hops: int, recovery_at: Any,
-                       lease_held: bool, generation: Any) -> list[tuple[RecoveryResult, str]]:
-        """Plan one candidate through the session's shared lifecycle context."""
-        if not isinstance(parent, TaskObservation):
-            raise TypeError("reconcile planning requires a typed task observation")
-        return _reconcile_candidate(
-            task_bin, hook, parent.to_mapping(), taskdata=taskdata, apply=apply,
-            max_expiration_hops=max_expiration_hops, recovery_at=recovery_at,
-            lease_held=lease_held, generation=generation,
-            reconciliation_service=self.lifecycle_service,
-        )
-
 def _build_reconcile_session(
     request: ReconcileRequest,
     unit_of_work: TaskwarriorUnitOfWork,
@@ -1651,16 +1638,17 @@ def main(
             if str(parent.get("status") or "").strip().lower() != "completed":
                 continue
             try:
-                planned_outcomes = session.plan_candidate(
+                planned_outcomes = _reconcile_candidate(
                     args.task_bin,
                     hook,
-                    parent_observation,
+                    parent_observation.to_mapping(),
                     taskdata=taskdata,
                     apply=False,
                     max_expiration_hops=args.max_expiration_hops,
                     recovery_at=recovery_at,
                     lease_held=_apply_lease_held,
                     generation=generation,
+                    reconciliation_service=lifecycle_service,
                 )
             except Exception:
                 continue
@@ -1711,16 +1699,17 @@ def main(
         else:
             mutation_started = time.perf_counter() if args.apply else 0.0
             try:
-                outcomes = session.plan_candidate(
+                outcomes = _reconcile_candidate(
                     args.task_bin,
                     hook,
-                    parent_observation,
+                    parent_observation.to_mapping(),
                     taskdata=taskdata,
                     apply=args.apply,
                     max_expiration_hops=args.max_expiration_hops,
                     recovery_at=recovery_at,
                     lease_held=_apply_lease_held,
                     generation=generation,
+                    reconciliation_service=lifecycle_service,
                 )
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__

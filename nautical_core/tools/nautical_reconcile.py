@@ -1463,20 +1463,6 @@ class _ReconcileSession:
             reconciliation_service=self.lifecycle_service,
         )
 
-    def execute_wave(self, *, hook: Any, taskdata: Path, wave_plans: dict[str, tuple[RecoveryPlanResult, str]],
-                     configuration_fingerprint: str, schedule_fingerprint: str) -> Any:
-        """Apply one guarded lifecycle wave through the session application service."""
-        return _execute_reconcile_lifecycle_wave(
-            hook,
-            self.lifecycle_service,
-            self.lifecycle_application,
-            taskdata,
-            wave_plans,
-            configuration_fingerprint=configuration_fingerprint,
-            schedule_fingerprint=schedule_fingerprint,
-        )
-
-
 def _build_reconcile_session(
     request: ReconcileRequest,
     unit_of_work: TaskwarriorUnitOfWork,
@@ -1753,10 +1739,12 @@ def main(
         if wave_plans:
             mutation_started = time.perf_counter()
             try:
-                wave_result = session.execute_wave(
-                    hook=hook,
-                    taskdata=taskdata,
-                    wave_plans=wave_plans,
+                wave_result = _execute_reconcile_lifecycle_wave(
+                    hook,
+                    lifecycle_service,
+                    lifecycle_application,
+                    taskdata,
+                    wave_plans,
                     configuration_fingerprint=configuration.fingerprint,
                     schedule_fingerprint=configuration.scheduler_fingerprint,
                 )

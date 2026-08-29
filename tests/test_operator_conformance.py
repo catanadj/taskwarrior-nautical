@@ -8,7 +8,7 @@ from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.operator_inspectors import inspect_operator_snapshot, standard_inspector_bundle, run_inspectors
 from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCapabilities, OperatorCoverage, OperatorCursor, OperatorFailure, OperatorLimits,
     OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status,
-    OperatorExitCode, OperatorContractError, exit_code_for_v2_status)
+    OperatorExitCode, OperatorContractError, OperatorPhase, OperatorPhaseResult, exit_code_for_v2_status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
 from nautical_core.operator_snapshot import OperatorSnapshot
@@ -26,6 +26,17 @@ from nautical_core.operator_context import OperatorInvocationContext
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_operator_phase_result_is_typed_and_fail_closed(self) -> None:
+        successful = OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, value={"snapshot": "s1"})
+        self.assertEqual(successful.phase, OperatorPhase.ACQUIRE_SNAPSHOT)
+        failure = OperatorFailure("snapshot_unavailable", "snapshot unavailable", retryable=True)
+        failed = OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, failure=failure)
+        self.assertIs(failed.failure, failure)
+        with self.assertRaises(OperatorContractError):
+            OperatorPhaseResult(OperatorPhase.PLAN)
+        with self.assertRaises(OperatorContractError):
+            OperatorPhaseResult(OperatorPhase.PLAN, value={}, failure=failure)
+
     def test_v2_status_exit_code_matrix_is_exhaustive(self) -> None:
         expected = {
             OperatorV2Status.OK: OperatorExitCode.SUCCESS,

@@ -38,6 +38,44 @@ class OperatorOperation(str, Enum):
     HOUSEKEEPING = "housekeeping"
 
 
+class OperatorPhase(str, Enum):
+    """Typed phases used by the internal operator control-plane pipeline."""
+
+    VALIDATE_REQUEST = "validate_request"
+    CAPTURE_CONTEXT = "capture_context"
+    COMPILE_SCOPE = "compile_scope"
+    ACQUIRE_SNAPSHOT = "acquire_snapshot"
+    INSPECT = "inspect"
+    PLAN = "plan"
+    AUTHORIZE = "authorize"
+    APPLY = "apply"
+    REFRESH = "refresh"
+    VERIFY = "verify"
+    RESULT = "result"
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorPhaseResult:
+    """One immutable phase outcome; failures stop later phases."""
+
+    phase: OperatorPhase
+    value: Any = None
+    failure: "OperatorFailure | None" = None
+
+    def __post_init__(self) -> None:
+        try:
+            phase = OperatorPhase(self.phase)
+        except (TypeError, ValueError) as exc:
+            raise OperatorContractError("invalid operator phase") from exc
+        if self.failure is not None and not isinstance(self.failure, OperatorFailure):
+            raise OperatorContractError("operator phase failure must be OperatorFailure")
+        if self.failure is not None and self.value is not None:
+            raise OperatorContractError("failed operator phase cannot contain a value")
+        if self.failure is None and self.value is None:
+            raise OperatorContractError("successful operator phase requires a value")
+        object.__setattr__(self, "phase", phase)
+
+
 class OperatorStatus(str, Enum):
     OK = "ok"
     ATTENTION = "attention"
@@ -917,7 +955,7 @@ class OperatorDependency:
 
 __all__ = [
     "OPERATOR_API_VERSION", "OPERATOR_RESULT_VERSION", "OperatorContractError", "OperatorOperation",
-    "OperatorStatus", "OperatorV2Status", "OperatorExitCode", "exit_code_for_status",
+    "OperatorStatus", "OperatorV2Status", "OperatorExitCode", "OperatorPhase", "OperatorPhaseResult", "exit_code_for_status",
     "exit_code_for_v2_status", "OperatorScopeKind",
     "CoverageKind", "OperatorScope", "OperatorCoverage", "OperatorCursor", "OperatorPage", "CoverageRequirement", "OperatorLimits",
     "OperatorRequest", "OperatorFailure", "OperatorResult", "OperatorV2Result", "OperatorCapabilities", "OperatorDependency",

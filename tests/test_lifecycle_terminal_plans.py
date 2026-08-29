@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
+from nautical_core.lifecycle_models import DeletionDisposition, LifecycleEvent, TaskSnapshot
 from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
-from nautical_core.chain_integrity_lifecycle import describe_recovery_result
+from nautical_core.chain_integrity_lifecycle import deleted_chain_disposition, describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask, TaskDraft
 
@@ -109,6 +109,20 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
                 evidence = describe_recovery_result(refusal)
                 self.assertEqual(evidence["status"], status.value)
                 self.assertEqual(evidence["reason"], f"{status.value} reason")
+
+    def test_malformed_expiration_evidence_is_ambiguous(self) -> None:
+        task = snapshot().observation.to_mapping()
+        task.update({"status": "deleted", "until": "not-a-date", "end": "20260825T200000Z"})
+        malformed = DEFAULT_TASK_CODEC.decode_row(task, source_query="malformed-expiration-test")
+
+        def parse(value: object):
+            if value == "not-a-date":
+                return None, "invalid timestamp"
+            return value, None
+
+        evidence = deleted_chain_disposition(malformed, safe_parse_datetime=parse)
+        self.assertEqual(evidence.disposition, DeletionDisposition.AMBIGUOUS)
+        self.assertIn("reliable native-until", evidence.reason)
 
 
 if __name__ == "__main__":

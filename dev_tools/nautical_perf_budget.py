@@ -305,6 +305,50 @@ def _bench_repair_planner_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_repair_application_stage() -> float:
+    """Measure one guarded repair application with a typed fake executor."""
+    from nautical_core.chain_integrity_application import IntegrityApplicationService
+    from nautical_core.chain_integrity_models import (
+        IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety,
+    )
+    from nautical_core.integration_models import (
+        GuardTimestamp, GuardTimestampField, MutationGuard, MutationOperation,
+        MutationOutcome, MutationOutcomeKind, MutationPostcondition, MutationRequest,
+    )
+    task_uuid = "11111111-1111-4111-8111-111111111111"
+    operation = IntegrityOperation(
+        "perf-repair-operation", RepairOperationKind.METADATA_REPAIR, "perf-chain", task_uuid,
+        (("chainID", "perf-chain"), ("link", 2)), ("target remains present",),
+        ("metadata repaired",), (("anchor_mode", "all"),),
+    )
+    plan = IntegrityRepairPlan(
+        "perf-repair-plan", "perf-repair-snapshot", "perf-chain", RepairSafety.SAFE,
+        "missing_link", "repair one link", (operation,), "perf-config",
+    )
+    guard = MutationGuard(
+        task_uuid, "pending", "perf-chain", 1, "w:mon",
+        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260829T000000Z"),), 0,
+    )
+
+    class Executor:
+        def repair_metadata(self, request):
+            return MutationOutcome(
+                MutationOperation.METADATA_REPAIR, MutationOutcomeKind.APPLIED, request.guard,
+                (MutationPostcondition.METADATA_REPAIRED,),
+            )
+
+    def request_factory(item):
+        return MutationRequest.metadata_repair(
+            guard, item.task_patch(), expected={"anchor_mode": "skip"},
+        )
+
+    started = time.perf_counter()
+    result = IntegrityApplicationService().apply(plan, Executor(), request_factory)
+    if len(result) != 1 or result[0].kind is not MutationOutcomeKind.APPLIED:
+        raise RuntimeError(f"repair application stage did not apply its guarded operation: {result!r}")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3253,6 +3297,7 @@ def main() -> int:
         checks.append(("stage_doctor_installation", _bench_doctor_installation_stage, repeats))
     checks.append(("stage_housekeeping", _bench_housekeeping_stage, repeats))
     checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
+    checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
     if args.workflows_only:
         checks = []
 

@@ -90,6 +90,17 @@ def _bench_parse_validate(exprs: list[str], rounds: int) -> float:
     return time.perf_counter() - t0
 
 
+def _bench_capabilities_stage() -> float:
+    """Measure the content-free capabilities composition root."""
+    from nautical_core.tools.nautical_query import _capabilities_payload
+
+    started = time.perf_counter()
+    payload = _capabilities_payload()
+    if not isinstance(payload, dict) or payload.get("status") != "ok" or not payload.get("operations"):
+        raise RuntimeError("capabilities stage returned an invalid payload")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -2940,6 +2951,7 @@ def main() -> int:
     cold_import_rounds = int(workload.get("cold_import_rounds", 3))
 
     checks = [
+        ("stage_capabilities", _bench_capabilities_stage, repeats),
         ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
         (
             "cold_modify_impl_import",

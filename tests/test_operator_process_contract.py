@@ -52,6 +52,26 @@ class OperatorProcessContractTests(unittest.TestCase):
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
 
+    def test_valid_operator_matrix_emits_one_json_document(self) -> None:
+        """Operational subprocesses keep stdout machine-readable and diagnostics separate."""
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            cases = (
+                (QUERY, ("capabilities",), {}),
+                (QUEUE_STATUS, ("--taskdata", str(taskdata), "--json"), {}),
+                (DOCTOR, ("--taskdata", str(taskdata), "--task-bin", "/bin/false", "--json", "--installation-only"), {}),
+                (RECONCILE, ("--json", "--task-bin", str(taskdata / "missing-task")), {"TASKDATA": str(taskdata)}),
+            )
+            for path, args, environment in cases:
+                process = self._run(path, *args, env=environment)
+                self.assertNotIn("Traceback", process.stdout)
+                self.assertNotIn("Traceback", process.stderr)
+                self.assertEqual(process.stderr, "", (path.name, process.stderr))
+                self.assertTrue(process.stdout.strip().startswith("{"), (path.name, process.stdout))
+                payload = json.loads(process.stdout)
+                self.assertIsInstance(payload, dict)
+                self.assertTrue(str(payload.get("schema", "")).startswith("nautical."), path.name)
+
     def test_managed_runtime_operator_matrix_runs_outside_checkout(self) -> None:
         """Installed operator clients resolve the staged package without source imports."""
         with tempfile.TemporaryDirectory(prefix="nautical-managed-matrix-") as directory:

@@ -17,6 +17,13 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertGreaterEqual(result["measured_wall_median_s"], 0.0)
         self.assertGreaterEqual(result["peak_memory_median_bytes"], 0)
 
+    def test_measure_does_not_hide_correctness_failures(self) -> None:
+        def broken_check() -> float:
+            raise RuntimeError("synthetic correctness failure")
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic correctness failure"):
+            budget._measure("broken", broken_check, 1)
+
     def test_capabilities_stage_has_a_correctness_guard(self) -> None:
         elapsed = budget._bench_capabilities_stage()
         self.assertGreaterEqual(elapsed, 0.0)

@@ -240,6 +240,15 @@ class OperatorControlPlane:
             OperatorPhaseResult(OperatorPhase.COMPILE_SCOPE, value=resolved_scope),
         ]
         findings = self.inspect(snapshot, requirement, limits, scope=resolved_scope)
+        if len(findings) > limits.findings:
+            failure = OperatorFailure(
+                "inspection_limit_exceeded",
+                f"inspection produced {len(findings)} findings, exceeding limit {limits.findings}",
+                scope=resolved_scope,
+                details={"resource": "findings", "observed": len(findings), "limit": limits.findings},
+            )
+            phases.append(OperatorPhaseResult(OperatorPhase.INSPECT, failure=failure))
+            return tuple(phases)
         phases.extend((
             OperatorPhaseResult(OperatorPhase.INSPECT, value=findings),
             OperatorPhaseResult(OperatorPhase.RESULT, value=findings),
@@ -280,6 +289,19 @@ class OperatorControlPlane:
             return tuple(phases)
         phases.append(OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, value=snapshot))
         findings = self.inspect(snapshot, request.requirement, request.limits, scope=request.scope)
+        if len(findings) > request.limits.findings:
+            phases.append(
+                OperatorPhaseResult(
+                    OperatorPhase.INSPECT,
+                    failure=OperatorFailure(
+                        "inspection_limit_exceeded",
+                        f"inspection produced {len(findings)} findings, exceeding limit {request.limits.findings}",
+                        scope=request.scope,
+                        details={"resource": "findings", "observed": len(findings), "limit": request.limits.findings},
+                    ),
+                )
+            )
+            return tuple(phases)
         phases.extend((
             OperatorPhaseResult(OperatorPhase.INSPECT, value=findings),
             OperatorPhaseResult(OperatorPhase.RESULT, value=findings),

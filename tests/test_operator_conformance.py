@@ -1,5 +1,6 @@
 import unittest
 import json
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -102,6 +103,30 @@ class OperatorConformanceTests(unittest.TestCase):
             (OperatorPhase.VALIDATE_REQUEST, OperatorPhase.COMPILE_SCOPE, OperatorPhase.INSPECT, OperatorPhase.RESULT),
         )
         self.assertTrue(phases[0].value)
+
+    def test_control_plane_inspection_stops_when_findings_budget_is_exceeded(self) -> None:
+        snapshot = OperatorSnapshot(
+            "phase-snapshot", OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc), "epoch-1", "config-1",
+        )
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        finding = OperatorFinding(
+            code="test.finding", domain="test", severity=FindingSeverity.WARNING,
+            actionability=FindingActionability.INFORMATIONAL, message="finding",
+        )
+        with patch.object(OperatorControlPlane, "inspect", return_value=(finding, finding)):
+            phases = control_plane.inspect_phases(
+                snapshot,
+                CoverageRequirement(CoverageKind.COMPLETE),
+                OperatorLimits(findings=1),
+            )
+        self.assertEqual(phases[-1].phase, OperatorPhase.INSPECT)
+        self.assertEqual(phases[-1].failure.code, "inspection_limit_exceeded")
 
     def test_control_plane_application_rejects_untyped_authorization_before_owner(self) -> None:
         class Configuration:

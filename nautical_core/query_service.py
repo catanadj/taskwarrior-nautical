@@ -32,7 +32,8 @@ from .query_models import (
     TaskIdentity,
     TaskOccurrenceResult,
 )
-from .operator_models import OperatorCursor, OperatorContractError
+from .operator_models import OperatorCursor, OperatorContractError, OperatorLimits
+from .operator_context import OperatorInvocationBudget
 from .parser_models import ParseError
 from .hook_validation_pipeline import ValidationStatus, validate_task_mapping
 from .hook_workflow_models import WorkflowRoute
@@ -196,6 +197,7 @@ class OccurrenceQueryService:
             raise QueryServiceError("validated local timezone is unavailable")
         self._timezone: tzinfo = local_timezone
         self._scheduler_cache: dict[tuple[str, tuple[tuple[str, str], ...]], SchedulerService] = {}
+        self._budget: OperatorInvocationBudget | None = None
 
     def _scheduler_for(self, task: TaskObservation, domain_task: NauticalTask, context: RecurrenceContext) -> SchedulerService:
         """Reuse one scheduler session for identical recurrence inputs in this invocation."""
@@ -211,6 +213,20 @@ class OccurrenceQueryService:
             scheduler = SchedulerService.from_task(domain_task, context=context)
             self._scheduler_cache[key] = scheduler
         return scheduler
+
+    @property
+    def budget(self) -> OperatorInvocationBudget | None:
+        """Return the current request ledger for envelope telemetry."""
+        return self._budget
+
+    @staticmethod
+    def _budget_for_request(request: OccurrenceQueryRequest) -> OperatorInvocationBudget:
+        return OperatorInvocationBudget(OperatorLimits(
+            tasks=request.max_tasks,
+            occurrences=request.max_occurrences,
+            scheduler_iterations=request.max_iterations,
+            file_records=request.max_tasks,
+        ))
 
     def _context_for(self, task: TaskObservation) -> RecurrenceContext:
         chain_id = str(_task_value(task, "chainID") or "").strip()
@@ -519,7 +535,7 @@ class OccurrenceQueryService:
                 max_iterations=request.max_iterations,
                 max_file_skips=request.max_file_skips,
             )
-            collected = scheduler.collect_request(range_request)
+            collected = scheduler.collect_request(range_request, budget=self._budget)
             failure = None
             if collected.failure is not None:
                 failure = _failure(
@@ -548,6 +564,7 @@ class OccurrenceQueryService:
     def query(self, request: OccurrenceQueryRequest) -> OccurrenceQueryResponse:
         if not isinstance(request, OccurrenceQueryRequest):
             raise QueryServiceError("occurrence query requires a validated request")
+        self._budget = self._budget_for_request(request)
         rows = self._rows_for(request)
         if isinstance(rows, QueryFailure):
             return OccurrenceQueryResponse(
@@ -890,6 +907,7 @@ class OccurrenceQueryService:
     def query_next(self, request: OccurrenceQueryRequest) -> OccurrenceQueryResponse:
         if not isinstance(request, OccurrenceQueryRequest) or request.operation != "next":
             raise QueryServiceError("next query requires a request with operation 'next'")
+        self._budget = self._budget_for_request(request)
         rows = self._rows_for(request)
         if isinstance(rows, QueryFailure):
             return OccurrenceQueryResponse(

@@ -22,6 +22,7 @@ from .scheduler_models import OccurrenceSearchExhausted
 from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
 from .task_models import NauticalTask, TaskObservation
+from .operator_context import OperatorBudgetLedger
 
 
 @dataclass(slots=True)
@@ -159,7 +160,12 @@ class SchedulerService:
         finally:
             self._flush_trace()
 
-    def collect_request(self, request: OccurrenceRangeRequest) -> OccurrenceCollectionResult:
+    def collect_request(
+        self,
+        request: OccurrenceRangeRequest,
+        *,
+        budget: OperatorBudgetLedger | None = None,
+    ) -> OccurrenceCollectionResult:
         """Collect one validated range request through this service."""
         if not isinstance(request, OccurrenceRangeRequest):
             raise TypeError("Scheduler collection requires an OccurrenceRangeRequest.")
@@ -171,6 +177,34 @@ class SchedulerService:
                 raise ValueError("Occurrence range timezone does not match scheduler context.")
         include_omitted = request.omission_policy in {"include", "report"}
         count_omitted = request.omission_policy in {"include", "report"}
+        iteration_limit = request.max_iterations
+        if budget is not None:
+            remaining = budget.remaining("scheduler_iterations")
+            if remaining < 1:
+                return OccurrenceCollectionResult(
+                    occurrences=(),
+                    cursor=request.cursor,
+                    source=self.session.evaluator.kind or "scheduler",
+                    terminal=OccurrenceSearchExhausted(
+                        "scheduler iteration budget",
+                        reference=request.cursor.local_datetime,
+                        limit=0,
+                    ),
+                    request=request,
+                )
+            iteration_limit = min(iteration_limit, remaining)
+            if not budget.consume("scheduler_iterations", iteration_limit):
+                return OccurrenceCollectionResult(
+                    occurrences=(),
+                    cursor=request.cursor,
+                    source=self.session.evaluator.kind or "scheduler",
+                    terminal=OccurrenceSearchExhausted(
+                        "scheduler iteration budget",
+                        reference=request.cursor.local_datetime,
+                        limit=remaining,
+                    ),
+                    request=request,
+                )
         try:
             if request.omission_policy == "exclude":
                 if request.end_local is not None:
@@ -180,7 +214,7 @@ class SchedulerService:
                         limit=request.limit,
                         inclusive=request.cursor.inclusive,
                         include_omitted=False,
-                        max_iterations=request.max_iterations,
+                        max_iterations=iteration_limit,
                         max_file_skips=request.max_file_skips,
                     )
                     result = OccurrenceCollectionResult(
@@ -193,7 +227,7 @@ class SchedulerService:
                     result = self.collect(
                         request.cursor,
                         limit=request.limit,
-                        max_iterations=request.max_iterations,
+                        max_iterations=iteration_limit,
                         max_file_skips=request.max_file_skips,
                     )
                 return OccurrenceCollectionResult(
@@ -212,7 +246,7 @@ class SchedulerService:
                     inclusive=request.cursor.inclusive,
                     include_omitted=include_omitted,
                     count_omitted=count_omitted,
-                    max_iterations=request.max_iterations,
+                    max_iterations=iteration_limit,
                     max_file_skips=request.max_file_skips,
                 )
             else:
@@ -220,7 +254,7 @@ class SchedulerService:
                     request.cursor,
                     limit=request.limit,
                     count_omitted=count_omitted,
-                    max_iterations=request.max_iterations,
+                    max_iterations=iteration_limit,
                     max_file_skips=request.max_file_skips,
                 )
         except OccurrenceSearchExhausted as exc:

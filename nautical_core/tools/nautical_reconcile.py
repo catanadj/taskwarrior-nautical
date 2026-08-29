@@ -29,9 +29,12 @@ from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_l
 from nautical_core import modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # noqa: E402
+from nautical_core.integrity_operator_owner import build_integrity_mutation_request  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
+from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,
     LifecycleAction,
@@ -56,15 +59,15 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 )
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
-from nautical_core.reconcile_report import exit_code, render_human, to_operator_result  # noqa: E402
-from nautical_core.operator_presentation import key_value_lines, render_json_document, render_result  # noqa: E402
+from nautical_core.reconcile_report import action_style, describe_plan, describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
+from nautical_core.operator_presentation import render_json_document, render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
-    CallbackLifecycleRecoveryOperations,
     LifecycleReconciliationService,
 )
 from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService  # noqa: E402
+from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks, ReconcileRecoveryCoordinator  # noqa: E402
 
 
 _PARENT_LOCK_RETRIES = 600
@@ -151,21 +154,6 @@ def _style(text: str, color: str, *, stream: Any = None) -> str:
     if os.environ.get("NO_COLOR") or not getattr(stream, "isatty", lambda: False)():
         return text
     return f"{_ANSI.get(color, '')}{text}{_ANSI['reset']}"
-
-
-def _action_style(action: str) -> str:
-    return {
-        "spawn": "green",
-        "backfill_nextlink": "cyan",
-        "repair_until": "green",
-        "legitimate_final": "yellow",
-        "manual_stop": "yellow",
-        "stale": "dim",
-        "partial": "yellow",
-        "error": "red",
-        "repair_error": "red",
-        "manual_review": "yellow",
-    }.get(action, "cyan")
 
 
 def _runtime_core(runtime: Any) -> Any:
@@ -328,26 +316,6 @@ def _reconcile_runtime_state() -> _ReconcileRuntimeState | None:
     return _RECONCILE_RUNTIME.get()
 
 
-def _active_chain_rows(
-    task_bin: str,
-    *,
-    include_inactive: bool = False,
-    snapshot: ReconcileSnapshotService | None = None,
-) -> list[TaskObservation]:
-    """Export live Nautical links for integrity checks, independently of recovery candidates."""
-    if snapshot is None:
-        raise RuntimeError("active-chain reads require an authoritative snapshot")
-    rows = snapshot.active_rows()
-    return sorted(
-        (
-            row
-            for row in rows
-            if _observation_text(row, "status").lower() not in {"completed", "deleted"}
-        ),
-        key=IntegrityRecoveryService.candidate_sort_key,
-    )
-
-
 def _native_until_guard_error(expected: TaskObservation, fresh: TaskObservation) -> str | None:
     """Detect target or recurrence changes made after the audit export."""
     fields = (
@@ -406,12 +374,16 @@ def _native_until_repairs(
     """Find invalid native windows and repair only those with a reliable predecessor."""
     runtime_state = _reconcile_runtime_state()
     runtime_snapshot = runtime_state.snapshot if runtime_state is not None else None
-    active_rows = _active_chain_rows(
-        task_bin,
-        include_inactive=False,
-        snapshot=snapshot or runtime_snapshot,
+    active_snapshot = snapshot or runtime_snapshot
+    if active_snapshot is None:
+        raise RuntimeError("native-until audit requires an authoritative snapshot")
+    active_rows = sorted(
+        (
+            row for row in active_snapshot.active_rows()
+            if _observation_text(row, "status").lower() not in {"completed", "deleted"}
+        ),
+        key=IntegrityRecoveryService.candidate_sort_key,
     )
-    rows = active_rows
     recovery_audit = control_plane.audit_native_until(
         active_rows,
         predecessor=_fresh_native_until_previous,
@@ -737,75 +709,6 @@ def _plan_for_parent(
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
         raise _PlanReadUnavailable(f"reconcile child read unavailable: {reason}") from exc
-
-
-def _integrity_request_factory(operation: Any) -> Any:
-    """Build a fresh guarded metadata request for one integrity operation."""
-    if _UNIT_OF_WORK is None:
-        raise RuntimeError("integrity repair requires an integration unit of work")
-    from nautical_core.integration_models import (
-        GuardTimestamp,
-        GuardTimestampField,
-        MutationGuard,
-        MutationRequest,
-    )
-    from nautical_core.task_changes import TaskPatch
-    from nautical_core.task_models import FieldPresence, TaskObservation, TaskUUID
-
-    read = _repository().by_uuid(operation.target_uuid, refresh=True)
-    row = _read_value(read, f"integrity target {operation.target_uuid}")
-    if not isinstance(row, TaskObservation):
-        raise RuntimeError(f"integrity target {operation.target_uuid} is unavailable")
-    def field_value(name: str) -> object:
-        state = row.field(name)
-        return None if state.presence is FieldPresence.ABSENT else state.raw_value()
-
-    modified = str(field_value("modified") or "").strip()
-    if not modified:
-        raise RuntimeError("integrity target has no modified timestamp")
-    link = lifecycle.int_or_default(field_value("link"), 0)
-    if link < 0:
-        raise RuntimeError("integrity target has an invalid link")
-    updates = dict(operation.payload)
-    expected = {key: field_value(key) for key in updates}
-    guard = MutationGuard(
-        task_uuid=str(field_value("uuid") or operation.target_uuid),
-        status=str(field_value("status") or "pending"),
-        chain_id=str(field_value("chainID") or operation.chain_id),
-        link=link,
-        recurrence_identity=recurrence_fingerprint(row.to_mapping()),
-        timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, modified),),
-        expected_mutation_epoch=_UNIT_OF_WORK.mutation_epoch,
-        chain=str(field_value("chain") or "on"),
-    )
-    patch = TaskPatch.metadata_repair(TaskUUID(guard.task_uuid), **updates)
-    return MutationRequest.metadata_repair(guard, patch, expected=expected)
-
-
-def _audit_reconcile_integrity(rows: tuple[dict[str, Any], ...], *, outbox_repository: Any = None) -> Any:
-    """Audit the authoritative lifecycle export without issuing another export."""
-    if _UNIT_OF_WORK is None:
-        raise RuntimeError("integrity audit requires an integration unit of work")
-    from nautical_core.chain_integrity_models import SnapshotCoverage
-    from nautical_core.integrity_audit_service import audit_authoritative_rows_with_engine
-
-    unit_of_work = _UNIT_OF_WORK
-    if unit_of_work is None:
-        raise RuntimeError("integrity audit requires an integration unit of work")
-    decoded = tuple(
-        DEFAULT_TASK_CODEC.decode_row(row, source_query="reconcile integrity snapshot")
-        for row in rows
-    )
-    bundle = audit_authoritative_rows_with_engine(
-        unit_of_work,
-        decoded,
-        source="lifecycle.lifecycle_candidates",
-        coverage=SnapshotCoverage.CHAIN,
-        outbox_repository=outbox_repository,
-    )
-    if bundle is None:
-        raise RuntimeError("reconcile lifecycle snapshot rejected: configuration unavailable")
-    return bundle.engine, bundle.result
 
 
 def _find_positional_child(lifecycle_plan: LifecyclePlan) -> Any | None:
@@ -1289,29 +1192,31 @@ def _reconcile_candidate(
             return _recovery_manual_review(candidate, reason)
         return _recovery_error(candidate, reason)
 
-    return reconciliation_service.recover_candidate(
-        parent,
-        operations=CallbackLifecycleRecoveryOperations(
-            apply_parent_callback=lambda candidate, **kwargs: _apply_parent_atomic(
+    coordinator = ReconcileRecoveryCoordinator(
+        reconciliation_service,
+        ReconcileRecoveryCallbacks(
+            apply_parent=lambda candidate, **kwargs: _apply_parent_atomic(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
-            plan_parent_callback=lambda candidate, **kwargs: _plan_for_parent(
+            plan_parent=lambda candidate, **kwargs: _plan_for_parent(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
-            next_child_callback=_next_recovery_child,
-            virtual_child_callback=lambda candidate, **kwargs: _virtual_expired_child(
+            next_child=_next_recovery_child,
+            virtual_child=lambda candidate, **kwargs: _virtual_expired_child(
                 candidate, hook=hook, **kwargs,
             ),
-            terminal_error_callback=lambda child, recovery_at: _terminal_recovery_error(
+            terminal_error=lambda child, recovery_at: _terminal_recovery_error(
                 child, hook, recovery_at,
             ),
-            is_orphan_deleted_callback=lifecycle.is_orphan_deleted_chain_candidate,
-            recovery_error_callback=_recovery_error,
-            recovery_partial_callback=_recovery_partial,
-            recovery_manual_review_callback=_recovery_manual_review,
-            recovery_terminal_callback=_recovery_terminal,
-            recovery_exception_callback=recovery_from_exception,
+            recovery_error=_recovery_error,
+            recovery_partial=_recovery_partial,
+            recovery_manual_review=_recovery_manual_review,
+            recovery_terminal=_recovery_terminal,
+            recovery_exception=recovery_from_exception,
         ),
+    )
+    return coordinator.recover(
+        parent,
         taskdata=taskdata,
         apply=apply,
         max_expiration_hops=max_expiration_hops,
@@ -1320,100 +1225,35 @@ def _reconcile_candidate(
         generation=generation,
     )
 
-def _fmt_parent(parent: TaskPayload) -> str:
-    uuid = lifecycle.short_uuid(parent.get("uuid")) or "????????"
-    chain_id = str(parent.get("chainID") or "?")
-    link = lifecycle.int_or_default(parent.get("link"), 0)
-    desc = str(parent.get("description") or "").strip()
-    return f"{uuid} chain {chain_id} link {link}" + (f" · {desc}" if desc else "")
-
-
-def _print_evidence(evidence: dict[str, Any], keys: tuple[str, ...]) -> None:
-    values = {
-        key.replace("_", " "): evidence[key]
-        for key in keys
-        if evidence.get(key) not in (None, "")
-    }
-    for line in key_value_lines(values):
-        print(f"  {line}")
-
-
-def _describe_plan(plan: RecoveryResult, *, hook: Any, fmt_dt_local=None) -> dict[str, Any]:
-    if isinstance(plan, RecoveryRefusal):
-        return lifecycle.describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
-    evidence = lifecycle.describe_recovery_result(plan, fmt_dt_local=fmt_dt_local)
-    child_until = plan.plan.child_dict().get("until")
-    if not child_until:
-        return evidence
-    try:
-        until_dt, until_err = _safe_parse_datetime(hook, child_until)
-    except Exception:
-        return evidence
-    if until_err or until_dt is None:
-        return evidence
-
-    if callable(fmt_dt_local):
-        try:
-            evidence["child_expires"] = str(fmt_dt_local(until_dt))
-        except Exception:
-            evidence["child_expires"] = str(child_until)
-    else:
-        evidence["child_expires"] = str(child_until)
-
-    if plan.child_due is None:
-        return evidence
-    try:
-        core = _runtime_core(hook)
-        add_validation = core._import_sibling("add_validation")
-        carry = add_validation.describe_native_until_carry(
-            until_dt,
-            plan.child_due,
-            to_local=core.to_local,
-        )
-    except Exception:
-        carry = None
-    if carry:
-        evidence["expiration"] = carry
-    return evidence
-
-
-def _recovery_action(result: RecoveryResult) -> str:
-    """Project a typed recovery result to the reconcile report action."""
-    if isinstance(result, RecoveryRefusal):
-        return result.status.value
-    return {
-        LifecycleAction.SPAWN_CHILD: "spawn",
-        LifecycleAction.UPDATE_PARENT: "backfill_nextlink",
-        LifecycleAction.FINALIZE_CHAIN: "legitimate_final",
-        LifecycleAction.DISABLE_CHAIN: "manual_stop",
-    }.get(result.plan.action, result.plan.action.value)
-
-
 def _print_plan(
     plan: RecoveryResult,
     evidence: dict[str, Any] | None = None,
     *,
     applied_short: str = "",
 ) -> None:
-    parent = _fmt_parent(plan.parent.to_mapping())
+    parent = format_parent(plan.parent.to_mapping())
     if evidence is None:
-        evidence = lifecycle.describe_recovery_result(plan)
+        evidence = describe_recovery_result(plan)
     if isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.SPAWN_CHILD:
         suffix = f" -> created {applied_short}" if applied_short else ""
-        print(_style(f"spawn: {parent}{suffix}", _action_style("spawn")))
-        _print_evidence(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration"))
+        print(_style(f"spawn: {parent}{suffix}", action_style("spawn")))
+        for line in evidence_lines(evidence, ("reason", "kind", "next_link", "child_field", "child_target", "child_due", "child_local", "child_expires", "expiration")):
+            print(f"  {line}")
     elif isinstance(plan, RecoveryPlanResult) and plan.plan.action is LifecycleAction.UPDATE_PARENT:
         suffix = " (applied)" if applied_short else ""
-        print(_style(f"backfill nextLink: {parent}{suffix}", _action_style("backfill_nextlink")))
-        _print_evidence(evidence, ("reason", "next_link", "existing_child"))
+        print(_style(f"backfill nextLink: {parent}{suffix}", action_style("backfill_nextlink")))
+        for line in evidence_lines(evidence, ("reason", "next_link", "existing_child")):
+            print(f"  {line}")
     elif isinstance(plan, RecoveryPlanResult) and plan.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}:
         suffix = " -> set chain:off" if applied_short else ""
-        print(_style(f"terminal: {parent} ({plan.reason}){suffix}", _action_style("legitimate_final")))
-        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+        print(_style(f"terminal: {parent} ({plan.reason}){suffix}", action_style("legitimate_final")))
+        for line in evidence_lines(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration")):
+            print(f"  {line}")
     else:
         status = plan.status.value if isinstance(plan, RecoveryRefusal) else "error"
-        print(_style(f"{status}: {parent} ({plan.reason})", _action_style(status)))
-        _print_evidence(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration"))
+        print(_style(f"{status}: {parent} ({plan.reason})", action_style(status)))
+        for line in evidence_lines(evidence, ("kind", "next_link", "child_due", "child_local", "child_expires", "expiration")):
+            print(f"  {line}")
 
 
 def _print_recovery_group(
@@ -1427,17 +1267,18 @@ def _print_recovery_group(
         and plan.plan.action in {LifecycleAction.SPAWN_CHILD, LifecycleAction.UPDATE_PARENT}
     )
     noun = "occurrence" if hops == 1 else "occurrences"
-    print(_style(f"recover: {_fmt_parent(first.parent.to_mapping())} -> advanced {hops} {noun}", "cyan"))
+    print(_style(f"recover: {format_parent(first.parent.to_mapping())} -> advanced {hops} {noun}", "cyan"))
     if isinstance(last, RecoveryRefusal) or (
         isinstance(last, RecoveryPlanResult)
         and last.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}
     ):
         result = last.status.value if isinstance(last, RecoveryRefusal) else "terminal"
-        print(_style(f"  result: {result} ({last.reason})", _action_style(result)))
+        print(_style(f"  result: {result} ({last.reason})", action_style(result)))
         return
     if applied_short:
         print(f"  child: {applied_short}")
-    _print_evidence(evidence, ("next_link", "child_local", "child_due", "child_expires"))
+    for line in evidence_lines(evidence, ("next_link", "child_local", "child_due", "child_expires")):
+        print(f"  {line}")
 
 
 def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
@@ -1496,19 +1337,24 @@ class _ReconcileSession:
         self.lifecycle_application = lifecycle_application
         self.runtime_state = runtime_state
 
-    def collect_candidates(self) -> tuple[TaskObservation, ...]:
-        """Load the bounded candidate set for this invocation."""
-        return tuple(self.lifecycle_service.candidates())
-
     def audit_integrity(self, *, hook: Any, apply: bool) -> tuple[Any, Any, float, tuple[Any, ...], float]:
         """Audit and, when authorized, apply integrity plans for this snapshot."""
-        if self.snapshot._rows is None:
+        rows = self.snapshot.loaded_rows()
+        if rows is None:
             return None, None, 0.0, (), 0.0
         started = time.perf_counter()
-        engine, audit = _audit_reconcile_integrity(
-            tuple(row.to_mapping() for row in self.snapshot._rows),
+        from nautical_core.chain_integrity_models import SnapshotCoverage
+        from nautical_core.integrity_audit_service import audit_authoritative_mappings_with_engine
+        bundle = audit_authoritative_mappings_with_engine(
+            self.unit_of_work,
+            tuple(row.to_mapping() for row in rows),
+            source="lifecycle.lifecycle_candidates",
+            coverage=SnapshotCoverage.CHAIN,
             outbox_repository=self.integrity_outbox,
         )
+        if bundle is None:
+            raise RuntimeError("reconcile lifecycle snapshot rejected: configuration unavailable")
+        engine, audit = bundle.engine, bundle.result
         audit_seconds = time.perf_counter() - started
         if not (apply and audit is not None and audit.plans):
             return engine, audit, audit_seconds, (), 0.0
@@ -1516,7 +1362,9 @@ class _ReconcileSession:
         application = engine.apply(
             audit,
             executor=self.mutation_gateway,
-            request_factory=_integrity_request_factory,
+            request_factory=lambda operation: build_integrity_mutation_request(
+                operation, unit_of_work=self.unit_of_work
+            ),
             outbox_repository=self.integrity_outbox,
             owner=f"reconcile-integrity-{os.getpid()}",
         )
@@ -1538,50 +1386,20 @@ class _ReconcileSession:
         )
         return repairs, errors, _native_until_audit_result(repairs, errors).status
 
-    def preflight_wave(self, candidates: tuple[TaskObservation, ...]) -> None:
-        """Hydrate child-slot evidence once for the candidate wave."""
-        self.lifecycle_service.preflight_wave(candidates)
-
-    def plan_candidate(self, task_bin: str, hook: Any, parent: TaskObservation, *, taskdata: Path | None,
-                       apply: bool, max_expiration_hops: int, recovery_at: Any,
-                       lease_held: bool, generation: Any) -> list[tuple[RecoveryResult, str]]:
-        """Plan one candidate through the session's shared lifecycle context."""
-        if not isinstance(parent, TaskObservation):
-            raise TypeError("reconcile planning requires a typed task observation")
-        return _reconcile_candidate(
-            task_bin, hook, parent.to_mapping(), taskdata=taskdata, apply=apply,
-            max_expiration_hops=max_expiration_hops, recovery_at=recovery_at,
-            lease_held=lease_held, generation=generation,
-            reconciliation_service=self.lifecycle_service,
-        )
-
-    def execute_wave(self, *, hook: Any, taskdata: Path, wave_plans: dict[str, tuple[RecoveryPlanResult, str]],
-                     configuration_fingerprint: str, schedule_fingerprint: str) -> Any:
-        """Apply one guarded lifecycle wave through the session application service."""
-        return _execute_reconcile_lifecycle_wave(
-            hook,
-            self.lifecycle_service,
-            self.lifecycle_application,
-            taskdata,
-            wave_plans,
-            configuration_fingerprint=configuration_fingerprint,
-            schedule_fingerprint=schedule_fingerprint,
-        )
-
-
 def _build_reconcile_session(
     request: ReconcileRequest,
     unit_of_work: TaskwarriorUnitOfWork,
+    *,
+    budget: OperatorInvocationBudget | None = None,
 ) -> _ReconcileSession:
     repository = unit_of_work.repository
     repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
-    scope_filter = f"chainID:{request.chain_id}" if request.chain_id else f"uuid:{request.uuid}" if request.uuid else None
-    snapshot = ReconcileSnapshotService(
+    snapshot = ReconcileSnapshotService.for_request(
         repository,
-        scope_filter=scope_filter,
-        full_audit=bool(request.full_audit),
+        request,
         read_value=_read_value,
         stats=_EXPORT_STATS,
+        budget=budget,
     )
     configuration = unit_of_work.context.configuration
     control_plane = OperatorControlPlane.from_configuration(configuration, DomainApplicationRegistry())
@@ -1595,6 +1413,7 @@ def _build_reconcile_session(
         outbox=integrity_outbox,
         owner=f"reconcile-{os.getpid()}",
         lease_seconds=120.0,
+        budget=budget,
     )
     lifecycle_service = LifecycleReconciliationService(
         snapshot,
@@ -1624,6 +1443,9 @@ def main(
         max_expiration_hops=_MAX_EXPIRATION_HOPS,
     )
     args = ReconcileRequest.from_namespace(parser.parse_args(argv))
+    # Reconcile is intentionally broader than a scoped query, but remains
+    # bounded so a corrupt/unbounded export cannot consume the process.
+    budget = OperatorInvocationBudget(OperatorLimits(tasks=10_000, chains=1_000))
     _EXPORT_STATS.update(calls=0, rows=0, seconds=0.0, slowest_seconds=0.0, snapshot_hits=0)
     _LOCK_STATS.update(reconcile_busy=0, parent_busy=0)
     if _unit_of_work is None:
@@ -1662,7 +1484,7 @@ def main(
         return _startup_failure(args, "runtime", exc)
     global _UNIT_OF_WORK
     _UNIT_OF_WORK = _unit_of_work
-    session = _build_reconcile_session(args, _UNIT_OF_WORK)
+    session = _build_reconcile_session(args, _UNIT_OF_WORK, budget=budget)
     repository = session.repository
     snapshot = session.snapshot
     operator_control_plane = session.control_plane
@@ -1674,7 +1496,7 @@ def main(
     runtime_state = session.runtime_state
     _RECONCILE_RUNTIME.set(runtime_state)
     try:
-        candidates = session.collect_candidates()
+        candidates = tuple(lifecycle_service.candidates())
     except Exception as exc:
         return _startup_failure(args, "candidate_export", exc)
     integrity_audit_result: Any = None
@@ -1699,7 +1521,7 @@ def main(
             configuration_drift_reason = integrity_audit_result.reason or "integrity audit unavailable"
         elif integrity_audit_result is not None and args.apply and integrity_audit_result.plans:
             if integrity_application_results:
-                candidates = session.collect_candidates()
+                candidates = tuple(lifecycle_service.candidates())
     except Exception as exc:
         if os.environ.get("NAUTICAL_DIAG") == "1":
             print(f"[nautical] integrity audit unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -1723,7 +1545,9 @@ def main(
                 integrity_outbox,
                 unit_of_work=_UNIT_OF_WORK,
                 executor=mutation_gateway,
-                request_factory=_integrity_request_factory,
+                request_factory=lambda operation: build_integrity_mutation_request(
+                    operation, unit_of_work=_UNIT_OF_WORK
+                ),
                 owner=f"reconcile-integrity-{os.getpid()}",
             )
         except Exception as exc:
@@ -1782,7 +1606,7 @@ def main(
                 f"chain={item.get('chainID') or '?'} link={item.get('link') or '?'}"
                 f"  {item.get('reason') or 'invalid native until'}{suffix}{outcome}"
             )
-            print(_style(line, _action_style(action)))
+            print(_style(line, action_style(action)))
         for error in native_until_errors:
             print(_style(f"error: native-until: {error}", "red", stream=sys.stderr), file=sys.stderr)
     plans: list[RecoveryResult] = []
@@ -1794,7 +1618,7 @@ def main(
     if configuration_status == "valid":
         hydration_started = time.perf_counter()
         try:
-            session.preflight_wave(candidates)
+            lifecycle_service.preflight_wave(candidates)
         except Exception as exc:
             configuration_status = "unavailable"
             configuration_drift_reason = f"wave child-slot evidence unavailable: {type(exc).__name__}: {exc}"
@@ -1814,16 +1638,17 @@ def main(
             if str(parent.get("status") or "").strip().lower() != "completed":
                 continue
             try:
-                planned_outcomes = session.plan_candidate(
+                planned_outcomes = _reconcile_candidate(
                     args.task_bin,
                     hook,
-                    parent_observation,
+                    parent_observation.to_mapping(),
                     taskdata=taskdata,
                     apply=False,
                     max_expiration_hops=args.max_expiration_hops,
                     recovery_at=recovery_at,
                     lease_held=_apply_lease_held,
                     generation=generation,
+                    reconciliation_service=lifecycle_service,
                 )
             except Exception:
                 continue
@@ -1838,10 +1663,12 @@ def main(
         if wave_plans:
             mutation_started = time.perf_counter()
             try:
-                wave_result = session.execute_wave(
-                    hook=hook,
-                    taskdata=taskdata,
-                    wave_plans=wave_plans,
+                wave_result = _execute_reconcile_lifecycle_wave(
+                    hook,
+                    lifecycle_service,
+                    lifecycle_application,
+                    taskdata,
+                    wave_plans,
                     configuration_fingerprint=configuration.fingerprint,
                     schedule_fingerprint=configuration.scheduler_fingerprint,
                 )
@@ -1872,16 +1699,17 @@ def main(
         else:
             mutation_started = time.perf_counter() if args.apply else 0.0
             try:
-                outcomes = session.plan_candidate(
+                outcomes = _reconcile_candidate(
                     args.task_bin,
                     hook,
-                    parent_observation,
+                    parent_observation.to_mapping(),
                     taskdata=taskdata,
                     apply=args.apply,
                     max_expiration_hops=args.max_expiration_hops,
                     recovery_at=recovery_at,
                     lease_held=_apply_lease_held,
                     generation=generation,
+                    reconciliation_service=lifecycle_service,
                 )
             except Exception as exc:
                 reason = str(exc).strip() or type(exc).__name__
@@ -1921,11 +1749,19 @@ def main(
                 )
             )
             plans.append(plan)
-            evidence = _describe_plan(plan, hook=hook, fmt_dt_local=fmt_dt_local)
+            core_runtime = _runtime_core(hook)
+            evidence = describe_plan(
+                plan,
+                fmt_dt_local=fmt_dt_local,
+                parse_until=lambda value: _safe_parse_datetime(hook, value),
+                describe_carry=lambda until, due: core_runtime._import_sibling("add_validation").describe_native_until_carry(
+                    until, due, to_local=core_runtime.to_local,
+                ),
+            )
             plan_evidence.append(evidence)
             rendered.append((plan, evidence, applied_short))
             if args.apply and applied_short:
-                action = _recovery_action(plan)
+                action = recovery_action(plan)
                 disabling = action in {"legitimate_final", "manual_stop"}
                 record = {
                     "action": action,
@@ -1946,7 +1782,7 @@ def main(
         1
         for plan in plans
         if str(plan.parent.to_mapping().get("status") or "").strip() == "deleted"
-        and _recovery_action(plan) in {"spawn", "backfill_nextlink"}
+        and recovery_action(plan) in {"spawn", "backfill_nextlink"}
     )
     recovered_chains = sum(
         1
@@ -1955,24 +1791,24 @@ def main(
             1
             for plan, _applied in outcomes
         if str(plan.parent.to_mapping().get("status") or "").strip() == "deleted"
-            and _recovery_action(plan) in {"spawn", "backfill_nextlink"}
+            and recovery_action(plan) in {"spawn", "backfill_nextlink"}
         )
         > 1
-        and all(_recovery_action(plan) not in {"error", "partial"} for plan, _applied in outcomes)
+        and all(recovery_action(plan) not in {"error", "partial"} for plan, _applied in outcomes)
     )
     native_until_manual_review = sum(
         1 for item in native_until_repairs if item.get("action") == "manual_review"
     )
     native_until_audit_skipped = int(bool(native_until_audit_warning))
     degraded = (
-        any(_recovery_action(plan) == "partial" for plan in plans)
-        or any(_recovery_action(plan) == "manual_review" for plan in plans)
+        any(recovery_action(plan) == "partial" for plan in plans)
+        or any(recovery_action(plan) == "manual_review" for plan in plans)
         or native_until_manual_review > 0
         or native_until_audit_skipped > 0
         or bool(configuration_drift_reason)
         or any(item.kind not in {MutationOutcomeKind.APPLIED, MutationOutcomeKind.ALREADY_APPLIED} for item in integrity_drain_results)
     )
-    plan_errors = sum(1 for plan in plans if _recovery_action(plan) == "error")
+    plan_errors = sum(1 for plan in plans if recovery_action(plan) == "error")
     native_until_error_count = len(native_until_errors)
     total_errors = plan_errors + native_until_error_count
     has_errors = total_errors > 0
@@ -2020,18 +1856,18 @@ def main(
         "candidates": len(candidates),
         "expiration_hops": expiration_hops,
         "recovered_chains": recovered_chains,
-        "spawn": sum(1 for p in plans if _recovery_action(p) == "spawn"),
-        "backfill_nextlink": sum(1 for p in plans if _recovery_action(p) == "backfill_nextlink"),
-        "legitimate_final": sum(1 for p in plans if _recovery_action(p) == "legitimate_final"),
+        "spawn": sum(1 for p in plans if recovery_action(p) == "spawn"),
+        "backfill_nextlink": sum(1 for p in plans if recovery_action(p) == "backfill_nextlink"),
+        "legitimate_final": sum(1 for p in plans if recovery_action(p) == "legitimate_final"),
         "terminal": sum(
             1 for p in plans
             if isinstance(p, RecoveryPlanResult)
             and p.plan.action in {LifecycleAction.FINALIZE_CHAIN, LifecycleAction.DISABLE_CHAIN}
         ),
-        "manual_stop": sum(1 for p in plans if _recovery_action(p) == "manual_stop"),
-        "stale": sum(1 for p in plans if _recovery_action(p) == "stale"),
-        "partial": sum(1 for p in plans if _recovery_action(p) == "partial"),
-        "manual_review": sum(1 for p in plans if _recovery_action(p) == "manual_review"),
+        "manual_stop": sum(1 for p in plans if recovery_action(p) == "manual_stop"),
+        "stale": sum(1 for p in plans if recovery_action(p) == "stale"),
+        "partial": sum(1 for p in plans if recovery_action(p) == "partial"),
+        "manual_review": sum(1 for p in plans if recovery_action(p) == "manual_review"),
         "errors": total_errors,
         "startup_errors": 0,
         "plan_errors": plan_errors,
@@ -2067,7 +1903,7 @@ def main(
         "lock_contention": dict(_LOCK_STATS),
         "plans": [
             {
-                "action": _recovery_action(plan),
+                "action": recovery_action(plan),
                 **evidence,
             }
             for plan, evidence in zip(plans, plan_evidence)
@@ -2079,7 +1915,7 @@ def main(
         "housekeeping": housekeeping,
     }
     if args.json:
-        print(render_result(to_operator_result(summary), "json"))
+        print(render_result(to_operator_result(summary), "json", budget=budget))
     else:
         summary_line, diagnostics_line = render_human(summary, _style)
         print(summary_line)

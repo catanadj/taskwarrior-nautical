@@ -204,6 +204,14 @@ def components(result: IntegrityEngineResult) -> dict[str, Any]:
         [{"chainID": chain_id, "status": status.value} for chain_id, status in result.chain_statuses],
         keys=("chainID", "status"),
     )
+    failure = None
+    if result.status.value == "unavailable":
+        failure = {
+            "code": "integrity_unavailable",
+            "message": result.reason or "integrity evidence is unavailable",
+            "retryable": True,
+            "details": {},
+        }
     return {
         "status": result.status.value,
         "snapshot": _snapshot_payload(result.snapshot),
@@ -211,7 +219,7 @@ def components(result: IntegrityEngineResult) -> dict[str, Any]:
         "plans": list(plan_rows),
         "refusals": list(refusal_rows),
         "chain_statuses": list(chain_rows),
-        "failure": {"message": result.reason} if result.reason else None,
+        "failure": failure,
     }
 
 

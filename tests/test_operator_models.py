@@ -254,6 +254,84 @@ class OperatorModelsTests(unittest.TestCase):
         with self.assertRaises(OperatorContractError):
             OperatorLimits(file_records=0)
 
+    def test_every_operator_limit_has_an_enforcement_owner(self) -> None:
+        limits = OperatorLimits()
+        fields = (
+            "taskwarrior_calls", "exported_rows", "decoded_rows", "hydration_identities",
+            "sqlite_transactions", "cache_entries", "peak_memory_bytes",
+            "tasks", "chains", "occurrences", "history_links", "findings",
+            "outbox_rows", "file_records", "scheduler_iterations", "wall_time_seconds",
+        )
+        for field in fields:
+            self.assertTrue(OperatorLimits.enforcement_owner(field))
+            self.assertTrue(hasattr(limits, field))
+        with self.assertRaises(OperatorContractError):
+            OperatorLimits.enforcement_owner("unknown")
+
+    def test_limits_round_trip_includes_resource_dimensions(self) -> None:
+        limits = OperatorLimits(
+            taskwarrior_calls=11,
+            exported_rows=12,
+            decoded_rows=13,
+            hydration_identities=14,
+            sqlite_transactions=15,
+            cache_entries=16,
+            peak_memory_bytes=17,
+        )
+        self.assertEqual(OperatorLimits.from_mapping(limits.to_dict()), limits)
+
+    def test_budget_does_not_interrupt_after_effect_boundary(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        self.assertTrue(budget.consume("taskwarrior_calls"))
+        self.assertFalse(budget.consume("taskwarrior_calls"))
+        budget.begin_effect()
+        self.assertTrue(budget.effect_started)
+        self.assertTrue(budget.consume("taskwarrior_calls"))
+        self.assertTrue(budget.exceeded("taskwarrior_calls"))
+
+    def test_budget_records_peak_memory_without_replacing_the_high_water_mark(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(peak_memory_bytes=100))
+        self.assertTrue(budget.observe_peak_memory(80))
+        self.assertFalse(budget.observe_peak_memory(120))
+        self.assertEqual(budget.usage("peak_memory_bytes"), 120)
+        self.assertEqual(budget.snapshot()["peak_memory_bytes"], 120)
+
+    def test_budget_reports_wall_time_without_interrupting_effects(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(wall_time_seconds=1))
+        budget._started_monotonic -= 2
+        self.assertTrue(budget.wall_time_exceeded)
+        budget.begin_effect()
+        self.assertTrue(budget.effect_started)
+
+    def test_budget_report_is_json_native_and_identifies_overages(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        budget.begin_effect()
+        budget.consume("taskwarrior_calls", 2)
+        report = budget.report()
+        self.assertEqual(report["usage"]["taskwarrior_calls"], 2)
+        self.assertEqual(report["limits"]["taskwarrior_calls"], 1)
+        self.assertIn("taskwarrior_calls", report["exceeded"])
+        self.assertTrue(report["effect_started"])
+
+    def test_task_command_budget_rejects_before_process_spawn(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+        from nautical_core.task_command import run_task_command
+
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        self.assertTrue(budget.consume("taskwarrior_calls"))
+        result = run_task_command("/path/that/does/not/exist", [], budget=budget)
+        self.assertEqual(result.kind.value, "rejected")
+        self.assertEqual(result.returncode, 125)
+        self.assertEqual(budget.usage("taskwarrior_calls"), 1)
+
     def test_invocation_context_captures_one_immutable_basis(self) -> None:
         configuration = ValidatedNauticalConfiguration(
             "/tmp/config", "config-1", "schedule-1", "UTC", (),
@@ -263,7 +341,11 @@ class OperatorModelsTests(unittest.TestCase):
             ZoneInfo("UTC"), SilentDiagnostics(), SystemClock(), "inv-1", 10,
             IntegrationAccess.READ_ONLY,
         )
-        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope(OperatorScopeKind.SYSTEM))
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.SYSTEM),
+            limits=OperatorLimits(cache_entries=3),
+        )
         context = OperatorInvocationContext.from_integration(
             request, integration,
             captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -273,6 +355,7 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(context.configuration_fingerprint, "config-1")
         self.assertFalse(context.mutation_capable)
         self.assertEqual(context.policy.output, OperatorOutputMode.TEXT)
+        self.assertEqual(context.cache.max_entries, 3)
         context.assert_compatible(integration)
         changed = replace(integration, configuration=replace(configuration, fingerprint="config-2"))
         with self.assertRaises(OperatorContextError):
@@ -476,7 +559,19 @@ class OperatorModelsTests(unittest.TestCase):
         )
         seen = []
         from nautical_core.integration_models import Found
-        reader = ChainSnapshotReader(lambda source_request: (seen.append(source_request) or Found(source, "chain read")))
+        def collect(source_request):
+            seen.append(source_request)
+            if getattr(source_request, "chain_id", None) == "chain-2":
+                return Found(
+                    ChainSnapshot(
+                        "chain-snap-2", SnapshotCoverage.CHAIN, "taskwarrior",
+                        (ChainNode("task-2", "chain-2", 1, "pending", ()),), "config-1", True,
+                    ),
+                    "chain read",
+                )
+            return Found(source, "chain read")
+
+        reader = ChainSnapshotReader(collect)
         raw = reader.read_chain_snapshot(
             context,
             SnapshotReadRequest(OperatorScope(OperatorScopeKind.CHAIN, ("chain-1",))),
@@ -505,6 +600,7 @@ class OperatorModelsTests(unittest.TestCase):
         )
         self.assertIsInstance(multi, ChainSnapshot)
         self.assertEqual(len(multi.rows), 2)
+
         reader.read(
             context,
             SnapshotReadRequest(
@@ -575,6 +671,160 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(len(batch), 2)
         self.assertIsInstance(batch[0], OperatorSnapshot)
         self.assertIsInstance(batch[1], OperatorFailure)
+
+    def test_chain_snapshot_reader_rejects_overlarge_hydration_before_read(self) -> None:
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope(OperatorScopeKind.CHAINS, ("chain-1", "chain-2")))
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-1", 10, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        calls = []
+        reader = ChainSnapshotReader(lambda source_request: calls.append(source_request))
+        result = reader.read_chain_snapshot(
+            context,
+            SnapshotReadRequest(request.scope, limits=OperatorLimits(hydration_identities=1)),
+        )
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_limit_exceeded")
+        self.assertEqual(calls, [])
+
+    def test_chain_snapshot_reader_stops_after_call_budget(self) -> None:
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.CHAINS, ("chain-1", "chain-2")),
+            limits=OperatorLimits(taskwarrior_calls=1),
+        )
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-1", 10, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        source = ChainSnapshot(
+            "chain-snap", SnapshotCoverage.CHAIN, "taskwarrior",
+            (ChainNode("task-1", "chain-1", 1, "pending", ()),), "config-1", True,
+        )
+        calls = []
+        from nautical_core.integration_models import Found
+        reader = ChainSnapshotReader(lambda source_request: (calls.append(source_request) or Found(source, "chain read")))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(request.scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_limit_exceeded")
+        self.assertEqual(len(calls), 1)
+
+    def test_chain_snapshot_reader_enforces_exported_row_budget(self) -> None:
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope(OperatorScopeKind.CHAIN, ("chain-1",)))
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-1", 10, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        source = ChainSnapshot(
+            "chain-snap", SnapshotCoverage.CHAIN, "taskwarrior",
+            (
+                ChainNode("task-1", "chain-1", 1, "pending", ()),
+                ChainNode("task-2", "chain-1", 2, "pending", ()),
+            ), "config-1", True,
+        )
+        from nautical_core.integration_models import Found
+        reader = ChainSnapshotReader(lambda _request: Found(source, "chain read"))
+        result = reader.read(
+            context,
+            SnapshotReadRequest(request.scope, limits=OperatorLimits(exported_rows=1)),
+        )
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_limit_exceeded")
+        self.assertEqual(result.details["resource"], "exported_rows")
+
+    def test_large_multi_scope_does_not_claim_complete_absence(self) -> None:
+        """Broad exports must fail closed when requested identities are missing."""
+        from nautical_core.integration_models import Found
+
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-large-scope", 32, IntegrationAccess.READ_ONLY,
+        )
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.CHAINS, ("chain-a", "chain-b", "chain-c", "chain-d", "chain-e")),
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        source = ChainSnapshot(
+            "broad-snapshot", SnapshotCoverage.CANDIDATES, "taskwarrior",
+            (ChainNode("task-a", "chain-a", 1, "pending", ()),), "config-1", True,
+        )
+        reader = ChainSnapshotReader(lambda _request: Found(source, "broad export"))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(request.scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "invalid_snapshot_scope")
+        self.assertFalse(result.retryable)
+        self.assertEqual(result.details["identity"], "chain-b")
+        uuid_scope = OperatorScope(
+            OperatorScopeKind.UUIDS,
+            ("task-a", "task-b", "task-c", "task-d", "task-e"),
+        )
+        uuid_result = reader.read_chain_snapshot(context, SnapshotReadRequest(uuid_scope))
+        self.assertIsInstance(uuid_result, OperatorFailure)
+        self.assertEqual(uuid_result.code, "invalid_snapshot_scope")
+        self.assertEqual(uuid_result.details["identity"], "task-b")
+
+    def test_multi_scope_reader_preserves_authoritative_identity_coverage(self) -> None:
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
+        from nautical_core.integration_models import Found
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-large-scope", 32, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        scope = OperatorScope(OperatorScopeKind.CHAINS, ("chain-a", "chain-b", "chain-c", "chain-d", "chain-e"))
+        source = ChainSnapshot(
+            "broad-snapshot", SnapshotCoverage.CANDIDATES, "taskwarrior",
+            (ChainNode("task-a", "chain-a", 1, "pending", ()),), "config-1", True,
+        )
+        reader = ChainSnapshotReader(lambda _request: Found(source, "broad export"))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "invalid_snapshot_scope")
+        self.assertFalse(result.retryable)
+        self.assertEqual(result.details["identity"], "chain-b")
+
+    def test_five_chain_scope_uses_one_exact_read_per_identity(self) -> None:
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-five", 32, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(
+            OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system()), integration,
+        )
+        values = tuple(f"chain-{index}" for index in range(5))
+        seen: list[str] = []
+        from nautical_core.integration_models import Found
+
+        def collect(source_request):
+            chain_id = str(source_request.chain_id)
+            seen.append(chain_id)
+            return Found(
+                ChainSnapshot(
+                    f"snapshot-{chain_id}", SnapshotCoverage.CHAIN, "taskwarrior",
+                    (ChainNode(f"task-{chain_id}", chain_id, 1, "pending", ()),), "config-1", True,
+                ),
+                "exact chain read",
+            )
+
+        reader = ChainSnapshotReader(collect)
+        result = reader.read_chain_snapshot(
+            context,
+            SnapshotReadRequest(OperatorScope(OperatorScopeKind.CHAINS, values)),
+        )
+        self.assertIsInstance(result, ChainSnapshot)
+        self.assertEqual(seen, list(values))
+        self.assertEqual(tuple(row.chain_id for row in result.rows), values)
 
     def test_multi_scope_hydration_stops_on_unavailable_evidence(self) -> None:
         request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
-from .operator_models import OperatorContractError, OperatorScope, OperatorStatus
+from .operator_models import OperatorContractError, OperatorScope, OperatorStatus, _freeze_json_value
 
 
 class FindingSeverity(str, Enum):
@@ -85,9 +85,9 @@ class OperatorFinding:
         object.__setattr__(self, "severity", severity)
         object.__setattr__(self, "actionability", actionability)
         object.__setattr__(self, "affected", affected)
-        object.__setattr__(self, "observed", dict(self.observed))
-        object.__setattr__(self, "expected", dict(self.expected))
-        object.__setattr__(self, "evidence", dict(self.evidence))
+        object.__setattr__(self, "observed", _freeze_json_value(self.observed))
+        object.__setattr__(self, "expected", _freeze_json_value(self.expected))
+        object.__setattr__(self, "evidence", _freeze_json_value(self.evidence))
         object.__setattr__(self, "command", str(self.command or "").strip())
         object.__setattr__(self, "guidance", str(self.guidance or "").strip())
         if actionability is not FindingActionability.INFORMATIONAL and not (self.command or self.guidance):

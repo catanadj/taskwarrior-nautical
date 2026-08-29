@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from .task_models import TaskPayload
 from .task_models import TaskObservation
 
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.lifecycle_models import DeletionEvidence, LifecycleAction
+from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 
 
@@ -151,7 +152,17 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
         _compute_cp_child_due=services.compute_cp_child_due,
         _build_child_draft=services.build_child_draft,
     )
-    plan = reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook)
+    plan = cast(
+        RecoveryResult,
+        reconcile.plan_recovery_decision(observation, existing_children=[], hook=plan_hook),
+    )
+
+    if isinstance(plan, RecoveryRefusal):
+        render_recovery_warning(task, plan.reason, services=services)
+        return True
+    if not isinstance(plan, RecoveryPlanResult):
+        render_recovery_warning(task, "Expiration recovery returned an invalid result.", services=services)
+        return True
 
     if plan.plan.action is LifecycleAction.FINALIZE_CHAIN:
         render_recovery_warning(

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 
-_OUTBOX_DB_SCHEMA_VERSION = 1
+_OUTBOX_DB_SCHEMA_VERSION = 2
 
 
 class ExitWorkProbe:

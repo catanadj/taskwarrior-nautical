@@ -20,6 +20,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -51,6 +52,11 @@ _BENCH_PANEL_MODES = {
     "live": "live",
     "minimal": "minimal",
 }
+
+
+def _budget_profile_name(*, slow_device: bool) -> str:
+    """Return the stable profile label recorded in benchmark reports."""
+    return "termux-slow-device" if slow_device else "desktop"
 
 
 def _panel_mode_config(mode: str) -> str:
@@ -88,6 +94,424 @@ def _bench_parse_validate(exprs: list[str], rounds: int) -> float:
         for expr in exprs:
             core.validate_anchor_expr_strict(expr)
     return time.perf_counter() - t0
+
+
+def _bench_capabilities_stage() -> float:
+    """Measure the content-free capabilities composition root."""
+    from nautical_core.tools.nautical_query import _capabilities_payload
+
+    started = time.perf_counter()
+    payload = _capabilities_payload()
+    if not isinstance(payload, dict) or payload.get("status") != "ok" or not payload.get("operations"):
+        raise RuntimeError("capabilities stage returned an invalid payload")
+    return time.perf_counter() - started
+
+
+def _bench_queue_status_stage() -> float:
+    """Measure queue-status composition against an isolated empty outbox."""
+    from nautical_core.tools.nautical_queue_status import _status_payload
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-status-") as td:
+        taskdata = Path(td)
+        started = time.perf_counter()
+        payload, _budget = _status_payload(taskdata, stale_after=300.0, limit=5)
+        if not isinstance(payload, dict) or payload.get("taskdata") != str(taskdata):
+            raise RuntimeError("queue-status stage returned an invalid payload")
+        return time.perf_counter() - started
+
+
+def _bench_navigator_stage() -> float:
+    """Measure one bounded Navigator anchor presentation."""
+    import nautical_navigator
+
+    started = time.perf_counter()
+    result = nautical_navigator._anchor_presentation_result("w:mon", count=1)
+    if not result.next_dates and not result.terminal_note:
+        raise RuntimeError("Navigator stage returned no preview or terminal evidence")
+    return time.perf_counter() - started
+
+
+def _bench_query_pagination_stage() -> float:
+    """Measure scoped and whole-system query pagination without Taskwarrior I/O."""
+    from types import SimpleNamespace
+
+    from nautical_core.query_models import OccurrenceQueryRequest, QueryContractError
+    from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
+
+    service = object.__new__(OccurrenceQueryService)
+    service._timezone = timezone.utc
+    service._scheduler_cache = {}
+    service._uow = SimpleNamespace(
+        mutation_epoch=0,
+        context=SimpleNamespace(configuration=SimpleNamespace(fingerprint="perf-config")),
+    )
+    rows = tuple(SimpleNamespace(uuid=f"perf-task-{index:04d}") for index in range(128))
+    scoped_request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"uuids": [rows[0].uuid]}, "from": "2026-08-24", "count": 1, "max_tasks": 1}
+    )
+    started = time.perf_counter()
+    scoped, scoped_cursor, scoped_complete = service._page_rows(rows[:1], scoped_request)
+    if len(scoped) != 1 or scoped_cursor is not None or not scoped_complete:
+        raise RuntimeError("scoped query pagination returned an invalid complete page")
+
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 16}
+    )
+    cursor = None
+    seen: list[str] = []
+    while True:
+        page_request = request if cursor is None else OccurrenceQueryRequest.from_mapping(
+            {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 16,
+             "cursor": cursor.to_dict()}
+        )
+        page, cursor, complete = service._page_rows(rows, page_request)
+        seen.extend(row.uuid for row in page)
+        if complete:
+            break
+    if seen != [row.uuid for row in rows]:
+        raise RuntimeError("whole-system query pagination lost or reordered rows")
+    empty_page, empty_cursor, empty_complete = service._page_rows((), request)
+    if empty_page or empty_cursor is not None or not empty_complete:
+        raise RuntimeError("empty query pagination did not complete cleanly")
+    exact_rows = rows[:16]
+    exact_page, exact_cursor, exact_complete = service._page_rows(exact_rows, request)
+    if len(exact_page) != 16 or exact_cursor is not None or not exact_complete:
+        raise RuntimeError("exact query page produced an unexpected continuation")
+    plus_one_rows = rows[:17]
+    first_page, continuation, first_complete = service._page_rows(plus_one_rows, request)
+    if len(first_page) != 16 or continuation is None or first_complete:
+        raise RuntimeError("page-size-plus-one query did not produce a continuation")
+    incompatible = continuation.to_dict()
+    incompatible["snapshot_id"] = "query-snapshot-invalid"
+    try:
+        service._page_rows(
+            plus_one_rows,
+            OccurrenceQueryRequest.from_mapping(
+                {"selector": {"all_tasks": True}, "from": "2026-08-24",
+                 "count": 1, "max_tasks": 16, "cursor": incompatible}
+            ),
+        )
+    except QueryServiceError:
+        pass
+    else:
+        raise RuntimeError("incompatible query cursor was accepted")
+    try:
+        OccurrenceQueryRequest.from_mapping(
+            {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 0}
+        )
+    except QueryContractError:
+        pass
+    else:
+        raise RuntimeError("malformed query page limit was accepted")
+    return time.perf_counter() - started
+
+
+def _bench_query_unavailable_stage() -> float:
+    """Measure fail-closed query handling for an unavailable snapshot."""
+    from types import SimpleNamespace
+
+    from nautical_core.integration_models import CommandFailureKind, FailureEvidence, TaskCommand, Unavailable
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    evidence = FailureEvidence(
+        TaskCommand(("task", "export"), "perf unavailable", 1.0),
+        CommandFailureKind.EXECUTION_FAILURE, 1, 1, 0.001, True, "synthetic failure",
+    )
+    service = object.__new__(OccurrenceQueryService)
+    service._uow = SimpleNamespace(repository=SimpleNamespace(
+        broad_snapshot=lambda **_kwargs: Unavailable("perf unavailable", evidence),
+    ))
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1}
+    )
+    started = time.perf_counter()
+    failure = service._rows_for(request)
+    if not getattr(failure, "code", "") == "task_read_unavailable":
+        raise RuntimeError("unavailable query snapshot did not fail closed")
+    return time.perf_counter() - started
+
+
+def _bench_doctor_installation_stage() -> float:
+    """Measure the read-only Doctor installation composition root in isolation."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return 0.0
+    from nautical_core.tools.nautical_doctor import _JSON_SCHEMA
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-doctor-") as td:
+        taskdata = Path(td)
+        taskrc = taskdata / "taskrc"
+        taskrc.write_text(
+            "uda.chainID.type=string\n"
+            "uda.chain.type=string\n"
+            "uda.link.type=numeric\n"
+            "uda.prevLink.type=string\n"
+            "uda.nextLink.type=string\n"
+            "uda.cp.type=string\n"
+            "uda.anchor.type=string\n"
+            "uda.anchor_mode.type=string\n",
+            encoding="utf-8",
+        )
+        config = taskdata / "config-nautical.toml"
+        config.write_text('tz = "UTC"\npanel_mode = "quiet"\n', encoding="utf-8")
+        env = dict(os.environ, TASKRC=str(taskrc), TASKDATA=str(taskdata),
+                   NAUTICAL_CONFIG=str(config), NAUTICAL_CORE_PATH=str(ROOT),
+                   NAUTICAL_TRUST_CONFIG_PATH="1", NAUTICAL_TRUST_CORE_PATH="1",
+                   NAUTICAL_TRUST_TASKDATA_PATH="1", TZ="UTC")
+        fixture = {"uuid": "11111111-1111-4111-8111-111111111111", "description": "doctor benchmark", "status": "pending"}
+        imported = subprocess.run(
+            [task_bin, f"rc.data.location={taskdata}", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input=json.dumps(fixture, ensure_ascii=False) + "\n",
+            text=True, capture_output=True, env=env, timeout=30.0,
+        )
+        if imported.returncode != 0:
+            raise RuntimeError(f"Doctor fixture import failed: {(imported.stderr or imported.stdout).strip()}")
+        started = time.perf_counter()
+        for mode in (("--installation-only",), ()):
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "nautical_core/tools/nautical_doctor.py"),
+                 *mode, "--json", "--task-bin", task_bin, "--taskdata", str(taskdata)],
+                text=True, capture_output=True, env=env, timeout=30.0,
+            )
+            try:
+                payload = json.loads(proc.stdout or "")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"Doctor stage returned invalid JSON ({mode or ('full',)}): "
+                    f"{(proc.stderr or proc.stdout).strip()}"
+                ) from exc
+            if not isinstance(payload, dict) or payload.get("schema") != _JSON_SCHEMA:
+                raise RuntimeError(f"Doctor stage returned an invalid envelope ({mode or ('full',)})")
+        return time.perf_counter() - started
+
+
+def _bench_housekeeping_stage() -> float:
+    """Measure bounded housekeeping against an isolated outbox."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-housekeeping-") as td:
+        repository = LifecycleOutboxRepository(Path(td))
+        opened = repository.open()
+        if not opened.ok:
+            raise RuntimeError(f"housekeeping outbox setup failed: {opened.reason or opened.kind.value}")
+        now = time.time()
+        with sqlite3.connect(str(repository.path)) as connection:
+            for index in range(2):
+                connection.execute(
+                    "INSERT INTO lifecycle_outbox "
+                    "(intent_id, work_kind, plan_json, plan_fingerprint, parent_guard_json, "
+                    "configuration_fingerprint, schedule_fingerprint, lifecycle_stage, processing_state, "
+                    "lease_owner, lease_expires_at, attempts, failure_json, created_at, updated_at, acknowledged_at) "
+                    "VALUES (?, 'lifecycle', '{}', 'perf', '{}', 'perf', 'perf', 'finalized', ?, '', 0, 0, '', ?, ?, ?)",
+                    (f"perf-housekeeping-{index}", "acknowledged", now - 100, now - 100, now - 100),
+                )
+        started = time.perf_counter()
+        result = repository.opportunistic_housekeeping(retention_seconds=0, interval_seconds=0, size_threshold_bytes=0)
+        if result.kind.value != "applied" or result.skipped or result.removed != 2:
+            raise RuntimeError(f"housekeeping stage removed an unexpected number of rows: {result}")
+        return time.perf_counter() - started
+
+
+def _bench_repair_planner_stage() -> float:
+    """Measure deterministic repair planning without applying mutations."""
+    from nautical_core.chain_graph import ChainGraph
+    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
+    from nautical_core.chain_integrity_models import (
+        ChainSnapshot, FindingSeverity, FindingStatus, IntegrityFinding, SnapshotCoverage,
+    )
+    from nautical_core.chain_repair_planner import IntegrityRepairPlanner
+
+    snapshot = ChainSnapshot("perf-repair", SnapshotCoverage.COMPLETE, "perf", (), "perf-config", True)
+    context = IntegrityContext(ChainGraph.from_snapshot(snapshot), OutboxSnapshot.from_records(()), "perf-config")
+    finding = IntegrityFinding(
+        "continuity.child_temporal_order", FindingStatus.MANUAL_REVIEW, FindingSeverity.ERROR,
+        snapshot.snapshot_id, "perf-chain", ("11111111-1111-4111-8111-111111111111",),
+        "child_not_after_parent", "repair benchmark finding",
+    )
+    started = time.perf_counter()
+    result = IntegrityRepairPlanner().plan(context, (finding,))
+    if result.plans or len(result.refusals) != 1:
+        raise RuntimeError("repair planner did not preserve an unsafe finding as a refusal")
+    return time.perf_counter() - started
+
+
+def _bench_repair_application_stage() -> float:
+    """Measure one guarded repair application with a typed fake executor."""
+    from nautical_core.chain_integrity_application import IntegrityApplicationService
+    from nautical_core.chain_integrity_models import (
+        IntegrityOperation, IntegrityRepairPlan, RepairOperationKind, RepairSafety,
+    )
+    from nautical_core.integration_models import (
+        GuardTimestamp, GuardTimestampField, MutationGuard, MutationOperation,
+        MutationOutcome, MutationOutcomeKind, MutationPostcondition, MutationRequest,
+    )
+    task_uuid = "11111111-1111-4111-8111-111111111111"
+    operation = IntegrityOperation(
+        "perf-repair-operation", RepairOperationKind.METADATA_REPAIR, "perf-chain", task_uuid,
+        (("chainID", "perf-chain"), ("link", 2)), ("target remains present",),
+        ("metadata repaired",), (("anchor_mode", "all"),),
+    )
+    plan = IntegrityRepairPlan(
+        "perf-repair-plan", "perf-repair-snapshot", "perf-chain", RepairSafety.SAFE,
+        "missing_link", "repair one link", (operation,), "perf-config",
+    )
+    guard = MutationGuard(
+        task_uuid, "pending", "perf-chain", 1, "w:mon",
+        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260829T000000Z"),), 0,
+    )
+
+    class Executor:
+        def repair_metadata(self, request):
+            return MutationOutcome(
+                MutationOperation.METADATA_REPAIR, MutationOutcomeKind.APPLIED, request.guard,
+                (MutationPostcondition.METADATA_REPAIRED,),
+            )
+
+    def request_factory(item):
+        return MutationRequest.metadata_repair(
+            guard, item.task_patch(), expected={"anchor_mode": "skip"},
+        )
+
+    started = time.perf_counter()
+    result = IntegrityApplicationService().apply(plan, Executor(), request_factory)
+    if len(result) != 1 or result[0].kind is not MutationOutcomeKind.APPLIED:
+        raise RuntimeError(f"repair application stage did not apply its guarded operation: {result!r}")
+    return time.perf_counter() - started
+
+
+def _bench_queue_stale_stage() -> float:
+    """Measure queue-status detection of a stale claim with a valid plan."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+    from nautical_core.queue_status_service import QueueStatusService
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-queue-stale-") as td:
+        taskdata = Path(td)
+        _init_empty_outbox(taskdata)
+        _parents, plans = _outbox_lifecycle_fixture("stale", 0, count=1)
+        _stage_workflow_plans(taskdata, plans, configuration_fingerprint="perf", schedule_fingerprint="perf")
+        repository = LifecycleOutboxRepository(taskdata)
+        claimed, records = repository.claim_batch(owner="perf-owner", lease_seconds=30.0, limit=1)
+        if not claimed.ok or len(records) != 1:
+            raise RuntimeError("stale queue fixture could not claim a valid lifecycle plan")
+        with sqlite3.connect(str(repository.path)) as connection:
+            connection.execute(
+                "UPDATE lifecycle_outbox SET lease_expires_at=? WHERE intent_id=?",
+                (time.time() - 10.0, records[0].intent_id),
+            )
+        started = time.perf_counter()
+        payload = QueueStatusService().status_payload(taskdata, stale_after=5.0, limit=5)
+        if int(payload.get("outbox", {}).get("stale_claims", 0) or 0) != 1:
+            raise RuntimeError(f"queue status did not report the valid stale claim: {payload!r}")
+        return time.perf_counter() - started
+
+
+def _bench_operator_failure_matrix_stage() -> float:
+    """Exercise fail-closed operator boundaries in one content-free matrix."""
+    from types import SimpleNamespace
+
+    from nautical_core.operator_health_service import OperatorHealthService
+    from nautical_core.tools.nautical_reconcile import _configuration_verification
+
+    started = time.perf_counter()
+    # Query covers malformed pagination and unavailable authoritative reads;
+    # repair covers an unsafe finding; queue covers a stale claim.  Each
+    # component raises on a fabricated success, so this matrix is a compact
+    # composition-root guard rather than a timing-only smoke test.
+    _bench_query_pagination_stage()
+    _bench_query_unavailable_stage()
+    _bench_repair_planner_stage()
+    _bench_queue_stale_stage()
+    doctor_findings = OperatorHealthService.configuration_schema_findings({"panel_mode": 17})
+    if not doctor_findings or not any(item.code == "config.schema.type" for item in doctor_findings):
+        raise RuntimeError("Doctor failure matrix accepted malformed configuration")
+
+    class BrokenCore:
+        @staticmethod
+        def configuration_drift():
+            raise RuntimeError("synthetic configuration read failure")
+
+    reconcile_state = _configuration_verification(SimpleNamespace(core=BrokenCore()))
+    if reconcile_state.status != "unavailable" or "configuration verification unavailable" not in reconcile_state.reason:
+        raise RuntimeError(f"reconcile failure matrix did not fail closed: {reconcile_state!r}")
+    return time.perf_counter() - started
+
+
+def _bench_operator_interrupted_stage() -> float:
+    """Verify an interrupted operator claim remains reclaimable."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-operator-interrupted-") as td:
+        taskdata = Path(td)
+        _init_empty_outbox(taskdata)
+        _parents, plans = _outbox_lifecycle_fixture("operator-interrupted", 0, count=1)
+        _stage_workflow_plans(taskdata, plans, configuration_fingerprint="perf", schedule_fingerprint="perf")
+        repository = LifecycleOutboxRepository(taskdata)
+        first, records = repository.claim_batch(owner="interrupted-a", lease_seconds=0.05, limit=1)
+        if not first.ok or len(records) != 1:
+            raise RuntimeError("interrupted operator fixture could not claim its intent")
+        time.sleep(0.08)
+        second, reclaimed = repository.claim_batch(owner="interrupted-b", lease_seconds=1.0, limit=1)
+        if not second.ok or len(reclaimed) != 1 or reclaimed[0].intent_id != records[0].intent_id:
+            raise RuntimeError("expired interrupted operator intent was not reclaimed")
+        return time.perf_counter() - started
+
+
+def _bench_exit_probe_fast_paths_stage() -> float:
+    """Verify empty and terminal outboxes are classified without Taskwarrior."""
+    from nautical_core.exit_probe import probe_exit_work
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-exit-probe-") as td:
+        taskdata = Path(td)
+        empty = probe_exit_work(taskdata)
+        if not empty.definitely_empty:
+            raise RuntimeError(f"empty exit probe reported possible work: {empty.reason}")
+        opened = LifecycleOutboxRepository(taskdata).open()
+        if not opened.ok:
+            raise RuntimeError("exit probe fixture outbox could not be initialized")
+        terminal = probe_exit_work(taskdata)
+        if not terminal.definitely_empty:
+            raise RuntimeError(f"terminal exit probe reported possible work: {terminal.reason}")
+    return time.perf_counter() - started
+
+
+def _bench_operator_scope_matrix_stage() -> float:
+    """Exercise empty, single-item, and page-boundary operator scopes."""
+    from types import SimpleNamespace
+
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    started = time.perf_counter()
+    service = object.__new__(OccurrenceQueryService)
+    service._timezone = timezone.utc
+    service._scheduler_cache = {}
+    service._uow = SimpleNamespace(
+        mutation_epoch=0,
+        context=SimpleNamespace(configuration=SimpleNamespace(fingerprint="scope-matrix")),
+    )
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 2}
+    )
+    empty, empty_cursor, empty_complete = service._page_rows((), request)
+    if empty or empty_cursor is not None or not empty_complete:
+        raise RuntimeError("empty operator scope was not a complete page")
+    one = (SimpleNamespace(uuid="scope-one"),)
+    one_page, one_cursor, one_complete = service._page_rows(one, request)
+    if tuple(row.uuid for row in one_page) != ("scope-one",) or one_cursor is not None or not one_complete:
+        raise RuntimeError("single-item operator scope was not complete")
+    boundary = tuple(SimpleNamespace(uuid=f"scope-{index}") for index in range(2))
+    page, cursor, complete = service._page_rows(boundary, request)
+    if len(page) != 2 or cursor is not None or not complete:
+        raise RuntimeError("boundary-sized operator scope produced a continuation")
+    plus_one = boundary + (SimpleNamespace(uuid="scope-2"),)
+    page, cursor, complete = service._page_rows(plus_one, request)
+    if len(page) != 2 or cursor is None or complete:
+        raise RuntimeError("boundary-plus-one operator scope omitted its continuation")
+    return time.perf_counter() - started
 
 
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
@@ -892,17 +1316,45 @@ def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
 
 def _measure(name: str, fn, repeats: int) -> dict:
     samples = []
+    cpu_samples = []
+    wall_samples = []
+    peak_memory_samples = []
     # Warmup once for interpreter/cache stabilization.
     _ = fn()
     for _ in range(max(1, repeats)):
-        samples.append(float(fn()))
+        started_wall = time.perf_counter()
+        started_cpu = time.process_time()
+        started_tracing = tracemalloc.is_tracing()
+        if not started_tracing:
+            tracemalloc.start()
+        tracemalloc.reset_peak()
+        reported = float(fn())
+        elapsed_wall = time.perf_counter() - started_wall
+        elapsed_cpu = time.process_time() - started_cpu
+        _current, peak_memory = tracemalloc.get_traced_memory()
+        if not started_tracing:
+            tracemalloc.stop()
+        # Existing checks return their own wall duration. Preserve that value
+        # while recording measured CPU/wall attribution alongside it.
+        samples.append(reported)
+        cpu_samples.append(max(0.0, elapsed_cpu))
+        wall_samples.append(max(0.0, elapsed_wall))
+        peak_memory_samples.append(max(0, int(peak_memory)))
     samples = sorted(samples)
+    cpu_samples = sorted(cpu_samples)
+    wall_samples = sorted(wall_samples)
+    peak_memory_samples = sorted(peak_memory_samples)
     return {
         "name": name,
         "samples_s": samples,
         "min_s": samples[0],
         "median_s": statistics.median(samples),
         "max_s": samples[-1],
+        "cpu_samples_s": cpu_samples,
+        "cpu_median_s": statistics.median(cpu_samples),
+        "measured_wall_median_s": statistics.median(wall_samples),
+        "peak_memory_samples_bytes": peak_memory_samples,
+        "peak_memory_median_bytes": statistics.median(peak_memory_samples),
     }
 
 
@@ -1352,6 +1804,28 @@ def _compact_reconcile_report(report: dict) -> dict:
 def _attach_reconcile_reports(result: dict, reports: list[dict]) -> None:
     """Attach reconcile command, export, and phase metrics to a result."""
     result["reconcile_reports"] = reports
+
+
+def _apply_reconcile_budgets(result: dict, budget: dict) -> None:
+    """Enforce explicit reconcile export/call/row ceilings independently of time."""
+    reports = result.get("reconcile_reports")
+    if not isinstance(budget, dict) or not isinstance(reports, list) or not reports:
+        return
+    checks: dict[str, dict[str, object]] = {}
+    for key, raw_limit in budget.items():
+        if key not in {"export_calls", "export_rows", "task_command_calls", "task_command_attempts"}:
+            continue
+        try:
+            limit = int(raw_limit)
+            observed = max(int(report.get(key, 0) or 0) for report in reports if isinstance(report, dict))
+        except (TypeError, ValueError):
+            continue
+        checks[key] = {"max_observed": observed, "budget": limit, "pass": observed <= limit}
+    if checks:
+        result["reconcile_budget"] = checks
+        result["pass"] = bool(result.get("pass", True)) and all(
+            bool(item["pass"]) for item in checks.values()
+        )
 
 
 def _apply_task_call_budgets(result: dict, samples: list[dict[str, int]], budget: dict) -> None:
@@ -1876,6 +2350,8 @@ def _bench_expensive_workflows(
         )
 
         expiration_samples = []
+        expiration_day = datetime.now(timezone.utc).date() - timedelta(days=1)
+        expiration_date = expiration_day.strftime("%Y%m%d")
         for sample_index in range(repeats):
             key = f"nautical-perf/expiration/{sample_index}"
             parent_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, key + "/parent"))
@@ -1887,17 +2363,17 @@ def _bench_expensive_workflows(
                 "chain": "on",
                 "chainID": f"expiration-perf-{sample_index:04d}",
                 "link": 1,
-                "due": "20260101T090000Z",
-                "until": "20260101T200000Z",
+                "due": f"{expiration_date}T090000Z",
+                "until": f"{expiration_date}T200000Z",
                 # Lifecycle plans require the Taskwarrior modified guard;
                 # preserve it in the synthetic hook snapshot just as an
                 # exported task would.
-                "modified": "20260101T090000Z",
+                "modified": f"{expiration_date}T090000Z",
             }
             # An expiration deletion ends at the native until boundary.  A
             # later end timestamp is a manual/ambiguous deletion and should
             # be deferred by the hook rather than staged for recovery.
-            new = dict(old, status="deleted", end="20260101T200000Z")
+            new = dict(old, status="deleted", end=f"{expiration_date}T200000Z")
             taskdata = root / f"expiration-recovery-{sample_index}"
             taskdata.mkdir()
             env = dict(base_env, TASKDATA=str(taskdata), NAUTICAL_BENCH_FORCE_FULL="1")
@@ -1913,6 +2389,21 @@ def _bench_expensive_workflows(
                 raise RuntimeError(
                     "workflow_expiration_recovery did not stage exactly one successor: "
                     f"result={result!r}; staged={staged!r}; stderr={_stderr.strip()!r}"
+                )
+            # Replaying the same deletion must be idempotent: a crash/retry
+            # after staging may not create a second successor intent.
+            replay_result = _run_workflow_hook_result(
+                ROOT / "on-modify.nautical",
+                input_text=json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False),
+                env=env,
+                expect_output=True,
+            )
+            replay_staged = _workflow_outbox_pending(taskdata)
+            if not isinstance(replay_result[1], dict) or len(replay_staged) != 1:
+                raise RuntimeError(
+                    "workflow_expiration_recovery replay was not idempotent: "
+                    f"result={replay_result[1]!r}; staged={replay_staged!r}; "
+                    f"stderr={replay_result[2].strip()!r}"
                 )
             expiration_samples.append(elapsed)
         results["workflow_expiration_recovery"] = _measure_workflow(
@@ -2086,6 +2577,12 @@ def _bench_expensive_workflows(
             )
             queue_samples.append(queue_elapsed)
             queue_call_stats.append(_read_exit_task_call_stats(stats_path))
+            child_slot_reads = queue_call_stats[-1].get("run_task_calls_purpose_task_read_child_slot", 0)
+            if child_slot_reads > 1:
+                raise RuntimeError(
+                    "queue drain preflight regressed to per-candidate child-slot reads: "
+                    f"{child_slot_reads} subprocesses for {len(queue_plans)} candidates"
+                )
             queue_timing_stats.append(_read_exit_task_timing_stats(stats_path))
             queue_outbox_stats.append(_read_exit_outbox_stats(stats_path))
 
@@ -2111,6 +2608,16 @@ def _bench_expensive_workflows(
             queue_idempotent_call_stats.append(_read_exit_task_call_stats(stats_path))
             queue_idempotent_timing_stats.append(_read_exit_task_timing_stats(stats_path))
             queue_idempotent_outbox_stats.append(_read_exit_outbox_stats(stats_path))
+            replay_calls = queue_idempotent_call_stats[-1]
+            replay_task_calls = sum(
+                value for key, value in replay_calls.items() if key.startswith("run_task_calls")
+            )
+            replay_rows = replay_calls.get("task_read_rows", 0)
+            if replay_task_calls or replay_rows:
+                raise RuntimeError(
+                    "acknowledged exit replay performed Taskwarrior I/O: "
+                    f"calls={replay_task_calls}, rows={replay_rows}"
+                )
             if _workflow_outbox_pending(queue_data):
                 raise RuntimeError(
                     "idempotent outbox drain left active intents: "
@@ -2842,6 +3349,11 @@ def _bench_expensive_workflows(
             float(budgets.get("workflow_reconcile_mixed", budgets.get("workflow_reconcile", 3.0))),
         )
         _attach_reconcile_reports(results["workflow_reconcile_mixed"], mixed_reports)
+        reconcile_budgets = workflow_cfg.get("reconcile_budgets", {})
+        if isinstance(reconcile_budgets, dict):
+            for name, result in results.items():
+                if name.startswith("workflow_reconcile"):
+                    _apply_reconcile_budgets(result, reconcile_budgets.get(name, reconcile_budgets.get("default", {})))
         RESOURCE_DETAILS["reconcile_task_call_purposes"] = reconcile_call_purposes
         return results
 
@@ -2907,6 +3419,11 @@ def main() -> int:
     cold_import_rounds = int(workload.get("cold_import_rounds", 3))
 
     checks = [
+        ("stage_capabilities", _bench_capabilities_stage, repeats),
+        ("stage_queue_status", _bench_queue_status_stage, repeats),
+        ("stage_navigator", _bench_navigator_stage, repeats),
+        ("stage_query_pagination", _bench_query_pagination_stage, repeats),
+        ("stage_query_unavailable", _bench_query_unavailable_stage, repeats),
         ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
         (
             "cold_modify_impl_import",
@@ -2952,6 +3469,16 @@ def main() -> int:
         ("anchor_file_provider", lambda: _bench_anchor_file_provider(anchor_file_rounds), repeats),
         ("anchor_file_batch_provider", lambda: _bench_anchor_file_batch_provider(anchor_file_rounds), repeats),
     ]
+    if shutil.which("task"):
+        checks.append(("stage_doctor_installation", _bench_doctor_installation_stage, repeats))
+    checks.append(("stage_housekeeping", _bench_housekeeping_stage, repeats))
+    checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
+    checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
+    checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
+    checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
+    checks.append(("stage_operator_interrupted", _bench_operator_interrupted_stage, repeats))
+    checks.append(("stage_exit_probe_fast_paths", _bench_exit_probe_fast_paths_stage, repeats))
+    checks.append(("stage_operator_scope_matrix", _bench_operator_scope_matrix_stage, repeats))
     if args.workflows_only:
         checks = []
 
@@ -3138,6 +3665,7 @@ def main() -> int:
         "budget_file": str(Path(args.budget_file).resolve()),
         "python": sys.version.split()[0],
         "platform": sys.platform,
+        "profile": _budget_profile_name(slow_device=args.slow_device),
         "cwd": os.getcwd(),
         "results": results,
         "enforced": bool(args.enforce),

@@ -6,14 +6,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from collections import OrderedDict
-from typing import Any
+import time
+from typing import Any, Protocol
 
 from .integration_context import IntegrationContext
-from .operator_models import OperatorRequest
+from .operator_models import OperatorContractError, OperatorLimits, OperatorRequest
 
 
 class OperatorContextError(ValueError):
     """Raised when an operator invocation context is incomplete."""
+
+
+class OperatorBudgetLedger(Protocol):
+    """Narrow resource-accounting boundary for operator providers."""
+
+    def consume(self, resource: str, amount: int = 1) -> bool: ...
+
+    def usage(self, resource: str) -> int: ...
+
+    def remaining(self, resource: str) -> int: ...
 
 
 class OperatorOutputMode(str, Enum):
@@ -85,6 +96,95 @@ class OperatorInvocationCache:
         return len(self._entries)
 
 
+@dataclass(slots=True)
+class OperatorInvocationBudget:
+    """Invocation-local usage counters for resources with hard limits."""
+
+    limits: OperatorLimits
+    _usage: dict[str, int] = field(default_factory=dict)
+    _effect_started: bool = False
+    _started_monotonic: float = field(default_factory=time.monotonic)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.limits, OperatorLimits):
+            raise OperatorContextError("operator budget requires typed limits")
+
+    def consume(self, resource: str, amount: int = 1) -> bool:
+        name = str(resource)
+        try:
+            limit = getattr(self.limits, name)
+        except AttributeError as exc:
+            raise OperatorContractError(f"unknown operator budget resource: {name}") from exc
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+            raise OperatorContextError("operator budget amount must be positive")
+        observed = self._usage.get(name, 0) + amount
+        self._usage[name] = observed
+        if self._effect_started:
+            return True
+        if observed > limit:
+            self._usage[name] = observed - amount
+            return False
+        return True
+
+    def begin_effect(self) -> None:
+        """Mark the durable mutation boundary; later budget crossings cannot abort it."""
+        self._effect_started = True
+
+    @property
+    def effect_started(self) -> bool:
+        return self._effect_started
+
+    def exceeded(self, resource: str) -> bool:
+        name = str(resource)
+        try:
+            return self.usage(name) > int(getattr(self.limits, name))
+        except AttributeError as exc:
+            raise OperatorContractError(f"unknown operator budget resource: {name}") from exc
+
+    def usage(self, resource: str) -> int:
+        return self._usage.get(str(resource), 0)
+
+    def remaining(self, resource: str) -> int:
+        name = str(resource)
+        try:
+            return max(0, int(getattr(self.limits, name)) - self.usage(name))
+        except AttributeError as exc:
+            raise OperatorContractError(f"unknown operator budget resource: {name}") from exc
+
+    def snapshot(self) -> dict[str, int]:
+        return {name: self.usage(name) for name in self.limits.to_dict()}
+
+    def report(self) -> dict[str, object]:
+        """Return JSON-native budget telemetry for diagnostics and renderers."""
+        usage = self.snapshot()
+        limits = self.limits.to_dict()
+        return {
+            "usage": usage,
+            "limits": limits,
+            "exceeded": tuple(name for name, value in usage.items() if value > limits[name]),
+            "effect_started": self.effect_started,
+            "wall_time_elapsed_s": round(self.wall_time_elapsed, 6),
+            "wall_time_exceeded": self.wall_time_exceeded,
+        }
+
+    def observe_peak_memory(self, bytes_used: int) -> bool:
+        """Record a measured peak and report whether the configured cap is exceeded."""
+        if isinstance(bytes_used, bool) or not isinstance(bytes_used, int) or bytes_used < 0:
+            raise OperatorContextError("peak memory observation must be a non-negative integer")
+        current = self.usage("peak_memory_bytes")
+        if bytes_used > current:
+            self._usage["peak_memory_bytes"] = bytes_used
+        return bytes_used <= self.limits.peak_memory_bytes
+
+    @property
+    def wall_time_elapsed(self) -> float:
+        return max(0.0, time.monotonic() - self._started_monotonic)
+
+    @property
+    def wall_time_exceeded(self) -> bool:
+        return self.wall_time_elapsed > self.limits.wall_time_seconds
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorInvocationContext:
     """Immutable shared state captured once for one operator invocation."""
@@ -95,6 +195,7 @@ class OperatorInvocationContext:
     mutation_epoch: str = "epoch-0"
     policy: OperatorPresentationPolicy = OperatorPresentationPolicy()
     cache: OperatorInvocationCache = field(default_factory=OperatorInvocationCache)
+    budget: OperatorInvocationBudget | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, OperatorRequest):
@@ -105,6 +206,8 @@ class OperatorInvocationContext:
             raise OperatorContextError("operator presentation policy is invalid")
         if not isinstance(self.cache, OperatorInvocationCache):
             raise OperatorContextError("operator invocation cache is invalid")
+        if self.budget is not None and not isinstance(self.budget, OperatorInvocationBudget):
+            raise OperatorContextError("operator invocation budget is invalid")
         if self.request.apply and not self.integration.mutation_capable:
             raise OperatorContextError("apply request requires mutation-capable integration access")
         captured_at = self.captured_at
@@ -132,7 +235,15 @@ class OperatorInvocationContext:
         instant = captured_at
         if instant is None:
             instant = integration.clock.now_utc()
-        return cls(request, integration, instant, mutation_epoch, policy or OperatorPresentationPolicy(), OperatorInvocationCache())
+        return cls(
+            request,
+            integration,
+            instant,
+            mutation_epoch,
+            policy or OperatorPresentationPolicy(),
+            OperatorInvocationCache(max_entries=request.limits.cache_entries),
+            OperatorInvocationBudget(request.limits),
+        )
 
     @classmethod
     def from_unit_of_work(
@@ -199,5 +310,7 @@ class OperatorInvocationContext:
 __all__ = [
     "OperatorContextError", "OperatorOutputMode", "OperatorPresentationPolicy",
     "OperatorInvocationCache",
+    "OperatorBudgetLedger",
+    "OperatorInvocationBudget",
     "OperatorInvocationContext",
 ]

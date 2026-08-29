@@ -7,8 +7,10 @@ lifecycle, Taskwarrior, and integrity services remain the owners of decisions.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
+from types import MappingProxyType
 from typing import Any, Mapping, cast
 
 
@@ -34,6 +36,44 @@ class OperatorOperation(str, Enum):
     APPLY = "apply"
     VERIFY = "verify"
     HOUSEKEEPING = "housekeeping"
+
+
+class OperatorPhase(str, Enum):
+    """Typed phases used by the internal operator control-plane pipeline."""
+
+    VALIDATE_REQUEST = "validate_request"
+    CAPTURE_CONTEXT = "capture_context"
+    COMPILE_SCOPE = "compile_scope"
+    ACQUIRE_SNAPSHOT = "acquire_snapshot"
+    INSPECT = "inspect"
+    PLAN = "plan"
+    AUTHORIZE = "authorize"
+    APPLY = "apply"
+    REFRESH = "refresh"
+    VERIFY = "verify"
+    RESULT = "result"
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorPhaseResult:
+    """One immutable phase outcome; failures stop later phases."""
+
+    phase: OperatorPhase
+    value: Any = None
+    failure: "OperatorFailure | None" = None
+
+    def __post_init__(self) -> None:
+        try:
+            phase = OperatorPhase(self.phase)
+        except (TypeError, ValueError) as exc:
+            raise OperatorContractError("invalid operator phase") from exc
+        if self.failure is not None and not isinstance(self.failure, OperatorFailure):
+            raise OperatorContractError("operator phase failure must be OperatorFailure")
+        if self.failure is not None and self.value is not None:
+            raise OperatorContractError("failed operator phase cannot contain a value")
+        if self.failure is None and self.value is None:
+            raise OperatorContractError("successful operator phase requires a value")
+        object.__setattr__(self, "phase", phase)
 
 
 class OperatorStatus(str, Enum):
@@ -175,19 +215,52 @@ def _mapping(value: object, field_name: str) -> Mapping[str, Any]:
     return value
 
 
-def _json_value(value: object) -> object:
+def _json_value(value: object, _seen: set[int] | None = None) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
     if isinstance(value, Enum):
         return value.value
+    seen = _seen if _seen is not None else set()
+    if isinstance(value, Mapping):
+        marker = id(value)
+        if marker in seen:
+            raise OperatorContractError("cyclic JSON value is not supported")
+        seen.add(marker)
+        try:
+            return {str(key): _json_value(item, seen) for key, item in value.items()}
+        finally:
+            seen.remove(marker)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        marker = id(value)
+        if marker in seen:
+            raise OperatorContractError("cyclic JSON value is not supported")
+        seen.add(marker)
+        try:
+            values = [_json_value(item, seen) for item in value]
+        finally:
+            seen.remove(marker)
+        if isinstance(value, (set, frozenset)):
+            return sorted(values, key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+        return values
     to_dict = getattr(value, "to_dict", None)
     if callable(to_dict):
-        return _json_value(to_dict())
+        return _json_value(to_dict(), seen)
     raise OperatorContractError(f"value of type {type(value).__name__} is not JSON-native")
+
+
+def _freeze_json_value(value: object) -> object:
+    """Validate JSON-native data and recursively detach mutable containers."""
+    _json_value(value)
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_json_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple, set, frozenset)):
+        frozen = tuple(_freeze_json_value(item) for item in value)
+        if isinstance(value, (set, frozenset)):
+            return tuple(sorted(frozen, key=lambda item: json.dumps(_json_value(item), sort_keys=True, ensure_ascii=False, separators=(",", ":"))))
+        return frozen
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -441,7 +514,7 @@ class OperatorPage:
             raise OperatorContractError("page contains more items than its cursor page_size")
         if self.complete and self.cursor is not None:
             raise OperatorContractError("complete page cannot contain a continuation cursor")
-        object.__setattr__(self, "items", tuple(normalized))
+        object.__setattr__(self, "items", tuple(_freeze_json_value(item) for item in normalized))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -464,10 +537,37 @@ class OperatorPage:
         )
 
 
+OPERATOR_LIMIT_ENFORCEMENT_OWNERS: Mapping[str, str] = {
+    "taskwarrior_calls": "taskwarrior_client",
+    "exported_rows": "taskwarrior_client",
+    "decoded_rows": "snapshot_reader",
+    "hydration_identities": "snapshot_reader",
+    "sqlite_transactions": "outbox_reader",
+    "cache_entries": "cache_provider",
+    "peak_memory_bytes": "invocation_context",
+    "tasks": "snapshot_reader",
+    "chains": "snapshot_reader",
+    "occurrences": "occurrence_service",
+    "history_links": "snapshot_reader",
+    "findings": "inspector",
+    "outbox_rows": "outbox_reader",
+    "file_records": "file_provider",
+    "scheduler_iterations": "scheduler_service",
+    "wall_time_seconds": "invocation_context",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorLimits:
     """Independent safety limits for one operator invocation."""
 
+    taskwarrior_calls: int = 256
+    exported_rows: int = 10000
+    decoded_rows: int = 10000
+    hydration_identities: int = 100
+    sqlite_transactions: int = 256
+    cache_entries: int = 10000
+    peak_memory_bytes: int = 64 * 1024 * 1024
     tasks: int = 100
     chains: int = 100
     occurrences: int = 1000
@@ -478,12 +578,23 @@ class OperatorLimits:
     scheduler_iterations: int = 512
     wall_time_seconds: int = 120
 
+    @classmethod
+    def enforcement_owner(cls, field_name: str) -> str:
+        """Return the declared owner for one resource limit."""
+        try:
+            return OPERATOR_LIMIT_ENFORCEMENT_OWNERS[str(field_name)]
+        except KeyError as exc:
+            raise OperatorContractError(f"no enforcement owner for limit {field_name!r}") from exc
+
     def __post_init__(self) -> None:
         for name in (
+            "taskwarrior_calls", "exported_rows", "decoded_rows", "hydration_identities",
+            "sqlite_transactions", "cache_entries", "peak_memory_bytes",
             "tasks", "chains", "occurrences", "history_links", "findings",
             "outbox_rows", "file_records", "scheduler_iterations", "wall_time_seconds",
         ):
-            object.__setattr__(self, name, _positive(getattr(self, name), name, 100_000))
+            maximum = 1_000_000_000_000 if name == "peak_memory_bytes" else 100_000
+            object.__setattr__(self, name, _positive(getattr(self, name), name, maximum))
 
     def to_dict(self) -> dict[str, int]:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -729,8 +840,8 @@ class OperatorV2Result:
         object.__setattr__(self, "schema", schema)
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "status", status)
-        object.__setattr__(self, "payload", dict(self.payload))
-        object.__setattr__(self, "extensions", dict(self.extensions))
+        object.__setattr__(self, "payload", _freeze_json_value(self.payload))
+        object.__setattr__(self, "extensions", _freeze_json_value(self.extensions))
         _json_value(self.payload)
         _json_value(self.extensions)
 
@@ -882,8 +993,8 @@ class OperatorDependency:
 
 __all__ = [
     "OPERATOR_API_VERSION", "OPERATOR_RESULT_VERSION", "OperatorContractError", "OperatorOperation",
-    "OperatorStatus", "OperatorV2Status", "OperatorExitCode", "exit_code_for_status",
+    "OperatorStatus", "OperatorV2Status", "OperatorExitCode", "OperatorPhase", "OperatorPhaseResult", "exit_code_for_status",
     "exit_code_for_v2_status", "OperatorScopeKind",
-    "CoverageKind", "OperatorScope", "OperatorCoverage", "OperatorCursor", "OperatorPage", "CoverageRequirement", "OperatorLimits",
+    "CoverageKind", "OperatorScope", "OperatorCoverage", "OperatorCursor", "OperatorPage", "CoverageRequirement", "OperatorLimits", "OPERATOR_LIMIT_ENFORCEMENT_OWNERS",
     "OperatorRequest", "OperatorFailure", "OperatorResult", "OperatorV2Result", "OperatorCapabilities", "OperatorDependency",
 ]

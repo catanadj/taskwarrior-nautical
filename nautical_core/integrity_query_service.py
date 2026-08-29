@@ -18,6 +18,7 @@ from .operator_models import (
     OperatorRequest,
     OperatorScope,
 )
+from .query_models import QueryContractError
 from .operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
 from .taskwarrior_uow import build_operator_uow
 
@@ -30,6 +31,24 @@ class IntegrityQueryService:
     task_binary: str
     env: Mapping[str, str]
     uow_builder: Callable[..., Any] = build_operator_uow
+
+    @staticmethod
+    def request_from_selector(
+        *, uuids: list[str] | None = None, chain_id: str | None = None, all_tasks: bool = False
+    ) -> IntegritySnapshotRequest:
+        """Compile exactly one CLI selector into the canonical snapshot request."""
+        selected = sum(bool(value) for value in (uuids, chain_id, all_tasks))
+        if selected != 1:
+            raise QueryContractError("integrity query requires exactly one of --uuid, --chain-id, or --all")
+        if uuids:
+            if len(uuids) != 1:
+                raise QueryContractError("integrity query accepts one --uuid")
+            return IntegritySnapshotRequest.uuid(uuids[0], complete_chain_history=True)
+        if chain_id:
+            return IntegritySnapshotRequest.chain(chain_id)
+        # Whole-system audits request authoritative history directly rather
+        # than bounded hydration of every individual chain.
+        return IntegritySnapshotRequest.candidates(complete_chain_history=True)
 
     def query(self, request: IntegritySnapshotRequest) -> tuple[dict[str, Any], int]:
         if not isinstance(request, IntegritySnapshotRequest):

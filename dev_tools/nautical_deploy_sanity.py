@@ -46,6 +46,7 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/lifecycle_application.py",
     "nautical_core/query_models.py",
     "nautical_core/query_service.py",
+    "nautical_core/query_report.py",
     "nautical_core/operator_control_plane.py",
     "nautical_core/operator_application.py",
     "nautical_core/integrity_query_service.py",
@@ -553,6 +554,8 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "nautical_core/recurrence_context.py",
         "nautical_core/task_codec.py",
         "nautical_core/tools/nautical_doctor.py",
+        "nautical_core/doctor_report.py",
+        "nautical_core/reconcile_report.py",
     }
     for path in package.rglob("*.py") if package.is_dir() else ():
         relative = str(path.relative_to(root))
@@ -577,6 +580,31 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "name": "removed-construction-paths",
         "ok": not violations,
         "message": "absent" if not violations else "removed domain-model paths found: " + ", ".join(sorted(violations)),
+    }]
+
+
+def _check_operator_legacy_symbols(root: Path) -> list[dict]:
+    """Prevent removed operator wrappers from returning unnoticed."""
+    forbidden = {
+        "_v2_document", "_error_payload", "_historical_summaries",
+        "_check_hook_installation", "_check_chains", "_check_obsolete_queue_state",
+        "_fmt_parent", "_print_evidence", "_action_style", "_active_chain_rows",
+        "_integrity_request_factory",
+    }
+    found: list[str] = []
+    for path in sorted((root / "nautical_core" / "tools").glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in forbidden:
+                found.append(f"{path.relative_to(root)}:{node.name}")
+    return [{
+        "kind": "ownership",
+        "name": "operator-legacy-symbols",
+        "ok": not found,
+        "message": "absent" if not found else "removed operator symbols found: " + ", ".join(found),
     }]
 
 
@@ -875,6 +903,7 @@ def main() -> int:
         results.extend(_check_manifest_alignment(root))
         results.extend(_check_removed_ownership(root))
         results.extend(_check_domain_model_boundaries(root))
+        results.extend(_check_operator_legacy_symbols(root))
         results.extend(_check_scheduler_ownership(root))
         results.extend(_check_taskwarrior_process_ownership(root))
         results.extend(_check_performance_workflow(root))

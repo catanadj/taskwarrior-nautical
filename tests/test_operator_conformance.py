@@ -1,5 +1,7 @@
 import unittest
 import json
+from unittest.mock import patch
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -7,7 +9,8 @@ from nautical_core.operator_application import DomainApplicationRegistry
 from nautical_core.operator_control_plane import OperatorControlPlane
 from nautical_core.operator_inspectors import inspect_operator_snapshot, standard_inspector_bundle, run_inspectors
 from nautical_core.operator_models import (CoverageKind, CoverageRequirement, OperatorCapabilities, OperatorCoverage, OperatorCursor, OperatorFailure, OperatorLimits,
-    OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status)
+    OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status,
+    OperatorExitCode, OperatorContractError, OperatorPhase, OperatorPhaseResult, exit_code_for_v2_status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
 from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
 from nautical_core.operator_snapshot import OperatorSnapshot
@@ -22,9 +25,47 @@ from nautical_core.integration_models import (
 from nautical_core.operator_models import OperatorFailure
 from nautical_core.operator_plans import OperatorPlan
 from nautical_core.operator_context import OperatorInvocationContext
+from nautical_core.operator_context import OperatorInvocationBudget
+from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
+from nautical_core.scheduler_service import SchedulerService
 
 
 class OperatorConformanceTests(unittest.TestCase):
+    def test_operator_phase_result_is_typed_and_fail_closed(self) -> None:
+        successful = OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, value={"snapshot": "s1"})
+        self.assertEqual(successful.phase, OperatorPhase.ACQUIRE_SNAPSHOT)
+        failure = OperatorFailure("snapshot_unavailable", "snapshot unavailable", retryable=True)
+        failed = OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, failure=failure)
+        self.assertIs(failed.failure, failure)
+        with self.assertRaises(OperatorContractError):
+            OperatorPhaseResult(OperatorPhase.PLAN)
+        with self.assertRaises(OperatorContractError):
+            OperatorPhaseResult(OperatorPhase.PLAN, value={}, failure=failure)
+
+    def test_v2_status_exit_code_matrix_is_exhaustive(self) -> None:
+        expected = {
+            OperatorV2Status.OK: OperatorExitCode.SUCCESS,
+            OperatorV2Status.FOUND: OperatorExitCode.SUCCESS,
+            OperatorV2Status.EMPTY: OperatorExitCode.SUCCESS,
+            OperatorV2Status.ABSENT: OperatorExitCode.SUCCESS,
+            OperatorV2Status.EXHAUSTED: OperatorExitCode.PARTIAL,
+            OperatorV2Status.ATTENTION: OperatorExitCode.FINDINGS,
+            OperatorV2Status.REPAIRABLE: OperatorExitCode.FINDINGS,
+            OperatorV2Status.DEFERRED: OperatorExitCode.FINDINGS,
+            OperatorV2Status.INVALID: OperatorExitCode.INVALID_REQUEST,
+            OperatorV2Status.UNAVAILABLE: OperatorExitCode.UNAVAILABLE,
+            OperatorV2Status.PARTIAL: OperatorExitCode.PARTIAL,
+            OperatorV2Status.MANUAL_REVIEW: OperatorExitCode.MANUAL_REVIEW,
+            OperatorV2Status.ERROR: OperatorExitCode.INTERNAL_FAILURE,
+        }
+        self.assertEqual(set(expected), set(OperatorV2Status))
+        self.assertEqual(
+            {status: exit_code_for_v2_status(status) for status in OperatorV2Status},
+            expected,
+        )
+        with self.assertRaises(OperatorContractError):
+            exit_code_for_v2_status("not-a-v2-status")
+
     def test_control_plane_and_direct_inspection_share_one_projection(self) -> None:
         snapshot = OperatorSnapshot(
             "conformance-1",
@@ -48,6 +89,174 @@ class OperatorConformanceTests(unittest.TestCase):
             tuple(item.to_dict() for item in actual),
             tuple(item.to_dict() for item in control_plane.inspect(snapshot, requirement, limits, scope=OperatorScope.system())),
         )
+
+    def test_control_plane_inspection_exposes_ordered_typed_phases(self) -> None:
+        snapshot = OperatorSnapshot(
+            "phase-snapshot", OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc), "epoch-1", "config-1",
+        )
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        phases = control_plane.inspect_phases(snapshot, CoverageRequirement(CoverageKind.COMPLETE), OperatorLimits())
+        self.assertEqual(
+            tuple(phase.phase for phase in phases),
+            (OperatorPhase.VALIDATE_REQUEST, OperatorPhase.COMPILE_SCOPE, OperatorPhase.INSPECT, OperatorPhase.RESULT),
+        )
+        self.assertTrue(phases[0].value)
+
+    def test_control_plane_inspection_stops_when_findings_budget_is_exceeded(self) -> None:
+        snapshot = OperatorSnapshot(
+            "phase-snapshot", OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc), "epoch-1", "config-1",
+        )
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        finding = OperatorFinding(
+            code="test.finding", domain="test", severity=FindingSeverity.WARNING,
+            actionability=FindingActionability.INFORMATIONAL, message="finding",
+        )
+        with patch.object(OperatorControlPlane, "inspect", return_value=(finding, finding)):
+            phases = control_plane.inspect_phases(
+                snapshot,
+                CoverageRequirement(CoverageKind.COMPLETE),
+                OperatorLimits(findings=1),
+            )
+        self.assertEqual(phases[-1].phase, OperatorPhase.INSPECT)
+        self.assertEqual(phases[-1].failure.code, "inspection_limit_exceeded")
+
+    def test_control_plane_application_rejects_untyped_authorization_before_owner(self) -> None:
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        phases = control_plane.apply_domain_phases("repair", object())  # type: ignore[arg-type]
+        self.assertEqual(tuple(phase.phase for phase in phases), (OperatorPhase.AUTHORIZE,))
+        self.assertEqual(phases[0].failure.code, "invalid_authorization")
+
+    def test_control_plane_request_pipeline_rejects_invalid_context_before_read(self) -> None:
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        phases = control_plane.inspect_request_phases(object(), object(), object())  # type: ignore[arg-type]
+        self.assertEqual(phases[0].phase, OperatorPhase.VALIDATE_REQUEST)
+        self.assertEqual(phases[0].failure.code, "invalid_request")
+
+    def test_scheduler_budget_exhaustion_is_terminal_before_evaluator_work(self) -> None:
+        evaluator = SimpleNamespace(kind="anchor", context=SimpleNamespace(timezone=None))
+        session = SimpleNamespace(evaluator=evaluator)
+        scheduler = SchedulerService(session)
+        budget = OperatorInvocationBudget(OperatorLimits(scheduler_iterations=1))
+        self.assertTrue(budget.consume("scheduler_iterations"))
+        cursor = OccurrenceCursor.inclusive_at(datetime(2026, 1, 1))
+        result = scheduler.collect_request(
+            OccurrenceRangeRequest(cursor), budget=budget,
+        )
+        self.assertEqual(result.status, "exhausted")
+        self.assertEqual(result.terminal.kind, "search_limit")
+
+    def test_control_plane_domain_application_emits_ordered_effect_phases(self) -> None:
+        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+        from nautical_core.operator_domain_plans import DomainApplicationAuthorization
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        class Owner:
+            def apply(self, authorization):
+                return OperatorResult(OperatorOperation.APPLY, OperatorStatus.OK)
+
+        control_plane = OperatorControlPlane.from_configuration(
+            Configuration(), DomainApplicationRegistry({"lifecycle": Owner()}),
+        )
+        scope = OperatorScope.system()
+        request = OperatorRequest(OperatorOperation.APPLY, scope, apply=True,
+                                  coverage=CoverageRequirement(CoverageKind.COMPLETE))
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snap-1")
+        plan = LifecyclePlan(
+            identity=LifecycleIdentity("chain-1", "task-1", 1, None, LifecycleEvent.DISABLE),
+            action=LifecycleAction.DISABLE_CHAIN,
+            parent_guard=ParentGuard("completed", "on", "chain-1", 1),
+        )
+        authorization = DomainApplicationAuthorization(
+            plan, request, "snap-1", "config-1", scope, coverage, "schedule-1",
+        )
+        from nautical_core.operator_context import OperatorInvocationBudget
+        budget = OperatorInvocationBudget(OperatorLimits())
+        phases = control_plane.apply_domain_phases("lifecycle", authorization, budget=budget)
+        self.assertEqual(
+            tuple(phase.phase for phase in phases),
+            (OperatorPhase.AUTHORIZE, OperatorPhase.APPLY, OperatorPhase.VERIFY, OperatorPhase.RESULT),
+        )
+        self.assertEqual(phases[-1].value.status, OperatorStatus.OK)
+        self.assertTrue(budget.effect_started)
+
+    def test_control_plane_rejects_expired_budget_before_authorization(self) -> None:
+        from nautical_core.operator_domain_plans import DomainApplicationAuthorization
+        from nautical_core.operator_context import OperatorInvocationBudget
+        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        scope = OperatorScope.system()
+        request = OperatorRequest(OperatorOperation.APPLY, scope, apply=True, coverage=CoverageRequirement(CoverageKind.COMPLETE))
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snap-1")
+        plan = LifecyclePlan(
+            identity=LifecycleIdentity("chain-1", "task-1", 1, None, LifecycleEvent.DISABLE),
+            action=LifecycleAction.DISABLE_CHAIN,
+            parent_guard=ParentGuard("completed", "on", "chain-1", 1),
+        )
+        authorization = DomainApplicationAuthorization(plan, request, "snap-1", "config-1", scope, coverage, "schedule-1")
+        budget = OperatorInvocationBudget(OperatorLimits(wall_time_seconds=1))
+        budget._started_monotonic -= 2
+        phases = control_plane.apply_domain_phases("lifecycle", authorization, budget=budget)
+        self.assertEqual(phases[0].phase, OperatorPhase.AUTHORIZE)
+        self.assertEqual(phases[0].failure.code, "application_limit_exceeded")
+
+    def test_effect_owner_failure_is_retryable_after_effect_boundary(self) -> None:
+        from nautical_core.operator_domain_plans import DomainApplicationAuthorization
+        from nautical_core.operator_context import OperatorInvocationBudget
+        from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        class Owner:
+            def apply(self, authorization):
+                raise RuntimeError("injected owner failure")
+
+        control_plane = OperatorControlPlane.from_configuration(
+            Configuration(), DomainApplicationRegistry({"lifecycle": Owner()}),
+        )
+        scope = OperatorScope.system()
+        request = OperatorRequest(OperatorOperation.APPLY, scope, apply=True, coverage=CoverageRequirement(CoverageKind.COMPLETE))
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snap-1")
+        plan = LifecyclePlan(
+            identity=LifecycleIdentity("chain-1", "task-1", 1, None, LifecycleEvent.DISABLE),
+            action=LifecycleAction.DISABLE_CHAIN,
+            parent_guard=ParentGuard("completed", "on", "chain-1", 1),
+        )
+        authorization = DomainApplicationAuthorization(plan, request, "snap-1", "config-1", scope, coverage, "schedule-1")
+        budget = OperatorInvocationBudget(OperatorLimits())
+        phases = control_plane.apply_domain_phases("lifecycle", authorization, budget=budget)
+        self.assertTrue(budget.effect_started)
+        self.assertEqual(phases[-1].phase, OperatorPhase.APPLY)
+        self.assertTrue(phases[-1].failure.retryable)
 
     def test_shuffled_findings_have_one_stable_order(self) -> None:
         findings = [
@@ -117,6 +326,86 @@ class OperatorConformanceTests(unittest.TestCase):
         encoded = render_contract_json(result)
         decoded = OperatorV2Result.from_mapping(json.loads(encoded))
         self.assertEqual(decoded, result)
+
+    def test_public_result_serializes_supported_nested_values(self) -> None:
+        """The public encoder keeps all supported evidence JSON-native and Unicode-safe."""
+        from datetime import date
+        from zoneinfo import ZoneInfo
+
+        class EvidenceDocument:
+            def to_dict(self):
+                return {
+                    "timezone": ZoneInfo("Europe/Bucharest"),
+                    "path": Path("/tmp/nautical-ă"),
+                    "captured_at": datetime(2026, 8, 29, 9, 30, tzinfo=timezone.utc),
+                    "date": date(2026, 8, 29),
+                    "status_value": OperatorV2Status.FOUND,
+                    "nested": {"message": "héllo", "values": [1, True, None]},
+                }
+
+        encoded = render_contract_json(EvidenceDocument())
+        self.assertIn("héllo", encoded)
+        document = json.loads(encoded)
+        payload = document
+        self.assertEqual(payload["timezone"], "Europe/Bucharest")
+        self.assertEqual(payload["path"], "/tmp/nautical-ă")
+        self.assertEqual(payload["captured_at"], "2026-08-29T09:30:00Z")
+        self.assertEqual(payload["date"], "2026-08-29")
+        self.assertEqual(payload["status_value"], "found")
+        self.assertEqual(payload["nested"]["values"], [1, True, None])
+
+    def test_operator_contracts_reject_nested_mutation(self) -> None:
+        """Frozen dataclasses must also protect nested evidence containers."""
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snapshot-immutable")
+        snapshot = OperatorSnapshot(
+            "snapshot-immutable", coverage, datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "epoch-1", "config-1", components={"nested": {"value": 1}},
+        )
+        finding = OperatorFinding(
+            "test", "snapshot", FindingSeverity.INFO, FindingActionability.INFORMATIONAL,
+            "immutable", observed={"nested": {"value": 1}},
+        )
+        page = OperatorPage(items=({"nested": {"value": 1}},))
+        plan = OperatorPlan(
+            "inspect", "snapshot-immutable", "config-1", OperatorScope.system(), coverage,
+            immutable_inputs={"nested": {"value": 1}},
+        )
+        for value, field in ((snapshot, "components"), (finding, "observed"), (page, "items"), (plan, "immutable_inputs")):
+            with self.assertRaises(TypeError):
+                if field == "items":
+                    value.items[0]["nested"]["value"] = 2
+                else:
+                    getattr(value, field)["nested"]["value"] = 2
+
+    def test_operator_contracts_reject_cycles_and_order_sets(self) -> None:
+        cyclic: list[object] = []
+        cyclic.append(cyclic)
+        with self.assertRaises(OperatorContractError):
+            OperatorV2Result("nautical.query.test", "query", OperatorV2Status.OK, payload={"cycle": cyclic})
+
+        first = OperatorV2Result(
+            "nautical.query.test", "query", OperatorV2Status.OK,
+            payload={"values": {"b", "a"}},
+        )
+        second = OperatorV2Result(
+            "nautical.query.test", "query", OperatorV2Status.OK,
+            payload={"values": {"a", "b"}},
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first.to_dict()["values"], ["a", "b"])
+
+    def test_plan_fingerprint_is_detached_from_caller_inputs(self) -> None:
+        """Caller-owned nested mappings cannot change a constructed plan."""
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snapshot-inputs")
+        inputs = {"nested": {"value": 1}}
+        plan = OperatorPlan(
+            "inspect", "snapshot-inputs", "config-1", OperatorScope.system(), coverage,
+            immutable_inputs=inputs,
+        )
+        fingerprint = plan.fingerprint
+        inputs["nested"]["value"] = 99
+        self.assertEqual(plan.fingerprint, fingerprint)
+        self.assertEqual(plan.immutable_inputs["nested"]["value"], 1)
 
     def test_public_operator_contracts_round_trip_through_json(self) -> None:
         """Representative request, finding, plan, and snapshot documents stay decodable."""

@@ -44,10 +44,11 @@ except Exception as exc:  # configuration can fail while the package is importin
         raise SystemExit(1)
     raise
 from nautical_core.operator_presentation import finding_display, finding_status, group_findings_by_severity, ordered_findings, render_result  # noqa: E402
+from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
+from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_findings import OperatorFinding, doctor_finding  # noqa: E402
 from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
-from nautical_core import chain_integrity_lifecycle as lifecycle  # noqa: E402
-from nautical_core.operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.doctor_report import format_task, historical_summaries, render_finding, timezone_summary, to_operator_result  # noqa: E402
 from nautical_core.integration_context import (  # noqa: E402
     IntegrationAccess,
     IntegrationContext,
@@ -64,28 +65,6 @@ from nautical_core.queue_status_service import QueueStatusService  # noqa: E402
 _JSON_SCHEMA = "nautical.doctor"
 _JSON_SCHEMA_VERSION = 1
 
-
-def _v2_document(payload: dict[str, Any]) -> OperatorV2Result:
-    """Build the shared v2 envelope while retaining Doctor's public fields."""
-    raw_status = str(payload.get("status") or "error")
-    # Preserve Doctor's v1 ``warn`` payload while using the canonical v2
-    # attention status in the shared envelope.
-    status = OperatorV2Status.ATTENTION if raw_status == "warn" else OperatorV2Status(raw_status)
-    failure = None
-    if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
-        finding = next((item for item in payload.get("operator_findings", ()) if isinstance(item, dict)), {})
-        failure = OperatorFailure(
-            code=str(finding.get("code") or "doctor_error"),
-            message=str(finding.get("message") or "Doctor reported an error"),
-            details=cast(Mapping[str, Any], finding.get("evidence")) if isinstance(finding.get("evidence"), dict) else {},
-        )
-    return OperatorV2Result(
-        schema=_JSON_SCHEMA,
-        operation="diagnose",
-        status=status,
-        payload={key: value for key, value in payload.items() if key not in {"schema", "status"}},
-        failure=failure,
-    )
 
 REQUIRED_UDAS = {
     "cp": "string",
@@ -196,24 +175,6 @@ def _resolve_hooks_dir(unit_of_work: TaskwarriorUnitOfWork, taskdata: Path) -> P
     return (taskdata / "hooks").resolve()
 
 
-def _hook_candidates(hooks_dir: Path, event: str) -> list[Path]:
-    return install_runtime.hook_candidates(hooks_dir, event)
-
-
-def _check_hook_installation(
-    findings: list[dict[str, Any]],
-    *,
-    hooks_dir: Path,
-    env: dict[str, str],
-) -> dict[str, dict[str, Any]]:
-    typed, validated = OperatorHealthService.hook_installation_findings(
-        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, _hook_candidates,
-        install_runtime.inspect_hook_runtime, env,
-    )
-    findings.extend(item.to_doctor_dict() for item in typed)
-    return validated
-
-
 def _check_runtime(
     findings: list[dict[str, Any]],
     *,
@@ -258,7 +219,11 @@ def _check_hooks_and_udas(
     hooks_dir: Path,
     env: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
-    validated = _check_hook_installation(findings, hooks_dir=hooks_dir, env=env)
+    typed, validated = OperatorHealthService.hook_installation_findings(
+        hooks_dir, install_runtime.HOOK_RUNTIME_FILES, install_runtime.hook_candidates,
+        install_runtime.inspect_hook_runtime, env,
+    )
+    findings.extend(item.to_doctor_dict() for item in typed)
     findings.extend(item.to_doctor_dict() for item in OperatorHealthService.uda_registration_findings(
         REQUIRED_UDAS,
         lambda name: _task_get(unit_of_work, f"rc.uda.{name}.type"),
@@ -396,46 +361,6 @@ _OBSOLETE_QUEUE_STATE_NAMES = (
 )
 
 
-def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) -> list[str]:
-    paths = sorted({str(root / name) for root in (taskdata, taskdata / ".nautical-state") for name in _OBSOLETE_QUEUE_STATE_NAMES if os.path.lexists(root / name)})
-    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.obsolete_queue_findings(taskdata, _OBSOLETE_QUEUE_STATE_NAMES))
-    return paths
-
-
-def _check_chains(
-    findings: list[dict[str, Any]],
-    *,
-    unit_of_work: TaskwarriorUnitOfWork | None,
-) -> dict[str, int]:
-    if unit_of_work is None:
-        return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
-    configuration = unit_of_work.context.configuration
-    control_plane = OperatorControlPlane.from_configuration(
-        configuration,
-        DomainApplicationRegistry(),
-    )
-    counts, chain_findings = control_plane.diagnose_chains(unit_of_work)
-    findings.extend(chain_findings)
-    return counts
-
-
-def _format_task(task: dict[str, Any]) -> str:
-    uuid = str(task.get("uuid") or "")
-    short = lifecycle.short_uuid(uuid) or "unknown"
-    description = str(task.get("description") or "").strip() or "(no description)"
-    parts = [f"{short} {description}"]
-    chain_id = str(task.get("chainID") or "").strip()
-    link = task.get("link")
-    status = str(task.get("status") or "").strip()
-    if chain_id:
-        parts.append(f"chain={chain_id}")
-    if link not in (None, ""):
-        parts.append(f"link={link}")
-    if status:
-        parts.append(f"status={status}")
-    return " | ".join(parts)
-
-
 def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: bool = False) -> None:
     stream = stream if stream is not None else sys.stdout
 
@@ -485,7 +410,7 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
         for task in issue.get("tasks") or []:
             if not isinstance(task, dict):
                 continue
-            write(f"    Task: {_format_task(task)}")
+            write(f"    Task: {format_task(task)}")
             reason = str(task.get("reason") or "").strip()
             if reason:
                 write(f"      Why: {reason}")
@@ -518,95 +443,26 @@ def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: boo
             write(f"    Child: {child}")
     for task in details.get("tasks") or []:
         if isinstance(task, dict):
-            write(f"  Affected: {_format_task(task)}")
+            write(f"  Affected: {format_task(task)}")
     for slot in details.get("slots") or []:
         if not isinstance(slot, dict):
             continue
         write(f"  Slot: chain={slot.get('chainID') or '?'} link={slot.get('link')}")
         for task in slot.get("tasks") or []:
             if isinstance(task, dict):
-                write(f"    Task: {_format_task(task)}")
+                write(f"    Task: {format_task(task)}")
     for link in details.get("links") or []:
         if not isinstance(link, dict):
             continue
         task = link.get("task")
-        source = _format_task(task) if isinstance(task, dict) else "unknown task"
+        source = format_task(task) if isinstance(task, dict) else "unknown task"
         target = link.get("target")
-        target_text = _format_task(target) if isinstance(target, dict) else str(target or "?")
+        target_text = format_task(target) if isinstance(target, dict) else str(target or "?")
         field = str(link.get("field") or "link")
         matches = link.get("matches")
         suffix = f" ({matches} matches)" if matches is not None else ""
         write(f"  Affected: {source}")
         write(f"    {field} -> {target_text}{suffix}")
-
-
-def _historical_summaries(findings: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Collapse completed-link evidence while leaving JSON output lossless."""
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
-    for item in findings:
-        if item.get("severity") != "info":
-            continue
-        details_value = item.get("details")
-        details: dict[str, Any] = dict(details_value) if isinstance(details_value, dict) else {}
-        if not details.get("historical"):
-            continue
-        invariant_id = str(details.get("invariant_id") or item.get("id") or "historical")
-        observed_value = details.get("observed")
-        observed: dict[str, Any] = dict(observed_value) if isinstance(observed_value, dict) else {}
-        field = str(observed.get("field") or "").strip()
-        chain_id = str(details.get("chainID") or "").strip()
-        key = (invariant_id, field)
-        group = groups.setdefault(key, {"count": 0, "chains": set(), "subjects": set()})
-        group["count"] += 1
-        if chain_id:
-            group["chains"].add(chain_id)
-        group["subjects"].update(str(value) for value in details.get("subjects") or () if value)
-
-    summaries: list[dict[str, Any]] = []
-    for (invariant_id, field), group in sorted(groups.items()):
-        count = int(group["count"])
-        label = f" {field}" if field else ""
-        chains = sorted(group["chains"])
-        summaries.append({
-            "id": "chains.historical_summary",
-            "severity": "info",
-            "message": f"{count} completed-link{label} observation(s) retained for audit.",
-            "fix": "No action is required; current pending-chain findings are reported separately.",
-            "details": {
-                "invariant_id": invariant_id,
-                "historical_count": count,
-                "chain_count": len(chains),
-                "chains": chains[:8],
-                "subjects": sorted(group["subjects"])[:8],
-                "detail_command": "nautical query integrity --all",
-            },
-        })
-    return summaries
-
-
-def _render_finding(item: object) -> dict[str, Any]:
-    """Project a canonical finding into the renderer's detail-oriented view."""
-    if not isinstance(item, dict):
-        return {}
-    if "code" not in item:
-        return item
-    severity = str(item.get("severity") or "info")
-    severity = "warn" if severity == "warning" else severity
-    evidence = item.get("evidence")
-    details = dict(evidence) if isinstance(evidence, dict) else {}
-    observed = item.get("observed")
-    expected = item.get("expected")
-    if isinstance(observed, dict):
-        details["observed"] = observed
-    if isinstance(expected, dict):
-        details["expected"] = expected
-    return {
-        "id": item.get("code"),
-        "severity": severity,
-        "message": item.get("message"),
-        "fix": item.get("guidance") or "",
-        "details": details,
-    }
 
 
 def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
@@ -624,7 +480,7 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
             or (isinstance(item.get("evidence"), dict) and item["evidence"].get("historical"))
         )
     ]
-    raw_findings = list(ordered_findings([_render_finding(item) for item in visible_source]))
+    raw_findings = list(ordered_findings([render_finding(item) for item in visible_source]))
     historical = [
         item for item in raw_findings
         if item.get("severity") == "info"
@@ -632,8 +488,8 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
         and item["details"].get("historical")
     ]
     findings = [item for item in raw_findings if item not in historical]
-    historical_summaries = _historical_summaries(historical)
-    findings.extend(historical_summaries)
+    historical_groups = historical_summaries(historical)
+    findings.extend(historical_groups)
     grouped = group_findings_by_severity(findings)
     counts = {
         severity: len(grouped.get(severity, ()))
@@ -650,16 +506,16 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
     warn_text = _paint(f"{counts['warn']} warnings", "yellow", enabled=enabled)
     error_text = _paint(f"{counts['error']} failures", "red", enabled=enabled)
     info_text = _paint(
-        f"{len(historical)} historical observations in {len(historical_summaries)} groups",
+        f"{len(historical)} historical observations in {len(historical_groups)} groups",
         "cyan",
         enabled=enabled,
     )
     write(
         "Checks: "
-        f"{len(findings) - len(historical_summaries)} current | "
+        f"{len(findings) - len(historical_groups)} current | "
         f"{ok_text} | {warn_text} | {error_text} | {info_text}"
     )
-    timezone = _timezone_summary([_render_finding(item) for item in source_findings])
+    timezone = timezone_summary([render_finding(item) for item in source_findings])
     if timezone:
         write(f"Timezone: {timezone}")
     for section in ("error", "warn", "info", "ok"):
@@ -681,21 +537,6 @@ def _render_text(payload: dict[str, Any], *, stream: Any = None) -> None:
                 write(f"    Fix: {_paint(guidance, 'yellow', enabled=enabled)}")
 
 
-def _timezone_summary(findings: list[dict[str, Any]]) -> str:
-    for item in findings:
-        if not isinstance(item, dict):
-            continue
-        check_id = item.get("id")
-        if check_id == "config.timezone":
-            return str(item.get("message") or "").replace("Nautical timezone is available: ", "")
-        if check_id in {"config.timezone.missing", "config.timezone.invalid", "config.timezone.unavailable"}:
-            details_value = item.get("details")
-            details: dict[str, Any] = dict(details_value) if isinstance(details_value, dict) else {}
-            tz_name = str(details.get("tz") or "?")
-            return f"{tz_name} unavailable; UTC fallback active"
-    return ""
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--taskdata", default=None)
@@ -709,6 +550,9 @@ def main() -> int:
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
     parser.add_argument("--clean-cache", action="store_true", help="prune expired and orphaned anchor cache files")
     args = parser.parse_args()
+    # Doctor audits the full task database, so use bounded full-system limits
+    # rather than the smaller scoped-query defaults.
+    budget = OperatorInvocationBudget(OperatorLimits(tasks=10_000, chains=1_000))
 
     env = os.environ.copy()
     findings: list[dict[str, Any]] = []
@@ -728,14 +572,14 @@ def main() -> int:
             message = f"Integration context unavailable: {exc}"
             if args.json:
                 print(
-                    render_result(_v2_document({
+                    render_result(to_operator_result({
                             "schema": _JSON_SCHEMA,
                             "schema_version": _JSON_SCHEMA_VERSION,
                             "status": "error",
                             "findings": [
                                 {"id": "integration.context", "severity": "error", "message": message}
                             ],
-                        }), "json")
+                        }), "json", budget=budget)
                 )
             else:
                 print(f"Nautical doctor: ERROR\nContext: {message}")
@@ -784,11 +628,24 @@ def main() -> int:
         counts = {"tasks": 0, "nautical_tasks": 0, "chains": 0}
     else:
         outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
-        obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
-        counts = _check_chains(
-            findings,
-            unit_of_work=unit_of_work,
-        )
+        obsolete_queue_state = sorted({
+            str(root / name)
+            for root in (taskdata, taskdata / ".nautical-state")
+            for name in _OBSOLETE_QUEUE_STATE_NAMES
+            if os.path.lexists(root / name)
+        })
+        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.obsolete_queue_findings(
+            taskdata, _OBSOLETE_QUEUE_STATE_NAMES,
+        ))
+        if unit_of_work is None:
+            counts = {"tasks": 0, "nautical_tasks": 0, "chains": 0}
+        else:
+            control_plane = OperatorControlPlane.from_configuration(
+                unit_of_work.context.configuration,
+                DomainApplicationRegistry(),
+            )
+            counts, chain_findings = control_plane.diagnose_chains(unit_of_work, budget=budget)
+            findings.extend(chain_findings)
 
     typed_findings = tuple(
         OperatorFinding.from_mapping(item)
@@ -819,7 +676,7 @@ def main() -> int:
         # Diagnostics may include timezone/provider objects supplied by an
         # optional backend. Keep the JSON boundary strict without allowing a
         # presentation-only value to make Doctor crash.
-                print(render_result(_v2_document(payload), "json"))
+                print(render_result(to_operator_result(payload), "json", budget=budget))
     else:
         _render_text(payload)
     return 2 if status == "error" else 1 if status == "warn" else 0

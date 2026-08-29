@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import shutil
 
-from nautical_core.integration_models import CommandFailureKind
+from nautical_core.integration_models import CommandFailureKind, FailureEvidence
 from nautical_core.doctor_report import DoctorReport
 from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_models import OperatorV2Result
@@ -51,6 +51,54 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(payload.get("schema"), "nautical.query.capabilities")
         decoded = QueryCapabilities.from_mapping(payload)
         self.assertEqual(decoded.to_dict(), payload)
+
+    def test_process_interruption_is_typed_and_retryable(self) -> None:
+        client = TaskwarriorClient((sys.executable, "-c", "import time; time.sleep(1)"))
+        result = client.execute((), purpose="interruption-test", timeout=0.01, attempts=1)
+        self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
+        self.assertEqual(result.returncode, 124)
+        self.assertGreaterEqual(result.duration, 0.0)
+        evidence = FailureEvidence(
+            result.command, result.kind, result.returncode, result.attempt,
+            result.duration, retryable=True, detail="process timeout",
+        )
+        self.assertTrue(evidence.retryable)
+
+    def test_integrity_unavailable_result_keeps_failure_evidence(self) -> None:
+        from nautical_core.query_report import to_operator_result
+
+        payload = to_operator_result({
+            "schema": "nautical.query.integrity",
+            "version": 1,
+            "operation": "integrity",
+            "status": "unavailable",
+            "findings": [],
+            "plans": [],
+            "reason": "chain snapshot unavailable",
+        })
+        self.assertEqual(payload["status"], "unavailable")
+        self.assertEqual(payload["failure"]["code"], "query_unavailable")
+        self.assertEqual(payload["failure"]["message"], "chain snapshot unavailable")
+
+    def test_valid_operator_matrix_emits_one_json_document(self) -> None:
+        """Operational subprocesses keep stdout machine-readable and diagnostics separate."""
+        with tempfile.TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            cases = (
+                (QUERY, ("capabilities",), {}),
+                (QUEUE_STATUS, ("--taskdata", str(taskdata), "--json"), {}),
+                (DOCTOR, ("--taskdata", str(taskdata), "--task-bin", "/bin/false", "--json", "--installation-only"), {}),
+                (RECONCILE, ("--json", "--task-bin", str(taskdata / "missing-task")), {"TASKDATA": str(taskdata)}),
+            )
+            for path, args, environment in cases:
+                process = self._run(path, *args, env=environment)
+                self.assertNotIn("Traceback", process.stdout)
+                self.assertNotIn("Traceback", process.stderr)
+                self.assertEqual(process.stderr, "", (path.name, process.stderr))
+                self.assertTrue(process.stdout.strip().startswith("{"), (path.name, process.stdout))
+                payload = json.loads(process.stdout)
+                self.assertIsInstance(payload, dict)
+                self.assertTrue(str(payload.get("schema", "")).startswith("nautical."), path.name)
 
     def test_managed_runtime_operator_matrix_runs_outside_checkout(self) -> None:
         """Installed operator clients resolve the staged package without source imports."""

@@ -332,6 +332,7 @@ class NavigatorPresentationResult:
     next_dates: tuple[str, ...] = ()
     terminal_note: str | None = None
     trace_summary: str | None = None
+    budget: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -341,6 +342,7 @@ class NavigatorPresentationResult:
             "next": list(self.next_dates),
             "terminal": self.terminal_note,
             "trace": self.trace_summary,
+            "budget": None if self.budget is None else dict(self.budget),
         }
 
 
@@ -854,10 +856,11 @@ def _anchor_preview_details(
     count: int = 5,
     *,
     trace: Any = None,
-) -> tuple[str, list[str], str | None]:
+) -> tuple[str, list[str], str | None, Mapping[str, Any] | None]:
     natural = ""
     next_dates: list[str] = []
     terminal_note: str | None = None
+    budget_report: Mapping[str, Any] | None = None
     dnf = None
     default_seed = None
     try:
@@ -876,8 +879,11 @@ def _anchor_preview_details(
         from nautical_core.occurrence_outcomes import ExhaustedOccurrence
         from nautical_core.recurrence_context import RecurrenceContext
         from nautical_core.scheduler_cursor import OccurrenceCursor
+        from nautical_core.scheduler_cursor import OccurrenceRangeRequest
         from nautical_core.scheduler_service import SchedulerService
         from nautical_core.task_codec import DEFAULT_TASK_CODEC
+        from nautical_core.operator_context import OperatorInvocationBudget
+        from nautical_core.operator_models import OperatorLimits
 
         now_local = core.to_local(core.now_utc())
         # Navigator previews are date-oriented: start after today's final
@@ -907,19 +913,22 @@ def _anchor_preview_details(
             source_query="navigator expression preview",
             trace=trace,
         )
+        budget = OperatorInvocationBudget(
+            OperatorLimits(occurrences=max(1, count), scheduler_iterations=max(512, count * 8))
+        )
         try:
-            result = service.collect(
-                OccurrenceCursor(
+            cursor = OccurrenceCursor(
                     after_local,
                     inclusive=False,
                     timezone=context.timezone,
-                ),
+                )
+            result = service.collect_request(OccurrenceRangeRequest(
+                cursor=cursor,
                 limit=count,
-                fallback_hhmm=(9, 0),
-                default_seed_date=now_local.date(),
                 max_iterations=max(512, count * 8),
                 max_file_skips=max(512, count * 8),
-            )
+            ), budget=budget)
+            budget_report = budget.report()
         except Exception:
             raise
         if isinstance(result.terminal, ExhaustedOccurrence):
@@ -930,19 +939,19 @@ def _anchor_preview_details(
             if occurrence.local_datetime is not None
         ]
 
-    return natural, next_dates[:count], terminal_note
+    return natural, next_dates[:count], terminal_note, budget_report
 
 
 def _anchor_preview(expr: str, count: int = 5) -> tuple[str, list[str]]:
     """Compatibility wrapper returning the historical two-value result."""
-    natural, next_dates, _terminal_note = _anchor_preview_details(expr, count)
+    natural, next_dates, _terminal_note, _budget = _anchor_preview_details(expr, count)
     return natural, next_dates
 
 
 def _anchor_presentation_result(
     expr: str, *, count: int = 5, trace: Any = None
 ) -> NavigatorPresentationResult:
-    natural, next_dates, terminal_note = _anchor_preview_details(expr, count=count, trace=trace)
+    natural, next_dates, terminal_note, budget = _anchor_preview_details(expr, count=count, trace=trace)
     return NavigatorPresentationResult(
         kind="anchor_explain",
         expression=expr,
@@ -950,6 +959,7 @@ def _anchor_presentation_result(
         next_dates=tuple(next_dates),
         terminal_note=terminal_note,
         trace_summary=None if trace is None else _trace_summary(trace),
+        budget=budget,
     )
 
 

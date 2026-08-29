@@ -6,12 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from .lifecycle_outbox import OUTBOX_ACK_RETENTION_SECONDS, OUTBOX_SCHEMA_VERSION, LifecycleOutboxRepository, lifecycle_outbox_path
+from .operator_context import OperatorBudgetLedger
 
 
 class QueueStatusService:
     """Collect lifecycle outbox health without presentation concerns."""
 
-    def outbox_summary(self, path: Path, *, stale_after: float, limit: int) -> tuple[dict[str, Any], list[str]]:
+    def outbox_summary(
+        self,
+        path: Path,
+        *,
+        stale_after: float,
+        limit: int,
+        budget: OperatorBudgetLedger | None = None,
+    ) -> tuple[dict[str, Any], list[str]]:
         summary: dict[str, Any] = {
             "exists": False,
             "schema": {"status": "absent", "version": 0, "expected_version": OUTBOX_SCHEMA_VERSION},
@@ -23,6 +31,15 @@ class QueueStatusService:
         if not path.exists():
             return summary, issues
         summary["exists"] = True
+        if budget is not None:
+            if not budget.consume("sqlite_transactions"):
+                return summary, ["operator SQLite transaction budget exhausted"]
+            requested_limit = limit
+            limit = min(limit, budget.remaining("outbox_rows"))
+            if requested_limit > 0 and limit == 0:
+                return summary, ["operator outbox row budget exhausted"]
+            if limit > 0 and not budget.consume("outbox_rows", limit):
+                return summary, ["operator outbox row budget exhausted"]
         result, data = LifecycleOutboxRepository(path.parent.parent).status(limit=limit, stale_after=stale_after)
         summary["integrity"] = str(data.get("integrity") or "not_checked")
         summary["states"] = dict(data.get("states") or {})
@@ -63,10 +80,17 @@ class QueueStatusService:
             summary["sample"].append(item)
         return summary, issues
 
-    def status_payload(self, taskdata: Path, *, stale_after: float, limit: int) -> dict[str, Any]:
+    def status_payload(
+        self,
+        taskdata: Path,
+        *,
+        stale_after: float,
+        limit: int,
+        budget: OperatorBudgetLedger | None = None,
+    ) -> dict[str, Any]:
         resolved = Path(taskdata).expanduser().resolve()
         outbox_path = lifecycle_outbox_path(resolved)
-        outbox, issues = self.outbox_summary(outbox_path, stale_after=stale_after, limit=limit)
+        outbox, issues = self.outbox_summary(outbox_path, stale_after=stale_after, limit=limit, budget=budget)
         status = "error" if outbox["schema"].get("status") == "error" or outbox["integrity"] not in {"ok", "not_checked"} else ("warn" if issues else "ok")
         return {"schema": "nautical.lifecycle_outbox_status", "schema_version": 1, "status": status, "taskdata": str(resolved), "paths": {"state_dir": str(outbox_path.parent), "outbox_db": str(outbox_path)}, "outbox": outbox, "issues": issues}
 

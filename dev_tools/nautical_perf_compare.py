@@ -83,11 +83,12 @@ def _metric_value(result: dict, metric: str) -> float | None:
             "rows": "export_rows",
             "transactions": "transaction_count",
         }
-        key = keys[metric]
-        values = [_number(item.get(key)) for item in reports]
-        present = [item for item in values if item is not None]
-        if present:
-            return sum(present)
+        if metric in keys:
+            key = keys[metric]
+            values = [_number(item.get(key)) for item in reports]
+            present = [item for item in values if item is not None]
+            if present:
+                return sum(present)
 
     samples = _mapping_list(result.get("task_call_stats"))
     if samples:
@@ -105,6 +106,25 @@ def _metric_value(result: dict, metric: str) -> float | None:
     outbox_samples = _mapping_list(result.get("outbox_stats"))
     if metric == "transactions" and outbox_samples:
         values = [_number(item.get("outbox_transactions")) for item in outbox_samples]
+        present = [item for item in values if item is not None]
+        if present:
+            return float(statistics.median(present))
+
+    if metric in {"cpu_time", "peak_memory"}:
+        key = "cpu_median_s" if metric == "cpu_time" else "peak_memory_median_bytes"
+        value = _number(result.get(key))
+        if value is not None:
+            return value
+
+    timing = _mapping_list(result.get("timing_breakdown"))
+    timing_keys = {
+        "taskwarrior_time": "taskwarrior_seconds",
+        "startup_time": "startup_seconds",
+        "drain_time": "drain_seconds",
+        "presentation_time": "presentation_seconds",
+    }
+    if metric in timing_keys and timing:
+        values = [_number(item.get(timing_keys[metric])) for item in timing]
         present = [item for item in values if item is not None]
         if present:
             return float(statistics.median(present))
@@ -169,7 +189,10 @@ def main() -> int:
         if trend == "regression":
             regressions.append(name)
 
-        for metric in ("calls", "rows", "transactions"):
+        for metric in (
+            "calls", "rows", "transactions", "cpu_time", "peak_memory",
+            "taskwarrior_time", "startup_time", "drain_time", "presentation_time",
+        ):
             base_value = _metric_value(b, metric)
             head_value = _metric_value(h, metric)
             if base_value is None or head_value is None:

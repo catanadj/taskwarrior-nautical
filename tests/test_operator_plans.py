@@ -168,6 +168,21 @@ class OperatorPlanTests(unittest.TestCase):
         with self.assertRaises(OperatorContractError):
             apply_authorized(plan, request, verifier, WrongOwner(), postcondition)
 
+    def test_dry_run_and_apply_bind_the_same_plan_fingerprint(self) -> None:
+        plan = OperatorPlan(
+            "repair", "snap-parity", "config-1", OperatorScope.system(),
+            OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            operations=( {"kind": "repair", "uuid": "task-1"}, ),
+        )
+        dry_run = OperatorRequest(OperatorOperation.PLAN, plan.scope, apply=False,
+                                  coverage=CoverageRequirement(CoverageKind.COMPLETE))
+        apply = OperatorRequest(OperatorOperation.APPLY, plan.scope, apply=True,
+                                coverage=CoverageRequirement(CoverageKind.COMPLETE))
+        self.assertEqual(plan.fingerprint, OperatorPlan.from_mapping(plan.to_dict()).fingerprint)
+        with self.assertRaises(OperatorContractError):
+            authorize_application(plan, dry_run)
+        self.assertEqual(authorize_application(plan, apply).plan.fingerprint, plan.fingerprint)
+
     def test_failure_injection_guard_blocks_effect_owner(self) -> None:
         plan = OperatorPlan(
             "apply", "snap-1", "config-1", OperatorScope.system(),

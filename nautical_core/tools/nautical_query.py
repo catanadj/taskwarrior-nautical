@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, Mapping
 
 
 CORE_DIR = Path(__file__).resolve().parents[1]
@@ -23,11 +23,10 @@ if str(BASE_DIR) not in sys.path:
 import nautical_core as core  # noqa: E402
 from nautical_core.operator_presentation import render_json_document  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
-from nautical_core.operator_models import OperatorFailure, OperatorScope, OperatorScopeKind, OperatorV2Result, OperatorV2Status  # noqa: E402
+from nautical_core.operator_models import OperatorScope, OperatorScopeKind  # noqa: E402
+from nautical_core.query_report import error_payload, to_operator_result  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
-    OCCURRENCES_SCHEMA,
     CAPABILITIES_SCHEMA,
-    NEXT_SCHEMA,
     NEXT_OPERATION,
     DEFAULT_MAX_FILE_SKIPS,
     DEFAULT_MAX_ITERATIONS,
@@ -45,31 +44,9 @@ from nautical_core.query_models import (  # noqa: E402
 )
 from nautical_core.query_service import OccurrenceQueryService  # noqa: E402
 from nautical_core.integrity_query_service import IntegrityQueryService  # noqa: E402
-from nautical_core.chain_snapshot import IntegritySnapshotRequest  # noqa: E402
 from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 
 INTEGRITY_SCHEMA = "nautical.query.integrity"
-
-
-def _error_payload(code: str, message: str, *, retryable: bool = False, operation: str = "occurrences") -> dict[str, Any]:
-    return {
-        "schema": NEXT_SCHEMA if operation == NEXT_OPERATION else OCCURRENCES_SCHEMA,
-        "version": QUERY_API_VERSION,
-        "operation": operation,
-        "status": "invalid" if not retryable else "unavailable",
-        "basis": "next" if operation == NEXT_OPERATION else "schedule",
-        "timezone": None,
-        "query": None,
-        "configuration_fingerprint": None,
-        "results": [],
-        "failure": {
-            "code": code,
-            "message": str(message or code),
-            "retryable": retryable,
-            "task_uuid": None,
-            "details": {},
-        },
-    }
 
 
 def _capabilities_payload() -> dict[str, Any]:
@@ -155,39 +132,18 @@ def _capabilities_payload() -> dict[str, Any]:
     }
 
 
-def _emit(payload: Mapping[str, Any], *, exit_code: int = 0) -> int:
+def _emit(payload: Mapping[str, Any], *, exit_code: int = 0, budget: object | None = None) -> int:
     if str(payload.get("schema") or "").startswith("nautical.query.") and payload.get("version") == 1:
-        payload = _v2_document(payload)
+        payload = to_operator_result(payload)
+    if budget is not None:
+        report = getattr(budget, "report", None)
+        if callable(report):
+            payload = {**payload, "budget": report()}
     try:
         sys.stdout.write(render_json_document(payload) + "\n")
     except BrokenPipeError:
         return 0
     return exit_code
-
-
-def _v2_document(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Upgrade a validated public query document to the shared v2 envelope."""
-    reserved = {"schema", "version", "operation", "status", "failure"}
-    failure_value = payload.get("failure")
-    failure = None
-    if isinstance(failure_value, Mapping):
-        failure = OperatorFailure(
-            code=str(failure_value.get("code") or "query_failure"),
-            message=str(failure_value.get("message") or "query failed"),
-            retryable=bool(failure_value.get("retryable", False)),
-            details=cast(Mapping[str, Any], failure_value.get("details"))
-            if isinstance(failure_value.get("details"), Mapping)
-            else {},
-        )
-    status = OperatorV2Status(str(payload.get("status") or "error"))
-    result = OperatorV2Result(
-        schema=str(payload.get("schema") or "nautical.query.unknown"),
-        operation=str(payload.get("operation") or "query"),
-        status=status,
-        payload={key: value for key, value in payload.items() if key not in reserved},
-        failure=failure,
-    )
-    return result.to_dict()
 
 
 def _diagnostic(message: str) -> None:
@@ -197,27 +153,15 @@ def _diagnostic(message: str) -> None:
 
 def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     """Validate the selector and delegate the audit to the shared service."""
-    selected = sum(bool(value) for value in (args.uuids, args.chain_id, args.all_tasks))
-    if selected != 1:
-        raise QueryContractError("integrity query requires exactly one of --uuid, --chain-id, or --all")
-    if args.uuids:
-        if len(args.uuids) != 1:
-            raise QueryContractError("integrity query accepts one --uuid")
-        request = IntegritySnapshotRequest.uuid(args.uuids[0], complete_chain_history=True)
-    elif args.chain_id:
-        request = IntegritySnapshotRequest.chain(args.chain_id)
-    else:
-        # An explicit whole-system audit already requests the complete
-        # authoritative history. Avoid bounded hydration of every chain,
-        # which would otherwise stop at the per-engine safety cap.
-        request = IntegritySnapshotRequest.candidates(complete_chain_history=True)
-    payload, exit_code = IntegrityQueryService(
+    service = IntegrityQueryService(
         core=core,
         task_binary=shutil.which("task") or "task",
         env=os.environ,
         uow_builder=build_operator_uow,
-    ).query(request)
-    upgraded = _v2_document(payload)
+    )
+    request = service.request_from_selector(uuids=args.uuids, chain_id=args.chain_id, all_tasks=args.all_tasks)
+    payload, exit_code = service.query(request)
+    upgraded = to_operator_result(payload)
     return upgraded, exit_code
 
 
@@ -311,19 +255,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--omissions", choices=("exclude", "include", "report"), dest="omission_policy", default="exclude")
     args = parser.parse_args(argv)
     if args.operation == "capabilities":
-        return _emit(_v2_document(_capabilities_payload()))
+        return _emit(to_operator_result(_capabilities_payload()))
     if args.operation == "integrity":
         try:
             payload, exit_code = _integrity_payload(args)
             return _emit(payload, exit_code=exit_code)
         except QueryContractError as exc:
             _diagnostic(str(exc))
-            return _emit(_v2_document({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
+            return _emit(to_operator_result({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
                           "status": "invalid", "findings": [], "plans": [],
                           "failure": {"code": "invalid_request", "message": str(exc)}}), exit_code=2)
         except (OSError, RuntimeError, ValueError) as exc:
             _diagnostic(str(exc))
-            return _emit(_v2_document({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
+            return _emit(to_operator_result({"schema": INTEGRITY_SCHEMA, "version": 1, "operation": "integrity",
                           "status": "unavailable", "findings": [], "plans": [],
                           "failure": {"code": "query_unavailable", "message": str(exc)}}), exit_code=3)
     try:
@@ -379,13 +323,13 @@ def main(argv: list[str] | None = None) -> int:
         service = OccurrenceQueryService(unit_of_work, core=core)
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
-        return _emit(cast(OperatorV2Result, response.to_operator_v2()).to_dict(), exit_code=exit_code)
+        return _emit(response.to_operator_v2().to_dict(), exit_code=exit_code, budget=service.budget)
     except QueryContractError as exc:
         _diagnostic(str(exc))
-        return _emit(_error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)
+        return _emit(error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)
     except (OSError, RuntimeError, ValueError) as exc:
         _diagnostic(str(exc))
-        return _emit(_error_payload("query_unavailable", str(exc), retryable=True, operation=args.operation), exit_code=3)
+        return _emit(error_payload("query_unavailable", str(exc), retryable=True, operation=args.operation), exit_code=3)
 
 
 if __name__ == "__main__":

@@ -17,8 +17,10 @@ from .operator_models import (
     OperatorScope,
     OperatorScopeKind,
     CoverageKind,
+    _freeze_json_value,
+    _json_value,
 )
-from .operator_context import OperatorInvocationContext
+from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .integration_models import Absent, Found, TaskRead, Unavailable
 from .chain_integrity_models import ChainSnapshot
 
@@ -189,8 +191,8 @@ class OperatorSnapshot:
         object.__setattr__(self, "mutation_epoch", epoch)
         object.__setattr__(self, "configuration_fingerprint", fingerprint)
         object.__setattr__(self, "created_at", self.created_at.astimezone(timezone.utc))
-        object.__setattr__(self, "components", dict(self.components))
-        object.__setattr__(self, "provider_manifest", dict(self.provider_manifest))
+        object.__setattr__(self, "components", _freeze_json_value(self.components))
+        object.__setattr__(self, "provider_manifest", _freeze_json_value(self.provider_manifest))
         object.__setattr__(self, "hydration", hydration)
         object.__setattr__(self, "component_evidence", component_evidence)
 
@@ -201,8 +203,8 @@ class OperatorSnapshot:
             "created_at": self.created_at.isoformat().replace("+00:00", "Z"),
             "mutation_epoch": self.mutation_epoch,
             "configuration_fingerprint": self.configuration_fingerprint,
-            "components": dict(self.components),
-            "provider_manifest": dict(self.provider_manifest),
+            "components": _json_value(self.components),
+            "provider_manifest": _json_value(self.provider_manifest),
             "indexes": self.indexes.to_dict(),
             "hydration": [item.to_dict() for item in self.hydration],
             "component_evidence": [item.to_dict() for item in self.component_evidence],
@@ -361,6 +363,8 @@ class ChainSnapshotReader:
                 details={"snapshot_id": snapshot.snapshot_id, "source": snapshot.coverage.source},
             )
         observed_limits = (
+            ("exported_rows", len(outcome.rows), request.limits.exported_rows),
+            ("decoded_rows", len(outcome.rows), request.limits.decoded_rows),
             ("tasks", len(snapshot.indexes.task_uuids), request.limits.tasks),
             ("chains", len(snapshot.indexes.chain_ids), request.limits.chains),
             ("history_links", len(snapshot.indexes.links), request.limits.history_links),
@@ -371,7 +375,7 @@ class ChainSnapshotReader:
                     "snapshot_limit_exceeded",
                     f"snapshot contains {observed} {name}, exceeding limit {limit}",
                     scope=scope,
-                    details={"snapshot_id": snapshot.snapshot_id, "observed": observed, "limit": limit},
+                    details={"resource": name, "snapshot_id": snapshot.snapshot_id, "observed": observed, "limit": limit},
                 )
         if snapshot.cacheable and not request.refresh:
             cache_key = "operator-snapshot:" + json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -382,15 +386,32 @@ class ChainSnapshotReader:
         self,
         context: OperatorInvocationContext,
         request: SnapshotReadRequest,
+        *,
+        budget: OperatorBudgetLedger | None = None,
     ) -> ChainSnapshot | OperatorFailure:
         """Read the established chain snapshot without projecting its rows."""
         if not isinstance(context, OperatorInvocationContext):
             raise OperatorContractError("snapshot read requires an operator context")
         if not isinstance(request, SnapshotReadRequest):
             raise OperatorContractError("snapshot read requires a typed request")
+        ledger = budget or context.budget
         from .chain_snapshot import IntegritySnapshotRequest
 
         scope = request.scope
+        if scope.kind in {OperatorScopeKind.CHAINS, OperatorScopeKind.UUIDS}:
+            requested_identities = len(scope.values)
+            if requested_identities > request.limits.hydration_identities:
+                return OperatorFailure(
+                    "snapshot_limit_exceeded",
+                    f"snapshot requests {requested_identities} hydration identities, exceeding limit "
+                    f"{request.limits.hydration_identities}",
+                    scope=scope,
+                    details={
+                        "resource": "hydration_identities",
+                        "observed": requested_identities,
+                        "limit": request.limits.hydration_identities,
+                    },
+                )
         cache_key = "operator-source-snapshot:" + json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         if not request.refresh:
             cached = context.cache.get(cache_key)
@@ -415,36 +436,7 @@ class ChainSnapshotReader:
                 refresh=request.refresh,
             )
         elif scope.kind in {OperatorScopeKind.CHAINS, OperatorScopeKind.UUIDS}:
-            from .chain_integrity_models import SnapshotCoverage
             complete = request.requirement.minimum.value == "complete"
-            if len(scope.values) > 4:
-                source_request = IntegritySnapshotRequest.candidates(
-                    complete_chain_history=complete,
-                    refresh=request.refresh,
-                )
-                outcome = self._collector(source_request)
-                if not isinstance(outcome, Found):
-                    return OperatorFailure(
-                        "snapshot_unavailable" if isinstance(outcome, Unavailable) else "snapshot_absent",
-                        outcome.evidence.detail if isinstance(outcome, Unavailable) else outcome.reason,
-                        retryable=outcome.retryable if isinstance(outcome, Unavailable) else False,
-                        scope=scope,
-                    )
-                source = cast(ChainSnapshot, outcome.value)
-                wanted = set(scope.values)
-                rows = tuple(
-                    row for row in source.rows
-                    if (row.chain_id in wanted if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid in wanted)
-                )
-                return ChainSnapshot(
-                    source.snapshot_id + ":multi",
-                    source.coverage,
-                    source.source,
-                    rows,
-                    source.configuration_fingerprint,
-                    source.complete_chain_history,
-                    source.reason,
-                )
             snapshots: list[ChainSnapshot] = []
             for value in scope.values:
                 source_request = (
@@ -452,6 +444,17 @@ class ChainSnapshotReader:
                     if scope.kind is OperatorScopeKind.CHAINS
                     else IntegritySnapshotRequest.uuid(value, complete_chain_history=complete, refresh=request.refresh)
                 )
+                if ledger is not None and not ledger.consume("taskwarrior_calls"):
+                    return OperatorFailure(
+                        "snapshot_limit_exceeded",
+                        "Taskwarrior call budget exhausted before snapshot read",
+                        scope=scope,
+                        details={
+                            "resource": "taskwarrior_calls",
+                            "observed": ledger.usage("taskwarrior_calls"),
+                            "limit": request.limits.taskwarrior_calls,
+                        },
+                    )
                 outcome = self._collector(source_request)
                 if isinstance(outcome, Unavailable):
                     return OperatorFailure("snapshot_unavailable", outcome.evidence.detail, retryable=outcome.retryable, scope=scope)
@@ -459,9 +462,35 @@ class ChainSnapshotReader:
                     continue
                 if not isinstance(outcome, Found) or not isinstance(outcome.value, ChainSnapshot):
                     return OperatorFailure("invalid_snapshot_read", "snapshot provider returned an invalid result", scope=scope)
-                snapshots.append(outcome.value)
+                snapshot = outcome.value
+                identity_rows = tuple(
+                    row for row in snapshot.rows
+                    if (row.chain_id == value if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid == value)
+                )
+                if any(
+                    (row.chain_id != value if scope.kind is OperatorScopeKind.CHAINS else row.task_uuid != value)
+                    for row in snapshot.rows
+                ):
+                    return OperatorFailure(
+                        "invalid_snapshot_scope",
+                        "snapshot provider returned rows outside the requested identity",
+                        scope=scope,
+                        details={"identity": value, "snapshot_id": snapshot.snapshot_id},
+                    )
+                snapshots.append(
+                    ChainSnapshot(
+                        snapshot.snapshot_id,
+                        snapshot.coverage,
+                        snapshot.source,
+                        identity_rows,
+                        snapshot.configuration_fingerprint,
+                        snapshot.complete_chain_history,
+                        snapshot.reason,
+                    )
+                )
             rows = tuple(row for snapshot in snapshots for row in snapshot.rows)
             digest = hashlib.sha256(":".join(snapshot.snapshot_id for snapshot in snapshots).encode()).hexdigest()[:16]
+            from .chain_integrity_models import SnapshotCoverage
             return ChainSnapshot(
                 "multi-" + digest,
                 SnapshotCoverage.CHAIN if scope.kind is OperatorScopeKind.CHAINS else SnapshotCoverage.NARROW,
@@ -475,6 +504,17 @@ class ChainSnapshotReader:
                 "unsupported_snapshot_scope",
                 f"authoritative snapshot reader does not support scope {scope.kind.value} with {len(scope.values)} value(s)",
                 scope=scope,
+            )
+        if ledger is not None and not ledger.consume("taskwarrior_calls"):
+            return OperatorFailure(
+                "snapshot_limit_exceeded",
+                "Taskwarrior call budget exhausted before snapshot read",
+                scope=scope,
+                details={
+                    "resource": "taskwarrior_calls",
+                    "observed": ledger.usage("taskwarrior_calls"),
+                    "limit": request.limits.taskwarrior_calls,
+                },
             )
         outcome = self._collector(source_request)
         if isinstance(outcome, Found):

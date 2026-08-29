@@ -445,55 +445,6 @@ def recurrence_kind(task: TaskObservation | NauticalTask) -> str:
     return "cp"
 
 
-def describe_recovery_result(result: RecoveryResult, *, fmt_dt_local: Any = None) -> dict[str, Any]:
-    """Describe a typed recovery result without reconstructing a decision."""
-    if isinstance(result, RecoveryRefusal):
-        parent = result.parent.to_mapping()
-        return {
-            "parent": short_uuid(parent.get("uuid")),
-            "chainID": str(parent.get("chainID") or ""),
-            "parent_link": int_or_default(parent.get("link"), 0),
-            "kind": recurrence_kind(result.parent),
-            "reason": result.reason,
-            "status": result.status.value,
-            **dict(result.evidence),
-        }
-    parent = result.parent.to_mapping()
-    plan = result.plan
-    evidence: dict[str, Any] = {
-        "parent": short_uuid(parent.get("uuid")),
-        "chainID": str(parent.get("chainID") or ""),
-        "parent_link": int_or_default(parent.get("link"), 0),
-        "next_link": plan.identity.target_link,
-        "kind": recurrence_kind(result.parent),
-        "trigger": (
-            "expiration"
-            if plan.identity.event is LifecycleEvent.EXPIRE
-            else "completion"
-        ),
-        "reason": result.reason,
-        "action": plan.action.value,
-    }
-    if result.terminal_kind:
-        evidence["terminal"] = True
-        evidence["terminal_kind"] = result.terminal_kind
-    if result.child_due is not None:
-        evidence["child_due"] = str(result.child_due)
-        if callable(fmt_dt_local):
-            try:
-                evidence["child_local"] = str(fmt_dt_local(result.child_due))
-            except Exception:
-                pass
-    if result.child_short:
-        evidence["existing_child"] = result.child_short
-    if plan.action is LifecycleAction.SPAWN_CHILD:
-        child = plan.child_dict()
-        field = "scheduled" if child.get("scheduled") and not child.get("due") else "due"
-        evidence["child_field"] = field
-        evidence["child_target"] = str(child.get(field) or "")
-    return evidence
-
-
 def _build_expiration_child_with_day_end(
     parent: TaskPayload,
     *,

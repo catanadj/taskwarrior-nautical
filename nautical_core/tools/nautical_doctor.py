@@ -375,24 +375,6 @@ _OBSOLETE_QUEUE_STATE_NAMES = (
 )
 
 
-def _check_chains(
-    findings: list[dict[str, Any]],
-    *,
-    unit_of_work: TaskwarriorUnitOfWork | None,
-    budget: OperatorInvocationBudget | None = None,
-) -> dict[str, int]:
-    if unit_of_work is None:
-        return {"tasks": 0, "nautical_tasks": 0, "chains": 0}
-    configuration = unit_of_work.context.configuration
-    control_plane = OperatorControlPlane.from_configuration(
-        configuration,
-        DomainApplicationRegistry(),
-    )
-    counts, chain_findings = control_plane.diagnose_chains(unit_of_work, budget=budget)
-    findings.extend(chain_findings)
-    return counts
-
-
 def _render_details(details: dict[str, Any], *, stream: Any = None, enabled: bool = False) -> None:
     stream = stream if stream is not None else sys.stdout
 
@@ -669,11 +651,15 @@ def main() -> int:
         findings.extend(item.to_doctor_dict() for item in OperatorHealthService.obsolete_queue_findings(
             taskdata, _OBSOLETE_QUEUE_STATE_NAMES,
         ))
-        counts = _check_chains(
-            findings,
-            unit_of_work=unit_of_work,
-            budget=budget,
-        )
+        if unit_of_work is None:
+            counts = {"tasks": 0, "nautical_tasks": 0, "chains": 0}
+        else:
+            control_plane = OperatorControlPlane.from_configuration(
+                unit_of_work.context.configuration,
+                DomainApplicationRegistry(),
+            )
+            counts, chain_findings = control_plane.diagnose_chains(unit_of_work, budget=budget)
+            findings.extend(chain_findings)
 
     typed_findings = tuple(
         OperatorFinding.from_mapping(item)

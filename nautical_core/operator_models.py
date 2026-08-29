@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
+from types import MappingProxyType
 from typing import Any, Mapping, cast
 
 
@@ -188,6 +189,18 @@ def _json_value(value: object) -> object:
     if callable(to_dict):
         return _json_value(to_dict())
     raise OperatorContractError(f"value of type {type(value).__name__} is not JSON-native")
+
+
+def _freeze_json_value(value: object) -> object:
+    """Validate JSON-native data and recursively detach mutable containers."""
+    _json_value(value)
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_json_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json_value(item) for item in value)
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -441,7 +454,7 @@ class OperatorPage:
             raise OperatorContractError("page contains more items than its cursor page_size")
         if self.complete and self.cursor is not None:
             raise OperatorContractError("complete page cannot contain a continuation cursor")
-        object.__setattr__(self, "items", tuple(normalized))
+        object.__setattr__(self, "items", tuple(_freeze_json_value(item) for item in normalized))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -729,8 +742,8 @@ class OperatorV2Result:
         object.__setattr__(self, "schema", schema)
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "status", status)
-        object.__setattr__(self, "payload", dict(self.payload))
-        object.__setattr__(self, "extensions", dict(self.extensions))
+        object.__setattr__(self, "payload", _freeze_json_value(self.payload))
+        object.__setattr__(self, "extensions", _freeze_json_value(self.extensions))
         _json_value(self.payload)
         _json_value(self.extensions)
 

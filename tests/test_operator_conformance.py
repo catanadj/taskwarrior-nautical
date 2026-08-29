@@ -170,6 +170,29 @@ class OperatorConformanceTests(unittest.TestCase):
         self.assertEqual(payload["status_value"], "found")
         self.assertEqual(payload["nested"]["values"], [1, True, None])
 
+    def test_operator_contracts_reject_nested_mutation(self) -> None:
+        """Frozen dataclasses must also protect nested evidence containers."""
+        coverage = OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior", "snapshot-immutable")
+        snapshot = OperatorSnapshot(
+            "snapshot-immutable", coverage, datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "epoch-1", "config-1", components={"nested": {"value": 1}},
+        )
+        finding = OperatorFinding(
+            "test", "snapshot", FindingSeverity.INFO, FindingActionability.INFORMATIONAL,
+            "immutable", observed={"nested": {"value": 1}},
+        )
+        page = OperatorPage(items=({"nested": {"value": 1}},))
+        plan = OperatorPlan(
+            "inspect", "snapshot-immutable", "config-1", OperatorScope.system(), coverage,
+            immutable_inputs={"nested": {"value": 1}},
+        )
+        for value, field in ((snapshot, "components"), (finding, "observed"), (page, "items"), (plan, "immutable_inputs")):
+            with self.assertRaises(TypeError):
+                if field == "items":
+                    value.items[0]["nested"]["value"] = 2
+                else:
+                    getattr(value, field)["nested"]["value"] = 2
+
     def test_public_operator_contracts_round_trip_through_json(self) -> None:
         """Representative request, finding, plan, and snapshot documents stay decodable."""
         request = OperatorRequest(OperatorOperation.INTEGRITY, OperatorScope.system())

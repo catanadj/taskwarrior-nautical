@@ -7,7 +7,7 @@ import hashlib
 import json
 from typing import Any, Mapping
 
-from .operator_models import CoverageKind, OperatorContractError, OperatorCoverage, OperatorRequest, OperatorScope
+from .operator_models import CoverageKind, OperatorContractError, OperatorCoverage, OperatorRequest, OperatorScope, _freeze_json_value, _json_value
 
 
 def _text(value: object, name: str) -> str:
@@ -17,14 +17,13 @@ def _text(value: object, name: str) -> str:
     return text
 
 
-def _json_object(value: Mapping[str, Any], name: str) -> dict[str, Any]:
+def _json_object(value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     """Copy and validate a JSON-native mapping at the plan boundary."""
-    result = dict(value)
     try:
-        json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise OperatorContractError(f"plan {name} must contain JSON-native values") from exc
-    return result
+    return _freeze_json_value(value)  # type: ignore[return-value]
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,10 +75,10 @@ class OperatorPlan:
             "configuration_fingerprint": self.configuration_fingerprint,
             "scope": self.scope.to_dict(),
             "coverage": self.coverage.to_dict(),
-            "operations": [dict(item) for item in self.operations],
-            "immutable_inputs": dict(self.immutable_inputs),
-            "expected_guards": dict(self.expected_guards),
-            "expected_postconditions": dict(self.expected_postconditions),
+            "operations": [_json_value(item) for item in self.operations],
+            "immutable_inputs": _json_value(self.immutable_inputs),
+            "expected_guards": _json_value(self.expected_guards),
+            "expected_postconditions": _json_value(self.expected_postconditions),
             "reason": self.reason or None,
         }
 

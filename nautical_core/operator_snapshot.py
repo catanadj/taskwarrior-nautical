@@ -17,6 +17,8 @@ from .operator_models import (
     OperatorScope,
     OperatorScopeKind,
     CoverageKind,
+    _freeze_json_value,
+    _json_value,
 )
 from .operator_context import OperatorInvocationContext
 from .integration_models import Absent, Found, TaskRead, Unavailable
@@ -189,8 +191,8 @@ class OperatorSnapshot:
         object.__setattr__(self, "mutation_epoch", epoch)
         object.__setattr__(self, "configuration_fingerprint", fingerprint)
         object.__setattr__(self, "created_at", self.created_at.astimezone(timezone.utc))
-        object.__setattr__(self, "components", dict(self.components))
-        object.__setattr__(self, "provider_manifest", dict(self.provider_manifest))
+        object.__setattr__(self, "components", _freeze_json_value(self.components))
+        object.__setattr__(self, "provider_manifest", _freeze_json_value(self.provider_manifest))
         object.__setattr__(self, "hydration", hydration)
         object.__setattr__(self, "component_evidence", component_evidence)
 
@@ -201,8 +203,8 @@ class OperatorSnapshot:
             "created_at": self.created_at.isoformat().replace("+00:00", "Z"),
             "mutation_epoch": self.mutation_epoch,
             "configuration_fingerprint": self.configuration_fingerprint,
-            "components": dict(self.components),
-            "provider_manifest": dict(self.provider_manifest),
+            "components": _json_value(self.components),
+            "provider_manifest": _json_value(self.provider_manifest),
             "indexes": self.indexes.to_dict(),
             "hydration": [item.to_dict() for item in self.hydration],
             "component_evidence": [item.to_dict() for item in self.component_evidence],

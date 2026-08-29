@@ -375,12 +375,6 @@ _OBSOLETE_QUEUE_STATE_NAMES = (
 )
 
 
-def _check_obsolete_queue_state(findings: list[dict[str, Any]], taskdata: Path) -> list[str]:
-    paths = sorted({str(root / name) for root in (taskdata, taskdata / ".nautical-state") for name in _OBSOLETE_QUEUE_STATE_NAMES if os.path.lexists(root / name)})
-    findings.extend(item.to_doctor_dict() for item in OperatorHealthService.obsolete_queue_findings(taskdata, _OBSOLETE_QUEUE_STATE_NAMES))
-    return paths
-
-
 def _check_chains(
     findings: list[dict[str, Any]],
     *,
@@ -666,7 +660,15 @@ def main() -> int:
         counts = {"tasks": 0, "nautical_tasks": 0, "chains": 0}
     else:
         outbox = _check_lifecycle_outbox(findings, taskdata, max(0.0, args.stale_after_seconds))
-        obsolete_queue_state = _check_obsolete_queue_state(findings, taskdata)
+        obsolete_queue_state = sorted({
+            str(root / name)
+            for root in (taskdata, taskdata / ".nautical-state")
+            for name in _OBSOLETE_QUEUE_STATE_NAMES
+            if os.path.lexists(root / name)
+        })
+        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.obsolete_queue_findings(
+            taskdata, _OBSOLETE_QUEUE_STATE_NAMES,
+        ))
         counts = _check_chains(
             findings,
             unit_of_work=unit_of_work,

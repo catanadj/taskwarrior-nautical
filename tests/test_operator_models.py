@@ -642,6 +642,39 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertFalse(result.retryable)
         self.assertEqual(result.details["identity"], "chain-b")
 
+    def test_five_chain_scope_uses_one_exact_read_per_identity(self) -> None:
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-five", 32, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(
+            OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system()), integration,
+        )
+        values = tuple(f"chain-{index}" for index in range(5))
+        seen: list[str] = []
+        from nautical_core.integration_models import Found
+
+        def collect(source_request):
+            chain_id = str(source_request.chain_id)
+            seen.append(chain_id)
+            return Found(
+                ChainSnapshot(
+                    f"snapshot-{chain_id}", SnapshotCoverage.CHAIN, "taskwarrior",
+                    (ChainNode(f"task-{chain_id}", chain_id, 1, "pending", ()),), "config-1", True,
+                ),
+                "exact chain read",
+            )
+
+        reader = ChainSnapshotReader(collect)
+        result = reader.read_chain_snapshot(
+            context,
+            SnapshotReadRequest(OperatorScope(OperatorScopeKind.CHAINS, values)),
+        )
+        self.assertIsInstance(result, ChainSnapshot)
+        self.assertEqual(seen, list(values))
+        self.assertEqual(tuple(row.chain_id for row in result.rows), values)
+
     def test_multi_scope_hydration_stops_on_unavailable_evidence(self) -> None:
         request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope.system())
         configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())

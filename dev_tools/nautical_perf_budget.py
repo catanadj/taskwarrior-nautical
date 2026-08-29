@@ -192,6 +192,51 @@ def _bench_query_pagination_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_doctor_installation_stage() -> float:
+    """Measure the read-only Doctor installation composition root in isolation."""
+    task_bin = shutil.which("task")
+    if not task_bin:
+        return 0.0
+    from nautical_core.tools.nautical_doctor import _JSON_SCHEMA
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-doctor-") as td:
+        taskdata = Path(td)
+        taskrc = taskdata / "taskrc"
+        taskrc.write_text(
+            "uda.chainID.type=string\n"
+            "uda.chain.type=string\n"
+            "uda.link.type=numeric\n"
+            "uda.prevLink.type=string\n"
+            "uda.nextLink.type=string\n"
+            "uda.cp.type=string\n"
+            "uda.anchor.type=string\n"
+            "uda.anchor_mode.type=string\n",
+            encoding="utf-8",
+        )
+        config = taskdata / "config-nautical.toml"
+        config.write_text('tz = "UTC"\npanel_mode = "quiet"\n', encoding="utf-8")
+        env = dict(os.environ, TASKRC=str(taskrc), TASKDATA=str(taskdata),
+                   NAUTICAL_CONFIG=str(config), NAUTICAL_CORE_PATH=str(ROOT),
+                   NAUTICAL_TRUST_CONFIG_PATH="1", NAUTICAL_TRUST_CORE_PATH="1",
+                   NAUTICAL_TRUST_TASKDATA_PATH="1", TZ="UTC")
+        started = time.perf_counter()
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "nautical_core/tools/nautical_doctor.py"),
+             "--installation-only", "--json", "--task-bin", task_bin,
+             "--taskdata", str(taskdata)],
+            text=True, capture_output=True, env=env, timeout=30.0,
+        )
+        try:
+            payload = json.loads(proc.stdout or "")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"Doctor installation stage returned invalid JSON: {(proc.stderr or proc.stdout).strip()}"
+            ) from exc
+        if not isinstance(payload, dict) or payload.get("schema") != _JSON_SCHEMA:
+            raise RuntimeError("Doctor installation stage returned an invalid envelope")
+        return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3091,6 +3136,8 @@ def main() -> int:
         ("anchor_file_provider", lambda: _bench_anchor_file_provider(anchor_file_rounds), repeats),
         ("anchor_file_batch_provider", lambda: _bench_anchor_file_batch_provider(anchor_file_rounds), repeats),
     ]
+    if shutil.which("task"):
+        checks.append(("stage_doctor_installation", _bench_doctor_installation_stage, repeats))
     if args.workflows_only:
         checks = []
 

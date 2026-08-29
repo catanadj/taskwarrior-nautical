@@ -32,6 +32,12 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         elapsed = budget._bench_query_pagination_stage()
         self.assertGreaterEqual(elapsed, 0.0)
 
+    def test_doctor_installation_stage_has_a_json_guard(self) -> None:
+        if budget.shutil.which("task") is None:
+            self.skipTest("Taskwarrior is not installed")
+        elapsed = budget._bench_doctor_installation_stage()
+        self.assertGreaterEqual(elapsed, 0.0)
+
     def test_task_call_budget_is_independent_from_wall_time(self) -> None:
         result = {"pass": True}
         budget._apply_task_call_budgets(

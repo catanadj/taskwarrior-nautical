@@ -175,12 +175,15 @@ class OperatorConformanceTests(unittest.TestCase):
         authorization = DomainApplicationAuthorization(
             plan, request, "snap-1", "config-1", scope, coverage, "schedule-1",
         )
-        phases = control_plane.apply_domain_phases("lifecycle", authorization)
+        from nautical_core.operator_context import OperatorInvocationBudget
+        budget = OperatorInvocationBudget(OperatorLimits())
+        phases = control_plane.apply_domain_phases("lifecycle", authorization, budget=budget)
         self.assertEqual(
             tuple(phase.phase for phase in phases),
             (OperatorPhase.AUTHORIZE, OperatorPhase.APPLY, OperatorPhase.VERIFY, OperatorPhase.RESULT),
         )
         self.assertEqual(phases[-1].value.status, OperatorStatus.OK)
+        self.assertTrue(budget.effect_started)
 
     def test_shuffled_findings_have_one_stable_order(self) -> None:
         findings = [

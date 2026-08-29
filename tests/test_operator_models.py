@@ -280,6 +280,17 @@ class OperatorModelsTests(unittest.TestCase):
         )
         self.assertEqual(OperatorLimits.from_mapping(limits.to_dict()), limits)
 
+    def test_budget_does_not_interrupt_after_effect_boundary(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        self.assertTrue(budget.consume("taskwarrior_calls"))
+        self.assertFalse(budget.consume("taskwarrior_calls"))
+        budget.begin_effect()
+        self.assertTrue(budget.effect_started)
+        self.assertTrue(budget.consume("taskwarrior_calls"))
+        self.assertTrue(budget.exceeded("taskwarrior_calls"))
+
     def test_invocation_context_captures_one_immutable_basis(self) -> None:
         configuration = ValidatedNauticalConfiguration(
             "/tmp/config", "config-1", "schedule-1", "UTC", (),

@@ -23,7 +23,7 @@ from .operator_findings import OperatorFinding
 from .operator_models import CoverageRequirement, OperatorLimits, OperatorScope
 from .operator_snapshot import OperatorSnapshot
 from .operator_snapshot import OperatorSnapshotSession, SnapshotReadRequest, SnapshotReader
-from .operator_context import OperatorInvocationContext
+from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .task_models import TaskObservation
 from .operator_health_service import OperatorHealthReport, OperatorHealthService
@@ -169,6 +169,8 @@ class OperatorControlPlane:
         self,
         operation: str,
         authorization: DomainApplicationAuthorization,
+        *,
+        budget: OperatorBudgetLedger | None = None,
     ) -> tuple[OperatorPhaseResult, ...]:
         """Apply one authorized domain plan through explicit typed phases."""
         try:
@@ -183,6 +185,10 @@ class OperatorControlPlane:
             )
         phases = [OperatorPhaseResult(OperatorPhase.AUTHORIZE, value=authorization)]
         try:
+            if budget is not None:
+                if not callable(getattr(budget, "begin_effect", None)):
+                    raise OperatorContractError("effect budget must support begin_effect")
+                budget.begin_effect()
             result = self.apply_domain(operation, authorization)
             if not isinstance(result, OperatorResult):
                 raise OperatorContractError("domain owner returned an untyped result")

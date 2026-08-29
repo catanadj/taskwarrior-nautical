@@ -101,6 +101,7 @@ class OperatorInvocationBudget:
 
     limits: OperatorLimits
     _usage: dict[str, int] = field(default_factory=dict)
+    _effect_started: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.limits, OperatorLimits):
@@ -115,10 +116,28 @@ class OperatorInvocationBudget:
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
             raise OperatorContextError("operator budget amount must be positive")
         observed = self._usage.get(name, 0) + amount
-        if observed > limit:
-            return False
         self._usage[name] = observed
+        if self._effect_started:
+            return True
+        if observed > limit:
+            self._usage[name] = observed - amount
+            return False
         return True
+
+    def begin_effect(self) -> None:
+        """Mark the durable mutation boundary; later budget crossings cannot abort it."""
+        self._effect_started = True
+
+    @property
+    def effect_started(self) -> bool:
+        return self._effect_started
+
+    def exceeded(self, resource: str) -> bool:
+        name = str(resource)
+        try:
+            return self.usage(name) > int(getattr(self.limits, name))
+        except AttributeError as exc:
+            raise OperatorContractError(f"unknown operator budget resource: {name}") from exc
 
     def usage(self, resource: str) -> int:
         return self._usage.get(str(resource), 0)

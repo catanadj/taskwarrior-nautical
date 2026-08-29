@@ -291,6 +291,15 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertTrue(budget.consume("taskwarrior_calls"))
         self.assertTrue(budget.exceeded("taskwarrior_calls"))
 
+    def test_budget_records_peak_memory_without_replacing_the_high_water_mark(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(peak_memory_bytes=100))
+        self.assertTrue(budget.observe_peak_memory(80))
+        self.assertFalse(budget.observe_peak_memory(120))
+        self.assertEqual(budget.usage("peak_memory_bytes"), 120)
+        self.assertEqual(budget.snapshot()["peak_memory_bytes"], 120)
+
     def test_task_command_budget_rejects_before_process_spawn(self) -> None:
         from nautical_core.operator_context import OperatorInvocationBudget
         from nautical_core.task_command import run_task_command

@@ -152,6 +152,15 @@ class OperatorInvocationBudget:
     def snapshot(self) -> dict[str, int]:
         return {name: self.usage(name) for name in self.limits.to_dict()}
 
+    def observe_peak_memory(self, bytes_used: int) -> bool:
+        """Record a measured peak and report whether the configured cap is exceeded."""
+        if isinstance(bytes_used, bool) or not isinstance(bytes_used, int) or bytes_used < 0:
+            raise OperatorContextError("peak memory observation must be a non-negative integer")
+        current = self.usage("peak_memory_bytes")
+        if bytes_used > current:
+            self._usage["peak_memory_bytes"] = bytes_used
+        return bytes_used <= self.limits.peak_memory_bytes
+
 
 @dataclass(frozen=True, slots=True)
 class OperatorInvocationContext:

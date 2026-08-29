@@ -42,7 +42,18 @@ jobs:
 
       - name: Enforce performance budgets (head)
         run: |
+          set -o pipefail
           python3 dev_tools/nautical_perf_budget.py --json --enforce --budget-file dev_tools/perf_budget.json | tee perf-budget-report-head.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("perf-budget-report-head.json").read_text())
+          if report.get("ok") is not True or report.get("failed_checks"):
+              raise SystemExit(f"performance budget report is not clean: {report.get('failed_checks')!r}")
+          if report.get("profile") != "desktop":
+              raise SystemExit(f"unexpected benchmark profile: {report.get('profile')!r}")
+          PY
 
       - name: Upload performance report artifact (head)
         uses: actions/upload-artifact@v4
@@ -53,7 +64,18 @@ jobs:
 
       - name: Enforce extended workflow budgets (head)
         run: |
+          set -o pipefail
           python3 dev_tools/nautical_perf_budget.py --extended --workflows-only --json --enforce --budget-file dev_tools/perf_budget.json | tee perf-budget-report-extended.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("perf-budget-report-extended.json").read_text())
+          if report.get("ok") is not True or report.get("failed_checks"):
+              raise SystemExit(f"extended performance report is not clean: {report.get('failed_checks')!r}")
+          if report.get("profile") != "desktop":
+              raise SystemExit(f"unexpected extended benchmark profile: {report.get('profile')!r}")
+          PY
 
       - name: Upload extended performance report artifact
         uses: actions/upload-artifact@v4

@@ -300,6 +300,15 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(budget.usage("peak_memory_bytes"), 120)
         self.assertEqual(budget.snapshot()["peak_memory_bytes"], 120)
 
+    def test_budget_reports_wall_time_without_interrupting_effects(self) -> None:
+        from nautical_core.operator_context import OperatorInvocationBudget
+
+        budget = OperatorInvocationBudget(OperatorLimits(wall_time_seconds=1))
+        budget._started_monotonic -= 2
+        self.assertTrue(budget.wall_time_exceeded)
+        budget.begin_effect()
+        self.assertTrue(budget.effect_started)
+
     def test_task_command_budget_rejects_before_process_spawn(self) -> None:
         from nautical_core.operator_context import OperatorInvocationBudget
         from nautical_core.task_command import run_task_command

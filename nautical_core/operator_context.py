@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from collections import OrderedDict
+import time
 from typing import Any, Protocol
 
 from .integration_context import IntegrationContext
@@ -102,6 +103,7 @@ class OperatorInvocationBudget:
     limits: OperatorLimits
     _usage: dict[str, int] = field(default_factory=dict)
     _effect_started: bool = False
+    _started_monotonic: float = field(default_factory=time.monotonic)
 
     def __post_init__(self) -> None:
         if not isinstance(self.limits, OperatorLimits):
@@ -160,6 +162,14 @@ class OperatorInvocationBudget:
         if bytes_used > current:
             self._usage["peak_memory_bytes"] = bytes_used
         return bytes_used <= self.limits.peak_memory_bytes
+
+    @property
+    def wall_time_elapsed(self) -> float:
+        return max(0.0, time.monotonic() - self._started_monotonic)
+
+    @property
+    def wall_time_exceeded(self) -> bool:
+        return self.wall_time_elapsed > self.limits.wall_time_seconds
 
 
 @dataclass(frozen=True, slots=True)

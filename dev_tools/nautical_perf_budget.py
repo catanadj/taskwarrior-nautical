@@ -125,6 +125,48 @@ def _bench_navigator_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_query_pagination_stage() -> float:
+    """Measure scoped and whole-system query pagination without Taskwarrior I/O."""
+    from types import SimpleNamespace
+
+    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_service import OccurrenceQueryService
+
+    service = object.__new__(OccurrenceQueryService)
+    service._timezone = timezone.utc
+    service._scheduler_cache = {}
+    service._uow = SimpleNamespace(
+        mutation_epoch=0,
+        context=SimpleNamespace(configuration=SimpleNamespace(fingerprint="perf-config")),
+    )
+    rows = tuple(SimpleNamespace(uuid=f"perf-task-{index:04d}") for index in range(128))
+    scoped_request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"uuids": [rows[0].uuid]}, "from": "2026-08-24", "count": 1, "max_tasks": 1}
+    )
+    started = time.perf_counter()
+    scoped, scoped_cursor, scoped_complete = service._page_rows(rows[:1], scoped_request)
+    if len(scoped) != 1 or scoped_cursor is not None or not scoped_complete:
+        raise RuntimeError("scoped query pagination returned an invalid complete page")
+
+    request = OccurrenceQueryRequest.from_mapping(
+        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 16}
+    )
+    cursor = None
+    seen: list[str] = []
+    while True:
+        page_request = request if cursor is None else OccurrenceQueryRequest.from_mapping(
+            {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 16,
+             "cursor": cursor.to_dict()}
+        )
+        page, cursor, complete = service._page_rows(rows, page_request)
+        seen.extend(row.uuid for row in page)
+        if complete:
+            break
+    if seen != [row.uuid for row in rows]:
+        raise RuntimeError("whole-system query pagination lost or reordered rows")
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -2978,6 +3020,7 @@ def main() -> int:
         ("stage_capabilities", _bench_capabilities_stage, repeats),
         ("stage_queue_status", _bench_queue_status_stage, repeats),
         ("stage_navigator", _bench_navigator_stage, repeats),
+        ("stage_query_pagination", _bench_query_pagination_stage, repeats),
         ("cold_core_import", lambda: _bench_cold_import("core", cold_import_rounds), repeats),
         (
             "cold_modify_impl_import",

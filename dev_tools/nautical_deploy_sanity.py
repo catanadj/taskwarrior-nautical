@@ -583,6 +583,31 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
     }]
 
 
+def _check_operator_legacy_symbols(root: Path) -> list[dict]:
+    """Prevent removed operator wrappers from returning unnoticed."""
+    forbidden = {
+        "_v2_document", "_error_payload", "_historical_summaries",
+        "_check_hook_installation", "_check_chains", "_check_obsolete_queue_state",
+        "_fmt_parent", "_print_evidence", "_action_style", "_active_chain_rows",
+        "_integrity_request_factory",
+    }
+    found: list[str] = []
+    for path in sorted((root / "nautical_core" / "tools").glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in forbidden:
+                found.append(f"{path.relative_to(root)}:{node.name}")
+    return [{
+        "kind": "ownership",
+        "name": "operator-legacy-symbols",
+        "ok": not found,
+        "message": "absent" if not found else "removed operator symbols found: " + ", ".join(found),
+    }]
+
+
 def _check_scheduler_ownership(root: Path) -> list[dict]:
     """Reject operational calls to scheduler aliases removed from the facade."""
     legacy_names = {
@@ -878,6 +903,7 @@ def main() -> int:
         results.extend(_check_manifest_alignment(root))
         results.extend(_check_removed_ownership(root))
         results.extend(_check_domain_model_boundaries(root))
+        results.extend(_check_operator_legacy_symbols(root))
         results.extend(_check_scheduler_ownership(root))
         results.extend(_check_taskwarrior_process_ownership(root))
         results.extend(_check_performance_workflow(root))

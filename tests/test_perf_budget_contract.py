@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import unittest
+import ast
+from pathlib import Path
 
 from dev_tools import nautical_perf_budget as budget
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
+    def test_thin_hook_wrappers_do_not_import_heavy_stacks(self) -> None:
+        forbidden = {"astral", "rich", "nautical_core.scheduler_service", "nautical_core.recurrence_evaluator"}
+        root = Path(__file__).parents[1]
+        for name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
+            tree = ast.parse((root / name).read_text(encoding="utf-8"), filename=name)
+            imported = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported.update(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported.add(node.module)
+            self.assertTrue(
+                forbidden.isdisjoint(imported),
+                f"{name} eagerly imports heavy modules: {sorted(forbidden & imported)}",
+            )
+
     def test_budget_profiles_are_explicit_and_distinct(self) -> None:
         self.assertEqual(budget._budget_profile_name(slow_device=False), "desktop")
         self.assertEqual(budget._budget_profile_name(slow_device=True), "termux-slow-device")

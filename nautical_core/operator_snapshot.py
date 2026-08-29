@@ -20,7 +20,7 @@ from .operator_models import (
     _freeze_json_value,
     _json_value,
 )
-from .operator_context import OperatorInvocationContext
+from .operator_context import OperatorBudgetLedger, OperatorInvocationContext
 from .integration_models import Absent, Found, TaskRead, Unavailable
 from .chain_integrity_models import ChainSnapshot
 
@@ -386,12 +386,15 @@ class ChainSnapshotReader:
         self,
         context: OperatorInvocationContext,
         request: SnapshotReadRequest,
+        *,
+        budget: OperatorBudgetLedger | None = None,
     ) -> ChainSnapshot | OperatorFailure:
         """Read the established chain snapshot without projecting its rows."""
         if not isinstance(context, OperatorInvocationContext):
             raise OperatorContractError("snapshot read requires an operator context")
         if not isinstance(request, SnapshotReadRequest):
             raise OperatorContractError("snapshot read requires a typed request")
+        ledger = budget or context.budget
         from .chain_snapshot import IntegritySnapshotRequest
 
         scope = request.scope
@@ -441,14 +444,14 @@ class ChainSnapshotReader:
                     if scope.kind is OperatorScopeKind.CHAINS
                     else IntegritySnapshotRequest.uuid(value, complete_chain_history=complete, refresh=request.refresh)
                 )
-                if context.budget is not None and not context.budget.consume("taskwarrior_calls"):
+                if ledger is not None and not ledger.consume("taskwarrior_calls"):
                     return OperatorFailure(
                         "snapshot_limit_exceeded",
                         "Taskwarrior call budget exhausted before snapshot read",
                         scope=scope,
                         details={
                             "resource": "taskwarrior_calls",
-                            "observed": context.budget.usage("taskwarrior_calls"),
+                            "observed": ledger.usage("taskwarrior_calls"),
                             "limit": request.limits.taskwarrior_calls,
                         },
                     )
@@ -502,14 +505,14 @@ class ChainSnapshotReader:
                 f"authoritative snapshot reader does not support scope {scope.kind.value} with {len(scope.values)} value(s)",
                 scope=scope,
             )
-        if context.budget is not None and not context.budget.consume("taskwarrior_calls"):
+        if ledger is not None and not ledger.consume("taskwarrior_calls"):
             return OperatorFailure(
                 "snapshot_limit_exceeded",
                 "Taskwarrior call budget exhausted before snapshot read",
                 scope=scope,
                 details={
                     "resource": "taskwarrior_calls",
-                    "observed": context.budget.usage("taskwarrior_calls"),
+                    "observed": ledger.usage("taskwarrior_calls"),
                     "limit": request.limits.taskwarrior_calls,
                 },
             )

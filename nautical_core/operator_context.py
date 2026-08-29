@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Protocol
 
 from .integration_context import IntegrationContext
 from .operator_models import OperatorContractError, OperatorLimits, OperatorRequest
@@ -14,6 +14,16 @@ from .operator_models import OperatorContractError, OperatorLimits, OperatorRequ
 
 class OperatorContextError(ValueError):
     """Raised when an operator invocation context is incomplete."""
+
+
+class OperatorBudgetLedger(Protocol):
+    """Narrow resource-accounting boundary for operator providers."""
+
+    def consume(self, resource: str, amount: int = 1) -> bool: ...
+
+    def usage(self, resource: str) -> int: ...
+
+    def remaining(self, resource: str) -> int: ...
 
 
 class OperatorOutputMode(str, Enum):
@@ -112,6 +122,16 @@ class OperatorInvocationBudget:
 
     def usage(self, resource: str) -> int:
         return self._usage.get(str(resource), 0)
+
+    def remaining(self, resource: str) -> int:
+        name = str(resource)
+        try:
+            return max(0, int(getattr(self.limits, name)) - self.usage(name))
+        except AttributeError as exc:
+            raise OperatorContractError(f"unknown operator budget resource: {name}") from exc
+
+    def snapshot(self) -> dict[str, int]:
+        return {name: self.usage(name) for name in self.limits.to_dict()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +259,7 @@ class OperatorInvocationContext:
 __all__ = [
     "OperatorContextError", "OperatorOutputMode", "OperatorPresentationPolicy",
     "OperatorInvocationCache",
+    "OperatorBudgetLedger",
     "OperatorInvocationBudget",
     "OperatorInvocationContext",
 ]

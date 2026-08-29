@@ -33153,28 +33153,32 @@ def test_generic_seasonal_selection_scheduler_and_round_trip():
 def test_seasonal_selection_scheduler_post_modifiers():
     """Seasonal modifiers should select first, then move dates across window boundaries."""
     from nautical_core import season_support
+    previous_hemisphere = season_support.active_hemisphere()
     season_support.configure_hemisphere("north")
-    seed = date(2026, 1, 1)
-    cases = (
-        ("(w:mon)@in-spring=last@+7d", date(2026, 1, 1), date(2026, 6, 1)),
-        ("(w:mon)@in-spring=first@-7d", date(2026, 1, 1), date(2026, 2, 23)),
-        ("(w:fri)@in-winter=last@+1bd", date(2026, 7, 1), date(2027, 3, 1)),
-    )
-    for expression, after_date, expected in cases:
-        dnf = core.validate_anchor_expr_strict(expression)
-        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
-        expect(actual == expected, f"unexpected shifted season date for {expression}: {actual}")
-        expect(
-            core.factor_matches_on(dnf[0][0], expected, seed),
-            f"shifted seasonal factor did not match its output: {expression}",
+    try:
+        seed = date(2026, 1, 1)
+        cases = (
+            ("(w:mon)@in-spring=last@+7d", date(2026, 1, 1), date(2026, 6, 1)),
+            ("(w:mon)@in-spring=first@-7d", date(2026, 1, 1), date(2026, 2, 23)),
+            ("(w:fri)@in-winter=last@+1bd", date(2026, 7, 1), date(2027, 3, 1)),
         )
+        for expression, after_date, expected in cases:
+            dnf = core.validate_anchor_expr_strict(expression)
+            actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
+            expect(actual == expected, f"unexpected shifted season date for {expression}: {actual}")
+            expect(
+                core.factor_matches_on(dnf[0][0], expected, seed),
+                f"shifted seasonal factor did not match its output: {expression}",
+            )
 
-    next_year, _meta = core.next_after_expr(
-        core.validate_anchor_expr_strict("(w:mon)@in-spring=last@+7d"),
-        date(2026, 6, 1),
-        default_seed=seed,
-    )
-    expect(next_year == date(2027, 6, 7), f"shifted season did not advance a year: {next_year}")
+        next_year, _meta = core.next_after_expr(
+            core.validate_anchor_expr_strict("(w:mon)@in-spring=last@+7d"),
+            date(2026, 6, 1),
+            default_seed=seed,
+        )
+        expect(next_year == date(2027, 6, 7), f"shifted season did not advance a year: {next_year}")
+    finally:
+        season_support.configure_hemisphere(previous_hemisphere)
 
 
 def test_seasonal_selection_boundary_and_overflow_contract():

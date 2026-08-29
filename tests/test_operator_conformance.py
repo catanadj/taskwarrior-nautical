@@ -103,6 +103,16 @@ class OperatorConformanceTests(unittest.TestCase):
         )
         self.assertTrue(phases[0].value)
 
+    def test_control_plane_application_rejects_untyped_authorization_before_owner(self) -> None:
+        class Configuration:
+            fingerprint = "config-1"
+            scheduler_fingerprint = "schedule-1"
+
+        control_plane = OperatorControlPlane.from_configuration(Configuration(), DomainApplicationRegistry())
+        phases = control_plane.apply_domain_phases("repair", object())  # type: ignore[arg-type]
+        self.assertEqual(tuple(phase.phase for phase in phases), (OperatorPhase.AUTHORIZE,))
+        self.assertEqual(phases[0].failure.code, "invalid_authorization")
+
     def test_shuffled_findings_have_one_stable_order(self) -> None:
         findings = [
             OperatorFinding("b", "chain", FindingSeverity.WARNING, FindingActionability.INFORMATIONAL, "b", affected=("z",), guidance="inspect"),

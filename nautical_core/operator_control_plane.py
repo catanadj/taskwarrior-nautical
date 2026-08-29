@@ -163,6 +163,42 @@ class OperatorControlPlane:
     def apply_domain(self, operation: str, authorization: DomainApplicationAuthorization) -> OperatorResult:
         return self.applications.apply(operation, authorization)
 
+    def apply_domain_phases(
+        self,
+        operation: str,
+        authorization: DomainApplicationAuthorization,
+    ) -> tuple[OperatorPhaseResult, ...]:
+        """Apply one authorized domain plan through explicit typed phases."""
+        try:
+            if not isinstance(authorization, DomainApplicationAuthorization):
+                raise OperatorContractError("domain application requires typed authorization")
+        except (OperatorContractError, TypeError, ValueError) as exc:
+            return (
+                OperatorPhaseResult(
+                    OperatorPhase.AUTHORIZE,
+                    failure=OperatorFailure("invalid_authorization", str(exc), retryable=False),
+                ),
+            )
+        phases = [OperatorPhaseResult(OperatorPhase.AUTHORIZE, value=authorization)]
+        try:
+            result = self.apply_domain(operation, authorization)
+            if not isinstance(result, OperatorResult):
+                raise OperatorContractError("domain owner returned an untyped result")
+        except Exception as exc:
+            phases.append(
+                OperatorPhaseResult(
+                    OperatorPhase.APPLY,
+                    failure=OperatorFailure("application_failed", str(exc), retryable=True),
+                )
+            )
+            return tuple(phases)
+        phases.extend((
+            OperatorPhaseResult(OperatorPhase.APPLY, value=result),
+            OperatorPhaseResult(OperatorPhase.VERIFY, value=result),
+            OperatorPhaseResult(OperatorPhase.RESULT, value=result),
+        ))
+        return tuple(phases)
+
     def inspect(
         self,
         snapshot: OperatorSnapshot,

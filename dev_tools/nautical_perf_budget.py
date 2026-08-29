@@ -227,21 +227,30 @@ def _bench_doctor_installation_stage() -> float:
                    NAUTICAL_CONFIG=str(config), NAUTICAL_CORE_PATH=str(ROOT),
                    NAUTICAL_TRUST_CONFIG_PATH="1", NAUTICAL_TRUST_CORE_PATH="1",
                    NAUTICAL_TRUST_TASKDATA_PATH="1", TZ="UTC")
-        started = time.perf_counter()
-        proc = subprocess.run(
-            [sys.executable, str(ROOT / "nautical_core/tools/nautical_doctor.py"),
-             "--installation-only", "--json", "--task-bin", task_bin,
-             "--taskdata", str(taskdata)],
+        fixture = {"uuid": "11111111-1111-4111-8111-111111111111", "description": "doctor benchmark", "status": "pending"}
+        imported = subprocess.run(
+            [task_bin, f"rc.data.location={taskdata}", "rc.hooks=off", "rc.verbose=nothing", "import"],
+            input=json.dumps(fixture, ensure_ascii=False) + "\n",
             text=True, capture_output=True, env=env, timeout=30.0,
         )
-        try:
-            payload = json.loads(proc.stdout or "")
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"Doctor installation stage returned invalid JSON: {(proc.stderr or proc.stdout).strip()}"
-            ) from exc
-        if not isinstance(payload, dict) or payload.get("schema") != _JSON_SCHEMA:
-            raise RuntimeError("Doctor installation stage returned an invalid envelope")
+        if imported.returncode != 0:
+            raise RuntimeError(f"Doctor fixture import failed: {(imported.stderr or imported.stdout).strip()}")
+        started = time.perf_counter()
+        for mode in (("--installation-only",), ()):
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "nautical_core/tools/nautical_doctor.py"),
+                 *mode, "--json", "--task-bin", task_bin, "--taskdata", str(taskdata)],
+                text=True, capture_output=True, env=env, timeout=30.0,
+            )
+            try:
+                payload = json.loads(proc.stdout or "")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"Doctor stage returned invalid JSON ({mode or ('full',)}): "
+                    f"{(proc.stderr or proc.stdout).strip()}"
+                ) from exc
+            if not isinstance(payload, dict) or payload.get("schema") != _JSON_SCHEMA:
+                raise RuntimeError(f"Doctor stage returned an invalid envelope ({mode or ('full',)})")
         return time.perf_counter() - started
 
 

@@ -392,7 +392,7 @@ class OperatorControlPlane:
             }]
         chain_count = len({row.field("chainID").raw_value() for row in rows if row.field("chainID").raw_value()})
         if budget is not None and (
-            not budget.consume("tasks", len(rows))
+            (len(rows) and not budget.consume("tasks", len(rows)))
             or (chain_count and not budget.consume("chains", chain_count))
         ):
             return {"tasks": len(rows), "nautical_tasks": len(rows), "chains": chain_count}, [{

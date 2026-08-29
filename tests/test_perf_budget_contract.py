@@ -8,6 +8,10 @@ from dev_tools import nautical_perf_budget as budget
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
+    def test_budget_profiles_are_explicit_and_distinct(self) -> None:
+        self.assertEqual(budget._budget_profile_name(slow_device=False), "desktop")
+        self.assertEqual(budget._budget_profile_name(slow_device=True), "termux-slow-device")
+
     def test_measure_records_cpu_and_wall_attribution(self) -> None:
         result = budget._measure("contract", lambda: 0.001, 2)
         self.assertEqual(result["name"], "contract")

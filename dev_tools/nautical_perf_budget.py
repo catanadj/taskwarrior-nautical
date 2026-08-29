@@ -54,6 +54,11 @@ _BENCH_PANEL_MODES = {
 }
 
 
+def _budget_profile_name(*, slow_device: bool) -> str:
+    """Return the stable profile label recorded in benchmark reports."""
+    return "termux-slow-device" if slow_device else "desktop"
+
+
 def _panel_mode_config(mode: str) -> str:
     try:
         return _BENCH_PANEL_MODES[str(mode).strip().lower()]
@@ -3592,6 +3597,7 @@ def main() -> int:
         "budget_file": str(Path(args.budget_file).resolve()),
         "python": sys.version.split()[0],
         "platform": sys.platform,
+        "profile": _budget_profile_name(slow_device=args.slow_device),
         "cwd": os.getcwd(),
         "results": results,
         "enforced": bool(args.enforce),

@@ -102,6 +102,14 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         self.assertNotIn("action", evidence)
         self.assertNotIn("child_target", evidence)
 
+    def test_refusal_statuses_remain_distinct_in_description(self) -> None:
+        for status in RecoveryStatus:
+            with self.subTest(status=status):
+                refusal = RecoveryRefusal(snapshot().observation, status, f"{status.value} reason")
+                evidence = describe_recovery_result(refusal)
+                self.assertEqual(evidence["status"], status.value)
+                self.assertEqual(evidence["reason"], f"{status.value} reason")
+
 
 if __name__ == "__main__":
     unittest.main()

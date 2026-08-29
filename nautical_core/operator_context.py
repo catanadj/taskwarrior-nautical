@@ -9,7 +9,7 @@ from collections import OrderedDict
 from typing import Any
 
 from .integration_context import IntegrationContext
-from .operator_models import OperatorRequest
+from .operator_models import OperatorContractError, OperatorLimits, OperatorRequest
 
 
 class OperatorContextError(ValueError):
@@ -85,6 +85,35 @@ class OperatorInvocationCache:
         return len(self._entries)
 
 
+@dataclass(slots=True)
+class OperatorInvocationBudget:
+    """Invocation-local usage counters for resources with hard limits."""
+
+    limits: OperatorLimits
+    _usage: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.limits, OperatorLimits):
+            raise OperatorContextError("operator budget requires typed limits")
+
+    def consume(self, resource: str, amount: int = 1) -> bool:
+        name = str(resource)
+        try:
+            limit = getattr(self.limits, name)
+        except AttributeError as exc:
+            raise OperatorContractError(f"unknown operator budget resource: {name}") from exc
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+            raise OperatorContextError("operator budget amount must be positive")
+        observed = self._usage.get(name, 0) + amount
+        if observed > limit:
+            return False
+        self._usage[name] = observed
+        return True
+
+    def usage(self, resource: str) -> int:
+        return self._usage.get(str(resource), 0)
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorInvocationContext:
     """Immutable shared state captured once for one operator invocation."""
@@ -95,6 +124,7 @@ class OperatorInvocationContext:
     mutation_epoch: str = "epoch-0"
     policy: OperatorPresentationPolicy = OperatorPresentationPolicy()
     cache: OperatorInvocationCache = field(default_factory=OperatorInvocationCache)
+    budget: OperatorInvocationBudget | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, OperatorRequest):
@@ -105,6 +135,8 @@ class OperatorInvocationContext:
             raise OperatorContextError("operator presentation policy is invalid")
         if not isinstance(self.cache, OperatorInvocationCache):
             raise OperatorContextError("operator invocation cache is invalid")
+        if self.budget is not None and not isinstance(self.budget, OperatorInvocationBudget):
+            raise OperatorContextError("operator invocation budget is invalid")
         if self.request.apply and not self.integration.mutation_capable:
             raise OperatorContextError("apply request requires mutation-capable integration access")
         captured_at = self.captured_at
@@ -139,6 +171,7 @@ class OperatorInvocationContext:
             mutation_epoch,
             policy or OperatorPresentationPolicy(),
             OperatorInvocationCache(max_entries=request.limits.cache_entries),
+            OperatorInvocationBudget(request.limits),
         )
 
     @classmethod
@@ -206,5 +239,6 @@ class OperatorInvocationContext:
 __all__ = [
     "OperatorContextError", "OperatorOutputMode", "OperatorPresentationPolicy",
     "OperatorInvocationCache",
+    "OperatorInvocationBudget",
     "OperatorInvocationContext",
 ]

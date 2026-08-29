@@ -638,6 +638,30 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(result.code, "snapshot_limit_exceeded")
         self.assertEqual(calls, [])
 
+    def test_chain_snapshot_reader_stops_after_call_budget(self) -> None:
+        request = OperatorRequest(
+            OperatorOperation.INSPECT,
+            OperatorScope(OperatorScopeKind.CHAINS, ("chain-1", "chain-2")),
+            limits=OperatorLimits(taskwarrior_calls=1),
+        )
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-1", 10, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        source = ChainSnapshot(
+            "chain-snap", SnapshotCoverage.CHAIN, "taskwarrior",
+            (ChainNode("task-1", "chain-1", 1, "pending", ()),), "config-1", True,
+        )
+        calls = []
+        from nautical_core.integration_models import Found
+        reader = ChainSnapshotReader(lambda source_request: (calls.append(source_request) or Found(source, "chain read")))
+        result = reader.read_chain_snapshot(context, SnapshotReadRequest(request.scope))
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_limit_exceeded")
+        self.assertEqual(len(calls), 1)
+
     def test_large_multi_scope_does_not_claim_complete_absence(self) -> None:
         """Broad exports must fail closed when requested identities are missing."""
         from nautical_core.integration_models import Found

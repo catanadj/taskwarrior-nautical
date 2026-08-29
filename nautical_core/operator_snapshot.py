@@ -439,6 +439,17 @@ class ChainSnapshotReader:
                     if scope.kind is OperatorScopeKind.CHAINS
                     else IntegritySnapshotRequest.uuid(value, complete_chain_history=complete, refresh=request.refresh)
                 )
+                if context.budget is not None and not context.budget.consume("taskwarrior_calls"):
+                    return OperatorFailure(
+                        "snapshot_limit_exceeded",
+                        "Taskwarrior call budget exhausted before snapshot read",
+                        scope=scope,
+                        details={
+                            "resource": "taskwarrior_calls",
+                            "observed": context.budget.usage("taskwarrior_calls"),
+                            "limit": request.limits.taskwarrior_calls,
+                        },
+                    )
                 outcome = self._collector(source_request)
                 if isinstance(outcome, Unavailable):
                     return OperatorFailure("snapshot_unavailable", outcome.evidence.detail, retryable=outcome.retryable, scope=scope)
@@ -488,6 +499,17 @@ class ChainSnapshotReader:
                 "unsupported_snapshot_scope",
                 f"authoritative snapshot reader does not support scope {scope.kind.value} with {len(scope.values)} value(s)",
                 scope=scope,
+            )
+        if context.budget is not None and not context.budget.consume("taskwarrior_calls"):
+            return OperatorFailure(
+                "snapshot_limit_exceeded",
+                "Taskwarrior call budget exhausted before snapshot read",
+                scope=scope,
+                details={
+                    "resource": "taskwarrior_calls",
+                    "observed": context.budget.usage("taskwarrior_calls"),
+                    "limit": request.limits.taskwarrior_calls,
+                },
             )
         outcome = self._collector(source_request)
         if isinstance(outcome, Found):

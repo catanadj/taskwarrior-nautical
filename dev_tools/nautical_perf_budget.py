@@ -432,6 +432,27 @@ def _bench_operator_failure_matrix_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_operator_interrupted_stage() -> float:
+    """Verify an interrupted operator claim remains reclaimable."""
+    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-operator-interrupted-") as td:
+        taskdata = Path(td)
+        _init_empty_outbox(taskdata)
+        _parents, plans = _outbox_lifecycle_fixture("operator-interrupted", 0, count=1)
+        _stage_workflow_plans(taskdata, plans, configuration_fingerprint="perf", schedule_fingerprint="perf")
+        repository = LifecycleOutboxRepository(taskdata)
+        first, records = repository.claim_batch(owner="interrupted-a", lease_seconds=0.05, limit=1)
+        if not first.ok or len(records) != 1:
+            raise RuntimeError("interrupted operator fixture could not claim its intent")
+        time.sleep(0.08)
+        second, reclaimed = repository.claim_batch(owner="interrupted-b", lease_seconds=1.0, limit=1)
+        if not second.ok or len(reclaimed) != 1 or reclaimed[0].intent_id != records[0].intent_id:
+            raise RuntimeError("expired interrupted operator intent was not reclaimed")
+        return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3384,6 +3405,7 @@ def main() -> int:
     checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
     checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
     checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
+    checks.append(("stage_operator_interrupted", _bench_operator_interrupted_stage, repeats))
     if args.workflows_only:
         checks = []
 

@@ -36619,7 +36619,11 @@ def test_lifecycle_application_happy_path_real_stack():
         expect(child_uuid_2.lower() in uow.repository.rows, "second child was not imported into task store")
         expect(uow.repository.rows[parent_uuid]["nextLink"] == child_uuid[:8], "parent nextLink not set")
         expect(uow.repository.rows[parent_uuid_2]["nextLink"] == child_uuid_2[:8], "second parent nextLink not set")
-        expect(uow.repository.set_calls >= 3, f"phase verification did not use targeted set reads: {uow.repository.set_calls}")
+        expect(
+            uow.repository.set_calls == 3,
+            "multi-plan drain must use exactly one set read per authoritative phase "
+            f"(preflight, child verification, parent verification), got {uow.repository.set_calls}",
+        )
         expect(uow.repository.broad_calls == 0, f"drain used broad history exports: {uow.repository.broad_calls}")
 
 

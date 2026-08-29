@@ -393,6 +393,20 @@ class ChainSnapshotReader:
         from .chain_snapshot import IntegritySnapshotRequest
 
         scope = request.scope
+        if scope.kind in {OperatorScopeKind.CHAINS, OperatorScopeKind.UUIDS}:
+            requested_identities = len(scope.values)
+            if requested_identities > request.limits.hydration_identities:
+                return OperatorFailure(
+                    "snapshot_limit_exceeded",
+                    f"snapshot requests {requested_identities} hydration identities, exceeding limit "
+                    f"{request.limits.hydration_identities}",
+                    scope=scope,
+                    details={
+                        "resource": "hydration_identities",
+                        "observed": requested_identities,
+                        "limit": request.limits.hydration_identities,
+                    },
+                )
         cache_key = "operator-source-snapshot:" + json.dumps(request.to_dict(), sort_keys=True, separators=(",", ":"))
         if not request.refresh:
             cached = context.cache.get(cache_key)

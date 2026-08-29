@@ -268,6 +268,18 @@ class OperatorModelsTests(unittest.TestCase):
         with self.assertRaises(OperatorContractError):
             OperatorLimits.enforcement_owner("unknown")
 
+    def test_limits_round_trip_includes_resource_dimensions(self) -> None:
+        limits = OperatorLimits(
+            taskwarrior_calls=11,
+            exported_rows=12,
+            decoded_rows=13,
+            hydration_identities=14,
+            sqlite_transactions=15,
+            cache_entries=16,
+            peak_memory_bytes=17,
+        )
+        self.assertEqual(OperatorLimits.from_mapping(limits.to_dict()), limits)
+
     def test_invocation_context_captures_one_immutable_basis(self) -> None:
         configuration = ValidatedNauticalConfiguration(
             "/tmp/config", "config-1", "schedule-1", "UTC", (),
@@ -531,6 +543,7 @@ class OperatorModelsTests(unittest.TestCase):
         )
         self.assertIsInstance(multi, ChainSnapshot)
         self.assertEqual(len(multi.rows), 2)
+
         reader.read(
             context,
             SnapshotReadRequest(
@@ -601,6 +614,24 @@ class OperatorModelsTests(unittest.TestCase):
         self.assertEqual(len(batch), 2)
         self.assertIsInstance(batch[0], OperatorSnapshot)
         self.assertIsInstance(batch[1], OperatorFailure)
+
+    def test_chain_snapshot_reader_rejects_overlarge_hydration_before_read(self) -> None:
+        request = OperatorRequest(OperatorOperation.INSPECT, OperatorScope(OperatorScopeKind.CHAINS, ("chain-1", "chain-2")))
+        configuration = ValidatedNauticalConfiguration("/tmp/config", "config-1", "schedule-1", "UTC", ())
+        integration = IntegrationContext(
+            Path("/tmp"), "explicit", ("task",), configuration, ZoneInfo("UTC"),
+            SilentDiagnostics(), SystemClock(), "inv-1", 10, IntegrationAccess.READ_ONLY,
+        )
+        context = OperatorInvocationContext.from_integration(request, integration)
+        calls = []
+        reader = ChainSnapshotReader(lambda source_request: calls.append(source_request))
+        result = reader.read_chain_snapshot(
+            context,
+            SnapshotReadRequest(request.scope, limits=OperatorLimits(hydration_identities=1)),
+        )
+        self.assertIsInstance(result, OperatorFailure)
+        self.assertEqual(result.code, "snapshot_limit_exceeded")
+        self.assertEqual(calls, [])
 
     def test_large_multi_scope_does_not_claim_complete_absence(self) -> None:
         """Broad exports must fail closed when requested identities are missing."""

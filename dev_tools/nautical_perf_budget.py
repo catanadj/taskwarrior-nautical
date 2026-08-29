@@ -129,7 +129,7 @@ def _bench_query_pagination_stage() -> float:
     """Measure scoped and whole-system query pagination without Taskwarrior I/O."""
     from types import SimpleNamespace
 
-    from nautical_core.query_models import OccurrenceQueryRequest
+    from nautical_core.query_models import OccurrenceQueryRequest, QueryContractError
     from nautical_core.query_service import OccurrenceQueryService, QueryServiceError
 
     service = object.__new__(OccurrenceQueryService)
@@ -189,6 +189,14 @@ def _bench_query_pagination_stage() -> float:
         pass
     else:
         raise RuntimeError("incompatible query cursor was accepted")
+    try:
+        OccurrenceQueryRequest.from_mapping(
+            {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1, "max_tasks": 0}
+        )
+    except QueryContractError:
+        pass
+    else:
+        raise RuntimeError("malformed query page limit was accepted")
     return time.perf_counter() - started
 
 

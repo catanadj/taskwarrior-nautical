@@ -401,6 +401,20 @@ def _bench_queue_stale_stage() -> float:
         return time.perf_counter() - started
 
 
+def _bench_operator_failure_matrix_stage() -> float:
+    """Exercise fail-closed operator boundaries in one content-free matrix."""
+    started = time.perf_counter()
+    # Query covers malformed pagination and unavailable authoritative reads;
+    # repair covers an unsafe finding; queue covers a stale claim.  Each
+    # component raises on a fabricated success, so this matrix is a compact
+    # composition-root guard rather than a timing-only smoke test.
+    _bench_query_pagination_stage()
+    _bench_query_unavailable_stage()
+    _bench_repair_planner_stage()
+    _bench_queue_stale_stage()
+    return time.perf_counter() - started
+
+
 def _bench_describe_expr(exprs: list[str], rounds: int) -> float:
     _clear_caches()
     t0 = time.perf_counter()
@@ -3352,6 +3366,7 @@ def main() -> int:
     checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
     checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
     checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
+    checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
     if args.workflows_only:
         checks = []
 

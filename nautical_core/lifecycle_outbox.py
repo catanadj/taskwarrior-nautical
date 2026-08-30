@@ -614,13 +614,14 @@ class LifecycleOutboxRepository:
             updated_at=float(row["updated_at"] or 0),
         )
 
-    def enqueue(
-        self,
+    @staticmethod
+    def _prepare_enqueue(
         plan: LifecyclePlan,
         *,
         configuration_fingerprint: str,
         schedule_fingerprint: str,
-    ) -> OutboxResult:
+    ) -> tuple[str, str, str, str, str] | OutboxResult:
+        """Validate and serialize enqueue inputs once for all enqueue paths."""
         if not isinstance(plan, LifecyclePlan):
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox enqueue requires a lifecycle plan")
         config = str(configuration_fingerprint or "").strip()
@@ -629,10 +630,23 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox enqueue requires configuration and schedule fingerprints")
         if plan.stage not in {ExecutionStage.PLANNED, ExecutionStage.PERSISTED}:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox enqueue requires a planned lifecycle plan")
+        planned = plan.with_stage(ExecutionStage.PLANNED)
+        return config, schedule, _plan_json(planned), planned.semantic_key(), json.dumps(
+            planned.parent_guard.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+
+    def enqueue(
+        self,
+        plan: LifecyclePlan,
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+    ) -> OutboxResult:
+        prepared = self._prepare_enqueue(plan, configuration_fingerprint=configuration_fingerprint, schedule_fingerprint=schedule_fingerprint)
+        if isinstance(prepared, OutboxResult):
+            return prepared
+        config, schedule, encoded_plan, plan_fingerprint, guard_json = prepared
         intent_id = plan.identity.idempotency_key
-        encoded_plan = _plan_json(plan.with_stage(ExecutionStage.PLANNED))
-        plan_fingerprint = plan.semantic_key()
-        guard_json = json.dumps(plan.parent_guard.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         now = self._clock()
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:
@@ -833,10 +847,12 @@ class LifecycleOutboxRepository:
         normalized = tuple(plans)
         if not normalized or not config or not schedule:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires plans and fingerprints"), {}
-        if any(not isinstance(plan, LifecyclePlan) for plan in normalized):
-            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires lifecycle plans"), {}
-        if any(plan.stage not in {ExecutionStage.PLANNED, ExecutionStage.PERSISTED} for plan in normalized):
-            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires planned lifecycle plans"), {}
+        prepared_plans: dict[str, tuple[LifecyclePlan, str, str, str]] = {}
+        for plan in normalized:
+            prepared = self._prepare_enqueue(plan, configuration_fingerprint=config, schedule_fingerprint=schedule)
+            if isinstance(prepared, OutboxResult):
+                return prepared, {}
+            prepared_plans[plan.identity.idempotency_key] = (plan, *prepared[2:])
         if len({plan.identity.idempotency_key for plan in normalized}) != len(normalized):
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires unique intent IDs"), {}
         now = self._clock()
@@ -846,9 +862,7 @@ class LifecycleOutboxRepository:
             with self._transaction(conn):
                 for plan in normalized:
                     intent_id = plan.identity.idempotency_key
-                    encoded_plan = _plan_json(plan.with_stage(ExecutionStage.PLANNED))
-                    fingerprint = plan.semantic_key()
-                    guard_json = json.dumps(plan.parent_guard.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    _, encoded_plan, fingerprint, guard_json = prepared_plans[intent_id]
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is not None:
                         try:

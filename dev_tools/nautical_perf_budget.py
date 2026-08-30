@@ -2299,7 +2299,7 @@ def _bench_expensive_workflows(
             "uda.anchor_mode.type=string\n",
             encoding="utf-8",
         )
-        base_env = os.environ.copy()
+        base_env = _python_subprocess_env()
         base_env.update(
             {
                 "NAUTICAL_CONFIG": str(config_path),

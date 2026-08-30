@@ -12,6 +12,7 @@ import unittest
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from nautical_core.lifecycle_application import LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
@@ -81,6 +82,106 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
             batch, records = outbox.claim_batch(owner="other-owner", lease_seconds=30, limit=5)
             self.assertEqual(batch.kind.value, "applied")
             self.assertEqual([record.intent_id for record in records], [plans[1].identity.idempotency_key])
+
+    def test_bulk_enqueue_commits_before_a_fresh_repository_claims(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "durable-chain",
+                "00000000-0000-4000-8000-000000000601",
+                "00000000-0000-4000-8000-000000000602",
+                1,
+            )
+            overall, results = outbox.enqueue_many(
+                (plan,), configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            )
+            self.assertEqual(overall.kind.value, "applied")
+            self.assertEqual(results[plan.identity.idempotency_key].kind.value, "applied")
+
+            # A separate repository/connection must see the committed intent,
+            # which is the recovery boundary after a process interruption.
+            recovered = LifecycleOutboxRepository(Path(td))
+            claim, claimed = recovered.claim_intents(
+                intent_ids=(plan.identity.idempotency_key,), owner="recovery", lease_seconds=30
+            )
+            self.assertEqual(claim.kind.value, "applied")
+            self.assertEqual(claimed[plan.identity.idempotency_key].kind.value, "applied")
+
+    def test_bulk_enqueue_rollback_leaves_no_phantom_intents(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plans = tuple(
+                self._bulk_plan(
+                    f"rollback-{idx}",
+                    f"00000000-0000-4000-8000-00000000061{idx}",
+                    f"00000000-0000-4000-8000-00000000062{idx}",
+                    1,
+                )
+                for idx in (1, 2)
+            )
+            original = outbox._enqueue_row
+            calls = 0
+
+            def fail_after_first(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("injected bulk enqueue interruption")
+                return original(*args, **kwargs)
+
+            with patch.object(outbox, "_enqueue_row", side_effect=fail_after_first):
+                overall, results = outbox.enqueue_many(
+                    plans, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+                )
+            self.assertEqual(overall.kind.value, "rejected")
+            self.assertEqual(results, {})
+
+            fresh = LifecycleOutboxRepository(Path(td))
+            _, status = fresh.status()
+            self.assertEqual(status["records"], [])
+
+    def test_exact_claim_rollback_leaves_staged_intents_recoverable(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plans = tuple(
+                self._bulk_plan(
+                    f"claim-rollback-{idx}",
+                    f"00000000-0000-4000-8000-00000000063{idx}",
+                    f"00000000-0000-4000-8000-00000000064{idx}",
+                    1,
+                )
+                for idx in (1, 2)
+            )
+            outbox.enqueue_many(plans, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            original = outbox._claim_row
+            calls = 0
+
+            def fail_after_first(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("injected exact claim interruption")
+                return original(*args, **kwargs)
+
+            with patch.object(outbox, "_claim_row", side_effect=fail_after_first):
+                overall, results = outbox.claim_intents(
+                    intent_ids=tuple(plan.identity.idempotency_key for plan in plans),
+                    owner="interrupted",
+                    lease_seconds=30,
+                )
+            self.assertEqual(overall.kind.value, "rejected")
+            self.assertEqual(results, {})
+
+            # The transaction rollback must return both rows to READY so a
+            # later process can claim the complete staged wave.
+            recovered = LifecycleOutboxRepository(Path(td))
+            claim, claimed = recovered.claim_intents(
+                intent_ids=tuple(plan.identity.idempotency_key for plan in plans),
+                owner="recovery",
+                lease_seconds=30,
+            )
+            self.assertEqual(claim.kind.value, "applied")
+            self.assertEqual(set(claimed), {plan.identity.idempotency_key for plan in plans})
 
     def test_execute_wave_claims_only_its_staged_intents(self) -> None:
         with TemporaryDirectory() as td:

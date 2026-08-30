@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from .operator_models import CoverageKind, OperatorContractError, OperatorCoverage, OperatorRequest, OperatorScope, _freeze_json_value, _json_value
 
@@ -23,7 +23,7 @@ def _json_object(value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
         json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise OperatorContractError(f"plan {name} must contain JSON-native values") from exc
-    return _freeze_json_value(value)
+    return cast(Mapping[str, Any], _freeze_json_value(value))
 
 
 @dataclass(frozen=True, slots=True)

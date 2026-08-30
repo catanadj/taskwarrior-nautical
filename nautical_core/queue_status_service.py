@@ -161,8 +161,8 @@ class QueueStatusService:
                                 actual = current.get(field)
                                 if field == "link":
                                     try:
-                                        expected = int(float(expected))
-                                        actual = int(float(actual))
+                                        expected = int(float(str(expected)))
+                                        actual = int(float(str(actual)))
                                     except (TypeError, ValueError, OverflowError):
                                         pass
                                 if str(expected if expected is not None else "") != str(actual if actual is not None else ""):

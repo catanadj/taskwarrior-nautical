@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 
 CORE_DIR = Path(__file__).resolve().parents[1]
@@ -323,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         service = OccurrenceQueryService(unit_of_work, core=core)
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
-        return _emit(response.to_operator_v2().to_dict(), exit_code=exit_code, budget=service.budget)
+        return _emit(cast(Any, response).to_operator_v2().to_dict(), exit_code=exit_code, budget=service.budget)
     except QueryContractError as exc:
         _diagnostic(str(exc))
         return _emit(error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)

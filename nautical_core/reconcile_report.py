@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
 from .operator_presentation import bounded_text, key_value_lines
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
@@ -209,7 +209,7 @@ def to_operator_result(summary: Mapping[str, Any]) -> OperatorV2Result:
         schema=_JSON_SCHEMA,
         operation="reconcile",
         status=status,
-        payload=_json_safe({key: value for key, value in summary.items() if key not in {"schema", "status"}}),
+        payload=cast(Mapping[str, Any], _json_safe({key: value for key, value in summary.items() if key not in {"schema", "status"}})),
         failure=failure,
     )
 

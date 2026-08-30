@@ -2154,21 +2154,28 @@ def _outbox_lifecycle_fixture(prefix: str, sample_index: int, count: int = 8) ->
     return parents, plans
 
 
-def _reconcile_candidate_tasks(prefix: str, count: int) -> list[dict]:
+def _reconcile_candidate_tasks(prefix: str, count: int, *, legacy_chain_ids: bool = False) -> list[dict]:
     """Create independent completed roots for reconcile candidate scaling."""
-    return [
-        {
-            "uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/{prefix}/{index}")),
+    tasks = []
+    for index in range(count):
+        root_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"nautical-perf/{prefix}/{index}"))
+        tasks.append(
+            {
+            "uuid": root_uuid,
             "status": "completed",
             "description": f"Reconcile candidate benchmark {index}",
             "cp": "P1D",
             "chain": "on",
-            "chainID": f"reconcile-candidate-{prefix}-{index}",
+            "chainID": (
+                f"reconcile-candidate-{prefix}-{index}"
+                if legacy_chain_ids
+                else root_uuid[:8]
+            ),
             "link": 1,
             "due": "20260101T090000Z",
-        }
-        for index in range(count)
-    ]
+            }
+        )
+    return tasks
 
 
 def _merge_task_call_stats(*stats: dict[str, int]) -> dict[str, int]:

@@ -35,6 +35,13 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertEqual(env["PYTHONPATH"].split(budget.os.pathsep)[0], str(budget.ROOT))
         self.assertIn("/tmp/existing", env["PYTHONPATH"])
 
+    def test_reconcile_candidates_match_production_chain_identity(self) -> None:
+        tasks = budget._reconcile_candidate_tasks("contract", 3)
+        for task in tasks:
+            self.assertEqual(task["chainID"], task["uuid"][:8])
+        legacy = budget._reconcile_candidate_tasks("contract", 1, legacy_chain_ids=True)[0]
+        self.assertNotEqual(legacy["chainID"], legacy["uuid"][:8])
+
     def test_measure_records_cpu_and_wall_attribution(self) -> None:
         result = budget._measure("contract", lambda: 0.001, 2)
         self.assertEqual(result["name"], "contract")

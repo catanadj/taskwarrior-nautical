@@ -43,6 +43,9 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertGreaterEqual(result["cpu_median_s"], 0.0)
         self.assertGreaterEqual(result["measured_wall_median_s"], 0.0)
         self.assertGreaterEqual(result["peak_memory_median_bytes"], 0)
+        self.assertFalse(result["memory_tracing"])
+        traced = budget._measure("contract-traced", lambda: 0.001, 1, trace_memory=True)
+        self.assertTrue(traced["memory_tracing"])
 
     def test_measure_does_not_hide_correctness_failures(self) -> None:
         def broken_check() -> float:

@@ -1387,7 +1387,7 @@ def _bench_native_until_reconcile(rounds: int, *, apply: bool) -> float:
         return time.perf_counter() - started
 
 
-def _measure(name: str, fn, repeats: int) -> dict:
+def _measure(name: str, fn, repeats: int, *, trace_memory: bool = False) -> dict:
     samples = []
     cpu_samples = []
     wall_samples = []
@@ -1398,14 +1398,18 @@ def _measure(name: str, fn, repeats: int) -> dict:
         started_wall = time.perf_counter()
         started_cpu = time.process_time()
         started_tracing = tracemalloc.is_tracing()
-        if not started_tracing:
+        if trace_memory and not started_tracing:
             tracemalloc.start()
-        tracemalloc.reset_peak()
+        if trace_memory:
+            tracemalloc.reset_peak()
         reported = float(fn())
         elapsed_wall = time.perf_counter() - started_wall
         elapsed_cpu = time.process_time() - started_cpu
-        _current, peak_memory = tracemalloc.get_traced_memory()
-        if not started_tracing:
+        if trace_memory:
+            _current, peak_memory = tracemalloc.get_traced_memory()
+        else:
+            peak_memory = 0
+        if trace_memory and not started_tracing:
             tracemalloc.stop()
         # Existing checks return their own wall duration. Preserve that value
         # while recording measured CPU/wall attribution alongside it.
@@ -1428,6 +1432,7 @@ def _measure(name: str, fn, repeats: int) -> dict:
         "measured_wall_median_s": statistics.median(wall_samples),
         "peak_memory_samples_bytes": peak_memory_samples,
         "peak_memory_median_bytes": statistics.median(peak_memory_samples),
+        "memory_tracing": trace_memory,
     }
 
 
@@ -3437,6 +3442,11 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="emit machine-readable JSON summary")
     ap.add_argument("--enforce", action="store_true", help="fail non-zero if any budget is exceeded")
     ap.add_argument(
+        "--trace-memory",
+        action="store_true",
+        help="enable tracemalloc while measuring generic benchmark operations",
+    )
+    ap.add_argument(
         "--extended",
         action="store_true",
         help="run large-file, astronomy, omission, and native-until benchmarks",
@@ -3717,7 +3727,7 @@ def main() -> int:
     results = {}
     failures = []
     for name, fn, check_repeats in checks:
-        r = _measure(name, fn, check_repeats)
+        r = _measure(name, fn, check_repeats, trace_memory=args.trace_memory)
         extended_budgets = {}
         if args.extended and isinstance(cfg.get("extended_workload"), dict):
             profile_key = "slow_device_budgets_seconds" if args.slow_device else "budgets_seconds"

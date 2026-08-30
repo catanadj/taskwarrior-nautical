@@ -35,12 +35,10 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
             host._module("modify_ui_effects").panel(
                 host, "ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note"
             )
-        mode = anchor_mode(host, old, new)
-        due = host._module("modify_datetime_effects").safe_dt(host, new.get("due") or old.get("due"))
-        if host.core.ENABLE_ANCHOR_CACHE:
-            host.core.build_and_cache_hints(anchor_expr, mode, default_due_dt=due, include_per_year=False)
-        else:
-            host.core.validate_anchor_expr_strict(anchor_expr)
+        anchor_mode(host, old, new)
+        # Validation must remain decision-only. Hint persistence has no
+        # synchronous consumer and would repeat scheduler work on every edit.
+        host.core.validate_anchor_expr_strict(anchor_expr)
     except TypeError:
         host.core.validate_anchor_expr_strict(anchor_expr)
     except Exception as exc:

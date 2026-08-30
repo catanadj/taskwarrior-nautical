@@ -163,6 +163,7 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/tools/nautical_runtime_cleanup.py",
     "nautical_core/tools/nautical_doctor.py",
     "nautical_core/tools/nautical_queue_status.py",
+    "nautical_core/tools/nautical_queue_review.py",
     "nautical_core/tools/nautical_reconcile.py",
     "nautical_core/reconcile_cli.py",
     "nautical_core/reconcile_report.py",

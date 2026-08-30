@@ -94,5 +94,47 @@ class QueueStatusService:
         status = "error" if outbox["schema"].get("status") == "error" or outbox["integrity"] not in {"ok", "not_checked"} else ("warn" if issues else "ok")
         return {"schema": "nautical.lifecycle_outbox_status", "schema_version": 1, "status": status, "taskdata": str(resolved), "paths": {"state_dir": str(outbox_path.parent), "outbox_db": str(outbox_path)}, "outbox": outbox, "issues": issues}
 
+    def review_payload(
+        self,
+        taskdata: Path,
+        *,
+        limit: int = 100,
+        intent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return bounded, read-only evidence for manual-review intents."""
+        resolved = Path(taskdata).expanduser().resolve()
+        repository = LifecycleOutboxRepository(resolved)
+        result, data = repository.status(limit=max(0, int(limit)), intent_id=intent_id)
+        if not result.ok:
+            return {
+                "schema": "nautical.lifecycle_outbox_review",
+                "version": 1,
+                "status": "unavailable",
+                "taskdata": str(resolved),
+                "intents": [],
+                "failure": {"code": "review_unavailable", "message": result.reason or "outbox read failed"},
+            }
+        records = [
+            record for record in data.get("records", [])
+            if record.get("state") in {"manual_review", "quarantined", "poison"}
+        ]
+        if intent_id and not records:
+            return {
+                "schema": "nautical.lifecycle_outbox_review",
+                "version": 1,
+                "status": "not_found",
+                "taskdata": str(resolved),
+                "intents": [],
+                "failure": {"code": "intent_not_found", "message": f"No review intent found: {intent_id}"},
+            }
+        return {
+            "schema": "nautical.lifecycle_outbox_review",
+            "version": 1,
+            "status": "found" if records else "empty",
+            "taskdata": str(resolved),
+            "intents": records,
+            "failure": None,
+        }
+
 
 __all__ = ["QueueStatusService"]

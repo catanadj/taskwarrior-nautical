@@ -1408,6 +1408,7 @@ class LifecycleOutboxRepository:
         limit: int = 20,
         stale_after: float = 300.0,
         retention_seconds: float = OUTBOX_ACK_RETENTION_SECONDS,
+        intent_id: str | None = None,
     ) -> tuple[OutboxResult, dict[str, Any]]:
         """Return a typed, read-only operational view of the outbox.
 
@@ -1491,10 +1492,17 @@ class LifecycleOutboxRepository:
                 "oldest_age_s": max(0, int(now - oldest_ack)) if oldest_ack else 0,
             }
             records = []
-            for row in conn.execute(
-                "SELECT * FROM lifecycle_outbox ORDER BY updated_at ASC, intent_id ASC LIMIT ?",
-                (max(0, int(limit)),),
-            ):
+            if intent_id:
+                rows = conn.execute(
+                    "SELECT * FROM lifecycle_outbox WHERE intent_id=?",
+                    (str(intent_id).strip(),),
+                )
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM lifecycle_outbox ORDER BY updated_at ASC, intent_id ASC LIMIT ?",
+                    (max(0, int(limit)),),
+                )
+            for row in rows:
                 try:
                     record = self._from_row(row)
                     records.append(
@@ -1512,6 +1520,15 @@ class LifecycleOutboxRepository:
                             "failure": None if record.failure is None else {
                                 "code": record.failure.code,
                                 "message": record.failure.message,
+                            },
+                            "plan": {
+                                "schema_version": 2,
+                                "action": record.plan.action.value,
+                                "event": record.plan.identity.event.value,
+                                "chainID": record.plan.identity.chain_id,
+                                "parent_uuid": record.plan.identity.parent_uuid,
+                                "source_link": record.plan.identity.source_link,
+                                "target_link": record.plan.identity.target_link,
                             },
                         }
                     )

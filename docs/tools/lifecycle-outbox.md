@@ -14,6 +14,22 @@ The report includes schema compatibility, queued/claimed/retry/manual-review/
 poison states, stale claims, attempts, retained acknowledgements, and a bounded
 sample of intents.
 
+## Review intents
+
+Manual-review and poison intents are not automatically claimable. Inspect their
+durable evidence without changing the queue:
+
+```bash
+nautical queue-review
+nautical queue-review --json
+nautical queue-review --intent li1-... --json
+```
+
+The detail includes the lifecycle event, action, chain and parent identity,
+link range, and failure reason. Resolve the underlying task or configuration,
+then rerun the owning lifecycle operation; review records remain immutable
+audit evidence.
+
 ## States
 
 | State | Meaning |

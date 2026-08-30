@@ -9,6 +9,10 @@ green even when the full golden dispatcher is not run.
 from __future__ import annotations
 
 import unittest
+import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -32,6 +36,69 @@ from dev_tools.nautical_golden_tests import (
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    @staticmethod
+    def _claim_worker(db_path: Path, mode: str, intent_ids: tuple[str, ...], owner: str) -> subprocess.Popen[str]:
+        """Start an independent process exercising one ownership path."""
+        code = """
+import json
+import sys
+from pathlib import Path
+from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+
+repo = LifecycleOutboxRepository(Path(sys.argv[1]))
+ids = tuple(json.loads(sys.argv[3]))
+if sys.argv[2] == "batch":
+    overall, records = repo.claim_batch(owner=sys.argv[4], lease_seconds=30, limit=len(ids))
+    payload = {"overall": overall.kind.value, "claimed": [record.intent_id for record in records]}
+else:
+    overall, results = repo.claim_intents(intent_ids=ids, owner=sys.argv[4], lease_seconds=30)
+    payload = {"overall": overall.kind.value, "claimed": [key for key, result in results.items() if result.kind.value == "applied"]}
+print(json.dumps(payload, sort_keys=True))
+"""
+        env = os.environ.copy()
+        root = str(Path(__file__).resolve().parents[1])
+        env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
+        return subprocess.Popen(
+            [sys.executable, "-c", code, str(db_path), mode, json.dumps(intent_ids), owner],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+
+    def _assert_process_race(self, mode_a: str, mode_b: str) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plans = tuple(
+                self._bulk_plan(
+                    f"process-race-{idx}",
+                    f"00000000-0000-4000-8000-0000000007{idx:02d}",
+                    f"00000000-0000-4000-8000-0000000008{idx:02d}",
+                    1,
+                )
+                for idx in range(1, 5)
+            )
+            outbox.enqueue_many(plans, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            intent_ids = tuple(plan.identity.idempotency_key for plan in plans)
+            first = self._claim_worker(Path(td), mode_a, intent_ids, "process-owner-a")
+            second = self._claim_worker(Path(td), mode_b, intent_ids, "process-owner-b")
+            first_out, first_err = first.communicate(timeout=15)
+            second_out, second_err = second.communicate(timeout=15)
+            self.assertEqual(first.returncode, 0, first_err)
+            self.assertEqual(second.returncode, 0, second_err)
+            first_claimed = set(json.loads(first_out)["claimed"])
+            second_claimed = set(json.loads(second_out)["claimed"])
+            self.assertEqual(first_claimed | second_claimed, set(intent_ids))
+            self.assertEqual(first_claimed & second_claimed, set())
+
+    def test_queue_and_reconcile_process_races_have_one_owner(self) -> None:
+        for _ in range(3):
+            self._assert_process_race("batch", "exact")
+
+    def test_reconcile_process_races_have_one_owner(self) -> None:
+        for _ in range(3):
+            self._assert_process_race("exact", "exact")
+
     @staticmethod
     def _bulk_plan(chain: str, parent: str, child: str, link: int) -> LifecyclePlan:
         from dev_tools.nautical_golden_tests import _task_draft

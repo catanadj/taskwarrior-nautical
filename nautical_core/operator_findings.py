@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo
 
 from .operator_models import OperatorContractError, OperatorScope, OperatorStatus, _freeze_json_value
 
@@ -42,6 +44,12 @@ def _text(value: object, name: str) -> str:
 def _json(value: object) -> object:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, ZoneInfo):
+        return value.key
+    if isinstance(value, Enum):
+        return _json(value.value)
     if isinstance(value, Mapping):
         return {str(key): _json(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -75,19 +83,20 @@ class OperatorFinding:
         if self.scope is not None and not isinstance(self.scope, OperatorScope):
             raise OperatorContractError("finding scope must be an OperatorScope")
         affected = tuple(dict.fromkeys(_text(value, "affected identity") for value in self.affected))
+        normalized: dict[str, object] = {}
         for name, value in (("observed", self.observed), ("expected", self.expected), ("evidence", self.evidence)):
             if not isinstance(value, Mapping):
                 raise OperatorContractError(f"finding {name} must be an object")
-            _json(value)
+            normalized[name] = _json(value)
         object.__setattr__(self, "code", _text(self.code, "code"))
         object.__setattr__(self, "domain", _text(self.domain, "domain"))
         object.__setattr__(self, "message", _text(self.message, "message"))
         object.__setattr__(self, "severity", severity)
         object.__setattr__(self, "actionability", actionability)
         object.__setattr__(self, "affected", affected)
-        object.__setattr__(self, "observed", _freeze_json_value(self.observed))
-        object.__setattr__(self, "expected", _freeze_json_value(self.expected))
-        object.__setattr__(self, "evidence", _freeze_json_value(self.evidence))
+        object.__setattr__(self, "observed", _freeze_json_value(normalized["observed"]))
+        object.__setattr__(self, "expected", _freeze_json_value(normalized["expected"]))
+        object.__setattr__(self, "evidence", _freeze_json_value(normalized["evidence"]))
         object.__setattr__(self, "command", str(self.command or "").strip())
         object.__setattr__(self, "guidance", str(self.guidance or "").strip())
         if actionability is not FindingActionability.INFORMATIONAL and not (self.command or self.guidance):

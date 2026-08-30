@@ -1,5 +1,7 @@
 import json
 import unittest
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from nautical_core.operator_findings import (
     FindingActionability,
@@ -15,6 +17,16 @@ from nautical_core.operator_models import OperatorContractError, OperatorScope, 
 
 
 class OperatorFindingTests(unittest.TestCase):
+    def test_finding_normalizes_temporal_and_timezone_evidence(self) -> None:
+        finding = OperatorFinding(
+            "config.astronomy", "configuration", FindingSeverity.INFO,
+            FindingActionability.INFORMATIONAL, "Astronomy configuration is valid.",
+            observed={"timezone": ZoneInfo("Europe/Bucharest"), "at": datetime(2026, 8, 30, tzinfo=timezone.utc)},
+        )
+        self.assertEqual(finding.to_dict()["observed"], {
+            "timezone": "Europe/Bucharest", "at": "2026-08-30T00:00:00+00:00",
+        })
+
     def test_finding_round_trip_is_json_native(self) -> None:
         finding = OperatorFinding(
             "chain.missing_successor",

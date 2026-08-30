@@ -53,6 +53,36 @@ class OperatorConformanceTests(unittest.TestCase):
         make_provider.assert_called_once()
         self.assertIs(make_engine.call_args.args[0], provider)
 
+    def test_integrity_audit_scopes_outbox_evidence_per_chain(self) -> None:
+        from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+        from nautical_core.chain_integrity_context import OutboxSnapshot
+        from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
+
+        snapshot = ChainSnapshot(
+            "scope-outbox", SnapshotCoverage.COMPLETE, "test",
+            (
+                ChainNode("11111111-1111-4111-8111-111111111111", "chain-a", 1, "pending"),
+                ChainNode("22222222-2222-4222-8222-222222222222", "chain-b", 1, "pending"),
+            ), "config-1", True,
+        )
+        class Outbox:
+            def snapshot_records(self):
+                return SimpleNamespace(ok=True), ()
+
+        seen: list[str] = []
+        original = OutboxSnapshot.for_chain
+
+        def scoped(self, chain_id):
+            seen.append(chain_id)
+            return original(self, chain_id)
+
+        engine = ChainIntegrityEngine.lifecycle_only(configuration_fingerprint="config-1")
+        with patch("nautical_core.chain_integrity_context.OutboxSnapshot.for_chain", scoped), \
+             patch("nautical_core.chain_invariants.evaluate_context", return_value=()):
+            result = engine.audit_snapshot(snapshot, outbox_repository=Outbox())
+        self.assertEqual(result.findings, ())
+        self.assertEqual(seen, ["chain-a", "chain-b"])
+
     def test_operator_phase_result_is_typed_and_fail_closed(self) -> None:
         successful = OperatorPhaseResult(OperatorPhase.ACQUIRE_SNAPSHOT, value={"snapshot": "s1"})
         self.assertEqual(successful.phase, OperatorPhase.ACQUIRE_SNAPSHOT)

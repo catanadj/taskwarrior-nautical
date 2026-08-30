@@ -298,8 +298,14 @@ class ChainIntegrityEngine:
             )
             try:
                 graph = ChainGraph.from_snapshot(scoped)
+                # Outbox evidence is global at load time but chain-local during
+                # invariant evaluation. Filtering here prevents every intent
+                # from being compared with every chain in a broad audit.
+                chain_outbox = OutboxSnapshot.from_records(
+                    outbox.for_chain(chain_id), source=outbox.source,
+                )
                 context = IntegrityContext(
-                    graph, outbox, self._configuration_fingerprint, mutation_epoch,
+                    graph, chain_outbox, self._configuration_fingerprint, mutation_epoch,
                 )
                 from .chain_invariants import evaluate_context
 

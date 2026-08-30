@@ -253,6 +253,15 @@ print(json.dumps(payload, sort_keys=True))
     def test_execute_wave_claims_only_its_staged_intents(self) -> None:
         with TemporaryDirectory() as td:
             outbox = LifecycleOutboxRepository(Path(td))
+            transaction_metrics: list[str] = []
+            original_metric = outbox._metric
+
+            def capture_metric(key: str, value: float = 1.0) -> None:
+                if key == "outbox_transactions":
+                    transaction_metrics.append(key)
+                original_metric(key, value)
+
+            outbox._metric = capture_metric
             plans = tuple(
                 self._bulk_plan(
                     f"wave-{idx}",
@@ -280,6 +289,7 @@ print(json.dumps(payload, sort_keys=True))
             self.assertEqual(result.claim.kind.value, "applied")
             claimed_ids: set[str] = {record.intent_id for record in service.claimed_records}
             self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
+            self.assertEqual(len(transaction_metrics), 2)
 
     def test_outbox_failures_are_retryable(self) -> None:
         test_lifecycle_application_outbox_faults_are_retryable()

@@ -116,6 +116,10 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         elapsed = budget._bench_lifecycle_staging_stage()
         self.assertGreaterEqual(elapsed, 0.0)
 
+    def test_reconcile_snapshot_stage_has_a_correctness_guard(self) -> None:
+        elapsed = budget._bench_reconcile_snapshot_stage()
+        self.assertGreaterEqual(elapsed, 0.0)
+
     def test_queue_stale_stage_has_a_correctness_guard(self) -> None:
         elapsed = budget._bench_queue_stale_stage()
         self.assertGreaterEqual(elapsed, 0.0)

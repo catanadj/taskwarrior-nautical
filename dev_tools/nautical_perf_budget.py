@@ -404,6 +404,40 @@ def _bench_lifecycle_staging_stage() -> float:
         return time.perf_counter() - started
 
 
+def _bench_reconcile_snapshot_stage() -> float:
+    """Measure bounded reconcile projection from one authoritative read."""
+    from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService
+    from nautical_core.task_models import TaskObservation
+
+    class Repository:
+        reads = 0
+
+        def lifecycle_candidates(self, **_kwargs):
+            self.reads += 1
+            return object()
+
+    rows = tuple(
+        TaskObservation.from_mapping({
+            "uuid": f"00000000-0000-4000-8000-{index:012d}",
+            "status": "completed" if index % 2 == 0 else "pending",
+            "chain": "on", "chainID": f"reconcile-stage-{index // 2:04d}",
+            "link": index + 1,
+        }, source_query="perf:reconcile-stage")
+        for index in range(128)
+    )
+    repository = Repository()
+    service = ReconcileSnapshotService(repository, read_value=lambda _value, _label: rows)
+    started = time.perf_counter()
+    candidates = service.candidate_rows()
+    active = service.active_rows()
+    if repository.reads != 1 or len(candidates) != 64 or len(active) != 64:
+        raise RuntimeError(
+            f"reconcile snapshot stage lost projection authority: reads={repository.reads} "
+            f"candidates={len(candidates)} active={len(active)}"
+        )
+    return time.perf_counter() - started
+
+
 def _bench_queue_stale_stage() -> float:
     """Measure queue-status detection of a stale claim with a valid plan."""
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
@@ -3499,6 +3533,7 @@ def main() -> int:
     checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
     checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
     checks.append(("stage_lifecycle_staging", _bench_lifecycle_staging_stage, repeats))
+    checks.append(("stage_reconcile_snapshot", _bench_reconcile_snapshot_stage, repeats))
     checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
     checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
     checks.append(("stage_operator_interrupted", _bench_operator_interrupted_stage, repeats))

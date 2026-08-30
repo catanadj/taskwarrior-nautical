@@ -882,6 +882,7 @@ def _bench_build_hints(
         core.cache_load = counted_load
         core.cache_save = counted_save
         try:
+            expression_elapsed = {f"{index}:{expr}": 0.0 for index, expr in enumerate(exprs)}
             if mode == "cold":
                 root = Path(core.ANCHOR_CACHE_DIR_OVERRIDE)
                 started = time.perf_counter()
@@ -889,8 +890,12 @@ def _bench_build_hints(
                     core.ANCHOR_CACHE_DIR_OVERRIDE = str(root / f"cold-{sample_index}")
                     core._CACHE_DIR = None
                     _clear_caches()
-                    for expr in exprs:
+                    for index, expr in enumerate(exprs):
+                        expression_started = time.perf_counter()
                         core.build_and_cache_hints(expr, "skip", include_per_year=include_per_year)
+                        expression_elapsed[f"{index}:{expr}"] += time.perf_counter() - expression_started
+                metric_name = f"build_hints_{'next_only_' if not include_per_year else ''}cold"
+                RESOURCE_DETAILS[metric_name] = {"per_expression_seconds": expression_elapsed}
                 if counts["hits"] or not counts["misses"]:
                     raise RuntimeError(f"cold hint benchmark observed unexpected cache state: {counts}")
                 return time.perf_counter() - started
@@ -907,8 +912,12 @@ def _bench_build_hints(
             _clear_caches()
             t0 = time.perf_counter()
             for _ in range(max(1, rounds)):
-                for expr in exprs:
+                for index, expr in enumerate(exprs):
+                    expression_started = time.perf_counter()
                     core.build_and_cache_hints(expr, "skip", include_per_year=include_per_year)
+                    expression_elapsed[f"{index}:{expr}"] += time.perf_counter() - expression_started
+            metric_name = f"build_hints_{'next_only_' if not include_per_year else ''}warm"
+            RESOURCE_DETAILS[metric_name] = {"per_expression_seconds": expression_elapsed}
             if counts["misses"] or not counts["hits"] or counts["saves"]:
                 raise RuntimeError(f"warm hint benchmark observed unexpected cache state: {counts}")
             return time.perf_counter() - t0

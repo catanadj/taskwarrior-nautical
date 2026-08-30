@@ -22,6 +22,9 @@ from nautical_core.hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from nautical_core.feedback_renderer import PanelView, panel_view_from_facts, render_panel_view
 from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.task_models import TaskObservation
+from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
+from nautical_core.lifecycle_models import recurrence_fingerprint
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_WORKFLOW_MODULES = (
@@ -83,6 +86,19 @@ class EffectBoundaryTests(unittest.TestCase):
                 (MutationPostcondition.CHAIN_DISABLED,),
                 reason="guard conflict",
             )
+
+    def test_guard_timestamp_conflict_reports_expected_and_found_values(self) -> None:
+        row = {"uuid": "11111111-1111-4111-8111-111111111111", "status": "pending", "chain": "on", "chainID": "abcd1234", "link": 1, "modified": "20260825T120001Z"}
+        observation = TaskObservation.from_mapping(row, source_query="test")
+        guard = MutationGuard(
+            task_uuid=row["uuid"], status="pending", chain_id="abcd1234", link=1,
+            recurrence_identity=recurrence_fingerprint(row),
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, "20260825T120000Z"),),
+            expected_mutation_epoch=0,
+        )
+        mismatch = TaskwarriorMutationService._guard_mismatch(guard, observation)
+        self.assertIn("expected 20260825T120000Z", mismatch)
+        self.assertIn("found 20260825T120001Z", mismatch)
 
     def test_snapshot_cache_is_invalidated_by_mutation_epoch(self) -> None:
         cache = InvocationReadCache()

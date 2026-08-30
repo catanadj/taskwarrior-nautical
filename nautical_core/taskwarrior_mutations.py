@@ -407,7 +407,8 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 else _observed_value(row, ts_field) if ts_field is not None else None
             )
             if ts_field is not None and _text(actual_value) != timestamp.value:
-                return f"guard {ts_field} changed"
+                actual_text = _text(actual_value) or "-"
+                return f"guard {ts_field} changed (expected {timestamp.value}, found {actual_text})"
         return ""
 
     def _command_failure(self, request: MutationRequest, result: TaskCommandResult) -> MutationOutcome:

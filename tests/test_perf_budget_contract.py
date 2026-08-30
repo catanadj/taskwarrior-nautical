@@ -30,6 +30,11 @@ class PerformanceBudgetContractTests(unittest.TestCase):
         self.assertEqual(budget._budget_profile_name(slow_device=False), "desktop")
         self.assertEqual(budget._budget_profile_name(slow_device=True), "termux-slow-device")
 
+    def test_python_subprocess_env_exposes_checkout_package(self) -> None:
+        env = budget._python_subprocess_env({"PYTHONPATH": "/tmp/existing"})
+        self.assertEqual(env["PYTHONPATH"].split(budget.os.pathsep)[0], str(budget.ROOT))
+        self.assertIn("/tmp/existing", env["PYTHONPATH"])
+
     def test_measure_records_cpu_and_wall_attribution(self) -> None:
         result = budget._measure("contract", lambda: 0.001, 2)
         self.assertEqual(result["name"], "contract")

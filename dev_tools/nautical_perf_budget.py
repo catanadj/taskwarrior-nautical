@@ -54,6 +54,15 @@ _BENCH_PANEL_MODES = {
 }
 
 
+def _python_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a subprocess environment that can import the checkout package."""
+    env = dict(os.environ if base is None else base)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(ROOT), env.get("PYTHONPATH", "")) if part
+    )
+    return env
+
+
 def _budget_profile_name(*, slow_device: bool) -> str:
     """Return the stable profile label recorded in benchmark reports."""
     return "termux-slow-device" if slow_device else "desktop"
@@ -1593,7 +1602,7 @@ def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[st
             f'tz = "UTC"\npanel_mode = "{_panel_mode_config(panel_mode)}"\n',
             encoding="utf-8",
         )
-        base_env = os.environ.copy()
+        base_env = _python_subprocess_env()
         base_env.update(
             {
                 "NAUTICAL_CONFIG": str(config_path),

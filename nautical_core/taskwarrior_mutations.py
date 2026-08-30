@@ -282,6 +282,19 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             if cached_parent is not None:
                 mismatch = self._guard_mismatch(request.guard, cached_parent)
                 if mismatch:
+                    if mismatch.startswith("guard modified changed"):
+                        expected_modified = next(
+                            (
+                                timestamp.value
+                                for timestamp in request.guard.timestamps
+                                if timestamp.field.value == "modified"
+                            ),
+                            None,
+                        )
+                        if expected_modified is not None and not self._guard_mismatch(
+                            request.guard, cached_parent, modified_override=expected_modified
+                        ):
+                            return cached_parent, None
                     return None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
                 return cached_parent, None
         if self._uow.mutation_epoch != request.guard.expected_mutation_epoch:
@@ -322,6 +335,35 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 == request.payload.child_short_uuid.casefold()
                 and mismatch.startswith("guard modified changed")
             ):
+                expected_modified = next(
+                    (
+                        timestamp.value
+                        for timestamp in request.guard.timestamps
+                        if timestamp.field.value == "modified"
+                    ),
+                    None,
+                )
+                if expected_modified is not None:
+                    if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
+                        return row, None
+            if request.operation is MutationOperation.PARENT_LINK and mismatch.startswith("guard modified changed"):
+                expected_modified = next(
+                    (
+                        timestamp.value
+                        for timestamp in request.guard.timestamps
+                        if timestamp.field.value == "modified"
+                    ),
+                    None,
+                )
+                if expected_modified is not None and not self._guard_mismatch(
+                    request.guard, row, modified_override=expected_modified
+                ):
+                    return row, None
+            if request.operation is MutationOperation.CHILD_IMPORT and mismatch.startswith("guard modified changed"):
+                # Taskwarrior may advance ``modified`` after the completion
+                # hook staged the intent but before on-exit imports the child.
+                # The parent identity/status/recurrence guard remains strict;
+                # only this post-hook timestamp drift is benign.
                 expected_modified = next(
                     (
                         timestamp.value
@@ -598,7 +640,23 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
         if cached_parent is not None:
             mismatch = self._guard_mismatch(request.guard, cached_parent)
             if mismatch:
-                parent, failure = None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
+                if mismatch.startswith("guard modified changed"):
+                    expected_modified = next(
+                        (
+                            timestamp.value
+                            for timestamp in request.guard.timestamps
+                            if timestamp.field.value == "modified"
+                        ),
+                        None,
+                    )
+                    if expected_modified is not None and not self._guard_mismatch(
+                        request.guard, cached_parent, modified_override=expected_modified
+                    ):
+                        parent, failure = cached_parent, None
+                    else:
+                        parent, failure = None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
+                else:
+                    parent, failure = None, self._outcome(request, MutationOutcomeKind.CONFLICT, reason=mismatch)
             else:
                 parent, failure = cached_parent, None
         else:
@@ -615,7 +673,7 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
             return self._outcome(request, MutationOutcomeKind.CONFLICT, reason="parent nextLink changed")
         failure = self._run_modify(
             request,
-            self._selectors(request.guard, extra=(f"nextLink:{current}",)),
+            self._selectors(request.guard, extra=(f"nextLink:{current}",), include_modified=False),
             (f"nextLink:{request.payload.child_short_uuid}",),
         )
         if failure is not None:

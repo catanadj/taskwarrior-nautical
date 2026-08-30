@@ -389,8 +389,11 @@ def _scenario_no_nested_hooks(env: dict[str, str], data_dir: Path) -> dict:
     command_log = _install_task_command_shim(data_dir.parent, env)
 
     description = "blackbox hook recursion"
-    future_due = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y%m%dT090000Z")
-    _task(["add", description, "cp:1d", f"due:{future_due}"], env)
+    # Complete an already-expired occurrence so every supported Taskwarrior
+    # version takes the same successor-spawn path.  This scenario tests hook
+    # recursion, not the distinction between early and expired completion.
+    expired_due = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y%m%dT090000Z")
+    _task(["add", description, "cp:1d", f"due:{expired_due}"], env)
     root = _one(env, f"description:{description}", "status:pending")
     root_uuid = str(root.get("uuid") or "").strip()
     chain_id = str(root.get("chainID") or "").strip()

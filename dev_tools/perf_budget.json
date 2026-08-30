@@ -135,6 +135,24 @@
         "export_rows": 10000,
         "task_command_calls": 96,
         "task_command_attempts": 128
+      },
+      "workflow_reconcile_candidates": {
+        "export_calls": 40,
+        "export_rows": 10000,
+        "task_command_calls": 96,
+        "task_command_attempts": 128
+      },
+      "workflow_reconcile_candidates_apply": {
+        "export_calls": 40,
+        "export_rows": 10000,
+        "task_command_calls": 96,
+        "task_command_attempts": 128
+      },
+      "workflow_reconcile_candidates_apply_scale": {
+        "export_calls": 256,
+        "export_rows": 10000,
+        "task_command_calls": 512,
+        "task_command_attempts": 512
       }
     },
     "task_call_budgets": {

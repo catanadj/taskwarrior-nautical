@@ -885,20 +885,30 @@ def _bench_build_hints(
             expression_elapsed = {f"{index}:{expr}": 0.0 for index, expr in enumerate(exprs)}
             if mode == "cold":
                 root = Path(core.ANCHOR_CACHE_DIR_OVERRIDE)
-                started = time.perf_counter()
-                for sample_index in range(max(1, rounds)):
-                    core.ANCHOR_CACHE_DIR_OVERRIDE = str(root / f"cold-{sample_index}")
+                setup_started = time.perf_counter()
+                sample_dirs = [root / f"cold-{sample_index}" for sample_index in range(max(1, rounds))]
+                for sample_dir in sample_dirs:
+                    sample_dir.mkdir(parents=True, exist_ok=True)
+                setup_elapsed = time.perf_counter() - setup_started
+                measured_total = 0.0
+                for sample_dir in sample_dirs:
+                    core.ANCHOR_CACHE_DIR_OVERRIDE = str(sample_dir)
                     core._CACHE_DIR = None
                     _clear_caches()
+                    operation_started = time.perf_counter()
                     for index, expr in enumerate(exprs):
                         expression_started = time.perf_counter()
                         core.build_and_cache_hints(expr, "skip", include_per_year=include_per_year)
                         expression_elapsed[f"{index}:{expr}"] += time.perf_counter() - expression_started
+                    measured_total += time.perf_counter() - operation_started
                 metric_name = f"build_hints_{'next_only_' if not include_per_year else ''}cold"
-                RESOURCE_DETAILS[metric_name] = {"per_expression_seconds": expression_elapsed}
+                RESOURCE_DETAILS[metric_name] = {
+                    "per_expression_seconds": expression_elapsed,
+                    "setup_seconds": setup_elapsed,
+                }
                 if counts["hits"] or not counts["misses"]:
                     raise RuntimeError(f"cold hint benchmark observed unexpected cache state: {counts}")
-                return time.perf_counter() - started
+                return measured_total
             if mode != "warm":
                 raise ValueError(f"unknown hint benchmark mode: {mode}")
             core.cache_load = saved_load

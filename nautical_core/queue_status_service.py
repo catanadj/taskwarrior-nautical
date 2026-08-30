@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import os
 from typing import Any
 
 from .lifecycle_outbox import OUTBOX_ACK_RETENTION_SECONDS, OUTBOX_SCHEMA_VERSION, LifecycleOutboxRepository, lifecycle_outbox_path
 from .operator_context import OperatorBudgetLedger
+from .taskwarrior_client import TaskwarriorClient
+from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
 
 
 class QueueStatusService:
@@ -100,6 +104,7 @@ class QueueStatusService:
         *,
         limit: int = 100,
         intent_id: str | None = None,
+        task_binary: str | None = None,
     ) -> dict[str, Any]:
         """Return bounded, read-only evidence for manual-review intents."""
         resolved = Path(taskdata).expanduser().resolve()
@@ -119,6 +124,42 @@ class QueueStatusService:
             record for record in data.get("records", [])
             if record.get("state") in {"manual_review", "quarantined", "poison"}
         ]
+        if intent_id and records:
+            record = records[0]
+            guard = ((record.get("plan") or {}).get("parent_guard") or {})
+            parent_uuid = str(((record.get("plan") or {}).get("parent_uuid") or "")).strip()
+            if parent_uuid:
+                environment = dict(os.environ)
+                environment["TASKDATA"] = str(resolved)
+                client = TaskwarriorClient(
+                    (task_binary or os.environ.get("NAUTICAL_TASK_BIN") or "task",),
+                    env=environment,
+                )
+                command = client.execute(
+                    (f"uuid:{parent_uuid}", "export"),
+                    purpose="queue review parent guard",
+                    timeout=5.0,
+                    attempts=1,
+                )
+                if command.ok:
+                    try:
+                        rows = DEFAULT_TASK_CODEC.decode_export(command.stdout, source_query="queue review parent")
+                    except (TaskCodecError, ValueError) as exc:
+                        record["guard_comparison"] = {"status": "unavailable", "reason": f"parent export could not be decoded: {exc}"}
+                    else:
+                        current = rows[0].to_mapping() if rows else None
+                        if current is None:
+                            record["guard_comparison"] = {"status": "unavailable", "reason": "parent task was not found"}
+                        else:
+                            comparisons = []
+                            for field in ("status", "chain", "chainID", "link", "modified", "end"):
+                                expected = guard.get(field)
+                                actual = current.get(field)
+                                if str(expected if expected is not None else "") != str(actual if actual is not None else ""):
+                                    comparisons.append({"field": field, "expected": expected, "actual": actual})
+                            record["guard_comparison"] = {"status": "changed" if comparisons else "matches", "differences": comparisons}
+                else:
+                    record["guard_comparison"] = {"status": "unavailable", "reason": command.stderr.strip() or command.stdout.strip() or "parent export failed"}
         if intent_id and not records and all_records:
             state = str(all_records[0].get("state") or "unknown")
             return {

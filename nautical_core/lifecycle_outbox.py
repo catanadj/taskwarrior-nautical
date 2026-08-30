@@ -651,135 +651,46 @@ class LifecycleOutboxRepository:
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:
             with self._transaction(conn):
-                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
-                if row is not None:
-                    current = self._from_row(row)
-                    same_plan = current.plan.compatibility_key() == plan.compatibility_key()
-                    if current.state is OutboxProcessingState.ACKNOWLEDGED and same_plan:
-                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
-                    if (
-                        same_plan
-                        and current.state in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}
-                    ):
-                        conn.execute(
-                            "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
-                            "configuration_fingerprint=?, schedule_fingerprint=?, failure_json='', updated_at=? "
-                            "WHERE intent_id=?",
-                            (
-                                encoded_plan,
-                                plan_fingerprint,
-                                guard_json,
-                                config,
-                                schedule,
-                                now,
-                                intent_id,
-                            ),
-                        )
-                        refreshed = conn.execute(
-                            "SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)
-                        ).fetchone()
-                        if refreshed is None:
-                            return OutboxResult(OutboxResultKind.RETRYABLE, reason="refreshed lifecycle intent disappeared")
-                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed))
-                    if (
-                        same_plan
-                        and current.state is OutboxProcessingState.CLAIMED
-                        and current.lease_expires_at <= now
-                    ):
-                        conn.execute(
-                            "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
-                            "configuration_fingerprint=?, schedule_fingerprint=?, processing_state=?, lease_owner='', "
-                            "lease_expires_at=0, failure_json='', updated_at=? WHERE intent_id=?",
-                            (
-                                encoded_plan,
-                                plan_fingerprint,
-                                guard_json,
-                                config,
-                                schedule,
-                                OutboxProcessingState.RETRY.value,
-                                now,
-                                intent_id,
-                            ),
-                        )
-                        refreshed = conn.execute(
-                            "SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)
-                        ).fetchone()
-                        if refreshed is None:
-                            return OutboxResult(OutboxResultKind.RETRYABLE, reason="expired lifecycle intent disappeared")
-                        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed))
-                    if (
-                        same_plan
-                        and current.state is OutboxProcessingState.MANUAL_REVIEW
-                        and current.failure is not None
-                        and current.failure.code in {"mutation_conflict", "mutation_rejected"}
-                    ):
-                        conn.execute(
-                            "UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, "
-                            "configuration_fingerprint=?, schedule_fingerprint=?, lifecycle_stage=?, processing_state=?, "
-                            "failure_json='', updated_at=? WHERE intent_id=?",
-                            (
-                                encoded_plan,
-                                plan_fingerprint,
-                                guard_json,
-                                config,
-                                schedule,
-                                ExecutionStage.PLANNED.value,
-                                OutboxProcessingState.RETRY.value,
-                                now,
-                                intent_id,
-                            ),
-                        )
-                        refreshed = conn.execute(
-                            "SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)
-                        ).fetchone()
-                        if refreshed is None:
-                            return OutboxResult(OutboxResultKind.RETRYABLE, reason="reopened lifecycle intent disappeared")
-                        return OutboxResult(OutboxResultKind.APPLIED, record=self._from_row(refreshed))
-                    compatible = (
-                        same_plan
-                        and current.configuration_fingerprint == config
-                        and current.schedule_fingerprint == schedule
-                    )
-                    if not compatible:
-                        return OutboxResult(
-                            OutboxResultKind.CONFLICT,
-                            record=current,
-                            reason=(
-                                "deterministic lifecycle intent conflicts with an existing queued transition; "
-                                "run `nautical reconcile --apply` to drain it, then inspect the chain's "
-                                "nextLink and child before retrying; "
-                                f"state={current.state.value}, plan_equal={same_plan}, "
-                                f"configuration={current.configuration_fingerprint!r}->{config!r}, "
-                                f"schedule={current.schedule_fingerprint!r}->{schedule!r}"
-                            ),
-                        )
-                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
-                conn.execute(
-                    """
-                    INSERT INTO lifecycle_outbox (
-                        intent_id, plan_json, plan_fingerprint, parent_guard_json,
-                        configuration_fingerprint, schedule_fingerprint,
-                        lifecycle_stage, processing_state, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        intent_id, encoded_plan, plan_fingerprint, guard_json, config, schedule,
-                        ExecutionStage.PLANNED.value, OutboxProcessingState.READY.value, now, now,
-                    ),
-                )
-                record = LifecycleOutboxRecord(
-                    intent_id=intent_id,
-                    plan=plan.with_stage(ExecutionStage.PLANNED),
-                    configuration_fingerprint=config,
-                    schedule_fingerprint=schedule,
-                    state=OutboxProcessingState.READY,
-                    stage=ExecutionStage.PLANNED,
-                    created_at=now,
-                    updated_at=now,
-                )
-                return OutboxResult(OutboxResultKind.APPLIED, record=record)
+                return self._enqueue_row(conn, plan, config, schedule, encoded_plan, plan_fingerprint, guard_json, now)
 
         return self._with_connection(operation)
+
+    def _enqueue_row(
+        self, conn: sqlite3.Connection, plan: LifecyclePlan, config: str, schedule: str,
+        encoded_plan: str, plan_fingerprint: str, guard_json: str, now: float,
+    ) -> OutboxResult:
+        intent_id = plan.identity.idempotency_key
+        row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO lifecycle_outbox (intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, schedule_fingerprint, lifecycle_stage, processing_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (intent_id, encoded_plan, plan_fingerprint, guard_json, config, schedule, ExecutionStage.PLANNED.value, OutboxProcessingState.READY.value, now, now),
+            )
+            return OutboxResult(OutboxResultKind.APPLIED, record=LifecycleOutboxRecord(
+                intent_id=intent_id, plan=plan.with_stage(ExecutionStage.PLANNED), configuration_fingerprint=config,
+                schedule_fingerprint=schedule, state=OutboxProcessingState.READY, stage=ExecutionStage.PLANNED,
+                created_at=now, updated_at=now,
+            ))
+        current = self._from_row(row)
+        same_plan = current.plan.compatibility_key() == plan.compatibility_key()
+        if current.state is OutboxProcessingState.ACKNOWLEDGED and same_plan:
+            return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
+        if same_plan and current.state in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}:
+            conn.execute("UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, configuration_fingerprint=?, schedule_fingerprint=?, failure_json='', updated_at=? WHERE intent_id=?", (encoded_plan, plan_fingerprint, guard_json, config, schedule, now, intent_id))
+            refreshed = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+            return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed)) if refreshed is not None else OutboxResult(OutboxResultKind.RETRYABLE, reason="refreshed lifecycle intent disappeared")
+        if same_plan and current.state is OutboxProcessingState.CLAIMED and current.lease_expires_at <= now:
+            conn.execute("UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, configuration_fingerprint=?, schedule_fingerprint=?, processing_state=?, lease_owner='', lease_expires_at=0, failure_json='', updated_at=? WHERE intent_id=?", (encoded_plan, plan_fingerprint, guard_json, config, schedule, OutboxProcessingState.RETRY.value, now, intent_id))
+            refreshed = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+            return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed)) if refreshed is not None else OutboxResult(OutboxResultKind.RETRYABLE, reason="expired lifecycle intent disappeared")
+        if same_plan and current.state is OutboxProcessingState.MANUAL_REVIEW and current.failure is not None and current.failure.code in {"mutation_conflict", "mutation_rejected"}:
+            conn.execute("UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, configuration_fingerprint=?, schedule_fingerprint=?, lifecycle_stage=?, processing_state=?, failure_json='', updated_at=? WHERE intent_id=?", (encoded_plan, plan_fingerprint, guard_json, config, schedule, ExecutionStage.PLANNED.value, OutboxProcessingState.RETRY.value, now, intent_id))
+            refreshed = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+            return OutboxResult(OutboxResultKind.APPLIED, record=self._from_row(refreshed)) if refreshed is not None else OutboxResult(OutboxResultKind.RETRYABLE, reason="reopened lifecycle intent disappeared")
+        compatible = same_plan and current.configuration_fingerprint == config and current.schedule_fingerprint == schedule
+        if not compatible:
+            return OutboxResult(OutboxResultKind.CONFLICT, record=current, reason=("deterministic lifecycle intent conflicts with an existing queued transition; run `nautical reconcile --apply` to drain it, then inspect the chain's nextLink and child before retrying; " f"state={current.state.value}, plan_equal={same_plan}, configuration={current.configuration_fingerprint!r}->{config!r}, schedule={current.schedule_fingerprint!r}->{schedule!r}"))
+        return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
 
     def enqueue_integrity(self, envelope: Any) -> OutboxResult:
         """Persist an integrity envelope in the shared outbox table.
@@ -863,30 +774,9 @@ class LifecycleOutboxRepository:
                 for plan in normalized:
                     intent_id = plan.identity.idempotency_key
                     _, encoded_plan, fingerprint, guard_json = prepared_plans[intent_id]
-                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
-                    if row is not None:
-                        try:
-                            current = self._from_row(row)
-                        except LifecycleOutboxError as exc:
-                            self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                            results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason=f"outbox intent quarantined: {exc}")
-                            continue
-                        same = current.plan.compatibility_key() == plan.compatibility_key()
-                        compatible = same and current.configuration_fingerprint == config and current.schedule_fingerprint == schedule
-                        if not compatible:
-                            results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=current, reason="deterministic lifecycle intent conflicts with an existing queued transition")
-                        else:
-                            results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
-                        continue
-                    conn.execute(
-                        "INSERT INTO lifecycle_outbox (intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, schedule_fingerprint, lifecycle_stage, processing_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (intent_id, encoded_plan, fingerprint, guard_json, config, schedule, ExecutionStage.PLANNED.value, OutboxProcessingState.READY.value, now, now),
+                    results[intent_id] = self._enqueue_row(
+                        conn, plan, config, schedule, encoded_plan, fingerprint, guard_json, now
                     )
-                    results[intent_id] = OutboxResult(OutboxResultKind.APPLIED, record=LifecycleOutboxRecord(
-                        intent_id=intent_id, plan=plan.with_stage(ExecutionStage.PLANNED), configuration_fingerprint=config,
-                        schedule_fingerprint=schedule, state=OutboxProcessingState.READY, stage=ExecutionStage.PLANNED,
-                        created_at=now, updated_at=now,
-                    ))
             return results
 
         return self._with_bulk_connection(operation)

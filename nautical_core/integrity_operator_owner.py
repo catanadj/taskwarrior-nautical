@@ -30,7 +30,11 @@ def build_integrity_mutation_request(operation: object, *, unit_of_work: object)
     modified = str(field_value("modified") or "").strip()
     if not modified:
         raise RuntimeError("integrity target has no modified timestamp")
-    link = int(field_value("link") or 0)
+    raw_link = field_value("link")
+    try:
+        link = int(float(str(raw_link or 0)))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("integrity target has an invalid link") from exc
     if link < 0:
         raise RuntimeError("integrity target has an invalid link")
     updates = dict(getattr(operation, "payload", {}) or {})

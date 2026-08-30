@@ -23,7 +23,7 @@ def _json_object(value: Mapping[str, Any], name: str) -> Mapping[str, Any]:
         json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise OperatorContractError(f"plan {name} must contain JSON-native values") from exc
-    return _freeze_json_value(value)  # type: ignore[return-value]
+    return _freeze_json_value(value)
 
 
 @dataclass(frozen=True, slots=True)

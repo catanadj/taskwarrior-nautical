@@ -30,6 +30,17 @@ link range, and failure reason. Resolve the underlying task or configuration,
 then rerun the owning lifecycle operation; review records remain immutable
 audit evidence.
 
+When review proves that a successor was already created, it may be explicitly
+closed. Resolution is limited to high-confidence assessments:
+
+```bash
+nautical queue-review --intent li1-... --resolve-applied
+nautical queue-review --all --resolve-applied
+```
+
+Ambiguous or unavailable reviews are left untouched. `--all` performs bounded
+per-intent verification before changing anything.
+
 ## States
 
 | State | Meaning |

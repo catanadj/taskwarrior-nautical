@@ -236,5 +236,12 @@ class QueueStatusService:
             "failure": None,
         }
 
+    def resolve_review(self, taskdata: Path, intent_id: str, reason: str) -> dict[str, Any]:
+        result = LifecycleOutboxRepository(Path(taskdata).expanduser().resolve()).resolve_manual_review(
+            intent_id=intent_id, reason=reason
+        )
+        status = "resolved" if result.ok else "already_applied" if result.kind.value == "already_applied" else "error"
+        return {"status": status, "reason": result.reason}
+
 
 __all__ = ["QueueStatusService"]

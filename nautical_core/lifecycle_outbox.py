@@ -1321,6 +1321,37 @@ class LifecycleOutboxRepository:
 
         return self._claimed_update(intent_id=intent_id, owner=owner, operation=operation)
 
+    def resolve_manual_review(self, *, intent_id: str, reason: str) -> OutboxResult:
+        """Explicitly close a review only after an operator proved convergence."""
+        now = self._clock()
+        try:
+            conn = self._connect()
+            self._initialize(conn)
+            with self._transaction(conn):
+                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                if row is None:
+                    return OutboxResult(OutboxResultKind.CONFLICT, reason="outbox intent is absent")
+                record = self._from_row(row)
+                if record.state is OutboxProcessingState.ACKNOWLEDGED:
+                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+                if record.state is not OutboxProcessingState.MANUAL_REVIEW:
+                    return OutboxResult(OutboxResultKind.CONFLICT, record=record, reason="intent is not in manual review")
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET lifecycle_stage=?, processing_state=?, lease_owner='', lease_expires_at=0, acknowledged_at=?, failure_json=?, updated_at=? WHERE intent_id=? AND processing_state=?",
+                    (ExecutionStage.FINALIZED.value, OutboxProcessingState.ACKNOWLEDGED.value, now,
+                     OutboxFailure("operator_resolved", reason).to_json(), now, intent_id,
+                     OutboxProcessingState.MANUAL_REVIEW.value),
+                )
+            return OutboxResult(OutboxResultKind.APPLIED)
+        except Exception as exc:
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"manual review resolution failed: {exc}")
+        finally:
+            try:
+                self._secure_state_files()
+                conn.close()
+            except (UnboundLocalError, AttributeError):
+                pass
+
     def acknowledge_many(
         self,
         *,

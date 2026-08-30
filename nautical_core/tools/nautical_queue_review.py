@@ -33,13 +33,16 @@ def main() -> int:
         print(f"review: {payload['status']} taskdata={payload['taskdata']}")
         for intent in payload["intents"]:
             plan = intent.get("plan") or {}
+            guard = plan.get("parent_guard") or {}
             failure = intent.get("failure") or {}
             print(
                 f"intent: id={intent.get('intent_id')} state={intent.get('state')} "
                 f"event={plan.get('event', '')} action={plan.get('action', '')} "
                 f"chain={plan.get('chainID', '')} parent={plan.get('parent_uuid', '')} "
                 f"links={plan.get('source_link', '')}->{plan.get('target_link', '')} "
-                f"reason={failure.get('message') or intent.get('reason', '')}"
+                f"reason={failure.get('message') or intent.get('reason', '')} "
+                f"expected_modified={guard.get('modified', '-') or '-'} "
+                f"expected_end={guard.get('end', '-') or '-'}"
             )
         if payload.get("failure"):
             print(f"failure: {payload['failure']['message']}")

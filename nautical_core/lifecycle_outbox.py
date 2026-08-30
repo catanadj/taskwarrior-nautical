@@ -1533,6 +1533,7 @@ class LifecycleOutboxRepository:
                                 "parent_uuid": record.plan.identity.parent_uuid,
                                 "source_link": record.plan.identity.source_link,
                                 "target_link": record.plan.identity.target_link,
+                                "parent_guard": record.plan.parent_guard.to_dict(),
                             },
                         }
                     )

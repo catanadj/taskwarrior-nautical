@@ -16,7 +16,7 @@ from tempfile import TemporaryDirectory
 from nautical_core.lifecycle_application import LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository
 from nautical_core.operator_context import OperatorInvocationBudget
 from nautical_core.operator_models import OperatorLimits
 from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
@@ -81,6 +81,37 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
             batch, records = outbox.claim_batch(owner="other-owner", lease_seconds=30, limit=5)
             self.assertEqual(batch.kind.value, "applied")
             self.assertEqual([record.intent_id for record in records], [plans[1].identity.idempotency_key])
+
+    def test_execute_wave_claims_only_its_staged_intents(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plans = tuple(
+                self._bulk_plan(
+                    f"wave-{idx}",
+                    f"00000000-0000-4000-8000-0000000004{idx:02d}",
+                    f"00000000-0000-4000-8000-0000000005{idx:02d}",
+                    1,
+                )
+                for idx in range(1, 3)
+            )
+
+            class WaveService(LifecycleApplicationService):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.claimed_records: tuple[LifecycleOutboxRecord, ...] = ()
+
+                def drain_claimed(self, records, **kwargs):
+                    self.claimed_records = tuple(records)
+                    return DrainResult(claim=OutboxResult(OutboxResultKind.APPLIED), outcomes=())
+
+            from nautical_core.lifecycle_application import DrainResult
+            from nautical_core.lifecycle_outbox import OutboxResult, OutboxResultKind
+
+            service = WaveService(outbox=outbox, owner="wave-owner")
+            result = service.execute_wave(plans, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(result.claim.kind.value, "applied")
+            claimed_ids: set[str] = {record.intent_id for record in service.claimed_records}
+            self.assertEqual(claimed_ids, {plan.identity.idempotency_key for plan in plans})
 
     def test_outbox_failures_are_retryable(self) -> None:
         test_lifecycle_application_outbox_faults_are_retryable()

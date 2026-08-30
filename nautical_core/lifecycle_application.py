@@ -572,31 +572,74 @@ class LifecycleApplicationService:
                 pass
         staged_records: list[LifecycleOutboxRecord] = []
         staged_outcomes: list[LifecycleApplicationOutcome] = []
+        spawn_plans: list[LifecyclePlan] = []
         for plan in validated:
-            staged = self.stage(
-                plan,
+            if plan.action is LifecycleAction.NOOP:
+                staged_outcomes.append(LifecycleApplicationOutcome(LifecycleApplicationOutcomeKind.NOOP, plan.identity))
+            elif plan.action is not LifecycleAction.SPAWN_CHILD:
+                staged_outcomes.append(LifecycleApplicationOutcome(
+                    LifecycleApplicationOutcomeKind.MANUAL_REVIEW, plan.identity,
+                    reason=f"{plan.action.value} does not use durable outbox staging; call apply_immediate",
+                ))
+            else:
+                reason = _validate_spawn_plan(plan)
+                if reason:
+                    staged_outcomes.append(LifecycleApplicationOutcome(LifecycleApplicationOutcomeKind.MANUAL_REVIEW, plan.identity, reason=reason))
+                else:
+                    spawn_plans.append(plan)
+        if any(not outcome.ok for outcome in staged_outcomes):
+            return DrainResult(
+                claim=OutboxResult(OutboxResultKind.REJECTED, reason="wave staging failed"),
+                outcomes=tuple(staged_outcomes),
+            )
+        enqueue_many = getattr(self._outbox, "enqueue_many", None)
+        if callable(enqueue_many) and spawn_plans:
+            overall, persisted = enqueue_many(
+                spawn_plans,
                 configuration_fingerprint=configuration_fingerprint,
                 schedule_fingerprint=schedule_fingerprint,
             )
-            staged_outcomes.append(staged)
-            if staged.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
-                continue
-            if not staged.ok or not staged.intent_id:
-                return DrainResult(
-                    claim=OutboxResult(OutboxResultKind.REJECTED, reason=staged.reason or "wave staging failed"),
-                    outcomes=tuple(staged_outcomes),
+            if not overall.ok:
+                return DrainResult(claim=overall, outcomes=tuple(staged_outcomes))
+            for plan in spawn_plans:
+                result = persisted.get(plan.identity.idempotency_key)
+                if result is None:
+                    return DrainResult(claim=OutboxResult(OutboxResultKind.REJECTED, reason="bulk staging omitted an intent"), outcomes=tuple(staged_outcomes))
+                outcome = _from_outbox_result(
+                    result, plan.identity, requested=plan,
+                    requested_config=configuration_fingerprint, requested_schedule=schedule_fingerprint,
                 )
-            claimed = self._outbox.claim_intent(
-                owner=self._owner,
-                lease_seconds=self._lease_seconds,
-                intent_id=staged.intent_id,
-            )
-            if not claimed.ok or claimed.record is None:
-                return DrainResult(
-                    claim=claimed,
-                    outcomes=tuple(staged_outcomes),
-                )
-            staged_records.append(claimed.record)
+                staged_outcomes.append(outcome)
+                if outcome.kind is not LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
+                    if not outcome.ok or not outcome.intent_id:
+                        return DrainResult(claim=result, outcomes=tuple(staged_outcomes))
+        else:
+            for plan in spawn_plans:
+                staged = self.stage(plan, configuration_fingerprint=configuration_fingerprint, schedule_fingerprint=schedule_fingerprint)
+                staged_outcomes.append(staged)
+                if not staged.ok or staged.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
+                    if not staged.ok:
+                        return DrainResult(claim=OutboxResult(OutboxResultKind.REJECTED, reason=staged.reason or "wave staging failed"), outcomes=tuple(staged_outcomes))
+                    continue
+        claim_ids = [outcome.intent_id for outcome in staged_outcomes if outcome.intent_id and outcome.kind is not LifecycleApplicationOutcomeKind.ALREADY_APPLIED]
+        claim_many = getattr(self._outbox, "claim_intents", None)
+        if callable(claim_many) and claim_ids:
+            claim, claimed_results = claim_many(intent_ids=claim_ids, owner=self._owner, lease_seconds=self._lease_seconds)
+            if not claim.ok:
+                return DrainResult(claim=claim, outcomes=tuple(staged_outcomes))
+            for intent_id in claim_ids:
+                result = claimed_results.get(intent_id)
+                if result is None or not result.ok or result.record is None:
+                    return DrainResult(claim=result or OutboxResult(OutboxResultKind.REJECTED, reason="bulk claim omitted an intent"), outcomes=tuple(staged_outcomes))
+                staged_records.append(result.record)
+        else:
+            for outcome in staged_outcomes:
+                if not outcome.intent_id or outcome.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
+                    continue
+                claimed = self._outbox.claim_intent(owner=self._owner, lease_seconds=self._lease_seconds, intent_id=outcome.intent_id)
+                if not claimed.ok or claimed.record is None:
+                    return DrainResult(claim=claimed, outcomes=tuple(staged_outcomes))
+                staged_records.append(claimed.record)
         already_applied = tuple(
             outcome
             for outcome in staged_outcomes

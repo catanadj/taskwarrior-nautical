@@ -1499,7 +1499,11 @@ class LifecycleOutboxRepository:
                 )
             else:
                 rows = conn.execute(
-                    "SELECT * FROM lifecycle_outbox ORDER BY updated_at ASC, intent_id ASC LIMIT ?",
+                    "SELECT * FROM lifecycle_outbox "
+                    "ORDER BY CASE processing_state "
+                    "WHEN 'manual_review' THEN 0 WHEN 'quarantined' THEN 1 "
+                    "WHEN 'retry' THEN 2 WHEN 'claimed' THEN 3 WHEN 'ready' THEN 4 "
+                    "ELSE 5 END, updated_at ASC, intent_id ASC LIMIT ?",
                     (max(0, int(limit)),),
                 )
             for row in rows:

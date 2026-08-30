@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections import OrderedDict
 from bisect import bisect_right
 from datetime import date, datetime, timedelta
 from datetime import timezone
@@ -52,6 +53,8 @@ _NEXT_PREV_WD_RE = re.compile(r"^(next|prev)-(mon|tue|wed|thu|fri|sat|sun)$")
 _DAY_OFFSET_RE = re.compile(r"^([+-]\d+)d$")
 _HHMM_RE = re.compile(r"^(\d{2}):(\d{2})$")
 _HOUR_PAD_RE = re.compile(r"^(\d):(\d{2})(?::\d{2})?$")
+_OCCURRENCE_CACHE_MAX_ENTRIES = 32
+_OCCURRENCE_RECORD_CACHE: OrderedDict[tuple[object, ...], tuple[tuple[date, tuple[int, int], str], ...]] = OrderedDict()
 
 
 def _default_mods() -> dict:
@@ -387,6 +390,26 @@ def _load_anchor_file_occurrence_records(
 ) -> list[tuple[date, tuple[int, int], str]]:
     business_calendar = effective_business_calendar(business_calendar)
     resolution = _resolved_anchor_sources(name, anchor_file_dir)
+    cache_key_parts: list[object] = [str(name or ""), str(anchor_file_dir or ""), fallback_hhmm]
+    cacheable = True
+    for source in resolution.sources:
+        _layers, source_time = _parse_source_mod_layers(source.display_name, source.modifier_layers)
+        if isinstance(source_time, dict) and source_time.get("time_random"):
+            cacheable = False
+        try:
+            stat = os.stat(source.path)
+            metadata = (int(stat.st_dev), int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns), int(stat.st_ctime_ns))
+        except OSError:
+            metadata = (source.path,)
+        cache_key_parts.append((source.path, metadata, source.modifier_layers))
+    calendar_fingerprint = getattr(business_calendar, "fingerprint", None)
+    cache_key_parts.append(calendar_fingerprint)
+    cache_key = tuple(cache_key_parts)
+    if cacheable:
+        cached = _OCCURRENCE_RECORD_CACHE.get(cache_key)
+        if cached is not None:
+            _OCCURRENCE_RECORD_CACHE.move_to_end(cache_key)
+            return list(cached)
     out: list[tuple[date, tuple[int, int], str]] = []
     seen: dict[tuple[date, tuple[int, int]], int] = {}
     times: list[tuple[Any, ...]]
@@ -426,6 +449,11 @@ def _load_anchor_file_occurrence_records(
                     )
                 out.append((occurrence[0], occurrence[1], description))
     out.sort()
+    if cacheable:
+        _OCCURRENCE_RECORD_CACHE[cache_key] = tuple(out)
+        _OCCURRENCE_RECORD_CACHE.move_to_end(cache_key)
+        while len(_OCCURRENCE_RECORD_CACHE) > _OCCURRENCE_CACHE_MAX_ENTRIES:
+            _OCCURRENCE_RECORD_CACHE.popitem(last=False)
     return out
 
 

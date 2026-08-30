@@ -346,19 +346,6 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
                 if expected_modified is not None:
                     if not self._guard_mismatch(request.guard, row, modified_override=expected_modified):
                         return row, None
-            if request.operation is MutationOperation.PARENT_LINK and mismatch.startswith("guard modified changed"):
-                expected_modified = next(
-                    (
-                        timestamp.value
-                        for timestamp in request.guard.timestamps
-                        if timestamp.field.value == "modified"
-                    ),
-                    None,
-                )
-                if expected_modified is not None and not self._guard_mismatch(
-                    request.guard, row, modified_override=expected_modified
-                ):
-                    return row, None
             if request.operation is MutationOperation.CHILD_IMPORT and mismatch.startswith("guard modified changed"):
                 # Taskwarrior may advance ``modified`` after the completion
                 # hook staged the intent but before on-exit imports the child.

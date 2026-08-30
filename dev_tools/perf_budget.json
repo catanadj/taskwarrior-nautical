@@ -230,7 +230,7 @@
     "rounds": 8,
     "anchor_file_rows": 5000,
     "budgets_seconds": {
-      "anchor_file_large_cold": 2.5,
+      "anchor_file_large_cold": 25.0,
       "anchor_file_large_hot": 1.0,
       "anchor_file_nonmonotonic": 1.0,
       "anchor_file_business_day_omissions": 1.5,

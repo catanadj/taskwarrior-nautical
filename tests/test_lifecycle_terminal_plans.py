@@ -124,6 +124,26 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         self.assertEqual(evidence.disposition, DeletionDisposition.AMBIGUOUS)
         self.assertIn("reliable native-until", evidence.reason)
 
+    def test_deleted_without_until_builds_chain_disable_terminal_plan(self) -> None:
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+
+        task = snapshot().observation.to_mapping()
+        task.update({"status": "deleted", "end": "20260825T200000Z"})
+        deleted = DEFAULT_TASK_CODEC.decode_row(task, source_query="deleted-without-until")
+        generation.core = object()
+        result = plan_recovery_decision(
+            deleted,
+            existing_children=(),
+            hook=object(),
+            generation=type("Generation", (), {
+                "safe_parse_datetime": staticmethod(lambda value: (None, "unused")),
+            })(),
+        )
+        self.assertIsInstance(result, RecoveryPlanResult)
+        assert isinstance(result, RecoveryPlanResult)
+        self.assertEqual(result.plan.action.value, "disable_chain")
+        self.assertEqual(result.plan.identity.event, LifecycleEvent.MANUAL_DELETE)
+
 
 if __name__ == "__main__":
     unittest.main()

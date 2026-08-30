@@ -49,7 +49,7 @@ class RecoveryPlanResult:
         if not isinstance(self.applied, bool):
             raise TypeError("recovery plan result applied must be boolean")
         terminal_kind = None if self.terminal_kind in (None, "") else str(self.terminal_kind).strip()
-        if terminal_kind and terminal_kind not in {"date_limit", "search_limit", "chain_max", "chain_until"}:
+        if terminal_kind and terminal_kind not in {"date_limit", "search_limit", "chain_max", "chain_until", "manual_delete"}:
             raise ValueError("invalid recovery terminal kind")
         object.__setattr__(self, "reason", reason)
         object.__setattr__(self, "child_short", child_short)

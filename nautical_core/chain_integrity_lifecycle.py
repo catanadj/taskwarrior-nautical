@@ -77,6 +77,7 @@ def _terminal_recovery_result(
     source_link: int,
     reason: str,
     terminal_kind: str,
+    event: LifecycleEvent | None = None,
 ) -> RecoveryPlanResult | RecoveryRefusal:
     """Build a typed finalization plan for a terminal recovery decision."""
     values = parent.to_mapping()
@@ -91,17 +92,25 @@ def _terminal_recovery_result(
             recurrence_fingerprint=recurrence_fingerprint(values),
             modified=str(values.get("modified") or ""),
         )
+        terminal_event = event or (
+            LifecycleEvent.MANUAL_DELETE
+            if str(values.get("status") or "").strip() == "deleted" and terminal_kind == "manual_delete"
+            else LifecycleEvent.EXPIRE
+            if str(values.get("status") or "").strip() == "deleted"
+            else LifecycleEvent.COMPLETE
+        )
         identity = LifecycleIdentity(
             chain_id=chain_id,
             parent_uuid=parent_uuid,
             source_link=source_link,
             target_link=None,
-            event=LifecycleEvent.EXPIRE if str(values.get("status") or "").strip() == "deleted" else LifecycleEvent.COMPLETE,
+            event=terminal_event,
         )
         plan = LifecyclePlan(
             identity=identity,
-            action=LifecycleAction.FINALIZE_CHAIN,
+            action=LifecycleAction.DISABLE_CHAIN if terminal_event is LifecycleEvent.MANUAL_DELETE else LifecycleAction.FINALIZE_CHAIN,
             parent_guard=guard,
+            parent_patch=(("chain", "off"),) if terminal_event is LifecycleEvent.MANUAL_DELETE else (),
             terminal_kind=terminal_kind,
         )
     except Exception as exc:
@@ -509,7 +518,13 @@ def _plan_recovery_decision_unscoped(
             safe_parse_datetime=generation.safe_parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
-            return _recovery_refusal(decision_parent, RecoveryStatus.MANUAL_REVIEW, evidence.reason)
+            return _terminal_recovery_result(
+                decision_parent,
+                source_link=link,
+                reason=evidence.reason or "manual deletion ends the chain",
+                terminal_kind="manual_delete",
+                event=LifecycleEvent.MANUAL_DELETE,
+            )
         if evidence.disposition is not DeletionDisposition.EXPIRATION:
             return _recovery_refusal(
                 decision_parent,

@@ -3269,7 +3269,7 @@ def _bench_expensive_workflows(
             text=True,
             capture_output=True,
             env=long_env,
-            timeout=60.0,
+            timeout=300.0 if slow_device else 60.0,
         )
         if long_import.returncode != 0:
             raise RuntimeError(
@@ -3280,7 +3280,13 @@ def _bench_expensive_workflows(
         long_reports: list[dict] = []
         for _ in range(repeats):
             started = time.perf_counter()
-            proc = subprocess.run(reconcile_cmd, text=True, capture_output=True, env=long_env, timeout=60.0)
+            proc = subprocess.run(
+                reconcile_cmd,
+                text=True,
+                capture_output=True,
+                env=long_env,
+                timeout=300.0 if slow_device else 60.0,
+            )
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"long reconcile workflow failed: {(proc.stderr or proc.stdout or '').strip()}"

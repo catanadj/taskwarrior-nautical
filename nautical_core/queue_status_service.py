@@ -114,10 +114,21 @@ class QueueStatusService:
                 "intents": [],
                 "failure": {"code": "review_unavailable", "message": result.reason or "outbox read failed"},
             }
+        all_records = list(data.get("records", []))
         records = [
             record for record in data.get("records", [])
             if record.get("state") in {"manual_review", "quarantined", "poison"}
         ]
+        if intent_id and not records and all_records:
+            state = str(all_records[0].get("state") or "unknown")
+            return {
+                "schema": "nautical.lifecycle_outbox_review",
+                "version": 1,
+                "status": "not_reviewable",
+                "taskdata": str(resolved),
+                "intents": all_records,
+                "failure": {"code": "intent_not_reviewable", "message": f"Intent is in state '{state}', not manual review"},
+            }
         if intent_id and not records:
             return {
                 "schema": "nautical.lifecycle_outbox_review",

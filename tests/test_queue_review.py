@@ -31,6 +31,16 @@ class QueueReviewTests(unittest.TestCase):
             self.assertEqual(payload["status"], "not_found")
             self.assertEqual(payload["failure"]["code"], "intent_not_found")
 
+    def test_review_exact_non_reviewable_intent_is_distinguished(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                queue_status_service.LifecycleOutboxRepository, "status",
+                return_value=(type("Result", (), {"ok": True, "reason": ""})(), {"records": [{"intent_id": "done", "state": "acknowledged"}]}),
+            ):
+                payload = QueueStatusService().review_payload(Path(directory), intent_id="done")
+            self.assertEqual(payload["status"], "not_reviewable")
+            self.assertEqual(payload["failure"]["code"], "intent_not_reviewable")
+
 
 if __name__ == "__main__":
     unittest.main()

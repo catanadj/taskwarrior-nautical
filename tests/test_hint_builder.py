@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from nautical_core.hint_builder import HintBuilder
-from nautical_core.occurrence_outcomes import OccurrenceCollectionResult
+from nautical_core.occurrence_outcomes import OccurrenceCollectionResult, UnavailableOccurrence
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_cursor import OccurrenceCursor
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
@@ -87,6 +87,54 @@ class HintBuilderTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0].limit, 24)
         self.assertGreater(calls[1].cursor.local_datetime, calls[0].cursor.local_datetime)
+
+    def test_next_only_propagates_typed_scheduler_failure(self) -> None:
+        timezone_utc = timezone.utc
+
+        class Service:
+            session = SimpleNamespace(
+                evaluator=SimpleNamespace(context=SimpleNamespace(timezone=timezone_utc), kind="anchor")
+            )
+
+            def collect_request(self, request):
+                return OccurrenceCollectionResult(
+                    (), request.cursor, failure=UnavailableOccurrence("astronomy unavailable", "LookupError")
+                )
+
+        builder = HintBuilder(Service())
+        with self.assertRaisesRegex(RuntimeError, "astronomy unavailable"):
+            builder.build(
+                start_dt=None,
+                k_next=1,
+                sample_days_for_year=366,
+                now_local=lambda: datetime(2026, 1, 1, tzinfo=timezone_utc),
+                include_per_year=False,
+            )
+
+    def test_next_only_enforces_occurrence_cap(self) -> None:
+        timezone_utc = timezone.utc
+        occurrence = Occurrence(
+            date(2026, 1, 2),
+            9,
+            0,
+            local_datetime=datetime(2026, 1, 2, 9, tzinfo=timezone_utc),
+        )
+        calls = []
+
+        class Service:
+            session = SimpleNamespace(
+                evaluator=SimpleNamespace(context=SimpleNamespace(timezone=timezone_utc), kind="anchor")
+            )
+
+            def collect_request(self, request):
+                calls.append(request)
+                return OccurrenceCollectionResult((occurrence,), request.cursor)
+
+        builder = HintBuilder(Service())
+        result = builder._collect_next_only(date(2026, 1, 1), date(2031, 1, 1))
+        self.assertEqual(len(result.occurrences), 384)
+        self.assertEqual(len(calls), 384)
+        self.assertEqual(calls[-1].limit, 1)
 
 
 if __name__ == "__main__":

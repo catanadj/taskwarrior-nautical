@@ -31,6 +31,57 @@ from dev_tools.nautical_golden_tests import (
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    @staticmethod
+    def _bulk_plan(chain: str, parent: str, child: str, link: int) -> LifecyclePlan:
+        from dev_tools.nautical_golden_tests import _task_draft
+
+        return LifecyclePlan.from_draft(
+            identity=LifecycleIdentity(chain, parent, link, link + 1, LifecycleEvent.COMPLETE),
+            action=LifecycleAction.SPAWN_CHILD,
+            parent_guard=ParentGuard("completed", "on", chain, link, f"rf-{chain}", "20260101T000000Z"),
+            draft=_task_draft({
+                "uuid": child, "description": "bulk child", "status": "pending", "chain": "on",
+                "chainID": chain, "link": link + 1, "prevLink": parent[:8], "cp": "1d",
+                "due": "20260102T000000Z",
+            }),
+            parent_patch={"nextLink": child[:8]},
+            expected_postconditions=("child_present", "parent_linked", "verified"),
+        )
+
+    def test_bulk_enqueue_and_exact_claim_are_scoped_and_idempotent(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plans = tuple(
+                self._bulk_plan(
+                    f"bulk-{idx}",
+                    f"00000000-0000-4000-8000-0000000002{idx:02d}",
+                    f"00000000-0000-4000-8000-0000000003{idx:02d}",
+                    1,
+                )
+                for idx in range(1, 4)
+            )
+            overall, results = outbox.enqueue_many(
+                plans, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            )
+            self.assertEqual(overall.kind.value, "applied")
+            self.assertEqual(set(results), {plan.identity.idempotency_key for plan in plans})
+            self.assertTrue(all(result.kind.value == "applied" for result in results.values()))
+
+            repeat, repeated = outbox.enqueue_many(
+                plans, configuration_fingerprint="cfg", schedule_fingerprint="sch"
+            )
+            self.assertEqual(repeat.kind.value, "applied")
+            self.assertTrue(all(result.kind.value == "already_applied" for result in repeated.values()))
+
+            target_ids = [plans[0].identity.idempotency_key, plans[2].identity.idempotency_key]
+            claim, claimed = outbox.claim_intents(intent_ids=target_ids, owner="bulk-owner", lease_seconds=30)
+            self.assertEqual(claim.kind.value, "applied")
+            self.assertEqual(set(claimed), set(target_ids))
+            self.assertTrue(all(result.kind.value == "applied" for result in claimed.values()))
+            batch, records = outbox.claim_batch(owner="other-owner", lease_seconds=30, limit=5)
+            self.assertEqual(batch.kind.value, "applied")
+            self.assertEqual([record.intent_id for record in records], [plans[1].identity.idempotency_key])
+
     def test_outbox_failures_are_retryable(self) -> None:
         test_lifecycle_application_outbox_faults_are_retryable()
 

@@ -814,6 +814,69 @@ class LifecycleOutboxRepository:
 
         return self._with_connection(operation)
 
+    def enqueue_many(
+        self,
+        plans: Sequence[LifecyclePlan],
+        *,
+        configuration_fingerprint: str,
+        schedule_fingerprint: str,
+    ) -> tuple[OutboxResult, Mapping[str, OutboxResult]]:
+        """Persist a bounded wave of lifecycle plans in one SQLite transaction.
+
+        Each intent retains the same idempotency/conflict semantics as
+        :meth:`enqueue`; the outer result reports transaction health while the
+        mapping preserves the outcome for every supplied plan.
+        """
+        self._metric("outbox_bulk_enqueues")
+        config = str(configuration_fingerprint or "").strip()
+        schedule = str(schedule_fingerprint or "").strip()
+        normalized = tuple(plans)
+        if not normalized or not config or not schedule:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires plans and fingerprints"), {}
+        if any(not isinstance(plan, LifecyclePlan) for plan in normalized):
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires lifecycle plans"), {}
+        if any(plan.stage not in {ExecutionStage.PLANNED, ExecutionStage.PERSISTED} for plan in normalized):
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires planned lifecycle plans"), {}
+        if len({plan.identity.idempotency_key for plan in normalized}) != len(normalized):
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk enqueue requires unique intent IDs"), {}
+        now = self._clock()
+
+        def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
+            results: dict[str, OutboxResult] = {}
+            with self._transaction(conn):
+                for plan in normalized:
+                    intent_id = plan.identity.idempotency_key
+                    encoded_plan = _plan_json(plan.with_stage(ExecutionStage.PLANNED))
+                    fingerprint = plan.semantic_key()
+                    guard_json = json.dumps(plan.parent_guard.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
+                    if row is not None:
+                        try:
+                            current = self._from_row(row)
+                        except LifecycleOutboxError as exc:
+                            self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                            results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason=f"outbox intent quarantined: {exc}")
+                            continue
+                        same = current.plan.compatibility_key() == plan.compatibility_key()
+                        compatible = same and current.configuration_fingerprint == config and current.schedule_fingerprint == schedule
+                        if not compatible:
+                            results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=current, reason="deterministic lifecycle intent conflicts with an existing queued transition")
+                        else:
+                            results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=current)
+                        continue
+                    conn.execute(
+                        "INSERT INTO lifecycle_outbox (intent_id, plan_json, plan_fingerprint, parent_guard_json, configuration_fingerprint, schedule_fingerprint, lifecycle_stage, processing_state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (intent_id, encoded_plan, fingerprint, guard_json, config, schedule, ExecutionStage.PLANNED.value, OutboxProcessingState.READY.value, now, now),
+                    )
+                    results[intent_id] = OutboxResult(OutboxResultKind.APPLIED, record=LifecycleOutboxRecord(
+                        intent_id=intent_id, plan=plan.with_stage(ExecutionStage.PLANNED), configuration_fingerprint=config,
+                        schedule_fingerprint=schedule, state=OutboxProcessingState.READY, stage=ExecutionStage.PLANNED,
+                        created_at=now, updated_at=now,
+                    ))
+            return results
+
+        return self._with_bulk_connection(operation)
+
     def claim_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[LifecycleOutboxRecord, ...]]:
         self._metric("outbox_lease_claims")
         owner = str(owner or "").strip()
@@ -884,6 +947,59 @@ class LifecycleOutboxRepository:
         finally:
             if conn is not None:
                 conn.close()
+
+    def claim_intents(
+        self, *, intent_ids: Sequence[str], owner: str, lease_seconds: float
+    ) -> tuple[OutboxResult, Mapping[str, OutboxResult]]:
+        """Claim exactly the supplied lifecycle intents in one transaction."""
+        self._metric("outbox_bulk_lease_claims")
+        ids = tuple(dict.fromkeys(str(item or "").strip() for item in intent_ids if str(item or "").strip()))
+        owner = str(owner or "").strip()
+        if not ids or not owner or lease_seconds <= 0:
+            return OutboxResult(OutboxResultKind.REJECTED, reason="bulk claim requires intents, owner, and lease"), {}
+        now = self._clock()
+        expires = now + float(lease_seconds)
+
+        def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
+            results: dict[str, OutboxResult] = {}
+            with self._transaction(conn):
+                conn.execute(
+                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? WHERE processing_state=? AND lease_expires_at <= ?",
+                    (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
+                )
+                for intent_id in ids:
+                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?", (intent_id, "lifecycle")).fetchone()
+                    if row is None:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
+                        continue
+                    try:
+                        record = self._from_row(row)
+                    except LifecycleOutboxError as exc:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+                        results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason=f"outbox intent quarantined: {exc}")
+                        continue
+                    if record.state is OutboxProcessingState.ACKNOWLEDGED:
+                        results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+                        continue
+                    if record.state not in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}:
+                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=record, reason=f"lifecycle intent is not claimable (state={record.state.value!r})")
+                        continue
+                    if record.attempts >= record.plan.max_attempts:
+                        self._quarantine_row(conn, intent_id, now, OutboxFailure("retry_exhausted", "outbox retry budget exhausted before claim"))
+                        results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason="outbox retry budget exhausted")
+                        continue
+                    changed = conn.execute(
+                        "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, attempts=attempts+1, failure_json='', updated_at=? WHERE intent_id=? AND processing_state IN (?, ?)",
+                        (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, *_ACTIVE_STATES),
+                    ).rowcount
+                    results[intent_id] = OutboxResult(
+                        OutboxResultKind.APPLIED if changed == 1 else OutboxResultKind.CONFLICT,
+                        record=replace(record, state=OutboxProcessingState.CLAIMED, lease_owner=owner, lease_expires_at=expires, attempts=record.attempts + 1, failure=None, updated_at=now) if changed == 1 else record,
+                        reason="" if changed == 1 else "outbox claim changed during bulk claim",
+                    )
+            return results
+
+        return self._with_bulk_connection(operation)
 
     def claim_integrity_batch(self, *, owner: str, lease_seconds: float, limit: int) -> tuple[OutboxResult, tuple[Any, ...]]:
         self._metric("outbox_lease_claims")

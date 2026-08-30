@@ -57,6 +57,8 @@
     "task_snapshot_memory": 0.0,
     "build_hints_cold": 16.0,
     "build_hints_warm": 0.9,
+    "build_hints_next_only_cold": 16.0,
+    "build_hints_next_only_warm": 0.9,
     "cache_key_hot": 0.2,
     "cache_save": 0.9,
     "cache_load_hot": 0.35,
@@ -72,6 +74,8 @@
   "slow_device_budgets_seconds": {
     "build_hints_cold": 30.0,
     "build_hints_warm": 8.0,
+    "build_hints_next_only_cold": 30.0,
+    "build_hints_next_only_warm": 8.0,
     "anchor_file_batch_provider": 1.0,
     "seasonal_build_hints_cold": 90.0,
     "seasonal_build_hints_warm": 30.0

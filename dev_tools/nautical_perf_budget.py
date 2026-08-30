@@ -855,7 +855,13 @@ def _bench_task_snapshot_memory(counts: Sequence[int]) -> float:
     return time.perf_counter() - started
 
 
-def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> float:
+def _bench_build_hints(
+    exprs: list[str],
+    rounds: int,
+    *,
+    mode: str = "warm",
+    include_per_year: bool = True,
+) -> float:
     """Measure hint construction with an explicit persistent-cache state."""
     with _perf_cache_context():
         saved_load = core.cache_load
@@ -884,7 +890,7 @@ def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> 
                     core._CACHE_DIR = None
                     _clear_caches()
                     for expr in exprs:
-                        core.build_and_cache_hints(expr, "skip")
+                        core.build_and_cache_hints(expr, "skip", include_per_year=include_per_year)
                 if counts["hits"] or not counts["misses"]:
                     raise RuntimeError(f"cold hint benchmark observed unexpected cache state: {counts}")
                 return time.perf_counter() - started
@@ -894,7 +900,7 @@ def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> 
             core.cache_save = saved_save
             _clear_caches()
             for expr in exprs:
-                core.build_and_cache_hints(expr, "skip")
+                core.build_and_cache_hints(expr, "skip", include_per_year=include_per_year)
             core.cache_load = counted_load
             core.cache_save = counted_save
             counts = {"hits": 0, "misses": 0, "saves": 0}
@@ -902,7 +908,7 @@ def _bench_build_hints(exprs: list[str], rounds: int, *, mode: str = "warm") -> 
             t0 = time.perf_counter()
             for _ in range(max(1, rounds)):
                 for expr in exprs:
-                    core.build_and_cache_hints(expr, "skip")
+                    core.build_and_cache_hints(expr, "skip", include_per_year=include_per_year)
             if counts["misses"] or not counts["hits"] or counts["saves"]:
                 raise RuntimeError(f"warm hint benchmark observed unexpected cache state: {counts}")
             return time.perf_counter() - t0
@@ -3526,6 +3532,26 @@ def main() -> int:
         (
             "build_hints_warm",
             lambda: _bench_build_hints(exprs, hints_warm_rounds, mode="warm"),
+            repeats,
+        ),
+        (
+            "build_hints_next_only_cold",
+            lambda: _bench_build_hints(
+                exprs,
+                hints_cold_rounds,
+                mode="cold",
+                include_per_year=False,
+            ),
+            repeats,
+        ),
+        (
+            "build_hints_next_only_warm",
+            lambda: _bench_build_hints(
+                exprs,
+                hints_warm_rounds,
+                mode="warm",
+                include_per_year=False,
+            ),
             repeats,
         ),
         ("cache_key_hot", lambda: _bench_cache_key_hot(exprs, cache_key_rounds), repeats),

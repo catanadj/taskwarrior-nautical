@@ -8,6 +8,7 @@ from nautical_core.occurrence_outcomes import OccurrenceCollectionResult, Unavai
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_cursor import OccurrenceCursor
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
+from nautical_core.parser_api import validate_anchor_expr_strict
 
 
 class HintBuilderTests(unittest.TestCase):
@@ -135,6 +136,18 @@ class HintBuilderTests(unittest.TestCase):
         self.assertEqual(len(result.occurrences), 384)
         self.assertEqual(len(calls), 384)
         self.assertEqual(calls[-1].limit, 1)
+
+    def test_next_only_grammar_matrix_is_strictly_parseable(self) -> None:
+        expressions = (
+            "w:mon..sun@t=09:00,18:00",
+            "w/4:rand",
+            "m:rand + y:w20",
+            "(moon:full + y:jul)@t=sunset@+45m",
+            "(w:mon)@in-spring=first",
+        )
+        for expression in expressions:
+            with self.subTest(expression=expression):
+                self.assertTrue(validate_anchor_expr_strict(expression))
 
 
 if __name__ == "__main__":

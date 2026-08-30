@@ -51,6 +51,56 @@ class HintBuilder:
             )
         return result
 
+    def _collect_next_only(
+        self,
+        start: date,
+        end: date,
+        *,
+        unique_target: int = 24,
+        page_size: int = 24,
+        occurrence_cap: int = 384,
+    ) -> OccurrenceCollectionResult:
+        """Collect a bounded next-only window without scanning the full horizon."""
+        timezone = self.service.session.evaluator.context.timezone
+        initial_cursor = OccurrenceCursor.strict_after(
+            datetime.combine(start, time.max, tzinfo=timezone),
+            timezone=timezone,
+        )
+        cursor = initial_cursor
+        collected: list[Any] = []
+        seen_dates: set[date] = set()
+        terminal: OccurrenceSearchExhausted | None = None
+        while len(collected) < occurrence_cap and len(seen_dates) < unique_target:
+            remaining = occurrence_cap - len(collected)
+            request = OccurrenceRangeRequest(
+                cursor,
+                end_local=datetime.combine(end - timedelta(days=1), time.max, tzinfo=timezone),
+                limit=min(page_size, remaining),
+                max_iterations=max(page_size, 512),
+            )
+            result = self.service.collect_request(request)
+            if not isinstance(result, OccurrenceCollectionResult):
+                raise TypeError("Scheduler service returned an invalid hint collection.")
+            if result.failure is not None:
+                raise RuntimeError(f"Hint scheduling {result.status}: {result.failure.reason}")
+            collected.extend(result.occurrences)
+            terminal = result.terminal
+            for occurrence in result.occurrences:
+                if occurrence.local_datetime is not None:
+                    seen_dates.add(occurrence.local_datetime.date())
+            if terminal is not None or not result.occurrences:
+                break
+            last = result.occurrences[-1].local_datetime
+            if last is None:
+                break
+            cursor = OccurrenceCursor.strict_after(last, timezone=timezone)
+        return OccurrenceCollectionResult(
+            occurrences=tuple(collected),
+            cursor=initial_cursor,
+            source=getattr(self.service.session.evaluator, "kind", None) or "scheduler",
+            terminal=terminal,
+        )
+
     @staticmethod
     def _unique_dates(result: OccurrenceCollectionResult, *, start: date, end: date) -> list[date]:
         seen: set[date] = set()
@@ -78,10 +128,10 @@ class HintBuilder:
         start = (start_dt.date() if isinstance(start_dt, datetime) else start_dt) or today
         preview_limit = max(1, int(k_next))
         preview_end = start + timedelta(days=365 * 5)
-        preview = self._collect_dates(
-            start,
-            preview_end,
-            limit=max(preview_limit * 16, 64),
+        preview = (
+            self._collect_dates(start, preview_end, limit=max(preview_limit * 16, 64))
+            if include_per_year
+            else self._collect_next_only(start, preview_end)
         )
         next_dates = [
             value.isoformat() + "T00:00"

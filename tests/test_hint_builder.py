@@ -7,6 +7,7 @@ from nautical_core.hint_builder import HintBuilder
 from nautical_core.occurrence_outcomes import OccurrenceCollectionResult
 from nautical_core.occurrence_provider import Occurrence
 from nautical_core.scheduler_cursor import OccurrenceCursor
+from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
 
 class HintBuilderTests(unittest.TestCase):
@@ -49,6 +50,43 @@ class HintBuilderTests(unittest.TestCase):
             )
         self.assertEqual(collect.call_count, 2)
         self.assertEqual(hints["per_year"]["est"], 1)
+
+    def test_next_only_uses_bounded_pages_and_strict_cursor(self) -> None:
+        timezone_utc = timezone.utc
+        values = [
+            self._result([2]).occurrences[0],
+            Occurrence(date(2026, 1, 2), 18, 0, local_datetime=datetime(2026, 1, 2, 18, tzinfo=timezone_utc)),
+            Occurrence(date(2026, 1, 3), 9, 0, local_datetime=datetime(2026, 1, 3, 9, tzinfo=timezone_utc)),
+        ]
+        calls = []
+
+        class Service:
+            session = SimpleNamespace(
+                evaluator=SimpleNamespace(context=SimpleNamespace(timezone=timezone_utc), kind="anchor")
+            )
+
+            def collect_request(self, request):
+                calls.append(request)
+                offset = 0 if len(calls) == 1 else 2
+                batch = tuple(values[offset : offset + (2 if len(calls) == 1 else 1)])
+                terminal = (
+                    OccurrenceSearchExhausted("test", reference=request.cursor.local_datetime, limit=24)
+                    if len(calls) == 2 else None
+                )
+                return OccurrenceCollectionResult(batch, request.cursor, terminal=terminal)
+
+        builder = HintBuilder(Service())
+        hints = builder.build(
+            start_dt=None,
+            k_next=2,
+            sample_days_for_year=366,
+            now_local=lambda: datetime(2026, 1, 1, tzinfo=timezone_utc),
+            include_per_year=False,
+        )
+        self.assertEqual(hints["next_dates"], ["2026-01-02T00:00", "2026-01-03T00:00"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].limit, 24)
+        self.assertGreater(calls[1].cursor.local_datetime, calls[0].cursor.local_datetime)
 
 
 if __name__ == "__main__":

@@ -168,6 +168,44 @@ class QueueStatusService:
                                 if str(expected if expected is not None else "") != str(actual if actual is not None else ""):
                                     comparisons.append({"field": field, "expected": expected, "actual": actual})
                             record["guard_comparison"] = {"status": "changed" if comparisons else "matches", "differences": comparisons}
+                            plan = record.get("plan") or {}
+                            if plan.get("action") == "spawn_child":
+                                child_uuid = str(plan.get("child_uuid") or "").strip()
+                                child_row = None
+                                if child_uuid:
+                                    child_command = client.execute(
+                                        (f"uuid:{child_uuid}", "export"),
+                                        purpose="queue review successor verification",
+                                        timeout=5.0,
+                                        attempts=1,
+                                    )
+                                    if child_command.ok:
+                                        try:
+                                            child_rows = DEFAULT_TASK_CODEC.decode_export(
+                                                child_command.stdout, source_query="queue review successor"
+                                            )
+                                            child_row = child_rows[0].to_mapping() if child_rows else None
+                                        except (TaskCodecError, ValueError):
+                                            child_row = None
+                                next_link = str(current.get("nextLink") or "").strip().lower()
+                                child_short = child_uuid[:8].lower()
+                                if child_row is not None and next_link == child_short:
+                                    record["assessment"] = {
+                                        "status": "already_applied",
+                                        "confidence": "high",
+                                        "message": "Parent nextLink and expected successor are present; no spawn is needed.",
+                                    }
+                                else:
+                                    record["assessment"] = {
+                                        "status": "needs_review",
+                                        "confidence": "insufficient",
+                                        "message": "Successor state could not be proven safe for automatic action.",
+                                        "options": [
+                                            "Inspect the parent nextLink and expected successor before retrying.",
+                                            "If the successor is correct, resolve this intent as already applied.",
+                                            "If it is absent, rerun reconcile after confirming the parent guard.",
+                                        ],
+                                    }
                 else:
                     record["guard_comparison"] = {"status": "unavailable", "reason": command.stderr.strip() or command.stdout.strip() or "parent export failed"}
         if intent_id and not records and all_records:

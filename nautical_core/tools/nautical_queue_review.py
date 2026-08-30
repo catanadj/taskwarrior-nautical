@@ -56,6 +56,16 @@ def main() -> int:
                     )
                 if comparison.get("reason"):
                     print(f"  guard_read: {comparison['reason']}")
+            assessment = intent.get("assessment") or {}
+            if assessment:
+                print(
+                    f"  assessment: {assessment.get('status')} "
+                    f"confidence={assessment.get('confidence', 'unknown')}"
+                )
+                if assessment.get("message"):
+                    print(f"  assessment_detail: {assessment['message']}")
+                for option in assessment.get("options", []):
+                    print(f"  option: {option}")
         if payload.get("failure"):
             print(f"failure: {payload['failure']['message']}")
     return 0 if payload["status"] in {"found", "empty"} else 1

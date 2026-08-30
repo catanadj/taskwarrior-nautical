@@ -1534,6 +1534,7 @@ class LifecycleOutboxRepository:
                                 "source_link": record.plan.identity.source_link,
                                 "target_link": record.plan.identity.target_link,
                                 "parent_guard": record.plan.parent_guard.to_dict(),
+                                "child_uuid": record.plan.child_dict().get("uuid"),
                             },
                         }
                     )

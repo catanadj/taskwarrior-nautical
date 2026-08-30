@@ -267,9 +267,10 @@ class OccurrenceQueryService:
                 filters=("chain:on",),
                 statuses=ACTIVE_TASK_STATUSES,
                 complete_chain_history=False,
+                max_rows=HARD_MAX_TASKS + 1,
             )
             if isinstance(read, Found):
-                if len(read.value.rows) > HARD_MAX_TASKS:
+                if read.value.truncated or len(read.value.rows) > HARD_MAX_TASKS:
                     return _failure(
                         "task_scope_exhausted",
                         f"whole-system snapshot contains {len(read.value.rows)} tasks; limit is {HARD_MAX_TASKS}; use an explicit chain or UUID scope",

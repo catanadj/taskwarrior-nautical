@@ -30,6 +30,7 @@ class _SnapshotRepository(Protocol):
         statuses: Sequence[str],
         complete_chain_history: bool = False,
         refresh: bool = False,
+        max_rows: int | None = None,
     ) -> TaskRead[AuthoritativeTaskSnapshot]: ...
 
 

@@ -78,6 +78,14 @@ class ReconcileSnapshotService:
                     statuses=ALL_TASK_STATUSES,
                     scope_filter=self.scope_filter,
                     bounded=not self.full_audit,
+                    max_rows=(
+                        min(
+                            self._budget.limits.tasks,
+                            self._budget.limits.exported_rows,
+                            self._budget.limits.decoded_rows,
+                        ) + 1
+                        if self._budget is not None else None
+                    ),
                 ),
                 "reconcile lifecycle snapshot",
             )

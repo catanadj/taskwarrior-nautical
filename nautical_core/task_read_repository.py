@@ -289,12 +289,14 @@ class TaskReadRepository:
         timeout: float | None = None,
         attempts: int | None = None,
         use_tempfiles: bool = False,
+        max_rows: int | None = None,
     ) -> TaskRead[AuthoritativeTaskSnapshot]:
         query = self._query_name(scope)
         if not refresh:
             cached = self._cached(scope)
             if cached is not None:
                 return cached
+        row_limit = None if max_rows is None else max(1, int(max_rows))
         result = self._uow.client.execute(
             (
                 "rc.hooks=off",
@@ -303,6 +305,7 @@ class TaskReadRepository:
                 "rc.color=off",
                 *filters,
                 *_status_filter(scope.statuses),
+                *(() if row_limit is None else (f"limit:{row_limit}",)),
                 "export",
             ),
             purpose=f"task read {scope.kind.value}",
@@ -368,7 +371,10 @@ class TaskReadRepository:
                     detail=f"Taskwarrior export returned statuses outside scope: {', '.join(unexpected_statuses)}",
                 ),
             )
-        snapshot = AuthoritativeTaskSnapshot(scope, payload, result)
+        snapshot = AuthoritativeTaskSnapshot(
+            scope, payload, result,
+            truncated=row_limit is not None and len(payload) >= row_limit,
+        )
         self._row_count += len(payload)
         return self._store(scope, Found(snapshot, query))
 
@@ -441,6 +447,7 @@ class TaskReadRepository:
         statuses: Sequence[str],
         complete_chain_history: bool = False,
         refresh: bool = False,
+        max_rows: int | None = None,
     ) -> TaskRead[AuthoritativeTaskSnapshot]:
         scope = TaskSnapshotScope(
             TaskQueryKind.BROAD,
@@ -448,7 +455,8 @@ class TaskReadRepository:
             tuple(statuses),
             complete_chain_history=complete_chain_history,
         )
-        return self._export(scope, filters, empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
+        return self._export(scope, filters, empty_output_is_absent=True, refresh=refresh,
+                            use_tempfiles=True, max_rows=max_rows)
 
     def by_uuid(
         self,
@@ -730,6 +738,7 @@ class TaskReadRepository:
         scope_filter: str | None = None,
         bounded: bool = False,
         refresh: bool = False,
+        max_rows: int | None = None,
     ) -> TaskRead[tuple[TaskRow, ...]]:
         scope_filter = str(scope_filter or "").strip()
         if scope_filter and any(token in scope_filter for token in (" ", "\n", "\r", "\t")):
@@ -758,9 +767,18 @@ class TaskReadRepository:
             filters = ("chain:on",) if not scope_filter else ("chain:on", scope_filter)
         if scope_filter and bounded:
             filters = (*filters, scope_filter)
-        read = self._export(scope, filters, empty_output_is_absent=True, refresh=refresh, use_tempfiles=True)
+        read = self._export(scope, filters, empty_output_is_absent=True, refresh=refresh,
+                            use_tempfiles=True, max_rows=max_rows)
         if not isinstance(read, Found):
             return read
+        if read.value.truncated:
+            admission_limit = max(0, int(max_rows or 1) - 1)
+            return self._failure(
+                read.value.command_result,
+                self._query_name(scope),
+                kind=CommandFailureKind.INVALID_RESPONSE,
+                detail=f"Taskwarrior export exceeded the admission limit of {admission_limit} rows",
+            )
         if any(_field_text(row, "chain").lower() != "on" for row in read.value.rows):
             return self._failure(
                 read.value.command_result,

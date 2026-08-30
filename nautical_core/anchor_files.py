@@ -398,10 +398,16 @@ def _load_anchor_file_occurrence_records(
             cacheable = False
         try:
             stat = os.stat(source.path)
-            metadata = (int(stat.st_dev), int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns), int(stat.st_ctime_ns))
+            metadata_key: tuple[int, int, int, int, int] | tuple[str] = (
+                int(stat.st_dev),
+                int(stat.st_ino),
+                int(stat.st_size),
+                int(stat.st_mtime_ns),
+                int(stat.st_ctime_ns),
+            )
         except OSError:
-            metadata = (source.path,)
-        cache_key_parts.append((source.path, metadata, source.modifier_layers))
+            metadata_key = (source.path,)
+        cache_key_parts.append((source.path, metadata_key, source.modifier_layers))
     calendar_fingerprint = getattr(business_calendar, "fingerprint", None)
     cache_key_parts.append(calendar_fingerprint)
     cache_key = tuple(cache_key_parts)

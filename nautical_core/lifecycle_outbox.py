@@ -872,35 +872,7 @@ class LifecycleOutboxRepository:
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
                 )
                 for intent_id in ids:
-                    row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?", (intent_id, "lifecycle")).fetchone()
-                    if row is None:
-                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
-                        continue
-                    try:
-                        record = self._from_row(row)
-                    except LifecycleOutboxError as exc:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                        results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason=f"outbox intent quarantined: {exc}")
-                        continue
-                    if record.state is OutboxProcessingState.ACKNOWLEDGED:
-                        results[intent_id] = OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
-                        continue
-                    if record.state not in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}:
-                        results[intent_id] = OutboxResult(OutboxResultKind.CONFLICT, record=record, reason=f"lifecycle intent is not claimable (state={record.state.value!r})")
-                        continue
-                    if record.attempts >= record.plan.max_attempts:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("retry_exhausted", "outbox retry budget exhausted before claim"))
-                        results[intent_id] = OutboxResult(OutboxResultKind.REJECTED, reason="outbox retry budget exhausted")
-                        continue
-                    changed = conn.execute(
-                        "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, attempts=attempts+1, failure_json='', updated_at=? WHERE intent_id=? AND processing_state IN (?, ?)",
-                        (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, *_ACTIVE_STATES),
-                    ).rowcount
-                    results[intent_id] = OutboxResult(
-                        OutboxResultKind.APPLIED if changed == 1 else OutboxResultKind.CONFLICT,
-                        record=replace(record, state=OutboxProcessingState.CLAIMED, lease_owner=owner, lease_expires_at=expires, attempts=record.attempts + 1, failure=None, updated_at=now) if changed == 1 else record,
-                        reason="" if changed == 1 else "outbox claim changed during bulk claim",
-                    )
+                    results[intent_id] = self._claim_row(conn, intent_id=intent_id, owner=owner, expires=expires, now=now)
             return results
 
         return self._with_bulk_connection(operation)
@@ -1029,6 +1001,31 @@ class LifecycleOutboxRepository:
             intent_id=intent_id, owner=owner, state=OutboxProcessingState.MANUAL_REVIEW, failure=failure,
         )
 
+    def _claim_row(self, conn: sqlite3.Connection, *, intent_id: str, owner: str, expires: float, now: float) -> OutboxResult:
+        row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?", (intent_id, "lifecycle")).fetchone()
+        if row is None:
+            return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
+        try:
+            record = self._from_row(row)
+        except LifecycleOutboxError as exc:
+            self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
+            return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
+        if record.state is OutboxProcessingState.ACKNOWLEDGED:
+            return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
+        if record.state not in {OutboxProcessingState.READY, OutboxProcessingState.RETRY}:
+            return OutboxResult(OutboxResultKind.CONFLICT, record=record, reason=f"lifecycle intent is not claimable (state={record.state.value!r})")
+        if record.attempts >= record.plan.max_attempts:
+            failure = OutboxFailure("retry_exhausted", "outbox retry budget exhausted before claim", {"attempts": record.attempts, "max_attempts": record.plan.max_attempts})
+            self._quarantine_row(conn, intent_id, now, failure)
+            return OutboxResult(OutboxResultKind.REJECTED, reason=failure.message)
+        changed = conn.execute(
+            "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, attempts=attempts+1, failure_json='', updated_at=? WHERE intent_id=? AND processing_state IN (?, ?)",
+            (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, *_ACTIVE_STATES),
+        ).rowcount
+        if changed != 1:
+            return OutboxResult(OutboxResultKind.CONFLICT, record=record, reason="outbox claim changed during claim")
+        return OutboxResult(OutboxResultKind.APPLIED, record=replace(record, state=OutboxProcessingState.CLAIMED, lease_owner=owner, lease_expires_at=expires, attempts=record.attempts + 1, failure=None, updated_at=now))
+
     def claim_intent(self, *, owner: str, lease_seconds: float, intent_id: str) -> OutboxResult:
         """Claim one specific intent by id, for a caller that must execute
         exactly the record it just staged (e.g. reconcile, which holds a
@@ -1042,6 +1039,7 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and intent_id")
         now = self._clock()
         expires = now + float(lease_seconds)
+        # Keep single-intent claims on the same decision tree as bulk claims.
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
@@ -1049,78 +1047,10 @@ class LifecycleOutboxRepository:
             self._secure_state_files()
             with self._transaction(conn):
                 conn.execute(
-                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
-                    "WHERE processing_state=? AND lease_expires_at <= ?",
+                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? WHERE processing_state=? AND lease_expires_at <= ?",
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
                 )
-                row = conn.execute(
-                    "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
-                    (intent_id, "lifecycle"),
-                ).fetchone()
-                if row is None:
-                    return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
-                current_state = str(row["processing_state"])
-                if current_state == OutboxProcessingState.ACKNOWLEDGED.value:
-                    try:
-                        record = self._from_row(row)
-                    except LifecycleOutboxError as exc:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                        return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
-                if current_state not in _ACTIVE_STATES:
-                    try:
-                        record = self._from_row(row)
-                    except LifecycleOutboxError as exc:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                        return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-                    return OutboxResult(
-                        OutboxResultKind.CONFLICT,
-                        record=record,
-                        reason=f"lifecycle intent is not claimable (state={current_state!r})",
-                    )
-                try:
-                    candidate = self._from_row(row)
-                except LifecycleOutboxError as exc:
-                    self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                    return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-                if candidate.attempts >= candidate.plan.max_attempts:
-                    failure = OutboxFailure(
-                        "retry_exhausted",
-                        "outbox retry budget exhausted before claim",
-                        {
-                            "attempts": candidate.attempts,
-                            "max_attempts": candidate.plan.max_attempts,
-                        },
-                    )
-                    self._quarantine_row(conn, intent_id, now, failure)
-                    return OutboxResult(OutboxResultKind.REJECTED, reason=failure.message)
-                conn.execute(
-                    "UPDATE lifecycle_outbox SET processing_state=?, lease_owner=?, lease_expires_at=?, "
-                    "attempts=attempts+1, failure_json='', updated_at=? "
-                    "WHERE intent_id=? AND processing_state IN (?, ?)",
-                    (OutboxProcessingState.CLAIMED.value, owner, expires, now, intent_id, *_ACTIVE_STATES),
-                )
-                row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
-                if row is None:
-                    return OutboxResult(OutboxResultKind.CONFLICT, reason="no such lifecycle intent")
-                if str(row["processing_state"]) == OutboxProcessingState.ACKNOWLEDGED.value:
-                    try:
-                        record = self._from_row(row)
-                    except LifecycleOutboxError as exc:
-                        self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                        return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-                    return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=record)
-                if str(row["lease_owner"]) != owner or str(row["processing_state"]) != OutboxProcessingState.CLAIMED.value:
-                    return OutboxResult(
-                        OutboxResultKind.CONFLICT,
-                        reason=f"lifecycle intent is not claimable (state={row['processing_state']!r})",
-                    )
-                try:
-                    record = self._from_row(row)
-                except LifecycleOutboxError as exc:
-                    self._quarantine_row(conn, intent_id, now, OutboxFailure("poison_row", str(exc)))
-                    return OutboxResult(OutboxResultKind.REJECTED, reason=str(exc))
-                return OutboxResult(OutboxResultKind.APPLIED, record=record)
+                return self._claim_row(conn, intent_id=intent_id, owner=owner, expires=expires, now=now)
         except sqlite3.OperationalError as exc:
             return OutboxResult(OutboxResultKind.RETRYABLE, reason=str(exc), lock_busy=_busy(exc))
         except Exception as exc:
@@ -1128,7 +1058,6 @@ class LifecycleOutboxRepository:
         finally:
             if conn is not None:
                 conn.close()
-
     @staticmethod
     def _quarantine_row(conn: sqlite3.Connection, intent_id: str, now: float, failure: OutboxFailure) -> None:
         conn.execute(

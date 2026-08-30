@@ -36,6 +36,15 @@ class OperatorPresentationTests(unittest.TestCase):
         self.assertIn('"budget"', rendered)
         self.assertEqual(result.extensions, {})
 
+    def test_static_renderer_exposes_budget_usage_and_overages(self) -> None:
+        result = OperatorResult(OperatorOperation.INSPECT, OperatorStatus.OK)
+        budget = OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1))
+        budget.begin_effect()
+        budget.consume("taskwarrior_calls", 2)
+        rendered = render_result(result, "text", budget=budget)
+        self.assertIn("budget calls=2", rendered)
+        self.assertIn("exceeded=taskwarrior_calls", rendered)
+
     def test_expired_wall_time_is_visible_during_presentation(self) -> None:
         result = OperatorResult(OperatorOperation.INSPECT, OperatorStatus.OK)
         budget = OperatorInvocationBudget(OperatorLimits(wall_time_seconds=1))

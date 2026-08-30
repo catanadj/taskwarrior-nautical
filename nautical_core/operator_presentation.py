@@ -134,6 +134,17 @@ def render_text(result: OperatorResult | OperatorV2Result) -> str:
         position = result.page.cursor.position if result.page.cursor is not None else 0
         suffix = " complete" if result.page.complete else " more available"
         line += f" (items {position + 1}-{position + len(result.page.items)};{suffix})"
+    budget = result.extensions.get("budget")
+    if isinstance(budget, Mapping):
+        usage = budget.get("usage")
+        exceeded = budget.get("exceeded")
+        if isinstance(usage, Mapping):
+            calls = next((value for key, value in usage.items() if str(key).endswith("_calls")), 0)
+            rows = usage.get("exported_rows", 0)
+            suffix = f"; budget calls={calls} rows={rows}"
+            if isinstance(exceeded, (list, tuple)) and exceeded:
+                suffix += f" exceeded={','.join(str(item) for item in exceeded)}"
+            line += suffix
     return line
 
 

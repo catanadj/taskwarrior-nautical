@@ -380,6 +380,30 @@ def _bench_repair_application_stage() -> float:
     return time.perf_counter() - started
 
 
+def _bench_lifecycle_staging_stage() -> float:
+    """Measure one guarded lifecycle plan crossing the durable staging boundary."""
+    from nautical_core.lifecycle_application import LifecycleApplicationService
+    from dataclasses import replace
+
+    with tempfile.TemporaryDirectory(prefix="nautical-perf-lifecycle-stage-") as td:
+        taskdata = Path(td)
+        _init_empty_outbox(taskdata)
+        _parents, plans = _outbox_lifecycle_fixture("stage", 0, count=1)
+        plans[0] = replace(plans[0], parent_guard=replace(plans[0].parent_guard, modified="20260829T000000Z"))
+        repository = lifecycle_outbox.LifecycleOutboxRepository(taskdata)
+        service = LifecycleApplicationService(outbox=repository, owner="perf-stage")
+        started = time.perf_counter()
+        outcome = service.stage(
+            plans[0], configuration_fingerprint="perf-config", schedule_fingerprint="perf-schedule",
+        )
+        if outcome.kind.value not in {"applied", "staged", "already_applied"}:
+            raise RuntimeError(f"lifecycle staging stage returned an unexpected outcome: {outcome!r}")
+        pending = _workflow_outbox_pending(taskdata)
+        if len(pending) != 1 or pending[0].get("state") not in {"ready", "claimed", "retry"}:
+            raise RuntimeError(f"lifecycle staging stage did not leave one durable intent: {pending!r}")
+        return time.perf_counter() - started
+
+
 def _bench_queue_stale_stage() -> float:
     """Measure queue-status detection of a stale claim with a valid plan."""
     from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
@@ -3474,6 +3498,7 @@ def main() -> int:
     checks.append(("stage_housekeeping", _bench_housekeeping_stage, repeats))
     checks.append(("stage_repair_planner", _bench_repair_planner_stage, repeats))
     checks.append(("stage_repair_application", _bench_repair_application_stage, repeats))
+    checks.append(("stage_lifecycle_staging", _bench_lifecycle_staging_stage, repeats))
     checks.append(("stage_queue_stale", _bench_queue_stale_stage, repeats))
     checks.append(("stage_operator_failure_matrix", _bench_operator_failure_matrix_stage, repeats))
     checks.append(("stage_operator_interrupted", _bench_operator_interrupted_stage, repeats))

@@ -103,7 +103,19 @@ class HintBuilder:
 
         sample_horizon = max(1, int(sample_days_for_year or 1))
         sample_end = today + timedelta(days=sample_horizon)
-        annual = self._collect_dates(today, sample_end, limit=max(sample_horizon * 8, 64))
+        if (
+            start == today
+            and preview.terminal is None
+            and preview.failure is None
+            and len(preview) < max(preview_limit * 16, 64)
+            and sample_end <= preview_end
+        ):
+            # The preview already covers the annual window. Reusing it avoids
+            # a second scheduler traversal for sparse schedules; capped or
+            # failed previews still take the independent complete query.
+            annual = preview
+        else:
+            annual = self._collect_dates(today, sample_end, limit=max(sample_horizon * 8, 64))
         annual_dates = self._unique_dates(annual, start=today, end=sample_end)
         if terminal is None:
             terminal = annual.terminal

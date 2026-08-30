@@ -152,9 +152,19 @@ class QueueStatusService:
                             record["guard_comparison"] = {"status": "unavailable", "reason": "parent task was not found"}
                         else:
                             comparisons = []
-                            for field in ("status", "chain", "chainID", "link", "modified", "end"):
+                            fields = ["status", "chain", "chainID", "link"]
+                            guard_timestamp = "end" if guard.get("end") else "modified" if guard.get("modified") else None
+                            if guard_timestamp:
+                                fields.append(guard_timestamp)
+                            for field in fields:
                                 expected = guard.get(field)
                                 actual = current.get(field)
+                                if field == "link":
+                                    try:
+                                        expected = int(float(expected))
+                                        actual = int(float(actual))
+                                    except (TypeError, ValueError, OverflowError):
+                                        pass
                                 if str(expected if expected is not None else "") != str(actual if actual is not None else ""):
                                     comparisons.append({"field": field, "expected": expected, "actual": actual})
                             record["guard_comparison"] = {"status": "changed" if comparisons else "matches", "differences": comparisons}

@@ -35,6 +35,7 @@ def main() -> int:
         for intent in payload["intents"]:
             plan = intent.get("plan") or {}
             guard = plan.get("parent_guard") or {}
+            guard_time_field = "end" if guard.get("end") else "modified" if guard.get("modified") else "none"
             failure = intent.get("failure") or {}
             print(
                 f"intent: id={intent.get('intent_id')} state={intent.get('state')} "
@@ -42,8 +43,7 @@ def main() -> int:
                 f"chain={plan.get('chainID', '')} parent={plan.get('parent_uuid', '')} "
                 f"links={plan.get('source_link', '')}->{plan.get('target_link', '')} "
                 f"reason={failure.get('message') or intent.get('reason', '')} "
-                f"expected_modified={guard.get('modified', '-') or '-'} "
-                f"expected_end={guard.get('end', '-') or '-'}"
+                f"expected_{guard_time_field}={guard.get(guard_time_field, '-') or '-'}"
             )
             comparison = intent.get("guard_comparison") or {}
             if comparison:

@@ -270,7 +270,7 @@ class OccurrenceQueryService:
                 max_rows=HARD_MAX_TASKS + 1,
             )
             if isinstance(read, Found):
-                if read.value.truncated or len(read.value.rows) > HARD_MAX_TASKS:
+                if getattr(read.value, "truncated", False) or len(read.value.rows) > HARD_MAX_TASKS:
                     return _failure(
                         "task_scope_exhausted",
                         f"whole-system snapshot contains {len(read.value.rows)} tasks; limit is {HARD_MAX_TASKS}; use an explicit chain or UUID scope",

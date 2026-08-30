@@ -2907,7 +2907,7 @@ def _bench_expensive_workflows(
                 text=True,
                 capture_output=True,
                 env=shape_env,
-                timeout=120.0,
+                timeout=300.0 if slow_device else 120.0,
             )
             if imported.returncode != 0:
                 raise RuntimeError(f"{name} fixture import failed: {(imported.stderr or imported.stdout or '').strip()}")

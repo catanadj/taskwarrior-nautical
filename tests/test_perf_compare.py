@@ -11,6 +11,19 @@ from dev_tools.nautical_perf_compare import _metric_value
 
 
 class PerformanceCompareTests(unittest.TestCase):
+    def test_help_is_a_valid_argparse_contract(self) -> None:
+        compare = Path(__file__).parents[1] / "dev_tools" / "nautical_perf_compare.py"
+        proc = subprocess.run(
+            [sys.executable, str(compare), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("usage:", proc.stdout)
+        self.assertIn("15%", proc.stdout)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_extended_metrics_extract_from_stage_and_workflow_reports(self) -> None:
         result = {
             "cpu_median_s": 0.2,

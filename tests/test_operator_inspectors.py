@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from types import MappingProxyType
 
 from nautical_core.operator_findings import FindingActionability
 from nautical_core.operator_inspectors import (ChainIntegrityInspector, ConfigurationInspector, DependenciesInspector,
@@ -121,6 +122,34 @@ class OperatorInspectorTests(unittest.TestCase):
         self.assertEqual(ChainIntegrityInspector().component, "chain_integrity")
         self.assertEqual(LifecycleOutboxInspector().component, "lifecycle")
         self.assertEqual(PerformanceInspector().component, "performance")
+
+    def test_component_inspectors_accept_immutable_mapping_evidence(self) -> None:
+        snapshot = OperatorSnapshot(
+            "snap-1",
+            OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "epoch-1",
+            "config-1",
+            components={"configuration": MappingProxyType({"available": True, "valid": True})},
+        )
+        self.assertEqual(inspect_component_availability(snapshot, "configuration"), ())
+        self.assertEqual(inspect_component_validity(snapshot, "configuration"), ())
+
+    def test_component_inspectors_fail_closed_for_malformed_evidence(self) -> None:
+        snapshot = OperatorSnapshot(
+            "snap-1",
+            OperatorCoverage(CoverageKind.COMPLETE, "taskwarrior"),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "epoch-1",
+            "config-1",
+            components={"configuration": "not an evidence object"},
+        )
+        unavailable = inspect_component_availability(snapshot, "configuration")
+        invalid = inspect_component_validity(snapshot, "configuration")
+        self.assertEqual(unavailable[0].actionability, FindingActionability.BLOCKING)
+        self.assertIn("must be an object", unavailable[0].message)
+        self.assertEqual(invalid[0].actionability, FindingActionability.BLOCKING)
+        self.assertIn("must be an object", invalid[0].message)
 
     def test_historical_classification_preserves_evidence_but_defers_action(self) -> None:
         finding = OperatorFinding("x", "chain", FindingSeverity.ERROR, FindingActionability.BLOCKING, "old", guidance="inspect")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from collections.abc import Mapping
 from typing import Any, Protocol, Sequence
 
 from .operator_findings import FindingActionability, FindingSeverity, OperatorFinding, deduplicate_findings
@@ -313,9 +314,18 @@ def inspect_component_availability(
     if not name:
         raise ValueError("component name is required")
     value = snapshot.components.get(name)
-    if isinstance(value, dict) and value.get("available", True):
-        return ()
-    reason = value.get("reason", "unavailable") if isinstance(value, dict) else "component is absent"
+    if isinstance(value, Mapping):
+        available = value.get("available", True)
+        if not isinstance(available, bool):
+            reason = "component availability must be boolean"
+        elif available:
+            return ()
+        else:
+            reason = str(value.get("reason") or "unavailable")
+    elif value is None:
+        reason = "component is absent"
+    else:
+        reason = "component evidence must be an object"
     return (
         OperatorFinding(
             code="component.unavailable",
@@ -345,15 +355,31 @@ def inspect_component_validity(
     if not name:
         raise ValueError("component name is required")
     value = snapshot.components.get(name)
-    if not isinstance(value, dict) or value.get("available", True) is False or value.get("valid", True):
+    if value is None:
         return ()
-    reason = str(value.get("reason") or "component validation failed")
+    if not isinstance(value, Mapping):
+        reason = "component evidence must be an object"
+    elif not isinstance(value.get("available", True), bool):
+        reason = "component availability must be boolean"
+    elif value.get("available", True) is False:
+        return ()
+    elif not isinstance(value.get("valid", True), bool):
+        reason = "component validity must be boolean"
+    elif value.get("valid", True):
+        return ()
+    else:
+        reason = str(value.get("reason") or "component validation failed")
+    malformed = (
+        not isinstance(value, Mapping)
+        or not isinstance(value.get("available", True), bool)
+        or not isinstance(value.get("valid", True), bool)
+    )
     return (
         OperatorFinding(
             code="component.invalid",
             domain=name,
             severity=FindingSeverity.ERROR,
-            actionability=FindingActionability.ACTIONABLE,
+            actionability=FindingActionability.BLOCKING if malformed else FindingActionability.ACTIONABLE,
             message=f"{name} evidence is invalid: {reason}.",
             scope=scope,
             observed={"component": name, "valid": False, "reason": reason},

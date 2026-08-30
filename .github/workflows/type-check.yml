@@ -99,5 +99,11 @@ jobs:
           nautical_core/queue_status_service.py
           nautical_core/reconcile_report.py
 
+      - name: Run full unit discovery
+        run: >-
+          PYTHONPATH=.
+          PYTHONPYCACHEPREFIX=/tmp/nautical-readiness-pycache
+          python3 -m unittest discover -s tests -q
+
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

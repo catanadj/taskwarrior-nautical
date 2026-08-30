@@ -5,7 +5,8 @@ import unittest
 from nautical_core.lifecycle_models import DeletionDisposition, LifecycleEvent, TaskSnapshot
 from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryStatus
 from nautical_core.lifecycle_planner import LifecyclePlanner, RecurrenceCandidate, terminal_plan_for_snapshot
-from nautical_core.chain_integrity_lifecycle import deleted_chain_disposition, describe_recovery_result
+from nautical_core.chain_integrity_lifecycle import deleted_chain_disposition
+from nautical_core.reconcile_report import describe_recovery_result
 from nautical_core.task_codec import DEFAULT_TASK_CODEC
 from nautical_core.task_models import NauticalTask, TaskDraft
 
@@ -130,12 +131,12 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
         task = snapshot().observation.to_mapping()
         task.update({"status": "deleted", "end": "20260825T200000Z"})
         deleted = DEFAULT_TASK_CODEC.decode_row(task, source_query="deleted-without-until")
-        generation.core = object()
         result = plan_recovery_decision(
             deleted,
             existing_children=(),
             hook=object(),
             generation=type("Generation", (), {
+                "core": object(),
                 "safe_parse_datetime": staticmethod(lambda value: (None, "unused")),
             })(),
         )

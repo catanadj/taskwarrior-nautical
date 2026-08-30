@@ -154,7 +154,7 @@ def main() -> int:
         default=0.0,
         help="absolute regression floor for call, row, and transaction counts",
     )
-    ap.add_argument("--pct-floor", type=float, default=0.15, help="relative regression floor ratio (0.15 = 15%)")
+    ap.add_argument("--pct-floor", type=float, default=0.15, help="relative regression floor ratio (0.15 = 15%%)")
     args = ap.parse_args()
 
     base = _load(args.base)

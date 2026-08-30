@@ -1884,8 +1884,11 @@ def _compact_reconcile_report(report: dict) -> dict:
         for key in (
             "status",
             "mode",
+            "stage_seconds",
             "export_calls",
             "export_rows",
+            "export_seconds",
+            "slowest_export_seconds",
             "task_command_calls",
             "task_command_attempts",
             "task_command_duration",
@@ -1893,6 +1896,7 @@ def _compact_reconcile_report(report: dict) -> dict:
             "task_command_budget_exceeded",
             "integrity_seconds",
             "integrity_application_seconds",
+            "lock_contention",
         )
         if key in report
     }

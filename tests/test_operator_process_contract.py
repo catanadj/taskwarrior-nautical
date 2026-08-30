@@ -80,6 +80,17 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(payload["failure"]["code"], "query_unavailable")
         self.assertEqual(payload["failure"]["message"], "chain snapshot unavailable")
 
+    def test_reconcile_degraded_status_maps_to_findings_contract(self) -> None:
+        from nautical_core.reconcile_report import to_operator_result
+
+        result = to_operator_result({
+            "schema": "nautical.reconcile",
+            "status": "degraded",
+            "mode": "apply",
+            "manual_review": 1,
+        })
+        self.assertEqual(result.status.value, "attention")
+
     def test_valid_operator_matrix_emits_one_json_document(self) -> None:
         """Operational subprocesses keep stdout machine-readable and diagnostics separate."""
         with tempfile.TemporaryDirectory() as directory:

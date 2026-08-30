@@ -194,7 +194,10 @@ class ReconcileReport(dict[str, Any]):
 
 def to_operator_result(summary: Mapping[str, Any]) -> OperatorV2Result:
     """Convert one reconcile summary into the shared operator envelope."""
-    status = OperatorV2Status(str(summary.get("status") or "error"))
+    raw_status = str(summary.get("status") or "error")
+    # Reconcile retains its human/exit-code vocabulary; map degraded reports
+    # to the shared findings status instead of leaking an unsupported enum.
+    status = OperatorV2Status.ATTENTION if raw_status == "degraded" else OperatorV2Status(raw_status)
     failure = None
     if status in {OperatorV2Status.ERROR, OperatorV2Status.UNAVAILABLE, OperatorV2Status.INVALID}:
         reason = str(summary.get("configuration_drift") or "")

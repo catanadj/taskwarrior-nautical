@@ -441,6 +441,41 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
             self.assertEqual(list(root.glob(".outbox.db.*")), [])
 
+    def test_outbox_disk_full_during_online_backup_removes_partial_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            source = source_dir / ".nautical_lifecycle_outbox.db"
+            source.write_bytes(b"source")
+            target = root / "outbox.db"
+
+            class FailingSource:
+                def backup(self, _target: object) -> None:
+                    target.write_bytes(b"partial")
+                    raise sqlite3.OperationalError("database or disk is full")
+                def close(self) -> None:
+                    return None
+
+            class Target:
+                def commit(self) -> None:
+                    return None
+                def close(self) -> None:
+                    return None
+
+            calls = iter((FailingSource(), Target()))
+            captured_paths: list[str] = []
+
+            def connect(path: str, **_kwargs: object) -> object:
+                captured_paths.append(path)
+                return next(calls)
+
+            with self.assertRaisesRegex(BackupExportError, "disk is full"):
+                backup_outbox_database(taskdata, target, storage=StorageIO(sqlite_connect=connect))
+            self.assertEqual(captured_paths, [str(source), str(target)])
+            self.assertFalse(target.exists())
+
 
     def test_changed_artifact_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:

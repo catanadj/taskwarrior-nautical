@@ -107,6 +107,17 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual(findings[1].severity.value, "error")
             self.assertIn("restore-tool schema", findings[1].observed["error"])
 
+    def test_deep_local_state_rejects_corrupt_outbox_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "outbox.db"
+            path.write_bytes(b"truncated sqlite")
+            findings = OperatorHealthService.deep_local_state_findings(path)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0].severity.value, "error")
+            self.assertEqual(findings[0].actionability.value, "blocking")
+            self.assertIn("outbox", findings[0].observed["path"])
+            self.assertEqual(path.read_bytes(), b"truncated sqlite")
+
     def test_deep_clock_reports_only_clock_before_evidence(self) -> None:
         runtime = {"manifest": {"created_at": 200.0}}
         findings = OperatorHealthService.deep_clock_findings(runtime, clock=lambda: 100.0)

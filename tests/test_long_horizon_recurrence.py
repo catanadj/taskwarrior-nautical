@@ -7,7 +7,7 @@ import unittest
 from zoneinfo import ZoneInfo
 
 from nautical_core.recurrence_context import RecurrenceContext
-from nautical_core.scheduler_cursor import OccurrenceCursor
+from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.task_models import TaskObservation
 
@@ -22,10 +22,13 @@ FIXTURES = (
 def _signatures(service: SchedulerService, *, limit: int) -> tuple[str, ...]:
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     end = datetime(2028, 1, 1, tzinfo=timezone.utc)
-    result = service.collect(
-        OccurrenceCursor.inclusive_at(start, timezone=timezone.utc, date_limit=end.date()),
-        limit=limit,
-        max_iterations=max(512, limit * 3),
+    result = service.collect_request(
+        OccurrenceRangeRequest(
+            OccurrenceCursor.inclusive_at(start, timezone=timezone.utc),
+            end_local=end,
+            limit=limit,
+            max_iterations=max(512, limit * 3),
+        )
     )
     values = tuple(item.local_datetime.astimezone(timezone.utc).isoformat() for item in result.occurrences)
     assert all(left < right for left, right in zip(values, values[1:]))
@@ -92,13 +95,13 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
             observation,
             context=RecurrenceContext("horizon-dst", timezone=zone),
         )
-        result = service.collect(
-            OccurrenceCursor.inclusive_at(
-                datetime(2026, 1, 1, tzinfo=zone), timezone=zone,
-                date_limit=datetime(2028, 1, 1, tzinfo=zone).date(),
-            ),
-            limit=800,
-            max_iterations=2400,
+        result = service.collect_request(
+            OccurrenceRangeRequest(
+                OccurrenceCursor.inclusive_at(datetime(2026, 1, 1, tzinfo=zone), timezone=zone),
+                end_local=datetime(2028, 1, 1, tzinfo=zone),
+                limit=800,
+                max_iterations=2400,
+            )
         )
         local = tuple(item.local_datetime for item in result.occurrences)
         utc_values = tuple(value.astimezone(timezone.utc) for value in local)

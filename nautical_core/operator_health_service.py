@@ -8,6 +8,7 @@ import subprocess
 import sqlite3
 import json
 import time
+import stat
 from typing import Any, Callable, Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
@@ -373,6 +374,60 @@ class OperatorHealthService:
                 ))
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             pass
+        return tuple(findings)
+
+    @staticmethod
+    def deep_ownership_findings(
+        runtime: Mapping[str, Any],
+        hooks_dir: object,
+        hook_runtimes: Mapping[str, Mapping[str, Any]] | None = None,
+        *,
+        stat_factory: Callable[[Path], object] = os.stat,
+    ) -> tuple[OperatorFinding, ...]:
+        """Verify active-release containment and required read/execute bits."""
+        findings: list[OperatorFinding] = []
+        runtime_root = Path(str(runtime.get("runtime_root") or "")).expanduser()
+        release_id = str(runtime.get("active_release") or "")
+        release = runtime_root / "releases" / release_id if release_id else Path("")
+        checks: list[tuple[str, Path, int]] = [
+            ("managed_launcher", release / "nautical", stat.S_IRUSR | stat.S_IXUSR),
+            ("navigator", release / "nautical_navigator.py", stat.S_IRUSR),
+        ]
+        for event, name in (("on-add", "on-add.nautical"), ("on-modify", "on-modify.nautical"), ("on-exit", "on-exit.nautical")):
+            checks.append((f"hook_{event}", Path(str(hooks_dir)).expanduser() / name, stat.S_IRUSR | stat.S_IXUSR))
+        errors: list[str] = []
+        for label, path, required_bits in checks:
+            try:
+                mode = int(getattr(stat_factory(path), "st_mode"))
+                if mode & required_bits != required_bits:
+                    errors.append(f"{label} lacks required permissions")
+            except Exception as exc:
+                errors.append(f"{label}: {exc}")
+        release_resolved = release.resolve() if release_id else Path("")
+        for event, record in (hook_runtimes or {}).items():
+            implementation = record.get("implementation")
+            if not implementation:
+                errors.append(f"{event} implementation path is missing")
+                continue
+            try:
+                Path(str(implementation)).resolve(strict=True).relative_to(release_resolved)
+            except Exception:
+                errors.append(f"{event} implementation is outside the active release")
+        if errors:
+            findings.append(OperatorFinding(
+                "install.ownership.deep", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Active runtime ownership or permissions could not be verified.",
+                observed={"release": str(release), "hooks_dir": str(hooks_dir), "errors": errors},
+                guidance="Restore executable/read permissions and reinstall from a verified local kit if ownership is wrong.",
+            ))
+        else:
+            findings.append(OperatorFinding(
+                "install.ownership.deep", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Active runtime and hook ownership/permissions are verified.",
+                observed={"release": str(release), "hooks_dir": str(hooks_dir)},
+            ))
         return tuple(findings)
 
     @staticmethod

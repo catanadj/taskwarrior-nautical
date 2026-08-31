@@ -112,6 +112,28 @@ class OperatorHealthServiceTests(unittest.TestCase):
         findings = OperatorHealthService.deep_clock_findings(runtime, clock=lambda: 100.0)
         self.assertEqual([item.code for item in findings], ["time.before_release"])
         self.assertEqual(OperatorHealthService.deep_clock_findings(runtime, clock=lambda: 300.0), ())
+
+    def test_deep_ownership_checks_permissions_and_release_containment(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            release = root / "runtime" / "releases" / "r-test"
+            release.mkdir(parents=True)
+            for name in ("nautical", "nautical_navigator.py"):
+                (release / name).write_text("x", encoding="utf-8")
+            implementation = release / "nautical_core" / "hooks" / "add_impl.py"
+            implementation.parent.mkdir(parents=True)
+            implementation.write_text("x", encoding="utf-8")
+            hooks = root / "hooks"
+            hooks.mkdir()
+            for name in ("on-add.nautical", "on-modify.nautical", "on-exit.nautical"):
+                (hooks / name).write_text("x", encoding="utf-8")
+            runtime = {"runtime_root": str(root / "runtime"), "active_release": "r-test"}
+            mode = SimpleNamespace(st_mode=0o700)
+            records = {"on-add": {"implementation": str(implementation)}}
+            findings = OperatorHealthService.deep_ownership_findings(runtime, hooks, records, stat_factory=lambda path: mode)
+            self.assertEqual(findings[0].severity.value, "info")
+            broken = OperatorHealthService.deep_ownership_findings(runtime, hooks, records, stat_factory=lambda path: SimpleNamespace(st_mode=0o400))
+            self.assertEqual(broken[0].severity.value, "error")
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

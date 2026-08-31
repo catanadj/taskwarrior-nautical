@@ -253,6 +253,19 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
             self.assertEqual(list(root.glob(".manifest.json.*")), [])
 
+    def test_publish_fsync_failure_removes_temporary_and_preserves_previous(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "payload").write_text("new", encoding="utf-8")
+            manifest = create_manifest(root, files=("payload",))
+            target = root / "manifest.json"
+            target.write_text('{"status":"previous"}\n', encoding="utf-8")
+            with patch.object(service.os, "fsync", side_effect=OSError("simulated fsync failure")), self.assertRaises(BackupManifestError):
+                publish_manifest(target, manifest)
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
+            self.assertEqual(list(root.glob(".manifest.json.*")), [])
+
     def test_outbox_failure_removes_partial_target(self):
         import nautical_core.backup_service as service
         with tempfile.TemporaryDirectory() as td:

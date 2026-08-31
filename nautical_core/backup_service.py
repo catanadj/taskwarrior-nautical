@@ -15,6 +15,8 @@ from pathlib import Path
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 
+from .task_command import failure_message, run_task_command
+
 
 BACKUP_MANIFEST_SCHEMA = "nautical.backup"
 BACKUP_MANIFEST_VERSION = 1
@@ -25,6 +27,10 @@ MAX_METADATA_KEYS = 128
 
 class BackupManifestError(ValueError):
     """Raised when an inventory or manifest violates the backup contract."""
+
+
+class BackupExportError(RuntimeError):
+    """Raised when a hooks-off Taskwarrior export cannot be captured safely."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +72,17 @@ class BackupVerification:
             "checked": self.checked,
             "errors": list(self.errors),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class BackupExport:
+    """Metadata for one atomically captured portable Taskwarrior export."""
+
+    status: str
+    destination: str
+    tasks: int
+    bytes: int
+    sha256: str
 
 
 def _safe_relative_path(value: str) -> str:
@@ -193,7 +210,14 @@ def validate_manifest(manifest: Mapping[str, Any]) -> tuple[BackupArtifact, ...]
         if not isinstance(value, Mapping):
             raise BackupManifestError("backup manifest contains a non-object artifact")
         try:
-            record = BackupArtifact(str(value["path"]), int(value["bytes"]), str(value["sha256"]))
+            path = value["path"]
+            size = value["bytes"]
+            digest = value["sha256"]
+            if not isinstance(path, str) or not isinstance(size, int) or isinstance(size, bool):
+                raise BackupManifestError("backup manifest contains an invalid artifact")
+            if not isinstance(digest, str):
+                raise BackupManifestError("backup manifest contains an invalid artifact")
+            record = BackupArtifact(path, size, digest)
         except (KeyError, TypeError, ValueError) as exc:
             raise BackupManifestError("backup manifest contains an invalid artifact") from exc
         if record.path in seen:
@@ -223,3 +247,67 @@ def manifest_json(manifest: Mapping[str, Any]) -> str:
     """Serialize a validated manifest using Nautical's JSON contract."""
     validate_manifest(manifest)
     return json.dumps(dict(manifest), ensure_ascii=False, sort_keys=True)
+
+
+def capture_taskwarrior_export(
+    taskdata: Path,
+    destination: Path,
+    *,
+    task_bin: str = "task",
+    timeout: float = 60.0,
+) -> BackupExport:
+    """Capture a validated hooks-off Taskwarrior JSON export atomically.
+
+    The destination must be outside Taskdata and must not already exist.  This
+    prevents an export from overwriting either live data or a prior artifact;
+    callers can publish it into a generation directory after verification.
+    """
+    source = Path(taskdata).expanduser().resolve()
+    target = Path(destination).expanduser().absolute()
+    if not source.is_dir():
+        raise BackupExportError(f"Taskdata is not a directory: {source}")
+    if target.exists() or target.is_symlink():
+        raise BackupExportError(f"export destination already exists: {target}")
+    try:
+        target_resolved = target.resolve()
+    except OSError as exc:
+        raise BackupExportError(f"export destination cannot be resolved: {target}") from exc
+    if target_resolved == source or source in target_resolved.parents:
+        raise BackupExportError("export destination must be outside Taskdata")
+    env = dict(os.environ)
+    env["TASKDATA"] = str(source)
+    result = run_task_command(
+        task_bin,
+        ("rc.hooks=off", "rc.verbose=nothing", "export"),
+        env=env,
+        timeout=max(0.1, float(timeout)),
+        purpose="offline backup Taskwarrior export",
+    )
+    if not result.ok:
+        raise BackupExportError(failure_message(result, "Taskwarrior export"))
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise BackupExportError(f"Taskwarrior export is not valid JSON: {exc}") from exc
+    if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+        raise BackupExportError("Taskwarrior export must be a JSON array of objects")
+    encoded = result.stdout.encode("utf-8")
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False) as handle:
+            temporary = handle.name
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        temporary = None
+    except OSError as exc:
+        raise BackupExportError(f"could not publish Taskwarrior export: {exc}") from exc
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+    return BackupExport("captured", str(target), len(payload), len(encoded), hashlib.sha256(encoded).hexdigest())

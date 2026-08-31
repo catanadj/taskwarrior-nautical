@@ -206,6 +206,12 @@ def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
 
 def validate_manifest(manifest: Mapping[str, Any]) -> tuple[BackupArtifact, ...]:
     """Validate structure and security properties without touching artifacts."""
+    try:
+        encoded = json.dumps(dict(manifest), ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise BackupManifestError(f"backup manifest is not JSON-serializable: {exc}") from exc
+    if len(encoded.encode("utf-8")) > MAX_MANIFEST_BYTES:
+        raise BackupManifestError("backup manifest exceeds the size limit")
     if not isinstance(manifest, Mapping) or manifest.get("schema") != BACKUP_MANIFEST_SCHEMA:
         raise BackupManifestError("unsupported backup manifest schema")
     if manifest.get("version") != BACKUP_MANIFEST_VERSION:

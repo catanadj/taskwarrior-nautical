@@ -178,6 +178,17 @@ class BackupServiceTests(unittest.TestCase):
             with self.subTest(artifact=artifact), self.assertRaises(BackupManifestError):
                 validate_manifest({**base, "files": [artifact]})
 
+    def test_validate_rejects_oversized_manifest(self):
+        with self.assertRaises(BackupManifestError):
+            validate_manifest(
+                {
+                    "schema": "nautical.backup",
+                    "version": 1,
+                    "metadata": {"padding": "x" * (16 * 1024 * 1024)},
+                    "files": [],
+                }
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

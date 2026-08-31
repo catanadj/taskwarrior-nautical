@@ -658,6 +658,9 @@ def main() -> int:
             Path(backup_root).expanduser() if backup_root else None,
         ))
         findings.extend(item.to_doctor_dict() for item in local_state_report.findings)
+        findings.extend(item.to_doctor_dict() for item in OperatorHealthService.deep_clock_findings(
+            runtime_state, Path(backup_root).expanduser() if backup_root else None,
+        ))
     if args.clean_cache:
         gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)

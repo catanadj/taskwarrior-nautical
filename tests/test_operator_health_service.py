@@ -106,6 +106,12 @@ class OperatorHealthServiceTests(unittest.TestCase):
             )
             self.assertEqual(findings[1].severity.value, "error")
             self.assertIn("restore-tool schema", findings[1].observed["error"])
+
+    def test_deep_clock_reports_only_clock_before_evidence(self) -> None:
+        runtime = {"manifest": {"created_at": 200.0}}
+        findings = OperatorHealthService.deep_clock_findings(runtime, clock=lambda: 100.0)
+        self.assertEqual([item.code for item in findings], ["time.before_release"])
+        self.assertEqual(OperatorHealthService.deep_clock_findings(runtime, clock=lambda: 300.0), ())
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

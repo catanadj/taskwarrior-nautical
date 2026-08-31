@@ -333,6 +333,49 @@ class OperatorHealthService:
         return tuple(findings)
 
     @staticmethod
+    def deep_clock_findings(
+        runtime: Mapping[str, Any],
+        backup_root: object | None = None,
+        *,
+        clock: Callable[[], float] = time.time,
+    ) -> tuple[OperatorFinding, ...]:
+        """Report only unambiguous clock-before-local-evidence anomalies."""
+        now = float(clock())
+        findings: list[OperatorFinding] = []
+        release_manifest = runtime.get("manifest") if isinstance(runtime.get("manifest"), Mapping) else {}
+        release_created = release_manifest.get("created_at")
+        if isinstance(release_created, (int, float)) and not isinstance(release_created, bool) and now < float(release_created):
+            findings.append(OperatorFinding(
+                "time.before_release", "installation", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "System clock predates the active Nautical release evidence.",
+                observed={"now": now, "release_created_at": float(release_created)},
+                guidance="Correct the system clock before scheduling or mutating recurrence state.",
+            ))
+        if backup_root is None:
+            return tuple(findings)
+        try:
+            root = Path(str(backup_root)).expanduser()
+            generations = [item for item in root.iterdir() if item.is_dir() and not item.is_symlink()]
+            if not generations:
+                return tuple(findings)
+            newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
+            manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
+            metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else {}
+            backup_created = metadata.get("created_at") if isinstance(metadata, Mapping) else None
+            if isinstance(backup_created, (int, float)) and not isinstance(backup_created, bool) and now < float(backup_created):
+                findings.append(OperatorFinding(
+                    "time.before_backup", "backup", FindingSeverity.WARNING,
+                    FindingActionability.ACTIONABLE,
+                    "System clock predates the newest verified backup evidence.",
+                    observed={"now": now, "backup_created_at": float(backup_created), "generation": newest.name},
+                    guidance="Correct the system clock before relying on scheduling or recovery timestamps.",
+                ))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        return tuple(findings)
+
+    @staticmethod
     def _quick_check_sqlite(path: Path) -> str:
         if path.is_symlink() or not path.is_file():
             raise FileNotFoundError(path)

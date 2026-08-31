@@ -25,6 +25,8 @@ from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, Life
 from nautical_core.task_models import TaskObservation
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 from nautical_core.lifecycle_models import recurrence_fingerprint
+from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
+from nautical_core.operator_presentation import render_result
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_WORKFLOW_MODULES = (
@@ -196,6 +198,19 @@ class EffectBoundaryTests(unittest.TestCase):
     def test_rendering_failure_is_contained(self) -> None:
         view = PanelView("Nautical workflow", "note", (("Warning", "x"),))
         self.assertFalse(render_panel_view(view, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ui"))))
+
+    def test_rendering_failure_does_not_change_semantic_result(self) -> None:
+        result = OperatorResult(OperatorOperation.INSPECT, OperatorStatus.OK, data={"decision": "schedule"})
+        before = result.to_dict()
+
+        rendered = render_result(
+            result,
+            "rich",
+            rich_renderer=lambda _result: (_ for _ in ()).throw(RuntimeError("ui")),
+        )
+
+        self.assertIn("presentation unavailable", rendered)
+        self.assertEqual(result.to_dict(), before)
 
     def test_production_feedback_paths_use_shared_renderer(self) -> None:
         import inspect

@@ -172,6 +172,27 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
             self.assertIsInstance(outcome, InvalidOccurrence)
             self.assertIn("anchor_file", outcome.reason)
 
+    def test_chain_limits_and_context_provenance_are_explicit(self) -> None:
+        values = {
+            "uuid": "00000000-0000-4000-8000-000000000707",
+            "chainID": "horizon-limits",
+            "link": 1,
+            "status": "pending",
+            "cp": "P1D",
+            "chainMax": 3,
+            "chainUntil": "20260105T090000Z",
+        }
+        observation = TaskObservation.from_mapping(values, source_query="long-horizon-fixture")
+        first = SchedulerService.from_observation(observation)
+        second = SchedulerService.from_observation(
+            observation,
+            context=RecurrenceContext("horizon-limits", timezone=ZoneInfo("UTC")),
+        )
+        candidate = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
+        self.assertTrue(first.session.evaluator.limits_allow(candidate, 3))
+        self.assertFalse(first.session.evaluator.limits_allow(candidate, 4))
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+
 
 if __name__ == "__main__":
     unittest.main()

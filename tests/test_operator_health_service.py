@@ -1,4 +1,5 @@
 import unittest
+import json
 import tempfile
 import sys
 from pathlib import Path
@@ -74,8 +75,9 @@ class OperatorHealthServiceTests(unittest.TestCase):
             newest = backup / "newest"
             older.mkdir()
             newest.mkdir()
-            (older / "manifest.json").write_text("{}", encoding="utf-8")
-            (newest / "manifest.json").write_text("{}", encoding="utf-8")
+            manifest = {"metadata": {"restore_tool_schema": 1, "created_at": 90.0}}
+            (older / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (newest / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             import os
             os.utime(older, (1, 1))
             os.utime(newest, (2, 2))
@@ -87,9 +89,23 @@ class OperatorHealthServiceTests(unittest.TestCase):
                 root / "outbox.db", backup,
                 quick_check=lambda path: "ok",
                 backup_checker=verify,
+                clock=lambda: 100.0,
             )
             self.assertEqual([item.severity.value for item in findings], ["info", "info"])
             self.assertEqual(checked, [newest])
+            self.assertEqual(findings[1].to_dict()["observed"]["age_seconds"], 10.0)
+
+    def test_deep_local_state_rejects_missing_backup_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            generation = Path(td) / "backups" / "generation"
+            generation.mkdir(parents=True)
+            (generation / "manifest.json").write_text(json.dumps({"metadata": {}}), encoding="utf-8")
+            findings = OperatorHealthService.deep_local_state_findings(
+                Path(td) / "outbox.db", generation.parent,
+                quick_check=lambda path: "ok", backup_checker=lambda path: True,
+            )
+            self.assertEqual(findings[1].severity.value, "error")
+            self.assertIn("restore-tool schema", findings[1].observed["error"])
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

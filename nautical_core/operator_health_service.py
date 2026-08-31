@@ -7,6 +7,7 @@ import os
 import subprocess
 import sqlite3
 import json
+import time
 from typing import Any, Callable, Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
@@ -272,6 +273,7 @@ class OperatorHealthService:
         *,
         quick_check: Callable[[Path], str] | None = None,
         backup_checker: Callable[[Path], bool] | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> tuple[OperatorFinding, ...]:
         """Check outbox integrity and the newest optional backup generation."""
         findings: list[OperatorFinding] = []
@@ -306,11 +308,19 @@ class OperatorHealthService:
             checker = backup_checker or OperatorHealthService._verify_backup_generation
             if not checker(newest):
                 raise RuntimeError("manifest or artifact verification failed")
+            manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
+            metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
+            if not isinstance(metadata, Mapping) or metadata.get("restore_tool_schema") != 1:
+                raise RuntimeError("backup restore-tool schema is missing or unsupported")
+            created_at = metadata.get("created_at")
+            if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
+                raise RuntimeError("backup creation timestamp is missing or invalid")
+            age_seconds = max(0.0, float(clock()) - float(created_at))
             findings.append(OperatorFinding(
                 "backup.newest.deep", "backup", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 "Newest configured backup generation is verified.",
-                observed={"root": str(root), "generation": newest.name},
+                observed={"root": str(root), "generation": newest.name, "age_seconds": age_seconds, "restore_tool_schema": 1},
             ))
         except Exception as exc:
             findings.append(OperatorFinding(

@@ -222,6 +222,29 @@ print(json.dumps(payload, sort_keys=True))
             repeated = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
             self.assertEqual(repeated.kind.value, "already_applied")
 
+    def test_poisoned_intent_does_not_block_healthy_chain_claim(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            poisoned = self._bulk_plan(
+                "poison-chain", "00000000-0000-4000-8000-000000000631",
+                "00000000-0000-4000-8000-000000000632", 1,
+            )
+            healthy = self._bulk_plan(
+                "healthy-chain", "00000000-0000-4000-8000-000000000641",
+                "00000000-0000-4000-8000-000000000642", 1,
+            )
+            outbox.enqueue_many((poisoned, healthy), configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            with sqlite3.connect(str(outbox.path)) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?",
+                    (poisoned.identity.idempotency_key,),
+                )
+            result, records = outbox.claim_batch(owner="healthy-worker", lease_seconds=30, limit=10)
+            self.assertEqual(result.kind.value, "applied")
+            self.assertEqual([record.intent_id for record in records], [healthy.identity.idempotency_key])
+            _, status = outbox.status()
+            self.assertEqual(status["states"].get("quarantined"), 1)
+
     def test_bulk_enqueue_rollback_leaves_no_phantom_intents(self) -> None:
         with TemporaryDirectory() as td:
             outbox = LifecycleOutboxRepository(Path(td))

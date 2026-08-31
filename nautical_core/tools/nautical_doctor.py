@@ -631,6 +631,10 @@ def main() -> int:
             OperatorHealthService.deep_identity_findings(runtime_state, args.task_bin, sys.executable)
         )
         findings.extend(item.to_doctor_dict() for item in identity_report.findings)
+        ownership_report = OperatorHealthService.report(OperatorHealthService.deep_ownership_findings(
+            runtime_state, hooks_dir, hook_runtimes,
+        ))
+        findings.extend(item.to_doctor_dict() for item in ownership_report.findings)
         deep_config_path = next((path for path in _config_candidates(taskdata) if path.is_file()), None)
         deep_data: dict[str, Any] = {}
         if deep_config_path is not None:

@@ -19,6 +19,7 @@ from nautical_core.backup_service import (  # noqa: E402
     BackupExportError,
     BackupManifestError,
     backup_outbox_database,
+    build_backup_metadata,
     capture_taskwarrior_export,
     create_manifest,
     prune_backup_generations,
@@ -35,7 +36,7 @@ def _outside_taskdata(taskdata: Path, destination: Path) -> None:
         raise BackupExportError("backup destination must be outside Taskdata")
 
 
-def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: float, keep: int = 2, prune: bool = False) -> dict[str, object]:
+def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: float, keep: int = 2, prune: bool = False, metadata: dict[str, object] | None = None) -> dict[str, object]:
     """Capture portable task data and outbox into one atomically published directory."""
     taskdata = taskdata.expanduser().resolve()
     destination = destination.expanduser().absolute()
@@ -49,6 +50,7 @@ def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: 
         manifest = create_manifest(
             staging,
             metadata={
+                **(metadata or {}),
                 "taskdata": str(taskdata),
                 "task_export_tasks": task_export.tasks,
                 "outbox_quick_check": outbox.quick_check,
@@ -91,6 +93,12 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--keep", type=int, default=2, help="verified generations to retain when --prune is used (default: 2)")
     parser.add_argument("--prune", action="store_true", help="prune older verified generations after a successful backup")
+    parser.add_argument("--active-release", default=None)
+    parser.add_argument("--runtime-digest", default=None)
+    parser.add_argument("--taskwarrior-version", default=None)
+    parser.add_argument("--python-version", default=None)
+    parser.add_argument("--timezone", default=None)
+    parser.add_argument("--timezone-data-identity", default=None)
     parser.add_argument("--json", action="store_true", help="emit one JSON result")
     args = parser.parse_args()
     destination = args.destination_option or args.destination_positional
@@ -98,7 +106,15 @@ def main() -> int:
         print(json.dumps({"status": "error", "error": "--destination is required"}, ensure_ascii=False))
         return 2
     try:
-        result = create_backup(Path(args.taskdata), Path(destination), task_bin=args.task_bin, timeout=args.timeout, keep=args.keep, prune=args.prune)
+        provenance = build_backup_metadata(
+            active_release=args.active_release,
+            runtime_digest=args.runtime_digest,
+            taskwarrior_version=args.taskwarrior_version,
+            python_version=args.python_version,
+            timezone=args.timezone,
+            timezone_data_identity=args.timezone_data_identity,
+        )
+        result = create_backup(Path(args.taskdata), Path(destination), task_bin=args.task_bin, timeout=args.timeout, keep=args.keep, prune=args.prune, metadata=provenance)
     except (BackupExportError, BackupManifestError, OSError, ValueError) as exc:
         result = {"status": "error", "error": str(exc)}
         print(json.dumps(result, ensure_ascii=False))

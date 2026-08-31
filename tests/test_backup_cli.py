@@ -41,6 +41,31 @@ class BackupCliTests(unittest.TestCase):
             self.assertEqual(json.loads((destination / "taskwarrior-export.json").read_text(encoding="utf-8"))[0]["description"], "café")
             self.assertTrue((destination / "manifest.json").is_file())
 
+    def test_named_provenance_is_recorded_without_implicit_values(self):
+        script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
+        with tempfile.TemporaryDirectory(prefix="nautical-backup-cli-") as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            (taskdata / ".nautical-state").mkdir(parents=True)
+            connection = sqlite3.connect(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db")
+            connection.execute("CREATE TABLE marker (value TEXT)")
+            connection.commit()
+            connection.close()
+            task = root / "task"
+            task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup"
+            result = subprocess.run([
+                sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task),
+                "--active-release", "r-test", "--runtime-digest", "a" * 64, "--timezone", "Europe/Bucharest", "--json",
+            ], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            metadata = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))["metadata"]
+            self.assertEqual(metadata["active_release"], "r-test")
+            self.assertEqual(metadata["runtime_digest"], "a" * 64)
+            self.assertEqual(metadata["timezone"], "Europe/Bucharest")
+            self.assertNotIn("python_version", metadata)
+
     def test_missing_destination_is_structured_error(self):
         script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
         result = subprocess.run([sys.executable, str(script), "--taskdata", "/tmp/no-taskdata"], capture_output=True, text=True, check=False)

@@ -39,6 +39,9 @@ back those up separately before an offline recovery operation.
 For a verified Nautical backup generation, use the local backup command. It
 captures the hooks-off export and the lifecycle outbox into a new directory:
 
+Run this only against an initialized installation that has a lifecycle outbox;
+an installer `--dry-run` target is intentionally not backup-ready.
+
 ```bash
 python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
   --destination "$HOME/nautical-backup-$(date +%Y%m%d-%H%M%S)" \

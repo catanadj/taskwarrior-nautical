@@ -99,6 +99,43 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertEqual(result.status, "rejected")
             self.assertFalse(target.exists())
 
+    def test_corrupt_outbox_is_rejected_before_target_publication(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            (source / "lifecycle-outbox.db").write_bytes(b"corrupt sqlite")
+            publish_manifest(
+                source / "manifest.json",
+                create_manifest(source, files=("taskwarrior-export.json", "lifecycle-outbox.db")),
+            )
+            target = root / "restored"
+            result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("quick_check failed" in error for error in result.errors))
+            self.assertFalse(target.exists())
+            self.assertEqual(list(root.glob(".restored.restore-*")), [])
+
+    def test_outbox_quick_check_failure_is_rejected_before_target_publication(self):
+        import nautical_core.restore_service as service
+
+        class FailingConnection:
+            def execute(self, query: str) -> object:
+                raise sqlite3.DatabaseError("simulated quick_check failure")
+
+            def close(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            target = root / "restored"
+            with patch.object(service.sqlite3, "connect", return_value=FailingConnection()):
+                result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("quick_check failed" in error for error in result.errors))
+            self.assertFalse(target.exists())
+            self.assertEqual(list(root.glob(".restored.restore-*")), [])
+
     def test_restore_publication_interruption_preserves_empty_target(self):
         import nautical_core.restore_service as service
         with tempfile.TemporaryDirectory() as td:

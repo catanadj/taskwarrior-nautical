@@ -182,6 +182,45 @@ class BackupServiceTests(unittest.TestCase):
                 capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
             self.assertFalse(destination.exists())
 
+    def test_capture_export_command_failure_has_no_output_or_temporary_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task-failing.py"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('simulated export failure', file=sys.stderr)\n"
+                "raise SystemExit(17)\n",
+                encoding="utf-8",
+            )
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup" / "tasks.json"
+            with self.assertRaisesRegex(BackupExportError, "simulated export failure"):
+                capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
+
+    def test_capture_export_timeout_has_no_output_or_temporary_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task-hanging.py"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import time\n"
+                "time.sleep(1)\n",
+                encoding="utf-8",
+            )
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup" / "tasks.json"
+            with self.assertRaisesRegex(BackupExportError, "timed out"):
+                capture_taskwarrior_export(taskdata, destination, task_bin=str(task), timeout=0.1)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
+
     def test_manifest_inventory_is_stable_and_unicode_safe(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

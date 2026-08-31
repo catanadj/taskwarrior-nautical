@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import subprocess
 from typing import Any, Callable, Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
@@ -149,6 +150,78 @@ class OperatorHealthService:
                     guidance=f"Make the {label} filesystem readable and retry deep Doctor.",
                 ))
         return tuple(findings)
+
+    @staticmethod
+    def deep_identity_findings(
+        runtime: Mapping[str, Any],
+        task_binary: str,
+        python_executable: str,
+        *,
+        digest_factory: Callable[[Path], str] | None = None,
+        version_probe: Callable[[str], tuple[bool, str]] | None = None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Verify active-release content and executable identities read-only."""
+        findings: list[OperatorFinding] = []
+        runtime_root = Path(str(runtime.get("runtime_root") or "")).expanduser()
+        release_id = str(runtime.get("active_release") or "")
+        manifest = runtime.get("manifest") if isinstance(runtime.get("manifest"), Mapping) else {}
+        expected_digest = str(manifest.get("content_sha256") or "")
+        release_path = runtime_root / "releases" / release_id if release_id else Path("")
+        try:
+            if digest_factory is None:
+                from .install_runtime import source_digest
+                digest_factory = source_digest
+            if not release_id or not expected_digest or not release_path.is_dir():
+                raise ValueError("active release or manifest digest is unavailable")
+            actual_digest = digest_factory(release_path)
+            if actual_digest != expected_digest:
+                raise ValueError(f"digest mismatch (expected {expected_digest}, got {actual_digest})")
+            findings.append(OperatorFinding(
+                "install.release_digest", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"Active managed release content is verified: {release_id}.",
+                observed={"release_id": release_id, "content_sha256": actual_digest, "path": str(release_path)},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "install.release_digest", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Active managed release content could not be verified.",
+                observed={"release_id": release_id, "path": str(release_path), "error": str(exc)},
+                guidance="Reinstall from a verified local kit or roll back to a retained release.",
+            ))
+
+        probe = version_probe or OperatorHealthService._probe_executable
+        for label, executable, code in (("Taskwarrior", task_binary, "taskwarrior.identity"), ("Python", python_executable, "python.identity")):
+            try:
+                path = str(Path(executable).expanduser().resolve(strict=True))
+                ok, version = probe(path)
+                if not ok:
+                    raise RuntimeError(version or "version probe failed")
+                findings.append(OperatorFinding(
+                    code, "installation", FindingSeverity.INFO,
+                    FindingActionability.INFORMATIONAL,
+                    f"{label} executable is usable: {path}.",
+                    observed={"path": path, "version": version},
+                ))
+            except Exception as exc:
+                findings.append(OperatorFinding(
+                    code, "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"{label} executable identity could not be verified.",
+                    observed={"path": str(executable), "error": str(exc)},
+                    guidance=f"Verify the offline-kit {label} executable and retry deep Doctor.",
+                ))
+        return tuple(findings)
+
+    @staticmethod
+    def _probe_executable(path: str) -> tuple[bool, str]:
+        try:
+            result = subprocess.run([path, "--version"], capture_output=True, text=True, check=False, timeout=5)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, str(exc)
+        output = (result.stdout or result.stderr).strip()
+        return result.returncode == 0, output
 
     @staticmethod
     def diagnose_configuration(request: ConfigurationDiagnosisRequest) -> OperatorHealthReport:

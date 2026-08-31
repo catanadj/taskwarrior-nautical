@@ -626,6 +626,11 @@ def main() -> int:
             OperatorHealthService.storage_findings(storage_paths)
         )
         findings.extend(item.to_doctor_dict() for item in storage_report.findings)
+        runtime_state = install_runtime.runtime_status(taskdata)
+        identity_report = OperatorHealthService.report(
+            OperatorHealthService.deep_identity_findings(runtime_state, args.task_bin, sys.executable)
+        )
+        findings.extend(item.to_doctor_dict() for item in identity_report.findings)
     if args.clean_cache:
         gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)

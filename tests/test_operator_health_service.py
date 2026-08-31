@@ -1,4 +1,7 @@
 import unittest
+import tempfile
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -26,6 +29,27 @@ class OperatorHealthServiceTests(unittest.TestCase):
         payload = findings[0].to_dict()
         self.assertEqual(payload["severity"], "error")
         self.assertIn("denied", payload["observed"]["error"])
+
+    def test_deep_identity_findings_are_injectable_and_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime_root = Path(td) / "runtime"
+            (runtime_root / "releases" / "r-test").mkdir(parents=True)
+            runtime = {
+                "runtime_root": str(runtime_root),
+                "active_release": "r-test",
+                "manifest": {"content_sha256": "digest"},
+            }
+            calls: list[str] = []
+            def probe(path: str) -> tuple[bool, str]:
+                calls.append(path)
+                return True, "version"
+            findings = OperatorHealthService.deep_identity_findings(
+                runtime, sys.executable, sys.executable,
+                digest_factory=lambda path: "digest",
+                version_probe=probe,
+            )
+            self.assertEqual([item.code for item in findings], ["install.release_digest", "taskwarrior.identity", "python.identity"])
+            self.assertEqual(len(calls), 2)
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

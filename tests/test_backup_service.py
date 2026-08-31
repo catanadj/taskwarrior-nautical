@@ -220,6 +220,26 @@ class BackupServiceTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
 
+    def test_capture_export_locked_command_has_no_output_or_temporary_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task-locked.py"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('database is locked', file=sys.stderr)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup" / "tasks.json"
+            with self.assertRaisesRegex(BackupExportError, "database is locked"):
+                capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
+
     def test_capture_export_timeout_has_no_output_or_temporary_files(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

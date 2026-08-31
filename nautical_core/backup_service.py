@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -95,6 +96,15 @@ class SQLiteBackup:
     destination: str
     bytes: int
     quick_check: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackupRetention:
+    """Result of pruning verified backup generations."""
+
+    kept: tuple[str, ...]
+    removed: tuple[str, ...]
+    skipped: tuple[str, ...]
 
 
 def _safe_relative_path(value: str) -> str:
@@ -259,6 +269,49 @@ def verify_manifest(root: Path, manifest: Mapping[str, Any]) -> BackupVerificati
         return BackupVerification("verified", str(root_path), len(records))
     except BackupManifestError as exc:
         return BackupVerification("rejected", str(Path(root).expanduser()), 0, (str(exc),))
+
+
+def prune_backup_generations(root: Path, *, keep: int = 2) -> BackupRetention:
+    """Remove old verified generation directories without deleting the last one.
+
+    Invalid, incomplete, and unverified directories are retained for
+    inspection rather than guessed at or silently removed.
+    """
+    if not isinstance(keep, int) or isinstance(keep, bool) or keep < 1:
+        raise BackupManifestError("backup retention must keep at least one generation")
+    root = Path(root).expanduser().resolve()
+    if not root.is_dir() or root.is_symlink():
+        raise BackupManifestError(f"backup root is not a directory: {root}")
+    valid: list[tuple[int, Path]] = []
+    skipped: list[str] = []
+    for candidate in root.iterdir():
+        if candidate.is_symlink() or not candidate.is_dir():
+            skipped.append(candidate.name)
+            continue
+        try:
+            manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
+            verification = verify_manifest(candidate, manifest)
+            if verification.status != "verified":
+                skipped.append(candidate.name)
+                continue
+            valid.append((candidate.stat().st_mtime_ns, candidate))
+        except (OSError, TypeError, ValueError):
+            skipped.append(candidate.name)
+    valid.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+    kept = [path for _mtime, path in valid[: int(keep)]]
+    removed: list[str] = []
+    for _mtime, candidate in valid[int(keep):]:
+        try:
+            shutil.rmtree(candidate)
+        except OSError:
+            skipped.append(candidate.name)
+            continue
+        removed.append(candidate.name)
+    return BackupRetention(
+        tuple(path.name for path in kept),
+        tuple(removed),
+        tuple(sorted(set(skipped))),
+    )
 
 
 def manifest_json(manifest: Mapping[str, Any]) -> str:

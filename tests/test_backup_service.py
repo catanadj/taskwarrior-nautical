@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import stat
 import sqlite3
@@ -16,10 +17,62 @@ from nautical_core.backup_service import (
     publish_manifest,
     validate_manifest,
     verify_manifest,
+    prune_backup_generations,
 )
 
 
 class BackupServiceTests(unittest.TestCase):
+    def _generation(self, root: Path, name: str, content: str = "ok") -> Path:
+        generation = root / name
+        generation.mkdir()
+        (generation / "payload").write_text(content, encoding="utf-8")
+        publish_manifest(generation / "manifest.json", create_manifest(generation, files=("payload",)))
+        return generation
+
+    def test_prune_keeps_newest_verified_generations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            older = self._generation(root, "old")
+            middle = self._generation(root, "middle")
+            newest = self._generation(root, "newest")
+            for index, path in enumerate((older, middle, newest), start=1):
+                os.utime(path, (index, index))
+            result = prune_backup_generations(root)
+            self.assertEqual(result.kept, ("newest", "middle"))
+            self.assertEqual(result.removed, ("old",))
+            self.assertFalse(older.exists())
+
+    def test_prune_leaves_invalid_and_unverified_generations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            valid = self._generation(root, "valid")
+            invalid = root / "invalid"
+            invalid.mkdir()
+            (invalid / "manifest.json").write_text("not-json", encoding="utf-8")
+            unverified = self._generation(root, "unverified")
+            (unverified / "payload").write_text("changed", encoding="utf-8")
+            result = prune_backup_generations(root, keep=1)
+            self.assertEqual(result.kept, ("valid",))
+            self.assertEqual(result.removed, ())
+            self.assertTrue(invalid.exists())
+            self.assertTrue(unverified.exists())
+
+    def test_prune_honors_keep_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ("one", "two", "three"):
+                self._generation(root, name)
+            result = prune_backup_generations(root, keep=1)
+            self.assertEqual(len(result.kept), 1)
+            self.assertEqual(len(result.removed), 2)
+
+    def test_prune_refuses_zero_or_boolean_retention(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with self.assertRaises(BackupManifestError):
+                prune_backup_generations(root, keep=0)
+            with self.assertRaises(BackupManifestError):
+                prune_backup_generations(root, keep=True)
     def test_outbox_online_backup_copies_wal_and_checks_integrity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

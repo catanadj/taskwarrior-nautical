@@ -7,9 +7,35 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from nautical_core import backup_service
+from nautical_core.tools import nautical_backup
 
 
 class BackupCliTests(unittest.TestCase):
+    def test_publication_interruption_removes_staging_and_preserves_previous(self):
+        with tempfile.TemporaryDirectory(prefix="nautical-backup-cli-") as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            (taskdata / ".nautical-state").mkdir(parents=True)
+            connection = sqlite3.connect(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db")
+            connection.execute("CREATE TABLE marker (value TEXT)")
+            connection.commit()
+            connection.close()
+            task = root / "task"
+            task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup"
+            previous = root / "previous"
+            previous.mkdir()
+            with patch.object(nautical_backup.os, "replace", side_effect=OSError("simulated interruption")):
+                with self.assertRaises(backup_service.BackupExportError):
+                    nautical_backup.create_backup(taskdata, destination, task_bin=str(task), timeout=5.0)
+            self.assertFalse(destination.exists())
+            self.assertTrue(previous.is_dir())
+            self.assertEqual(list(root.glob(".backup.*")), [])
+
     def test_named_options_capture_export_and_outbox(self):
         script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
         with tempfile.TemporaryDirectory(prefix="nautical-backup-cli-") as td:

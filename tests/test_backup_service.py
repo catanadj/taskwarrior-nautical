@@ -18,10 +18,29 @@ from nautical_core.backup_service import (
     validate_manifest,
     verify_manifest,
     prune_backup_generations,
+    build_backup_metadata,
 )
 
 
 class BackupServiceTests(unittest.TestCase):
+    def test_backup_metadata_is_explicit_and_deterministic(self):
+        values = dict(
+            active_release="r-test",
+            runtime_digest="a" * 64,
+            taskwarrior_version="3.5.0",
+            python_version="3.11.2",
+            timezone="Europe/Bucharest",
+            timezone_data_identity="tzdata-2026a",
+        )
+        expected = {
+            "metadata_schema": 1,
+            **values,
+        }
+        self.assertEqual(build_backup_metadata(**values), expected)
+        self.assertEqual(build_backup_metadata(**values), build_backup_metadata(**values))
+
+    def test_backup_metadata_omits_unsupplied_values(self):
+        self.assertEqual(build_backup_metadata(timezone=" UTC ", python_version=""), {"metadata_schema": 1, "timezone": "UTC"})
     def _generation(self, root: Path, name: str, content: str = "ok") -> Path:
         generation = root / name
         generation.mkdir()

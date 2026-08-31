@@ -27,6 +27,39 @@ MAX_PATH_BYTES = 4096
 MAX_METADATA_KEYS = 128
 
 
+def build_backup_metadata(
+    *,
+    active_release: str | None = None,
+    runtime_digest: str | None = None,
+    taskwarrior_version: str | None = None,
+    python_version: str | None = None,
+    timezone: str | None = None,
+    timezone_data_identity: str | None = None,
+) -> dict[str, Any]:
+    """Build explicit, JSON-safe provenance metadata for a backup.
+
+    Values are caller-supplied deliberately: creating a backup must not
+    silently inspect or depend on the live installation's environment.
+    """
+    values = (
+        ("active_release", active_release),
+        ("runtime_digest", runtime_digest),
+        ("taskwarrior_version", taskwarrior_version),
+        ("python_version", python_version),
+        ("timezone", timezone),
+        ("timezone_data_identity", timezone_data_identity),
+    )
+    result: dict[str, Any] = {"metadata_schema": 1}
+    for key, value in values:
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            result[key] = normalized
+    json.dumps(result, ensure_ascii=False)
+    return result
+
+
 class BackupManifestError(ValueError):
     """Raised when an inventory or manifest violates the backup contract."""
 

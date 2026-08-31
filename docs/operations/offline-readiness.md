@@ -33,3 +33,36 @@ nautical doctor --installation-only
 Use a disposable `TASKDATA` directory for repair drills. The kit does not
 include user Taskwarrior data, lifecycle state, or private resource files;
 back those up separately before an offline recovery operation.
+
+## Snapshot Taskdata Before Recovery
+
+There are two different backups, and they serve different purposes. For a
+portable Taskwarrior copy, first stop other Taskwarrior/Nautical processes and
+export with hooks disabled:
+
+```bash
+TASKDATA="$HOME/.task"
+task rc.hooks=off rc.verbose=nothing export > taskwarrior-export.json
+```
+
+This export preserves task records and UUIDs, but not Taskwarrior's local
+history or Nautical's lifecycle outbox. It is the safer choice for moving
+tasks to another installation.
+
+For implementation-specific recovery, take an exact filesystem snapshot only
+after all Taskwarrior and Nautical processes have stopped. This preserves the
+Taskwarrior database/history and Nautical state, including the outbox WAL:
+
+```bash
+TASKDATA="$HOME/.task"
+SNAPSHOT="$HOME/nautical-taskdata-snapshot-$(date +%Y%m%d-%H%M%S).tar"
+tar -C "$TASKDATA" -cf "$SNAPSHOT" .
+sha256sum "$SNAPSHOT" > "$SNAPSHOT.sha256"
+```
+
+Do not make an exact copy while a process may be writing Taskwarrior or SQLite
+files; an interrupted or live copy is not a consistent backup. Restore an
+exact snapshot only into an empty disposable directory first, verify its
+checksum, and run `nautical doctor --installation-only`, `nautical queue-status
+--json`, and a reconcile dry-run before considering any live replacement. Never
+extract it over an existing Taskdata directory.

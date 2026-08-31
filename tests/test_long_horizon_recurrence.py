@@ -16,6 +16,7 @@ FIXTURES = (
     ("anchor-weekly", {"anchor": "w:mon"}, 200),
     ("anchor-multi-time", {"anchor": "w:mon..sun@t=09:00,18:00"}, 1600),
     ("anchor-omit-sunday", {"anchor": "w:mon..sun@t=09:00", "omit": "w:sun"}, 700),
+    ("anchor-random-month", {"anchor": "m:rand"}, 30),
 )
 
 

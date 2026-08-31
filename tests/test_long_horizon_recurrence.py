@@ -62,6 +62,29 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
             self.assertTrue(first_values, name)
             self.assertLessEqual(len(first_values), limit, name)
 
+    def test_horizon_fixture_counts_and_endpoints_are_not_truncated(self) -> None:
+        expected = {
+            "anchor-weekly": (104, "2027-12-27T09:00:00+00:00"),
+            "anchor-multi-time": (1460, "2027-12-31T18:00:00+00:00"),
+            "anchor-omit-sunday": (626, "2027-12-31T09:00:00+00:00"),
+            "anchor-random-month": (24, "2027-12-19T09:00:00+00:00"),
+        }
+        for index, (name, recurrence, limit) in enumerate(FIXTURES, start=1):
+            base = {
+                "uuid": f"00000000-0000-4000-8000-{index:012d}",
+                "chainID": f"horizon-{name}",
+                "link": 1,
+                "status": "pending",
+                **recurrence,
+            }
+            values = _signatures(
+                SchedulerService.from_observation(
+                    TaskObservation.from_mapping(base, source_query="long-horizon-fixture")
+                ),
+                limit=limit,
+            )
+            self.assertEqual((len(values), values[-1]), expected[name])
+
     def test_cp_fixture_projects_a_730_day_horizon_deterministically(self) -> None:
         base = datetime(2026, 1, 1, 9, tzinfo=timezone.utc)
         values = []

@@ -547,6 +547,7 @@ def main() -> int:
         action="store_true",
         help="check installation and configuration without auditing task chains or lifecycle state",
     )
+    parser.add_argument("--deep", action="store_true", help="run additional read-only offline health checks")
     parser.add_argument("--stale-after-seconds", type=float, default=300.0)
     parser.add_argument("--clean-cache", action="store_true", help="prune expired and orphaned anchor cache files")
     args = parser.parse_args()
@@ -612,6 +613,19 @@ def main() -> int:
     )
     _check_managed_runtime(findings, hooks_dir, hook_runtimes)
     _check_config(findings, taskdata)
+    if args.deep:
+        storage_paths: dict[str, object] = {
+            "taskdata": taskdata,
+            "lifecycle_state": taskdata / ".nautical-state",
+            "managed_runtime": taskdata / ".nautical-runtime",
+        }
+        backup_root = os.environ.get("NAUTICAL_BACKUP_DIR", "").strip()
+        if backup_root:
+            storage_paths["backup"] = Path(backup_root).expanduser()
+        storage_report = OperatorHealthService.report(
+            OperatorHealthService.storage_findings(storage_paths)
+        )
+        findings.extend(item.to_doctor_dict() for item in storage_report.findings)
     if args.clean_cache:
         gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)

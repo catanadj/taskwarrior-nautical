@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any, Callable, Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
@@ -107,6 +108,47 @@ class OperatorHealthService:
     @staticmethod
     def report(findings: Iterable[OperatorFinding]) -> OperatorHealthReport:
         return OperatorHealthReport(tuple(findings))
+
+    @staticmethod
+    def storage_findings(
+        paths: Mapping[str, object],
+        *,
+        statvfs_factory: Callable[[str], object] = os.statvfs,
+    ) -> tuple[OperatorFinding, ...]:
+        """Report read-only filesystem capacity for explicitly supplied paths."""
+        findings: list[OperatorFinding] = []
+        for label, raw_path in paths.items():
+            path = str(raw_path)
+            try:
+                stats = statvfs_factory(path)
+                block_size = int(getattr(stats, "f_frsize", 0) or getattr(stats, "f_bsize", 0))
+                free_blocks = int(getattr(stats, "f_bavail"))
+                total_blocks = int(getattr(stats, "f_blocks"))
+                free_inodes = int(getattr(stats, "f_favail"))
+                total_inodes = int(getattr(stats, "f_files"))
+                if block_size < 1 or min(free_blocks, total_blocks, free_inodes, total_inodes) < 0:
+                    raise ValueError("statvfs returned invalid capacity values")
+                findings.append(OperatorFinding(
+                    f"storage.{label}", "installation", FindingSeverity.INFO,
+                    FindingActionability.INFORMATIONAL,
+                    f"Storage capacity is readable for {label}: {path}.",
+                    observed={
+                        "path": path,
+                        "free_bytes": free_blocks * block_size,
+                        "total_bytes": total_blocks * block_size,
+                        "free_inodes": free_inodes,
+                        "total_inodes": total_inodes,
+                    },
+                ))
+            except Exception as exc:
+                findings.append(OperatorFinding(
+                    f"storage.{label}", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"Storage capacity is unavailable for {label}: {path}.",
+                    observed={"path": path, "error": str(exc)},
+                    guidance=f"Make the {label} filesystem readable and retry deep Doctor.",
+                ))
+        return tuple(findings)
 
     @staticmethod
     def diagnose_configuration(request: ConfigurationDiagnosisRequest) -> OperatorHealthReport:

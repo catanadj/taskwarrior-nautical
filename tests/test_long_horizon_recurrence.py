@@ -15,6 +15,7 @@ from nautical_core.task_models import TaskObservation
 FIXTURES = (
     ("anchor-weekly", {"anchor": "w:mon"}, 200),
     ("anchor-multi-time", {"anchor": "w:mon..sun@t=09:00,18:00"}, 1600),
+    ("anchor-omit-sunday", {"anchor": "w:mon..sun@t=09:00", "omit": "w:sun"}, 700),
 )
 
 
@@ -104,6 +105,23 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
         self.assertTrue(all(value.hour == 9 and value.minute == 0 for value in local))
         self.assertTrue(all(left < right for left, right in zip(utc_values, utc_values[1:])))
         self.assertGreater(len({value.utcoffset() for value in local}), 1)
+
+    def test_omission_fixture_never_returns_omitted_weekdays(self) -> None:
+        observation = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000703",
+                "chainID": "horizon-omit",
+                "link": 1,
+                "status": "pending",
+                "anchor": "w:mon..sun@t=09:00",
+                "omit": "w:sun",
+            },
+            source_query="long-horizon-fixture",
+        )
+        service = SchedulerService.from_observation(observation)
+        values = _signatures(service, limit=700)
+        self.assertTrue(values)
+        self.assertTrue(all(datetime.fromisoformat(value).weekday() != 6 for value in values))
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ COMMANDS = {
     "queue-status": ROOT / "nautical_core" / "tools" / "nautical_queue_status.py",
     "queue-review": ROOT / "nautical_core" / "tools" / "nautical_queue_review.py",
     "backup": ROOT / "nautical_core" / "tools" / "nautical_backup.py",
+    "restore": ROOT / "nautical_core" / "tools" / "nautical_restore.py",
     "reconcile": ROOT / "nautical_core" / "tools" / "nautical_reconcile.py",
     "query": ROOT / "nautical_core" / "tools" / "nautical_query.py",
     "navigator": ROOT / "nautical_navigator.py",
@@ -63,7 +64,7 @@ def _has_source_argument(arguments: list[str]) -> bool:
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
         print("usage: nautical <command> [options]")
-        print("commands: install, runtime-clean, doctor, queue-status, queue-review, reconcile, query, navigator")
+        print("commands: install, runtime-clean, doctor, queue-status, queue-review, backup, restore, reconcile, query, navigator")
         return 0
     command = ALIASES.get(sys.argv[1], sys.argv[1])
     target = COMMANDS.get(command)

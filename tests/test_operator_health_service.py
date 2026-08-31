@@ -50,6 +50,20 @@ class OperatorHealthServiceTests(unittest.TestCase):
             )
             self.assertEqual([item.code for item in findings], ["install.release_digest", "taskwarrior.identity", "python.identity"])
             self.assertEqual(len(calls), 2)
+
+    def test_deep_resource_findings_validate_timezone_and_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            resource = Path(td) / "calendar.json"
+            resource.write_text("{}", encoding="utf-8")
+            findings = OperatorHealthService.deep_resource_findings(
+                "UTC", {"calendar": resource}, timezone_factory=lambda value: object(),
+            )
+            self.assertEqual([item.severity.value for item in findings], ["info", "info"])
+            missing = OperatorHealthService.deep_resource_findings(
+                "No/Such/Zone", {"calendar": resource}, timezone_factory=lambda value: (_ for _ in ()).throw(ValueError("bad zone")),
+            )
+            self.assertEqual(missing[0].severity.value, "error")
+            self.assertEqual(missing[1].severity.value, "info")
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

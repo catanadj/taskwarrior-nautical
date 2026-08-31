@@ -215,6 +215,55 @@ class OperatorHealthService:
         return tuple(findings)
 
     @staticmethod
+    def deep_resource_findings(
+        timezone_name: str,
+        resources: Mapping[str, object],
+        *,
+        timezone_factory: Callable[[str], object] | None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Validate an explicit timezone and resource-path inventory read-only."""
+        findings: list[OperatorFinding] = []
+        try:
+            if timezone_factory is None:
+                raise RuntimeError("timezone support is unavailable")
+            timezone_factory(str(timezone_name).strip())
+            findings.append(OperatorFinding(
+                "config.timezone.deep", "configuration", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"Configured timezone is available: {timezone_name}.",
+                observed={"timezone": str(timezone_name)},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "config.timezone.deep", "configuration", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                f"Configured timezone is unavailable: {timezone_name}.",
+                observed={"timezone": str(timezone_name), "error": str(exc)},
+                guidance="Install timezone data or select an available IANA timezone, then retry deep Doctor.",
+            ))
+        for label, raw_path in resources.items():
+            path = Path(str(raw_path)).expanduser()
+            try:
+                resolved = path.resolve(strict=True)
+                if not (resolved.is_file() or resolved.is_dir()) or not os.access(str(resolved), os.R_OK):
+                    raise OSError("resource is not readable")
+                findings.append(OperatorFinding(
+                    f"resource.{label}", "configuration", FindingSeverity.INFO,
+                    FindingActionability.INFORMATIONAL,
+                    f"Configured resource is readable: {label}.",
+                    observed={"path": str(resolved), "kind": "directory" if resolved.is_dir() else "file"},
+                ))
+            except Exception as exc:
+                findings.append(OperatorFinding(
+                    f"resource.{label}", "configuration", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"Configured resource is unavailable: {label}.",
+                    observed={"path": str(path), "error": str(exc)},
+                    guidance=f"Create or correct the configured {label} resource, then retry deep Doctor.",
+                ))
+        return tuple(findings)
+
+    @staticmethod
     def _probe_executable(path: str) -> tuple[bool, str]:
         try:
             result = subprocess.run([path, "--version"], capture_output=True, text=True, check=False, timeout=5)

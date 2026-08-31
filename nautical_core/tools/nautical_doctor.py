@@ -631,6 +631,28 @@ def main() -> int:
             OperatorHealthService.deep_identity_findings(runtime_state, args.task_bin, sys.executable)
         )
         findings.extend(item.to_doctor_dict() for item in identity_report.findings)
+        deep_config_path = next((path for path in _config_candidates(taskdata) if path.is_file()), None)
+        deep_data: dict[str, Any] = {}
+        if deep_config_path is not None:
+            try:
+                parsed = tomllib.loads(deep_config_path.read_text(encoding="utf-8"))
+                if isinstance(parsed, dict):
+                    deep_data = parsed
+            except Exception:
+                # The normal configuration check already reports parse errors.
+                deep_data = {}
+        deep_resources: dict[str, object] = {}
+        if deep_config_path is not None:
+            deep_resources["config"] = deep_config_path
+        for key in ("anchor_file_dir", "omit_file_dir", "anchor_cache_dir"):
+            raw = str(deep_data.get(key) or "").strip()
+            if raw:
+                path = Path(raw).expanduser()
+                deep_resources[key] = path if path.is_absolute() else deep_config_path.parent / path
+        resource_report = OperatorHealthService.report(OperatorHealthService.deep_resource_findings(
+            str(deep_data.get("tz") or "UTC"), deep_resources, timezone_factory=ZONEINFO_FACTORY,
+        ))
+        findings.extend(item.to_doctor_dict() for item in resource_report.findings)
     if args.clean_cache:
         gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)

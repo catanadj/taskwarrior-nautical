@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
 
 CORE_ROOT = Path(__file__).resolve().parents[1].parent
 if str(CORE_ROOT) not in sys.path:
@@ -78,6 +79,8 @@ def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: 
             staging,
             metadata={
                 **(metadata or {}),
+                "created_at": time.time(),
+                "restore_tool_schema": 1,
                 "taskdata": str(taskdata),
                 "task_export_tasks": task_export.tasks,
                 "outbox_quick_check": outbox.quick_check,

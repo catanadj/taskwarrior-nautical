@@ -214,6 +214,51 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
             self.assertEqual(list(root.glob(".manifest.json.*")), [])
 
+    def test_outbox_failure_removes_partial_target(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            source = source_dir / ".nautical_lifecycle_outbox.db"
+            source.write_bytes(b"source")
+            target = root / "outbox.db"
+
+            class FakeConnection:
+                def __init__(self, is_target: bool) -> None:
+                    self.is_target = is_target
+                def backup(self, other: object) -> None:
+                    target.write_bytes(b"partial")
+                def commit(self) -> None:
+                    return None
+                def execute(self, query: str) -> object:
+                    raise sqlite3.DatabaseError("simulated quick_check failure")
+                def close(self) -> None:
+                    return None
+
+            calls = iter((FakeConnection(False), FakeConnection(True)))
+            with patch.object(service.sqlite3, "connect", side_effect=lambda *args, **kwargs: next(calls)):
+                with self.assertRaises(BackupExportError):
+                    backup_outbox_database(taskdata, target)
+            self.assertFalse(target.exists())
+
+    def test_outbox_connection_failure_rejects_without_artifacts(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            (source_dir / ".nautical_lifecycle_outbox.db").write_bytes(b"source")
+            target = root / "outbox.db"
+            with patch.object(service.sqlite3, "connect", side_effect=sqlite3.OperationalError("simulated open failure")):
+                with self.assertRaises(BackupExportError):
+                    backup_outbox_database(taskdata, target)
+            self.assertFalse(target.exists())
+            self.assertEqual(list(root.glob(".outbox.db.*")), [])
+
+
     def test_changed_artifact_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

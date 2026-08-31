@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -110,6 +111,29 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertEqual(result.status, "rejected")
             self.assertTrue(target.is_dir())
             self.assertEqual(list(target.iterdir()), [])
+            self.assertEqual(list(root.glob(".restored.restore-*")), [])
+
+    def test_restore_resource_copy_failure_cleans_staging_and_target(self):
+        import nautical_core.restore_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            resources = source / "resources"
+            resources.mkdir()
+            (resources / "calendar.json").write_text('{"name":"café"}\n', encoding="utf-8")
+            from nautical_core.backup_service import create_manifest, publish_manifest
+            publish_manifest(
+                source / "manifest.json",
+                create_manifest(
+                    source,
+                    files=("taskwarrior-export.json", "lifecycle-outbox.db", "resources/calendar.json"),
+                ),
+            )
+            target = root / "restored"
+            with patch.object(service.shutil, "copytree", side_effect=service.shutil.Error("simulated resource failure")):
+                result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertFalse(target.exists())
             self.assertEqual(list(root.glob(".restored.restore-*")), [])
 
 

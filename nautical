@@ -16,6 +16,7 @@ COMMANDS = {
     "doctor": ROOT / "nautical_core" / "tools" / "nautical_doctor.py",
     "queue-status": ROOT / "nautical_core" / "tools" / "nautical_queue_status.py",
     "queue-review": ROOT / "nautical_core" / "tools" / "nautical_queue_review.py",
+    "backup": ROOT / "nautical_core" / "tools" / "nautical_backup.py",
     "reconcile": ROOT / "nautical_core" / "tools" / "nautical_reconcile.py",
     "query": ROOT / "nautical_core" / "tools" / "nautical_query.py",
     "navigator": ROOT / "nautical_navigator.py",

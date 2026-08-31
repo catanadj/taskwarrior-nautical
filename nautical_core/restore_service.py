@@ -115,8 +115,10 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
             return RestoreReport("rejected", report.source, str(destination), errors=("restore target must be a new or empty directory",))
     parent = destination.parent
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=parent))
+    temporary: Path | None = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=parent))
+    displaced: Path | None = None
     try:
+        assert temporary is not None
         source_path = Path(report.source)
         shutil.copy2(source_path / "taskwarrior-export.json", temporary / "taskwarrior-export.json")
         state = temporary / ".nautical-state"
@@ -132,11 +134,20 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
             shutil.copytree(resources, temporary / "resources")
         shutil.copy2(source_path / "manifest.json", temporary / "manifest.json")
         if destination.exists():
-            destination.rmdir()
+            displaced = Path(tempfile.mkdtemp(prefix=f".{destination.name}.previous-", dir=parent))
+            displaced.rmdir()
+            os.replace(destination, displaced)
         os.replace(temporary, destination)
+        temporary = None
+        if displaced is not None:
+            displaced.rmdir()
+            displaced = None
         return RestoreReport("restored", report.source, str(destination), report.tasks, report.checked, report.quick_check)
-    except (OSError, shutil.Error) as exc:
-        shutil.rmtree(temporary, ignore_errors=True)
+    except (BackupRestoreError, OSError, shutil.Error) as exc:
+        if temporary is not None:
+            shutil.rmtree(temporary, ignore_errors=True)
+        if displaced is not None and not destination.exists():
+            os.replace(displaced, destination)
         return RestoreReport("rejected", report.source, str(destination), errors=(f"restore could not be published: {exc}",))
 
 

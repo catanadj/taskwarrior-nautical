@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from nautical_core.backup_service import create_manifest, publish_manifest
@@ -51,6 +52,12 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertEqual(json.loads((target / "taskwarrior-export.json").read_text(encoding="utf-8"))[0]["description"], "café")
             self.assertTrue((target / ".nautical-state" / ".nautical_lifecycle_outbox.db").is_file())
 
+            empty = root / "empty"
+            empty.mkdir()
+            result = restore_backup(source, empty, apply=True)
+            self.assertEqual(result.status, "restored")
+            self.assertTrue((empty / "taskwarrior-export.json").is_file())
+
     def test_apply_refuses_nonempty_target(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -90,6 +97,20 @@ class RestoreServiceTests(unittest.TestCase):
             result = restore_backup(source, target, apply=True)
             self.assertEqual(result.status, "rejected")
             self.assertFalse(target.exists())
+
+    def test_restore_publication_interruption_preserves_empty_target(self):
+        import nautical_core.restore_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            target = root / "restored"
+            target.mkdir()
+            with patch.object(service.os, "replace", side_effect=OSError("simulated interruption")):
+                result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(target.is_dir())
+            self.assertEqual(list(target.iterdir()), [])
+            self.assertEqual(list(root.glob(".restored.restore-*")), [])
 
 
 if __name__ == "__main__":

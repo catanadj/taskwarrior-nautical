@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import unittest
+from zoneinfo import ZoneInfo
 
+from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.scheduler_cursor import OccurrenceCursor
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.task_models import TaskObservation
@@ -72,6 +74,36 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
             values.append(previous)
         self.assertEqual(values[-1], datetime(2028, 1, 1, 9, tzinfo=timezone.utc))
         self.assertTrue(all(left < right for left, right in zip(values, values[1:])))
+
+    def test_timezone_fixture_preserves_local_time_across_dst(self) -> None:
+        zone = ZoneInfo("Europe/Bucharest")
+        observation = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000701",
+                "chainID": "horizon-dst",
+                "link": 1,
+                "status": "pending",
+                "anchor": "w:mon..sun@t=09:00",
+            },
+            source_query="long-horizon-fixture",
+        )
+        service = SchedulerService.from_observation(
+            observation,
+            context=RecurrenceContext("horizon-dst", timezone=zone),
+        )
+        result = service.collect(
+            OccurrenceCursor.inclusive_at(
+                datetime(2026, 1, 1, tzinfo=zone), timezone=zone,
+                date_limit=datetime(2028, 1, 1, tzinfo=zone).date(),
+            ),
+            limit=800,
+            max_iterations=2400,
+        )
+        local = tuple(item.local_datetime for item in result.occurrences)
+        utc_values = tuple(value.astimezone(timezone.utc) for value in local)
+        self.assertTrue(all(value.hour == 9 and value.minute == 0 for value in local))
+        self.assertTrue(all(left < right for left, right in zip(utc_values, utc_values[1:])))
+        self.assertGreater(len({value.utcoffset() for value in local}), 1)
 
 
 if __name__ == "__main__":

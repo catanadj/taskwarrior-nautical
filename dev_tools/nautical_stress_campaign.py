@@ -20,20 +20,25 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOOP = ROOT / "dev_tools" / "nautical_mixed_recurrence_loop.py"
+PROFILE_BUDGETS = {
+    "ci": (8, 300.0),
+    "nightly": (24, 300.0),
+    "stress": (64, 900.0),
+}
 
 
 def _run_stage(profile: str) -> dict:
-    cycles = 8 if profile == "ci" else 24
+    cycles, timeout = PROFILE_BUDGETS[profile]
     command = [sys.executable, str(LOOP), "--cycles", str(cycles), "--json", "--enforce"]
     started = time.perf_counter()
     try:
-        proc = subprocess.run(command, text=True, capture_output=True, timeout=300.0)
+        proc = subprocess.run(command, text=True, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {
             "stage": "mixed_recurrence",
             "status": "failed",
             "duration_s": round(time.perf_counter() - started, 3),
-            "error": "stage timed out after 300 seconds",
+            "error": f"stage timed out after {timeout:g} seconds",
         }
 
     raw = (proc.stdout or "").strip()
@@ -61,7 +66,7 @@ def _run_stage(profile: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Nautical CI stress campaign")
-    parser.add_argument("--profile", choices=("ci", "nightly"), default="ci")
+    parser.add_argument("--profile", choices=tuple(PROFILE_BUDGETS), default="ci")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--enforce", action="store_true", help="exit non-zero when a stage fails")
     args = parser.parse_args()

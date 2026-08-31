@@ -62,6 +62,25 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertEqual(result.status, "rejected")
             self.assertTrue((target / "keep").exists())
 
+    def test_apply_restores_explicit_resources(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            resources = source / "resources"
+            resources.mkdir()
+            (resources / "calendar.json").write_text('{"name":"café"}\n', encoding="utf-8")
+            publish_manifest(
+                source / "manifest.json",
+                create_manifest(
+                    source,
+                    files=("taskwarrior-export.json", "lifecycle-outbox.db", "resources/calendar.json"),
+                ),
+            )
+            target = root / "restored"
+            result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "restored")
+            self.assertIn("café", (target / "resources" / "calendar.json").read_text(encoding="utf-8"))
+
     def test_corrupt_export_is_rejected_before_apply(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

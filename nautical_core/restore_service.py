@@ -122,6 +122,14 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
         state = temporary / ".nautical-state"
         state.mkdir(mode=0o700)
         shutil.copy2(source_path / "lifecycle-outbox.db", state / ".nautical_lifecycle_outbox.db")
+        resources = source_path / "resources"
+        if resources.exists():
+            if resources.is_symlink() or not resources.is_dir():
+                raise BackupRestoreError("backup resources directory is missing or unsafe")
+            for resource in resources.iterdir():
+                if resource.is_symlink() or not resource.is_file():
+                    raise BackupRestoreError(f"backup resource is missing or unsafe: {resource.name}")
+            shutil.copytree(resources, temporary / "resources")
         shutil.copy2(source_path / "manifest.json", temporary / "manifest.json")
         if destination.exists():
             destination.rmdir()

@@ -17,6 +17,9 @@ class OfflineKitTests(unittest.TestCase):
             verified = subprocess.run([sys.executable, str(script), "verify", str(kit)], capture_output=True, text=True, check=False)
             self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
             self.assertEqual(json.loads(verified.stdout)["status"], "verified")
+            manifest = json.loads((kit / "kit-manifest.json").read_text(encoding="utf-8"))
+            paths = [item["path"] for item in manifest["files"]]
+            self.assertFalse(any(".nautical-cache" in path or "__pycache__" in path or path.endswith(".pyc") for path in paths))
 
     def test_verify_rejects_changed_runtime(self):
         script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"

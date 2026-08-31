@@ -59,7 +59,17 @@ def _files(root: Path) -> list[Path]:
     result: list[Path] = []
     for path in paths:
         if path.is_dir():
-            result.extend(sorted(item for item in path.rglob("*") if item.is_file() and not item.is_symlink()))
+            result.extend(
+                sorted(
+                    item
+                    for item in path.rglob("*")
+                    if item.is_file()
+                    and not item.is_symlink()
+                    and ".nautical-cache" not in item.relative_to(root).parts
+                    and "__pycache__" not in item.relative_to(root).parts
+                    and item.suffix != ".pyc"
+                )
+            )
         elif path.is_file() and not path.is_symlink():
             result.append(path)
         else:

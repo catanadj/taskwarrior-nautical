@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
 import stat
+import sqlite3
 import tempfile
 import unittest
 
 from nautical_core.backup_service import (
     BackupManifestError,
     BackupExportError,
+    backup_outbox_database,
     capture_taskwarrior_export,
     create_manifest,
     inventory,
@@ -18,6 +20,46 @@ from nautical_core.backup_service import (
 
 
 class BackupServiceTests(unittest.TestCase):
+    def test_outbox_online_backup_copies_wal_and_checks_integrity(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            state = taskdata / ".nautical-state"
+            state.mkdir(parents=True)
+            source = state / ".nautical_lifecycle_outbox.db"
+            connection = sqlite3.connect(source)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("CREATE TABLE values_table (value TEXT NOT NULL)")
+            connection.execute("INSERT INTO values_table VALUES ('pending')")
+            connection.commit()
+            # Leave the connection open so the row remains a WAL-backed source.
+            destination = root / "backup" / "outbox.db"
+            result = backup_outbox_database(taskdata, destination)
+            connection.close()
+            self.assertEqual(result.status, "captured")
+            self.assertEqual(result.quick_check, "ok")
+            copied = sqlite3.connect(destination)
+            self.assertEqual(copied.execute("SELECT value FROM values_table").fetchone()[0], "pending")
+            copied.close()
+
+    def test_outbox_backup_refuses_live_or_existing_destinations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            state = taskdata / ".nautical-state"
+            state.mkdir(parents=True)
+            source = state / ".nautical_lifecycle_outbox.db"
+            connection = sqlite3.connect(source)
+            connection.execute("CREATE TABLE values_table (value TEXT)")
+            connection.commit()
+            with self.assertRaises(BackupExportError):
+                backup_outbox_database(taskdata, taskdata / "outbox.db")
+            target = root / "existing.db"
+            target.write_bytes(b"existing")
+            with self.assertRaises(BackupExportError):
+                backup_outbox_database(taskdata, target)
+            connection.close()
+
     def _fake_task(self, root: Path, output: str) -> Path:
         script = root / "task-fake.py"
         script.write_text(

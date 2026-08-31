@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -83,6 +84,17 @@ class BackupExport:
     tasks: int
     bytes: int
     sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteBackup:
+    """Metadata for one verified SQLite online backup."""
+
+    status: str
+    source: str
+    destination: str
+    bytes: int
+    quick_check: str
 
 
 def _safe_relative_path(value: str) -> str:
@@ -311,3 +323,65 @@ def capture_taskwarrior_export(
             except OSError:
                 pass
     return BackupExport("captured", str(target), len(payload), len(encoded), hashlib.sha256(encoded).hexdigest())
+
+
+def backup_outbox_database(taskdata: Path, destination: Path) -> SQLiteBackup:
+    """Copy the lifecycle outbox with SQLite's online-backup API.
+
+    The destination is a new standalone database outside Taskdata.  SQLite's
+    backup API copies committed pages while handling a live WAL; callers still
+    need to quiesce lifecycle mutation for a logically coordinated multi-file
+    backup, which is intentionally outside this primitive.
+    """
+    source_root = Path(taskdata).expanduser().resolve()
+    source = source_root / ".nautical-state" / ".nautical_lifecycle_outbox.db"
+    target = Path(destination).expanduser().absolute()
+    if not source_root.is_dir():
+        raise BackupExportError(f"Taskdata is not a directory: {source_root}")
+    if source.is_symlink() or not source.is_file():
+        raise BackupExportError(f"lifecycle outbox database is unavailable: {source}")
+    if target.exists() or target.is_symlink():
+        raise BackupExportError(f"outbox backup destination already exists: {target}")
+    try:
+        target_resolved = target.resolve()
+    except OSError as exc:
+        raise BackupExportError(f"outbox backup destination cannot be resolved: {target}") from exc
+    if target_resolved == source_root or source_root in target_resolved.parents:
+        raise BackupExportError("outbox backup destination must be outside Taskdata")
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    source_conn: sqlite3.Connection | None = None
+    target_conn: sqlite3.Connection | None = None
+    try:
+        source_conn = sqlite3.connect(str(source), uri=False)
+        target_conn = sqlite3.connect(str(target), uri=False)
+        source_conn.backup(target_conn)
+        target_conn.commit()
+        quick_check = str(target_conn.execute("PRAGMA quick_check").fetchone()[0])
+        if quick_check.lower() != "ok":
+            raise BackupExportError(f"outbox backup integrity check failed: {quick_check}")
+    except BackupExportError:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise
+    except (OSError, sqlite3.Error) as exc:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise BackupExportError(f"could not back up lifecycle outbox: {exc}") from exc
+    finally:
+        if target_conn is not None:
+            target_conn.close()
+        if source_conn is not None:
+            source_conn.close()
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise BackupExportError(f"outbox backup was not published: {exc}") from exc
+    return SQLiteBackup("captured", str(source), str(target), size, quick_check)

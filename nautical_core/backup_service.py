@@ -75,6 +75,7 @@ class StorageIO:
     replace: Callable[[str, str], None] | None = None
     fsync: Callable[[int], None] | None = None
     unlink: Callable[[str], None] | None = None
+    sqlite_connect: Callable[..., sqlite3.Connection] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,7 +439,7 @@ def capture_taskwarrior_export(
     return BackupExport("captured", str(target), len(payload), len(encoded), hashlib.sha256(encoded).hexdigest())
 
 
-def backup_outbox_database(taskdata: Path, destination: Path) -> SQLiteBackup:
+def backup_outbox_database(taskdata: Path, destination: Path, *, storage: StorageIO | None = None) -> SQLiteBackup:
     """Copy the lifecycle outbox with SQLite's online-backup API.
 
     The destination is a new standalone database outside Taskdata.  SQLite's
@@ -467,9 +468,10 @@ def backup_outbox_database(taskdata: Path, destination: Path) -> SQLiteBackup:
         raise BackupExportError(f"could not prepare outbox backup destination: {exc}") from exc
     source_conn: sqlite3.Connection | None = None
     target_conn: sqlite3.Connection | None = None
+    connect = (storage or StorageIO()).sqlite_connect or sqlite3.connect
     try:
-        source_conn = sqlite3.connect(str(source), uri=False)
-        target_conn = sqlite3.connect(str(target), uri=False)
+        source_conn = connect(str(source), uri=False)
+        target_conn = connect(str(target), uri=False)
         source_conn.backup(target_conn)
         target_conn.commit()
         quick_check = str(target_conn.execute("PRAGMA quick_check").fetchone()[0])

@@ -413,6 +413,32 @@ class BackupServiceTests(unittest.TestCase):
                 with self.assertRaises(BackupExportError):
                     backup_outbox_database(taskdata, target)
             self.assertFalse(target.exists())
+
+    def test_outbox_backup_accepts_injected_connection_factory(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            source = source_dir / ".nautical_lifecycle_outbox.db"
+            connection = sqlite3.connect(source)
+            connection.execute("CREATE TABLE marker (value TEXT)")
+            connection.commit()
+            connection.close()
+            calls = []
+
+            def connect(path, **kwargs):
+                calls.append(path)
+                return sqlite3.connect(path, **kwargs)
+
+            destination = root / "outbox.db"
+            captured = backup_outbox_database(
+                taskdata,
+                destination,
+                storage=StorageIO(sqlite_connect=connect),
+            )
+            self.assertEqual(captured.status, "captured")
+            self.assertEqual(len(calls), 2)
             self.assertEqual(list(root.glob(".outbox.db.*")), [])
 
 

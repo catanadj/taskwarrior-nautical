@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 from typing import Any
 
-from .backup_service import BackupManifestError, verify_manifest
+from .backup_service import BackupManifestError, StorageIO, verify_manifest
 
 
 class BackupRestoreError(RuntimeError):
@@ -100,7 +100,13 @@ def validate_backup(source: Path) -> RestoreReport:
         return RestoreReport("rejected", str(source), errors=(str(exc),))
 
 
-def restore_backup(source: Path, target: Path | None = None, *, apply: bool = False) -> RestoreReport:
+def restore_backup(
+    source: Path,
+    target: Path | None = None,
+    *,
+    apply: bool = False,
+    storage: StorageIO | None = None,
+) -> RestoreReport:
     """Validate, then optionally stage a backup into a new disposable target.
 
     Without ``apply`` this function is strictly inspect-only.  An existing
@@ -114,6 +120,7 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
         if not destination.is_dir() or any(destination.iterdir()):
             return RestoreReport("rejected", report.source, str(destination), errors=("restore target must be a new or empty directory",))
     parent = destination.parent
+    replace = (storage or StorageIO()).replace or os.replace
     temporary: Path | None = None
     displaced: Path | None = None
     try:
@@ -137,8 +144,8 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
         if destination.exists():
             displaced = Path(tempfile.mkdtemp(prefix=f".{destination.name}.previous-", dir=parent))
             displaced.rmdir()
-            os.replace(destination, displaced)
-        os.replace(temporary, destination)
+            replace(str(destination), str(displaced))
+        replace(str(temporary), str(destination))
         temporary = None
         if displaced is not None:
             displaced.rmdir()
@@ -148,7 +155,7 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
         if temporary is not None:
             shutil.rmtree(temporary, ignore_errors=True)
         if displaced is not None and not destination.exists():
-            os.replace(displaced, destination)
+            replace(str(displaced), str(destination))
         return RestoreReport("rejected", report.source, str(destination), errors=(f"restore could not be published: {exc}",))
 
 

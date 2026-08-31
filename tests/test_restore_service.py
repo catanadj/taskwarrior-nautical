@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from nautical_core.backup_service import create_manifest, publish_manifest
+from nautical_core.backup_service import StorageIO, create_manifest, publish_manifest
 from nautical_core.restore_service import restore_backup, validate_backup
 
 
@@ -173,6 +173,22 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertTrue(target.is_dir())
             self.assertEqual(list(target.iterdir()), [])
             self.assertEqual(list(root.glob(".restored.restore-*")), [])
+
+    def test_restore_accepts_injected_publication_operation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            target = root / "restored"
+            calls = []
+
+            def replace(source_path, destination):
+                calls.append("replace")
+                service.os.replace(source_path, destination)
+
+            import nautical_core.restore_service as service
+            result = restore_backup(source, target, apply=True, storage=StorageIO(replace=replace))
+            self.assertEqual(result.status, "restored")
+            self.assertEqual(calls, ["replace"])
 
     def test_restore_resource_copy_failure_cleans_staging_and_target(self):
         import nautical_core.restore_service as service

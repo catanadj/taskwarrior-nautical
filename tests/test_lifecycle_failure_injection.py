@@ -11,6 +11,7 @@ from __future__ import annotations
 import unittest
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -19,7 +20,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nautical_core.lifecycle_application import LifecycleApplicationService
-from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
+from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
 from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository
 from nautical_core.operator_context import OperatorInvocationBudget
@@ -173,6 +174,53 @@ print(json.dumps(payload, sort_keys=True))
             )
             self.assertEqual(claim.kind.value, "applied")
             self.assertEqual(claimed[plan.identity.idempotency_key].kind.value, "applied")
+
+    def test_stage_lock_is_retryable_and_does_not_duplicate_intent(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "stage-interrupt",
+                "00000000-0000-4000-8000-000000000611",
+                "00000000-0000-4000-8000-000000000612",
+                1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(outbox.claim_intent(owner="stage-owner", lease_seconds=30, intent_id=intent_id).kind.value, "applied")
+            with patch.object(outbox, "_connect", side_effect=sqlite3.OperationalError("database is locked")):
+                interrupted = outbox.advance_stage(
+                    intent_id=intent_id, owner="stage-owner", stage=ExecutionStage.CHILD_PRESENT
+                )
+            self.assertEqual(interrupted.kind.value, "retryable")
+            resumed = outbox.advance_stage(
+                intent_id=intent_id, owner="stage-owner", stage=ExecutionStage.CHILD_PRESENT
+            )
+            self.assertEqual(resumed.kind.value, "applied")
+            repeated = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(repeated.kind.value, "already_applied")
+
+    def test_acknowledgement_lock_is_retryable_and_duplicate_enqueue_is_idempotent(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "ack-interrupt",
+                "00000000-0000-4000-8000-000000000621",
+                "00000000-0000-4000-8000-000000000622",
+                1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            outbox.claim_intent(owner="ack-owner", lease_seconds=30, intent_id=intent_id)
+            outbox.advance_stage(intent_id=intent_id, owner="ack-owner", stage=ExecutionStage.CHILD_PRESENT)
+            outbox.advance_stage(intent_id=intent_id, owner="ack-owner", stage=ExecutionStage.PARENT_LINKED)
+            outbox.advance_stage(intent_id=intent_id, owner="ack-owner", stage=ExecutionStage.VERIFIED)
+            with patch.object(outbox, "_connect", side_effect=sqlite3.OperationalError("database is locked")):
+                interrupted = outbox.acknowledge(intent_id=intent_id, owner="ack-owner")
+            self.assertEqual(interrupted.kind.value, "retryable")
+            acknowledged = outbox.acknowledge(intent_id=intent_id, owner="ack-owner")
+            self.assertEqual(acknowledged.kind.value, "applied")
+            repeated = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(repeated.kind.value, "already_applied")
 
     def test_bulk_enqueue_rollback_leaves_no_phantom_intents(self) -> None:
         with TemporaryDirectory() as td:

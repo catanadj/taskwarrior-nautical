@@ -66,6 +66,44 @@ class BackupCliTests(unittest.TestCase):
             self.assertEqual(metadata["timezone"], "Europe/Bucharest")
             self.assertNotIn("python_version", metadata)
 
+    def test_include_copies_unicode_resource_and_checksums_it(self):
+        script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
+        with tempfile.TemporaryDirectory(prefix="nautical-backup-cli-") as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            (taskdata / ".nautical-state").mkdir(parents=True)
+            connection = sqlite3.connect(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db")
+            connection.execute("CREATE TABLE marker (value TEXT)")
+            connection.commit()
+            connection.close()
+            resource = root / "calendar.json"
+            resource.write_text('{"description":"café"}\n', encoding="utf-8")
+            task = root / "task"
+            task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup"
+            result = subprocess.run([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--include", "calendar=" + str(resource), "--json"], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual((destination / "resources" / "calendar").read_text(encoding="utf-8"), '{"description":"café"}\n')
+
+    def test_include_refuses_duplicate_and_taskdata_resource(self):
+        script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
+        with tempfile.TemporaryDirectory(prefix="nautical-backup-cli-") as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            (taskdata / ".nautical-state").mkdir(parents=True)
+            connection = sqlite3.connect(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db")
+            connection.execute("CREATE TABLE marker (value TEXT)")
+            connection.commit()
+            connection.close()
+            task = root / "task"
+            task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup"
+            result = subprocess.run([sys.executable, str(script), "--taskdata", str(taskdata), "--destination", str(destination), "--task-bin", str(task), "--include", "x=" + str(taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db"), "--json"], capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("outside Taskdata", json.loads(result.stdout)["error"])
+
     def test_missing_destination_is_structured_error(self):
         script = Path(__file__).parents[1] / "nautical_core" / "tools" / "nautical_backup.py"
         result = subprocess.run([sys.executable, str(script), "--taskdata", "/tmp/no-taskdata"], capture_output=True, text=True, check=False)

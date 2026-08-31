@@ -36,7 +36,33 @@ def _outside_taskdata(taskdata: Path, destination: Path) -> None:
         raise BackupExportError("backup destination must be outside Taskdata")
 
 
-def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: float, keep: int = 2, prune: bool = False, metadata: dict[str, object] | None = None) -> dict[str, object]:
+def _copy_resources(resources: list[tuple[str, Path]], taskdata: Path, staging: Path) -> None:
+    names: set[str] = set()
+    taskdata_resolved = taskdata.resolve()
+    runtime_resolved = taskdata_resolved / ".nautical-runtime"
+    for name, source in resources:
+        if not name or name in {".", ".."} or "/" in name or "\\" in name or ".." in Path(name).parts:
+            raise BackupExportError(f"resource name is unsafe: {name!r}")
+        if name in names:
+            raise BackupExportError(f"duplicate resource name: {name}")
+        names.add(name)
+        source = source.expanduser()
+        if source.is_symlink() or not source.is_file():
+            raise BackupExportError(f"resource is not a regular file: {source}")
+        resolved = source.resolve()
+        if resolved == taskdata_resolved or taskdata_resolved in resolved.parents:
+            raise BackupExportError("resource source must be outside Taskdata")
+        if resolved == runtime_resolved or runtime_resolved in resolved.parents:
+            raise BackupExportError("resource source must be outside the managed runtime")
+        target = staging / "resources" / name
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            shutil.copy2(resolved, target)
+        except OSError as exc:
+            raise BackupExportError(f"could not copy resource {name}: {exc}") from exc
+
+
+def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: float, keep: int = 2, prune: bool = False, metadata: dict[str, object] | None = None, resources: list[tuple[str, Path]] | None = None) -> dict[str, object]:
     """Capture portable task data and outbox into one atomically published directory."""
     taskdata = taskdata.expanduser().resolve()
     destination = destination.expanduser().absolute()
@@ -47,6 +73,7 @@ def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: 
         assert staging is not None
         task_export = capture_taskwarrior_export(taskdata, staging / "taskwarrior-export.json", task_bin=task_bin, timeout=timeout)
         outbox = backup_outbox_database(taskdata, staging / "lifecycle-outbox.db")
+        _copy_resources(resources or [], taskdata, staging)
         manifest = create_manifest(
             staging,
             metadata={
@@ -99,6 +126,7 @@ def main() -> int:
     parser.add_argument("--python-version", default=None)
     parser.add_argument("--timezone", default=None)
     parser.add_argument("--timezone-data-identity", default=None)
+    parser.add_argument("--include", action="append", default=[], metavar="NAME=PATH", help="include an explicit regular resource file (repeatable)")
     parser.add_argument("--json", action="store_true", help="emit one JSON result")
     args = parser.parse_args()
     destination = args.destination_option or args.destination_positional
@@ -114,7 +142,13 @@ def main() -> int:
             timezone=args.timezone,
             timezone_data_identity=args.timezone_data_identity,
         )
-        result = create_backup(Path(args.taskdata), Path(destination), task_bin=args.task_bin, timeout=args.timeout, keep=args.keep, prune=args.prune, metadata=provenance)
+        includes: list[tuple[str, Path]] = []
+        for value in args.include:
+            if "=" not in value:
+                raise BackupExportError(f"--include requires NAME=PATH: {value!r}")
+            name, path = value.split("=", 1)
+            includes.append((name, Path(path)))
+        result = create_backup(Path(args.taskdata), Path(destination), task_bin=args.task_bin, timeout=args.timeout, keep=args.keep, prune=args.prune, metadata=provenance, resources=includes)
     except (BackupExportError, BackupManifestError, OSError, ValueError) as exc:
         result = {"status": "error", "error": str(exc)}
         print(json.dumps(result, ensure_ascii=False))

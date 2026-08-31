@@ -46,6 +46,15 @@ python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
 ```
 
 The destination must be outside Taskdata and must not already exist.
+Additional files are included only when explicitly selected with repeatable
+`--include NAME=PATH` options; Nautical does not scan configuration or resource
+directories implicitly:
+
+```bash
+python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
+  --destination "$HOME/nautical-backup-$(date +%Y%m%d-%H%M%S)" \
+  --include calendar="$HOME/.local/share/nautical/calendar.json" --json
+```
 
 There are two different backups, and they serve different purposes. For a
 portable Taskwarrior copy, first stop other Taskwarrior/Nautical processes and

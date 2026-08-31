@@ -20,6 +20,7 @@ from nautical_core.backup_service import (
     verify_manifest,
     prune_backup_generations,
     build_backup_metadata,
+    StorageIO,
 )
 
 
@@ -330,6 +331,21 @@ class BackupServiceTests(unittest.TestCase):
                 publish_manifest(target, manifest)
             self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
             self.assertEqual(list(root.glob(".manifest.json.*")), [])
+
+    def test_publish_accepts_injected_storage_operations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = create_manifest(root, files=())
+            target = root / "manifest.json"
+            calls = []
+
+            def replace(source, destination):
+                calls.append("replace")
+                os.replace(source, destination)
+
+            publish_manifest(target, manifest, storage=StorageIO(replace=replace))
+            self.assertEqual(calls, ["replace"])
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), manifest)
 
     def test_outbox_failure_removes_partial_target(self):
         import nautical_core.backup_service as service

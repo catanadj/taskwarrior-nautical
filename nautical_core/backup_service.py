@@ -15,7 +15,7 @@ from pathlib import Path
 import sqlite3
 import shutil
 import tempfile
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .task_command import failure_message, run_task_command
 
@@ -66,6 +66,15 @@ class BackupManifestError(ValueError):
 
 class BackupExportError(RuntimeError):
     """Raised when a hooks-off Taskwarrior export cannot be captured safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class StorageIO:
+    """Optional filesystem operations for deterministic storage-fault tests."""
+
+    replace: Callable[[str, str], None] | None = None
+    fsync: Callable[[int], None] | None = None
+    unlink: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +227,7 @@ def create_manifest(
     }
 
 
-def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
+def publish_manifest(path: Path, manifest: Mapping[str, Any], *, storage: StorageIO | None = None) -> None:
     """Atomically publish a validated manifest without partial output."""
     encoded = json.dumps(dict(manifest), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if len(encoded.encode("utf-8")) > MAX_MANIFEST_BYTES:
@@ -226,6 +235,10 @@ def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
     validate_manifest(manifest)
     destination = Path(path).expanduser()
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    storage = storage or StorageIO()
+    replace = storage.replace or os.replace
+    fsync = storage.fsync or os.fsync
+    unlink = storage.unlink or os.unlink
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -234,15 +247,15 @@ def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
             temporary = handle.name
             handle.write(encoded)
             handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
+            fsync(handle.fileno())
+        replace(temporary, str(destination))
         temporary = None
     except OSError as exc:
         raise BackupManifestError(f"could not publish backup manifest: {exc}") from exc
     finally:
         if temporary is not None:
             try:
-                os.unlink(temporary)
+                unlink(temporary)
             except OSError:
                 pass
 

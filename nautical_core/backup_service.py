@@ -372,6 +372,7 @@ def capture_taskwarrior_export(
     *,
     task_bin: str = "task",
     timeout: float = 60.0,
+    storage: StorageIO | None = None,
 ) -> BackupExport:
     """Capture a validated hooks-off Taskwarrior JSON export atomically.
 
@@ -414,20 +415,24 @@ def capture_taskwarrior_export(
     except OSError as exc:
         raise BackupExportError(f"could not prepare export destination: {exc}") from exc
     temporary: str | None = None
+    storage = storage or StorageIO()
+    replace = storage.replace or os.replace
+    fsync = storage.fsync or os.fsync
+    unlink = storage.unlink or os.unlink
     try:
         with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False) as handle:
             temporary = handle.name
             handle.write(encoded)
             handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
+            fsync(handle.fileno())
+        replace(temporary, str(target))
         temporary = None
     except OSError as exc:
         raise BackupExportError(f"could not publish Taskwarrior export: {exc}") from exc
     finally:
         if temporary is not None:
             try:
-                os.unlink(temporary)
+                unlink(temporary)
             except OSError:
                 pass
     return BackupExport("captured", str(target), len(payload), len(encoded), hashlib.sha256(encoded).hexdigest())

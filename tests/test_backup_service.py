@@ -191,6 +191,30 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(json.loads(destination.read_text(encoding="utf-8"))[0]["description"], "café")
             self.assertEqual(list(destination.parent.glob(".*")), [])
 
+    def test_capture_export_accepts_injected_storage_operations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task"
+            task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            calls = []
+
+            def replace(source, destination):
+                calls.append("replace")
+                os.replace(source, destination)
+
+            destination = root / "export.json"
+            captured = capture_taskwarrior_export(
+                taskdata,
+                destination,
+                task_bin=str(task),
+                storage=StorageIO(replace=replace),
+            )
+            self.assertEqual(captured.tasks, 0)
+            self.assertEqual(calls, ["replace"])
+
     def test_capture_export_refuses_live_or_existing_destinations(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

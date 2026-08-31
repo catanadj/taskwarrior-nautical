@@ -114,10 +114,11 @@ def restore_backup(source: Path, target: Path | None = None, *, apply: bool = Fa
         if not destination.is_dir() or any(destination.iterdir()):
             return RestoreReport("rejected", report.source, str(destination), errors=("restore target must be a new or empty directory",))
     parent = destination.parent
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary: Path | None = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=parent))
+    temporary: Path | None = None
     displaced: Path | None = None
     try:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=parent))
         assert temporary is not None
         source_path = Path(report.source)
         shutil.copy2(source_path / "taskwarrior-export.json", temporary / "taskwarrior-export.json")

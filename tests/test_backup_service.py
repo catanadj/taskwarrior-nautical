@@ -151,6 +151,20 @@ class BackupServiceTests(unittest.TestCase):
                 backup_outbox_database(taskdata, target)
             connection.close()
 
+    def test_outbox_destination_permission_failure_has_no_output(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            state = taskdata / ".nautical-state"
+            state.mkdir(parents=True)
+            (state / ".nautical_lifecycle_outbox.db").write_bytes(b"source")
+            destination = root / "backup" / "outbox.db"
+            with patch.object(service.Path, "mkdir", side_effect=PermissionError("read-only destination")):
+                with self.assertRaises(BackupExportError):
+                    backup_outbox_database(taskdata, destination)
+            self.assertFalse(destination.exists())
+
     def _fake_task(self, root: Path, output: str) -> Path:
         script = root / "task-fake.py"
         script.write_text(
@@ -188,6 +202,19 @@ class BackupServiceTests(unittest.TestCase):
             destination.write_text("old", encoding="utf-8")
             with self.assertRaises(BackupExportError):
                 capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+
+    def test_capture_export_destination_permission_failure_has_no_output(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = self._fake_task(root, "[]")
+            destination = root / "backup" / "tasks.json"
+            with patch.object(service.Path, "mkdir", side_effect=PermissionError("read-only destination")):
+                with self.assertRaises(BackupExportError):
+                    capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+            self.assertFalse(destination.exists())
 
     def test_capture_export_rejects_invalid_json_without_output(self):
         with tempfile.TemporaryDirectory() as td:

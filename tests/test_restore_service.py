@@ -35,6 +35,18 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertEqual(result.tasks, 1)
             self.assertFalse((source / ".nautical-state").exists())
 
+    def test_restore_source_permission_failure_is_structured(self):
+        import nautical_core.restore_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            target = root / "restored"
+            with patch.object(service.Path, "read_text", side_effect=PermissionError("read-only source")):
+                result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("manifest is unreadable" in error for error in result.errors))
+            self.assertFalse(target.exists())
+
     def test_inspection_does_not_create_target_without_apply(self):
         with tempfile.TemporaryDirectory() as td:
             source = self._backup(Path(td))
@@ -69,6 +81,18 @@ class RestoreServiceTests(unittest.TestCase):
             result = restore_backup(source, target, apply=True)
             self.assertEqual(result.status, "rejected")
             self.assertTrue((target / "keep").exists())
+
+    def test_restore_destination_permission_failure_is_structured(self):
+        import nautical_core.restore_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            target = root / "restored"
+            with patch.object(service.Path, "mkdir", side_effect=PermissionError("read-only destination")):
+                result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("publish" in error for error in result.errors))
+            self.assertFalse(target.exists())
 
     def test_apply_restores_explicit_resources(self):
         with tempfile.TemporaryDirectory() as td:

@@ -396,7 +396,10 @@ def capture_taskwarrior_export(
     if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
         raise BackupExportError("Taskwarrior export must be a JSON array of objects")
     encoded = result.stdout.encode("utf-8")
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BackupExportError(f"could not prepare export destination: {exc}") from exc
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False) as handle:
@@ -440,7 +443,10 @@ def backup_outbox_database(taskdata: Path, destination: Path) -> SQLiteBackup:
         raise BackupExportError(f"outbox backup destination cannot be resolved: {target}") from exc
     if target_resolved == source_root or source_root in target_resolved.parents:
         raise BackupExportError("outbox backup destination must be outside Taskdata")
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BackupExportError(f"could not prepare outbox backup destination: {exc}") from exc
     source_conn: sqlite3.Connection | None = None
     target_conn: sqlite3.Connection | None = None
     try:

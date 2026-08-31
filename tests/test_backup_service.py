@@ -86,6 +86,24 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(len(result.kept), 1)
             self.assertEqual(len(result.removed), 2)
 
+    def test_prune_deletion_failure_keeps_generation_and_reports_skipped(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            older = self._generation(root, "old")
+            middle = self._generation(root, "middle")
+            newest = self._generation(root, "newest")
+            for index, path in enumerate((older, middle, newest), start=1):
+                os.utime(path, (index, index))
+            with patch.object(service.shutil, "rmtree", side_effect=OSError("simulated deletion failure")):
+                result = prune_backup_generations(root, keep=2)
+            self.assertEqual(result.kept, ("newest", "middle"))
+            self.assertEqual(result.removed, ())
+            self.assertIn("old", result.skipped)
+            self.assertTrue(older.exists())
+            self.assertTrue(middle.exists())
+            self.assertTrue(newest.exists())
+
     def test_prune_refuses_zero_or_boolean_retention(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

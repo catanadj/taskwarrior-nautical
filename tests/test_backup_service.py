@@ -5,6 +5,7 @@ import stat
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from nautical_core.backup_service import (
     BackupManifestError,
@@ -200,6 +201,18 @@ class BackupServiceTests(unittest.TestCase):
             publish_manifest(target, manifest)
             self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["version"], 1)
             self.assertEqual(verify_manifest(root, manifest).status, "verified")
+
+    def test_publish_interruption_removes_temporary_and_preserves_previous(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "payload").write_text("new", encoding="utf-8")
+            manifest = create_manifest(root, files=("payload",))
+            target = root / "manifest.json"
+            target.write_text('{"status":"previous"}\n', encoding="utf-8")
+            with patch("nautical_core.backup_service.os.replace", side_effect=OSError("simulated interruption")), self.assertRaises(BackupManifestError):
+                publish_manifest(target, manifest)
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
+            self.assertEqual(list(root.glob(".manifest.json.*")), [])
 
     def test_changed_artifact_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:

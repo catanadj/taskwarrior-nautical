@@ -14177,6 +14177,7 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
             "anchor_mode": "skip",
             "chain": "on",
             "chainID": "00000901",
+            "chainUntil": "20270101T000000Z",
             "status": "pending",
             "entry": "20260809T090000Z",
         },
@@ -14187,7 +14188,7 @@ def test_large_weekly_interval_is_scheduled_without_clamping():
         "an unrepresentable finite conjunction must be rejected rather than creating an incomplete task",
     )
     expect(
-        "No matching anchor occurrences found" in finite_proc.stderr,
+        "Chain end point is earlier" in finite_proc.stderr,
         f"finite large interval rejection was not actionable: {finite_proc.stderr!r}",
     )
 

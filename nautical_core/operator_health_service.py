@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import subprocess
+import sqlite3
+import json
 from typing import Any, Callable, Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
@@ -262,6 +264,80 @@ class OperatorHealthService:
                     guidance=f"Create or correct the configured {label} resource, then retry deep Doctor.",
                 ))
         return tuple(findings)
+
+    @staticmethod
+    def deep_local_state_findings(
+        outbox_path: object,
+        backup_root: object | None = None,
+        *,
+        quick_check: Callable[[Path], str] | None = None,
+        backup_checker: Callable[[Path], bool] | None = None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Check outbox integrity and the newest optional backup generation."""
+        findings: list[OperatorFinding] = []
+        path = Path(str(outbox_path)).expanduser()
+        try:
+            checker = quick_check or OperatorHealthService._quick_check_sqlite
+            result = checker(path)
+            if result.lower() != "ok":
+                raise RuntimeError(result)
+            findings.append(OperatorFinding(
+                "outbox.quick_check.deep", "lifecycle", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Lifecycle outbox integrity is verified.",
+                observed={"path": str(path), "quick_check": result},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "outbox.quick_check.deep", "lifecycle", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Lifecycle outbox integrity could not be verified.",
+                observed={"path": str(path), "error": str(exc)},
+                guidance="Stop Nautical processes and restore or repair the outbox from a verified local backup.",
+            ))
+        if backup_root is None:
+            return tuple(findings)
+        root = Path(str(backup_root)).expanduser()
+        try:
+            generations = [item for item in root.iterdir() if item.is_dir() and not item.is_symlink()]
+            if not generations:
+                raise FileNotFoundError("no backup generations found")
+            newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
+            checker = backup_checker or OperatorHealthService._verify_backup_generation
+            if not checker(newest):
+                raise RuntimeError("manifest or artifact verification failed")
+            findings.append(OperatorFinding(
+                "backup.newest.deep", "backup", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Newest configured backup generation is verified.",
+                observed={"root": str(root), "generation": newest.name},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "backup.newest.deep", "backup", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Newest configured backup generation could not be verified.",
+                observed={"root": str(root), "error": str(exc)},
+                guidance="Create or select a verified local backup generation before relying on offline recovery.",
+            ))
+        return tuple(findings)
+
+    @staticmethod
+    def _quick_check_sqlite(path: Path) -> str:
+        if path.is_symlink() or not path.is_file():
+            raise FileNotFoundError(path)
+        connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
+        try:
+            return str(connection.execute("PRAGMA quick_check").fetchone()[0])
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _verify_backup_generation(path: Path) -> bool:
+        from .backup_service import verify_manifest
+        manifest_path = path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return verify_manifest(path, manifest).status == "verified"
 
     @staticmethod
     def _probe_executable(path: str) -> tuple[bool, str]:

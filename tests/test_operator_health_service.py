@@ -64,6 +64,32 @@ class OperatorHealthServiceTests(unittest.TestCase):
             )
             self.assertEqual(missing[0].severity.value, "error")
             self.assertEqual(missing[1].severity.value, "info")
+
+    def test_deep_local_state_checks_are_injectable_and_select_newest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            backup = root / "backups"
+            backup.mkdir()
+            older = backup / "older"
+            newest = backup / "newest"
+            older.mkdir()
+            newest.mkdir()
+            (older / "manifest.json").write_text("{}", encoding="utf-8")
+            (newest / "manifest.json").write_text("{}", encoding="utf-8")
+            import os
+            os.utime(older, (1, 1))
+            os.utime(newest, (2, 2))
+            checked: list[Path] = []
+            def verify(path: Path) -> bool:
+                checked.append(path)
+                return True
+            findings = OperatorHealthService.deep_local_state_findings(
+                root / "outbox.db", backup,
+                quick_check=lambda path: "ok",
+                backup_checker=verify,
+            )
+            self.assertEqual([item.severity.value for item in findings], ["info", "info"])
+            self.assertEqual(checked, [newest])
     def test_astronomy_finding_normalizes_timezone_for_json(self) -> None:
         findings = OperatorHealthService.astronomy_findings(
             {}, effective_timezone=ZoneInfo("Europe/Bucharest"), source_hint="config",

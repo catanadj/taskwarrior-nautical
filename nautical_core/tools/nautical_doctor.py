@@ -653,6 +653,11 @@ def main() -> int:
             str(deep_data.get("tz") or "UTC"), deep_resources, timezone_factory=ZONEINFO_FACTORY,
         ))
         findings.extend(item.to_doctor_dict() for item in resource_report.findings)
+        local_state_report = OperatorHealthService.report(OperatorHealthService.deep_local_state_findings(
+            taskdata / ".nautical-state" / ".nautical_lifecycle_outbox.db",
+            Path(backup_root).expanduser() if backup_root else None,
+        ))
+        findings.extend(item.to_doctor_dict() for item in local_state_report.findings)
     if args.clean_cache:
         gc_result = nautical_core_package.cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)

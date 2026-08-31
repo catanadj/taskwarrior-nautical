@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import unittest
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from nautical_core.recurrence_context import RecurrenceContext
@@ -126,6 +127,27 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
         values = _signatures(service, limit=700)
         self.assertTrue(values)
         self.assertTrue(all(datetime.fromisoformat(value).weekday() != 6 for value in values))
+
+    def test_missing_astronomy_provider_fails_closed(self) -> None:
+        from nautical_core.astronomy import AstronomyUnavailableError
+
+        observation = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000705",
+                "chainID": "horizon-astronomy",
+                "link": 1,
+                "status": "pending",
+                "anchor": "w:mon@t=sunrise",
+            },
+            source_query="long-horizon-fixture",
+        )
+        service = SchedulerService.from_observation(observation)
+        cursor = OccurrenceCursor.inclusive_at(datetime(2026, 1, 1, tzinfo=timezone.utc), timezone=timezone.utc)
+        with patch(
+            "nautical_core.astronomy.resolve_event",
+            side_effect=AstronomyUnavailableError("astral provider unavailable"),
+        ), self.assertRaisesRegex(AstronomyUnavailableError, "astral provider unavailable"):
+            service.next(cursor)
 
 
 if __name__ == "__main__":

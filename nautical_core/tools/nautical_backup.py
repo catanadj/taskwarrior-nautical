@@ -21,6 +21,7 @@ from nautical_core.backup_service import (  # noqa: E402
     backup_outbox_database,
     capture_taskwarrior_export,
     create_manifest,
+    prune_backup_generations,
     publish_manifest,
 )
 
@@ -34,7 +35,7 @@ def _outside_taskdata(taskdata: Path, destination: Path) -> None:
         raise BackupExportError("backup destination must be outside Taskdata")
 
 
-def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: float) -> dict[str, object]:
+def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: float, keep: int = 2, prune: bool = False) -> dict[str, object]:
     """Capture portable task data and outbox into one atomically published directory."""
     taskdata = taskdata.expanduser().resolve()
     destination = destination.expanduser().absolute()
@@ -56,12 +57,23 @@ def create_backup(taskdata: Path, destination: Path, *, task_bin: str, timeout: 
         publish_manifest(staging / "manifest.json", manifest)
         os.replace(staging, destination)
         staging = None
+        retention: dict[str, object] = {"status": "not_requested", "keep": keep}
+        if prune:
+            result = prune_backup_generations(destination.parent, keep=keep)
+            retention = {
+                "status": "pruned",
+                "keep": keep,
+                "kept": list(result.kept),
+                "removed": list(result.removed),
+                "skipped": list(result.skipped),
+            }
         return {
             "status": "created",
             "destination": str(destination),
             "manifest": str(destination / "manifest.json"),
             "task_export": {"tasks": task_export.tasks, "bytes": task_export.bytes, "sha256": task_export.sha256},
             "outbox": {"bytes": outbox.bytes, "quick_check": outbox.quick_check},
+            "retention": retention,
         }
     finally:
         if staging is not None and staging.exists():
@@ -77,6 +89,8 @@ def main() -> int:
     parser.add_argument("--taskdata", default=os.environ.get("TASKDATA", "~/.task"))
     parser.add_argument("--task-bin", default="task")
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--keep", type=int, default=2, help="verified generations to retain when --prune is used (default: 2)")
+    parser.add_argument("--prune", action="store_true", help="prune older verified generations after a successful backup")
     parser.add_argument("--json", action="store_true", help="emit one JSON result")
     args = parser.parse_args()
     destination = args.destination_option or args.destination_positional
@@ -84,7 +98,7 @@ def main() -> int:
         print(json.dumps({"status": "error", "error": "--destination is required"}, ensure_ascii=False))
         return 2
     try:
-        result = create_backup(Path(args.taskdata), Path(destination), task_bin=args.task_bin, timeout=args.timeout)
+        result = create_backup(Path(args.taskdata), Path(destination), task_bin=args.task_bin, timeout=args.timeout, keep=args.keep, prune=args.prune)
     except (BackupExportError, BackupManifestError, OSError, ValueError) as exc:
         result = {"status": "error", "error": str(exc)}
         print(json.dumps(result, ensure_ascii=False))

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from nautical_core.recurrence_context import RecurrenceContext
+from nautical_core.occurrence_outcomes import InvalidOccurrence
 from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 from nautical_core.scheduler_service import SchedulerService
 from nautical_core.task_models import TaskObservation
@@ -148,6 +150,27 @@ class LongHorizonRecurrenceTests(unittest.TestCase):
             side_effect=AstronomyUnavailableError("astral provider unavailable"),
         ), self.assertRaisesRegex(AstronomyUnavailableError, "astral provider unavailable"):
             service.next(cursor)
+
+    def test_missing_anchor_resource_fails_closed(self) -> None:
+        observation = TaskObservation.from_mapping(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000706",
+                "chainID": "horizon-resource",
+                "link": 1,
+                "status": "pending",
+                "anchor_file": "missing.csv",
+            },
+            source_query="long-horizon-fixture",
+        )
+        with TemporaryDirectory() as directory:
+            service = SchedulerService.from_observation(
+                observation,
+                context=RecurrenceContext("horizon-resource", anchor_file_dir=directory),
+            )
+            cursor = OccurrenceCursor.inclusive_at(datetime(2026, 1, 1, tzinfo=timezone.utc), timezone=timezone.utc)
+            outcome = service.next(cursor)
+            self.assertIsInstance(outcome, InvalidOccurrence)
+            self.assertIn("anchor_file", outcome.reason)
 
 
 if __name__ == "__main__":

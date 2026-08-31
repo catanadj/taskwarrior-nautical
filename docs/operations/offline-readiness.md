@@ -36,6 +36,17 @@ back those up separately before an offline recovery operation.
 
 ## Snapshot Taskdata Before Recovery
 
+For a verified Nautical backup generation, use the local backup command. It
+captures the hooks-off export and the lifecycle outbox into a new directory:
+
+```bash
+python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
+  --destination "$HOME/nautical-backup-$(date +%Y%m%d-%H%M%S)" \
+  --task-bin "$(command -v task)" --json
+```
+
+The destination must be outside Taskdata and must not already exist.
+
 There are two different backups, and they serve different purposes. For a
 portable Taskwarrior copy, first stop other Taskwarrior/Nautical processes and
 export with hooks disabled:

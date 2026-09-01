@@ -1,4 +1,5 @@
 import json
+import tarfile
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,39 @@ class OfflineKitTests(unittest.TestCase):
             verified = subprocess.run([sys.executable, str(script), "verify", str(kit)], capture_output=True, text=True, check=False)
             self.assertEqual(verified.returncode, 2)
             self.assertIn("checksum mismatch", verified.stdout)
+
+    def test_build_archive_and_verify_archive(self):
+        script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"
+        with tempfile.TemporaryDirectory(prefix="nautical-kit-test-") as td:
+            kit = Path(td) / "kit"
+            archive = Path(td) / "kit.tar.gz"
+            built = subprocess.run(
+                [sys.executable, str(script), "build", str(kit), "--archive", str(archive)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            self.assertTrue(archive.is_file())
+            verified = subprocess.run(
+                [sys.executable, str(script), "verify", str(archive)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+            self.assertEqual(json.loads(verified.stdout)["status"], "verified")
+
+    def test_verify_rejects_unsafe_archive_member(self):
+        script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"
+        with tempfile.TemporaryDirectory(prefix="nautical-kit-test-") as td:
+            archive = Path(td) / "unsafe.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                info = tarfile.TarInfo("../escape")
+                info.size = 1
+                handle.addfile(info, __import__("io").BytesIO(b"x"))
+            verified = subprocess.run(
+                [sys.executable, str(script), "verify", str(archive)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(verified.returncode, 2)
+            self.assertIn("unsafe archive", verified.stdout)
 
 
 if __name__ == "__main__":

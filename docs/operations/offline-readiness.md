@@ -10,8 +10,10 @@ checksums.
 From a Nautical checkout, choose a destination outside the checkout:
 
 ```bash
-python3 dev_tools/nautical_offline_kit.py build /path/to/nautical-kit
+python3 dev_tools/nautical_offline_kit.py build /path/to/nautical-kit \
+  --archive /path/to/nautical-kit.tar.gz
 python3 dev_tools/nautical_offline_kit.py verify /path/to/nautical-kit
+python3 dev_tools/nautical_offline_kit.py verify /path/to/nautical-kit.tar.gz
 ```
 
 The builder does not contact Git, download packages, or modify Taskwarrior.
@@ -28,6 +30,17 @@ python3 dev_tools/nautical_offline_kit.py verify /path/to/nautical-kit
 ./nautical install --source /path/to/nautical-kit --dry-run
 ./nautical install --source /path/to/nautical-kit
 nautical doctor --installation-only
+```
+
+Prefer transferring the archive so hidden files and runtime modules cannot be
+dropped by a file manager. On the target, verify the archive, extract it, then
+verify the extracted directory once more:
+
+```bash
+python3 dev_tools/nautical_offline_kit.py verify /path/to/nautical-kit.tar.gz
+mkdir /path/to/nautical-kit
+tar -xzf /path/to/nautical-kit.tar.gz -C /path/to/nautical-kit
+python3 dev_tools/nautical_offline_kit.py verify /path/to/nautical-kit
 ```
 
 Use a disposable `TASKDATA` directory for repair drills. The kit does not

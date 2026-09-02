@@ -110,7 +110,7 @@ Use read-only inspection before any mutation:
 ```bash
 nautical doctor --deep --json
 nautical queue-status --json
-nautical query integrity --all --json
+nautical query integrity --all
 nautical reconcile --dry-run --json --no-housekeeping
 ```
 
@@ -182,7 +182,7 @@ Before leaving a device offline:
 ```bash
 nautical doctor --installation-only --json
 nautical queue-status --json
-nautical query integrity --all --json
+nautical query integrity --all
 python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
   --destination "$HOME/nautical-backup-$(date +%Y%m%d-%H%M%S)" \
   --task-bin "$(command -v task)" --json

@@ -1,8 +1,13 @@
 import unittest
 from types import SimpleNamespace
 
-from nautical_core.chain_invariants import _child_continuity_rule
+from nautical_core.chain_invariants import _child_continuity_rule, _outbox_rule
+from nautical_core.chain_integrity_context import OutboxSnapshot
 from nautical_core.chain_integrity_models import ReferenceState, SnapshotCoverage
+from nautical_core.lifecycle_models import (
+    ExecutionStage, LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard,
+)
+from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
 
 
 class _Node:
@@ -45,6 +50,27 @@ class ChildTemporalInvariantTests(unittest.TestCase):
         child = _Node("child", {"anchor": "w:mon", "due": "20260903T025500Z"}, link=2)
         findings = _child_continuity_rule(_Graph(parent, child))
         self.assertEqual([finding.reason_code for finding in findings], ["child_not_after_parent"])
+
+    def test_acknowledged_finalized_intent_is_not_stage_mismatch(self):
+        identity = LifecycleIdentity("chain", "parent", 1, 2, LifecycleEvent.COMPLETE)
+        guard = ParentGuard("completed", "on", "chain", 1)
+        plan = LifecyclePlan(identity, LifecycleAction.SPAWN_CHILD, guard)
+        record = LifecycleOutboxRecord(
+            identity.idempotency_key, plan, "config", "schedule",
+            OutboxProcessingState.ACKNOWLEDGED, ExecutionStage.FINALIZED,
+        )
+        graph = SimpleNamespace(
+            snapshot=SimpleNamespace(snapshot_id="snapshot"),
+            uuid_matches=lambda _uuid: (SimpleNamespace(),),
+            chain_nodes=lambda _chain: (SimpleNamespace(),),
+        )
+        context = SimpleNamespace(
+            graph=graph,
+            outbox=OutboxSnapshot.from_records((record,)),
+            configuration_fingerprint="config",
+            schedule_fingerprint="schedule",
+        )
+        self.assertEqual(_outbox_rule(context), ())
 
 
 if __name__ == "__main__":

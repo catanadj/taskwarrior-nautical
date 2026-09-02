@@ -17,8 +17,8 @@ from .chain_integrity_models import (
     ReferenceState,
     SnapshotCoverage,
 )
-from .lifecycle_models import recurrence_fingerprint
-from .lifecycle_outbox import LifecycleOutboxRecord
+from .lifecycle_models import ExecutionStage, recurrence_fingerprint
+from .lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
 
 
 InvariantEvaluator = Callable[[ChainGraph], tuple[IntegrityFinding, ...]]
@@ -681,7 +681,13 @@ def _outbox_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
         if not isinstance(record, LifecycleOutboxRecord):
             continue
         identity = record.plan.identity
-        if record.stage is not record.plan.stage:
+        if (
+            record.stage is not record.plan.stage
+            and not (
+                record.state is OutboxProcessingState.ACKNOWLEDGED
+                and record.stage is ExecutionStage.FINALIZED
+            )
+        ):
             findings.append(IntegrityFinding(
                 "outbox.stage_agreement",
                 FindingStatus.MANUAL_REVIEW,

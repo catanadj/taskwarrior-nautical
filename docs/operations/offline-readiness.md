@@ -140,6 +140,18 @@ record used for idempotent recovery.
   do not download while offline. Re-run installation-only Doctor afterward.
 - **Repeated timeout or locked Taskwarrior:** stop concurrent processes and
   retry once. If it repeats, keep hooks disabled and use backup/restore.
+- **Malformed, truncated, or unexpectedly large Taskwarrior output:** stop
+  mutation and retain the raw diagnostic; repair the Taskwarrior/runtime
+  boundary before retrying. Never treat an undecodable export as empty data.
+- **Interrupted install, backup, restore, queue drain, or reconcile:** rerun
+  the corresponding read-only verification first, then resume through queue
+  status/reconcile. Do not manually replay a child or parent link.
+- **Duplicate-child or idempotency concern:** stop mutation, inspect the chain
+  and deterministic intent with `nautical query integrity` and
+  `nautical queue-review`; apply only a reviewed plan.
+- **Hook protocol or diagnostic failure:** preserve stdout as the protocol
+  record, enable `NAUTICAL_DIAG=1` only for stderr diagnostics, and keep hooks
+  disabled until a strict-JSON smoke test passes.
 
 ## Hooks-Off Break Glass
 

@@ -462,6 +462,12 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "nautical_core/install_runtime.py",
         "nautical_core/lifecycle_outbox.py",
         "nautical_core/position_selection.py",
+        # Operator persistence boundaries decode their own on-disk JSON;
+        # these are not Taskwarrior/domain payload re-parsing paths.
+        "nautical_core/backup_service.py",
+        "nautical_core/restore_service.py",
+        "nautical_core/operator_health_service.py",
+        "nautical_core/tools/nautical_backup.py",
     }
     direct_json_violations: list[str] = []
     if package.is_dir():
@@ -671,6 +677,10 @@ def _check_taskwarrior_process_ownership(root: Path) -> list[dict]:
     allowed = {
         Path("nautical_core/taskwarrior_client.py"),
         Path("nautical_core/install_runtime.py"),
+        # Read-only version probes are explicit operator/deployment
+        # boundaries, not lifecycle Taskwarrior mutations.
+        Path("nautical_core/operator_health_service.py"),
+        Path("nautical_core/tools/nautical_backup.py"),
     }
     violations: list[str] = []
     for path in sorted((root / "nautical_core").rglob("*.py")):

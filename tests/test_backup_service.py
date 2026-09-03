@@ -1,9 +1,11 @@
 import json
+import os
 from pathlib import Path
 import stat
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from nautical_core.backup_service import (
     BackupManifestError,
@@ -16,10 +18,100 @@ from nautical_core.backup_service import (
     publish_manifest,
     validate_manifest,
     verify_manifest,
+    prune_backup_generations,
+    build_backup_metadata,
+    StorageIO,
 )
 
 
 class BackupServiceTests(unittest.TestCase):
+    def test_backup_metadata_is_explicit_and_deterministic(self):
+        values = dict(
+            active_release="r-test",
+            runtime_digest="a" * 64,
+            taskwarrior_version="3.5.0",
+            python_version="3.11.2",
+            timezone="Europe/Bucharest",
+            timezone_data_identity="tzdata-2026a",
+        )
+        expected = {
+            "metadata_schema": 1,
+            **values,
+        }
+        self.assertEqual(build_backup_metadata(**values), expected)
+        self.assertEqual(build_backup_metadata(**values), build_backup_metadata(**values))
+
+    def test_backup_metadata_omits_unsupplied_values(self):
+        self.assertEqual(build_backup_metadata(timezone=" UTC ", python_version=""), {"metadata_schema": 1, "timezone": "UTC"})
+    def _generation(self, root: Path, name: str, content: str = "ok") -> Path:
+        generation = root / name
+        generation.mkdir()
+        (generation / "payload").write_text(content, encoding="utf-8")
+        publish_manifest(generation / "manifest.json", create_manifest(generation, files=("payload",)))
+        return generation
+
+    def test_prune_keeps_newest_verified_generations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            older = self._generation(root, "old")
+            middle = self._generation(root, "middle")
+            newest = self._generation(root, "newest")
+            for index, path in enumerate((older, middle, newest), start=1):
+                os.utime(path, (index, index))
+            result = prune_backup_generations(root)
+            self.assertEqual(result.kept, ("newest", "middle"))
+            self.assertEqual(result.removed, ("old",))
+            self.assertFalse(older.exists())
+
+    def test_prune_leaves_invalid_and_unverified_generations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            valid = self._generation(root, "valid")
+            invalid = root / "invalid"
+            invalid.mkdir()
+            (invalid / "manifest.json").write_text("not-json", encoding="utf-8")
+            unverified = self._generation(root, "unverified")
+            (unverified / "payload").write_text("changed", encoding="utf-8")
+            result = prune_backup_generations(root, keep=1)
+            self.assertEqual(result.kept, ("valid",))
+            self.assertEqual(result.removed, ())
+            self.assertTrue(invalid.exists())
+            self.assertTrue(unverified.exists())
+
+    def test_prune_honors_keep_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for name in ("one", "two", "three"):
+                self._generation(root, name)
+            result = prune_backup_generations(root, keep=1)
+            self.assertEqual(len(result.kept), 1)
+            self.assertEqual(len(result.removed), 2)
+
+    def test_prune_deletion_failure_keeps_generation_and_reports_skipped(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            older = self._generation(root, "old")
+            middle = self._generation(root, "middle")
+            newest = self._generation(root, "newest")
+            for index, path in enumerate((older, middle, newest), start=1):
+                os.utime(path, (index, index))
+            with patch.object(service.shutil, "rmtree", side_effect=OSError("simulated deletion failure")):
+                result = prune_backup_generations(root, keep=2)
+            self.assertEqual(result.kept, ("newest", "middle"))
+            self.assertEqual(result.removed, ())
+            self.assertIn("old", result.skipped)
+            self.assertTrue(older.exists())
+            self.assertTrue(middle.exists())
+            self.assertTrue(newest.exists())
+
+    def test_prune_refuses_zero_or_boolean_retention(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with self.assertRaises(BackupManifestError):
+                prune_backup_generations(root, keep=0)
+            with self.assertRaises(BackupManifestError):
+                prune_backup_generations(root, keep=True)
     def test_outbox_online_backup_copies_wal_and_checks_integrity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -60,6 +152,20 @@ class BackupServiceTests(unittest.TestCase):
                 backup_outbox_database(taskdata, target)
             connection.close()
 
+    def test_outbox_destination_permission_failure_has_no_output(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            state = taskdata / ".nautical-state"
+            state.mkdir(parents=True)
+            (state / ".nautical_lifecycle_outbox.db").write_bytes(b"source")
+            destination = root / "backup" / "outbox.db"
+            with patch.object(service.Path, "mkdir", side_effect=PermissionError("read-only destination")):
+                with self.assertRaises(BackupExportError):
+                    backup_outbox_database(taskdata, destination)
+            self.assertFalse(destination.exists())
+
     def _fake_task(self, root: Path, output: str) -> Path:
         script = root / "task-fake.py"
         script.write_text(
@@ -85,6 +191,30 @@ class BackupServiceTests(unittest.TestCase):
             self.assertEqual(json.loads(destination.read_text(encoding="utf-8"))[0]["description"], "café")
             self.assertEqual(list(destination.parent.glob(".*")), [])
 
+    def test_capture_export_accepts_injected_storage_operations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task"
+            task.write_text("#!/usr/bin/env python3\nprint('[]')\n", encoding="utf-8")
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            calls = []
+
+            def replace(source, destination):
+                calls.append("replace")
+                os.replace(source, destination)
+
+            destination = root / "export.json"
+            captured = capture_taskwarrior_export(
+                taskdata,
+                destination,
+                task_bin=str(task),
+                storage=StorageIO(replace=replace),
+            )
+            self.assertEqual(captured.tasks, 0)
+            self.assertEqual(calls, ["replace"])
+
     def test_capture_export_refuses_live_or_existing_destinations(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -98,6 +228,19 @@ class BackupServiceTests(unittest.TestCase):
             with self.assertRaises(BackupExportError):
                 capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
 
+    def test_capture_export_destination_permission_failure_has_no_output(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = self._fake_task(root, "[]")
+            destination = root / "backup" / "tasks.json"
+            with patch.object(service.Path, "mkdir", side_effect=PermissionError("read-only destination")):
+                with self.assertRaises(BackupExportError):
+                    capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+            self.assertFalse(destination.exists())
+
     def test_capture_export_rejects_invalid_json_without_output(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -108,6 +251,65 @@ class BackupServiceTests(unittest.TestCase):
             with self.assertRaises(BackupExportError):
                 capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
             self.assertFalse(destination.exists())
+
+    def test_capture_export_command_failure_has_no_output_or_temporary_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task-failing.py"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('simulated export failure', file=sys.stderr)\n"
+                "raise SystemExit(17)\n",
+                encoding="utf-8",
+            )
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup" / "tasks.json"
+            with self.assertRaisesRegex(BackupExportError, "simulated export failure"):
+                capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
+
+    def test_capture_export_locked_command_has_no_output_or_temporary_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task-locked.py"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "print('database is locked', file=sys.stderr)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup" / "tasks.json"
+            with self.assertRaisesRegex(BackupExportError, "database is locked"):
+                capture_taskwarrior_export(taskdata, destination, task_bin=str(task))
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
+
+    def test_capture_export_timeout_has_no_output_or_temporary_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            task = root / "task-hanging.py"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import time\n"
+                "time.sleep(1)\n",
+                encoding="utf-8",
+            )
+            task.chmod(task.stat().st_mode | stat.S_IXUSR)
+            destination = root / "backup" / "tasks.json"
+            with self.assertRaisesRegex(BackupExportError, "timed out"):
+                capture_taskwarrior_export(taskdata, destination, task_bin=str(task), timeout=0.1)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(destination.parent.glob(".*")) if destination.parent.exists() else [], [])
 
     def test_manifest_inventory_is_stable_and_unicode_safe(self):
         with tempfile.TemporaryDirectory() as td:
@@ -128,6 +330,152 @@ class BackupServiceTests(unittest.TestCase):
             publish_manifest(target, manifest)
             self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["version"], 1)
             self.assertEqual(verify_manifest(root, manifest).status, "verified")
+
+    def test_publish_interruption_removes_temporary_and_preserves_previous(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "payload").write_text("new", encoding="utf-8")
+            manifest = create_manifest(root, files=("payload",))
+            target = root / "manifest.json"
+            target.write_text('{"status":"previous"}\n', encoding="utf-8")
+            with patch("nautical_core.backup_service.os.replace", side_effect=OSError("simulated interruption")), self.assertRaises(BackupManifestError):
+                publish_manifest(target, manifest)
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
+            self.assertEqual(list(root.glob(".manifest.json.*")), [])
+
+    def test_publish_fsync_failure_removes_temporary_and_preserves_previous(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "payload").write_text("new", encoding="utf-8")
+            manifest = create_manifest(root, files=("payload",))
+            target = root / "manifest.json"
+            target.write_text('{"status":"previous"}\n', encoding="utf-8")
+            with patch.object(service.os, "fsync", side_effect=OSError("simulated fsync failure")), self.assertRaises(BackupManifestError):
+                publish_manifest(target, manifest)
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"status":"previous"}\n')
+            self.assertEqual(list(root.glob(".manifest.json.*")), [])
+
+    def test_publish_accepts_injected_storage_operations(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = create_manifest(root, files=())
+            target = root / "manifest.json"
+            calls = []
+
+            def replace(source, destination):
+                calls.append("replace")
+                os.replace(source, destination)
+
+            publish_manifest(target, manifest, storage=StorageIO(replace=replace))
+            self.assertEqual(calls, ["replace"])
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), manifest)
+
+    def test_outbox_failure_removes_partial_target(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            source = source_dir / ".nautical_lifecycle_outbox.db"
+            source.write_bytes(b"source")
+            target = root / "outbox.db"
+
+            class FakeConnection:
+                def __init__(self, is_target: bool) -> None:
+                    self.is_target = is_target
+                def backup(self, other: object) -> None:
+                    target.write_bytes(b"partial")
+                def commit(self) -> None:
+                    return None
+                def execute(self, query: str) -> object:
+                    raise sqlite3.DatabaseError("simulated quick_check failure")
+                def close(self) -> None:
+                    return None
+
+            calls = iter((FakeConnection(False), FakeConnection(True)))
+            with patch.object(service.sqlite3, "connect", side_effect=lambda *args, **kwargs: next(calls)):
+                with self.assertRaises(BackupExportError):
+                    backup_outbox_database(taskdata, target)
+            self.assertFalse(target.exists())
+
+    def test_outbox_connection_failure_rejects_without_artifacts(self):
+        import nautical_core.backup_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            (source_dir / ".nautical_lifecycle_outbox.db").write_bytes(b"source")
+            target = root / "outbox.db"
+            with patch.object(service.sqlite3, "connect", side_effect=sqlite3.OperationalError("simulated open failure")):
+                with self.assertRaises(BackupExportError):
+                    backup_outbox_database(taskdata, target)
+            self.assertFalse(target.exists())
+
+    def test_outbox_backup_accepts_injected_connection_factory(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            source = source_dir / ".nautical_lifecycle_outbox.db"
+            connection = sqlite3.connect(source)
+            connection.execute("CREATE TABLE marker (value TEXT)")
+            connection.commit()
+            connection.close()
+            calls = []
+
+            def connect(path, **kwargs):
+                calls.append(path)
+                return sqlite3.connect(path, **kwargs)
+
+            destination = root / "outbox.db"
+            captured = backup_outbox_database(
+                taskdata,
+                destination,
+                storage=StorageIO(sqlite_connect=connect),
+            )
+            self.assertEqual(captured.status, "captured")
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(list(root.glob(".outbox.db.*")), [])
+
+    def test_outbox_disk_full_during_online_backup_removes_partial_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            taskdata = root / "taskdata"
+            source_dir = taskdata / ".nautical-state"
+            source_dir.mkdir(parents=True)
+            source = source_dir / ".nautical_lifecycle_outbox.db"
+            source.write_bytes(b"source")
+            target = root / "outbox.db"
+
+            class FailingSource:
+                def backup(self, _target: object) -> None:
+                    target.write_bytes(b"partial")
+                    raise sqlite3.OperationalError("database or disk is full")
+                def close(self) -> None:
+                    return None
+
+            class Target:
+                def commit(self) -> None:
+                    return None
+                def close(self) -> None:
+                    return None
+
+            calls = iter((FailingSource(), Target()))
+            captured_paths: list[str] = []
+
+            def connect(path: str, **_kwargs: object) -> object:
+                captured_paths.append(path)
+                return next(calls)
+
+            with self.assertRaisesRegex(BackupExportError, "disk is full"):
+                backup_outbox_database(taskdata, target, storage=StorageIO(sqlite_connect=connect))
+            self.assertEqual(captured_paths, [str(source), str(target)])
+            self.assertFalse(target.exists())
+
 
     def test_changed_artifact_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:

@@ -179,6 +179,7 @@ def summary(result: IntegrityEngineResult) -> dict[str, Any]:
 
 def components(result: IntegrityEngineResult) -> dict[str, Any]:
     """Return the stable evidence components shared by all consumers."""
+    public_status = "ok" if result.status.value == "healthy" else result.status.value
     finding_rows = ordered_records(
         [_finding_payload(finding) for finding in result.findings],
         keys=("chain_id", "severity", "invariant_id", "reason_code", "snapshot_id"),
@@ -213,7 +214,7 @@ def components(result: IntegrityEngineResult) -> dict[str, Any]:
             "details": {},
         }
     return {
-        "status": result.status.value,
+        "status": public_status,
         "snapshot": _snapshot_payload(result.snapshot),
         "findings": list(finding_rows),
         "plans": list(plan_rows),

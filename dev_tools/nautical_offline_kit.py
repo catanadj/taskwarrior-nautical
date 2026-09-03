@@ -7,10 +7,12 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
 from importlib import metadata
 from pathlib import Path
 from typing import Any
@@ -49,7 +51,15 @@ def _inventory() -> dict[str, Any]:
             task_version = (result.stdout or result.stderr).strip().splitlines()[0]
         except (OSError, subprocess.SubprocessError):
             task_version = "unavailable"
-    return {"python": sys.version.split()[0], "python_executable": sys.executable, "taskwarrior": task_version, "python_packages": versions, "timezone": os.environ.get("TZ", "") or "system"}
+    return {
+        "platform": platform.system().lower(),
+        "architecture": platform.machine().lower(),
+        "python": sys.version.split()[0],
+        "python_executable": sys.executable,
+        "taskwarrior": task_version,
+        "python_packages": versions,
+        "timezone": os.environ.get("TZ", "") or "system",
+    }
 
 
 def _files(root: Path) -> list[Path]:
@@ -59,7 +69,17 @@ def _files(root: Path) -> list[Path]:
     result: list[Path] = []
     for path in paths:
         if path.is_dir():
-            result.extend(sorted(item for item in path.rglob("*") if item.is_file() and not item.is_symlink()))
+            result.extend(
+                sorted(
+                    item
+                    for item in path.rglob("*")
+                    if item.is_file()
+                    and not item.is_symlink()
+                    and ".nautical-cache" not in item.relative_to(root).parts
+                    and "__pycache__" not in item.relative_to(root).parts
+                    and item.suffix != ".pyc"
+                )
+            )
         elif path.is_file() and not path.is_symlink():
             result.append(path)
         else:
@@ -67,13 +87,17 @@ def _files(root: Path) -> list[Path]:
     return sorted(result, key=lambda item: item.relative_to(root).as_posix())
 
 
-def build(source: Path, destination: Path) -> dict[str, Any]:
+def build(source: Path, destination: Path, archive: Path | None = None) -> dict[str, Any]:
     source = source.resolve()
     destination = destination.expanduser().absolute()
     if destination.exists() or destination.is_symlink():
         raise KitError(f"destination already exists: {destination}")
     if destination == source or source in destination.parents:
         raise KitError("kit destination must not be inside the source tree")
+    if archive is not None:
+        archive = archive.expanduser().absolute()
+        if archive == destination or destination in archive.parents:
+            raise KitError("kit archive must not be inside the kit directory")
     inputs = _files(source)
     with tempfile.TemporaryDirectory(prefix="nautical-kit-", dir=str(destination.parent)) as temporary:
         staging = Path(temporary) / "kit"
@@ -90,10 +114,18 @@ def build(source: Path, destination: Path) -> dict[str, Any]:
         (staging / "checksums.sha256").write_text(checksums, encoding="ascii")
         (staging / "OFFLINE-README.txt").write_text("Use the included local source with: ./nautical install --source .\nVerify first with: python3 dev_tools/nautical_offline_kit.py verify .\nNetworking is not required.\n", encoding="utf-8")
         os.replace(staging, destination)
-    return {"status": "created", "kit": str(destination), "files": len(records), "manifest": str(destination / "kit-manifest.json")}
+    result: dict[str, Any] = {"status": "created", "kit": str(destination), "files": len(records), "manifest": str(destination / "kit-manifest.json")}
+    if archive is not None:
+        if archive.exists() or archive.is_symlink():
+            raise KitError(f"archive destination already exists: {archive}")
+        archive.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tarfile.open(archive, "w:gz") as handle:
+            handle.add(destination, arcname=".", recursive=True)
+        result["archive"] = str(archive)
+    return result
 
 
-def verify(kit: Path) -> dict[str, Any]:
+def _verify_directory(kit: Path) -> dict[str, Any]:
     kit = kit.expanduser().resolve()
     manifest_path = kit / "kit-manifest.json"
     try:
@@ -117,17 +149,58 @@ def verify(kit: Path) -> dict[str, Any]:
     return {"status": "verified", "kit": str(kit), "files": checked, "manifest": str(manifest_path)}
 
 
+def _verify_archive(archive: Path) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="nautical-kit-verify-") as temporary:
+        root = Path(temporary) / "kit"
+        root.mkdir(mode=0o700)
+        try:
+            with tarfile.open(archive, "r:*") as handle:
+                for member in handle.getmembers():
+                    relative = Path(member.name)
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise KitError(f"unsafe archive member: {member.name}")
+                    if member.issym() or member.islnk() or not (member.isdir() or member.isfile()):
+                        raise KitError(f"unsafe archive member: {member.name}")
+                    target = root / relative
+                    if root not in target.resolve().parents and target.resolve() != root:
+                        raise KitError(f"unsafe archive member: {member.name}")
+                    if member.isdir():
+                        target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        continue
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    payload = handle.extractfile(member)
+                    if payload is None:
+                        raise KitError(f"unreadable archive member: {member.name}")
+                    target.write_bytes(payload.read())
+        except (OSError, tarfile.TarError) as exc:
+            raise KitError(f"archive is unreadable: {exc}") from exc
+        result = _verify_directory(root)
+        result["archive"] = str(archive)
+        result["kit"] = str(archive)
+        return result
+
+
+def verify(kit: Path) -> dict[str, Any]:
+    kit = kit.expanduser().absolute()
+    if kit.is_dir():
+        return _verify_directory(kit.resolve())
+    if kit.is_file():
+        return _verify_archive(kit.resolve())
+    raise KitError(f"kit does not exist: {kit}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument("destination")
     build_parser.add_argument("--source", default=str(ROOT))
+    build_parser.add_argument("--archive", help="also write a portable .tar.gz transport archive")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("kit")
     args = parser.parse_args()
     try:
-        result = build(Path(args.source), Path(args.destination)) if args.command == "build" else verify(Path(args.kit))
+        result = build(Path(args.source), Path(args.destination), Path(args.archive) if args.archive else None) if args.command == "build" else verify(Path(args.kit))
     except KitError as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
         return 2

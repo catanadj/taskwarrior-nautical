@@ -17,8 +17,8 @@ from .chain_integrity_models import (
     ReferenceState,
     SnapshotCoverage,
 )
-from .lifecycle_models import recurrence_fingerprint
-from .lifecycle_outbox import LifecycleOutboxRecord
+from .lifecycle_models import ExecutionStage, recurrence_fingerprint
+from .lifecycle_outbox import LifecycleOutboxRecord, OutboxProcessingState
 
 
 InvariantEvaluator = Callable[[ChainGraph], tuple[IntegrityFinding, ...]]
@@ -365,11 +365,16 @@ def _child_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
         if len(children) != 1:
             continue
         child = children[0]
+        parent_kind = next((field for field in ("anchor", "anchor_file", "cp") if str(parent.field(field, "") or "").strip()), "")
+        child_kind = next((field for field in ("anchor", "anchor_file", "cp") if str(child.field(field, "") or "").strip()), "")
         parent_raw = parent.field("due") or parent.field("scheduled")
         child_raw = child.field("due") or child.field("scheduled")
         parent_dt = _canonical_timestamp(parent_raw)
         child_dt = _canonical_timestamp(child_raw)
-        if parent_dt is not None and child_dt is not None and child_dt <= parent_dt:
+        temporal_reference = parent_dt
+        if parent_kind == "cp":
+            temporal_reference = _canonical_timestamp(parent.field("end")) or parent_dt
+        if temporal_reference is not None and child_dt is not None and child_dt <= temporal_reference:
             findings.append(IntegrityFinding(
                     "continuity.child_temporal_order",
                     FindingStatus.MANUAL_REVIEW,
@@ -378,13 +383,11 @@ def _child_continuity_rule(graph: ChainGraph) -> tuple[IntegrityFinding, ...]:
                     parent.chain_id,
                     (parent.task_uuid, child.task_uuid),
                     "child_not_after_parent",
-                    "Resolved child recurrence target is not later than its parent target.",
-                    (("parent_target", str(parent_raw)), ("child_target", str(child_raw))),
-                    (("child_target", "after parent_target"),),
+                    "Resolved child recurrence target is not later than its recurrence reference.",
+                    (("parent_target", str(parent_raw)), ("child_target", str(child_raw)), ("reference", str(temporal_reference))),
+                    (("child_target", "after recurrence reference"),),
                     (("parent_link", parent.link), ("child_link", child.link), ("coverage", graph.snapshot.coverage.value)),
             ))
-        parent_kind = next((field for field in ("anchor", "anchor_file", "cp") if str(parent.field(field, "") or "").strip()), "")
-        child_kind = next((field for field in ("anchor", "anchor_file", "cp") if str(child.field(field, "") or "").strip()), "")
         if parent_kind and parent_kind != child_kind:
             findings.append(IntegrityFinding(
                 "continuity.child_recurrence_identity",
@@ -678,7 +681,13 @@ def _outbox_rule(context: IntegrityContext) -> tuple[IntegrityFinding, ...]:
         if not isinstance(record, LifecycleOutboxRecord):
             continue
         identity = record.plan.identity
-        if record.stage is not record.plan.stage:
+        if (
+            record.stage is not record.plan.stage
+            and not (
+                record.state is OutboxProcessingState.ACKNOWLEDGED
+                and record.stage is ExecutionStage.FINALIZED
+            )
+        ):
             findings.append(IntegrityFinding(
                 "outbox.stage_agreement",
                 FindingStatus.MANUAL_REVIEW,

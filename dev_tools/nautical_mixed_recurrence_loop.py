@@ -159,12 +159,15 @@ def _health_snapshot(env: dict, taskdata: Path) -> dict:
         env=env,
         timeout=20.0,
     )
-    if not ok:
-        return {"ok": False, "status": "crit", "error": err or out or "health check failed", "duration_s": dt}
     try:
         obj = json.loads(out or "{}")
     except Exception as exc:
-        return {"ok": False, "status": "crit", "error": f"health JSON parse failed: {exc}", "duration_s": dt}
+        return {"ok": False, "status": "crit", "error": err or f"health JSON parse failed: {exc}", "duration_s": dt}
+    if not isinstance(obj, dict):
+        return {"ok": False, "status": "crit", "error": "health JSON must be an object", "duration_s": dt}
+    status = str(obj.get("status") or "crit").lower()
+    if not ok and status not in {"warn", "crit"}:
+        return {"ok": False, "status": "crit", "error": err or "health check failed", "duration_s": dt}
     obj["ok"] = True
     obj["duration_s"] = dt
     return obj

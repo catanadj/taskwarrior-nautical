@@ -9,12 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from importlib import metadata as importlib_metadata
 import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import tempfile
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .task_command import failure_message, run_task_command
 
@@ -24,6 +26,51 @@ BACKUP_MANIFEST_VERSION = 1
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_PATH_BYTES = 4096
 MAX_METADATA_KEYS = 128
+RUNTIME_DEPENDENCIES = ("astral", "rich", "prompt_toolkit", "python-dateutil")
+
+
+def runtime_dependency_versions() -> dict[str, str | None]:
+    """Record versions of runtime distributions without importing them."""
+    versions: dict[str, str | None] = {}
+    for name in RUNTIME_DEPENDENCIES:
+        try:
+            versions[name] = importlib_metadata.version(name)
+        except importlib_metadata.PackageNotFoundError:
+            versions[name] = None
+    return versions
+
+
+def build_backup_metadata(
+    *,
+    active_release: str | None = None,
+    runtime_digest: str | None = None,
+    taskwarrior_version: str | None = None,
+    python_version: str | None = None,
+    timezone: str | None = None,
+    timezone_data_identity: str | None = None,
+) -> dict[str, Any]:
+    """Build explicit, JSON-safe provenance metadata for a backup.
+
+    Values are caller-supplied deliberately: creating a backup must not
+    silently inspect or depend on the live installation's environment.
+    """
+    values = (
+        ("active_release", active_release),
+        ("runtime_digest", runtime_digest),
+        ("taskwarrior_version", taskwarrior_version),
+        ("python_version", python_version),
+        ("timezone", timezone),
+        ("timezone_data_identity", timezone_data_identity),
+    )
+    result: dict[str, Any] = {"metadata_schema": 1}
+    for key, value in values:
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            result[key] = normalized
+    json.dumps(result, ensure_ascii=False)
+    return result
 
 
 class BackupManifestError(ValueError):
@@ -32,6 +79,16 @@ class BackupManifestError(ValueError):
 
 class BackupExportError(RuntimeError):
     """Raised when a hooks-off Taskwarrior export cannot be captured safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class StorageIO:
+    """Optional filesystem operations for deterministic storage-fault tests."""
+
+    replace: Callable[[str, str], None] | None = None
+    fsync: Callable[[int], None] | None = None
+    unlink: Callable[[str], None] | None = None
+    sqlite_connect: Callable[..., sqlite3.Connection] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +152,15 @@ class SQLiteBackup:
     destination: str
     bytes: int
     quick_check: str
+
+
+@dataclass(frozen=True, slots=True)
+class BackupRetention:
+    """Result of pruning verified backup generations."""
+
+    kept: tuple[str, ...]
+    removed: tuple[str, ...]
+    skipped: tuple[str, ...]
 
 
 def _safe_relative_path(value: str) -> str:
@@ -175,7 +241,7 @@ def create_manifest(
     }
 
 
-def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
+def publish_manifest(path: Path, manifest: Mapping[str, Any], *, storage: StorageIO | None = None) -> None:
     """Atomically publish a validated manifest without partial output."""
     encoded = json.dumps(dict(manifest), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if len(encoded.encode("utf-8")) > MAX_MANIFEST_BYTES:
@@ -183,6 +249,10 @@ def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
     validate_manifest(manifest)
     destination = Path(path).expanduser()
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    storage = storage or StorageIO()
+    replace = storage.replace or os.replace
+    fsync = storage.fsync or os.fsync
+    unlink = storage.unlink or os.unlink
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -191,15 +261,15 @@ def publish_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
             temporary = handle.name
             handle.write(encoded)
             handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
+            fsync(handle.fileno())
+        replace(temporary, str(destination))
         temporary = None
     except OSError as exc:
         raise BackupManifestError(f"could not publish backup manifest: {exc}") from exc
     finally:
         if temporary is not None:
             try:
-                os.unlink(temporary)
+                unlink(temporary)
             except OSError:
                 pass
 
@@ -261,6 +331,49 @@ def verify_manifest(root: Path, manifest: Mapping[str, Any]) -> BackupVerificati
         return BackupVerification("rejected", str(Path(root).expanduser()), 0, (str(exc),))
 
 
+def prune_backup_generations(root: Path, *, keep: int = 2) -> BackupRetention:
+    """Remove old verified generation directories without deleting the last one.
+
+    Invalid, incomplete, and unverified directories are retained for
+    inspection rather than guessed at or silently removed.
+    """
+    if not isinstance(keep, int) or isinstance(keep, bool) or keep < 1:
+        raise BackupManifestError("backup retention must keep at least one generation")
+    root = Path(root).expanduser().resolve()
+    if not root.is_dir() or root.is_symlink():
+        raise BackupManifestError(f"backup root is not a directory: {root}")
+    valid: list[tuple[int, Path]] = []
+    skipped: list[str] = []
+    for candidate in root.iterdir():
+        if candidate.is_symlink() or not candidate.is_dir():
+            skipped.append(candidate.name)
+            continue
+        try:
+            manifest = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
+            verification = verify_manifest(candidate, manifest)
+            if verification.status != "verified":
+                skipped.append(candidate.name)
+                continue
+            valid.append((candidate.stat().st_mtime_ns, candidate))
+        except (OSError, TypeError, ValueError):
+            skipped.append(candidate.name)
+    valid.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+    kept = [path for _mtime, path in valid[: int(keep)]]
+    removed: list[str] = []
+    for _mtime, candidate in valid[int(keep):]:
+        try:
+            shutil.rmtree(candidate)
+        except OSError:
+            skipped.append(candidate.name)
+            continue
+        removed.append(candidate.name)
+    return BackupRetention(
+        tuple(path.name for path in kept),
+        tuple(removed),
+        tuple(sorted(set(skipped))),
+    )
+
+
 def manifest_json(manifest: Mapping[str, Any]) -> str:
     """Serialize a validated manifest using Nautical's JSON contract."""
     validate_manifest(manifest)
@@ -273,6 +386,7 @@ def capture_taskwarrior_export(
     *,
     task_bin: str = "task",
     timeout: float = 60.0,
+    storage: StorageIO | None = None,
 ) -> BackupExport:
     """Capture a validated hooks-off Taskwarrior JSON export atomically.
 
@@ -310,28 +424,35 @@ def capture_taskwarrior_export(
     if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
         raise BackupExportError("Taskwarrior export must be a JSON array of objects")
     encoded = result.stdout.encode("utf-8")
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BackupExportError(f"could not prepare export destination: {exc}") from exc
     temporary: str | None = None
+    storage = storage or StorageIO()
+    replace = storage.replace or os.replace
+    fsync = storage.fsync or os.fsync
+    unlink = storage.unlink or os.unlink
     try:
         with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False) as handle:
             temporary = handle.name
             handle.write(encoded)
             handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
+            fsync(handle.fileno())
+        replace(temporary, str(target))
         temporary = None
     except OSError as exc:
         raise BackupExportError(f"could not publish Taskwarrior export: {exc}") from exc
     finally:
         if temporary is not None:
             try:
-                os.unlink(temporary)
+                unlink(temporary)
             except OSError:
                 pass
     return BackupExport("captured", str(target), len(payload), len(encoded), hashlib.sha256(encoded).hexdigest())
 
 
-def backup_outbox_database(taskdata: Path, destination: Path) -> SQLiteBackup:
+def backup_outbox_database(taskdata: Path, destination: Path, *, storage: StorageIO | None = None) -> SQLiteBackup:
     """Copy the lifecycle outbox with SQLite's online-backup API.
 
     The destination is a new standalone database outside Taskdata.  SQLite's
@@ -354,12 +475,16 @@ def backup_outbox_database(taskdata: Path, destination: Path) -> SQLiteBackup:
         raise BackupExportError(f"outbox backup destination cannot be resolved: {target}") from exc
     if target_resolved == source_root or source_root in target_resolved.parents:
         raise BackupExportError("outbox backup destination must be outside Taskdata")
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise BackupExportError(f"could not prepare outbox backup destination: {exc}") from exc
     source_conn: sqlite3.Connection | None = None
     target_conn: sqlite3.Connection | None = None
+    connect = (storage or StorageIO()).sqlite_connect or sqlite3.connect
     try:
-        source_conn = sqlite3.connect(str(source), uri=False)
-        target_conn = sqlite3.connect(str(target), uri=False)
+        source_conn = connect(str(source), uri=False)
+        target_conn = connect(str(target), uri=False)
         source_conn.backup(target_conn)
         target_conn.commit()
         quick_check = str(target_conn.execute("PRAGMA quick_check").fetchone()[0])

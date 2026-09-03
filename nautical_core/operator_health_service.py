@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+import subprocess
+import sqlite3
+import json
+import time
+import stat
 from typing import Any, Callable, Iterable, Mapping
 from datetime import date, datetime
 from pathlib import Path
@@ -107,6 +113,348 @@ class OperatorHealthService:
     @staticmethod
     def report(findings: Iterable[OperatorFinding]) -> OperatorHealthReport:
         return OperatorHealthReport(tuple(findings))
+
+    @staticmethod
+    def storage_findings(
+        paths: Mapping[str, object],
+        *,
+        statvfs_factory: Callable[[str], object] = os.statvfs,
+    ) -> tuple[OperatorFinding, ...]:
+        """Report read-only filesystem capacity for explicitly supplied paths."""
+        findings: list[OperatorFinding] = []
+        for label, raw_path in paths.items():
+            path = str(raw_path)
+            try:
+                stats = statvfs_factory(path)
+                block_size = int(getattr(stats, "f_frsize", 0) or getattr(stats, "f_bsize", 0))
+                free_blocks = int(getattr(stats, "f_bavail"))
+                total_blocks = int(getattr(stats, "f_blocks"))
+                free_inodes = int(getattr(stats, "f_favail"))
+                total_inodes = int(getattr(stats, "f_files"))
+                if block_size < 1 or min(free_blocks, total_blocks, free_inodes, total_inodes) < 0:
+                    raise ValueError("statvfs returned invalid capacity values")
+                findings.append(OperatorFinding(
+                    f"storage.{label}", "installation", FindingSeverity.INFO,
+                    FindingActionability.INFORMATIONAL,
+                    f"Storage capacity is readable for {label}: {path}.",
+                    observed={
+                        "path": path,
+                        "free_bytes": free_blocks * block_size,
+                        "total_bytes": total_blocks * block_size,
+                        "free_inodes": free_inodes,
+                        "total_inodes": total_inodes,
+                    },
+                ))
+            except Exception as exc:
+                findings.append(OperatorFinding(
+                    f"storage.{label}", "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"Storage capacity is unavailable for {label}: {path}.",
+                    observed={"path": path, "error": str(exc)},
+                    guidance=f"Make the {label} filesystem readable and retry deep Doctor.",
+                ))
+        return tuple(findings)
+
+    @staticmethod
+    def deep_identity_findings(
+        runtime: Mapping[str, Any],
+        task_binary: str,
+        python_executable: str,
+        *,
+        digest_factory: Callable[[Path], str] | None = None,
+        version_probe: Callable[[str], tuple[bool, str]] | None = None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Verify active-release content and executable identities read-only."""
+        findings: list[OperatorFinding] = []
+        runtime_root = Path(str(runtime.get("runtime_root") or "")).expanduser()
+        release_id = str(runtime.get("active_release") or "")
+        manifest = runtime.get("manifest") if isinstance(runtime.get("manifest"), Mapping) else {}
+        expected_digest = str(manifest.get("content_sha256") or "")
+        release_path = runtime_root / "releases" / release_id if release_id else Path("")
+        try:
+            if digest_factory is None:
+                from .install_runtime import source_digest
+                digest_factory = source_digest
+            if not release_id or not expected_digest or not release_path.is_dir():
+                raise ValueError("active release or manifest digest is unavailable")
+            actual_digest = digest_factory(release_path)
+            if actual_digest != expected_digest:
+                raise ValueError(f"digest mismatch (expected {expected_digest}, got {actual_digest})")
+            findings.append(OperatorFinding(
+                "install.release_digest", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"Active managed release content is verified: {release_id}.",
+                observed={"release_id": release_id, "content_sha256": actual_digest, "path": str(release_path)},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "install.release_digest", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Active managed release content could not be verified.",
+                observed={"release_id": release_id, "path": str(release_path), "error": str(exc)},
+                guidance="Reinstall from a verified local kit or roll back to a retained release.",
+            ))
+
+        probe = version_probe or OperatorHealthService._probe_executable
+        for label, executable, code in (("Taskwarrior", task_binary, "taskwarrior.identity"), ("Python", python_executable, "python.identity")):
+            try:
+                path = str(Path(executable).expanduser().resolve(strict=True))
+                ok, version = probe(path)
+                if not ok:
+                    raise RuntimeError(version or "version probe failed")
+                findings.append(OperatorFinding(
+                    code, "installation", FindingSeverity.INFO,
+                    FindingActionability.INFORMATIONAL,
+                    f"{label} executable is usable: {path}.",
+                    observed={"path": path, "version": version},
+                ))
+            except Exception as exc:
+                findings.append(OperatorFinding(
+                    code, "installation", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"{label} executable identity could not be verified.",
+                    observed={"path": str(executable), "error": str(exc)},
+                    guidance=f"Verify the offline-kit {label} executable and retry deep Doctor.",
+                ))
+        return tuple(findings)
+
+    @staticmethod
+    def deep_resource_findings(
+        timezone_name: str,
+        resources: Mapping[str, object],
+        *,
+        timezone_factory: Callable[[str], object] | None,
+    ) -> tuple[OperatorFinding, ...]:
+        """Validate an explicit timezone and resource-path inventory read-only."""
+        findings: list[OperatorFinding] = []
+        try:
+            if timezone_factory is None:
+                raise RuntimeError("timezone support is unavailable")
+            timezone_factory(str(timezone_name).strip())
+            findings.append(OperatorFinding(
+                "config.timezone.deep", "configuration", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                f"Configured timezone is available: {timezone_name}.",
+                observed={"timezone": str(timezone_name)},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "config.timezone.deep", "configuration", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                f"Configured timezone is unavailable: {timezone_name}.",
+                observed={"timezone": str(timezone_name), "error": str(exc)},
+                guidance="Install timezone data or select an available IANA timezone, then retry deep Doctor.",
+            ))
+        for label, raw_path in resources.items():
+            path = Path(str(raw_path)).expanduser()
+            try:
+                resolved = path.resolve(strict=True)
+                if not (resolved.is_file() or resolved.is_dir()) or not os.access(str(resolved), os.R_OK):
+                    raise OSError("resource is not readable")
+                findings.append(OperatorFinding(
+                    f"resource.{label}", "configuration", FindingSeverity.INFO,
+                    FindingActionability.INFORMATIONAL,
+                    f"Configured resource is readable: {label}.",
+                    observed={"path": str(resolved), "kind": "directory" if resolved.is_dir() else "file"},
+                ))
+            except Exception as exc:
+                findings.append(OperatorFinding(
+                    f"resource.{label}", "configuration", FindingSeverity.ERROR,
+                    FindingActionability.BLOCKING,
+                    f"Configured resource is unavailable: {label}.",
+                    observed={"path": str(path), "error": str(exc)},
+                    guidance=f"Create or correct the configured {label} resource, then retry deep Doctor.",
+                ))
+        return tuple(findings)
+
+    @staticmethod
+    def deep_local_state_findings(
+        outbox_path: object,
+        backup_root: object | None = None,
+        *,
+        quick_check: Callable[[Path], str] | None = None,
+        backup_checker: Callable[[Path], bool] | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> tuple[OperatorFinding, ...]:
+        """Check outbox integrity and the newest optional backup generation."""
+        findings: list[OperatorFinding] = []
+        path = Path(str(outbox_path)).expanduser()
+        try:
+            checker = quick_check or OperatorHealthService._quick_check_sqlite
+            result = checker(path)
+            if result.lower() != "ok":
+                raise RuntimeError(result)
+            findings.append(OperatorFinding(
+                "outbox.quick_check.deep", "lifecycle", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Lifecycle outbox integrity is verified.",
+                observed={"path": str(path), "quick_check": result},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "outbox.quick_check.deep", "lifecycle", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Lifecycle outbox integrity could not be verified.",
+                observed={"path": str(path), "error": str(exc)},
+                guidance="Stop Nautical processes and restore or repair the outbox from a verified local backup.",
+            ))
+        if backup_root is None:
+            return tuple(findings)
+        root = Path(str(backup_root)).expanduser()
+        try:
+            generations = [item for item in root.iterdir() if item.is_dir() and not item.is_symlink()]
+            if not generations:
+                raise FileNotFoundError("no backup generations found")
+            newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
+            checker = backup_checker or OperatorHealthService._verify_backup_generation
+            if not checker(newest):
+                raise RuntimeError("manifest or artifact verification failed")
+            manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
+            metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
+            if not isinstance(metadata, Mapping) or metadata.get("restore_tool_schema") != 1:
+                raise RuntimeError("backup restore-tool schema is missing or unsupported")
+            created_at = metadata.get("created_at")
+            if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
+                raise RuntimeError("backup creation timestamp is missing or invalid")
+            age_seconds = max(0.0, float(clock()) - float(created_at))
+            findings.append(OperatorFinding(
+                "backup.newest.deep", "backup", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Newest configured backup generation is verified.",
+                observed={"root": str(root), "generation": newest.name, "age_seconds": age_seconds, "restore_tool_schema": 1},
+            ))
+        except Exception as exc:
+            findings.append(OperatorFinding(
+                "backup.newest.deep", "backup", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Newest configured backup generation could not be verified.",
+                observed={"root": str(root), "error": str(exc)},
+                guidance="Create or select a verified local backup generation before relying on offline recovery.",
+            ))
+        return tuple(findings)
+
+    @staticmethod
+    def deep_clock_findings(
+        runtime: Mapping[str, Any],
+        backup_root: object | None = None,
+        *,
+        clock: Callable[[], float] = time.time,
+    ) -> tuple[OperatorFinding, ...]:
+        """Report only unambiguous clock-before-local-evidence anomalies."""
+        now = float(clock())
+        findings: list[OperatorFinding] = []
+        release_manifest = runtime.get("manifest") if isinstance(runtime.get("manifest"), Mapping) else {}
+        release_created = release_manifest.get("created_at")
+        if isinstance(release_created, (int, float)) and not isinstance(release_created, bool) and now < float(release_created):
+            findings.append(OperatorFinding(
+                "time.before_release", "installation", FindingSeverity.WARNING,
+                FindingActionability.ACTIONABLE,
+                "System clock predates the active Nautical release evidence.",
+                observed={"now": now, "release_created_at": float(release_created)},
+                guidance="Correct the system clock before scheduling or mutating recurrence state.",
+            ))
+        if backup_root is None:
+            return tuple(findings)
+        try:
+            root = Path(str(backup_root)).expanduser()
+            generations = [item for item in root.iterdir() if item.is_dir() and not item.is_symlink()]
+            if not generations:
+                return tuple(findings)
+            newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
+            manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
+            metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else {}
+            backup_created = metadata.get("created_at") if isinstance(metadata, Mapping) else None
+            if isinstance(backup_created, (int, float)) and not isinstance(backup_created, bool) and now < float(backup_created):
+                findings.append(OperatorFinding(
+                    "time.before_backup", "backup", FindingSeverity.WARNING,
+                    FindingActionability.ACTIONABLE,
+                    "System clock predates the newest verified backup evidence.",
+                    observed={"now": now, "backup_created_at": float(backup_created), "generation": newest.name},
+                    guidance="Correct the system clock before relying on scheduling or recovery timestamps.",
+                ))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        return tuple(findings)
+
+    @staticmethod
+    def deep_ownership_findings(
+        runtime: Mapping[str, Any],
+        hooks_dir: object,
+        hook_runtimes: Mapping[str, Mapping[str, Any]] | None = None,
+        *,
+        stat_factory: Callable[[Path], object] = os.stat,
+    ) -> tuple[OperatorFinding, ...]:
+        """Verify active-release containment and required read/execute bits."""
+        findings: list[OperatorFinding] = []
+        runtime_root = Path(str(runtime.get("runtime_root") or "")).expanduser()
+        release_id = str(runtime.get("active_release") or "")
+        release = runtime_root / "releases" / release_id if release_id else Path("")
+        checks: list[tuple[str, Path, int]] = [
+            ("managed_launcher", release / "nautical", stat.S_IRUSR | stat.S_IXUSR),
+            ("navigator", release / "nautical_navigator.py", stat.S_IRUSR),
+        ]
+        for event, name in (("on-add", "on-add.nautical"), ("on-modify", "on-modify.nautical"), ("on-exit", "on-exit.nautical")):
+            checks.append((f"hook_{event}", Path(str(hooks_dir)).expanduser() / name, stat.S_IRUSR | stat.S_IXUSR))
+        errors: list[str] = []
+        for label, path, required_bits in checks:
+            try:
+                mode = int(getattr(stat_factory(path), "st_mode"))
+                if mode & required_bits != required_bits:
+                    errors.append(f"{label} lacks required permissions")
+            except Exception as exc:
+                errors.append(f"{label}: {exc}")
+        release_resolved = release.resolve() if release_id else Path("")
+        for event, record in (hook_runtimes or {}).items():
+            implementation = record.get("implementation")
+            if not implementation:
+                errors.append(f"{event} implementation path is missing")
+                continue
+            try:
+                Path(str(implementation)).resolve(strict=True).relative_to(release_resolved)
+            except Exception:
+                errors.append(f"{event} implementation is outside the active release")
+        if errors:
+            findings.append(OperatorFinding(
+                "install.ownership.deep", "installation", FindingSeverity.ERROR,
+                FindingActionability.BLOCKING,
+                "Active runtime ownership or permissions could not be verified.",
+                observed={"release": str(release), "hooks_dir": str(hooks_dir), "errors": errors},
+                guidance="Restore executable/read permissions and reinstall from a verified local kit if ownership is wrong.",
+            ))
+        else:
+            findings.append(OperatorFinding(
+                "install.ownership.deep", "installation", FindingSeverity.INFO,
+                FindingActionability.INFORMATIONAL,
+                "Active runtime and hook ownership/permissions are verified.",
+                observed={"release": str(release), "hooks_dir": str(hooks_dir)},
+            ))
+        return tuple(findings)
+
+    @staticmethod
+    def _quick_check_sqlite(path: Path) -> str:
+        if path.is_symlink() or not path.is_file():
+            raise FileNotFoundError(path)
+        connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
+        try:
+            return str(connection.execute("PRAGMA quick_check").fetchone()[0])
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _verify_backup_generation(path: Path) -> bool:
+        from .backup_service import verify_manifest
+        manifest_path = path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return verify_manifest(path, manifest).status == "verified"
+
+    @staticmethod
+    def _probe_executable(path: str) -> tuple[bool, str]:
+        try:
+            result = subprocess.run([path, "--version"], capture_output=True, text=True, check=False, timeout=5)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, str(exc)
+        output = (result.stdout or result.stderr).strip()
+        return result.returncode == 0, output
 
     @staticmethod
     def diagnose_configuration(request: ConfigurationDiagnosisRequest) -> OperatorHealthReport:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import unittest
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -19,9 +20,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from nautical_core.lifecycle_application import LifecycleApplicationService
-from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
+from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository, OutboxFailure
 from nautical_core.operator_context import OperatorInvocationBudget
 from nautical_core.operator_models import OperatorLimits
 from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
@@ -116,6 +117,28 @@ print(json.dumps(payload, sort_keys=True))
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
 
+    def test_same_plan_reopens_manual_review_after_configuration_drift(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "config-drift", "00000000-0000-4000-8000-000000000701",
+                "00000000-0000-4000-8000-000000000702", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="old-config", schedule_fingerprint="same-schedule")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=30, intent_id=intent_id).kind.value, "applied")
+            outbox.manual_review(
+                intent_id=intent_id, owner="owner",
+                failure=OutboxFailure("invalid_intent", "guard modified changed"),
+            )
+            reopened = outbox.enqueue(
+                plan, configuration_fingerprint="new-config", schedule_fingerprint="same-schedule",
+            )
+            self.assertEqual(reopened.kind.value, "applied")
+            self.assertIsNotNone(reopened.record)
+            assert reopened.record is not None
+            self.assertEqual(reopened.record.state.value, "retry")
+
     def test_bulk_enqueue_and_exact_claim_are_scoped_and_idempotent(self) -> None:
         with TemporaryDirectory() as td:
             outbox = LifecycleOutboxRepository(Path(td))
@@ -173,6 +196,76 @@ print(json.dumps(payload, sort_keys=True))
             )
             self.assertEqual(claim.kind.value, "applied")
             self.assertEqual(claimed[plan.identity.idempotency_key].kind.value, "applied")
+
+    def test_stage_lock_is_retryable_and_does_not_duplicate_intent(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "stage-interrupt",
+                "00000000-0000-4000-8000-000000000611",
+                "00000000-0000-4000-8000-000000000612",
+                1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(outbox.claim_intent(owner="stage-owner", lease_seconds=30, intent_id=intent_id).kind.value, "applied")
+            with patch.object(outbox, "_connect", side_effect=sqlite3.OperationalError("database is locked")):
+                interrupted = outbox.advance_stage(
+                    intent_id=intent_id, owner="stage-owner", stage=ExecutionStage.CHILD_PRESENT
+                )
+            self.assertEqual(interrupted.kind.value, "retryable")
+            resumed = outbox.advance_stage(
+                intent_id=intent_id, owner="stage-owner", stage=ExecutionStage.CHILD_PRESENT
+            )
+            self.assertEqual(resumed.kind.value, "applied")
+            repeated = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(repeated.kind.value, "already_applied")
+
+    def test_acknowledgement_lock_is_retryable_and_duplicate_enqueue_is_idempotent(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "ack-interrupt",
+                "00000000-0000-4000-8000-000000000621",
+                "00000000-0000-4000-8000-000000000622",
+                1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            outbox.claim_intent(owner="ack-owner", lease_seconds=30, intent_id=intent_id)
+            outbox.advance_stage(intent_id=intent_id, owner="ack-owner", stage=ExecutionStage.CHILD_PRESENT)
+            outbox.advance_stage(intent_id=intent_id, owner="ack-owner", stage=ExecutionStage.PARENT_LINKED)
+            outbox.advance_stage(intent_id=intent_id, owner="ack-owner", stage=ExecutionStage.VERIFIED)
+            with patch.object(outbox, "_connect", side_effect=sqlite3.OperationalError("database is locked")):
+                interrupted = outbox.acknowledge(intent_id=intent_id, owner="ack-owner")
+            self.assertEqual(interrupted.kind.value, "retryable")
+            acknowledged = outbox.acknowledge(intent_id=intent_id, owner="ack-owner")
+            self.assertEqual(acknowledged.kind.value, "applied")
+            repeated = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(repeated.kind.value, "already_applied")
+
+    def test_poisoned_intent_does_not_block_healthy_chain_claim(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            poisoned = self._bulk_plan(
+                "poison-chain", "00000000-0000-4000-8000-000000000631",
+                "00000000-0000-4000-8000-000000000632", 1,
+            )
+            healthy = self._bulk_plan(
+                "healthy-chain", "00000000-0000-4000-8000-000000000641",
+                "00000000-0000-4000-8000-000000000642", 1,
+            )
+            outbox.enqueue_many((poisoned, healthy), configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            with sqlite3.connect(str(outbox.path)) as connection:
+                connection.execute(
+                    "UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?",
+                    (poisoned.identity.idempotency_key,),
+                )
+            result, records = outbox.claim_batch(owner="healthy-worker", lease_seconds=30, limit=10)
+            self.assertEqual(result.kind.value, "applied")
+            self.assertEqual([record.intent_id for record in records], [healthy.identity.idempotency_key])
+            _, status = outbox.status()
+            self.assertEqual(status["states"].get("quarantined"), 1)
 
     def test_bulk_enqueue_rollback_leaves_no_phantom_intents(self) -> None:
         with TemporaryDirectory() as td:

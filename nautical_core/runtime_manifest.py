@@ -146,6 +146,7 @@ HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
 # tests alone cannot prove these operator surfaces survived staging.
 OPERATOR_RUNTIME_FILES = (
     "nautical",
+    "nautical_core/tools/nautical_backup.py",
     "nautical_navigator.py",
     "nautical_core/operator_presentation.py",
     "nautical_core/operator_control_plane.py",
@@ -164,6 +165,7 @@ OPERATOR_RUNTIME_FILES = (
     "nautical_core/tools/nautical_doctor.py",
     "nautical_core/tools/nautical_queue_status.py",
     "nautical_core/tools/nautical_queue_review.py",
+    "nautical_core/tools/nautical_restore.py",
     "nautical_core/tools/nautical_reconcile.py",
     "nautical_core/reconcile_cli.py",
     "nautical_core/reconcile_report.py",

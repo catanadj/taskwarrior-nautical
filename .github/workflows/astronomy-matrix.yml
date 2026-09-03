@@ -49,4 +49,3 @@ jobs:
           python3 dev_tools/nautical_golden_tests.py
           --only astronomy
           --only moon
-          --only season

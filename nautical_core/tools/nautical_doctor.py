@@ -648,11 +648,12 @@ def main() -> int:
         deep_resources: dict[str, object] = {}
         if deep_config_path is not None:
             deep_resources["config"] = deep_config_path
-        for key in ("anchor_file_dir", "omit_file_dir", "anchor_cache_dir"):
-            raw = str(deep_data.get(key) or "").strip()
-            if raw:
-                path = Path(raw).expanduser()
-                deep_resources[key] = path if path.is_absolute() else deep_config_path.parent / path
+            config_parent = deep_config_path.parent
+            for key in ("anchor_file_dir", "omit_file_dir", "anchor_cache_dir"):
+                raw = str(deep_data.get(key) or "").strip()
+                if raw:
+                    path = Path(raw).expanduser()
+                    deep_resources[key] = path if path.is_absolute() else config_parent / path
         resource_report = OperatorHealthService.report(OperatorHealthService.deep_resource_findings(
             str(deep_data.get("tz") or "UTC"), deep_resources, timezone_factory=ZONEINFO_FACTORY,
         ))

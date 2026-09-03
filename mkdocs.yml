@@ -66,6 +66,7 @@ nav:
       - Lifecycle and Chain Integrity: operations/lifecycle-and-integrity.md
       - Sync and Recovery: operations/sync-and-recovery.md
       - Diagnostics and Performance: operations/diagnostics-and-performance.md
+      - Offline Readiness: operations/offline-readiness.md
       - Troubleshooting: operations/troubleshooting.md
   - Reference:
       - Grammar: reference/grammar.md

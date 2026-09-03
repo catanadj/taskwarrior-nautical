@@ -168,7 +168,8 @@ class OperatorHealthService:
         findings: list[OperatorFinding] = []
         runtime_root = Path(str(runtime.get("runtime_root") or "")).expanduser()
         release_id = str(runtime.get("active_release") or "")
-        manifest = runtime.get("manifest") if isinstance(runtime.get("manifest"), Mapping) else {}
+        manifest_value = runtime.get("manifest")
+        manifest: Mapping[str, Any] = manifest_value if isinstance(manifest_value, Mapping) else {}
         expected_digest = str(manifest.get("content_sha256") or "")
         release_path = runtime_root / "releases" / release_id if release_id else Path("")
         try:
@@ -306,8 +307,8 @@ class OperatorHealthService:
             if not generations:
                 raise FileNotFoundError("no backup generations found")
             newest = max(generations, key=lambda item: (item.stat().st_mtime_ns, item.name))
-            checker = backup_checker or OperatorHealthService._verify_backup_generation
-            if not checker(newest):
+            backup_checker_fn: Callable[[Path], bool] = backup_checker or OperatorHealthService._verify_backup_generation
+            if not backup_checker_fn(newest):
                 raise RuntimeError("manifest or artifact verification failed")
             manifest = json.loads((newest / "manifest.json").read_text(encoding="utf-8"))
             metadata = manifest.get("metadata") if isinstance(manifest, Mapping) else None
@@ -343,7 +344,8 @@ class OperatorHealthService:
         """Report only unambiguous clock-before-local-evidence anomalies."""
         now = float(clock())
         findings: list[OperatorFinding] = []
-        release_manifest = runtime.get("manifest") if isinstance(runtime.get("manifest"), Mapping) else {}
+        manifest_value = runtime.get("manifest")
+        release_manifest: Mapping[str, Any] = manifest_value if isinstance(manifest_value, Mapping) else {}
         release_created = release_manifest.get("created_at")
         if isinstance(release_created, (int, float)) and not isinstance(release_created, bool) and now < float(release_created):
             findings.append(OperatorFinding(

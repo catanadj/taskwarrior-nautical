@@ -128,9 +128,27 @@ def validate_and_terms_satisfiable(
             for atom in term
             if (atom.get("typ") or atom.get("type") or "").lower() in ("w", "m", "y")
         ]
+        kinds = {
+            (atom.get("typ") or atom.get("type") or "").lower()
+            for atom in term
+        }
+        if len(kinds & {"w", "m", "y"}) > 1 and any(interval > 1 for interval in stepped_intervals):
+            # Mixed stepped calendars can make the generic daily probe
+            # disproportionately expensive. Leave those rare intersections
+            # to the bounded scheduler search instead of hanging validation.
+            continue
         if any(interval > 40 for interval in stepped_intervals):
             continue
-        probe_years = max(40, min(400, max(stepped_intervals or [1]) * 6))
+        # Weekly/monthly intersections repeat quickly; reserving the full
+        # leap-day horizon for every stepped term makes malformed/fuzz input
+        # spend minutes in the daily probe. Yearly terms retain the wider
+        # horizon needed for Gregorian alignment.
+        has_yearly = any(
+            (atom.get("typ") or atom.get("type") or "").lower() == "y"
+            for atom in term
+        )
+        minimum_years = 40 if has_yearly else 8
+        probe_years = max(minimum_years, min(400, max(stepped_intervals or [1]) * 6))
         if not term_has_any_match_within(term, ref_d, seed, years=probe_years):
             pieces = []
             for atom in term:

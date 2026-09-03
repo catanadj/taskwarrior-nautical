@@ -45,4 +45,8 @@ jobs:
       - name: Run Astral-backed golden tests
         env:
           NAUTICAL_REQUIRE_ASTRAL: "1"
-        run: python3 dev_tools/nautical_golden_tests.py
+        run: >-
+          python3 dev_tools/nautical_golden_tests.py
+          --only astronomy
+          --only moon
+          --only season

@@ -34972,7 +34972,11 @@ DEEP_TESTS = [
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", help="substring filter for test names")
+    ap.add_argument(
+        "--only",
+        action="append",
+        help="substring filter for test names (repeatable; filters are ORed)",
+    )
     ap.add_argument("--verbose", action="store_true", help="show detailed test information")
     ap.add_argument(
         "--shuffle-seed",
@@ -34988,11 +34992,11 @@ def main():
 
     selected = TESTS
     if args.only:
-        sel = []
-        for fn in TESTS:
-            if args.only.lower() in fn.__name__.lower():
-                sel.append(fn)
-        selected = sel
+        filters = tuple(value.lower() for value in args.only)
+        selected = [
+            fn for fn in TESTS
+            if any(value in fn.__name__.lower() for value in filters)
+        ]
     if args.shuffle_seed is not None:
         selected = list(selected)
         random.Random(args.shuffle_seed).shuffle(selected)

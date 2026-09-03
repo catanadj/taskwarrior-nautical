@@ -140,6 +140,22 @@ def restore_backup(
                 if resource.is_symlink() or not resource.is_file():
                     raise BackupRestoreError(f"backup resource is missing or unsafe: {resource.name}")
             shutil.copytree(resources, temporary / "resources")
+        runtime = source_path / "runtime"
+        if runtime.exists():
+            if runtime.is_symlink() or not runtime.is_dir():
+                raise BackupRestoreError("backup runtime directory is missing or unsafe")
+            runtime_target = temporary / ".nautical-runtime"
+            shutil.copytree(runtime, runtime_target, symlinks=False)
+            releases = runtime_target / "releases"
+            candidates = sorted(path for path in releases.iterdir() if path.is_dir() and not path.is_symlink())
+            if len(candidates) != 1:
+                raise BackupRestoreError("backup runtime must contain exactly one release")
+            (runtime_target / "current").symlink_to(Path("releases") / candidates[0].name, target_is_directory=True)
+        hooks = source_path / "hooks"
+        if hooks.exists():
+            if hooks.is_symlink() or not hooks.is_dir():
+                raise BackupRestoreError("backup hooks directory is missing or unsafe")
+            shutil.copytree(hooks, temporary / "hooks", symlinks=False)
         shutil.copy2(source_path / "manifest.json", temporary / "manifest.json")
         if destination.exists():
             displaced = Path(tempfile.mkdtemp(prefix=f".{destination.name}.previous-", dir=parent))

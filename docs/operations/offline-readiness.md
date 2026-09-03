@@ -62,15 +62,90 @@ python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
 ```
 
 The destination must be outside Taskdata and must not already exist.
-Additional files are included only when explicitly selected with repeatable
-`--include NAME=PATH` options; Nautical does not scan configuration or resource
-directories implicitly:
+The backup automatically includes the active Nautical configuration, UDA
+definition, Taskwarrior rc file, and every configured or task-referenced
+anchor/omit resource. These are copied under `resources/` and checksummed in
+the manifest. Additional files can still be selected with repeatable
+`--include NAME=PATH` options:
 
 ```bash
 python3 nautical_core/tools/nautical_backup.py --taskdata "$HOME/.task" \
   --destination "$HOME/nautical-backup-$(date +%Y%m%d-%H%M%S)" \
   --include calendar="$HOME/.local/share/nautical/calendar.json" --json
 ```
+
+The manifest also records the versions of Nautical's Python runtime
+distributions (`astral`, `rich`, `prompt_toolkit`, and `python-dateutil`).
+Dependency binaries are intentionally outside the backup contract; install
+the requirements separately when rebuilding a different device.
+
+For an offline recovery kit, build and verify one kit on each qualification
+target rather than copying a kit between unlike systems. The kit manifest
+records platform, CPU architecture, Python executable/version, Taskwarrior
+version, timezone, and Python package versions. Name the outputs by target so
+the correct inventory is unambiguous:
+
+```bash
+python3 dev_tools/nautical_offline_kit.py build \
+  "$HOME/nautical-kit-linux-$(uname -m)" \
+  --archive "$HOME/nautical-kit-linux-$(uname -m).tar.gz"
+python3 dev_tools/nautical_offline_kit.py verify \
+  "$HOME/nautical-kit-linux-$(uname -m).tar.gz"
+```
+
+Run the same commands locally on the Termux device, using its own writable
+storage and Python interpreter. A kit whose manifest does not match the
+target's platform, architecture, interpreter, or Taskwarrior version must be
+rejected or rebuilt for that target; the shared source may remain identical.
+
+The backup also includes the active managed release and hook layout. Restore
+stages these as `.nautical-runtime/` and `hooks/` in the disposable target and
+recreates the managed `current` release pointer. The launcher is deliberately
+not installed into the host PATH; use the local installer as the explicit
+cutover step after validating the staged target.
+
+## Periodic Backups
+
+The manual backup command above is the supported workflow and does not depend
+on a scheduler. If periodic copies are useful, place this small wrapper in a
+writable local directory and adjust `BACKUP_ROOT`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+TASKDATA="${TASKDATA:-$HOME/.task}"
+BACKUP_ROOT="${BACKUP_ROOT:-$HOME/nautical-backups}"
+LOCK="$BACKUP_ROOT/.backup.lock"
+mkdir -p "$BACKUP_ROOT"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  exit 0
+fi
+trap 'rmdir "$LOCK"' EXIT
+stamp=$(date +%Y%m%d-%H%M%S)
+nautical backup --taskdata "$TASKDATA" \
+  --destination "$BACKUP_ROOT/$stamp" \
+  --task-bin "$(command -v task)" --keep 2 --prune --json
+```
+
+On ordinary Linux, a daily cron entry can invoke the wrapper (use its absolute
+path):
+
+```cron
+17 3 * * * /home/user/bin/nautical-periodic-backup.sh >>/home/user/.local/state/nautical-backup.log 2>&1
+```
+
+On Termux, the same wrapper can be scheduled when
+`termux-job-scheduler` is installed:
+
+```bash
+termux-job-scheduler --script "$HOME/bin/nautical-periodic-backup.sh" \
+  --period-ms 86400000 --persisted true
+```
+
+Keep the backup root on writable storage. The wrapper skips overlapping runs,
+keeps the newest two verified generations, and returns the backup command's
+failure status for scheduler logs; a manual invocation remains equivalent.
 
 There are two different backups, and they serve different purposes. For a
 portable Taskwarrior copy, first stop other Taskwarrior/Nautical processes and
@@ -180,6 +255,37 @@ against the disposable target. For a managed runtime rollback, stop hooks and
 operator processes first, select a retained release with the local installer,
 verify it, and repeat those checks. Reverse a rollback by selecting the
 previously verified release; never copy files into the active runtime.
+
+A missing or corrupt lifecycle outbox makes the restore unavailable; it does
+not prove that no recovery work exists. Restore a verified generation (or
+repair the outbox), then run reconcile dry-run and review its result before
+authorizing any mutation.
+
+### Selecting A Retained Runtime Release
+
+List retained releases first and choose a release directory under
+`.nautical-runtime/releases/`. Always perform a dry run before switching:
+
+```bash
+TASKDATA="$HOME/.task"
+RELEASE_ID=r-previous
+SOURCE="$TASKDATA/.nautical-runtime/releases/$RELEASE_ID"
+nautical install --source "$SOURCE" --taskdata "$TASKDATA" \
+  --release-id "$RELEASE_ID" --dry-run --json
+```
+
+Inspect `previous_release`, `release_id`, `content_sha256`, and the planned
+operation. If they identify the intended retained release, repeat the same
+command without `--dry-run`:
+
+```bash
+nautical install --source "$SOURCE" --taskdata "$TASKDATA" \
+  --release-id "$RELEASE_ID" --json
+```
+
+The installer validates the retained tree, publishes its managed pointer and
+wrappers atomically, and leaves the previously active release available for
+another rollback. Do not copy individual modules or hooks between releases.
 
 ## Authority And Departure Check
 

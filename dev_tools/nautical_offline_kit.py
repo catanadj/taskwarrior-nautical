@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -50,7 +51,15 @@ def _inventory() -> dict[str, Any]:
             task_version = (result.stdout or result.stderr).strip().splitlines()[0]
         except (OSError, subprocess.SubprocessError):
             task_version = "unavailable"
-    return {"python": sys.version.split()[0], "python_executable": sys.executable, "taskwarrior": task_version, "python_packages": versions, "timezone": os.environ.get("TZ", "") or "system"}
+    return {
+        "platform": platform.system().lower(),
+        "architecture": platform.machine().lower(),
+        "python": sys.version.split()[0],
+        "python_executable": sys.executable,
+        "taskwarrior": task_version,
+        "python_packages": versions,
+        "timezone": os.environ.get("TZ", "") or "system",
+    }
 
 
 def _files(root: Path) -> list[Path]:

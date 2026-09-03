@@ -683,7 +683,11 @@ class LifecycleOutboxRepository:
             conn.execute("UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, configuration_fingerprint=?, schedule_fingerprint=?, processing_state=?, lease_owner='', lease_expires_at=0, failure_json='', updated_at=? WHERE intent_id=?", (encoded_plan, plan_fingerprint, guard_json, config, schedule, OutboxProcessingState.RETRY.value, now, intent_id))
             refreshed = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
             return OutboxResult(OutboxResultKind.ALREADY_APPLIED, record=self._from_row(refreshed)) if refreshed is not None else OutboxResult(OutboxResultKind.RETRYABLE, reason="expired lifecycle intent disappeared")
-        if same_plan and current.state is OutboxProcessingState.MANUAL_REVIEW and current.failure is not None and current.failure.code in {"mutation_conflict", "mutation_rejected"}:
+        # A configuration fingerprint can change while a deterministic intent
+        # is awaiting recovery.  The immutable plan and schedule still prove
+        # that this is the same child operation, so reopen it for retry rather
+        # than turning harmless config drift into a permanent conflict.
+        if same_plan and current.state is OutboxProcessingState.MANUAL_REVIEW and current.schedule_fingerprint == schedule:
             conn.execute("UPDATE lifecycle_outbox SET plan_json=?, plan_fingerprint=?, parent_guard_json=?, configuration_fingerprint=?, schedule_fingerprint=?, lifecycle_stage=?, processing_state=?, failure_json='', updated_at=? WHERE intent_id=?", (encoded_plan, plan_fingerprint, guard_json, config, schedule, ExecutionStage.PLANNED.value, OutboxProcessingState.RETRY.value, now, intent_id))
             refreshed = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
             return OutboxResult(OutboxResultKind.APPLIED, record=self._from_row(refreshed)) if refreshed is not None else OutboxResult(OutboxResultKind.RETRYABLE, reason="reopened lifecycle intent disappeared")

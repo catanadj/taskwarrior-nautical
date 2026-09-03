@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from importlib import metadata as importlib_metadata
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,18 @@ BACKUP_MANIFEST_VERSION = 1
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_PATH_BYTES = 4096
 MAX_METADATA_KEYS = 128
+RUNTIME_DEPENDENCIES = ("astral", "rich", "prompt_toolkit", "python-dateutil")
+
+
+def runtime_dependency_versions() -> dict[str, str | None]:
+    """Record versions of runtime distributions without importing them."""
+    versions: dict[str, str | None] = {}
+    for name in RUNTIME_DEPENDENCIES:
+        try:
+            versions[name] = importlib_metadata.version(name)
+        except importlib_metadata.PackageNotFoundError:
+            versions[name] = None
+    return versions
 
 
 def build_backup_metadata(

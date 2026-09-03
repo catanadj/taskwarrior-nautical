@@ -22,7 +22,7 @@ from unittest.mock import patch
 from nautical_core.lifecycle_application import LifecycleApplicationService
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository
+from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository, OutboxFailure
 from nautical_core.operator_context import OperatorInvocationBudget
 from nautical_core.operator_models import OperatorLimits
 from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
@@ -116,6 +116,28 @@ print(json.dumps(payload, sort_keys=True))
             parent_patch={"nextLink": child[:8]},
             expected_postconditions=("child_present", "parent_linked", "verified"),
         )
+
+    def test_same_plan_reopens_manual_review_after_configuration_drift(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "config-drift", "00000000-0000-4000-8000-000000000701",
+                "00000000-0000-4000-8000-000000000702", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="old-config", schedule_fingerprint="same-schedule")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=30, intent_id=intent_id).kind.value, "applied")
+            outbox.manual_review(
+                intent_id=intent_id, owner="owner",
+                failure=OutboxFailure("invalid_intent", "guard modified changed"),
+            )
+            reopened = outbox.enqueue(
+                plan, configuration_fingerprint="new-config", schedule_fingerprint="same-schedule",
+            )
+            self.assertEqual(reopened.kind.value, "applied")
+            self.assertIsNotNone(reopened.record)
+            assert reopened.record is not None
+            self.assertEqual(reopened.record.state.value, "retry")
 
     def test_bulk_enqueue_and_exact_claim_are_scoped_and_idempotent(self) -> None:
         with TemporaryDirectory() as td:

@@ -52,6 +52,25 @@ class OperatorHealthServiceTests(unittest.TestCase):
             self.assertEqual([item.code for item in findings], ["install.release_digest", "taskwarrior.identity", "python.identity"])
             self.assertEqual(len(calls), 2)
 
+    def test_deep_identity_rejects_active_release_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            runtime_root = Path(td) / "runtime"
+            release = runtime_root / "releases" / "r-test"
+            release.mkdir(parents=True)
+            runtime = {
+                "runtime_root": str(runtime_root),
+                "active_release": "r-test",
+                "manifest": {"content_sha256": "expected"},
+            }
+            findings = OperatorHealthService.deep_identity_findings(
+                runtime, sys.executable, sys.executable,
+                digest_factory=lambda path: "actual",
+                version_probe=lambda path: (True, "version"),
+            )
+            self.assertEqual(findings[0].code, "install.release_digest")
+            self.assertEqual(findings[0].severity.value, "error")
+            self.assertIn("digest mismatch", findings[0].observed["error"])
+
     def test_deep_resource_findings_validate_timezone_and_paths(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             resource = Path(td) / "calendar.json"

@@ -9629,6 +9629,12 @@ def test_installer_upgrade_rollback_restores_active_runtime():
         expect(os.readlink(current) == pointer_before, "failed upgrade did not restore current")
         expect(wrapper.read_bytes() == wrapper_before, "failed upgrade did not restore wrapper")
         expect(not install_runtime.runtime_status(taskdata).get("errors"), "rollback left a broken managed runtime")
+        retained = taskdata / ".nautical-runtime/releases/release-one"
+        retained_plan = install_runtime.install_release(
+            source=retained, taskdata=taskdata, release_id="release-one", dry_run=True, smoke=False,
+        )
+        expect(retained_plan.get("status") == "dry-run", f"retained release was not selectable: {retained_plan!r}")
+        expect(retained_plan.get("previous_release") == "release-one", f"rollback selected an unexpected release: {retained_plan!r}")
 
         planned = install_runtime.install_release(
             source=Path(ROOT),
@@ -9854,6 +9860,31 @@ def test_runtime_cleanup_preserves_active_and_rollback_releases():
         expect(applied.get("removed"), f"cleanup did not remove old release: {applied}")
         remaining = {path.name for path in (taskdata / ".nautical-runtime" / "releases").iterdir() if path.is_dir()}
         expect(remaining == {"active", "middle"}, f"cleanup removed a protected release: {remaining}")
+
+
+def test_retained_release_can_be_selected_with_dry_run_then_applied():
+    """Rollback selection must validate the retained tree before switching."""
+    from nautical_core import install_runtime
+
+    with tempfile.TemporaryDirectory() as td:
+        taskdata = Path(td) / "taskdata"
+        install_runtime.install_release(source=Path(ROOT), taskdata=taskdata, release_id="release-one", smoke=False)
+        install_runtime.install_release(source=Path(ROOT), taskdata=taskdata, release_id="release-two", smoke=False)
+        current = taskdata / ".nautical-runtime/current"
+        pointer_before = os.readlink(current)
+        retained = taskdata / ".nautical-runtime/releases/release-one"
+        planned = install_runtime.install_release(
+            source=retained, taskdata=taskdata, release_id="release-one", dry_run=True, smoke=False,
+        )
+        expect(planned.get("status") == "dry-run", f"rollback was not dry-run: {planned!r}")
+        expect(planned.get("previous_release") == "release-two", f"wrong rollback source state: {planned!r}")
+        expect(os.readlink(current) == pointer_before, "rollback dry-run changed the active release")
+        applied = install_runtime.install_release(
+            source=retained, taskdata=taskdata, release_id="release-one", smoke=False,
+        )
+        expect(applied.get("active_release") == "release-one", f"rollback did not select retained release: {applied!r}")
+        expect(os.readlink(current) == "releases/release-one", "rollback selected the wrong pointer")
+        expect((taskdata / ".nautical-runtime/releases/release-two").is_dir(), "rollback removed newer release")
 
 
 def test_doctor_discovers_effective_taskdata_directory():
@@ -34547,6 +34578,7 @@ TESTS = [
     test_installer_cli_and_doctor_managed_runtime_diagnostics,
     test_doctor_reports_retired_queue_state_without_migrating_it,
     test_runtime_cleanup_preserves_active_and_rollback_releases,
+    test_retained_release_can_be_selected_with_dry_run_then_applied,
     test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,
     test_nautical_dispatches_supported_subcommands,

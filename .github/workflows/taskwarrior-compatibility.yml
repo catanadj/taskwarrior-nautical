@@ -56,7 +56,8 @@ jobs:
       - name: Run golden correctness suite
         env:
           NAUTICAL_REQUIRE_ASTRAL: "1"
-        run: python3 dev_tools/nautical_golden_tests.py
+          PYTHONUNBUFFERED: "1"
+        run: python3 dev_tools/nautical_golden_tests.py --verbose
 
       - name: Run Taskwarrior integration lifecycle
         run: python3 dev_tools/nautical_black_box_test.py --json

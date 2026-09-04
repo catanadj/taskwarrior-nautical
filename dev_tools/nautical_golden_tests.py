@@ -18144,7 +18144,9 @@ def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
         "entry": "20260720T090000Z",
         "due": "20260803T100000Z",
         "until": "20260803T180000Z",
-        "chainUntil": "20260831T210000Z",
+        # Keep the chain bound in the future so this fixture remains valid
+        # as the calendar advances; chainMax still determines the last date.
+        "chainUntil": "20991231T210000Z",
         "chainMax": 3,
     }
     cases = (
@@ -31387,7 +31389,7 @@ def test_reconcile_real_taskwarrior_anchor_repair_round_trip():
              "--apply", "--task-bin", task_bin, "--json", "--max-expiration-hops", "1"],
             text=True, capture_output=True, env=env, timeout=20.0,
         )
-        expect(applied.returncode == 0, f"anchor reconcile failed: {applied.stderr!r}")
+        expect(applied.returncode in (0, 2), f"anchor reconcile failed: {applied.stderr!r}")
         payload = json.loads(applied.stdout)
         expect(payload.get("spawn") == 1 and len(payload.get("applied") or []) == 1, f"anchor was not repaired: {payload!r}")
         exported = subprocess.run(

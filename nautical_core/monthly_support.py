@@ -177,11 +177,27 @@ def monthly_align_base_for_interval(
         else:
             base = nxt
 
+    # Count valid months from the seed without allowing an invalid candidate
+    # month to make the old equality loop walk forever.
     cnt = 0
     ty, tm = sy, sm
-    while (ty, tm) != (base.year, base.month):
-        ty, tm = advance_k_valid_months(spec, ty, tm, 0)
-        cnt += 1
+    seed_idx = sy * 12 + sm
+    base_idx = base.year * 12 + base.month
+    if base_idx >= seed_idx:
+        for _ in range(480):
+            current_idx = ty * 12 + tm
+            if current_idx >= base_idx:
+                if current_idx > base_idx:
+                    doms = month_doms_safe(spec, ty, tm)
+                    if doms:
+                        base = date(ty, tm, doms[0])
+                break
+            ny, nm = next_valid_month_on_or_after(spec, ty + (tm == 12), 1 if tm == 12 else tm + 1)
+            next_idx = ny * 12 + nm
+            if next_idx <= current_idx:
+                break
+            ty, tm = ny, nm
+            cnt += 1
 
     if (cnt % ival) != 0:
         steps = ival - (cnt % ival)

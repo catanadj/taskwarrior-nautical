@@ -4970,7 +4970,7 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
             ).ok,
             "manual intent setup failed",
         )
-        reopened = repo.enqueue(manual_plan, configuration_fingerprint="new-config", schedule_fingerprint="new-schedule")
+        reopened = repo.enqueue(manual_plan, configuration_fingerprint="new-config", schedule_fingerprint="sf1")
         expect(reopened.kind is OutboxResultKind.APPLIED, "known stale postcondition review was not reopened")
         expect(reopened.record is not None and reopened.record.state is OutboxProcessingState.RETRY, "reopened intent was not retryable")
         cleanup_claim = repo.claim_intent(owner="cleanup-owner", lease_seconds=5, intent_id=manual_staged.record.intent_id)
@@ -5027,7 +5027,8 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
             ("child_present", "parent_linked"),
             ("child_present", "parent_linked", "verified"),
         )
-        for link, prior_stages in enumerate(stage_sequences, start=2):
+        # Use IDs that do not overlap the legacy/numeric fixtures above.
+        for link, prior_stages in enumerate(stage_sequences, start=30):
             staged_plan = plan_for(link)
             expect(
                 repo.enqueue(staged_plan, configuration_fingerprint="cf1", schedule_fingerprint="sf1").ok,
@@ -5069,13 +5070,13 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
 
         def claim_once(worker: str) -> None:
             claim_barrier.wait()
-            result, records = LifecycleOutboxRepository(Path(td), clock=clock).claim_batch(
+            result = LifecycleOutboxRepository(Path(td), clock=clock).claim_intent(
                 owner=worker,
                 lease_seconds=5,
-                limit=1,
+                intent_id=concurrent_plan.identity.idempotency_key,
             )
             with claims_lock:
-                concurrent_claims.append((result.ok, records))
+                concurrent_claims.append((result.ok, (result.record,) if result.record is not None else ()))
 
         workers = [threading.Thread(target=claim_once, args=(f"concurrent-{index}",)) for index in range(2)]
         for worker in workers:
@@ -5090,8 +5091,11 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
         with sqlite3.connect(str(repo.path)) as conn:
             conn.execute("UPDATE lifecycle_outbox SET plan_json='{' WHERE intent_id=?", (poison_plan.identity.idempotency_key,))
         now[0] += 1
-        claimed, records = repo.claim_batch(owner="poison-worker", lease_seconds=5, limit=10)
-        expect(claimed.ok and not records, f"poison outbox row was claimed: {claimed}, {records}")
+        claimed = repo.claim_intent(
+            owner="poison-worker", lease_seconds=5,
+            intent_id=poison_plan.identity.idempotency_key,
+        )
+        expect(not claimed.ok and claimed.record is None, f"poison outbox row was claimed: {claimed}")
         status_result, status = repo.status()
         expect(status_result.ok, f"outbox status failed: {status_result}")
         expect(
@@ -5106,8 +5110,11 @@ print(json.dumps({"semantic_key": record.plan.semantic_key(), "stage": record.st
                 "UPDATE lifecycle_outbox SET parent_guard_json=? WHERE intent_id=?",
                 ('{"chain":"off"}', tampered_plan.identity.idempotency_key),
             )
-        claimed, records = repo.claim_batch(owner="integrity-worker", lease_seconds=5, limit=10)
-        expect(claimed.ok and not records, f"tampered immutable row was claimed: {claimed}, {records}")
+        claimed = repo.claim_intent(
+            owner="integrity-worker", lease_seconds=5,
+            intent_id=tampered_plan.identity.idempotency_key,
+        )
+        expect(not claimed.ok and claimed.record is None, f"tampered immutable row was claimed: {claimed}")
         status_result, status = repo.status()
         expect(status_result.ok, f"outbox integrity status failed: {status_result}")
         expect(

@@ -89,7 +89,8 @@
       "hook_nautical_ordinary_modify": 0.8,
       "hook_empty_exit": 0.8
     },
-    "managed_layout_max_ratio": 1.5
+    "managed_layout_max_ratio": 1.5,
+    "staged_layout_max_ratio": 1.5
   },
   "resource_budgets": {
     "cold_core_import": {"module_count": 120},

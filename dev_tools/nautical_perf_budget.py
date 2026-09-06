@@ -1608,6 +1608,40 @@ def _measure_managed_hook_latency(
     }
 
 
+def _measure_staged_hook_latency(
+    name: str,
+    hook_path: Path,
+    *,
+    input_text: str,
+    expected_task: dict | None,
+    base_env: dict[str, str],
+    repeats: int,
+    baseline_median_s: float,
+    max_ratio: float,
+) -> dict:
+    """Measure a staged source tree against the source-layout median."""
+    result = _measure_hook_fast_path(
+        name,
+        hook_path,
+        input_text=input_text,
+        expected_task=expected_task,
+        base_env=base_env,
+        repeats=repeats,
+        max_ratio=max_ratio,
+    )
+    staged_median_s = float(result["median_s"])
+    ratio = staged_median_s / baseline_median_s if baseline_median_s > 0.0 else 1.0
+    result.update(
+        {
+            "baseline_median_s": float(baseline_median_s),
+            "staged_to_source_ratio": ratio,
+            "max_ratio": float(max_ratio),
+            "pass": bool(result.get("pass", True)) and ratio <= float(max_ratio),
+        }
+    )
+    return result
+
+
 def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[str, dict]:
     hook_cfg = cfg.get("hook_fast_path")
     if not isinstance(hook_cfg, dict) or not hook_cfg.get("enabled", True):
@@ -1615,6 +1649,7 @@ def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[st
     repeats = max(1, int(hook_cfg.get("repeats", 7)))
     max_ratios = hook_cfg.get("max_ratio") if isinstance(hook_cfg.get("max_ratio"), dict) else {}
     managed_max_ratio = float(hook_cfg.get("managed_layout_max_ratio", 1.5))
+    staged_max_ratio = float(hook_cfg.get("staged_layout_max_ratio", 1.5))
 
     plain = {
         "uuid": "11111111-1111-1111-1111-111111111111",
@@ -1725,6 +1760,34 @@ def _bench_hook_fast_paths(cfg: dict, *, panel_mode: str = "minimal") -> dict[st
                 repeats=repeats,
                 baseline_median_s=float(results[name]["median_s"]),
                 max_ratio=managed_max_ratio,
+            )
+        staged_root = temp_root / "staged-source"
+        shutil.copytree(
+            ROOT,
+            staged_root,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                ".nautical-cache",
+                "__pycache__",
+                "backups",
+                "benchmarks",
+                ".director",
+            ),
+        )
+        staged_env = dict(base_env)
+        staged_env["NAUTICAL_CORE_PATH"] = str(staged_root)
+        staged_env["NAUTICAL_TRUST_CORE_PATH"] = "1"
+        for name, source_hook, input_text, expected_task, _taskdata in cases:
+            staged_name = f"staged_{name}"
+            results[staged_name] = _measure_staged_hook_latency(
+                staged_name,
+                staged_root / source_hook.relative_to(ROOT),
+                input_text=input_text,
+                expected_task=expected_task,
+                base_env=staged_env,
+                repeats=repeats,
+                baseline_median_s=float(results[name]["median_s"]),
+                max_ratio=staged_max_ratio,
             )
         return results
 
@@ -3831,6 +3894,11 @@ def main() -> int:
                 print(
                     f"- {name}: managed={r['median_s']:.4f}s source={r['baseline_median_s']:.4f}s "
                     f"ratio={r['managed_to_source_ratio']:.3f} max_ratio={r['max_ratio']:.3f} => {status}"
+                )
+            elif "staged_to_source_ratio" in r:
+                print(
+                    f"- {name}: staged={r['median_s']:.4f}s source={r['baseline_median_s']:.4f}s "
+                    f"ratio={r['staged_to_source_ratio']:.3f} max_ratio={r['max_ratio']:.3f} => {status}"
                 )
             else:
                 print(

@@ -10941,6 +10941,10 @@ def test_perf_budget_config_covers_cache_io_checks():
         float(hook_fast_path.get("managed_layout_max_ratio") or 0.0) >= 1.0,
         "managed hook layout ratio budget must allow ordinary timing jitter",
     )
+    expect(
+        float(hook_fast_path.get("staged_layout_max_ratio") or 0.0) >= 1.0,
+        "staged hook layout ratio budget must allow ordinary timing jitter",
+    )
     ratios = hook_fast_path.get("max_ratio") if isinstance(hook_fast_path.get("max_ratio"), dict) else {}
     expect(
         {"hook_plain_add", "hook_plain_modify", "hook_nautical_ordinary_modify", "hook_empty_exit"} <= set(ratios),

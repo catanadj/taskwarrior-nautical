@@ -37,7 +37,6 @@ class ModifyRuntimeState:
     chain_generation_service: Any = None
     query_ctx: dict[str, dict[object, object]] = field(
         default_factory=lambda: {
-            "task_text": {},
             "tw_get": {},
             "read_query": {},
             "chain_root_age": {},
@@ -65,8 +64,6 @@ class ModifyRuntimeState:
             "run_task_seconds_other": 0.0,
             "tw_get_cache_hits": 0,
             "tw_get_cache_misses": 0,
-            "task_text_cache_hits": 0,
-            "task_text_cache_misses": 0,
             "chain_root_age_cache_hits": 0,
             "chain_root_age_cache_misses": 0,
             "format_root_age_cache_hits": 0,

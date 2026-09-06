@@ -1,29 +1,6 @@
 from __future__ import annotations
 
-from . import hook_support
 from .task_models import TaskPayload
-
-
-def task_text(args, *, run_task, task_cmd_prefix, env=None, timeout: float = 3.0, retries: int = 2, diag=None) -> str:
-    env = env or {}
-    result = hook_support.run_task_result(
-        run_task=run_task,
-        cmd=list(task_cmd_prefix) + ["rc.hooks=off"] + list(args),
-        env=env,
-        timeout=timeout,
-        retries=retries,
-    )
-    if not result.ok and callable(diag):
-        diag(f"task {' '.join(args)} failed: {(result.stderr or '').strip()}")
-    return result.stdout or ""
-
-
-def tw_get(ref: str, *, task_text) -> str:
-    try:
-        out = task_text(["rc.verbose=nothing", "_get", ref])
-        return (out or "").strip()
-    except Exception:
-        return ""
 
 
 def chain_root_and_age(

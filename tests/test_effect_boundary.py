@@ -46,6 +46,14 @@ FORBIDDEN_IMPORTS = {
 
 
 class EffectBoundaryTests(unittest.TestCase):
+    def test_modify_command_boundary_has_no_legacy_text_wrappers(self) -> None:
+        from nautical_core import modify_command_effects, modify_queries
+
+        self.assertFalse(hasattr(modify_queries, "task_text"))
+        self.assertFalse(hasattr(modify_queries, "tw_get"))
+        self.assertFalse(hasattr(modify_command_effects, "task_text"))
+        self.assertTrue(callable(modify_command_effects.run_task_result))
+
     def test_planners_and_presenters_have_no_external_effect_imports(self) -> None:
         for relative in PURE_WORKFLOW_MODULES:
             tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"), filename=relative)

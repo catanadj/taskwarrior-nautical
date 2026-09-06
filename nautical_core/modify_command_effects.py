@@ -25,28 +25,6 @@ def run_task_result(host: Any, cmd: list[str], **kwargs):
     return result
 
 
-def task_text(host: Any, args, *, env=None) -> str:
-    cache_key = None
-    if env is None and host._task_args_cacheable(args):
-        cache_key = tuple(str(value) for value in args)
-        cached = host._query_ctx_get("task_text", cache_key)
-        if isinstance(cached, str):
-            host._diag_count("task_text_cache_hits")
-            return cached
-        host._diag_count("task_text_cache_misses")
-    result = run_task_result(
-        host,
-        host._task_cmd_prefix() + ["rc.hooks=off"] + list(args),
-        env=(env or host.os.environ.copy()),
-        timeout=3.0,
-        retries=2,
-    )
-    output = result.stdout or ""
-    if cache_key is not None:
-        host._query_ctx_set("task_text", cache_key, output)
-    return output
-
-
 def reserve_child_uuid(host: Any, env: dict) -> str:
     candidate = str(uuid.uuid4())
     while True:
@@ -66,4 +44,4 @@ def reserve_child_uuid(host: Any, env: dict) -> str:
         return candidate
 
 
-__all__ = ("run_task_result", "task_text", "reserve_child_uuid")
+__all__ = ("run_task_result", "reserve_child_uuid")

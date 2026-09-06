@@ -543,32 +543,6 @@ def _diag(msg: str) -> None:
             pass
 
 
-def _run_task_result(
-    cmd: list[str],
-    *,
-    env: dict | None = None,
-    input_text: str | None = None,
-    timeout: float = 3.0,
-    retries: int = 2,
-    retry_delay: float = 0.15,
-    use_tempfiles: bool = False,
-):
-    """Execute one on-add Taskwarrior command through the shared client."""
-    from nautical_core.runtime_command import run_task_result
-
-    return run_task_result(
-        cmd,
-        env=env,
-        input_text=input_text,
-        timeout=timeout,
-        retries=retries,
-        retry_delay=retry_delay,
-        use_tempfiles=use_tempfiles,
-        purpose="on-add Taskwarrior command",
-    )
-
-
-
 def _format_cp_rows(rows: list[tuple[str, str]]) -> list[tuple[str | None, str]]:
     """Compact layout for classic cp preview."""
     add_formatting = _module("add_formatting")

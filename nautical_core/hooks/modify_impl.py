@@ -408,14 +408,6 @@ def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
         pass
 
 
-def _task_args_cacheable(args) -> bool:
-    try:
-        parts = tuple(str(a) for a in (args or ()))
-    except Exception:
-        return False
-    return ('_get' in parts) or ('export' in parts) or ('count' in parts)
-
-
 def _diag_summary() -> None:
     if os.environ.get("NAUTICAL_DIAG") != "1":
         return

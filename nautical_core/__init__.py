@@ -5,6 +5,7 @@ Shared core for Taskwarrior Nautical hooks.
 
 """
 from __future__ import annotations
+import math
 import os, re, sys
 from collections import OrderedDict
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict, cast
@@ -424,7 +425,38 @@ _CACHE_LOAD_MEM_TTL = _core_config.CACHE_LOAD_MEM_TTL
 # ==============================================================================
 # SECTION: Taskwarrior helpers
 # ==============================================================================
-_common = _import_sibling("common")
+def _split_csv_tokens(spec: str) -> list[str]:
+    return [token.strip() for token in str(spec or "").split(",") if token.strip()]
+
+
+def _split_csv_lower(spec: str) -> list[str]:
+    return [token.lower() for token in _split_csv_tokens(spec)]
+
+
+def _coerce_int(value, default=None):
+    try:
+        if value is None or isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            return value if abs(value) <= (2**63 - 1) else default
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                return default
+            integer = int(round(value))
+            return integer if abs(integer) <= (2**63 - 1) else default
+        text = str(value).strip()
+        integer = int(float(text)) if _int_floatish_re.fullmatch(text) else int(text)
+        return integer if abs(integer) <= (2**63 - 1) else default
+    except Exception:
+        return default
+
+
+_common = types.SimpleNamespace(
+    split_csv_tokens=_split_csv_tokens,
+    split_csv_lower=_split_csv_lower,
+    coerce_int=_coerce_int,
+)
+
 _cache_payload = _LazySibling("cache_payload")
 _cache_locking = _LazySibling("cache_locking")
 _acf_support = _LazySibling("acf_support")
@@ -471,7 +503,14 @@ def _configure_season_support() -> None:
     _season_support.configure_mode(SEASON_MODE)
     _season_support.configure_timezone(LOCAL_TZ_NAME)
 
-short_uuid = _common.short_uuid
+def short_uuid(u: str | None) -> str:
+    """Taskwarrior-style short UUID without importing the broad common facade."""
+    if not u or not isinstance(u, str):
+        return ""
+    value = u.strip().lower()
+    if not value:
+        return ""
+    return value.split("-", 1)[0] if "-" in value else value[:8]
 
 
 def _ensure_business_calendar_exports() -> None:
@@ -756,7 +795,7 @@ _QUARTER_POS_MONTH = {
 
 
 # -------- Pre-compiled Regex Patterns ----------
-_int_floatish_re = _common._INT_FLOATISH_RE
+_int_floatish_re = re.compile(r"^[+-]?\d+(?:\.0+)?$")
 _hhmm_re = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _atom_head_re = re.compile(r"^(w|m|y)(?:/(\d+))?$")
 _int_like_re = re.compile(r"^[+-]?\d+$")
@@ -775,7 +814,7 @@ _md_range_re = re.compile(r"(\d{2})-(\d{2})(?:\.\.(\d{2})-(\d{2}))?$")
 _rand_mm_re = re.compile(r"^rand-(\d{2})$")
 _year_range_colon_re = re.compile(r"^(\d{2})-(\d{2})\.\.(\d{2})-(\d{2})$")
 _int_range_re = re.compile(r"^-?\d+\s*\.\.\s*-?\d+$")
-_CONTROL_CHARS_RE = _common._CONTROL_CHARS_RE
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _token_api = _LazyApiBundle(
     "token_api",

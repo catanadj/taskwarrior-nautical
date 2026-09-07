@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .timeutil import compare_datetimes
@@ -343,19 +343,19 @@ def anchor_pick_occurrence_local(
 
 
 def anchor_next_occurrence_after_local_dt(
-    dnf,
-    after_dt_local,
-    fallback_hhmm=(9, 0),
-    interval_seed=None,
-    seed_base="",
-    omit_dnf=None,
+    dnf: Any,
+    after_dt_local: datetime,
+    fallback_hhmm: tuple[int, int] | None = (9, 0),
+    interval_seed: date | None = None,
+    seed_base: str = "",
+    omit_dnf: Any = None,
     *,
     default_seed_date=None,
     core: Any | None = None,
     norm_t_mod: Callable[[Any], list[tuple[int, int]]] | None = None,
     resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     project_time: Callable[[Any, date], Any] | None = None,
-):
+) -> datetime | None:
     if default_seed_date is not None:
         interval_seed = default_seed_date
     if core is None:

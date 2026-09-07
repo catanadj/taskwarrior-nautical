@@ -1,13 +1,7 @@
 from __future__ import annotations
 
 import os
-import copy
-import hashlib
 import importlib
-import json
-import time
-from collections import OrderedDict
-from functools import lru_cache, wraps
 from types import MappingProxyType
 from typing import Any, TypedDict
 
@@ -64,7 +58,7 @@ _CONFIG_TASKDATA_OVERRIDE = ""
 _CONFIG_LOADED = False
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
-_CACHE_LOAD_MEM: OrderedDict[str, tuple[int, int, dict, float]] = OrderedDict()
+_CACHE_LOAD_MEM: dict[str, tuple[int, int, dict, float]] = {}
 
 
 class ConfigReloadResult(TypedDict, total=False):
@@ -235,16 +229,22 @@ def warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0
 
 
 def _get_config() -> dict:
+    import copy
+
     global _CONF_CACHE
     out, _CONF_CACHE = _load_support_module("config_support").get_config(_CONF_CACHE, load_config=_load_config)
     return out
 
 
-_CONF = MappingProxyType(copy.deepcopy(_DEFAULTS))
+_CONF = MappingProxyType(dict(_DEFAULTS))
 
 
 def effective_config_snapshot() -> dict:
     """Return the effective immutable-at-call-time config and its source hint."""
+    import copy
+    import hashlib
+    import json
+
     ensure_loaded()
     values = copy.deepcopy(dict(_CONF))
     source = "defaults"
@@ -331,6 +331,9 @@ _SCHEDULER_FINGERPRINT_CACHE: str | None = None
 
 def scheduler_config_fingerprint() -> str:
     """Fingerprint only settings that can change recurrence projection results."""
+    import hashlib
+    import json
+
     global _SCHEDULER_FINGERPRINT_CACHE_KEY, _SCHEDULER_FINGERPRINT_CACHE
     config_fingerprint = effective_config_fingerprint()
     if config_fingerprint == _SCHEDULER_FINGERPRINT_CACHE_KEY and _SCHEDULER_FINGERPRINT_CACHE is not None:
@@ -368,6 +371,8 @@ def configuration_drift() -> dict:
 
 def ensure_loaded() -> None:
     """Load and validate configuration once, on first scheduling use."""
+    import copy
+
     global _CONFIG_LOADED, _CONF, _CONF_CACHE, _LOADED_CONFIG_FINGERPRINT
     if _CONFIG_LOADED:
         return
@@ -578,6 +583,8 @@ def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
     normal loader, while allowing reconcile and doctor to supply the resolved
     directory without mutating the process environment.
     """
+    import copy
+
     global _CONF, _CONF_CACHE, _CONFIG_ERROR, _CONFIG_ERROR_PATH, _CONFIG_LOADED
     global _CONFIG_TASKDATA_OVERRIDE, _CONFIG_FINGERPRINT_CACHE
     global _CONFIG_FINGERPRINT_CACHE_KEY, _CONFIG_SOURCE_PATH_CACHE
@@ -622,6 +629,9 @@ def reload_for_taskdata(taskdata: str | os.PathLike[str]) -> ConfigReloadResult:
 
 
 def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
+    import time
+    from functools import lru_cache, wraps
+
     ttl_val = CACHE_TTL_SECS if ttl is None else ttl
 
     def _decorator(fn):

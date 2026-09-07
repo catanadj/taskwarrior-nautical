@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import os, re, sys
 from collections import OrderedDict
-from typing import Any, Callable, TYPE_CHECKING, TypeAlias, TypedDict, cast
+from typing import Any, Callable, Mapping, TYPE_CHECKING, TypeAlias, TypedDict, cast
 from functools import partial
 
 if TYPE_CHECKING:
@@ -279,8 +279,8 @@ def effective_config_snapshot() -> dict:
 effective_config_fingerprint = _config_call("effective_config_fingerprint")
 scheduler_config_fingerprint = _config_call("scheduler_config_fingerprint")
 configuration_drift = _config_call("configuration_drift")
-_DEFAULTS = {}
-_CONF = MappingProxyType({})
+_DEFAULTS: dict[str, Any] = {}
+_CONF: Mapping[str, Any] = MappingProxyType({})
 _FACADE_CONFIG_SYNCED = False
 _conf_raw = _config_call("conf_raw")
 _conf_str = _config_call("conf_str")
@@ -404,10 +404,10 @@ SEASON_HEMISPHERE = "north"
 SEASON_MODE = "fixed"
 HOLIDAY_REGION = ""
 ANCHOR_FILE_DIR = OMIT_FILE_DIR = ""
-ANCHOR_PRESETS = {}
-OMIT_PRESETS = {}
-BUSINESS_CALENDAR_CONFIG = {}
-ASTRONOMY_CONFIG = {}
+ANCHOR_PRESETS: dict[str, Any] = {}
+OMIT_PRESETS: dict[str, Any] = {}
+BUSINESS_CALENDAR_CONFIG: dict[str, Any] = {}
+ASTRONOMY_CONFIG: dict[str, Any] = {}
 ENABLE_ANCHOR_CACHE = ENABLE_UDA_ALIASES = False
 ANCHOR_CACHE_DIR_OVERRIDE = ""
 ANCHOR_CACHE_TTL = 0

@@ -127,7 +127,7 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
             codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
         )
 
-    def handle_terminal(exc) -> None:
+    def handle_terminal(exc) -> bool:
         message = host.core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
         if exc.is_date_limit:
             host._module("modify_presentation_effects").ensure_terminal_chain_off(host, new, "complete")
@@ -137,9 +137,10 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
                 host._diag(f"terminal chain summary failed: {summary_exc}")
                 _panel(host, "⛔ Nautical chain stopped", [("Reason", message), ("Task", host.core.short_uuid(new.get("uuid")) or "–")], kind="summary")
             host._module("modify_ui_effects").print_task(host, new)
-            return
+            return True
         _panel(host, "⛔ Chain error", [("Scheduler", message), ("Fix", "Use a less sparse rule or adjust its search limits.")], kind="error")
         host._module("modify_ui_effects").print_task(host, new)
+        return True
 
     return compute.completion_compute_child_due(
         new,

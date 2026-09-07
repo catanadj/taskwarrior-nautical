@@ -26,7 +26,7 @@ class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
                 compute_cp_child_due=compute,
                 panel=lambda *_args, **_kwargs: None,
                 print_task=lambda *_args: None,
-                on_terminal=observed.append,
+                on_terminal=lambda exc: (observed.append(exc), True)[1],
             )
         self.assertIs(observed[0], error)
 

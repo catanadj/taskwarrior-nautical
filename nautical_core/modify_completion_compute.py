@@ -76,7 +76,9 @@ def completion_compute_child_due(
         return child_due, meta, dnf
     except OccurrenceSearchExhausted as exc:
         if callable(on_terminal):
-            on_terminal(exc)
+            propagate = on_terminal(exc)
+            if propagate is not True:
+                return None
         else:
             panel(
                 "⛔ Chain error",
@@ -84,9 +86,8 @@ def completion_compute_child_due(
                 kind="error",
             )
             print_task(task_row)
-        # Keep the typed boundary evidence available to the mutation caller.
-        # Presentation has already happened above; collapsing this to None
-        # would make exhaustion indistinguishable from a generic failure.
+        # Keep typed boundary evidence available to mutation callers that opt
+        # into propagation; presentation-only callers retain the None result.
         raise
     except ValueError as exc:
         panel(

@@ -39,7 +39,9 @@ jobs:
           python3 --version
           python3 - <<'PY'
           from importlib.metadata import version
+          from nautical_core.support_policy import policy_document
           print(f"astral {version('astral')}")
+          print(f"support policy {policy_document()}")
           PY
 
       - name: Run Astral-backed golden tests

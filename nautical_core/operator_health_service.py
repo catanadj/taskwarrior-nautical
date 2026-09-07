@@ -24,6 +24,7 @@ from .operator_findings import (
 from .operator_models import OperatorStatus
 from .config_schema import CONFIG_SPECS, validate_config
 from .description_aliases import ALIAS_TO_FIELD
+from .support_policy import policy_document
 
 
 def _json_safe(value: object) -> object:
@@ -603,6 +604,7 @@ class OperatorHealthService:
                 "taskwarrior.version", "installation", FindingSeverity.INFO,
                 FindingActionability.INFORMATIONAL,
                 "Taskwarrior command is available.",
+                observed={"support_policy": policy_document()},
             ))
         path = Path(str(taskdata)).expanduser()
         if not path.exists():

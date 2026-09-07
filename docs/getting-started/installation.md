@@ -4,7 +4,7 @@
 
 Nautical requires:
 
-- Taskwarrior 3.x (the current compatibility target is 3.4.2);
+- Taskwarrior 3.4.2 or newer (CI verifies 3.4.2 and 3.5.0);
 - Python 3.11 or newer;
 - Git and `curl` for the bootstrap installer;
 - the Python packages in `requirements.txt`.

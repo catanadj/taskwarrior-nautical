@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import compileall
 import hashlib
 import json
 import os
@@ -260,6 +261,21 @@ def _copy_release(source: Path, stage: Path) -> None:
     )
     for name in (*HOOK_FILES.values(), "nautical"):
         (stage / name).chmod(0o755)
+
+
+def _precompile_release(root: Path) -> None:
+    """Compile the immutable release so hooks do not pay cold bytecode cost."""
+    try:
+        compiled = compileall.compile_dir(
+            str(root),
+            quiet=1,
+            force=True,
+            legacy=False,
+        )
+    except Exception as exc:
+        raise InstallError(f"release bytecode precompilation failed: {exc}") from exc
+    if not compiled:
+        raise InstallError("release bytecode precompilation failed")
 
 
 def _strict_json_object(stdout_text: str) -> bool:
@@ -803,6 +819,7 @@ def install_release(
         try:
             _copy_release(source, stage)
             apis = validate_release(stage, smoke=smoke)
+            _precompile_release(stage)
             _write_manifest(stage, release_id=release_id, digest=digest, source=source, apis=apis)
             plan = _target_plan(
                 base=base,

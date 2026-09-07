@@ -77,26 +77,35 @@ if (
     and os.environ.get("NAUTICAL_DIAG") != "1"
     and os.environ.get("NAUTICAL_BENCH_FORCE_FULL") != "1"
 ):
-    _path_support, _path_support_path, _path_support_error = hook_bootstrap.load_core_helper_module(
-        _CORE_BASE,
-        "config_support.py",
-        "_nautical_exit_path_support",
-    )
+    _taskdata_env = str(os.environ.get("TASKDATA") or "").strip()
+    if _taskdata_env:
+        _path_support = None
+    else:
+        _path_support, _path_support_path, _path_support_error = hook_bootstrap.load_core_helper_module(
+            _CORE_BASE,
+            "config_support.py",
+            "_nautical_exit_path_support",
+        )
     _exit_probe, _exit_probe_path, _exit_probe_error = hook_bootstrap.load_core_helper_module(
         _CORE_BASE,
         "exit_probe.py",
         "_nautical_exit_probe",
     )
-    if _path_support is not None and _exit_probe is not None:
+    if _exit_probe is not None and (_taskdata_env or _path_support is not None):
         try:
-            _early_taskdata = hook_bootstrap.resolve_task_data_context_light(
-                path_support=_path_support,
-                argv=sys.argv[1:],
-                env=os.environ,
-                tw_dir=str(TW_DIR),
-            )
-            if _early_taskdata is not None:
-                _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_early_taskdata[0])
+            # Taskwarrior supplies TASKDATA for normal hook invocations. Avoid
+            # importing config_support just to validate that already-resolved path.
+            if _taskdata_env:
+                _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_taskdata_env)
+            else:
+                _early_taskdata = hook_bootstrap.resolve_task_data_context_light(
+                    path_support=_path_support,
+                    argv=sys.argv[1:],
+                    env=os.environ,
+                    tw_dir=str(TW_DIR),
+                )
+                if _early_taskdata is not None:
+                    _EARLY_EXIT_PROBE = _exit_probe.probe_exit_work(_early_taskdata[0])
         except Exception:
             _EARLY_EXIT_PROBE = None
         if _EARLY_EXIT_PROBE is not None and _EARLY_EXIT_PROBE.definitely_empty:

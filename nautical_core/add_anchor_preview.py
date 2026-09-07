@@ -6,7 +6,7 @@ from typing import Any, Callable, NoReturn
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
-from .occurrence_provider import Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
+from .occurrence_provider import AnchorOccurrenceLookup, Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
@@ -523,8 +523,8 @@ def _collect_included_with_provider(
     seed_base: str,
     omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: Callable[..., Any],
-    pick_occurrence_local: Callable[..., Any] | None = None,
+    next_occurrence_after_local_dt: AnchorOccurrenceLookup,
+    pick_occurrence_local: AnchorOccurrenceLookup | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
@@ -646,8 +646,8 @@ def _collect_events_with_provider(
     seed_base: str,
     omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: Callable[..., Any],
-    pick_occurrence_local: Callable[..., Any] | None = None,
+    next_occurrence_after_local_dt: AnchorOccurrenceLookup,
+    pick_occurrence_local: AnchorOccurrenceLookup | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,

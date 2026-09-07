@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Callable, Generic, Literal, Protocol, TypeVar
+from typing import Any, Callable, Generic, Literal, Protocol, TypeVar
 
 from .scheduler_models import OccurrenceSearchExhausted
 from .scheduler_cursor import OccurrenceCursor
@@ -157,6 +157,18 @@ class BatchOccurrenceProvider(LazyOccurrenceProvider, Protocol):
 class OccurrenceProvider(LazyOccurrenceProvider, Protocol):
     def occurrences(self) -> list[Occurrence]:
         """Return sorted, deduplicated local occurrences."""
+
+
+class AnchorOccurrenceLookup(Protocol):
+    """Scheduler-backed lookup callback used by merged occurrence providers."""
+
+    def __call__(
+        self,
+        dnf: Any,
+        after_local_dt: datetime,
+        **kwargs: Any,
+    ) -> datetime | None:
+        ...
 
 
 def _datetime_is_aware(value: datetime) -> bool:

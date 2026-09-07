@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     validate_anchor_expr_strict: Callable[..., Any]
 import importlib
 import types
+from types import MappingProxyType
 fcntl: Any
 try:
     import fcntl  # POSIX advisory lock
@@ -234,45 +235,55 @@ _CACHE_LOCK_STALE_AFTER = 300.0
 _CACHE_LOAD_MEM_MAX = 128
 _CACHE_LOAD_MEM_TTL = 300
 _CACHE_LOAD_MEM: OrderedDict[str, tuple[tuple[int, int, int, int], dict, float]] = OrderedDict()
-_core_config = _import_sibling("core_config")
-_env_flag_true = _core_config.env_flag_true
-_path_input_error = _core_config.path_input_error
-_normalized_abspath = _core_config.normalized_abspath
-_nearest_existing_dir = _core_config.nearest_existing_dir
-_world_writable_without_sticky = _core_config.world_writable_without_sticky
-_path_safety_error = _core_config.path_safety_error
-_validated_user_dir = _core_config.validated_user_dir
-_DEFAULTS = _core_config._DEFAULTS
-_read_toml = _core_config._read_toml
-_config_paths = _core_config._config_paths
-_warn_env_config_missing = _core_config._warn_env_config_missing
-_normalize_keys = _core_config._normalize_keys
-_load_config = _core_config._load_config
-_nautical_cache_dir = _core_config.nautical_cache_dir
-_warn_once_per_day = _core_config.warn_once_per_day
-_warn_once_per_day_any = _core_config.warn_once_per_day_any
-_warn_rate_limited_any = _core_config.warn_rate_limited_any
-_warn_toml_parse_error = _core_config._warn_toml_parse_error
-_get_config = _core_config._get_config
+_core_config = _LazySibling("core_config")
+
+
+def _config_call(name: str):
+    def call(*args, **kwargs):
+        return getattr(_core_config, name)(*args, **kwargs)
+
+    call.__name__ = name
+    return call
+
+
+_env_flag_true = _config_call("env_flag_true")
+_path_input_error = _config_call("path_input_error")
+_normalized_abspath = _config_call("normalized_abspath")
+_nearest_existing_dir = _config_call("nearest_existing_dir")
+_world_writable_without_sticky = _config_call("world_writable_without_sticky")
+_path_safety_error = _config_call("path_safety_error")
+_validated_user_dir = _config_call("validated_user_dir")
+_read_toml = _config_call("_read_toml")
+_config_paths = _config_call("_config_paths")
+_warn_env_config_missing = _config_call("_warn_env_config_missing")
+_normalize_keys = _config_call("_normalize_keys")
+_load_config = _config_call("_load_config")
+_nautical_cache_dir = _config_call("nautical_cache_dir")
+_warn_once_per_day = _config_call("warn_once_per_day")
+_warn_once_per_day_any = _config_call("warn_once_per_day_any")
+_warn_rate_limited_any = _config_call("warn_rate_limited_any")
+_warn_toml_parse_error = _config_call("_warn_toml_parse_error")
+_get_config = _config_call("_get_config")
 def effective_config_snapshot() -> dict:
     """Return the effective config after synchronizing facade exports."""
     refresh = globals().get("_refresh_facade_config_exports")
     if callable(refresh):
         refresh()
     return _core_config.effective_config_snapshot()
-effective_config_fingerprint = _core_config.effective_config_fingerprint
-scheduler_config_fingerprint = _core_config.scheduler_config_fingerprint
-configuration_drift = _core_config.configuration_drift
-_CONF = _core_config._CONF
+effective_config_fingerprint = _config_call("effective_config_fingerprint")
+scheduler_config_fingerprint = _config_call("scheduler_config_fingerprint")
+configuration_drift = _config_call("configuration_drift")
+_DEFAULTS = {}
+_CONF = MappingProxyType({})
 _FACADE_CONFIG_SYNCED = False
-_conf_raw = _core_config.conf_raw
-_conf_str = _core_config.conf_str
-_conf_int = _core_config.conf_int
-_conf_bool = _core_config.conf_bool
-_conf_csv_or_list = _core_config.conf_csv_or_list
-_conf_uda_field_list = _core_config.conf_uda_field_list
-_trueish = _core_config.trueish
-_ttl_lru_cache = _core_config.ttl_lru_cache
+_conf_raw = _config_call("conf_raw")
+_conf_str = _config_call("conf_str")
+_conf_int = _config_call("conf_int")
+_conf_bool = _config_call("conf_bool")
+_conf_csv_or_list = _config_call("conf_csv_or_list")
+_conf_uda_field_list = _config_call("conf_uda_field_list")
+_trueish = _config_call("trueish")
+_ttl_lru_cache = _config_call("ttl_lru_cache")
 
 
 def _emit_cache_metrics() -> None:
@@ -379,46 +390,38 @@ def render_panel(*args, **kwargs):
     ui.text_line = text_line
     return ui.render_panel(*args, **kwargs)
 
-ANCHOR_YEAR_FMT = _core_config.ANCHOR_YEAR_FMT
-WRAND_SALT = _core_config.WRAND_SALT
-LOCAL_TZ_NAME = _core_config.LOCAL_TZ_NAME
-CONFIG_ERROR = _core_config.configuration_error()
-SEASON_HEMISPHERE = _core_config.SEASON_HEMISPHERE
-SEASON_MODE = _core_config.SEASON_MODE
-HOLIDAY_REGION = _core_config.HOLIDAY_REGION
-ANCHOR_FILE_DIR = _core_config.ANCHOR_FILE_DIR
-OMIT_FILE_DIR = _core_config.OMIT_FILE_DIR
-ANCHOR_PRESETS = _core_config.ANCHOR_PRESETS
-OMIT_PRESETS = _core_config.OMIT_PRESETS
-BUSINESS_CALENDAR_CONFIG = _core_config.BUSINESS_CALENDAR_CONFIG
-ASTRONOMY_CONFIG = _core_config.ASTRONOMY_CONFIG
-ENABLE_ANCHOR_CACHE = _core_config.ENABLE_ANCHOR_CACHE
-ENABLE_UDA_ALIASES = _core_config.ENABLE_UDA_ALIASES
-ANCHOR_CACHE_DIR_OVERRIDE = _core_config.ANCHOR_CACHE_DIR_OVERRIDE
-ANCHOR_CACHE_TTL = _core_config.ANCHOR_CACHE_TTL
-CHAIN_COLOR_PER_CHAIN = _core_config.CHAIN_COLOR_PER_CHAIN
-SHOW_TIMELINE_GAPS = _core_config.SHOW_TIMELINE_GAPS
-SHOW_ANALYTICS = _core_config.SHOW_ANALYTICS
-ANALYTICS_STYLE = _core_config.ANALYTICS_STYLE
-ANALYTICS_ONTIME_TOL_SECS = _core_config.ANALYTICS_ONTIME_TOL_SECS
-DEBUG_WAIT_SCHED = _core_config.DEBUG_WAIT_SCHED
-CHECK_CHAIN_INTEGRITY = _core_config.CHECK_CHAIN_INTEGRITY
-PANEL_MODE = _core_config.PANEL_MODE
-LIVE_PANEL_DURATION_MS = _core_config.LIVE_PANEL_DURATION_MS
-LIVE_PANEL_FOOTER = _core_config.LIVE_PANEL_FOOTER
-FAST_COLOR = _core_config.FAST_COLOR
-EXIT_PROGRESS = _core_config.EXIT_PROGRESS
-OUTBOX_DRAIN_MAX_ITEMS = _core_config.OUTBOX_DRAIN_MAX_ITEMS
-MAX_CHAIN_WALK = _core_config.MAX_CHAIN_WALK
-MAX_ANCHOR_ITER = _core_config.MAX_ANCHOR_ITER
-MAX_LINK_NUMBER = _core_config.MAX_LINK_NUMBER
-SANITIZE_UDA = _core_config.SANITIZE_UDA
-SANITIZE_UDA_MAX_LEN = _core_config.SANITIZE_UDA_MAX_LEN
-MAX_JSON_BYTES = _core_config.MAX_JSON_BYTES
-RECURRENCE_UPDATE_UDAS = _core_config.RECURRENCE_UPDATE_UDAS
-_CACHE_TTL_SECS = _core_config.CACHE_TTL_SECS
-_CACHE_LOAD_MEM_MAX = _core_config.CACHE_LOAD_MEM_MAX
-_CACHE_LOAD_MEM_TTL = _core_config.CACHE_LOAD_MEM_TTL
+ANCHOR_YEAR_FMT = "MD"
+WRAND_SALT = "nautical|wrand|v4"
+LOCAL_TZ_NAME = "UTC"
+CONFIG_ERROR = ""
+SEASON_HEMISPHERE = "north"
+SEASON_MODE = "fixed"
+HOLIDAY_REGION = ""
+ANCHOR_FILE_DIR = OMIT_FILE_DIR = ""
+ANCHOR_PRESETS = OMIT_PRESETS = BUSINESS_CALENDAR_CONFIG = ASTRONOMY_CONFIG = {}
+ENABLE_ANCHOR_CACHE = ENABLE_UDA_ALIASES = False
+ANCHOR_CACHE_DIR_OVERRIDE = ""
+ANCHOR_CACHE_TTL = 0
+CHAIN_COLOR_PER_CHAIN = False
+SHOW_TIMELINE_GAPS = SHOW_ANALYTICS = True
+ANALYTICS_STYLE = "clinical"
+ANALYTICS_ONTIME_TOL_SECS = 14400
+DEBUG_WAIT_SCHED = CHECK_CHAIN_INTEGRITY = False
+PANEL_MODE = "rich"
+LIVE_PANEL_DURATION_MS = 160
+LIVE_PANEL_FOOTER = "NAUTICAL"
+FAST_COLOR = EXIT_PROGRESS = True
+OUTBOX_DRAIN_MAX_ITEMS = 32
+MAX_CHAIN_WALK = 500
+MAX_ANCHOR_ITER = 128
+MAX_LINK_NUMBER = 10000
+SANITIZE_UDA = False
+SANITIZE_UDA_MAX_LEN = 1024
+MAX_JSON_BYTES = 10 * 1024 * 1024
+RECURRENCE_UPDATE_UDAS = ()
+_CACHE_TTL_SECS = 3600
+_CACHE_LOAD_MEM_MAX = 128
+_CACHE_LOAD_MEM_TTL = 300
 
 # ==============================================================================
 # SECTION: Taskwarrior helpers
@@ -721,7 +724,7 @@ DATE_FORMATS = ("%Y%m%dT%H%M%SZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y
 UNTIL_COUNT_CAP = 1000
 INTERSECTION_GUARD_STEPS = 256
 DEFAULT_DUE_HOUR = 11
-MAX_ANCHOR_DNF_TERMS = _conf_int("max_anchor_dnf_terms", 10_000, min_value=64, max_value=200_000)
+MAX_ANCHOR_DNF_TERMS = 10_000
 
 # --- Weekday constants ---
 _WEEKDAYS = {

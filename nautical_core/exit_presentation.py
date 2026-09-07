@@ -14,7 +14,7 @@ from .operator_presentation import ProgressView
 class ExitDrainProgress:
     """Render lifecycle drain events without participating in mutation."""
 
-    _TITLE = "⚓ > > >"
+    _TITLE = "⚓ Updating recurring tasks"
     _DETAIL_LABELS = {
         "starting intent": "Preparing update",
         "child mutation": "Next task created",

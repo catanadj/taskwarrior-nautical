@@ -20025,7 +20025,7 @@ def test_on_modify_build_child_carries_until_across_dst():
             child_due,
             "due",
             2,
-            "beeswax",
+            "beef",
             "cp",
             0,
             None,
@@ -20090,7 +20090,7 @@ def test_on_modify_native_until_calendar_and_exact_carry_policy():
             child_due,
             "due",
             2,
-            "beeswax",
+            "beef",
             kind,
             0,
             None,
@@ -20250,7 +20250,7 @@ def test_on_modify_native_until_exact_carry_preserves_elapsed_time_across_dst():
             child_due,
             "due",
             2,
-            "beeswax",
+            "beef",
             "cp",
             0,
             None,
@@ -20414,7 +20414,7 @@ def test_native_until_calendar_slot_guard_rejects_impossible_anchor_expirations(
             mod.core.build_local_datetime(anchor_day, (20, 0)),
             "due",
             2,
-            "beeswax",
+            "beef",
             "anchor",
             0,
             None,
@@ -20710,7 +20710,7 @@ def test_on_modify_build_child_carries_configured_uda_datetime():
             child_due_utc,
             "due",
             2,
-            "beeswax",
+            "beef",
             "cp",
             0,
             None,
@@ -27169,13 +27169,13 @@ def test_on_modify_compute_anchor_child_due_from_anchor_file():
                 f"evaluator/file mode drifted from hook mode: {result!r} vs {child_due!r}",
             )
 
-            child = _build_child_draft_for_test(mod, parent, child_due, "due", 2, "beeswax", "anchor_file", 0, None)
+            child = _build_child_draft_for_test(mod, parent, child_due, "due", 2, "beef", "anchor_file", 0, None)
             expect(child.get("anchor_file") == "calendar.csv@nbd@t=12:00", f"child should preserve anchor_file: {child!r}")
             expect(not child.get("anchor"), f"child should not gain anchor expr: {child!r}")
 
             anchor_parent = dict(parent, anchor="w:mon@t=12:00", anchor_file="null")
             anchor_child = _build_child_draft_for_test(
-                mod, anchor_parent, child_due, "due", 2, "beeswax", "anchor", 0, None
+                mod, anchor_parent, child_due, "due", 2, "beef", "anchor", 0, None
             )
             expect(not anchor_child.get("anchor_file"), f"literal null anchor_file leaked into anchor child: {anchor_child!r}")
         finally:
@@ -27924,7 +27924,7 @@ def test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait()
         child_due,
         "scheduled",
         2,
-        "beeswax",
+        "beef",
         "cp",
         0,
         None,

@@ -862,6 +862,18 @@ def _load_core_module(path: str, module_name: str, config_path: str):
         if HERE not in sys.path:
             sys.path.insert(0, HERE)
         loader.exec_module(mod)
+        # The facade keeps compatibility exports lazy; dynamic test modules
+        # need one explicit sync after loading their isolated config.
+        refresh = getattr(mod, "_refresh_facade_config_exports", None)
+        if callable(refresh):
+            # Some characterization cases intentionally load invalid timezone
+            # configuration and assert the fail-closed fallback themselves.
+            # Keep the partially synchronized exports while allowing those
+            # assertions to inspect the module state.
+            try:
+                refresh()
+            except Exception:
+                pass
         return mod
     finally:
         if prev_conf is None:
@@ -35001,6 +35013,7 @@ def main():
         action="store_true",
         help="fail selected tests on leaked temporary-Taskdata or stale-config warnings",
     )
+    ap.add_argument("--isolated-child", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     selected = TESTS
@@ -35021,6 +35034,25 @@ def main():
         total_tests += 1
         captured_stderr = io.StringIO()
         try:
+            if not args.isolated_child and "_load_core_module" in fn.__code__.co_names:
+                child_env = dict(os.environ)
+                child_env["NAUTICAL_GOLDEN_ISOLATED"] = "1"
+                child = subprocess.run(
+                    [sys.executable, __file__, "--only", fn.__name__, "--isolated-child"],
+                    cwd=ROOT,
+                    env=child_env,
+                    capture_output=True,
+                    text=True,
+                    timeout=60.0,
+                )
+                if child.returncode != 0:
+                    detail = (child.stdout or "") + (child.stderr or "")
+                    raise AssertionError(f"isolated test failed: {detail.strip()[-1200:]}")
+                if args.verbose:
+                    docstring = fn.__doc__ or "No description available"
+                    description = docstring.strip().split('\n')[0] if docstring else fn.__name__
+                    print(f"✓ {fn.__name__}: {description}")
+                continue
             # Reset process-wide presentation/season knobs before every case;
             # a shuffled run must not inherit state from tests that exercise
             # alternate seasonal profiles or panel modes.

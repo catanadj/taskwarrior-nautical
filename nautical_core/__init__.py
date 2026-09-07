@@ -82,6 +82,12 @@ class _LazySibling:
     def __getattr__(self, name: str):
         return getattr(self._resolve(), name)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in self.__slots__:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._resolve(), name, value)
+
 
 class _LazyPublicExports:
     """Tuple-like ``__all__`` that defers the compatibility export module."""
@@ -576,6 +582,9 @@ _timeutil = _LazySibling("timeutil")
 def scheduling_configuration_error() -> str:
     """Return a blocking configuration error for Nautical scheduling paths."""
     _core_config.ensure_loaded()
+    config_error = _core_config.configuration_error()
+    if config_error:
+        return config_error
     if CONFIG_ERROR:
         return CONFIG_ERROR
     return _TIMEZONE_CONFIG_ERROR
@@ -1403,3 +1412,13 @@ def __getattr__(name: str):
         _ensure_public_models()
         return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Explicit configuration is already loaded by ``core_config`` at import time;
+# synchronize facade compatibility exports for ``from nautical_core import ...``
+# callers without adding work to the normal auto-discovery path.
+if str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
+    try:
+        _refresh_facade_config_exports()
+    except Exception:
+        pass

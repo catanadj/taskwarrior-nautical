@@ -24211,6 +24211,9 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
         )
         old_dir = getattr(navigator.core, "ANCHOR_FILE_DIR", "")
         navigator.core.ANCHOR_FILE_DIR = str(anchor_dir)
+        # This test intentionally overrides the lazy facade's configured
+        # source; mark the override as synchronized before scheduler access.
+        navigator.core._FACADE_CONFIG_SYNCED = True
         try:
             analyzer = navigator.TaskAnalyzer()
             navigator.core.ANCHOR_FILE_DIR = str(anchor_dir)

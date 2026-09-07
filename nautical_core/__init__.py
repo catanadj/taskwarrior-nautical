@@ -20,8 +20,6 @@ if TYPE_CHECKING:
     validate_anchor_expr_strict: Callable[..., Any]
 import importlib
 import types
-import random
-import time
 fcntl: Any
 try:
     import fcntl  # POSIX advisory lock

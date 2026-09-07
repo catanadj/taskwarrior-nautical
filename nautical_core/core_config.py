@@ -11,17 +11,36 @@ from functools import lru_cache, wraps
 from types import MappingProxyType
 from typing import Any, TypedDict
 
-from nautical_core import cache_support, config_schema, config_support, diagnostic_warnings
+from nautical_core import config_schema
 
-_tomllib: Any = None
-try:
-    _tomllib = importlib.import_module("tomllib")  # Python 3.11+
-except Exception:
+cache_support: Any = None
+config_support: Any = None
+diagnostic_warnings: Any = None
+
+
+def _load_support_module(name: str) -> Any:
+    global cache_support, config_support, diagnostic_warnings
+    module = globals().get(name)
+    if module is None:
+        module = importlib.import_module(f"nautical_core.{name}")
+        globals()[name] = module
+    return module
+
+tomllib: Any = None
+
+
+def _load_tomllib() -> Any:
+    global tomllib
+    if tomllib is not None:
+        return tomllib
     try:
-        _tomllib = importlib.import_module("tomli")
+        tomllib = importlib.import_module("tomllib")  # Python 3.11+
     except Exception:
-        _tomllib = None
-tomllib: Any = _tomllib
+        try:
+            tomllib = importlib.import_module("tomli")
+        except Exception:
+            tomllib = None
+    return tomllib
 
 
 _DEFAULTS = {
@@ -59,27 +78,27 @@ class ConfigReloadResult(TypedDict, total=False):
 
 
 def env_flag_true(name: str, env_map: dict | None = None) -> bool:
-    return config_support.env_flag_true(name, env_map=env_map)
+    return _load_support_module("config_support").env_flag_true(name, env_map=env_map)
 
 
 def path_input_error(path_value: str) -> str | None:
-    return config_support.path_input_error(path_value)
+    return _load_support_module("config_support").path_input_error(path_value)
 
 
 def normalized_abspath(path_value: str) -> str:
-    return config_support.normalized_abspath(path_value)
+    return _load_support_module("config_support").normalized_abspath(path_value)
 
 
 def nearest_existing_dir(path_value: str) -> str | None:
-    return config_support.nearest_existing_dir(path_value)
+    return _load_support_module("config_support").nearest_existing_dir(path_value)
 
 
 def world_writable_without_sticky(mode: int) -> bool:
-    return config_support.world_writable_without_sticky(mode)
+    return _load_support_module("config_support").world_writable_without_sticky(mode)
 
 
 def path_safety_error(path_value: str, *, expect_dir: bool = True) -> str | None:
-    return config_support.path_safety_error(path_value, expect_dir=expect_dir)
+    return _load_support_module("config_support").path_safety_error(path_value, expect_dir=expect_dir)
 
 
 def validated_user_dir(
@@ -90,7 +109,7 @@ def validated_user_dir(
     env_map: dict | None = None,
     warn_on_error: bool = True,
 ) -> str:
-    return config_support.validated_user_dir(
+    return _load_support_module("config_support").validated_user_dir(
         path_value,
         label=label,
         trust_env=trust_env,
@@ -100,14 +119,14 @@ def validated_user_dir(
 
 
 def _warn_env_config_missing(env_path: str) -> None:
-    config_support.warn_env_config_missing(
+    _load_support_module("config_support").warn_env_config_missing(
         env_path,
         warn_once_per_day_any=warn_once_per_day_any,
     )
 
 
 def _warn_missing_toml_parser(config_path: str) -> None:
-    diagnostic_warnings.warn_missing_toml_parser(
+    _load_support_module("diagnostic_warnings").warn_missing_toml_parser(
         config_path,
         warn_once_per_day=warn_once_per_day,
         warn_once_per_day_any=warn_once_per_day_any,
@@ -115,7 +134,7 @@ def _warn_missing_toml_parser(config_path: str) -> None:
 
 
 def _warn_toml_parse_error(config_path: str, err: Exception) -> None:
-    diagnostic_warnings.warn_toml_parse_error(
+    _load_support_module("diagnostic_warnings").warn_toml_parse_error(
         config_path,
         err,
         warn_once_per_day=warn_once_per_day,
@@ -135,9 +154,9 @@ def _read_toml(path: str) -> dict:
 
 
 def _read_toml_result(path: str):
-    return config_support.read_toml_result(
+    return _load_support_module("config_support").read_toml_result(
         path,
-        tomllib_mod=tomllib,
+        tomllib_mod=_load_tomllib(),
         warn_missing_toml_parser=_warn_missing_toml_parser,
         warn_toml_parse_error=_warn_toml_parse_error,
         error_sink=lambda message: _record_config_error(message, path),
@@ -146,7 +165,7 @@ def _read_toml_result(path: str):
 
 def _config_paths(taskdata: str | None = None) -> list[str]:
     selected_taskdata = taskdata if taskdata is not None else _CONFIG_TASKDATA_OVERRIDE
-    return config_support.config_paths(
+    return _load_support_module("config_support").config_paths(
         warn_env_config_missing=_warn_env_config_missing,
         taskdata=selected_taskdata or None,
         error_sink=lambda message: _record_config_error(
@@ -157,11 +176,11 @@ def _config_paths(taskdata: str | None = None) -> list[str]:
 
 
 def _normalize_keys(d: dict) -> dict:
-    return config_support.normalize_keys(d)
+    return _load_support_module("config_support").normalize_keys(d)
 
 
 def _load_config(taskdata: str | None = None) -> dict:
-    return config_support.load_config(
+    return _load_support_module("config_support").load_config(
         defaults=_DEFAULTS,
         config_paths=lambda: _config_paths(taskdata),
         read_toml=_read_toml,
@@ -185,11 +204,11 @@ def configuration_error() -> str:
 
 
 def nautical_cache_dir() -> str:
-    return cache_support.nautical_cache_dir(validated_user_dir=validated_user_dir)
+    return _load_support_module("cache_support").nautical_cache_dir(validated_user_dir=validated_user_dir)
 
 
 def warn_once_per_day(key: str, message: str) -> None:
-    diagnostic_warnings.warn_once_per_day(
+    _load_support_module("diagnostic_warnings").warn_once_per_day(
         key,
         message,
         cache_dir=nautical_cache_dir(),
@@ -198,7 +217,7 @@ def warn_once_per_day(key: str, message: str) -> None:
 
 
 def warn_once_per_day_any(key: str, message: str) -> None:
-    diagnostic_warnings.warn_once_per_day(
+    _load_support_module("diagnostic_warnings").warn_once_per_day(
         key,
         message,
         cache_dir=nautical_cache_dir(),
@@ -207,7 +226,7 @@ def warn_once_per_day_any(key: str, message: str) -> None:
 
 
 def warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0) -> None:
-    diagnostic_warnings.warn_rate_limited_any(
+    _load_support_module("diagnostic_warnings").warn_rate_limited_any(
         key,
         message,
         cache_dir=nautical_cache_dir(),
@@ -217,7 +236,7 @@ def warn_rate_limited_any(key: str, message: str, min_interval_s: float = 3600.0
 
 def _get_config() -> dict:
     global _CONF_CACHE
-    out, _CONF_CACHE = config_support.get_config(_CONF_CACHE, load_config=_load_config)
+    out, _CONF_CACHE = _load_support_module("config_support").get_config(_CONF_CACHE, load_config=_load_config)
     return out
 
 
@@ -365,11 +384,11 @@ def ensure_loaded() -> None:
 
 
 def conf_raw(key: str):
-    return config_support.conf_raw(_CONF, key)
+    return _load_support_module("config_support").conf_raw(_CONF, key)
 
 
 def conf_str(key: str, default: str) -> str:
-    return config_support.conf_str(_CONF, key, default)
+    return _load_support_module("config_support").conf_str(_CONF, key, default)
 
 
 def conf_int(
@@ -378,7 +397,7 @@ def conf_int(
     min_value: int | None = None,
     max_value: int | None = None,
 ) -> int:
-    return config_support.conf_int(
+    return _load_support_module("config_support").conf_int(
         _CONF,
         key,
         default,
@@ -393,7 +412,7 @@ def conf_bool(
     true_values: set[str] | None = None,
     false_values: set[str] | None = None,
 ) -> bool:
-    return config_support.conf_bool(
+    return _load_support_module("config_support").conf_bool(
         _CONF,
         key,
         default=default,
@@ -403,11 +422,11 @@ def conf_bool(
 
 
 def conf_csv_or_list(key: str, default: list[str] | None = None, lower: bool = False) -> list[str]:
-    return config_support.conf_csv_or_list(_CONF, key, default=default, lower=lower)
+    return _load_support_module("config_support").conf_csv_or_list(_CONF, key, default=default, lower=lower)
 
 
 def conf_uda_field_list(key: str) -> list[str]:
-    return config_support.conf_uda_field_list(_CONF, key)
+    return _load_support_module("config_support").conf_uda_field_list(_CONF, key)
 
 
 def conf_schema_str(key: str) -> str:
@@ -439,7 +458,7 @@ def conf_schema_bool(
 
 
 def trueish(v, default=False):
-    return config_support.trueish(v, default=default)
+    return _load_support_module("config_support").trueish(v, default=default)
 
 
 ANCHOR_YEAR_FMT = "MD"

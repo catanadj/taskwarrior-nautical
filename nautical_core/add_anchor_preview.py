@@ -13,6 +13,26 @@ from .timeutil import compare_datetimes
 from .task_models import TaskPayload
 
 
+def _next_occurrence_callback(
+    dnf: Any,
+    after_local_dt: datetime,
+    *,
+    default_seed_date: Any,
+    seed_base: str,
+    omit_dnf: Any = None,
+    fallback_hhmm: tuple[int, int] | None = None,
+) -> datetime | None:
+    """Adapt the legacy anchor helper to the provider callback protocol."""
+    return anchor_next_occurrence_after_local_dt(
+        dnf,
+        after_local_dt,
+        default_seed_date=default_seed_date,
+        seed_base=seed_base,
+        omit_dnf=omit_dnf,
+        fallback_hhmm=fallback_hhmm,
+    )
+
+
 def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
     return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
@@ -853,7 +873,7 @@ def handle_anchor_file_preview_on_add(
         seed_base=seed_base,
         omit_dnf=omit_dnf,
         core=core,
-        next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+        next_occurrence_after_local_dt=_next_occurrence_callback,
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         evaluator=scheduler_service.session.evaluator,
         scheduler_service=scheduler_service,
@@ -964,7 +984,7 @@ def handle_anchor_file_preview_on_add(
         seed_base=seed_base,
         omit_dnf=omit_dnf,
         core=core,
-        next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+        next_occurrence_after_local_dt=_next_occurrence_callback,
         anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
         return_occurrences=True,
         scheduler_service=scheduler_service,
@@ -1208,7 +1228,7 @@ def handle_anchor_preview_on_add(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+                next_occurrence_after_local_dt=_next_occurrence_callback,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
@@ -1272,7 +1292,7 @@ def handle_anchor_preview_on_add(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+                next_occurrence_after_local_dt=_next_occurrence_callback,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
@@ -1436,7 +1456,7 @@ def handle_anchor_preview_on_add(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+                next_occurrence_after_local_dt=_next_occurrence_callback,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,
@@ -1468,7 +1488,7 @@ def handle_anchor_preview_on_add(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+                next_occurrence_after_local_dt=_next_occurrence_callback,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             return_occurrences=True,
             anchor_file_provider=shared_anchor_file_provider,
@@ -1523,7 +1543,7 @@ def handle_anchor_preview_on_add(
             seed_base=seed_base,
             omit_dnf=omit_dnf,
             core=core,
-            next_occurrence_after_local_dt=anchor_next_occurrence_after_local_dt,
+                next_occurrence_after_local_dt=_next_occurrence_callback,
             anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             anchor_file_provider=shared_anchor_file_provider,
             evaluator=recurrence_evaluator,

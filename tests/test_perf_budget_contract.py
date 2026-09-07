@@ -9,6 +9,7 @@ from pathlib import Path
 
 from dev_tools import nautical_perf_budget as budget
 from nautical_core.exit_probe import probe_exit_work
+import nautical_core
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
@@ -159,6 +160,10 @@ class PerformanceBudgetContractTests(unittest.TestCase):
             result = probe_exit_work(missing)
             self.assertFalse(result.definitely_empty)
             self.assertIn("unavailable", result.reason)
+
+    def test_lazy_facade_defaults_do_not_share_configuration_tables(self) -> None:
+        self.assertIsNot(nautical_core.ANCHOR_PRESETS, nautical_core.OMIT_PRESETS)
+        self.assertIsNot(nautical_core.BUSINESS_CALENDAR_CONFIG, nautical_core.ASTRONOMY_CONFIG)
 
     def test_operator_scope_matrix_has_explicit_boundaries(self) -> None:
         elapsed = budget._bench_operator_scope_matrix_stage()

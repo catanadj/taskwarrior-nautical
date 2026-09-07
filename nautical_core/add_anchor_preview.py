@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
@@ -83,7 +83,7 @@ def anchor_preview_prepare_dnf(
     core: Any,
     validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> tuple[list[list[dict[str, Any]]], str]:
     _ = due_dt
     t0 = time.perf_counter()
@@ -129,7 +129,7 @@ def anchor_preview_prepare_omit_dnf(
     *,
     core: Any,
     validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> Any:
     omit_str = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip()
@@ -215,7 +215,7 @@ def anchor_preview_first_due(
     to_local_cached: Callable[[datetime], datetime],
     evaluator: Any,
     scheduler_service: Any,
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
     def _fmt(dt: Any) -> str:
@@ -806,7 +806,7 @@ def handle_anchor_file_preview_on_add(
     panel: Callable[..., None],
     fmt_local_for_task: Callable[[datetime], str],
     human_delta: Callable[[Any, Any, bool], str],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> None:
     rows: list[tuple[str, str]] = []
     panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
@@ -1089,7 +1089,7 @@ def handle_anchor_preview_on_add(
     format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
     panel: Callable[..., None],
     human_delta: Callable[[Any, Any, bool], str],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     validate_native_until_after_target: Callable[[TaskPayload, datetime, str], None],
     validate_native_until_anchor_slots: Callable[[TaskPayload, datetime, Any, str, tuple[int, int]], None],
     append_first_expiration_row: Callable[[list[tuple[str, str]], TaskPayload, datetime, str], None],

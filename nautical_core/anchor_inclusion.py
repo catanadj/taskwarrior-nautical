@@ -4,7 +4,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from .occurrence_provider import AnchorOccurrenceLookup, Occurrence, _cursor_before
+from .occurrence_provider import Occurrence, _cursor_before
+from .recurrence_protocols import NextOccurrenceCallback, PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .scheduler_models import OccurrenceSearchExhausted
 
@@ -167,8 +168,8 @@ def next_included_occurrence(
     seed_base: str,
     omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: AnchorOccurrenceLookup,
-    pick_occurrence_local: AnchorOccurrenceLookup | None = None,
+    next_occurrence_after_local_dt: NextOccurrenceCallback,
+    pick_occurrence_local: PickOccurrenceCallback | None = None,
     anchor_file_dir: str = "",
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
@@ -278,8 +279,8 @@ def next_occurrence_event_local(
     seed_base: str,
     omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: AnchorOccurrenceLookup,
-    pick_occurrence_local: AnchorOccurrenceLookup | None = None,
+    next_occurrence_after_local_dt: NextOccurrenceCallback,
+    pick_occurrence_local: PickOccurrenceCallback | None = None,
     anchor_file_dir: str = "",
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,

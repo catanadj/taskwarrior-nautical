@@ -12397,6 +12397,33 @@ def test_hook_on_modify_uda_aliases_route_through_thin_wrapper():
         expect(normalized.get("anchor") == "w:tue", f"alias-only modify did not update canonical UDA: {normalized!r}")
 
 
+def test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel():
+    """A description alias changing an existing anchor must still acknowledge the edit."""
+    hook = _find_hook_file("on-modify.nautical")
+    with tempfile.TemporaryDirectory() as td:
+        config = Path(td) / "nautical.toml"
+        config.write_text("enable_uda_aliases = true\ntz = \"UTC\"\n", encoding="utf-8")
+        old = {
+            "uuid": "00000000-0000-4000-8000-000000000117",
+            "description": "plain",
+            "status": "pending",
+            "anchor": "w:mon",
+            "chain": "on",
+            "chainID": "abcd1234",
+            "link": 1,
+        }
+        new = dict(old, description="plain a:w:tue")
+        env = {"NAUTICAL_CONFIG": str(config), "NAUTICAL_TRUST_CONFIG_PATH": "1", "TASKDATA": td, "NO_COLOR": "1"}
+        proc = _run_hook_script_raw(hook, json.dumps(old) + "\n" + json.dumps(new), env_extra=env)
+
+    expect(proc.returncode == 0, f"alias anchor modify failed: {proc.stderr[:600]!r}")
+    _assert_stdout_json_only(proc.stdout)
+    normalized = _extract_last_json(proc.stdout)
+    expect(normalized.get("anchor") == "w:tue", f"alias anchor was not normalized: {normalized!r}")
+    expect("Nautical recurrence updated" in proc.stderr, f"alias anchor acknowledgement missing: {proc.stderr!r}")
+    expect("Anchor: w:mon" in proc.stderr and "w:tue" in proc.stderr, f"alias anchor diff missing: {proc.stderr!r}")
+
+
 def test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper():
     """The native empty-value clearing form must survive the wrapper boundary."""
     hook = _find_hook_file("on-modify.nautical")
@@ -34976,6 +35003,7 @@ TESTS = [
     test_on_add_expands_enabled_description_uda_aliases,
     test_hook_on_add_uda_aliases_emit_canonical_json_and_reject_conflicts,
     test_hook_on_modify_uda_aliases_route_through_thin_wrapper,
+    test_hook_on_modify_uda_alias_anchor_change_emits_ack_panel,
     test_hook_on_modify_empty_uda_alias_clears_through_thin_wrapper,
     test_hook_on_add_disabled_uda_aliases_leave_description_untouched,
     test_on_modify_expands_and_clears_description_uda_aliases,

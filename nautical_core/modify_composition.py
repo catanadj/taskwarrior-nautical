@@ -101,6 +101,14 @@ def run_on_modify(host: Any) -> None:
     hook_engine = host._module("hook_engine")
     host._apply_description_uda_aliases(old, new)
     validation = host.core._import_sibling("hook_validation_pipeline")
+    # Alias expansion mutates the canonical task mapping. Refresh the typed
+    # observation so transition diffs and recurrence feedback include aliases.
+    if host._PARSED_NEW_OBSERVATION is not None:
+        task_models = host.core._import_sibling("task_models")
+        host._PARSED_NEW_OBSERVATION = task_models.TaskObservation.from_mapping(
+            new,
+            source_query="on-modify alias-normalized task",
+        )
     _validated_observation, validation_report = validation.validate_task_mapping(
         new,
         route=validation.WorkflowRoute.RECURRING_EDIT,

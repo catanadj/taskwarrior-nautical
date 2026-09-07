@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         astral-version: ["3.2", "latest"]
     steps:
       - name: Checkout
@@ -49,3 +49,10 @@ jobs:
           python3 dev_tools/nautical_golden_tests.py
           --only astronomy
           --only moon
+
+      - name: Run lightweight runtime compatibility checks
+        run: |
+          python3 -m unittest -q \
+            tests.test_hook_validation_pipeline \
+            tests.test_hook_workflow_contract
+          python3 dev_tools/nautical_deploy_sanity.py --json

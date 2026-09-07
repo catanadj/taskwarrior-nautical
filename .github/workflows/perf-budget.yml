@@ -114,3 +114,37 @@ jobs:
       - name: Cleanup base worktree (PR only)
         if: github.event_name == 'pull_request'
         run: git worktree remove ../perf-base --force
+
+  slow-device-trend:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install benchmark dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y taskwarrior
+          python3 -m pip install -r requirements.txt
+
+      - name: Capture slow-device trend profile
+        run: >-
+          python3 dev_tools/nautical_perf_budget.py
+          --slow-device --json --budget-file dev_tools/perf_budget.json
+          > perf-budget-report-slow-device.json
+
+      - name: Upload slow-device trend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-budget-report-slow-device
+          path: perf-budget-report-slow-device.json
+          if-no-files-found: error

@@ -3059,8 +3059,10 @@ def _bench_expensive_workflows(
             return result
 
         results["workflow_queue_drain_one_intent"] = run_queue_shape("queue-one-intent", 0)
+        history_key = "slow_device_queue_background_history_rows" if slow_device else "queue_background_history_rows"
+        default_history_rows = 1000 if slow_device else 5000
         results["workflow_queue_drain_large_history"] = run_queue_shape(
-            "queue-large-history", max(5000, int(workflow_cfg.get("queue_background_history_rows", 5000)))
+            "queue-large-history", max(default_history_rows, int(workflow_cfg.get(history_key, default_history_rows)))
         )
 
         reconcile_data = root / "reconcile"

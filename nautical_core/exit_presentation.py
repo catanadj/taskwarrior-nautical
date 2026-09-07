@@ -14,7 +14,6 @@ from .operator_presentation import ProgressView
 class ExitDrainProgress:
     """Render lifecycle drain events without participating in mutation."""
 
-    _TITLE = "⚓ Updating recurring tasks"
     _DETAIL_LABELS = {
         "starting intent": "Preparing update",
         "child mutation": "Next task created",
@@ -43,10 +42,7 @@ class ExitDrainProgress:
     @classmethod
     def _description(cls, value: object = "") -> str:
         detail = str(value or "").replace("_", " ").strip().lower()
-        if not detail:
-            return cls._TITLE
-        label = cls._DETAIL_LABELS.get(detail, "Processing update")
-        return f"{cls._TITLE} · {label}"
+        return cls._DETAIL_LABELS.get(detail, "Processing update")
 
     def _is_enabled(self) -> bool:
         if not sys.stderr.isatty() or os.environ.get("TERM", "").strip().lower() == "dumb":

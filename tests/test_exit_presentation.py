@@ -22,17 +22,17 @@ class ExitDrainProgressTests(unittest.TestCase):
             with self.subTest(internal=internal):
                 self.assertEqual(
                     ExitDrainProgress._description(internal),
-                    f"⚓ Updating recurring tasks · {friendly}",
+                    friendly,
                 )
 
     def test_unknown_detail_does_not_expose_internal_vocabulary(self) -> None:
         self.assertEqual(
             ExitDrainProgress._description("future_internal_phase"),
-            "⚓ Updating recurring tasks · Processing update",
+            "Processing update",
         )
 
     def test_empty_detail_uses_compact_title(self) -> None:
-        self.assertEqual(ExitDrainProgress._description(), "⚓ Updating recurring tasks")
+        self.assertEqual(ExitDrainProgress._description(), "Processing update")
 
 
 if __name__ == "__main__":

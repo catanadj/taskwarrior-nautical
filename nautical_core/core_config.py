@@ -474,50 +474,39 @@ OMIT_PRESETS = _CONF["omit_presets"]
 BUSINESS_CALENDAR_CONFIG = _CONF["business_calendar"]
 ASTRONOMY_CONFIG = _CONF["astronomy"]
 
-ENABLE_ANCHOR_CACHE = conf_schema_bool("enable_anchor_cache")
-ENABLE_UDA_ALIASES = conf_schema_bool("enable_uda_aliases")
-ANCHOR_CACHE_DIR_OVERRIDE = conf_schema_str("anchor_cache_dir")
-ANCHOR_CACHE_TTL = conf_schema_int("anchor_cache_ttl")
+def _schema_default(key: str) -> Any:
+    return config_schema.spec_default(key)
 
-CHAIN_COLOR_PER_CHAIN = conf_schema_bool(
-    "chain_color_per_chain",
-    true_values={"chain", "per-chain", "per"},
-)
-SHOW_TIMELINE_GAPS = conf_schema_bool(
-    "show_timeline_gaps",
-    false_values={"0", "no", "false", "off", "none"},
-)
-SHOW_ANALYTICS = conf_schema_bool(
-    "show_analytics",
-    false_values={"0", "no", "false", "off", "none"},
-)
-ANALYTICS_STYLE = conf_schema_str("analytics_style").lower()
-ANALYTICS_STYLE = config_schema.normalized_choice("analytics_style", ANALYTICS_STYLE)
-ANALYTICS_ONTIME_TOL_SECS = conf_schema_int("analytics_ontime_tol_secs")
-DEBUG_WAIT_SCHED = conf_schema_bool(
-    "debug_wait_sched",
-    true_values={"1", "yes", "true", "on"},
-)
-CHECK_CHAIN_INTEGRITY = conf_schema_bool(
-    "check_chain_integrity",
-    true_values={"1", "yes", "true", "on"},
-)
-PANEL_MODE = config_schema.normalized_choice("panel_mode", conf_schema_str("panel_mode"))
-LIVE_PANEL_DURATION_MS = conf_schema_int("live_panel_duration_ms")
-LIVE_PANEL_FOOTER = conf_schema_str("live_panel_footer")
-FAST_COLOR = conf_schema_bool("fast_color")
-EXIT_PROGRESS = conf_schema_bool("exit_progress")
-OUTBOX_DRAIN_MAX_ITEMS = conf_schema_int("outbox_drain_max_items")
-MAX_CHAIN_WALK = conf_schema_int("max_chain_walk")
-MAX_ANCHOR_ITER = conf_schema_int("max_anchor_iterations")
-MAX_LINK_NUMBER = conf_schema_int("max_link_number")
-SANITIZE_UDA = conf_schema_bool("sanitize_uda", true_values={"1", "yes", "true", "on"})
-SANITIZE_UDA_MAX_LEN = conf_schema_int("sanitize_uda_max_len")
-MAX_JSON_BYTES = conf_schema_int("max_json_bytes")
-RECURRENCE_UPDATE_UDAS = tuple(conf_uda_field_list("recurrence_update_udas"))
-CACHE_TTL_SECS = conf_schema_int("cache_ttl_secs")
-CACHE_LOAD_MEM_MAX = conf_schema_int("cache_load_mem_max")
-CACHE_LOAD_MEM_TTL = conf_schema_int("cache_load_mem_ttl")
+
+# Keep import-time values dependency-free. ``_refresh_config_exports`` replaces
+# these defaults with validated taskdata configuration before they are used.
+ENABLE_ANCHOR_CACHE = bool(_schema_default("enable_anchor_cache"))
+ENABLE_UDA_ALIASES = bool(_schema_default("enable_uda_aliases"))
+ANCHOR_CACHE_DIR_OVERRIDE = str(_schema_default("anchor_cache_dir"))
+ANCHOR_CACHE_TTL = int(_schema_default("anchor_cache_ttl"))
+CHAIN_COLOR_PER_CHAIN = bool(_schema_default("chain_color_per_chain"))
+SHOW_TIMELINE_GAPS = bool(_schema_default("show_timeline_gaps"))
+SHOW_ANALYTICS = bool(_schema_default("show_analytics"))
+ANALYTICS_STYLE = config_schema.normalized_choice("analytics_style", str(_schema_default("analytics_style")))
+ANALYTICS_ONTIME_TOL_SECS = int(_schema_default("analytics_ontime_tol_secs"))
+DEBUG_WAIT_SCHED = bool(_schema_default("debug_wait_sched"))
+CHECK_CHAIN_INTEGRITY = bool(_schema_default("check_chain_integrity"))
+PANEL_MODE = config_schema.normalized_choice("panel_mode", str(_schema_default("panel_mode")))
+LIVE_PANEL_DURATION_MS = int(_schema_default("live_panel_duration_ms"))
+LIVE_PANEL_FOOTER = str(_schema_default("live_panel_footer"))
+FAST_COLOR = bool(_schema_default("fast_color"))
+EXIT_PROGRESS = bool(_schema_default("exit_progress"))
+OUTBOX_DRAIN_MAX_ITEMS = int(_schema_default("outbox_drain_max_items"))
+MAX_CHAIN_WALK = int(_schema_default("max_chain_walk"))
+MAX_ANCHOR_ITER = int(_schema_default("max_anchor_iterations"))
+MAX_LINK_NUMBER = int(_schema_default("max_link_number"))
+SANITIZE_UDA = bool(_schema_default("sanitize_uda"))
+SANITIZE_UDA_MAX_LEN = int(_schema_default("sanitize_uda_max_len"))
+MAX_JSON_BYTES = int(_schema_default("max_json_bytes"))
+RECURRENCE_UPDATE_UDAS = tuple(_schema_default("recurrence_update_udas") or ())
+CACHE_TTL_SECS = int(_schema_default("cache_ttl_secs"))
+CACHE_LOAD_MEM_MAX = int(_schema_default("cache_load_mem_max"))
+CACHE_LOAD_MEM_TTL = int(_schema_default("cache_load_mem_ttl"))
 
 
 def _refresh_config_exports() -> None:

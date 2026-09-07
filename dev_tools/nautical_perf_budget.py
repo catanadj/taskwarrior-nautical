@@ -3837,8 +3837,10 @@ def main() -> int:
         r["budget_s"] = budget
         if name == "cold_core_import":
             r["module_count"] = IMPORT_PROFILES.get("core", 0)
+            r["cache_semantics"] = "fresh-process; filesystem bytecode cache may be reused"
         elif name == "cold_modify_impl_import":
             r["module_count"] = IMPORT_PROFILES.get("modify_impl", 0)
+            r["cache_semantics"] = "fresh-process; filesystem bytecode cache may be reused"
         r["pass"] = (budget <= 0.0) or (r["median_s"] <= budget)
         resource_budgets = cfg.get("resource_budgets")
         if isinstance(resource_budgets, dict):

@@ -47,6 +47,14 @@ def probe_exit_work(taskdata: str | os.PathLike[str]) -> ExitWorkProbe:
     except Exception:
         return ExitWorkProbe(True, "taskdata path could not be resolved")
 
+    # An invalid or inaccessible taskdata path must never be classified as
+    # safely empty: the full hook path can still recover with better context.
+    try:
+        if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+            return ExitWorkProbe(True, f"taskdata directory is unavailable: {root}")
+    except Exception:
+        return ExitWorkProbe(True, f"taskdata directory could not be inspected: {root}")
+
     path = root / ".nautical-state" / ".nautical_lifecycle_outbox.db"
     try:
         if not path.exists():

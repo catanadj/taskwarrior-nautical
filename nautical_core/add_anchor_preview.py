@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 from .add_anchor_compute import anchor_next_occurrence_after_local_dt
 from . import calendar_feedback, panel_diagnostics
 from .occurrence_provider import Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
+from .recurrence_protocols import NextOccurrenceCallback, PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
 
 
-def _build_slot_datetime(day, hhmm):
+def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
     return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
 
 
@@ -58,7 +59,7 @@ def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
     return ' and '.join(part for part in parts if part)
 
 
-def _anchor_preview_natural_text(task: TaskPayload, dnf, anchor_file_str: str, *, core: Any) -> str:
+def _anchor_preview_natural_text(task: TaskPayload, dnf: Any, anchor_file_str: str, *, core: Any) -> str:
     natural = core.describe_anchor_dnf(dnf, task) if dnf else ''
     omit_text = _anchor_omit_natural_text(task, core=core)
     if omit_text and (task.get('anchor_mode') or 'skip').lower() == 'skip':
@@ -83,7 +84,7 @@ def anchor_preview_prepare_dnf(
     core: Any,
     validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
     validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> tuple[list[list[dict[str, Any]]], str]:
     _ = due_dt
     t0 = time.perf_counter()
@@ -129,8 +130,8 @@ def anchor_preview_prepare_omit_dnf(
     *,
     core: Any,
     validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
-):
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
+) -> Any:
     omit_str = str(task.get("omit") or "").strip()
     omit_file = str(task.get("omit_file") or "").strip()
     omit_dnf = None
@@ -199,8 +200,8 @@ def anchor_preview_seed_context(
 
 def anchor_preview_first_due(
     task: TaskPayload,
-    dnf,
-    omit_dnf,
+    dnf: Any,
+    omit_dnf: Any,
     *,
     now_local: datetime,
     due_dt: datetime,
@@ -215,10 +216,10 @@ def anchor_preview_first_due(
     to_local_cached: Callable[[datetime], datetime],
     evaluator: Any,
     scheduler_service: Any,
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
-    def _fmt(dt):
+    def _fmt(dt: Any) -> str:
         return core.fmt_dt_local(dt)
 
     fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
@@ -276,12 +277,12 @@ def anchor_preview_first_due(
 def anchor_preview_misaligned_due_warning(
     rows: list[tuple[str, str]],
     *,
-    dnf,
+    dnf: Any,
     due_dt: datetime,
     recurrence_field: str,
     interval_seed: Any,
     seed_base: str,
-    omit_dnf,
+    omit_dnf: Any,
     to_local_cached: Callable[[datetime], datetime],
     evaluator: Any,
 ) -> None:
@@ -334,7 +335,7 @@ def anchor_preview_limit_rows(
     human_delta: Callable[[Any, Any, bool], str],
     final_max_dt: datetime | None = None,
 ) -> None:
-    def _fmt(dt):
+    def _fmt(dt: Any) -> str:
         return core.fmt_dt_local(dt)
 
     future_counts = []
@@ -437,7 +438,7 @@ def _preview_occurrence_lines(
     return out
 
 
-def _anchor_file_is_omitted(omit_dnf, item_local: datetime, *, core: Any, seed_base: str) -> bool:
+def _anchor_file_is_omitted(omit_dnf: Any, item_local: datetime, *, core: Any, seed_base: str) -> bool:
     if not omit_dnf:
         return False
     try:
@@ -462,7 +463,7 @@ def _anchor_file_preview_occurrences(
     *,
     core: Any,
     fallback_hhmm: tuple[int, int],
-    omit_dnf,
+    omit_dnf: Any,
     seed_base: str,
     after_local_dt: datetime | None = None,
     inclusive: bool = True,
@@ -513,18 +514,18 @@ def _anchor_file_preview_occurrences(
 
 def _collect_included_with_provider(
     *,
-    dnf,
+    dnf: Any,
     anchor_file_str: str,
     after_local_dt: datetime,
     inclusive: bool,
     limit: int,
     fallback_hhmm: tuple[int, int],
-    default_seed_date,
+    default_seed_date: Any,
     seed_base: str,
-    omit_dnf,
+    omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: Callable[..., Any],
-    pick_occurrence_local: Callable[..., Any] | None = None,
+    next_occurrence_after_local_dt: NextOccurrenceCallback,
+    pick_occurrence_local: PickOccurrenceCallback | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
@@ -636,18 +637,18 @@ def _collect_included_with_provider(
 
 def _collect_events_with_provider(
     *,
-    dnf,
+    dnf: Any,
     anchor_file_str: str,
     after_local_dt: datetime,
     inclusive: bool,
     limit_included: int,
     fallback_hhmm: tuple[int, int],
-    default_seed_date,
+    default_seed_date: Any,
     seed_base: str,
-    omit_dnf,
+    omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: Callable[..., Any],
-    pick_occurrence_local: Callable[..., Any] | None = None,
+    next_occurrence_after_local_dt: NextOccurrenceCallback,
+    pick_occurrence_local: PickOccurrenceCallback | None = None,
     anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
@@ -806,7 +807,7 @@ def handle_anchor_file_preview_on_add(
     panel: Callable[..., None],
     fmt_local_for_task: Callable[[datetime], str],
     human_delta: Callable[[Any, Any, bool], str],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
 ) -> None:
     rows: list[tuple[str, str]] = []
     panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
@@ -1007,7 +1008,7 @@ def _timezone_fallback_warning_needed(core: Any, anchor_str: str, anchor_file_st
 
 def _append_dst_adjustment_row(
     rows: list[tuple[str, str]],
-    dnf,
+    dnf: Any,
     occurrence_local: datetime,
     *,
     core: Any,
@@ -1089,7 +1090,7 @@ def handle_anchor_preview_on_add(
     format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
     panel: Callable[..., None],
     human_delta: Callable[[Any, Any, bool], str],
-    error_and_exit: Callable[[list[tuple[str, str]]], None],
+    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     validate_native_until_after_target: Callable[[TaskPayload, datetime, str], None],
     validate_native_until_anchor_slots: Callable[[TaskPayload, datetime, Any, str, tuple[int, int]], None],
     append_first_expiration_row: Callable[[list[tuple[str, str]], TaskPayload, datetime, str], None],

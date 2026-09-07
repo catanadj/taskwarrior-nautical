@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from .occurrence_provider import Occurrence, _cursor_before
+from .recurrence_protocols import NextOccurrenceCallback, PickOccurrenceCallback
 from .timeutil import compare_datetimes
 from .scheduler_models import OccurrenceSearchExhausted
 
@@ -16,7 +17,7 @@ def _scheduler_engine(core: Any) -> Any:
     return engine
 
 
-def _norm_t_mod(v):
+def _norm_t_mod(v: Any) -> list[Any]:
     if v is None:
         return []
     if isinstance(v, tuple) and len(v) == 2:
@@ -130,8 +131,8 @@ def _build_anchor_file_provider(
 def _anchor_file_occurrence_is_omitted(
     item_local: datetime | None,
     *,
-    omit_dnf,
-    default_seed_date,
+    omit_dnf: Any,
+    default_seed_date: Any,
     seed_base: str,
     core: Any,
 ) -> bool:
@@ -158,17 +159,17 @@ def _anchor_file_occurrence_is_omitted(
 
 def next_included_occurrence(
     *,
-    dnf,
+    dnf: Any,
     anchor_file_str: str,
     after_local_dt: datetime,
     inclusive: bool,
     fallback_hhmm: tuple[int, int],
-    default_seed_date,
+    default_seed_date: Any,
     seed_base: str,
-    omit_dnf,
+    omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: Callable[..., Any],
-    pick_occurrence_local: Callable[..., Any] | None = None,
+    next_occurrence_after_local_dt: NextOccurrenceCallback,
+    pick_occurrence_local: PickOccurrenceCallback | None = None,
     anchor_file_dir: str = "",
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
@@ -261,7 +262,7 @@ def next_included_occurrence(
     return selected
 
 
-def next_included_occurrence_local(**kwargs) -> datetime | None:
+def next_included_occurrence_local(**kwargs: Any) -> datetime | None:
     """Compatibility wrapper returning only the selected local datetime."""
     occurrence = next_included_occurrence(**kwargs)
     return occurrence.local_datetime if occurrence is not None else None
@@ -269,22 +270,22 @@ def next_included_occurrence_local(**kwargs) -> datetime | None:
 
 def next_occurrence_event_local(
     *,
-    dnf,
+    dnf: Any,
     anchor_file_str: str,
     after_local_dt: datetime,
     inclusive: bool,
     fallback_hhmm: tuple[int, int],
-    default_seed_date,
+    default_seed_date: Any,
     seed_base: str,
-    omit_dnf,
+    omit_dnf: Any,
     core: Any,
-    next_occurrence_after_local_dt: Callable[..., Any],
-    pick_occurrence_local: Callable[..., Any] | None = None,
+    next_occurrence_after_local_dt: NextOccurrenceCallback,
+    pick_occurrence_local: PickOccurrenceCallback | None = None,
     anchor_file_dir: str = "",
     anchor_file_provider: Any | None = None,
     recurrence_context: Any | None = None,
     business_calendar: Any | None = None,
-    scheduler_omit_dnf=...,
+    scheduler_omit_dnf: Any = ...,
 ) -> Occurrence | None:
     scheduler_omit = omit_dnf if scheduler_omit_dnf is ... else scheduler_omit_dnf
     expr_local = None

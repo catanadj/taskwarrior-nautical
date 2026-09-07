@@ -137,10 +137,14 @@ def tw_get_cached(host: Any, ref: str) -> str:
             host._diag_count("tw_get_cache_hits")
             return cached
         host._diag_count("tw_get_cache_misses")
-        out = host._module("modify_queries").tw_get(
-            ref,
-            task_text=lambda args: host._module("modify_command_effects").task_text(host, args),
+        result = host._module("modify_command_effects").run_task_result(
+            host,
+            host._task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
+            env=host.os.environ.copy(),
+            timeout=3.0,
+            retries=2,
         )
+        out = (result.stdout or "").strip() if result.ok else ""
         host._query_ctx_set("tw_get", ref, out or "")
         return out
     except Exception:

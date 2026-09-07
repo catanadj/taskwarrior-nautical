@@ -103,11 +103,7 @@ if __name__ == "__main__":
 
 
 import atexit
-import hashlib
-import random
 import re
-import stat
-import tempfile
 import time as _time
 import uuid
 from collections import OrderedDict
@@ -406,14 +402,6 @@ def _record_chain_snapshot_stat(name: str, inc: int = 1) -> None:
         state.diag_stats[name] = state.diag_stats.get(name, 0) + inc
     except Exception:
         pass
-
-
-def _task_args_cacheable(args) -> bool:
-    try:
-        parts = tuple(str(a) for a in (args or ()))
-    except Exception:
-        return False
-    return ('_get' in parts) or ('export' in parts) or ('count' in parts)
 
 
 def _diag_summary() -> None:

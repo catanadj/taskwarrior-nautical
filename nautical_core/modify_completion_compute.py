@@ -76,7 +76,9 @@ def completion_compute_child_due(
         return child_due, meta, dnf
     except OccurrenceSearchExhausted as exc:
         if callable(on_terminal):
-            on_terminal(exc)
+            propagate = on_terminal(exc)
+            if propagate is not True:
+                return None
         else:
             panel(
                 "⛔ Chain error",
@@ -84,7 +86,9 @@ def completion_compute_child_due(
                 kind="error",
             )
             print_task(task_row)
-        return None
+        # Keep typed boundary evidence available to mutation callers that opt
+        # into propagation; presentation-only callers retain the None result.
+        raise
     except ValueError as exc:
         panel(
             "⛔ Chain error",
@@ -638,7 +642,14 @@ def completion_compute_next_and_limits(
     completion_warn_unreasonable_duration = services.completion_warn_unreasonable_duration
     completion_caps = services.completion_caps
     completion_cap_guard_or_stop = services.completion_cap_guard_or_stop
-    computed = completion_compute_child_due(new, kind)
+    try:
+        computed = completion_compute_child_due(new, kind)
+    except OccurrenceSearchExhausted as exc:
+        return CompletionLifecycleResult(
+            state="terminal" if exc.is_date_limit else "retryable",
+            reason=occurrence_exhaustion_message(exc),
+            diagnostic=_terminal_diagnostic(new, next_no, exc.kind),
+        )
     if computed is None:
         if str(new.get("chain") or "").strip().lower() == "off":
             return CompletionLifecycleResult(

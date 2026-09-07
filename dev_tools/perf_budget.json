@@ -89,7 +89,8 @@
       "hook_nautical_ordinary_modify": 0.8,
       "hook_empty_exit": 0.8
     },
-    "managed_layout_max_ratio": 1.5
+    "managed_layout_max_ratio": 1.5,
+    "staged_layout_max_ratio": 1.5
   },
   "resource_budgets": {
     "cold_core_import": {"module_count": 120},
@@ -221,6 +222,7 @@
     "reconcile_candidate_chains": 32,
     "reconcile_candidate_apply_counts": [1, 8, 32, 200],
     "queue_background_history_rows": 5000,
+    "slow_device_queue_background_history_rows": 1000,
     "reconcile_long_history_rows": 2048,
     "reconcile_corrupted_chains": 16,
     "reconcile_mixed_healthy_rows": 8,

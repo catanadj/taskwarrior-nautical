@@ -215,6 +215,93 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list(root.glob(".restored.restore-*")), [])
 
+    def test_empty_inventory_is_rejected_for_restore(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "backup"
+            source.mkdir()
+            publish_manifest(source / "manifest.json", create_manifest(source, files=()))
+            result = validate_backup(source)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("mandatory" in error for error in result.errors))
+
+    def test_missing_mandatory_manifest_entry_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            publish_manifest(source / "manifest.json", create_manifest(source, files=("taskwarrior-export.json",)))
+            result = validate_backup(source)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("lifecycle-outbox.db" in error for error in result.errors))
+
+    def test_unlisted_managed_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            hooks = source / "hooks"
+            hooks.mkdir()
+            (hooks / "on-add.nautical").write_text("hook\n", encoding="utf-8")
+            (hooks / "on-modify.nautical").write_text("unlisted\n", encoding="utf-8")
+            publish_manifest(
+                source / "manifest.json",
+                create_manifest(source, files=(
+                    "taskwarrior-export.json", "lifecycle-outbox.db", "hooks/on-add.nautical",
+                )),
+            )
+            result = validate_backup(source)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("not listed" in error for error in result.errors))
+
+    def test_unlisted_runtime_and_resource_files_are_rejected(self):
+        for relative in ("runtime/releases/r-test/module.py", "resources/calendar.json"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                source = self._backup(root)
+                path = source / relative
+                path.parent.mkdir(parents=True)
+                path.write_text("payload\n", encoding="utf-8")
+                publish_manifest(
+                    source / "manifest.json",
+                    create_manifest(source, files=("taskwarrior-export.json", "lifecycle-outbox.db")),
+                )
+                result = validate_backup(source)
+                self.assertEqual(result.status, "rejected")
+                self.assertTrue(any("not listed" in error for error in result.errors))
+
+    def test_changed_listed_file_is_rejected_before_restore(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+            (source / "taskwarrior-export.json").write_text('[{"uuid":"u2"}]\n', encoding="utf-8")
+            result = validate_backup(source)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("checksum mismatch" in error for error in result.errors))
+
+    def test_source_mutation_during_staging_is_rejected_and_cleaned(self):
+        import nautical_core.restore_service as service
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self._backup(root)
+            target = root / "restored"
+            original_copy2 = service.shutil.copy2
+            calls = 0
+
+            def copy_and_mutate(source_path, destination):
+                nonlocal calls
+                result = original_copy2(source_path, destination)
+                calls += 1
+                if calls == 1:
+                    (source / "taskwarrior-export.json").write_text('[{"uuid":"changed"}]\n', encoding="utf-8")
+                return result
+
+            with patch.object(service.shutil, "copy2", side_effect=copy_and_mutate):
+                result = restore_backup(source, target, apply=True)
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(any("changed" in error for error in result.errors))
+            self.assertFalse(target.exists())
+            self.assertEqual(list(root.glob(".restored.restore-*")), [])
+
     def test_outbox_quick_check_failure_is_rejected_before_target_publication(self):
         import nautical_core.restore_service as service
 
@@ -283,7 +370,7 @@ class RestoreServiceTests(unittest.TestCase):
                 ),
             )
             target = root / "restored"
-            with patch.object(service.shutil, "copytree", side_effect=service.shutil.Error("simulated resource failure")):
+            with patch.object(service.shutil, "copy2", side_effect=service.shutil.Error("simulated resource failure")):
                 result = restore_backup(source, target, apply=True)
             self.assertEqual(result.status, "rejected")
             self.assertFalse(target.exists())

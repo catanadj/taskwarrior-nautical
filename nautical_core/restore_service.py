@@ -11,7 +11,7 @@ import sqlite3
 import tempfile
 from typing import Any
 
-from .backup_service import BackupManifestError, StorageIO, verify_manifest
+from .backup_service import BackupArtifact, BackupManifestError, StorageIO, _digest, validate_manifest, verify_manifest
 
 
 class BackupRestoreError(RuntimeError):
@@ -83,6 +83,53 @@ def _validate_outbox(source: Path) -> str:
     return result
 
 
+_MANDATORY_ARTIFACTS = frozenset(("taskwarrior-export.json", "lifecycle-outbox.db"))
+_MANAGED_PREFIXES = ("hooks/", "runtime/", "resources/")
+
+
+def _validate_restore_inventory(source: Path, manifest: dict[str, Any]) -> tuple[BackupArtifact, ...]:
+    records = validate_manifest(manifest)
+    paths = {record.path for record in records}
+    missing = sorted(_MANDATORY_ARTIFACTS - paths)
+    if missing:
+        raise BackupRestoreError("backup manifest is incomplete; mandatory artifacts missing: " + ", ".join(missing))
+    listed_managed = {path for path in paths if path.startswith(_MANAGED_PREFIXES)}
+    actual_managed: set[str] = set()
+    for prefix in _MANAGED_PREFIXES:
+        root = source / prefix.rstrip("/")
+        if not root.exists():
+            continue
+        if root.is_symlink() or not root.is_dir():
+            raise BackupRestoreError(f"backup {prefix.rstrip('/')} directory is missing or unsafe")
+        for path in root.rglob("*"):
+            if path.is_symlink():
+                raise BackupRestoreError(f"backup tree contains a symlink: {path.relative_to(source)}")
+            if path.is_file():
+                actual_managed.add(path.relative_to(source).as_posix())
+    unlisted = sorted(actual_managed - listed_managed)
+    if unlisted:
+        raise BackupRestoreError("backup contains managed artifacts not listed in manifest: " + ", ".join(unlisted))
+    return records
+
+
+def _copy_inventory(source: Path, temporary: Path, records: tuple[BackupArtifact, ...]) -> None:
+    for record in records:
+        source_path = source / record.path
+        destination_name = record.path
+        if record.path == "lifecycle-outbox.db":
+            destination_name = ".nautical-state/.nautical_lifecycle_outbox.db"
+        elif record.path.startswith("runtime/"):
+            destination_name = ".nautical-runtime/" + record.path.removeprefix("runtime/")
+        destination = temporary / destination_name
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination)
+        copied = destination.stat()
+        if copied.st_size != record.size:
+            raise BackupRestoreError(f"staged artifact size changed: {record.path}")
+        if _digest(destination) != record.sha256:
+            raise BackupRestoreError(f"staged artifact checksum changed: {record.path}")
+
+
 def validate_backup(source: Path) -> RestoreReport:
     """Validate a backup generation without creating or changing any files."""
     source = Path(source).expanduser().resolve()
@@ -90,6 +137,7 @@ def validate_backup(source: Path) -> RestoreReport:
         if not source.is_dir() or source.is_symlink():
             raise BackupRestoreError(f"backup source is not a directory: {source}")
         manifest = _load_manifest(source)
+        records = _validate_restore_inventory(source, manifest)
         verification = verify_manifest(source, manifest)
         if verification.status != "verified":
             raise BackupRestoreError("; ".join(verification.errors) or "backup checksum verification failed")
@@ -128,34 +176,21 @@ def restore_backup(
         temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.restore-", dir=parent))
         assert temporary is not None
         source_path = Path(report.source)
-        shutil.copy2(source_path / "taskwarrior-export.json", temporary / "taskwarrior-export.json")
-        state = temporary / ".nautical-state"
-        state.mkdir(mode=0o700)
-        shutil.copy2(source_path / "lifecycle-outbox.db", state / ".nautical_lifecycle_outbox.db")
-        resources = source_path / "resources"
-        if resources.exists():
-            if resources.is_symlink() or not resources.is_dir():
-                raise BackupRestoreError("backup resources directory is missing or unsafe")
-            for resource in resources.iterdir():
-                if resource.is_symlink() or not resource.is_file():
-                    raise BackupRestoreError(f"backup resource is missing or unsafe: {resource.name}")
-            shutil.copytree(resources, temporary / "resources")
+        manifest = _load_manifest(source_path)
+        records = _validate_restore_inventory(source_path, manifest)
+        _copy_inventory(source_path, temporary, records)
         runtime = source_path / "runtime"
         if runtime.exists():
-            if runtime.is_symlink() or not runtime.is_dir():
-                raise BackupRestoreError("backup runtime directory is missing or unsafe")
             runtime_target = temporary / ".nautical-runtime"
-            shutil.copytree(runtime, runtime_target, symlinks=False)
             releases = runtime_target / "releases"
             candidates = sorted(path for path in releases.iterdir() if path.is_dir() and not path.is_symlink())
             if len(candidates) != 1:
                 raise BackupRestoreError("backup runtime must contain exactly one release")
             (runtime_target / "current").symlink_to(Path("releases") / candidates[0].name, target_is_directory=True)
-        hooks = source_path / "hooks"
-        if hooks.exists():
-            if hooks.is_symlink() or not hooks.is_dir():
-                raise BackupRestoreError("backup hooks directory is missing or unsafe")
-            shutil.copytree(hooks, temporary / "hooks", symlinks=False)
+        final_verification = verify_manifest(source_path, manifest)
+        if final_verification.status != "verified":
+            detail = "; ".join(final_verification.errors) or "checksum verification failed"
+            raise BackupRestoreError(f"backup source changed while staging: {detail}")
         shutil.copy2(source_path / "manifest.json", temporary / "manifest.json")
         if destination.exists():
             displaced = Path(tempfile.mkdtemp(prefix=f".{destination.name}.previous-", dir=parent))

@@ -104,6 +104,15 @@ recreates the managed `current` release pointer. The launcher is deliberately
 not installed into the host PATH; use the local installer as the explicit
 cutover step after validating the staged target.
 
+Restore validation is inventory-based. A restorable generation must list and
+checksum both `taskwarrior-export.json` and `lifecycle-outbox.db`; every file
+under `hooks/`, `runtime/`, and `resources/` must also be listed. The root
+`manifest.json` is the only file excluded from its own inventory. Validation
+rejects missing or unlisted managed files, checksum changes, symlinks, and
+source mutation during staging before publishing the target. Generic manifest
+verification remains available for partial inventories, but those inventories
+are not sufficient for a Taskwarrior restore.
+
 ## Periodic Backups
 
 The manual backup command above is the supported workflow and does not depend

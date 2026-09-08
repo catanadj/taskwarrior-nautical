@@ -951,12 +951,12 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason="invalid integrity transition state")
         if state is OutboxProcessingState.MANUAL_REVIEW and failure is None:
             return OutboxResult(OutboxResultKind.REJECTED, reason="manual review requires failure evidence")
-        now = self._clock()
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
             self._initialize(conn)
             with self._transaction(conn):
+                now = self._clock()
                 row = conn.execute(
                     "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
                     (intent_id, "integrity"),
@@ -1134,12 +1134,11 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not ids or not owner or lease_seconds <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk lease renewal requires intents, owner, and lease"), {}
-        now = self._clock()
-        expires = now + float(lease_seconds)
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
+                expires = now + float(lease_seconds)
                 for intent_id in ids:
                     # Lease renewal only needs the CAS columns. Avoid
                     # decoding plan/guard JSON on the healthy path.
@@ -1217,11 +1216,10 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk stage advancement contains an invalid stage"), {}
         if not normalized or not owner:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk stage advancement requires intents and owner"), {}
-        now = self._clock()
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
                 for intent_id, target in normalized.items():
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is None:
@@ -1315,11 +1313,10 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not ids or not owner:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk acknowledgement requires intents and owner"), {}
-        now = self._clock()
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
                 for intent_id in ids:
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is None:

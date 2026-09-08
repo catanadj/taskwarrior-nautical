@@ -7,6 +7,9 @@ from .time_windows import parse_random_time_window_spec, validate_time_schedule_
 
 
 CACHE_SCHEMA_VERSION = 2
+MAX_CACHE_FILE_BYTES = 2 * 1024 * 1024
+MAX_CACHE_DECODED_BYTES = 8 * 1024 * 1024
+MAX_CACHE_JSON_BYTES = MAX_CACHE_DECODED_BYTES
 _CACHE_VERSION_KEY = "_nautical_cache_version"
 _SELECTION_SCOPES = frozenset(("week", "month", "quarter", "year", "season", *SEASON_NAMES))
 
@@ -211,6 +214,19 @@ def cache_payload_shape_ok(obj: dict, *, is_dnf_like) -> bool:
     return True
 
 
+def _bounded_decompress(blob: bytes, zlib_mod, limit: int) -> bytes:
+    decompressor = zlib_mod.decompressobj()
+    data = decompressor.decompress(blob, limit + 1)
+    if len(data) > limit:
+        raise ValueError("decoded cache payload exceeds size limit")
+    if decompressor.unconsumed_tail or not decompressor.eof or decompressor.unused_data:
+        raise ValueError("decoded cache payload exceeds size limit")
+    data += decompressor.flush(limit + 1 - len(data))
+    if len(data) > limit:
+        raise ValueError("decoded cache payload exceeds size limit")
+    return data
+
+
 def cache_atomic_replace(src: str, dst: str, *, os_mod) -> None:
     try:
         os_mod.replace(src, dst)
@@ -296,7 +312,9 @@ def cache_load(
         # reading and retry once before treating the cache as unavailable.
         for attempt in range(2):
             with open(path, "rb") as fh:
-                blob = fh.read()
+                blob = fh.read(MAX_CACHE_FILE_BYTES + 1)
+            if len(blob) > MAX_CACHE_FILE_BYTES:
+                raise ValueError("encoded cache payload exceeds size limit")
             end_stamp = _stamp(os_mod.stat(path))
             if end_stamp == stamp:
                 break
@@ -306,7 +324,7 @@ def cache_load(
             if anchor_cache_ttl and (time_mod.time() - st.st_mtime) > anchor_cache_ttl:
                 return None
             stamp = _stamp(st)
-        data = zlib_mod.decompress(base64_mod.b85decode(blob))
+        data = _bounded_decompress(base64_mod.b85decode(blob), zlib_mod, MAX_CACHE_DECODED_BYTES)
         obj = json_mod.loads(data.decode("utf-8"))
         version = obj.pop(_CACHE_VERSION_KEY, None) if isinstance(obj, dict) else None
         if type(version) is not int or version != CACHE_SCHEMA_VERSION:
@@ -362,7 +380,11 @@ def cache_save(
     payload = dict(obj)
     payload[_CACHE_VERSION_KEY] = CACHE_SCHEMA_VERSION
     data = json_mod.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    if len(data) > MAX_CACHE_DECODED_BYTES:
+        return False
     blob = base64_mod.b85encode(zlib_mod.compress(data, 9))
+    if len(blob) > MAX_CACHE_FILE_BYTES:
+        return False
     path = cache_path(key)
     if not path:
         return False

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import shutil
 
@@ -63,6 +64,28 @@ class OperatorProcessContractTests(unittest.TestCase):
             result.duration, retryable=True, detail="process timeout",
         )
         self.assertTrue(evidence.retryable)
+
+    def test_timeout_terminates_descendant_process_group_within_bound(self) -> None:
+        code = (
+            "import subprocess,sys,time; "
+            "subprocess.Popen([sys.executable, '-c', 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
+            "time.sleep(30)"
+        )
+        client = TaskwarriorClient((sys.executable, "-c", code))
+        started = time.monotonic()
+        result = client.execute((), purpose="descendant-timeout", timeout=0.05, attempts=1)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
+        self.assertLess(elapsed, 2.0)
+
+    def test_timeout_with_tempfile_outputs_remains_bounded(self) -> None:
+        code = "import sys,time; print('partial output', flush=True); time.sleep(30)"
+        client = TaskwarriorClient((sys.executable, "-c", code))
+        result = client.execute(
+            (), purpose="tempfile-timeout", timeout=0.05, attempts=1, use_tempfiles=True,
+        )
+        self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
+        self.assertIn("partial output", result.stdout)
 
     def test_integrity_unavailable_result_keeps_failure_evidence(self) -> None:
         from nautical_core.query_report import to_operator_result

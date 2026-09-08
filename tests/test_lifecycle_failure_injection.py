@@ -39,6 +39,15 @@ from dev_tools.nautical_golden_tests import (
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    def test_sqlite_busy_timeout_uses_configured_seconds_as_milliseconds(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
+            connection = outbox._connect()
+            try:
+                self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 100)
+            finally:
+                connection.close()
+
     def test_lease_renewal_samples_clock_after_transaction_acquisition(self) -> None:
         with TemporaryDirectory() as td:
             clock = [100.0]
@@ -116,6 +125,7 @@ class LifecycleFailureInjectionTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0].kind.value, "retryable")
+            self.assertTrue(result[0].lock_busy)
             writer.rollback()
             writer.close()
 

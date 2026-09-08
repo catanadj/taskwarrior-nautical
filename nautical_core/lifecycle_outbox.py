@@ -323,7 +323,7 @@ class LifecycleOutboxRepository:
         os.chmod(self.path, 0o600)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA synchronous=FULL")
-        conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+        conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
         return conn
 
     def _secure_state_files(self) -> None:
@@ -1423,7 +1423,7 @@ class LifecycleOutboxRepository:
                 timeout=self.connect_timeout,
             )
             conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
             version_row = conn.execute("PRAGMA user_version").fetchone()
             version = int(version_row[0] if version_row else 0)
             empty["schema_version"] = version
@@ -1551,7 +1551,7 @@ class LifecycleOutboxRepository:
                 timeout=self.connect_timeout,
             )
             conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
             version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
             if version != OUTBOX_SCHEMA_VERSION:
                 raise LifecycleOutboxError(

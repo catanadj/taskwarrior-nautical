@@ -61,13 +61,25 @@ class TaskStatus(str, Enum):
     RECURRING = "recurring"
 
 
+@dataclass(frozen=True, slots=True)
+class _FrozenMapping:
+    items: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenSequence:
+    items: tuple[object, ...]
+
+
 def _freeze(value: Any) -> FrozenValue:
+    if isinstance(value, (_FrozenMapping, _FrozenSequence)):
+        return value
     if isinstance(value, Mapping):
-        return tuple(sorted((str(key), _freeze(item)) for key, item in value.items()))
+        return _FrozenMapping(tuple(sorted((str(key), _freeze(item)) for key, item in value.items())))
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
+        return _FrozenSequence(tuple(_freeze(item) for item in value))
     if isinstance(value, (set, frozenset)):
-        return tuple(sorted((_freeze(item) for item in value), key=repr))
+        return _FrozenSequence(tuple(sorted((_freeze(item) for item in value), key=repr)))
     if isinstance(value, float) and not math.isfinite(value):
         raise TypeError("non-finite task field value")
     if value is None or isinstance(value, (bool, int, float, str)):
@@ -76,10 +88,10 @@ def _freeze(value: Any) -> FrozenValue:
 
 
 def _thaw(value: FrozenValue) -> Any:
-    if isinstance(value, tuple):
-        if all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in value):
-            return {key: _thaw(item) for key, item in value}
-        return [_thaw(item) for item in value]
+    if isinstance(value, _FrozenMapping):
+        return {key: _thaw(item) for key, item in value.items}
+    if isinstance(value, _FrozenSequence):
+        return [_thaw(item) for item in value.items]
     return value
 
 
@@ -95,6 +107,10 @@ def _semantic_value(value: Any) -> Any:
         return value.value
     if isinstance(value, TaskTimestamp):
         return value.value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, _FrozenMapping):
+        return {key: _semantic_value(item) for key, item in value.items}
+    if isinstance(value, _FrozenSequence):
+        return [_semantic_value(item) for item in value.items]
     if isinstance(value, Mapping):
         return {str(key): _semantic_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -186,7 +202,7 @@ class FieldState:
 
     @classmethod
     def absent(cls) -> "FieldState":
-        return cls(FieldPresence.ABSENT)
+        return _ABSENT_FIELD_STATE
 
     @classmethod
     def from_raw(cls, raw: Any, value: FrozenValue = _MISSING) -> "FieldState":
@@ -197,6 +213,9 @@ class FieldState:
 
     def raw_value(self) -> Any:
         return _thaw(self.raw) if self.presence is FieldPresence.VALUE else None
+
+
+_ABSENT_FIELD_STATE = FieldState(FieldPresence.ABSENT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,7 +365,7 @@ class TaskObservation:
                 except TypeError as exc:
                     issues.append(DecodeIssue(name, "unsupported_value", str(exc), IssueSeverity.ERROR))
         for name in _KNOWN_FIELDS:
-            fields.setdefault(name, FieldState.absent())
+            fields.setdefault(name, _ABSENT_FIELD_STATE)
         provenance = ObservationProvenance(source_query, snapshot_id, mutation_epoch, command_count)
         semantic = {
             "fields": {
@@ -369,7 +388,7 @@ class TaskObservation:
         return cls(fields, arbitrary, tuple(issues), provenance, fingerprint)
 
     def field(self, name: str) -> FieldState:
-        return self.fields.get(str(name), FieldState.absent())
+        return self.fields.get(str(name), _ABSENT_FIELD_STATE)
 
     def get(self, name: str, default: Any = None) -> Any:
         """Read a raw field value for typed consumers migrating from mappings."""

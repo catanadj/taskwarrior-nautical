@@ -323,7 +323,7 @@ class LifecycleOutboxRepository:
         os.chmod(self.path, 0o600)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA synchronous=FULL")
-        conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+        conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
         return conn
 
     def _secure_state_files(self) -> None:
@@ -790,14 +790,14 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and limit"), ()
-        now = self._clock()
-        expires = now + float(lease_seconds)
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
             with self._transaction(conn):
+                now = self._clock()
+                expires = now + float(lease_seconds)
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
                     "WHERE processing_state=? AND lease_expires_at <= ?",
@@ -865,12 +865,11 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not ids or not owner or lease_seconds <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk claim requires intents, owner, and lease"), {}
-        now = self._clock()
-        expires = now + float(lease_seconds)
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
+                expires = now + float(lease_seconds)
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? WHERE processing_state=? AND lease_expires_at <= ?",
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
@@ -889,14 +888,14 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not owner or lease_seconds <= 0 or limit <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and limit"), ()
-        now = self._clock()
-        expires = now + float(lease_seconds)
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
             self._initialize(conn)
             self._secure_state_files()
             with self._transaction(conn):
+                now = self._clock()
+                expires = now + float(lease_seconds)
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? "
                     "WHERE work_kind=? AND processing_state=? AND lease_expires_at <= ?",
@@ -952,12 +951,12 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason="invalid integrity transition state")
         if state is OutboxProcessingState.MANUAL_REVIEW and failure is None:
             return OutboxResult(OutboxResultKind.REJECTED, reason="manual review requires failure evidence")
-        now = self._clock()
         conn: sqlite3.Connection | None = None
         try:
             conn = self._connect()
             self._initialize(conn)
             with self._transaction(conn):
+                now = self._clock()
                 row = conn.execute(
                     "SELECT * FROM lifecycle_outbox WHERE intent_id=? AND work_kind=?",
                     (intent_id, "integrity"),
@@ -1041,8 +1040,6 @@ class LifecycleOutboxRepository:
         intent_id = str(intent_id or "").strip()
         if not owner or lease_seconds <= 0 or not intent_id:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox claim requires owner, lease, and intent_id")
-        now = self._clock()
-        expires = now + float(lease_seconds)
         # Keep single-intent claims on the same decision tree as bulk claims.
         conn: sqlite3.Connection | None = None
         try:
@@ -1050,6 +1047,8 @@ class LifecycleOutboxRepository:
             self._initialize(conn)
             self._secure_state_files()
             with self._transaction(conn):
+                now = self._clock()
+                expires = now + float(lease_seconds)
                 conn.execute(
                     "UPDATE lifecycle_outbox SET processing_state=?, lease_owner='', lease_expires_at=0, updated_at=? WHERE processing_state=? AND lease_expires_at <= ?",
                     (OutboxProcessingState.RETRY.value, now, OutboxProcessingState.CLAIMED.value, now),
@@ -1081,10 +1080,9 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not intent_id or not owner:
             return OutboxResult(OutboxResultKind.REJECTED, reason="outbox mutation requires intent and lease owner")
-        now = self._clock()
-
         def run(conn: sqlite3.Connection) -> OutboxResult:
             with self._transaction(conn):
+                now = self._clock()
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is None:
                     return OutboxResult(OutboxResultKind.CONFLICT, reason="outbox intent is absent")
@@ -1136,12 +1134,11 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not ids or not owner or lease_seconds <= 0:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk lease renewal requires intents, owner, and lease"), {}
-        now = self._clock()
-        expires = now + float(lease_seconds)
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
+                expires = now + float(lease_seconds)
                 for intent_id in ids:
                     # Lease renewal only needs the CAS columns. Avoid
                     # decoding plan/guard JSON on the healthy path.
@@ -1219,11 +1216,10 @@ class LifecycleOutboxRepository:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk stage advancement contains an invalid stage"), {}
         if not normalized or not owner:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk stage advancement requires intents and owner"), {}
-        now = self._clock()
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
                 for intent_id, target in normalized.items():
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is None:
@@ -1317,11 +1313,10 @@ class LifecycleOutboxRepository:
         owner = str(owner or "").strip()
         if not ids or not owner:
             return OutboxResult(OutboxResultKind.REJECTED, reason="bulk acknowledgement requires intents and owner"), {}
-        now = self._clock()
-
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
             with self._transaction(conn):
+                now = self._clock()
                 for intent_id in ids:
                     row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                     if row is None:
@@ -1428,7 +1423,7 @@ class LifecycleOutboxRepository:
                 timeout=self.connect_timeout,
             )
             conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
             version_row = conn.execute("PRAGMA user_version").fetchone()
             version = int(version_row[0] if version_row else 0)
             empty["schema_version"] = version
@@ -1556,7 +1551,7 @@ class LifecycleOutboxRepository:
                 timeout=self.connect_timeout,
             )
             conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 2000)}")
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
             version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
             if version != OUTBOX_SCHEMA_VERSION:
                 raise LifecycleOutboxError(

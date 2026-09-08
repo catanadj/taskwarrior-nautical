@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import signal
 import subprocess
 import tempfile
 import time
@@ -119,6 +120,7 @@ class TaskwarriorClient:
                 stderr=stderr_file if stderr_file is not None else subprocess.PIPE,
                 env=self._env,
                 close_fds=True,
+                start_new_session=True,
             )
             try:
                 out_bytes, err_bytes = proc.communicate(
@@ -129,8 +131,24 @@ class TaskwarriorClient:
                 returncode = int(proc.returncode if proc.returncode is not None else 1)
                 kind = self._classify(returncode, stdout, stderr)
             except subprocess.TimeoutExpired as exc:
+                cleanup_deadline = time.monotonic() + 0.4
                 self._terminate(proc)
-                out_bytes, err_bytes = proc.communicate()
+                try:
+                    remaining = max(0.0, cleanup_deadline - time.monotonic())
+                    out_bytes, err_bytes = proc.communicate(timeout=remaining)
+                except subprocess.TimeoutExpired as final_exc:
+                    self._kill_group(proc)
+                    try:
+                        remaining = max(0.0, cleanup_deadline - time.monotonic())
+                        proc.wait(timeout=remaining)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    out_bytes = final_exc.stdout or b""
+                    err_bytes = final_exc.stderr or b""
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                    if proc.stderr is not None:
+                        proc.stderr.close()
                 stdout, stderr = self._collect_output(
                     stdout_file,
                     stderr_file,
@@ -206,9 +224,20 @@ class TaskwarriorClient:
     @staticmethod
     def _terminate(proc: subprocess.Popen[bytes]) -> None:
         try:
-            proc.terminate()
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             proc.wait(timeout=0.2)
         except (OSError, subprocess.TimeoutExpired):
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.2)
+            except (OSError, subprocess.TimeoutExpired):
+                TaskwarriorClient._kill_group(proc)
+
+    @staticmethod
+    def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (OSError, ProcessLookupError):
             try:
                 proc.kill()
             except OSError:

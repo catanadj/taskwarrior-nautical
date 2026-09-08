@@ -14,7 +14,9 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -22,7 +24,7 @@ from unittest.mock import patch
 from nautical_core.lifecycle_application import LifecycleApplicationService
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository, OutboxFailure
+from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository, OutboxFailure, OutboxResult
 from nautical_core.operator_context import OperatorInvocationBudget
 from nautical_core.operator_models import OperatorLimits
 from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
@@ -37,6 +39,113 @@ from dev_tools.nautical_golden_tests import (
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    def test_sqlite_busy_timeout_uses_configured_seconds_as_milliseconds(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
+            connection = outbox._connect()
+            try:
+                self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 100)
+            finally:
+                connection.close()
+
+    def test_lease_renewal_samples_clock_after_transaction_acquisition(self) -> None:
+        with TemporaryDirectory() as td:
+            clock = [100.0]
+            outbox = LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
+            plan = self._bulk_plan(
+                "lease-clock", "00000000-0000-4000-8000-000000000901",
+                "00000000-0000-4000-8000-000000000902", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=5, intent_id=intent_id).kind.value, "applied")
+            original_transaction = outbox._transaction
+
+            @contextmanager
+            def delayed_transaction(conn):
+                with original_transaction(conn):
+                    clock[0] += 2.0
+                    yield
+
+            with patch.object(outbox, "_transaction", delayed_transaction):
+                renewed = outbox.renew_lease(intent_id=intent_id, owner="owner", lease_seconds=1)
+            self.assertEqual(renewed.kind.value, "applied")
+            assert renewed.record is not None
+            self.assertEqual(renewed.record.lease_expires_at, 103.0)
+            clock[0] = 102.0
+            second = outbox.claim_intent(owner="other", lease_seconds=5, intent_id=intent_id)
+            self.assertEqual(second.kind.value, "conflict")
+
+    def test_lease_renewal_refuses_expired_lease_after_transaction_acquisition(self) -> None:
+        with TemporaryDirectory() as td:
+            clock = [100.0]
+            outbox = LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
+            plan = self._bulk_plan(
+                "lease-expired", "00000000-0000-4000-8000-000000000911",
+                "00000000-0000-4000-8000-000000000912", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=1, intent_id=intent_id).kind.value, "applied")
+            original_transaction = outbox._transaction
+
+            @contextmanager
+            def delayed_transaction(conn):
+                with original_transaction(conn):
+                    clock[0] += 2.0
+                    yield
+
+            with patch.object(outbox, "_transaction", delayed_transaction):
+                renewed = outbox.renew_lease(intent_id=intent_id, owner="owner", lease_seconds=30)
+            self.assertEqual(renewed.kind.value, "conflict")
+
+    def test_wal_writer_contention_returns_bounded_retryable_claim(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td), connect_timeout=0.1)
+            plan = self._bulk_plan(
+                "lease-contention", "00000000-0000-4000-8000-000000000921",
+                "00000000-0000-4000-8000-000000000922", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            writer = sqlite3.connect(str(outbox.path), timeout=0.1, check_same_thread=False)
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("BEGIN IMMEDIATE")
+            started = threading.Event()
+            result: list[OutboxResult] = []
+
+            def contender() -> None:
+                started.set()
+                result.append(outbox.claim_intent(owner="contender", lease_seconds=5, intent_id=intent_id))
+
+            worker = threading.Thread(target=contender)
+            worker.start()
+            self.assertTrue(started.wait(1.0))
+            worker.join(2.0)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0].kind.value, "retryable")
+            self.assertTrue(result[0].lock_busy)
+            writer.rollback()
+            writer.close()
+
+    def test_renewal_ownership_matrix_is_explicit(self) -> None:
+        with TemporaryDirectory() as td:
+            outbox = LifecycleOutboxRepository(Path(td))
+            plan = self._bulk_plan(
+                "lease-matrix", "00000000-0000-4000-8000-000000000931",
+                "00000000-0000-4000-8000-000000000932", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            self.assertEqual(outbox.renew_lease(intent_id=intent_id, owner="owner", lease_seconds=1).kind.value, "conflict")
+            self.assertEqual(outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").kind.value, "applied")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=30, intent_id=intent_id).kind.value, "applied")
+            self.assertEqual(outbox.renew_lease(intent_id=intent_id, owner="other", lease_seconds=30).kind.value, "conflict")
+            self.assertEqual(outbox.renew_lease(intent_id=intent_id, owner="owner", lease_seconds=30).kind.value, "applied")
+            bulk, results = outbox.renew_leases(intent_ids=(intent_id, "missing"), owner="owner", lease_seconds=30)
+            self.assertEqual(bulk.kind.value, "applied")
+            self.assertEqual(results[intent_id].kind.value, "applied")
+            self.assertEqual(results["missing"].kind.value, "conflict")
     @staticmethod
     def _claim_worker(db_path: Path, mode: str, intent_ids: tuple[str, ...], owner: str) -> subprocess.Popen[str]:
         """Start an independent process exercising one ownership path."""

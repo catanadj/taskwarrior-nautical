@@ -15,16 +15,16 @@ class ExitDrainProgress:
     """Render lifecycle drain events without participating in mutation."""
 
     _DETAIL_LABELS = {
-        "starting intent": "Preparing update",
-        "child mutation": "Next task created",
-        "child verified": "Next task confirmed",
-        "child mutation and verification": "Next task created and confirmed",
-        "parent mutation": "Task sequence linked",
-        "parent verified": "Task link confirmed",
-        "parent mutation and verification": "Task sequence linked and confirmed",
-        "intent verified": "Update verified",
-        "intent acknowledged": "Completion recorded",
-        "intent finished": "Update complete",
+        "starting intent": "Preparing",
+        "child mutation": "Created",
+        "child verified": "Confirmed",
+        "child mutation and verification": "Created",
+        "parent mutation": "Linked",
+        "parent verified": "Confirmed",
+        "parent mutation and verification": "Linked",
+        "intent verified": "Verified",
+        "intent acknowledged": "Recorded",
+        "intent finished": "Completed",
     }
 
     def __init__(self, *, core: Any, diagnostic=None) -> None:
@@ -42,7 +42,7 @@ class ExitDrainProgress:
     @classmethod
     def _description(cls, value: object = "") -> str:
         detail = str(value or "").replace("_", " ").strip().lower()
-        return cls._DETAIL_LABELS.get(detail, "Processing update")
+        return cls._DETAIL_LABELS.get(detail, "Processing")
 
     def _is_enabled(self) -> bool:
         if not sys.stderr.isatty() or os.environ.get("TERM", "").strip().lower() == "dumb":

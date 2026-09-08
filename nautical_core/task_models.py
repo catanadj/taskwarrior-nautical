@@ -202,7 +202,7 @@ class FieldState:
 
     @classmethod
     def absent(cls) -> "FieldState":
-        return cls(FieldPresence.ABSENT)
+        return _ABSENT_FIELD_STATE
 
     @classmethod
     def from_raw(cls, raw: Any, value: FrozenValue = _MISSING) -> "FieldState":
@@ -213,6 +213,9 @@ class FieldState:
 
     def raw_value(self) -> Any:
         return _thaw(self.raw) if self.presence is FieldPresence.VALUE else None
+
+
+_ABSENT_FIELD_STATE = FieldState(FieldPresence.ABSENT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,7 +365,7 @@ class TaskObservation:
                 except TypeError as exc:
                     issues.append(DecodeIssue(name, "unsupported_value", str(exc), IssueSeverity.ERROR))
         for name in _KNOWN_FIELDS:
-            fields.setdefault(name, FieldState.absent())
+            fields.setdefault(name, _ABSENT_FIELD_STATE)
         provenance = ObservationProvenance(source_query, snapshot_id, mutation_epoch, command_count)
         semantic = {
             "fields": {
@@ -385,7 +388,7 @@ class TaskObservation:
         return cls(fields, arbitrary, tuple(issues), provenance, fingerprint)
 
     def field(self, name: str) -> FieldState:
-        return self.fields.get(str(name), FieldState.absent())
+        return self.fields.get(str(name), _ABSENT_FIELD_STATE)
 
     def get(self, name: str, default: Any = None) -> Any:
         """Read a raw field value for typed consumers migrating from mappings."""

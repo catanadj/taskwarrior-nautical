@@ -15,6 +15,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -37,6 +38,56 @@ from dev_tools.nautical_golden_tests import (
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    def test_lease_renewal_samples_clock_after_transaction_acquisition(self) -> None:
+        with TemporaryDirectory() as td:
+            clock = [100.0]
+            outbox = LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
+            plan = self._bulk_plan(
+                "lease-clock", "00000000-0000-4000-8000-000000000901",
+                "00000000-0000-4000-8000-000000000902", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=5, intent_id=intent_id).kind.value, "applied")
+            original_transaction = outbox._transaction
+
+            @contextmanager
+            def delayed_transaction(conn):
+                with original_transaction(conn):
+                    clock[0] += 2.0
+                    yield
+
+            with patch.object(outbox, "_transaction", delayed_transaction):
+                renewed = outbox.renew_lease(intent_id=intent_id, owner="owner", lease_seconds=1)
+            self.assertEqual(renewed.kind.value, "applied")
+            assert renewed.record is not None
+            self.assertEqual(renewed.record.lease_expires_at, 103.0)
+            clock[0] = 102.0
+            second = outbox.claim_intent(owner="other", lease_seconds=5, intent_id=intent_id)
+            self.assertEqual(second.kind.value, "conflict")
+
+    def test_lease_renewal_refuses_expired_lease_after_transaction_acquisition(self) -> None:
+        with TemporaryDirectory() as td:
+            clock = [100.0]
+            outbox = LifecycleOutboxRepository(Path(td), clock=lambda: clock[0])
+            plan = self._bulk_plan(
+                "lease-expired", "00000000-0000-4000-8000-000000000911",
+                "00000000-0000-4000-8000-000000000912", 1,
+            )
+            intent_id = plan.identity.idempotency_key
+            outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+            self.assertEqual(outbox.claim_intent(owner="owner", lease_seconds=1, intent_id=intent_id).kind.value, "applied")
+            original_transaction = outbox._transaction
+
+            @contextmanager
+            def delayed_transaction(conn):
+                with original_transaction(conn):
+                    clock[0] += 2.0
+                    yield
+
+            with patch.object(outbox, "_transaction", delayed_transaction):
+                renewed = outbox.renew_lease(intent_id=intent_id, owner="owner", lease_seconds=30)
+            self.assertEqual(renewed.kind.value, "conflict")
     @staticmethod
     def _claim_worker(db_path: Path, mode: str, intent_ids: tuple[str, ...], owner: str) -> subprocess.Popen[str]:
         """Start an independent process exercising one ownership path."""

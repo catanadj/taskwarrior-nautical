@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "business_calendar_api")
 
     def business_calendar_definitions():
         return core["_business_calendar_config"].parse_business_calendar_definitions(
@@ -93,11 +94,15 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             return core["_business_calendar"].DEFAULT_BUSINESS_CALENDAR
         return get_configured_business_calendar(core["_unwrap_quotes"](raw_name))
 
-    def normalize_task_business_calendar(task: dict):
+    def normalize_task_business_calendar_in_place(task: dict):
         business_calendar = business_calendar_for_task(task)
         if str(task.get("bc") or "").strip():
             task["bc"] = business_calendar.name
         return business_calendar
+
+    # Compatibility name retained for integrations; the explicit name makes
+    # the in-place mutation visible to new callers.
+    normalize_task_business_calendar = normalize_task_business_calendar_in_place
 
     def business_calendar_fingerprint(business_calendar=None) -> str:
         business_calendar = core["_business_calendar"].effective_business_calendar(
@@ -112,9 +117,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         return core["_business_calendar"].use_business_calendar(business_calendar)
 
     def use_task_business_calendar(task: dict):
-        return use_business_calendar(normalize_task_business_calendar(task))
+        return use_business_calendar(normalize_task_business_calendar_in_place(task))
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         business_calendar_definitions=business_calendar_definitions,
         _validate_business_calendar_omit_expr=validate_business_calendar_omit_expr,
         _business_calendar_expression_matches_date=business_calendar_expression_matches_date,
@@ -122,6 +127,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         configured_business_calendars=configured_business_calendars,
         get_configured_business_calendar=get_configured_business_calendar,
         business_calendar_for_task=business_calendar_for_task,
+        normalize_task_business_calendar_in_place=normalize_task_business_calendar_in_place,
         normalize_task_business_calendar=normalize_task_business_calendar,
         business_calendar_fingerprint=business_calendar_fingerprint,
         use_business_calendar=use_business_calendar,

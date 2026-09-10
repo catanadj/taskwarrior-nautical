@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, TYPE_CHECKING, TypeAlias, TypedDict, 
 from functools import partial
 
 if TYPE_CHECKING:
-    from .parser_models import AnchorDNF as AnchorDNFType
+    from .parsing.parser_models import AnchorDNF as AnchorDNFType
     from .core_config import ConfigReloadResult
 
     resolve_anchor_presets: Callable[..., str]
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 import importlib
 import types
 from types import MappingProxyType
+from .core_context import CoreContext
 fcntl: Any
 try:
     import fcntl  # POSIX advisory lock
@@ -53,7 +54,7 @@ _PUBLIC_MODEL_NAMES = (
 def _ensure_public_models() -> None:
     if "ParseError" in globals():
         return
-    parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parser_models")
+    parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parsing.parser_models")
     scheduler_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.scheduler_models")
     for name in _PUBLIC_MODEL_NAMES[:-1]:
         globals()[name] = getattr(parser_models, name)
@@ -118,7 +119,7 @@ class _LazyApiBundle:
     the existing facade namespace and monkeypatch points.
     """
 
-    __slots__ = ("_module_name", "_module", "_core", "_namespace", "_aliases", "_bindings")
+    __slots__ = ("_module_name", "_module", "_core", "_namespace", "_aliases", "_bindings", "_context")
 
     def __init__(
         self,
@@ -134,6 +135,11 @@ class _LazyApiBundle:
         self._namespace = namespace
         self._aliases = aliases
         self._bindings = None
+        self._context = CoreContext(
+            namespace,
+            namespace.get("_import_sibling", _import_sibling),
+            getattr(core, "__file__", None),
+        )
 
     def _resolve(self):
         if self._bindings is None:
@@ -146,7 +152,7 @@ class _LazyApiBundle:
                 refresh_config()
             module = _import_sibling(self._module_name)
             self._module = module
-            self._bindings = module.for_core(self._core, namespace=self._namespace)
+            self._bindings = module.for_core(context=self._context)
             for spec in self._aliases:
                 alias, source = spec if isinstance(spec, tuple) else (spec, spec)
                 self._namespace[alias] = getattr(self._bindings, source)
@@ -479,9 +485,9 @@ _monthly_support = _LazySibling("monthly_support")
 _natural_language = _LazySibling("natural_language")
 _astronomy = _LazySibling("astronomy")
 _linting = _LazySibling("linting")
-_parser_atoms = _LazySibling("parser_atoms")
-_parser_dnf = _LazySibling("parser_dnf")
-_parser_frontend = _LazySibling("parser_frontend")
+_parser_atoms = _LazySibling("parsing.parser_atoms")
+_parser_dnf = _LazySibling("parsing.parser_dnf")
+_parser_frontend = _LazySibling("parsing.parser_frontend")
 _position_selection = _LazySibling("position_selection")
 _season_support = _LazySibling("season_support")
 _precompute = _LazySibling("precompute")
@@ -1069,7 +1075,7 @@ _expansion_api = _LazyApiBundle(
 _bind_lazy_api_aliases(_expansion_api)
 
 _parser_support_api = _LazyApiBundle(
-    "parser_support_api",
+    "parsing.parser_support_api",
     (
         "_parse_hhmm",
         "_parse_atom_head",
@@ -1154,6 +1160,7 @@ _business_calendar_api = _LazyApiBundle(
         "configured_business_calendars",
         "get_configured_business_calendar",
         "business_calendar_for_task",
+        "normalize_task_business_calendar_in_place",
         "normalize_task_business_calendar",
         "business_calendar_fingerprint",
         "use_business_calendar",
@@ -1414,11 +1421,5 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Explicit configuration is already loaded by ``core_config`` at import time;
-# synchronize facade compatibility exports for ``from nautical_core import ...``
-# callers without adding work to the normal auto-discovery path.
-if str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
-    try:
-        _refresh_facade_config_exports()
-    except Exception:
-        pass
+# Configuration loading is intentionally deferred until an explicit runtime
+# access.  Importing the facade must not perform configuration file I/O.

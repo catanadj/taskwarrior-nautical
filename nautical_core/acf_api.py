@@ -5,13 +5,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 import zlib
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "acf_api")
     acf = core["_acf_support"]
     ttl_lru_cache = core["_ttl_lru_cache"]
 
@@ -113,7 +114,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             format_selection_positions=core["_position_selection"].format_positions,
         )
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _atom_sort_key=atom_sort_key,
         _acf_unpack=acf_unpack,
         _year_pair_cached=year_pair_cached,

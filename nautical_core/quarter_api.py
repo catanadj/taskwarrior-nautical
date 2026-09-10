@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "quarter_api")
 
     def yearly_tokens(term):
         return core["_quarter_helpers"].yearly_tokens(
@@ -125,7 +126,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             rewrite_quarter_year_atoms=rewrite_quarter_year_atoms,
         )
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _yearly_tokens=yearly_tokens,
         _monthly_tokens=monthly_tokens,
         _quarters_from_first_month_tokens=quarters_from_first_month_tokens,

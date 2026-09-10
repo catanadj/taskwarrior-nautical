@@ -10,9 +10,11 @@ import os
 import random
 import tempfile
 import time
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
 import zlib
+
+from .core_context import CoreContext
 
 fcntl: Any
 try:
@@ -21,11 +23,18 @@ except Exception:
     fcntl = None
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create cache APIs without sharing cache state across core loaders."""
-    core = namespace if namespace is not None else vars(module)
+    core = core_namespace(module, namespace, context, "cache_api")
+    if context is not None:
+        import_sibling = context.import_sibling
+    else:
+        import_sibling = core.get("_import_sibling")
+        if not callable(import_sibling):
+            import_sibling = getattr(module, "_import_sibling", None)
+        if not callable(import_sibling):
+            raise TypeError("cache_api.for_core requires a callable sibling-module loader")
     cache_dir_state: list[str | None] = [None]
-    import_sibling = core.get("_import_sibling", module._import_sibling)
     cache_support = import_sibling("cache_support")
     cache_locking = import_sibling("cache_locking")
     cache_payload = import_sibling("cache_payload")
@@ -194,10 +203,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         "cache_api.py",
         "cache_payload.py",
         "parser_api.py",
-        "parser_atoms.py",
-        "parser_dnf.py",
-        "parser_models.py",
-        "parser_support_api.py",
+        "parsing/parser_atoms.py",
+        "parsing/parser_dnf.py",
+        "parsing/parser_models.py",
+        "parsing/parser_support_api.py",
         "strict_validation.py",
         "scheduler_api.py",
         "scheduler_atom.py",
@@ -217,7 +226,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         cached = semantic_fingerprint_state[0]
         if cached is not None:
             return cached
-        package_dir = os.path.dirname(os.path.abspath(getattr(module, "__file__", "")))
+        source_file = context.source_file if context is not None else getattr(module, "__file__", "")
+        if not isinstance(source_file, str):
+            source_file = ""
+        package_dir = os.path.dirname(os.path.abspath(source_file))
         release_hint = str(core.get("NAUTICAL_RELEASE_ID") or os.environ.get("NAUTICAL_RELEASE_ID") or "")
         source_parts = [
             f"{name}:{_source_signature(os.path.join(package_dir, name))}"
@@ -246,7 +258,6 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             anchor_year_fmt=core["ANCHOR_YEAR_FMT"],
             wrand_salt=core["WRAND_SALT"],
             local_tz_name=core["LOCAL_TZ_NAME"],
-            holiday_region=core["HOLIDAY_REGION"],
         )
 
     def cache_path(key: str) -> str:
@@ -269,7 +280,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             return False
 
     def cache_load_impl(key: str) -> dict | None:
-        return core["_cache_payload"].cache_load(
+        return cache_payload.cache_load(
             key,
             enable_anchor_cache=core["ENABLE_ANCHOR_CACHE"],
             cache_path=cache_path,
@@ -290,7 +301,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     def cache_save_impl(key: str, obj: dict) -> bool:
-        return core["_cache_payload"].cache_save(
+        return cache_payload.cache_save(
             key,
             obj,
             enable_anchor_cache=core["ENABLE_ANCHOR_CACHE"],
@@ -314,7 +325,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         stale_lock_age: float = 86400.0,
     ) -> dict:
         """Prune expired and orphaned anchor cache files outside hook hot paths."""
-        return core["_cache_payload"].cache_gc(
+        return cache_payload.cache_gc(
             cache_dir(),
             ttl=core["ANCHOR_CACHE_TTL"],
             max_entries=max_entries,
@@ -340,7 +351,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     ) -> str:
         _ = config_fingerprint
         _ = semantic_fingerprint
-        return core["_cache_payload"].cache_key_for_task_cached(
+        return cache_payload.cache_key_for_task_cached(
             anchor_expr,
             anchor_mode,
             fmt,
@@ -369,13 +380,13 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def dnf_cache_fingerprint() -> str:
         """Identify parser, cache schema, and installed release inputs."""
         parser_parts = []
-        for module_name in ("parser_dnf", "parser_api", "parser_support_api", "parser_models", "strict_validation"):
+        for module_name in ("parsing.parser_dnf", "parser_api", "parsing.parser_support_api", "parsing.parser_models", "strict_validation"):
             try:
                 sibling = import_sibling(module_name)
                 parser_parts.append(f"{module_name}:{_source_signature(getattr(sibling, '__file__', ''))}")
             except Exception:
                 parser_parts.append(f"{module_name}:unavailable")
-        release = _source_signature(getattr(module, "__file__", ""))
+        release = _source_signature(context.source_file if context is not None else getattr(module, "__file__", ""))
         schema = getattr(cache_payload, "CACHE_SCHEMA_VERSION", "unknown")
         return f"parser={'|'.join(parser_parts)}|schema:{schema}|release:{release}"
 
@@ -417,7 +428,23 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             {"kind": "anchor-dnf", "dnf": clone_dnf(dnf)},
         )
 
-    return SimpleNamespace(
+    # Bind the complete lock port once; compatibility names below continue to
+    # expose the same per-core callables without rebuilding dependencies.
+    bound_locking = cache_locking.bind_locking(
+        cache_lock_path=cache_lock_path,
+        retries=core["_CACHE_LOCK_RETRIES"],
+        sleep_base=core["_CACHE_LOCK_SLEEP_BASE"],
+        jitter=core["_CACHE_LOCK_JITTER"],
+        stale_after=core["_CACHE_LOCK_STALE_AFTER"],
+        fcntl_mod=core.get("fcntl", fcntl),
+        os_mod=core["os"],
+        time_mod=core.get("time", time),
+        random_mod=core.get("random", random),
+    )
+    safe_lock = bound_locking.safe_lock
+    cache_lock = bound_locking.cache_lock
+
+    return ApiBinding.from_kwargs(
         _safe_lock_sleep_once=safe_lock_sleep_once,
         _safe_lock_ensure_parent=safe_lock_ensure_parent,
         _safe_lock_age=safe_lock_age,

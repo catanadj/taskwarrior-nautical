@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from functools import lru_cache
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+
+from .core_context import CoreContext
 
 
 def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
@@ -18,7 +20,11 @@ def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
 
 
 def _weeks_between(module: Any, d1, d2) -> int:
-    return module._schedule_utils.weeks_between(d1, d2)
+    # This helper has no per-core state; route directly to its owning module
+    # instead of traversing the mutable compatibility facade.
+    from .schedule_utils import weeks_between
+
+    return weeks_between(d1, d2)
 
 
 def _resolve_moon_phase_date(module: Any, phase: str, reference_day):
@@ -38,7 +44,8 @@ def _moon_phase_matches_date(module: Any, phase: str, day) -> bool:
 
 
 def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, business_calendar=None):
-    return module._scheduler_atom.base_next_after_atom(
+    scheduler_atom = module.import_sibling("scheduler_atom") if isinstance(module, CoreContext) else module._scheduler_atom
+    return scheduler_atom.base_next_after_atom(
         atom,
         ref_d,
         seed_base=seed_base,
@@ -243,21 +250,27 @@ def _next_after_expr_impl(
     )
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create scheduler APIs without sharing state between core loaders."""
-    core = namespace if namespace is not None else vars(module)
+    if context is not None:
+        core = context.namespace
+        module = context
+    else:
+        core = core_namespace(module, namespace, context, "scheduler_api")
+    scheduler_expr = context.import_sibling("scheduler_expr") if context is not None else core["_scheduler_expr"]
+    cached_expansion = context.import_sibling("cached_expansion") if context is not None else core["_cached_expansion"]
     ttl_lru_cache = core["_ttl_lru_cache"]
 
     @ttl_lru_cache(maxsize=128)
     def expand_weekly_cached_impl(spec: str):
-        return core["_cached_expansion"].expand_weekly(
+        return cached_expansion.expand_weekly(
             spec,
             weekly_spec_to_wset=core["_weekly_spec_to_wset"],
         )
 
     @ttl_lru_cache(maxsize=128)
     def expand_weekly_cached_mods_impl(spec: str, bd_only: bool):
-        return core["_cached_expansion"].expand_weekly_mods(
+        return cached_expansion.expand_weekly_mods(
             spec,
             bd_only,
             expand_weekly_cached=expand_weekly_cached_impl,
@@ -265,7 +278,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
 
     @ttl_lru_cache(maxsize=128)
     def expand_yearly_cached_impl(spec: str, year: int):
-        return core["_cached_expansion"].expand_yearly(
+        return cached_expansion.expand_yearly(
             spec,
             year,
             rewrite_month_names_to_ranges=core["_rewrite_month_names_to_ranges"],
@@ -278,7 +291,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     @ttl_lru_cache(maxsize=128)
     def expand_monthly_cached_impl(spec: str, year: int, month: int, business_calendar=None):
         business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
-        return core["_cached_expansion"].expand_monthly(
+        return cached_expansion.expand_monthly(
             spec,
             year,
             month,
@@ -394,7 +407,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     # core instance.  The callbacks are looked up through ``core`` at call
     # time so facade monkeypatches continue to affect scheduling.
     def week_monday(day):
-        return core["_cached_expansion"].week_monday(day)
+        return cached_expansion.week_monday(day)
 
     def weekly_rand_pick(
         iso_year,
@@ -406,7 +419,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         business_calendar=None,
     ):
         business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
-        return core["_cached_expansion"].weekly_rand_pick(
+        return cached_expansion.weekly_rand_pick(
             iso_year,
             iso_week,
             mods,
@@ -418,20 +431,20 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
 
     def is_bd(day, business_calendar=None):
         business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
-        return core["_cached_expansion"].is_bd(day, business_calendar)
+        return cached_expansion.is_bd(day, business_calendar)
 
     def random_identity(value):
-        return core["_cached_expansion"].random_identity(value)
+        return cached_expansion.random_identity(value)
 
     def random_pick_index(seq_len, **kwargs):
-        return core["_cached_expansion"].random_pick_index(
+        return cached_expansion.random_pick_index(
             seq_len,
             namespace=core["WRAND_SALT"],
             **kwargs,
         )
 
     def random_pick_indices(seq_len, count, **kwargs):
-        return core["_cached_expansion"].random_pick_indices(
+        return cached_expansion.random_pick_indices(
             seq_len,
             count,
             namespace=core["WRAND_SALT"],
@@ -439,13 +452,13 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     def term_rand_info(term):
-        return core["_cached_expansion"].term_rand_info(term)
+        return cached_expansion.term_rand_info(term)
 
     def dnf_has_counted_random(dnf):
-        return core["_cached_expansion"].dnf_has_counted_random(dnf)
+        return cached_expansion.dnf_has_counted_random(dnf)
 
     def filter_by_w(dt_list, term):
-        return core["_cached_expansion"].filter_by_w(
+        return cached_expansion.filter_by_w(
             dt_list,
             term,
             atype=core["_atype"],
@@ -456,7 +469,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     @ttl_lru_cache(maxsize=128)
     def month_tokens_for_atom_cached(year, month, spec, business_calendar=None):
         business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
-        return core["_cached_expansion"].month_tokens_for_atom_values(
+        return cached_expansion.month_tokens_for_atom_values(
             year,
             month,
             spec,
@@ -470,7 +483,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     def month_tokens_for_atom(atom, year, month, business_calendar=None):
-        return core["_cached_expansion"].month_tokens_for_atom(
+        return cached_expansion.month_tokens_for_atom(
             atom,
             year,
             month,
@@ -488,7 +501,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         bd_only,
         business_calendar=None,
     ):
-        return core["_cached_expansion"].term_candidates_in_month(
+        return cached_expansion.term_candidates_in_month(
             term,
             year,
             month,
@@ -507,7 +520,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     def next_for_and_rand_yearly(term, ref_d, y_specs, seed_base=None):
-        return core["_scheduler_expr"].next_for_and_rand_yearly(
+        return scheduler_expr.next_for_and_rand_yearly(
             term,
             ref_d,
             y_specs,
@@ -524,7 +537,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def next_for_and_fast_path(term, ref_d, seed, seed_base=None, business_calendar=None):
         next_atom = core["_with_business_calendar"](core["next_after_factor"], business_calendar)
         matches = core["_with_business_calendar"](core["factor_matches_on"], business_calendar)
-        return core["_scheduler_expr"].next_for_and_fast_path(
+        return scheduler_expr.next_for_and_fast_path(
             term,
             ref_d,
             seed,
@@ -540,7 +553,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def next_for_and(term, ref_d, seed, seed_base=None, business_calendar=None):
         next_atom = core["_with_business_calendar"](core["next_after_factor"], business_calendar)
         matches = core["_with_business_calendar"](core["factor_matches_on"], business_calendar)
-        return core["_scheduler_expr"].next_for_and(
+        return scheduler_expr.next_for_and(
             term,
             ref_d,
             seed,
@@ -562,7 +575,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
 
     def next_for_or(dnf, ref_d, seed, seed_base=None, business_calendar=None):
         next_for_and_fn = core["_with_business_calendar"](next_for_and, business_calendar)
-        return core["_scheduler_expr"].next_for_or(
+        return scheduler_expr.next_for_or(
             dnf,
             ref_d,
             seed,
@@ -668,7 +681,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def moon_phase_matches_date(phase: str, day) -> bool:
         return _moon_phase_matches_date(module, phase, day)
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _expand_weekly_cached_impl=expand_weekly_cached_impl,
         _expand_weekly_cached_mods_impl=expand_weekly_cached_mods_impl,
         _expand_yearly_cached_impl=expand_yearly_cached_impl,

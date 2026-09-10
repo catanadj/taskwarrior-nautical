@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "token_api")
 
     def yearfmt():
         fmt = (core.get("ANCHOR_YEAR_FMT") or "MD").upper()
@@ -73,9 +75,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def normalize_weekday(s: str) -> str | None:
         return core["_tokenutil"].normalize_weekday(s)
 
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _yearfmt=yearfmt,
         _tok=tok,
         _tok_range=tok_range,

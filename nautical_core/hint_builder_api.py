@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "hint_builder_api")
 
     def build_and_cache_hints(
         anchor_expr: str,
@@ -63,13 +64,12 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             anchor_year_fmt=core["ANCHOR_YEAR_FMT"],
             wrand_salt=core["WRAND_SALT"],
             local_tz_name=core["LOCAL_TZ_NAME"],
-            holiday_region=core["HOLIDAY_REGION"],
             business_calendar_fingerprint=calendar_fingerprint,
             include_per_year=include_per_year,
             hint_builder_factory=hint_builder_factory,
         )
 
-    return SimpleNamespace(build_and_cache_hints=build_and_cache_hints)
+    return ApiBinding.from_mapping({"build_and_cache_hints": build_and_cache_hints})
 
 
 __all__ = ("for_core",)

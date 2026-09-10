@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create description APIs bound to one core module instance."""
-    core = namespace if namespace is not None else vars(module)
+    core = core_namespace(module, namespace, context, "natural_language_api")
     natural = core["_natural_language"]
 
     def ordinal(n: int) -> str:
@@ -231,7 +232,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def try_bucket_rand_monthly(dnf: list[list[dict]], task: dict) -> str | None:
         return natural.try_bucket_rand_monthly(dnf, task, rand_bucket_signature=rand_bucket_signature)
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _ordinal=ordinal,
         _term_collect_mods=term_collect_mods,
         _fmt_hhmm_for_term=fmt_hhmm_for_term,

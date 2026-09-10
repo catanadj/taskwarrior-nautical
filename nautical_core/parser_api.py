@@ -6,8 +6,10 @@ import importlib
 import re
 import sys
 from datetime import date
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+
+from .core_context import CoreContext
 
 
 def _core_module():
@@ -18,7 +20,8 @@ def _core_module():
 def _parse_anchor_expr_to_dnf_impl(module: Any, s: str):
     """Run the parser pipeline against one isolated core facade."""
     s = module.resolve_anchor_presets(s)
-    return module._parser_dnf.parse_anchor_expr_to_dnf(
+    parser_dnf = module.import_sibling("parsing.parser_dnf") if isinstance(module, CoreContext) else module._parser_dnf
+    return parser_dnf.parse_anchor_expr_to_dnf(
         s,
         normalize_anchor_expr_input=module._normalize_anchor_expr_input,
         raise_on_bad_colon_year_tokens=module._raise_on_bad_colon_year_tokens,
@@ -82,9 +85,19 @@ def _validate_anchor_dnf_atoms_strict(module: Any, dnf) -> None:
     )
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create parser entry points bound to one core module instance."""
-    core = namespace if namespace is not None else vars(module)
+    if context is not None:
+        core = context.namespace
+        module = context
+    else:
+        if module is None and namespace is None:
+            module = _core_module()
+        core = core_namespace(module, namespace, context, "parser_api")
+    parser_atoms = context.import_sibling("parsing.parser_atoms") if context is not None else core["_parser_atoms"]
+    parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else core["_parser_dnf"]
+    parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else core["_parser_frontend"]
+    position_selection = context.import_sibling("position_selection") if context is not None else core["_position_selection"]
     preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
 
     def resolve_preset_refs(
@@ -185,7 +198,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         return "Omit preset", f"@{name} → {preset_display_value(name, presets, table_name='omit_presets', label='omit')}"
 
     def normalize_anchor_expr_input(value: str) -> str:
-        return core["_parser_frontend"].normalize_anchor_expr_input(
+        return parser_frontend.normalize_anchor_expr_input(
             value,
             unwrap_quotes=core["_unwrap_quotes"],
             rewrite_weekly_multi_time_atoms=core["_rewrite_weekly_multi_time_atoms"],
@@ -194,10 +207,10 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     def normalize_monthly_ordinal_spec(spec: str) -> str:
-        return core["_parser_atoms"].normalize_monthly_ordinal_spec(spec, re_mod=core["re"])
+        return parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=core["re"])
 
     def build_anchor_atom_dnf(head: str, full_tail: str):
-        return core["_parser_atoms"].build_anchor_atom_dnf(
+        return parser_atoms.build_anchor_atom_dnf(
             head,
             full_tail,
             parse_atom_head=core["_parse_atom_head"],
@@ -209,7 +222,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
         )
 
     def parse_anchor_atom_at(value: str, index: int, length: int):
-        return core["_parser_atoms"].parse_anchor_atom_at(
+        return parser_atoms.parse_anchor_atom_at(
             value,
             index,
             length,
@@ -338,9 +351,9 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def validate_and_terms_satisfiable(dnf: list[list[dict]], ref_d):
         for term in dnf:
             for factor in term:
-                if core["_position_selection"].is_selection_node(factor):
+                if position_selection.is_selection_node(factor):
                     validate_and_terms_satisfiable(factor.get("expr") or [], ref_d)
-                    if not core["_position_selection"].seasonal_candidate_has_match(
+                    if not position_selection.seasonal_candidate_has_match(
                         factor,
                         matches_on=core["atom_matches_on"],
                         default_seed=ref_d,
@@ -358,7 +371,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
                         )
         plain_dnf = [
             term for term in dnf
-            if not any(core["_position_selection"].is_selection_node(factor) for factor in term)
+            if not any(position_selection.is_selection_node(factor) for factor in term)
         ]
         if not plain_dnf:
             return
@@ -374,7 +387,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
         )
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         build_acf=lambda expr: module._build_acf_impl(expr),
         _resolve_preset_refs=resolve_preset_refs,
         _resolve_anchor_presets_impl=resolve_anchor_presets_impl,

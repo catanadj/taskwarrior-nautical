@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import difflib
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "linting_api")
     linting = core["_linting"]
 
     def iter_y_segments(value: str):
@@ -82,7 +83,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             re_mod=core["re"],
         )
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _iter_y_segments=iter_y_segments,
         _lint_expand_year_month_aliases=lint_expand_year_month_aliases,
         _lint_check_weekly_delimiter_contract=lint_check_weekly_delimiter_contract,

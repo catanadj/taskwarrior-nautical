@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "time_api")
     timeutil = core["_timeutil"]
     dates = core["_dates"]
 
@@ -73,7 +74,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
     def build_local_datetime(d, hhmm=(core["DEFAULT_DUE_HOUR"], 0)):
         return timeutil.build_local_datetime(d, hhmm, core["_LOCAL_TZ"])
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         now_utc=now_utc,
         to_local=to_local,
         utc_to_local_naive=utc_to_local_naive,

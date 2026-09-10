@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from calendar import monthrange
-from types import SimpleNamespace
 from typing import Any
+from .api_bindings import ApiBinding, core_namespace
+from .core_context import CoreContext
 
 
-def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
-    core = namespace if namespace is not None else vars(module)
+def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
+    core = core_namespace(module, namespace, context, "expansion_api")
     ttl_lru_cache = core["_ttl_lru_cache"]
 
     def days_in_month(year: int, month: int) -> int:
@@ -102,7 +103,7 @@ def for_core(module: Any, *, namespace: dict[str, Any] | None = None):
             month_allowed_doms_for_monthly_atom=month_allowed_doms_for_monthly_atom,
         )
 
-    return SimpleNamespace(
+    return ApiBinding.from_kwargs(
         _days_in_month=days_in_month,
         _wd_idx=wd_idx,
         _wday_idx_any=wday_idx_any,

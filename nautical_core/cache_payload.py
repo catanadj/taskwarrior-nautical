@@ -379,7 +379,7 @@ def cache_save(
         return False
     payload = dict(obj)
     payload[_CACHE_VERSION_KEY] = CACHE_SCHEMA_VERSION
-    data = json_mod.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    data = json_mod.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     if len(data) > MAX_CACHE_DECODED_BYTES:
         return False
     blob = base64_mod.b85encode(zlib_mod.compress(data, 9))

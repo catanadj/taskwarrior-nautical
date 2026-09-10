@@ -7,18 +7,6 @@ from typing import Any
 from .task_models import TaskPayload
 
 
-def _task_view(models: Any, value: Any) -> Any:
-    """Use typed views for real tasks while keeping panel-only fixtures permissive."""
-    if isinstance(value, models.TaskView):
-        return value
-    if isinstance(value, dict):
-        payload = dict(value)
-        payload.setdefault("status", "pending")
-        payload.setdefault("link", 1)
-        return models.TaskView.from_mapping(payload)
-    return value
-
-
 def chain_colour_for_task(host: Any, task: TaskPayload, kind: str) -> str:
     """Resolve the configured presentation colour for a chain root."""
     root_uuid = host._module("modify_task_fields").root_uuid(task)
@@ -140,41 +128,33 @@ def ensure_terminal_chain_off(host: Any, task: TaskPayload, event: str | None = 
     return host._module("modify_lifecycle").ensure_terminal_chain_off(task)
 
 
-def render_anchor_completion_feedback(host: Any, **kwargs: Any) -> None:
+def render_anchor_completion_feedback(host: Any, *, request: Any) -> None:
     calendar_feedback = host.importlib.import_module("nautical_core.calendar_feedback")
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
     ui = host._module("modify_ui_effects")
     feedback.orchestrate_anchor_completion_feedback(
-        **{
-            **kwargs,
-            "new": _task_view(models, kwargs["new"]),
-            "child": _task_view(models, kwargs["child"]),
-            "core": host.core,
-            "panel": lambda title, rows, **options: ui.panel(host, title, rows, **options),
-            "calendar_feedback": calendar_feedback,
-            "panel_diagnostics": host._module("panel_diagnostics"),
-            "modify_models": models,
-            "modify_runtime": host._module("modify_runtime"),
-            "build_runtime_services": lambda: build_runtime_services(host),
-        }
+        request=request,
+        core=host.core,
+        panel=lambda title, rows, **options: ui.panel(host, title, rows, **options),
+        calendar_feedback=calendar_feedback,
+        panel_diagnostics=host._module("panel_diagnostics"),
+        modify_models=models,
+        modify_runtime=host._module("modify_runtime"),
+        build_runtime_services=lambda: build_runtime_services(host),
     )
 
 
-def render_cp_completion_feedback(host: Any, **kwargs: Any) -> None:
+def render_cp_completion_feedback(host: Any, *, request: Any) -> None:
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
     feedback.orchestrate_cp_completion_feedback(
-        **{
-            **kwargs,
-            "new": _task_view(models, kwargs["new"]),
-            "child": _task_view(models, kwargs["child"]),
-            "core": host.core,
-            "panel_diagnostics": host._module("panel_diagnostics"),
-            "modify_models": models,
-            "modify_runtime": host._module("modify_runtime"),
-            "build_runtime_services": lambda: build_runtime_services(host),
-        }
+        request=request,
+        core=host.core,
+        panel_diagnostics=host._module("panel_diagnostics"),
+        modify_models=models,
+        modify_runtime=host._module("modify_runtime"),
+        build_runtime_services=lambda: build_runtime_services(host),
     )
 
 
@@ -203,22 +183,27 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
     collect_prev_two = collector_override if callable(collector_override) else (
         lambda task, chain_by_link=None: host._module("modify_read_effects").collect_prev_two(host, task, chain_by_link)
     )
-    return host._module("modify_timeline").timeline_lines_for_task(
-        kind, task, child_due_utc, child_short, dnf, **kwargs,
-        core=host.core, max_iterations=host._MAX_ITERATIONS,
-        future_style_for_chain=lambda task, kind: future_style_for_chain(host, task, kind),
-        collect_prev_two=collect_prev_two, dtparse=host._dtparse,
-        fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol), fmtlocal=host._fmtlocal,
-        short=host.core.short_uuid, tolocal=host._tolocal,
-        next_occurrence_after_local_dt=lambda *args, **kwargs: host._module("modify_schedule_effects").next_occurrence_after_local_dt(host, *args, **kwargs),
+    timeline = host._module("modify_timeline")
+    services = timeline.TimelineServices(
+        core=host.core,
+        max_iterations=host._MAX_ITERATIONS,
+        future_style_for_chain=lambda value, value_kind: future_style_for_chain(host, value, value_kind),
+        collect_prev_two=collect_prev_two,
+        dtparse=host._dtparse,
+        fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol),
+        fmtlocal=host._fmtlocal,
+        short=host.core.short_uuid,
+        tolocal=host._tolocal,
+        next_occurrence_after_local_dt=lambda *args, **options: host._module("modify_schedule_effects").next_occurrence_after_local_dt(host, *args, **options),
         to_local_cached=host._to_local_cached,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").safe_parse_datetime(host, value),
-        format_gap=host._module("modify_timeline").format_gap,
+        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        format_gap=timeline.format_gap,
         module_loader=host._module,
-        omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(host, task),
+        omit_dnf_from_parent=lambda value: host._module("modify_anchor_effects").omit_dnf_from_parent(host, value),
         recurrence_evaluator_for_task=evaluator_callback,
         scheduler_service_for_task=service_callback,
     )
+    return timeline.timeline_lines_for_task(kind, task, child_due_utc, child_short, dnf, **kwargs, services=services)
 
 
 def build_runtime_services(host: Any) -> Any:

@@ -51,6 +51,7 @@ from nautical_core.integration_models import (  # noqa: E402
 from nautical_core.task_read_repository import TaskReadRepository  # noqa: E402
 from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload  # noqa: E402
 from nautical_core.task_codec import DEFAULT_TASK_CODEC  # noqa: E402
+from nautical_core.task_datetime import parser_for_core  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
@@ -165,14 +166,11 @@ def _format_local_until(hook: Any, value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return raw
-    parser = getattr(hook, "safe_parse_datetime", None)
-    if not callable(parser):
-        parser = getattr(hook, "_safe_parse_datetime", None)
     formatter = getattr(_runtime_core(hook), "fmt_dt_local", None)
     if not callable(formatter):
         return raw
     try:
-        parsed, error = _safe_parse_datetime(hook, raw)
+        parsed, error = _parse_datetime(hook, raw)
         if parsed is not None and not error:
             return str(formatter(parsed))
     except Exception:
@@ -180,24 +178,22 @@ def _format_local_until(hook: Any, value: Any) -> str:
     return raw
 
 
-def _safe_parse_datetime(hook: Any, value: Any):
-    # Heavy hook implementations keep this boundary private because they are
-    # loaded as executable modules.  Prefer the public adapter when present,
-    # then use the hook's typed private parser; never silently treat a missing
-    # parser as a valid/absent timestamp.
-    parser = getattr(hook, "safe_parse_datetime", None)
-    if not callable(parser):
-        parser = getattr(hook, "_safe_parse_datetime", None)
-    if callable(parser):
-        return parser(value)
-    parser = getattr(_runtime_core(hook), "parse_dt_any", None)
-    if not callable(parser):
+def _parse_datetime(hook: Any, value: Any):
+    # Reconcile and hook workflows use the same configured parser port.  The
+    # hook object remains an integration carrier, never the parser contract.
+    configured = getattr(hook, "datetime_parser", None)
+    if configured is not None and callable(getattr(configured, "parse", None)):
+        return configured.parse(value)
+    core = _runtime_core(hook)
+    if core is None:
         return None, "datetime parser unavailable"
-    try:
-        parsed = parser(value)
-    except Exception as exc:
-        return None, str(exc).strip() or type(exc).__name__
-    return parsed, None if parsed is not None else f"unrecognized datetime: {value}"
+    if not callable(getattr(core, "parse_dt_any", None)):
+        fallback = getattr(hook, "safe_parse_datetime", None)
+        if callable(fallback):
+            return fallback(value)
+        return None, "datetime parser unavailable"
+    diagnostic = getattr(hook, "_diag", None)
+    return parser_for_core(core, diagnostic=diagnostic).parse(value)
 
 
 def _stable_child_uuid(hook: Any, parent: TaskPayload, child: TaskPayload) -> str:
@@ -387,7 +383,7 @@ def _native_until_repairs(
     recovery_audit = control_plane.audit_native_until(
         active_rows,
         predecessor=_fresh_native_until_previous,
-        safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
+        safe_parse_datetime=lambda value: _parse_datetime(hook, value),
         fmt_isoz=_runtime_core(hook).fmt_isoz,
         utc_to_local_naive=_runtime_core(hook).utc_to_local_naive,
         local_naive_to_utc=_runtime_core(hook).local_naive_to_utc,
@@ -470,8 +466,8 @@ def _native_until_matches(fresh: TaskObservation, expected: str, hook: Any) -> b
     if actual == str(expected or "").strip():
         return True
     try:
-        actual_dt, actual_err = _safe_parse_datetime(hook, actual)
-        expected_dt, expected_err = _safe_parse_datetime(hook, expected)
+        actual_dt, actual_err = _parse_datetime(hook, actual)
+        expected_dt, expected_err = _parse_datetime(hook, expected)
         return not actual_err and not expected_err and actual_dt is not None and actual_dt == expected_dt
     except Exception:
         return False
@@ -704,7 +700,7 @@ def _plan_for_parent(
             observation,
             hook=hook,
             generation=generation or _chain_generation_for_hook(hook),
-            safe_parse_datetime=lambda value: _safe_parse_datetime(hook, value),
+            safe_parse_datetime=lambda value: _parse_datetime(hook, value),
         )
     except Exception as exc:
         reason = str(exc).strip() or type(exc).__name__
@@ -1100,7 +1096,7 @@ def _next_recovery_child(
 def _recovery_policy(hook: Any) -> LifecycleRecoveryPolicy:
     """Build the lifecycle-owned recovery policy with Taskwarrior adapters."""
     return LifecycleRecoveryPolicy(
-        parse_datetime=lambda value: _safe_parse_datetime(hook, value),
+        parse_datetime=lambda value: _parse_datetime(hook, value),
         compare_datetimes=compare_datetimes,
         validate_child=_validate_recovery_child,
         virtual_uuid=lambda plan: (
@@ -1689,7 +1685,7 @@ def main(
             evidence = describe_plan(
                 plan,
                 fmt_dt_local=fmt_dt_local,
-                parse_until=lambda value: _safe_parse_datetime(hook, value),
+                parse_until=lambda value: _parse_datetime(hook, value),
                 describe_carry=lambda until, due: core_runtime._import_sibling("add_validation").describe_native_until_carry(
                     until, due, to_local=core_runtime.to_local,
                 ),

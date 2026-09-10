@@ -5,6 +5,16 @@ from nautical_core.modify_validation_effects import validate_anchor
 
 
 class ModifyValidationEffectsTests(unittest.TestCase):
+    def test_datetime_parser_callback_has_stable_value_error_shape(self) -> None:
+        from nautical_core.modify_datetime_effects import parse_datetime
+        from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
+
+        parser = ConfiguredTaskDatetimeParser(lambda value: None if value == "bad" else value)
+        self.assertEqual(parse_datetime(parser, ""), (None, None))
+        parsed, error = parse_datetime(parser, "bad")
+        self.assertIsNone(parsed)
+        self.assertIn("Unrecognized datetime", error)
+
     def test_anchor_validation_does_not_persist_unused_hints(self) -> None:
         calls = []
 

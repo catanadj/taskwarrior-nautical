@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .task_models import TaskPayload
+from .task_datetime import parser_for_core
 
 
 def initialize_core(host: Any) -> None:
@@ -81,7 +82,7 @@ def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> da
         parse_cp_sequence=host.core.parse_cp_sequence,
         cp_sequence_parse_error=host.core.cp_sequence_parse_error,
         parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: parser_for_core(host.core).parse(value)[0],
     )
     if findings:
         finding = findings[0]
@@ -107,14 +108,14 @@ def due_context(host: Any, task: TaskPayload, now_utc: datetime):
     due_dt = None
     past_due_warning = None
     if recurrence_field == "due" and user_provided_due:
-        due_dt, err = host._safe_parse_datetime(task.get("due"), "due")
+        due_dt, err = host._validate_datetime_field(task.get("due"), "due")
         if err:
             host._error_and_exit([("Invalid due", err)])
         is_past, warn_msg = host._check_due_in_past(due_dt, now_utc)
         if is_past:
             past_due_warning = warn_msg
     elif recurrence_field == "scheduled":
-        due_dt, err = host._safe_parse_datetime(task.get("scheduled"), "scheduled")
+        due_dt, err = host._validate_datetime_field(task.get("scheduled"), "scheduled")
         if err:
             host._error_and_exit([("Invalid scheduled", err)])
     if due_dt is None:
@@ -126,8 +127,8 @@ def due_context(host: Any, task: TaskPayload, now_utc: datetime):
 def _due_matches_entry(host: Any, task: TaskPayload) -> bool:
     if not task.get("due") or not task.get("entry"):
         return False
-    due_dt, due_err = host._safe_parse_datetime(task.get("due"), "due")
-    entry_dt, entry_err = host._safe_parse_datetime(task.get("entry"), "entry")
+    due_dt, due_err = host._validate_datetime_field(task.get("due"), "due")
+    entry_dt, entry_err = host._validate_datetime_field(task.get("entry"), "entry")
     return not due_err and not entry_err and due_dt is not None and due_dt == entry_dt
 
 
@@ -227,7 +228,9 @@ class AddCompositionServices:
         workflow = core._import_sibling("add_workflow")
         raw = task.get(target_field)
         try:
-            value = core.parse_dt_any(raw)
+            value, error = parser_for_core(core).parse(raw)
+            if error or value is None:
+                raise ValueError(error or "missing datetime")
             timestamp = core._import_sibling("task_models").TaskTimestamp
             return workflow.record_schedule(plan, first_occurrence=timestamp(value))
         except Exception as exc:
@@ -253,7 +256,12 @@ class AddCompositionServices:
 
         def as_timestamp(field):
             raw = task.get(field)
-            return None if not raw else timestamp(core.parse_dt_any(raw))
+            if not raw:
+                return None
+            value, error = parser_for_core(core).parse(raw)
+            if error or value is None:
+                raise ValueError(error or f"missing {field} datetime")
+            return timestamp(value)
 
         chain_max = core.coerce_int(task.get("chainMax"), 0)
         limits = workflow.AddScheduleLimits(

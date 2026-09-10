@@ -13014,7 +13014,7 @@ def test_non_hour_dst_carry_and_reconcile_share_core_policy():
             parent_obs,
             current_obs,
             kind="anchor",
-            safe_parse_datetime=mod._safe_parse_datetime,
+            safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
             fmt_isoz=mod.core.fmt_isoz,
             utc_to_local_naive=mod.core.utc_to_local_naive,
             local_naive_to_utc=mod.core.local_naive_to_utc,
@@ -15810,7 +15810,7 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
             allowed_future=1,
             cap_no=None,
             to_local_cached=modify_mod._to_local_cached,
-            safe_parse_datetime=modify_mod._safe_parse_datetime,
+            safe_parse_datetime=modify_mod._TASK_DATETIME_PARSER.parse,
             next_occurrence_after_local_dt=lambda *args, **kwargs: modify_mod._module("modify_schedule_effects").next_occurrence_after_local_dt(modify_mod, *args, **kwargs),
             omit_dnf=None,
             omit_expr_fires_on_date=None,
@@ -30243,7 +30243,7 @@ def test_reconcile_candidate_and_plan_paths():
         def __init__(self):
             super().__init__(FakeCore())
 
-        def safe_parse_datetime(self, _value):
+        def parse_datetime(self, _value):
             return None, None
 
         def compute_cp_child_due(self, _parent):
@@ -30361,7 +30361,7 @@ def test_reconcile_plan_uses_task_business_calendar_context():
         def __init__(self):
             super().__init__(FakeCore)
 
-        def safe_parse_datetime(self, _value):
+        def parse_datetime(self, _value):
             return None, None
 
         def compute_cp_child_due(self, _parent):
@@ -30426,7 +30426,7 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     }
     is_candidate = lambda task: reconcile.is_orphan_expiration_candidate(
         _task_observation(task),
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
 
     expect(is_candidate(parent), "deletion exactly at until should be an expiration candidate")
@@ -30434,17 +30434,17 @@ def test_reconcile_expiration_candidate_requires_expiry_evidence():
     expect(not is_candidate(manual), "manual deletion before until must not advance")
     evidence = reconcile.deleted_chain_disposition(
         _task_observation(manual),
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
     expect(evidence.disposition.value == "manual", f"early deletion should stop the chain: {evidence!r}")
     no_until_evidence = reconcile.deleted_chain_disposition(
         _task_observation({key: value for key, value in parent.items() if key != "until"}),
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
     expect(no_until_evidence.disposition.value == "manual", f"deletion without until should stop the chain: {no_until_evidence!r}")
     malformed_evidence = reconcile.deleted_chain_disposition(
         _task_observation(dict(parent, until="not-a-date")),
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
     )
     expect(malformed_evidence.disposition.value == "ambiguous", f"malformed evidence must fail closed: {malformed_evidence!r}")
     manual_plan = _recovery_plan(reconcile, manual, existing_children=[], hook=mod)
@@ -30531,7 +30531,7 @@ def test_reconcile_delayed_expiration_dry_run_converges_to_live_slot():
     plans = [plan for plan, _applied in outcomes]
     expect([plan.action for plan in plans] == ["spawn", "spawn", "spawn"], f"unexpected recovery path: {plans}")
     expect([plan.parent.get("link") for plan in plans] == [1, 2, 3], f"recovery skipped chain links: {plans}")
-    final_until, final_until_err = hook._safe_parse_datetime((plans[-1].child or {}).get("until"))
+    final_until, final_until_err = hook._TASK_DATETIME_PARSER.parse((plans[-1].child or {}).get("until"))
     expect(not final_until_err and final_until is not None and final_until > recovery_at, f"final slot is already expired: {plans[-1]}")
     expect(
         [plan.action for plan, _applied in limited] == ["spawn", "spawn", "partial"],
@@ -30577,7 +30577,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
         except Exception:
             return None, "invalid datetime"
 
-    hook = SimpleNamespace(_safe_parse_datetime=parse)
+    hook = SimpleNamespace(safe_parse_datetime=parse)
     original_apply = tool._apply_parent_atomic
     original_lookup = tool._next_recovery_child
     try:
@@ -33751,14 +33751,14 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         "until": stamp(date(2026, 7, 21), (23, 0)),
     }
     expect(
-        reconcile.invalid_native_until_reason(_task_observation(current), safe_parse_datetime=mod._safe_parse_datetime),
+        reconcile.invalid_native_until_reason(_task_observation(current), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse),
         "invalid native-until window was not detected",
     )
     repaired, error = reconcile.repair_native_until_from_previous(
         _task_observation(previous),
         _task_observation(current),
         kind="anchor",
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
         fmt_isoz=mod.core.fmt_isoz,
         utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
         local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
@@ -33770,7 +33770,7 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
             "status": "pending", "chain": "on", "chainID": "until-test", "link": 3,
             "due": stamp(date(2026, 7, 23), (9, 0)),
         }),
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
         fmt_isoz=mod.core.fmt_isoz,
         utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
         local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
@@ -33785,7 +33785,7 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
             "status": "pending", "chain": "on", "chainID": "until-test", "link": 4,
             "due": stamp(date(2026, 7, 23), (23, 0)),
         }),
-        safe_parse_datetime=mod._safe_parse_datetime,
+        safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
         fmt_isoz=mod.core.fmt_isoz,
         utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
         local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
@@ -33800,8 +33800,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
     )
     expected_until = stamp(date(2026, 7, 23), (23, 0))
     compact_expected = expected_until.replace("-", "").replace(":", "")
-    actual_dt, actual_parse_error = mod._safe_parse_datetime(compact_expected)
-    expected_dt, expected_parse_error = mod._safe_parse_datetime(expected_until)
+    actual_dt, actual_parse_error = mod._TASK_DATETIME_PARSER.parse(compact_expected)
+    expected_dt, expected_parse_error = mod._TASK_DATETIME_PARSER.parse(expected_until)
     expect(
         tool._native_until_matches(_task_observation({
             "uuid": "00000000-0000-4000-8000-000000003245", "description": "verify",

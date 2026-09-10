@@ -8,6 +8,7 @@ from typing import Any, Callable
 from nautical_core import astronomy, native_until
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_context import RecurrenceContext
+from nautical_core.task_datetime import TaskDatetimeParser
 
 
 def validate_until_not_past(until_dt: Any, now_utc: datetime, *, core: Any) -> tuple[bool, str | None]:
@@ -180,26 +181,14 @@ def parse_chain_max(value: Any) -> tuple[int | None, str | None]:
     return (cpmax, None)
 
 
-def safe_parse_datetime(
-    s: Any,
+def validate_datetime_field(
+    value: Any,
     field_name: str,
     *,
-    core: Any,
-    diag: Callable[[str], None],
+    parser: TaskDatetimeParser,
 ) -> tuple[datetime | None, str | None]:
-    if not s:
-        return (None, None)
-    try:
-        dt = core.parse_dt_any(s)
-        if dt is None:
-            return (None, f"{field_name}: Unrecognized datetime format '{s}'")
-        return (dt, None)
-    except ValueError as e:
-        diag(f"{field_name} parse value error: {e}")
-        return (None, f"{field_name}: Invalid datetime value")
-    except Exception as e:
-        diag(f"{field_name} parse unexpected error: {e}")
-        return (None, f"{field_name}: Unexpected parsing error")
+    parsed, error = parser.parse(value)
+    return parsed, f"{field_name}: {error}" if error else None
 
 
 def validate_no_legacy_colon_ranges(expr: str) -> tuple[bool, str | None]:

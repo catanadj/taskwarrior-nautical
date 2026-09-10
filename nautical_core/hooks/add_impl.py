@@ -701,7 +701,7 @@ def _validate_native_until_after_target_or_fail(
             kind="error",
         )
         sys.exit(1)
-    until_dt, until_err = _safe_parse_datetime(until_raw, "until")
+    until_dt, until_err = _validate_datetime_field(until_raw, "until")
     if until_err or until_dt is None:
         _fail_and_exit("Invalid until", until_err or "until must be a valid datetime")
     is_valid, reason = add_validation.validate_native_until_after_target(
@@ -747,7 +747,7 @@ def _validate_native_until_anchor_slots_or_fail(
     until_raw = task.get("until")
     if not until_raw or not (dnf or anchor_file_value):
         return
-    until_dt, until_err = _safe_parse_datetime(until_raw, "until")
+    until_dt, until_err = _validate_datetime_field(until_raw, "until")
     if until_err or until_dt is None:
         return
     try:
@@ -811,9 +811,14 @@ def _validate_chain_duration_reasonable(
 
 
 # Helper to safely parse with context
-def _safe_parse_datetime(s, field_name) -> tuple[datetime | None, str | None]:
+def _validate_datetime_field(s, field_name) -> tuple[datetime | None, str | None]:
     add_validation = _module("add_validation")
-    return add_validation.safe_parse_datetime(s, field_name, core=core, diag=_diag)
+    from nautical_core.task_datetime import parser_for_core
+    return add_validation.validate_datetime_field(
+        s,
+        field_name,
+        parser=parser_for_core(core, diagnostic=_diag),
+    )
 
 
 def _safe_parse_duration(s, field_name) -> tuple[timedelta | None, str | None]:
@@ -998,9 +1003,7 @@ def _anchor_until_summary(
         omit_dnf=omit_dnf,
         core=core,
         to_local_cached=_to_local_cached,
-        max_preview_iterations=_MAX_PREVIEW_ITERATIONS,
         max_iterations=_MAX_ITERATIONS,
-        resolve_time_slots=_resolve_time_slots,
         evaluator=evaluator,
     )
 
@@ -1027,8 +1030,6 @@ def _anchor_build_preview(
         seed_base,
         omit_dnf=omit_dnf,
         core=core,
-        norm_t_mod=_norm_t_mod,
-        resolve_time_slots=_resolve_time_slots,
         evaluator=evaluator,
     )
 
@@ -1039,7 +1040,7 @@ def _append_first_expiration_row(
     target_dt: datetime,
     target_field: str,
 ) -> None:
-    expires_dt, err = _safe_parse_datetime(task.get("until"), "until")
+    expires_dt, err = _validate_datetime_field(task.get("until"), "until")
     if err or expires_dt is None:
         return
     add_validation = _module("add_validation")

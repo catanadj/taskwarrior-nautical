@@ -469,7 +469,7 @@ def _build_expiration_child_with_day_end(
 ) -> dict[str, Any]:
     generation = generation or _generation_service(hook)
     target_raw = parent.get("due") or parent.get("scheduled")
-    target_dt, target_err = generation.safe_parse_datetime(target_raw)
+    target_dt, target_err = generation.parse_datetime(target_raw)
     if target_err or target_dt is None:
         raise ValueError(target_err or "expired recurrence has no due or scheduled timestamp")
     target_local = generation.core.to_local(target_dt)
@@ -515,7 +515,7 @@ def _plan_recovery_decision_unscoped(
     if is_expiration:
         evidence = deleted_chain_disposition(
             operational_parent.observation,
-            safe_parse_datetime=generation.safe_parse_datetime,
+            safe_parse_datetime=generation.parse_datetime,
         )
         if evidence.disposition is DeletionDisposition.MANUAL:
             return _terminal_recovery_result(
@@ -608,7 +608,7 @@ def _plan_recovery_decision_unscoped(
         # still reports malformed chain limits through the hook boundary.
         evaluator = None
         kind = recurrence_kind(operational_parent)
-        until_dt, until_err = generation.safe_parse_datetime(parent.get("chainUntil"))
+        until_dt, until_err = generation.parse_datetime(parent.get("chainUntil"))
         cpmax = generation.core.coerce_int(parent.get("chainMax"), 0)
     if until_err:
         return _recovery_refusal(decision_parent, RecoveryStatus.MANUAL_REVIEW, f"invalid chainUntil: {until_err}")

@@ -176,7 +176,7 @@ class ChainGenerationPlanningService:
         until = None
         raw_until = parent.observation.field("chainUntil").raw_value()
         if raw_until:
-            until, error = self.generation.safe_parse_datetime(raw_until)
+            until, error = self.generation.parse_datetime(raw_until)
             if error or until is None:
                 raise LifecyclePlanningError(f"invalid chainUntil: {error or raw_until}")
         return RecurrenceCandidate(

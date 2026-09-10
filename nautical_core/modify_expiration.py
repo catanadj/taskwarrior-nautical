@@ -147,7 +147,6 @@ def handle_expired_deleted_modify(task: TaskPayload, *, services: ExpirationServ
 
     plan_hook = SimpleNamespace(
         core=services.core,
-        _safe_parse_datetime=services.safe_parse_datetime,
         _compute_anchor_child_due=services.compute_anchor_child_due,
         _compute_cp_child_due=services.compute_cp_child_due,
         _build_child_draft=services.build_child_draft,

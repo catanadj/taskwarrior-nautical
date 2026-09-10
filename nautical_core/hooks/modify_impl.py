@@ -120,7 +120,7 @@ if TYPE_CHECKING:
 # making it part of the production route surface.
 def __getattr__(name: str):
     if name == "_timeline_lines":
-        host = _module("modify_composition").hook_host(globals(), __name__)
+        host = _hook_host()
         def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
             return _module("modify_presentation_effects").timeline_lines(
                 host, kind, task, child_due_utc, child_short, dnf, **kwargs
@@ -143,6 +143,15 @@ _SPAWN_RETRY_DELAY = 0.1  # seconds between retries
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
 # Panel chain index and chain caches live in the per-run modify runtime state.
 _MODIFY_RUNTIME_STATE = None
+_HOOK_HOST = None
+
+
+def _hook_host():
+    """Return the single live composition view for this hook module."""
+    global _HOOK_HOST
+    if _HOOK_HOST is None:
+        _HOOK_HOST = _module("modify_composition").hook_host(globals(), __name__)
+    return _HOOK_HOST
 _HOOK_CONTEXT = None
 _HOOK_CONTEXT_LOAD_FAILED = False
 _HOOK_ENGINE = None
@@ -157,19 +166,43 @@ _DEFAULT_DEBUG_WAIT_SCHED = False
 _LAST_WAIT_SCHED_DEBUG: OrderedDict[str, dict[str, Any]] = OrderedDict()
 _MAX_WAIT_SCHED_DEBUG = 32
 
+_DIAG_REDACT_KEYS = frozenset({"description", "annotation", "annotations", "note", "notes"})
+
+
+def _diag_redact_msg(msg: object) -> str:
+    raw = msg if isinstance(msg, str) else str(msg)
+    redactor = getattr(core, "diag_log_redact", None) if core is not None else None
+    if callable(redactor):
+        try:
+            red = redactor(raw)
+            return red if isinstance(red, str) else str(red)
+        except Exception:
+            pass
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            for key in list(data):
+                if key in _DIAG_REDACT_KEYS:
+                    data[key] = "[redacted]"
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        pass
+    return raw
+
 
 def _diag(msg: str) -> None:
+    safe_msg = _diag_redact_msg(msg)
     try:
         _load_core()
     except Exception:
         pass
     if core is not None:
         event_factory = getattr(core, "DiagnosticEvent", None)
-        event = event_factory.from_message(msg, hook="on-modify") if event_factory is not None else msg
+        event = event_factory.from_message(safe_msg, hook="on-modify") if event_factory is not None else safe_msg
         core.diag(event, "on-modify", str(TW_DATA_DIR))
     elif os.environ.get("NAUTICAL_DIAG") == "1":
         try:
-            sys.stderr.write(f"[nautical] {msg}\n")
+            sys.stderr.write(f"[nautical] {safe_msg}\n")
         except Exception:
             pass
 
@@ -214,8 +247,8 @@ def _anchor_file_provider_for(
 def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int, int]:
     """Keep provider fallback time stable across completion projection stages."""
     for field in ("due", "scheduled"):
-        parsed, error = _module("modify_datetime_effects").safe_parse_datetime(
-            _module("modify_composition").hook_host(globals(), __name__), task.get(field)
+        parsed, error = _module("modify_datetime_effects").parse_datetime(
+            _TASK_DATETIME_PARSER, task.get(field)
         )
         if not error and parsed is not None:
             local = _to_local_cached(parsed)
@@ -462,7 +495,7 @@ def _append_next_wait_sched_rows(
         anchor_field=anchor_field,
         format_local=core.fmt_dt_local,
         compare_datetimes=lambda left, right: _module("modify_value_effects").compare_datetimes(
-            _module("modify_composition").hook_host(globals(), __name__), left, right
+            _hook_host(), left, right
         ),
         format_delta=_module("modify_value_effects").format_delta,
     )
@@ -892,6 +925,7 @@ _MODULE_SPECS = {
     ),
 }
 core = None
+_TASK_DATETIME_PARSER = None
 _CORE_IMPORT_TARGET = None
 _CORE_IMPORT_ERROR = None
 
@@ -975,7 +1009,7 @@ def _initialize_integration_context() -> None:
     _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
 def _load_core() -> None:
-    global core, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
+    global core, _TASK_DATETIME_PARSER, _MAX_JSON_BYTES, _CORE_READY, _IMPORT_MS
     if core is not None and _CORE_READY:
         return
     _initialize_integration_context()
@@ -988,6 +1022,8 @@ def _load_core() -> None:
     except Exception:
         pass
     _apply_core_config()
+    from nautical_core.task_datetime import parser_for_core
+    _TASK_DATETIME_PARSER = parser_for_core(core, diagnostic=_diag)
     if _IMPORT_MS is None:
         _IMPORT_MS = (_ptime.perf_counter() - _IMPORT_T0) * 1000.0
     _CORE_READY = True
@@ -1030,14 +1066,6 @@ def _apply_core_config() -> None:
 # ------------------------------------------------------------------------------
 # Small cached helpers for speed + consistency
 # ------------------------------------------------------------------------------
-def _safe_parse_datetime(value):
-    """Parse a Taskwarrior timestamp for operator/reconcile integrations."""
-    try:
-        return core.parse_dt_any(value), None
-    except Exception as exc:
-        return None, str(exc)
-
-
 @lru_cache(maxsize=512)
 def _parse_dt_any_cached(s: str):
     return core.parse_dt_any(s)
@@ -1246,7 +1274,7 @@ def _panic_passthrough() -> None:
 
 
 def _print_task(task):
-    host = _module("modify_composition").hook_host(globals(), __name__)
+    host = _hook_host()
     return _module("modify_ui_effects").print_task(host, task)
 
 
@@ -1260,7 +1288,7 @@ def _panel(
     title_style: str | None = None,
     label_style: str | None = None,
 ):
-    host = _module("modify_composition").hook_host(globals(), __name__)
+    host = _hook_host()
     return _module("modify_ui_effects").panel(
         host, title, rows, kind=kind, border_style=border_style,
         title_style=title_style, label_style=label_style,
@@ -1313,7 +1341,7 @@ _RESERVED_OVERRIDE = {"due", "entry", "status", "chain", "prevLink", "link"}
 
 def main():
     _module("modify_composition").run_on_modify(
-        _module("modify_composition").hook_host(globals(), __name__)
+        _hook_host()
     )
 
 

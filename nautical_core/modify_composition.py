@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from contextlib import nullcontext
 from typing import Any, Callable
+from .task_datetime import parser_for_core
 
 
 class _HookHost:
@@ -21,19 +23,135 @@ class _HookHost:
             raise AttributeError(name) from exc
 
 
+@dataclass(frozen=True)
+class ModifyHookCapabilities:
+    """Modules and facilities resolved once at the hook composition root.
+
+    Effects receive this explicit capability set instead of repeatedly reaching
+    through the dynamic host module loader.  The loader remains the boundary
+    that constructs the set, preserving import-by-file compatibility.
+    """
+
+    modify_ordinary: Any
+    modify_effects: Any
+    hook_results: Any
+    hook_context: Any
+    hook_engine: Any
+    modify_lifecycle: Any
+    modify_transition_effects: Any
+    modify_presentation_effects: Any
+    modify_diagnostics_effects: Any
+    modify_validation_effects: Any
+    modify_ui_effects: Any
+    modify_task_fields: Any
+    modify_completion_effects: Any
+    modify_read_effects: Any
+    modify_queries: Any
+    modify_expiration: Any
+    modify_generation_effects: Any
+    task_codec: Any
+    task_models: Any
+    chain_integrity_lifecycle: Any
+    modify_datetime_effects: Any
+    modify_spawn_effects: Any
+
+    @classmethod
+    def from_host(cls, host: Any) -> "ModifyHookCapabilities":
+        load = host._module
+        return cls(
+            modify_ordinary=load("modify_ordinary"),
+            modify_effects=load("modify_effects"),
+            hook_results=load("hook_results"),
+            hook_context=load("hook_context"),
+            hook_engine=load("hook_engine"),
+            modify_lifecycle=load("modify_lifecycle"),
+            modify_transition_effects=load("modify_transition_effects"),
+            modify_presentation_effects=load("modify_presentation_effects"),
+            modify_diagnostics_effects=load("modify_diagnostics_effects"),
+            modify_validation_effects=load("modify_validation_effects"),
+            modify_ui_effects=load("modify_ui_effects"),
+            modify_task_fields=load("modify_task_fields"),
+            modify_completion_effects=load("modify_completion_effects"),
+            modify_read_effects=load("modify_read_effects"),
+            modify_queries=load("modify_queries"),
+            modify_expiration=load("modify_expiration", required=False),
+            modify_generation_effects=load("modify_generation_effects"),
+            task_codec=load("task_codec"),
+            task_models=load("task_models"),
+            chain_integrity_lifecycle=load("chain_integrity_lifecycle"),
+            modify_datetime_effects=load("modify_datetime_effects"),
+            modify_spawn_effects=load("modify_spawn_effects"),
+        )
+
+
+@dataclass(frozen=True)
+class ModifyRuntimeServices:
+    """Explicit runtime services supplied to route effects at composition time."""
+
+    host: Any
+    capabilities: ModifyHookCapabilities
+    runtime_state: Callable[..., Any]
+    import_module: Callable[..., Any]
+    diag_summary: Callable[..., Any]
+    diagnostic: Callable[..., Any]
+    show_analytics: bool
+    check_integrity: bool
+    analytics_style: str
+
+    @classmethod
+    def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
+        capabilities = capabilities or capabilities_for(host)
+        return cls(
+            host=host,
+            capabilities=capabilities,
+            runtime_state=host._modify_runtime_state,
+            import_module=host.importlib.import_module,
+            diag_summary=host._diag_summary,
+            diagnostic=host._diag,
+            show_analytics=host._SHOW_ANALYTICS,
+            check_integrity=host._CHECK_CHAIN_INTEGRITY,
+            analytics_style=host._ANALYTICS_STYLE,
+        )
+
+
+def capabilities_for(host: Any) -> ModifyHookCapabilities:
+    """Return the composition-root capability set for ``host``."""
+    cached = getattr(host, "_MODIFY_CAPABILITIES", None)
+    if cached is None:
+        cached = ModifyHookCapabilities.from_host(host)
+        try:
+            setattr(host, "_MODIFY_CAPABILITIES", cached)
+        except Exception:
+            pass
+    # Construct the datetime port once at the composition root.  Effects may
+    # consume it through their narrow parser adapter without rediscovering the
+    # live hook/core namespace on every field.
+    if getattr(host, "_TASK_DATETIME_PARSER", None) is None:
+        try:
+            setattr(
+                host,
+                "_TASK_DATETIME_PARSER",
+                parser_for_core(host.core, diagnostic=getattr(host, "_diag", None)),
+            )
+        except Exception:
+            pass
+    return cached
+
+
 class ModifyCompositionServices:
     """Bind on-modify effects to the hook's validated composition root."""
 
     def __init__(self, host: Any, result_cls: Callable[..., Any]) -> None:
         self._host = host
         self._result_cls = result_cls
+        self._capabilities = capabilities_for(host)
+        self._runtime = ModifyRuntimeServices.from_host(host, self._capabilities)
 
     def result(self, task, *, sanitize: bool):
         return self._result_cls(task=task, sanitize=sanitize)
 
     def has_nautical_fields(self, task):
-        lifecycle = self._host._module("modify_lifecycle")
-        return lifecycle.task_has_nautical_fields(task)
+        return self._capabilities.modify_lifecycle.task_has_nautical_fields(task)
 
     def load_core(self):
         self._host._load_core()
@@ -45,27 +163,28 @@ class ModifyCompositionServices:
         self._host._fail_and_exit(title, message)
 
     def handle_non_completion(self, old, new, unit_of_work, transition=None):
-        self._host._module("modify_effects").handle_non_completion(
-            self._host,
-            old, new, unit_of_work, transition=transition
+        self._capabilities.modify_effects.handle_non_completion(
+            self._host, old, new, unit_of_work, transition=transition,
+            runtime=self._runtime,
         )
 
     def handle_completion(self, old, new, unit_of_work, transition=None):
-        return self._host._module("modify_effects").handle_completion(
-            self._host,
-            old, new, unit_of_work, transition=transition
+        return self._capabilities.modify_effects.handle_completion(
+            self._host, old, new, unit_of_work, transition=transition,
+            runtime=self._runtime,
         )
 
     def handle_deleted(
         self, old, new, unit_of_work, transition=None, terminal_decision=None
     ):
-        return self._host._module("modify_effects").handle_deleted(
+        return self._capabilities.modify_effects.handle_deleted(
             self._host,
             old,
             new,
             unit_of_work,
             transition=transition,
             terminal_decision=terminal_decision,
+            runtime=self._runtime,
         )
 
 
@@ -80,7 +199,8 @@ def run_on_modify(host: Any) -> None:
     state = host._modify_runtime_state()
     startup_t0 = host._ptime.perf_counter()
     module_t0 = host._ptime.perf_counter()
-    hook_results = host._module("hook_results")
+    capabilities = capabilities_for(host)
+    hook_results = capabilities.hook_results
     state.diag_stats["startup_module_ms"] = round(
         (host._ptime.perf_counter() - module_t0) * 1000.0, 3
     )
@@ -90,15 +210,15 @@ def run_on_modify(host: Any) -> None:
         r"(?:^|\s)(?:a|af|am|o|of|cm|cu):",
         str(new.get("description") or ""),
     ) is not None
-    lifecycle = host._module("modify_lifecycle")
+    lifecycle = capabilities.modify_lifecycle
     has_nautical_fields = lifecycle.task_has_nautical_fields(old) or lifecycle.task_has_nautical_fields(new)
     if not has_nautical_fields and not alias_candidate:
         hook_results.emit_passthrough_json(new)
         host._write_bench_stats()
         return
     host._load_core()
-    hook_context = host._module("hook_context")
-    hook_engine = host._module("hook_engine")
+    hook_context = capabilities.hook_context
+    hook_engine = capabilities.hook_engine
     host._apply_description_uda_aliases(old, new)
     validation = host.core._import_sibling("hook_validation_pipeline")
     # Alias expansion mutates the canonical task mapping. Refresh the typed
@@ -144,7 +264,7 @@ def run_on_modify(host: Any) -> None:
         host._fail_and_exit("Invalid business calendar", str(exc))
         return
     request_t0 = host._ptime.perf_counter()
-    host._module("modify_read_effects").seed_runtime_lookup_tasks(host, old, new)
+    capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, old, new)
     runtime = host._build_hook_runtime_context(new)
     host._modify_runtime_state().workflow_context = runtime.workflow
     request = hook_context.build_on_modify_request(

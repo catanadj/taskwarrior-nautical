@@ -19,6 +19,7 @@ from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext
 from .task_codec import TaskCodec
 from .task_models import TaskDraft, NauticalTask
+from .task_datetime import TaskDatetimeParser, parser_for_core
 
 
 _STABLE_CHILD_UUID_NAMESPACE = uuid.UUID("1f4b2396-df58-5a32-a879-33f0d3fe711f")
@@ -112,6 +113,7 @@ class ChainGenerationService:
     recurrence_update_udas: tuple[str, ...] = ()
     debug_wait_sched: bool = False
     wait_sched_debug: MutableMapping[str, dict[str, Any]] | None = None
+    datetime_parser: TaskDatetimeParser | None = None
     _evaluator_cache: OrderedDict[tuple[Any, ...], SchedulerService] = field(
         default_factory=OrderedDict,
         repr=False,
@@ -121,6 +123,11 @@ class ChainGenerationService:
         default_factory=OrderedDict,
         repr=False,
     )
+
+    def __post_init__(self) -> None:
+        if self.datetime_parser is None:
+            if callable(getattr(self.core, "parse_dt_any", None)):
+                self.datetime_parser = parser_for_core(self.core)
 
     @classmethod
     def from_core(
@@ -133,6 +140,7 @@ class ChainGenerationService:
     ) -> "ChainGenerationService":
         return cls(
             core=core,
+            datetime_parser=parser_for_core(core),
             recurrence_update_udas=tuple(
                 str(value) for value in recurrence_update_udas if str(value).strip()
             ),
@@ -159,16 +167,10 @@ class ChainGenerationService:
         )
         return service
 
-    def safe_parse_datetime(self, value: Any) -> tuple[datetime | None, str | None]:
-        if not (value or ""):
-            return None, None
-        try:
-            parsed = self.core.parse_dt_any(value)
-        except Exception:
-            return None, f"Unrecognized datetime format '{value}'"
-        if parsed is None:
-            return None, f"Unrecognized datetime format '{value}'"
-        return parsed, None
+    def parse_datetime(self, value: Any) -> tuple[datetime | None, str | None]:
+        if self.datetime_parser is None:
+            return None, "datetime parser unavailable"
+        return self.datetime_parser.parse(value)
 
     @staticmethod
     def _require_chain_id(task: NauticalTask) -> str:
@@ -223,15 +225,15 @@ class ChainGenerationService:
     def _anchor_parent_local_times(
         self, parent: NauticalTask
     ) -> tuple[datetime | None, datetime | None, datetime | None]:
-        end_dt, error = self.safe_parse_datetime(parent.get("end"))
+        end_dt, error = self.parse_datetime(parent.get("end"))
         if error:
             raise ValueError(f"end field: {error}")
         if end_dt is None:
             return None, None, None
-        due_dt, error = self.safe_parse_datetime(parent.get("due"))
+        due_dt, error = self.parse_datetime(parent.get("due"))
         if error:
             raise ValueError(f"due field: {error}")
-        scheduled_dt, error = self.safe_parse_datetime(parent.get("scheduled"))
+        scheduled_dt, error = self.parse_datetime(parent.get("scheduled"))
         if error:
             raise ValueError(f"scheduled field: {error}")
         end_local = self._local(end_dt)
@@ -262,15 +264,15 @@ class ChainGenerationService:
         )
         if not interval:
             return None, None
-        end_dt, error = self.safe_parse_datetime(parent.get("end"))
+        end_dt, error = self.parse_datetime(parent.get("end"))
         if error:
             raise ValueError(f"end field: {error}")
         if end_dt is None:
             return None, None
-        due_dt, error = self.safe_parse_datetime(parent.get("due"))
+        due_dt, error = self.parse_datetime(parent.get("due"))
         if error:
             raise ValueError(f"due field: {error}")
-        scheduled_dt, error = self.safe_parse_datetime(parent.get("scheduled"))
+        scheduled_dt, error = self.parse_datetime(parent.get("scheduled"))
         if error:
             raise ValueError(f"scheduled field: {error}")
         target_field = "scheduled" if due_dt is None and scheduled_dt is not None else "due"
@@ -384,8 +386,10 @@ class ChainGenerationService:
             self._record_carry_debug(field, {"ok": False, "reason": reason})
             raise CarryFieldError(field, reason)
         try:
-            parent_anchor = self.core.parse_dt_any(parent.get(parent_anchor_field))
-            parent_value = self.core.parse_dt_any(parent.get(field))
+            parent_anchor, anchor_error = self.parse_datetime(parent.get(parent_anchor_field))
+            parent_value, value_error = self.parse_datetime(parent.get(field))
+            if anchor_error or value_error:
+                raise ValueError(anchor_error or value_error or "invalid recurrence timestamp")
             if not (parent_anchor and parent_value and isinstance(child_due_utc, datetime)):
                 raise ValueError("parent or child recurrence timestamp is not parseable")
             parent_delta = self.core.utc_to_local_naive(parent_value) - self.core.utc_to_local_naive(
@@ -453,8 +457,10 @@ class ChainGenerationService:
             return
         native_until = self.core._import_sibling("native_until")
         try:
-            parent_target = self.core.parse_dt_any(parent.get(parent_anchor_field))
-            parent_until = self.core.parse_dt_any(parent.get("until"))
+            parent_target, target_error = self.parse_datetime(parent.get(parent_anchor_field))
+            parent_until, until_error = self.parse_datetime(parent.get("until"))
+            if target_error or until_error:
+                raise ValueError(target_error or until_error or "invalid recurrence timestamp")
         except Exception as exc:
             raise native_until.NativeUntilCarryError(
                 native_until.CARRY_INVALID,

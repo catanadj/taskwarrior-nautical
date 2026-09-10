@@ -1,12 +1,8 @@
 """Stable public export contract for the Nautical core facade.
 
-``py``, ``random``, and ``time`` are historical implementation names kept in
-the tuple for snapshot compatibility; they are not guaranteed facade exports.
 The explicit ``normalize_task_business_calendar_in_place`` name is the public
 mutator.  Its shorter predecessor remains a facade-only compatibility alias.
 """
-
-LEGACY_UNRESOLVED_EXPORTS = ('py', 'random', 'time')
 
 PUBLIC_EXPORTS = (
     'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF', 'TaskDict',
@@ -46,11 +42,11 @@ PUBLIC_EXPORTS = (
     'parse_anchor_expr_to_dnf_cached', 'parse_cp_duration', 'parse_cp_sequence',
     'parse_cp_sequence_tokens', 'cp_sequence_parse_error',
     'cp_sequence_interval_for_link', 'cp_sequence_interval_for_token', 'parse_dt_any',
-    'pick_hhmm_from_dnf_for_date', 'py', 'random', 'render_panel',
+    'pick_hhmm_from_dnf_for_date', 'render_panel',
     'resolve_anchor_presets', 'resolve_business_calendar_config', 'resolve_omit_presets',
     'resolve_task_data_context', 'safe_lock',
     'short_uuid', 'strip_rich_markup', 'tempfile',
-    'term_width_stderr', 'time', 'to_local', 'utc_to_local_naive', 'local_naive_to_utc',
+    'term_width_stderr', 'to_local', 'utc_to_local_naive', 'local_naive_to_utc',
     'use_business_calendar', 'use_task_business_calendar', 'validate_anchor_expr_strict',
 )
 

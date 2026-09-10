@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import nautical_core as core
 from nautical_core import cache_api
@@ -135,6 +137,28 @@ class CacheApiContractTests(unittest.TestCase):
                 self.assertTrue(held)
                 with second.safe_lock(second._cache_lock_path("private"), retries=1, sleep_base=0) as competing:
                     self.assertFalse(competing)
+
+    def test_semantic_fingerprint_tracks_canonical_parser_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            seen: list[str] = []
+
+            def parser_stat(parser_mtime: int):
+                def stat(path):
+                    path = str(path)
+                    seen.append(path)
+                    if path.endswith("parsing/parser_dnf.py"):
+                        return SimpleNamespace(st_mtime_ns=parser_mtime, st_size=1)
+                    return SimpleNamespace(st_mtime_ns=1, st_size=1)
+
+                return stat
+
+            with patch.object(cache_api.os, "stat", side_effect=parser_stat(1)):
+                before = self._binding(Path(td))._cache_semantic_fingerprint()
+            with patch.object(cache_api.os, "stat", side_effect=parser_stat(2)):
+                after = self._binding(Path(td))._cache_semantic_fingerprint()
+
+            self.assertTrue(any(path.endswith("parsing/parser_dnf.py") for path in seen))
+            self.assertNotEqual(before, after)
 
 
 if __name__ == "__main__":

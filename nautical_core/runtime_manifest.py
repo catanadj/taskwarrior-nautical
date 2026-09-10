@@ -132,10 +132,23 @@ _HOOK_SUPPORT_FILES = {
     "on-exit": ("hook_bootstrap.py", "config_support.py", "exit_probe.py", *_INTEGRATION_FILES),
 }
 
+# Parser implementations live under the canonical ``parsing`` package.  Keep
+# them explicit in the staged-runtime manifest so deployment checks cannot
+# accidentally validate only the legacy root-level forwarding modules.
+_PARSER_RUNTIME_FILES = (
+    "parsing/__init__.py",
+    "parsing/parser_atoms.py",
+    "parsing/parser_dnf.py",
+    "parsing/parser_frontend.py",
+    "parsing/parser_models.py",
+    "parsing/parser_support_api.py",
+)
+
 HOOK_RUNTIME_FILES: dict[str, tuple[str, ...]] = {
     event: (
         impl,
         *_HOOK_SUPPORT_FILES[event],
+        *_PARSER_RUNTIME_FILES,
         *(f"{module}.py" for module in modules),
     )
     for event, modules in HOOK_LAZY_MODULES.items()

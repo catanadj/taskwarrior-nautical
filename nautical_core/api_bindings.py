@@ -7,6 +7,22 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
+def core_namespace(
+    module: Any,
+    namespace: Mapping[str, Any] | None,
+    context: Any,
+    owner: str,
+) -> dict[str, Any]:
+    """Resolve one factory's explicit core source with a stable error."""
+    if context is not None:
+        return context.namespace
+    if namespace is not None:
+        return namespace if isinstance(namespace, dict) else dict(namespace)
+    if module is None:
+        raise TypeError(f"{owner}.for_core requires a module, namespace, or CoreContext")
+    return vars(module)
+
+
 @dataclass(frozen=True)
 class ApiBinding:
     """A read-only, explicitly owned set of core API members.
@@ -43,4 +59,4 @@ class ApiBinding:
         return self._members.keys()
 
 
-__all__ = ("ApiBinding",)
+__all__ = ("ApiBinding", "core_namespace")

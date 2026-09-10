@@ -81,9 +81,9 @@ class NaturalLanguageContractTests(unittest.TestCase):
             "(w:mon)+(m:1|m:2|m:3)": (
                 "Mondays that fall on either the 1st, the 2nd, or the 3rd day of each month"
             ),
-            "(w:mon..wed)+(m:1..10)+(y:01-01|y:10-01)": (
+            "(w:mon..wed)+(m:1..10)+(y:01-01|y:02-01|y:03-01|y:04-01|y:05-01|y:06-01|y:07-01|y:08-01|y:09-01|y:10-01)": (
                 "Mondays through Wednesdays that fall on days 1–10 of each month and within "
-                "either Jan 1 or Oct 1 each year"
+                "either Jan 1, Feb 1, Mar 1, Apr 1, May 1, Jun 1, Jul 1, Aug 1, Sep 1, or Oct 1 each year"
             ),
         }
         for expression, expected in cases.items():
@@ -101,6 +101,18 @@ class NaturalLanguageContractTests(unittest.TestCase):
                     ),
                     expected + "; skip missed anchors",
                 )
+
+    def test_bounded_time_windows_keep_compact_boundary_phrasing(self) -> None:
+        cases = {
+            "w:mon..fri@t=06..18/3": "Mondays through Fridays 3 evenly spaced times (every 6h) within 06:00–18:00",
+            "w:mon..fri@t=06:00..18:01/4": "Mondays through Fridays 4 evenly spaced times (every ~4h) within 06:00–18:01",
+            "w:mon@t=22:30..06:30/7": "Mondays 7 evenly spaced times (every 1h20m) within 22:30–06:30 next day",
+            "w:mon@t=rand(06..18/3)": "Mondays 3 deterministic random times, one per bucket, within 06:00–18:00",
+        }
+        for expression, expected in cases.items():
+            with self.subTest(expression=expression):
+                self.assertEqual(self.direct_description(expression), expected)
+                self.assertEqual(core.describe_anchor_expr(expression), expected)
 
     def test_direct_formatter_is_order_stable(self) -> None:
         expressions = ["w:mon", "m:1", "y:12-25", "w/2:mon", "malformed"]

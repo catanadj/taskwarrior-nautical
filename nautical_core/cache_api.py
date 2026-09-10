@@ -380,7 +380,15 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def dnf_cache_fingerprint() -> str:
         """Identify parser, cache schema, and installed release inputs."""
         parser_parts = []
-        for module_name in ("parsing.parser_dnf", "parser_api", "parsing.parser_support_api", "parsing.parser_models", "strict_validation"):
+        for module_name in (
+            "parsing.parser_atoms",
+            "parsing.parser_dnf",
+            "parsing.parser_frontend",
+            "parser_api",
+            "parsing.parser_support_api",
+            "parsing.parser_models",
+            "strict_validation",
+        ):
             try:
                 sibling = import_sibling(module_name)
                 parser_parts.append(f"{module_name}:{_source_signature(getattr(sibling, '__file__', ''))}")

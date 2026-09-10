@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import tempfile
-import time
 import unittest
 
 import nautical_core as core
@@ -80,7 +79,9 @@ class CacheApiContractTests(unittest.TestCase):
             path.write_bytes(b"not valid cache data")
             self.assertIsNone(binding.cache_load("broken"))
             self.assertFalse(path.exists())
-            self.assertEqual(list(root.glob("broken.jsonz.bad.*")), [*root.glob("broken.jsonz.bad.*")])
+            quarantined = list(root.glob("broken.jsonz.bad.*"))
+            self.assertEqual(len(quarantined), 1)
+            self.assertEqual(quarantined[0].read_bytes(), b"not valid cache data")
             self.assertIsNone(binding.cache_load("broken"))
 
     def test_lock_refusal_is_retry_safe_and_release_allows_save(self) -> None:
@@ -130,6 +131,10 @@ class CacheApiContractTests(unittest.TestCase):
             self.assertIn("private", self._namespaces[-2]["_CACHE_LOAD_MEM"])
             self.assertNotIn("private", self._namespaces[-1]["_CACHE_LOAD_MEM"])
             self.assertEqual(first._cache_lock_path("private"), second._cache_lock_path("private"))
+            with first.safe_lock(first._cache_lock_path("private"), retries=1, sleep_base=0) as held:
+                self.assertTrue(held)
+                with second.safe_lock(second._cache_lock_path("private"), retries=1, sleep_base=0) as competing:
+                    self.assertFalse(competing)
 
 
 if __name__ == "__main__":

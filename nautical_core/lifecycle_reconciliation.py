@@ -156,6 +156,85 @@ class CallbackLifecycleRecoveryOperations:
         return self.recovery_exception_callback(parent, exc)
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleRecoveryPolicy:
+    """Pure recovery decisions shared by reconcile front ends.
+
+    Taskwarrior-specific parsing and validation are injected at the boundary;
+    timing and virtual-expiration policy remain owned by this service module.
+    """
+
+    parse_datetime: Callable[[Any], tuple[Any, str | None]]
+    compare_datetimes: Callable[[Any, Any], int]
+    validate_child: Callable[[TaskPayload, TaskPayload], str]
+    virtual_uuid: Callable[[LifecyclePlan], str]
+
+    def terminal_error(self, child: TaskObservation, recovery_at: Any) -> str:
+        if not isinstance(child, TaskObservation):
+            raise TypeError("terminal recovery validation requires a TaskObservation")
+
+        def value(field: str) -> Any:
+            state = child.field(field)
+            return state.raw_value() if state.presence is FieldPresence.VALUE else None
+
+        if str(value("status") or "").strip().lower() != "pending":
+            return ""
+        try:
+            until_dt, until_err = self.parse_datetime(value("until"))
+        except Exception:
+            return "live recovery child native until could not be parsed"
+        if until_err or until_dt is None:
+            return f"live recovery child has no reliable native until: {until_err or 'missing until'}"
+        target_field = "due" if value("due") else "scheduled"
+        try:
+            target_dt, target_err = self.parse_datetime(value(target_field))
+        except Exception:
+            return f"live recovery child {target_field} could not be parsed"
+        if target_err or target_dt is None:
+            return f"live recovery child has no reliable {target_field}: {target_err or f'missing {target_field}'}"
+        try:
+            if self.compare_datetimes(until_dt, target_dt) <= 0:
+                return f"live recovery child native until is not later than its {target_field}"
+            if self.compare_datetimes(until_dt, recovery_at) <= 0:
+                return "live recovery child native until has already elapsed"
+        except Exception:
+            return "live recovery child timing could not be compared"
+        return ""
+
+    def virtual_expired_child(
+        self,
+        plan: LifecyclePlan,
+        *,
+        parent: TaskObservation,
+        recovery_at: Any,
+    ) -> tuple[VirtualExpiredChild | None, str]:
+        if plan.action is not LifecycleAction.SPAWN_CHILD:
+            return None, "planned child draft is unavailable"
+        child = plan.child_dict()
+        until_raw = child.get("until")
+        try:
+            until_dt, until_err = self.parse_datetime(until_raw)
+        except Exception:
+            return None, "planned child expiration could not be parsed"
+        if until_err or until_dt is None:
+            return None, f"planned child has no reliable native until: {until_err or 'missing until'}"
+        try:
+            if self.compare_datetimes(until_dt, recovery_at) > 0:
+                return None, ""
+        except Exception:
+            return None, "planned child expiration could not be compared with recovery time"
+        child["status"] = "deleted"
+        child["end"] = until_raw
+        child["uuid"] = self.virtual_uuid(plan)
+        child.pop("nextLink", None)
+        validation_error = self.validate_child(parent.to_mapping(), child)
+        if validation_error:
+            return None, validation_error
+        return VirtualExpiredChild(
+            TaskObservation.from_mapping(child, source_query="reconcile virtual expiration")
+        ), ""
+
+
 
 def _sort_key(row: TaskObservation) -> tuple[str, int, str, str]:
     def value(name: str) -> object:

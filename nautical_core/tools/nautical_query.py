@@ -148,7 +148,7 @@ def _diagnostic(message: str) -> None:
         sys.stderr.write(f"[nautical] query: {message}\n")
 
 
-def _integrity_payload(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+def _integrity_payload(args: argparse.Namespace) -> tuple[OperatorV2Result, int]:
     """Validate the selector and delegate the audit to the shared service."""
     service = IntegrityQueryService(
         core=core,

@@ -39,7 +39,6 @@ from nautical_core.lifecycle_models import (  # noqa: E402
     DeletionDisposition,
     LifecycleAction,
     LifecyclePlan,
-    VirtualExpiredChild,
     recurrence_fingerprint,
 )
 from nautical_core.lifecycle_recovery_models import RecoveryPlanResult, RecoveryRefusal, RecoveryResult, RecoveryStatus  # noqa: E402
@@ -1066,42 +1065,6 @@ def _validate_recovery_child(parent: TaskPayload, child: TaskPayload) -> str:
     return child_error
 
 
-def _terminal_recovery_error(child: TaskObservation, hook: Any, recovery_at: Any) -> str:
-    if not isinstance(child, TaskObservation):
-        raise TypeError("terminal recovery validation requires a TaskObservation")
-
-    def value(field: str) -> Any:
-        state = child.field(field)
-        return state.raw_value() if state.presence is FieldPresence.VALUE else None
-
-    if str(value("status") or "").strip().lower() != "pending":
-        return ""
-    until_raw = value("until")
-    try:
-        until_dt, until_err = _safe_parse_datetime(hook, until_raw)
-    except Exception:
-        return "live recovery child native until could not be parsed"
-    if until_err or until_dt is None:
-        return f"live recovery child has no reliable native until: {until_err or 'missing until'}"
-
-    target_field = "due" if value("due") else "scheduled"
-    target_raw = value(target_field)
-    try:
-        target_dt, target_err = _safe_parse_datetime(hook, target_raw)
-    except Exception:
-        return f"live recovery child {target_field} could not be parsed"
-    if target_err or target_dt is None:
-        return f"live recovery child has no reliable {target_field}: {target_err or f'missing {target_field}'}"
-    try:
-        if compare_datetimes(until_dt, target_dt) <= 0:
-            return f"live recovery child native until is not later than its {target_field}"
-        if compare_datetimes(until_dt, recovery_at) <= 0:
-            return "live recovery child native until has already elapsed"
-    except Exception:
-        return "live recovery child timing could not be compared"
-    return ""
-
-
 def _next_recovery_child(
     parent: TaskObservation,
     child_short: str,
@@ -1132,44 +1095,6 @@ def _next_recovery_child(
     if validation_error:
         raise RuntimeError(validation_error)
     return child_observation
-
-
-def _virtual_expired_child(
-    plan: LifecyclePlan,
-    *,
-    parent: TaskObservation,
-    hook: Any,
-    recovery_at: Any,
-) -> tuple[VirtualExpiredChild | None, str]:
-    if plan.action is not LifecycleAction.SPAWN_CHILD:
-        return None, "planned child draft is unavailable"
-    child = plan.child_dict()
-    until_raw = child.get("until")
-    try:
-        until_dt, until_err = _safe_parse_datetime(hook, until_raw)
-    except Exception:
-        return None, "planned child expiration could not be parsed"
-    if until_err or until_dt is None:
-        return None, f"planned child has no reliable native until: {until_err or 'missing until'}"
-    try:
-        if compare_datetimes(until_dt, recovery_at) > 0:
-            return None, ""
-    except Exception:
-        return None, "planned child expiration could not be compared with recovery time"
-
-    child["status"] = "deleted"
-    child["end"] = until_raw
-    child["uuid"] = (
-        f"dryrun-{str(child.get('chainID') or 'chain')}-"
-        f"{lifecycle.int_or_default(child.get('link'), plan.identity.target_link or 0)}"
-    )
-    child.pop("nextLink", None)
-    validation_error = _validate_recovery_child(parent.to_mapping(), child)
-    if validation_error:
-        return None, validation_error
-    return VirtualExpiredChild(
-        TaskObservation.from_mapping(child, source_query="reconcile virtual expiration")
-    ), ""
 
 
 def _recovery_policy(hook: Any) -> LifecycleRecoveryPolicy:

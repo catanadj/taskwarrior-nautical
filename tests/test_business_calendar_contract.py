@@ -15,12 +15,14 @@ class BusinessCalendarHelperContractTests(unittest.TestCase):
             name="work",
             fingerprint="work-v1",
             anchor_dates=frozenset({date(2026, 9, 12)}),
-            omit_dates=frozenset({date(2026, 9, 12)}),
+            omit_dates=frozenset({date(2026, 9, 14)}),
             _anchor_matches=lambda value: value == date(2026, 9, 13),
-            _omit_matches=lambda value: value == date(2026, 9, 13),
+            _omit_matches=lambda value: value == date(2026, 9, 15),
         )
-        self.assertFalse(configured.is_business_day(date(2026, 9, 12)))
-        self.assertFalse(configured.is_business_day(date(2026, 9, 13)))
+        self.assertTrue(configured.is_business_day(date(2026, 9, 12)))
+        self.assertTrue(configured.is_business_day(date(2026, 9, 13)))
+        self.assertFalse(configured.is_business_day(date(2026, 9, 14)))
+        self.assertFalse(configured.is_business_day(date(2026, 9, 15)))
 
     def test_search_shift_and_month_helpers_obey_limits(self):
         saturday = date(2026, 9, 12)
@@ -35,6 +37,18 @@ class BusinessCalendarHelperContractTests(unittest.TestCase):
         self.assertEqual(business_calendar.business_day_offsets_for_iso_week(2026, 37), [0, 1, 2, 3, 4])
         with self.assertRaises(business_calendar.BusinessCalendarSearchError):
             business_calendar.find_business_day(saturday, 1, max_scan_days=1)
+        never_business = business_calendar.ConfiguredBusinessCalendar(
+            name="closed",
+            fingerprint="closed-v1",
+            anchor_dates=frozenset(),
+            omit_dates=frozenset(),
+            _anchor_matches=lambda value: False,
+            _omit_matches=lambda value: False,
+        )
+        with self.assertRaises(business_calendar.BusinessCalendarSearchError):
+            business_calendar.shift_business_days(
+                date(2026, 9, 11), 1, never_business, max_scan_days_per_step=2
+            )
         with self.assertRaises(ValueError):
             business_calendar.find_business_day(saturday, 0)
 

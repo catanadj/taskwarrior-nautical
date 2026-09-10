@@ -77,8 +77,15 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
             calls.append(("load", expression, directory))
             return frozenset({date(2026, 1, 2) if "anchor" in directory else date(2026, 1, 3)})
 
-        result = business_calendar_config.resolve_business_calendars(
-            {" Work ": {"anchor": "y:01", "anchor_file": "anchor.txt", "omit": "y:02", "omit_file": "omit.txt"}},
+        raw_config = {
+            " Work ": {
+                "anchor": "y:01",
+                "anchor_file": "anchor.txt",
+                "omit": "y:02",
+                "omit_file": "omit.txt",
+            }
+        }
+        resolve_kwargs = dict(
             anchor_file_dir="anchor-dir",
             omit_file_dir="omit-dir",
             validate_anchor_expr=validate_rule,
@@ -91,6 +98,7 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
             load_anchor_file_dates=load,
             load_omit_file_dates=load,
         )
+        result = business_calendar_config.resolve_business_calendars(raw_config, **resolve_kwargs)
         self.assertIsInstance(result, MappingProxyType)
         calendar = result["work"]
         self.assertEqual(calendar.anchor_dates, frozenset({date(2026, 1, 2)}))
@@ -99,6 +107,26 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
         self.assertFalse(calendar.is_business_day(date(2026, 1, 3)))
         self.assertEqual(len(calendar.fingerprint), 16)
         self.assertTrue(any(item[0] == "load" for item in calls))
+
+        equivalent = business_calendar_config.resolve_business_calendars(raw_config, **resolve_kwargs)
+        self.assertEqual(equivalent["work"].fingerprint, calendar.fingerprint)
+
+        changed_rule = {"work": {**raw_config[" Work "], "anchor": "y:03"}}
+        changed_rule_result = business_calendar_config.resolve_business_calendars(
+            changed_rule, **resolve_kwargs
+        )
+        self.assertNotEqual(changed_rule_result["work"].fingerprint, calendar.fingerprint)
+
+        def changed_load(expression, directory):
+            if "anchor" in directory:
+                return frozenset({date(2026, 1, 4)})
+            return frozenset({date(2026, 1, 3)})
+
+        changed_files = business_calendar_config.resolve_business_calendars(
+            raw_config,
+            **{**resolve_kwargs, "load_anchor_file_dates": changed_load},
+        )
+        self.assertNotEqual(changed_files["work"].fingerprint, calendar.fingerprint)
 
     def test_resolve_reports_expression_file_and_loader_failures(self):
         base = {"work": {"anchor": "y:01"}}

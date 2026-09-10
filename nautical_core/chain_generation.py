@@ -134,13 +134,14 @@ class ChainGenerationService:
         cls,
         core: Any,
         *,
+        datetime_parser: TaskDatetimeParser | None = None,
         recurrence_update_udas: tuple[str, ...] | list[str] = (),
         debug_wait_sched: bool = False,
         wait_sched_debug: MutableMapping[str, dict[str, Any]] | None = None,
     ) -> "ChainGenerationService":
         return cls(
             core=core,
-            datetime_parser=parser_for_core(core),
+            datetime_parser=datetime_parser or parser_for_core(core),
             recurrence_update_udas=tuple(
                 str(value) for value in recurrence_update_udas if str(value).strip()
             ),

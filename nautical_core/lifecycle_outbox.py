@@ -28,6 +28,7 @@ OUTBOX_ACK_RETENTION_SECONDS = 90.0 * 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS = 24.0 * 60.0 * 60.0
 OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 OUTBOX_HOUSEKEEPING_ROW_LIMIT = 1000
+OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE = "filesystem_security_failure"
 _INIT_RETRIES = 8
 _INIT_BACKOFF_S = 0.025
 _MAX_INIT_BACKOFF_S = 0.25
@@ -575,7 +576,12 @@ class LifecycleOutboxRepository:
         finally:
             self._metric("outbox_operation_seconds", time.perf_counter() - started)
             if conn is not None:
-                self._secure_state_files()
+                try:
+                    self._secure_state_files()
+                except Exception:
+                    # Cleanup hardening must never replace the structured
+                    # operation result or prevent connection closure.
+                    pass
                 conn.close()
 
     @staticmethod
@@ -1273,9 +1279,7 @@ class LifecycleOutboxRepository:
     def resolve_manual_review(self, *, intent_id: str, reason: str) -> OutboxResult:
         """Explicitly close a review only after an operator proved convergence."""
         now = self._clock()
-        try:
-            conn = self._connect()
-            self._initialize(conn)
+        def operation(conn: sqlite3.Connection) -> OutboxResult:
             with self._transaction(conn):
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is None:
@@ -1292,14 +1296,8 @@ class LifecycleOutboxRepository:
                      OutboxProcessingState.MANUAL_REVIEW.value),
                 )
             return OutboxResult(OutboxResultKind.APPLIED)
-        except Exception as exc:
-            return OutboxResult(OutboxResultKind.REJECTED, reason=f"manual review resolution failed: {exc}")
-        finally:
-            try:
-                self._secure_state_files()
-                conn.close()
-            except (UnboundLocalError, AttributeError):
-                pass
+
+        return self._with_connection(operation)
 
     def acknowledge_many(
         self,
@@ -1655,6 +1653,13 @@ class LifecycleOutboxRepository:
                 reason=str(exc),
                 lock_busy=_busy(exc),
             )
+        except OSError as exc:
+            return OutboxMaintenanceResult(
+                OutboxResultKind.REJECTED,
+                cutoff=cutoff,
+                retention_seconds=retention,
+                reason=f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}: {type(exc).__name__}: {exc}",
+            )
         except Exception as exc:
             return OutboxMaintenanceResult(
                 OutboxResultKind.REJECTED,
@@ -1781,6 +1786,13 @@ class LifecycleOutboxRepository:
                 reason=str(exc),
                 lock_busy=_busy(exc),
             )
+        except OSError as exc:
+            return OutboxMaintenanceResult(
+                OutboxResultKind.REJECTED,
+                cutoff=cutoff,
+                retention_seconds=retention,
+                reason=f"{OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE}: {type(exc).__name__}: {exc}",
+            )
         except Exception as exc:
             return OutboxMaintenanceResult(
                 OutboxResultKind.REJECTED,
@@ -1802,6 +1814,7 @@ __all__ = (
     "OUTBOX_HOUSEKEEPING_INTERVAL_SECONDS",
     "OUTBOX_HOUSEKEEPING_SIZE_THRESHOLD_BYTES",
     "OUTBOX_HOUSEKEEPING_ROW_LIMIT",
+    "OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE",
     "OutboxFailure",
     "OutboxMaintenanceResult",
     "OutboxProcessingState",

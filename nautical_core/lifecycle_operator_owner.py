@@ -12,7 +12,7 @@ from .operator_models import OperatorFailure, OperatorOperation, OperatorResult,
 
 class LifecycleApplicationPort(Protocol):
     def stage(self, plan: LifecyclePlan, *, configuration_fingerprint: str, schedule_fingerprint: str) -> LifecycleApplicationOutcome: ...
-    def drain(self, *, configuration_fingerprint: str, schedule_fingerprint: str): ...
+    def drain(self, *, limit: int, configuration_fingerprint: str, schedule_fingerprint: str): ...
     def apply_immediate(self, plan: LifecyclePlan) -> LifecycleApplicationOutcome: ...
 
 
@@ -35,6 +35,7 @@ class LifecycleOperatorOwner:
             if not staged.ok:
                 return self._result(staged.kind, staged.reason, staged.intent_id)
             drained = self._service.drain(
+                limit=1,
                 configuration_fingerprint=authorization.configuration_fingerprint,
                 schedule_fingerprint=authorization.schedule_fingerprint,
             )

@@ -126,6 +126,27 @@ class DrainResult:
     outcomes: tuple[LifecycleApplicationOutcome, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleExecutionCapabilities:
+    """Mutation, verification, and outbox operations resolved at composition."""
+
+    apply_unverified: Callable[..., Any] | None
+    apply_children_unverified: Callable[..., Any] | None
+    verify_children: Callable[..., Any] | None
+    verify_parents: Callable[..., Any] | None
+    preflight: Callable[..., Any] | None
+
+    @classmethod
+    def from_dependencies(cls, mutations: Any | None) -> "LifecycleExecutionCapabilities":
+        return cls(
+            apply_unverified=getattr(mutations, "apply_lifecycle_unverified", None),
+            apply_children_unverified=getattr(mutations, "apply_lifecycle_children_unverified", None),
+            verify_children=getattr(mutations, "verify_lifecycle_children", None),
+            verify_parents=getattr(mutations, "verify_lifecycle_parents", None),
+            preflight=getattr(mutations, "preflight_lifecycle_batch", None),
+        )
+
+
 @dataclass(slots=True)
 class _BatchState:
     record: LifecycleOutboxRecord
@@ -375,6 +396,7 @@ class LifecycleApplicationService:
         self._owner = str(owner or "").strip() or f"pid-{os.getpid()}"
         self._lease_seconds = max(1.0, float(lease_seconds))
         self._budget = budget
+        self._execution = LifecycleExecutionCapabilities.from_dependencies(mutations)
 
     def _require_execution_deps(self) -> None:
         if self._uow is None or self._mutations is None:
@@ -491,10 +513,10 @@ class LifecycleApplicationService:
             return DrainResult(claim=OutboxResult(OutboxResultKind.APPLIED), outcomes=())
         if any(not isinstance(record, LifecycleOutboxRecord) for record in claimed):
             raise LifecycleApplicationError("claimed lifecycle drain requires typed outbox records")
-        batch_apply = getattr(self._mutations, "apply_lifecycle_unverified", None)
-        batch_children_apply = getattr(self._mutations, "apply_lifecycle_children_unverified", None)
-        batch_children = getattr(self._mutations, "verify_lifecycle_children", None)
-        batch_parents = getattr(self._mutations, "verify_lifecycle_parents", None)
+        batch_apply = self._execution.apply_unverified
+        batch_children_apply = self._execution.apply_children_unverified
+        batch_children = self._execution.verify_children
+        batch_parents = self._execution.verify_parents
         if not all(callable(item) for item in (batch_apply, batch_children_apply, batch_children, batch_parents)):
             raise LifecycleApplicationError("claimed lifecycle drain requires batched mutation operations")
         session = getattr(self._outbox, "session", None)
@@ -548,7 +570,7 @@ class LifecycleApplicationService:
         validated = tuple(plans)
         if any(not isinstance(plan, LifecyclePlan) for plan in validated):
             raise LifecycleApplicationError("lifecycle wave requires validated plans")
-        preflight = getattr(self._mutations, "preflight_lifecycle_batch", None)
+        preflight = self._execution.preflight
         if callable(preflight) and validated:
             payloads = tuple(
                 payload
@@ -700,7 +722,7 @@ class LifecycleApplicationService:
         )
         config = str(configuration_fingerprint or "").strip()
         schedule = str(schedule_fingerprint or "").strip()
-        preflight = getattr(self._mutations, "preflight_lifecycle_batch", None)
+        preflight = self._execution.preflight
         if callable(preflight):
             payloads = tuple(
                 payload
@@ -721,10 +743,10 @@ class LifecycleApplicationService:
                 # Prefetch is an optimization only; normal authoritative
                 # UUID reads remain the correctness fallback.
                 pass
-        batch_apply = getattr(self._mutations, "apply_lifecycle_unverified", None)
-        batch_children_apply = getattr(self._mutations, "apply_lifecycle_children_unverified", None)
-        batch_children = getattr(self._mutations, "verify_lifecycle_children", None)
-        batch_parents = getattr(self._mutations, "verify_lifecycle_parents", None)
+        batch_apply = self._execution.apply_unverified
+        batch_children_apply = self._execution.apply_children_unverified
+        batch_children = self._execution.verify_children
+        batch_parents = self._execution.verify_parents
         if len(records) > 1 and all(callable(item) for item in (batch_apply, batch_children_apply, batch_children, batch_parents)):
             return self._drain_batched(
                 claim,

@@ -137,7 +137,7 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
             hook=object(),
             generation=type("Generation", (), {
                 "core": object(),
-                "safe_parse_datetime": staticmethod(lambda value: (None, "unused")),
+                "parse_datetime": staticmethod(lambda value: (None, "unused")),
             })(),
         )
         self.assertIsInstance(result, RecoveryPlanResult)

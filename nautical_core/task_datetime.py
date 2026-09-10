@@ -82,10 +82,27 @@ def parser_for_core(core: object, *, diagnostic: DiagnosticSink | None = None) -
     return ConfiguredTaskDatetimeParser(parse_dt_any, diagnostic=diagnostic)
 
 
+def datetime_value(parser: TaskDatetimeParser, value: object) -> datetime | None:
+    """Explicitly adapt the tuple port for callers needing only a value."""
+    parsed, _error = parser.parse(value)
+    return parsed
+
+
+def parser_for_host(host: object, *, diagnostic: DiagnosticSink | None = None) -> TaskDatetimeParser:
+    """Return the composition-root parser carried by a hook host."""
+    parser = getattr(host, "_TASK_DATETIME_PARSER", None)
+    if parser is not None and callable(getattr(parser, "parse", None)):
+        return parser
+    core = getattr(host, "core", None)
+    return parser_for_core(core, diagnostic=diagnostic or getattr(host, "_diag", None))
+
+
 __all__ = (
     "ConfiguredTaskDatetimeParser",
     "DatetimeParseFn",
     "DiagnosticSink",
     "TaskDatetimeParser",
+    "datetime_value",
     "parser_for_core",
+    "parser_for_host",
 )

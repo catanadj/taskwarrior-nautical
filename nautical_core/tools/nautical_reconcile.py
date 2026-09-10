@@ -51,7 +51,7 @@ from nautical_core.integration_models import (  # noqa: E402
 from nautical_core.task_read_repository import TaskReadRepository  # noqa: E402
 from nautical_core.task_models import FieldPresence, NauticalTask, TaskDraft, TaskObservation, TaskPayload  # noqa: E402
 from nautical_core.task_codec import DEFAULT_TASK_CODEC  # noqa: E402
-from nautical_core.task_datetime import parser_for_core  # noqa: E402
+from nautical_core.task_datetime import TaskDatetimeParser, parser_for_core  # noqa: E402
 from nautical_core.timeutil import compare_datetimes  # noqa: E402
 from nautical_core.taskwarrior_uow import (  # noqa: E402
     TaskwarriorUnitOfWork,
@@ -181,16 +181,16 @@ def _format_local_until(hook: Any, value: Any) -> str:
 def _parse_datetime(hook: Any, value: Any):
     # Reconcile and hook workflows use the same configured parser port.  The
     # hook object remains an integration carrier, never the parser contract.
-    configured = getattr(hook, "datetime_parser", None)
+    state = _reconcile_runtime_state()
+    configured = getattr(state, "datetime_parser", None) if state is not None else None
+    if configured is None:
+        configured = getattr(hook, "datetime_parser", None)
     if configured is not None and callable(getattr(configured, "parse", None)):
         return configured.parse(value)
     core = _runtime_core(hook)
     if core is None:
         return None, "datetime parser unavailable"
     if not callable(getattr(core, "parse_dt_any", None)):
-        fallback = getattr(hook, "safe_parse_datetime", None)
-        if callable(fallback):
-            return fallback(value)
         return None, "datetime parser unavailable"
     diagnostic = getattr(hook, "_diag", None)
     return parser_for_core(core, diagnostic=diagnostic).parse(value)
@@ -290,17 +290,19 @@ def _observation_text(observation: TaskObservation, field: str) -> str:
 class _ReconcileRuntimeState:
     """Invocation-scoped read/service state; never shared between runs."""
 
-    __slots__ = ("repository", "snapshot", "lifecycle_service")
+    __slots__ = ("repository", "snapshot", "lifecycle_service", "datetime_parser")
 
     def __init__(
         self,
         repository: TaskReadRepository,
         snapshot: ReconcileSnapshotService,
         lifecycle_service: LifecycleReconciliationService,
+        datetime_parser: TaskDatetimeParser,
     ) -> None:
         self.repository = repository
         self.snapshot = snapshot
         self.lifecycle_service = lifecycle_service
+        self.datetime_parser = datetime_parser
 
 
 _RECONCILE_RUNTIME: ContextVar[_ReconcileRuntimeState | None] = ContextVar(
@@ -636,8 +638,10 @@ def _chain_generation_for_hook(hook: Any) -> ChainGenerationService:
         raise RuntimeError("configured Nautical core is unavailable")
     if not callable(getattr(core, "parse_cp_sequence_tokens", None)):
         return ChainGenerationService.from_hook(hook)
+    state = _reconcile_runtime_state()
     return ChainGenerationService.from_core(
         core,
+        datetime_parser=getattr(state, "datetime_parser", None) if state is not None else None,
         recurrence_update_udas=tuple(getattr(core, "RECURRENCE_UPDATE_UDAS", ()) or ()),
         debug_wait_sched=bool(getattr(core, "DEBUG_WAIT_SCHED", False)),
     )
@@ -1255,10 +1259,10 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
 class _ReconcileSession:
     """Validated, task-scoped services shared by one reconcile invocation."""
 
-    __slots__ = ("unit_of_work", "repository", "snapshot", "control_plane", "mutation_gateway", "integrity_outbox", "lifecycle_service", "lifecycle_application", "runtime_state")
+    __slots__ = ("unit_of_work", "repository", "snapshot", "control_plane", "mutation_gateway", "integrity_outbox", "lifecycle_service", "lifecycle_application", "runtime_state", "datetime_parser")
 
     def __init__(self, unit_of_work, repository, snapshot, control_plane, mutation_gateway,
-                 integrity_outbox, lifecycle_service, lifecycle_application, runtime_state):
+                 integrity_outbox, lifecycle_service, lifecycle_application, runtime_state, datetime_parser):
         self.unit_of_work = unit_of_work
         self.repository = repository
         self.snapshot = snapshot
@@ -1268,6 +1272,7 @@ class _ReconcileSession:
         self.lifecycle_service = lifecycle_service
         self.lifecycle_application = lifecycle_application
         self.runtime_state = runtime_state
+        self.datetime_parser = datetime_parser
 
     def audit_integrity(self, *, hook: Any, apply: bool) -> tuple[Any, Any, float, tuple[Any, ...], float]:
         """Audit and, when authorized, apply integrity plans for this snapshot."""
@@ -1323,6 +1328,7 @@ def _build_reconcile_session(
     unit_of_work: TaskwarriorUnitOfWork,
     *,
     budget: OperatorInvocationBudget | None = None,
+    datetime_parser: TaskDatetimeParser | None = None,
 ) -> _ReconcileSession:
     repository = unit_of_work.repository
     repository.configure_commands(timeout=120.0, attempts=2, retry_delay=0.05)
@@ -1355,10 +1361,12 @@ def _build_reconcile_session(
         unit_of_work=unit_of_work,
         application=lifecycle_application,
     )
+    datetime_parser = datetime_parser or parser_for_core(nautical_core_package)
     return _ReconcileSession(
         unit_of_work, repository, snapshot, control_plane, mutation_gateway,
         integrity_outbox, lifecycle_service, lifecycle_application,
-        _ReconcileRuntimeState(repository, snapshot, lifecycle_service),
+        _ReconcileRuntimeState(repository, snapshot, lifecycle_service, datetime_parser),
+        datetime_parser,
     )
 
 
@@ -1416,7 +1424,12 @@ def main(
         return _startup_failure(args, "runtime", exc)
     global _UNIT_OF_WORK
     _UNIT_OF_WORK = _unit_of_work
-    session = _build_reconcile_session(args, _UNIT_OF_WORK, budget=budget)
+    session = _build_reconcile_session(
+        args,
+        _UNIT_OF_WORK,
+        budget=budget,
+        datetime_parser=parser_for_core(core),
+    )
     repository = session.repository
     snapshot = session.snapshot
     operator_control_plane = session.control_plane

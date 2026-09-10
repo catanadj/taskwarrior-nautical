@@ -4,7 +4,6 @@ import unittest
 
 from nautical_core.add_validation import validate_datetime_field
 from nautical_core.chain_generation import ChainGenerationService
-from nautical_core.modify_datetime_effects import parse_datetime
 from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
 from nautical_core.tools.nautical_reconcile import _parse_datetime
 
@@ -31,7 +30,7 @@ class TaskDatetimeContractTests(unittest.TestCase):
         }
         for value, result in expected.items():
             self.assertEqual(parser.parse(value), result)
-            self.assertEqual(parse_datetime(parser, value), result)
+            self.assertEqual(parser.parse(value), result)
             self.assertEqual(
                 validate_datetime_field(value, "due", parser=parser),
                 (result[0], f"due: {result[1]}" if result[1] else None),
@@ -53,7 +52,7 @@ class TaskDatetimeContractTests(unittest.TestCase):
         parser = ConfiguredTaskDatetimeParser(raising, diagnostic=diagnostics.append)
         expected = (None, "Datetime parsing failed")
         self.assertEqual(parser.parse("value"), expected)
-        self.assertEqual(parse_datetime(parser, "value"), expected)
+        self.assertEqual(parser.parse("value"), expected)
         self.assertEqual(validate_datetime_field("value", "until", parser=parser), (None, "until: Datetime parsing failed"))
         self.assertEqual(len(diagnostics), 3)
         self.assertTrue(all("parser exploded" in item for item in diagnostics))

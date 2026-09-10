@@ -271,7 +271,7 @@ def invalid_relative_carry_reason(
     generation = generation or _generation_service(hook)
     core = generation.core
     utc_to_local_naive = getattr(core, "utc_to_local_naive", None)
-    if not callable(getattr(core, "parse_dt_any", None)) or not callable(utc_to_local_naive):
+    if not callable(utc_to_local_naive):
         return None
     parent_field = native_until_target_field(parent)
     fields = ["wait"]
@@ -285,11 +285,13 @@ def invalid_relative_carry_reason(
         if not child_value_raw:
             return f"{field} carry is missing from the reconciled child"
         try:
-            parent_target = core.parse_dt_any(_observation_value(parent, parent_field))
-            parent_value = core.parse_dt_any(parent_value_raw)
-            child_target = core.parse_dt_any(child.field_value(child_field))
-            child_value = core.parse_dt_any(child_value_raw)
-            if not all((parent_target, parent_value, child_target, child_value)):
+            parent_target, parent_target_error = generation.parse_datetime(_observation_value(parent, parent_field))
+            parent_value, parent_value_error = generation.parse_datetime(parent_value_raw)
+            child_target, child_target_error = generation.parse_datetime(child.field_value(child_field))
+            child_value, child_value_error = generation.parse_datetime(child_value_raw)
+            if not all((parent_target, parent_value, child_target, child_value)) or any(
+                (parent_target_error, parent_value_error, child_target_error, child_value_error)
+            ):
                 return f"{field} carry contains an unparseable timestamp"
             parent_delta = utc_to_local_naive(parent_value) - utc_to_local_naive(parent_target)
             child_delta = utc_to_local_naive(child_value) - utc_to_local_naive(child_target)

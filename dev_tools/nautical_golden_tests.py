@@ -11930,7 +11930,7 @@ def test_chain_health_advice_coach_healthy_streak():
         "cp",
         {"cp": "3d"},
         core=mod.core,
-        parse_datetime=mod._dtparse,
+        parse_datetime=lambda value: mod._TASK_DATETIME_PARSER.parse(value)[0],
         format_delta=mod._module("modify_value_effects").format_delta,
         coerce_int=mod.core.coerce_int,
         tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
@@ -11958,7 +11958,7 @@ def test_chain_health_advice_coach_low_ontime_issue():
         "cp",
         {"cp": "1d"},
         core=mod.core,
-        parse_datetime=mod._dtparse,
+        parse_datetime=lambda value: mod._TASK_DATETIME_PARSER.parse(value)[0],
         format_delta=mod._module("modify_value_effects").format_delta,
         coerce_int=mod.core.coerce_int,
         tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
@@ -11986,7 +11986,7 @@ def test_chain_health_advice_clinical_drift_and_style_normalization():
         "anchor",
         {},
         core=mod.core,
-        parse_datetime=mod._dtparse,
+        parse_datetime=lambda value: mod._TASK_DATETIME_PARSER.parse(value)[0],
         format_delta=mod._module("modify_value_effects").format_delta,
         coerce_int=mod.core.coerce_int,
         tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
@@ -30577,7 +30577,7 @@ def test_reconcile_reuses_verified_live_recovery_child():
         except Exception:
             return None, "invalid datetime"
 
-    hook = SimpleNamespace(safe_parse_datetime=parse)
+    hook = SimpleNamespace(datetime_parser=SimpleNamespace(parse=parse))
     original_apply = tool._apply_parent_atomic
     original_lookup = tool._next_recovery_child
     try:

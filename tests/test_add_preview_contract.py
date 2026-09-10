@@ -55,9 +55,13 @@ class AddPreviewCompositionTests(unittest.TestCase):
         self.assertEqual(count, 2)
         self.assertEqual(last, datetime(2026, 1, 3, 9, tzinfo=UTC))
 
-    def test_sequence_period_rejects_empty_tokens(self):
-        with self.assertRaises(ZeroDivisionError):
-            add_preview_composition.cp_sequence_period_for_link(_Host(), [], "", 1)
+    def test_sequence_period_uses_zero_duration_for_unresolved_token(self):
+        # The parser normally rejects this input.  At this lower boundary an
+        # unresolved provider token has the stable no-op duration contract.
+        self.assertEqual(
+            add_preview_composition.cp_sequence_period_for_link(_Host(), [{}], "bad", 1),
+            timedelta(),
+        )
 
     def test_limit_rows_reports_minimum_cap_and_until(self):
         host = _Host()
@@ -113,6 +117,69 @@ class AddAnchorComputeTests(unittest.TestCase):
                 [], datetime(2026, 1, 2, tzinfo=UTC), date(2026, 1, 1), (9, 0), date(2026, 1, 1),
                 "chain", core=SimpleNamespace(), to_local_cached=lambda value: value, max_iterations=2,
             )
+
+    def test_anchor_build_preview_propagates_typed_provider_exhaustion(self):
+        failure = OccurrenceSearchExhausted(
+            "anchor preview", reference=date(9999, 12, 31), limit=3,
+            kind=OccurrenceSearchExhausted.DATE_LIMIT,
+        )
+        evaluator = SimpleNamespace(collect_after=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure))
+        core = SimpleNamespace(fmt_dt_local=lambda value: value.isoformat())
+        with self.assertRaises(OccurrenceSearchExhausted) as ctx:
+            add_anchor_compute.anchor_build_preview(
+                [], datetime(2026, 1, 1, 9, tzinfo=UTC), 3, None, (9, 0),
+                date(2026, 1, 1), "chain", core=core, evaluator=evaluator,
+            )
+        self.assertIs(ctx.exception, failure)
+
+    def test_until_summary_preserves_typed_provider_exhaustion(self):
+        failure = OccurrenceSearchExhausted(
+            "anchor summary", reference=date(9999, 12, 31), limit=4,
+            kind=OccurrenceSearchExhausted.DATE_LIMIT,
+        )
+        evaluator = SimpleNamespace(events_between=lambda *_args, **_kwargs: (_ for _ in ()).throw(failure))
+        core = SimpleNamespace(
+            build_local_datetime=lambda day, hhmm: datetime(
+                day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=UTC
+            )
+        )
+        with self.assertRaises(OccurrenceSearchExhausted) as ctx:
+            add_anchor_compute.anchor_until_summary(
+                [], datetime(2026, 1, 2, tzinfo=UTC), date(2026, 1, 1), (9, 0),
+                date(2026, 1, 1), "chain", core=core,
+                to_local_cached=lambda value: value, max_iterations=4, evaluator=evaluator,
+            )
+        self.assertIs(ctx.exception, failure)
+
+    def test_anchor_preview_filters_omitted_events_but_preserves_them_in_provider_stream(self):
+        included = Occurrence(
+            date(2026, 1, 2), 9, 0,
+            local_datetime=datetime(2026, 1, 2, 9, tzinfo=UTC),
+        )
+        omitted = Occurrence(
+            date(2026, 1, 3), 9, 0,
+            local_datetime=datetime(2026, 1, 3, 9, tzinfo=UTC), omitted=True,
+        )
+        batch = OccurrenceBatch([included, omitted])
+        scheduler_result = SimpleNamespace(occurrences=batch, terminal=None)
+        scheduler_service = SimpleNamespace(
+            session=SimpleNamespace(evaluator=SimpleNamespace(context=SimpleNamespace(timezone=UTC))),
+            collect=lambda *_args, **_kwargs: scheduler_result,
+        )
+        kwargs = dict(
+            dnf=[], anchor_file_str="", after_local_dt=datetime(2026, 1, 1, tzinfo=UTC),
+            inclusive=False, limit_included=1, fallback_hhmm=(9, 0),
+            default_seed_date=date(2026, 1, 1), seed_base="chain", omit_dnf=None,
+            core=SimpleNamespace(), next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
+            scheduler_service=scheduler_service,
+        )
+        stream = add_anchor_preview._collect_events_with_provider(**kwargs, return_occurrences=True)
+        self.assertEqual(stream, [included, omitted])
+        included_kwargs = dict(kwargs)
+        included_kwargs.pop("limit_included")
+        included_kwargs["limit"] = 1
+        included_only = add_anchor_preview._collect_included_with_provider(**included_kwargs)
+        self.assertEqual(included_only, [included.local_datetime])
 
 
 class AddAnchorPreviewTests(unittest.TestCase):

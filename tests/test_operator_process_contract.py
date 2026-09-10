@@ -15,7 +15,6 @@ from nautical_core.doctor_report import DoctorReport
 from nautical_core.installation_report import InstallationVerificationReport
 from nautical_core.operator_models import OperatorV2Result
 from nautical_core.query_models import QueryCapabilities
-from nautical_core.reconcile_report import ReconcileReport
 from nautical_core.taskwarrior_client import TaskwarriorClient
 
 
@@ -383,7 +382,7 @@ class OperatorProcessContractTests(unittest.TestCase):
                 env={"TASKDATA": str(taskdata)},
             )
             reconcile_payload = self._json(reconcile)
-            reconcile_decoded = ReconcileReport.from_mapping(reconcile_payload)
+            reconcile_decoded = OperatorV2Result.from_mapping(reconcile_payload)
             self.assertEqual(reconcile_decoded.to_dict(), reconcile_payload)
 
             doctor = self._run(

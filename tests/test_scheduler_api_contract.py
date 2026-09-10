@@ -1,4 +1,3 @@
-import os
 import unittest
 from datetime import date, timedelta
 from types import SimpleNamespace
@@ -83,7 +82,15 @@ class SchedulerAtomContractTests(unittest.TestCase):
         seed = date(2024, 1, 1)
         self.assertTrue(scheduler_atom.interval_allowed_for_atom("w", 2, seed, date(2024, 1, 15), weeks_between=weeks, year_index=years))
         self.assertFalse(scheduler_atom.interval_allowed_for_atom("w", 2, seed, date(2024, 1, 8), weeks_between=weeks, year_index=years))
-        self.assertTrue(scheduler_atom.interval_allowed_for_atom("y", 2, date(2024, 12, 30), date(2026, 1, 1), weeks_between=weeks, year_index=years, spec="w:1"))
+        # The ISO year changes at the end of December; this must use the
+        # candidate's ISO year rather than its Gregorian calendar year.
+        self.assertFalse(scheduler_atom.interval_allowed_for_atom("y", 2, date(2024, 12, 30), date(2026, 1, 1), weeks_between=weeks, year_index=years, spec="w1"))
+        self.assertTrue(scheduler_atom.interval_allowed_for_atom("y", 2, date(2024, 12, 30), date(2028, 1, 1), weeks_between=weeks, year_index=years, spec="w1"))
+        iso_probe = scheduler_atom.advance_probe_for_interval_bucket(
+            "y", 2, date(2024, 12, 30), date(2026, 1, 1),
+            weeks_between=weeks, year_index=years, date_cls=date, spec="w1"
+        )
+        self.assertEqual(iso_probe, date(2027, 1, 3))
         advanced = scheduler_atom.advance_probe_for_interval_bucket("w", 2, seed, date(2024, 1, 8), weeks_between=weeks, year_index=years, date_cls=date)
         self.assertEqual(advanced, date(2024, 1, 14))
         with self.assertRaises(OccurrenceSearchExhausted) as ctx:
@@ -100,7 +107,9 @@ class SchedulerAtomContractTests(unittest.TestCase):
         calls = []
         matches = scheduler_atom.atom_matches_on(
             {"typ": "w", "spec": "sat"}, target, target,
-            next_after_atom_with_mods=lambda atom, ref, seed, **kwargs: calls.append(ref) or target,
+            next_after_atom_with_mods=lambda atom, ref, seed, **kwargs: calls.append(ref) or (
+                target if ref == target - timedelta(days=1) else target - timedelta(days=1)
+            ),
         )
         self.assertTrue(matches)
         self.assertEqual(calls, [target - timedelta(days=1)])
@@ -110,25 +119,65 @@ class SchedulerAtomContractTests(unittest.TestCase):
             moon_phase_matches_date=lambda phase, day: False,
         ))
 
+    def test_atom_matches_on_rejects_nonmatching_concrete_candidate(self):
+        target = date(2026, 1, 10)
+        self.assertFalse(scheduler_atom.atom_matches_on(
+            {"typ": "w", "spec": "sat"}, target, target,
+            next_after_atom_with_mods=lambda atom, ref, seed, **kwargs: target - timedelta(days=1),
+        ))
+
 
 class SchedulerApiDelegationTests(unittest.TestCase):
     def test_base_wrapper_delegates_callbacks_and_calendar(self):
         seen = {}
+        calendars = []
         atom_module = SimpleNamespace(base_next_after_atom=lambda atom, ref, **kwargs: seen.update(kwargs) or date(2026, 2, 1))
         module = SimpleNamespace(
             _scheduler_atom=atom_module,
             expand_weekly_cached_mods="weekly",
             _split_csv_tokens="split",
-            _with_business_calendar=lambda fn, cal: fn,
+            _with_business_calendar=lambda fn, cal: (calendars.append(cal) or fn),
             expand_monthly_cached="monthly",
             expand_yearly_cached="yearly",
             _weekly_rand_pick="random",
             _week_monday="monday",
             _resolve_moon_phase_date="moon",
         )
-        self.assertEqual(scheduler_api._base_next_after_atom_impl(module, {"typ": "w"}, date(2026, 1, 1)), date(2026, 2, 1))
+        calendar = object()
+        self.assertEqual(scheduler_api._base_next_after_atom_impl(module, {"typ": "w"}, date(2026, 1, 1), business_calendar=calendar), date(2026, 2, 1))
         self.assertEqual(seen["expand_weekly_cached_mods"], "weekly")
         self.assertEqual(seen["date_cls"].__name__, "date")
+        self.assertEqual(calendars, [calendar, calendar])
+
+    def test_modified_atom_wrapper_delegates_all_contract_callbacks(self):
+        seen = {}
+        atom_module = SimpleNamespace(
+            next_after_atom_with_mods=lambda *args, **kwargs: seen.update(kwargs) or date(2026, 2, 2),
+        )
+        calendar = SimpleNamespace(is_business_day=lambda day: True)
+        module = SimpleNamespace(
+            _business_calendar=SimpleNamespace(effective_business_calendar=lambda value: calendar),
+            _with_business_calendar=lambda fn, cal: fn,
+            base_next_after_atom="base",
+            _monthly_align_base_for_interval="monthly",
+            roll_apply="roll",
+            apply_day_offset="offset",
+            _scheduler_atom=atom_module,
+            _active_mod_keys="active",
+            MAX_ANCHOR_ITER=12,
+            _warn_once_per_day="warn",
+            os="os",
+            _resolve_moon_phase_date="moon",
+            _moon_phase_matches_date="phase",
+        )
+        self.assertEqual(
+            scheduler_api._next_after_atom_with_mods_impl(
+                module, {"typ": "w"}, date(2026, 1, 1), date(2026, 1, 1), business_calendar="custom"
+            ),
+            date(2026, 2, 2),
+        )
+        self.assertIs(seen["is_business_day"], calendar.is_business_day)
+        self.assertEqual(seen["max_anchor_iter"], 12)
 
     def test_interval_wrapper_preserves_typed_exhaustion(self):
         failure = OccurrenceSearchExhausted("test", reference=date(2026, 1, 1), limit=2, kind=OccurrenceSearchExhausted.DATE_LIMIT)

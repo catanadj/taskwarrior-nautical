@@ -1318,6 +1318,18 @@ def handle_anchor_preview_on_add(
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
+    if anchor_file_str:
+        from . import anchor_files
+
+        anchor_description = anchor_files.anchor_file_description_for_date(
+            anchor_file_str,
+            getattr(core, "ANCHOR_FILE_DIR", ""),
+            first_due_local_dt.date(),
+            business_calendar=core.business_calendar_for_task(task),
+        )
+        if anchor_description:
+            rows.append(("Anchor event", f"[white]{anchor_description}[/]"))
+
     _append_dst_adjustment_row(rows, dnf, first_due_local_dt, core=core)
 
     if anchor_file_str and first_hhmm != fallback_hhmm:

@@ -90,7 +90,7 @@ class OperatorProcessContractTests(unittest.TestCase):
     def test_integrity_unavailable_result_keeps_failure_evidence(self) -> None:
         from nautical_core.query_report import to_operator_result
 
-        payload = to_operator_result({
+        result = to_operator_result({
             "schema": "nautical.query.integrity",
             "version": 1,
             "operation": "integrity",
@@ -99,9 +99,76 @@ class OperatorProcessContractTests(unittest.TestCase):
             "plans": [],
             "reason": "chain snapshot unavailable",
         })
-        self.assertEqual(payload["status"], "unavailable")
-        self.assertEqual(payload["failure"]["code"], "query_unavailable")
-        self.assertEqual(payload["failure"]["message"], "chain snapshot unavailable")
+        self.assertIsInstance(result, OperatorV2Result)
+        self.assertEqual(result.status.value, "unavailable")
+        self.assertIsNotNone(result.failure)
+        assert result.failure is not None
+        self.assertEqual(result.failure.code, "query_unavailable")
+        self.assertEqual(result.failure.message, "chain snapshot unavailable")
+
+    def test_report_converters_share_one_typed_result_contract(self) -> None:
+        from nautical_core.doctor_report import to_operator_result as doctor_result
+        from nautical_core.query_report import to_operator_result as query_result
+        from nautical_core.reconcile_report import to_operator_result as reconcile_result
+
+        results = (
+            query_result({
+                "schema": "nautical.query.occurrences",
+                "version": 1,
+                "operation": "occurrences",
+                "status": "found",
+                "results": [{"description": "café"}],
+            }),
+            doctor_result({
+                "schema": "nautical.doctor",
+                "schema_version": 1,
+                "status": "ok",
+                "operator_findings": [{"message": "café"}],
+            }),
+            reconcile_result({
+                "schema": "nautical.reconcile",
+                "schema_version": 1,
+                "status": "ok",
+                "mode": "dry-run",
+                "message": "café",
+            }),
+        )
+        self.assertTrue(all(isinstance(result, OperatorV2Result) for result in results))
+        self.assertEqual(results[0].payload["results"][0]["description"], "café")
+        self.assertEqual(results[2].payload["message"], "café")
+
+    def test_report_converters_keep_typed_failure_evidence(self) -> None:
+        from nautical_core.doctor_report import to_operator_result as doctor_result
+        from nautical_core.query_report import to_operator_result as query_result
+        from nautical_core.reconcile_report import to_operator_result as reconcile_result
+
+        results = (
+            query_result({
+                "schema": "nautical.query.occurrences",
+                "version": 1,
+                "operation": "occurrences",
+                "status": "invalid",
+                "failure": {"code": "bad_query", "message": "invalid café"},
+            }),
+            doctor_result({
+                "schema": "nautical.doctor",
+                "schema_version": 1,
+                "status": "error",
+                "operator_findings": [{"code": "broken", "message": "invalid café", "evidence": {"x": 1}}],
+            }),
+            reconcile_result({
+                "schema": "nautical.reconcile",
+                "schema_version": 1,
+                "status": "error",
+                "mode": "apply",
+                "errors": ["invalid café"],
+            }),
+        )
+        for result in results:
+            self.assertIsInstance(result, OperatorV2Result)
+            self.assertIsNotNone(result.failure)
+            assert result.failure is not None
+            self.assertTrue(result.failure.message)
 
     def test_reconcile_degraded_status_maps_to_findings_contract(self) -> None:
         from nautical_core.reconcile_report import to_operator_result
@@ -303,7 +370,7 @@ class OperatorProcessContractTests(unittest.TestCase):
             self.assertEqual(reconcile_payload.get("schema"), "nautical.reconcile")
 
     def test_operator_documents_round_trip_through_public_decoders(self) -> None:
-        """Doctor and queue use v2; reconcile remains JSON-native and stable."""
+        """Doctor, queue, and reconcile expose stable JSON operator documents."""
         with tempfile.TemporaryDirectory() as directory:
             taskdata = Path(directory)
             queue = self._run(QUEUE_STATUS, "--taskdata", str(taskdata), "--json")

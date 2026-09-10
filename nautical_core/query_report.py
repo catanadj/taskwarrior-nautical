@@ -8,23 +8,35 @@ from typing import Any, cast
 from .operator_models import OperatorFailure, OperatorV2Result, OperatorV2Status
 
 
-def error_payload(code: str, message: str, *, retryable: bool = False, operation: str = "occurrences") -> dict[str, Any]:
-    """Build a stable v1 query failure document for CLI transport errors."""
-    return {
-        "schema": "nautical.query.next" if operation == "next" else "nautical.query.occurrences",
-        "version": 1,
-        "operation": operation,
-        "status": "invalid" if not retryable else "unavailable",
-        "basis": "next" if operation == "next" else "schedule",
-        "timezone": None,
-        "query": None,
-        "configuration_fingerprint": None,
-        "results": [],
-        "failure": {"code": code, "message": str(message or code), "retryable": retryable, "task_uuid": None, "details": {}},
-    }
+def error_payload(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    operation: str = "occurrences",
+) -> OperatorV2Result:
+    """Build a typed query failure result for CLI transport errors."""
+    return OperatorV2Result(
+        schema="nautical.query.next" if operation == "next" else "nautical.query.occurrences",
+        operation=operation,
+        status=OperatorV2Status.UNAVAILABLE if retryable else OperatorV2Status.INVALID,
+        payload={
+            "basis": "next" if operation == "next" else "schedule",
+            "timezone": None,
+            "query": None,
+            "configuration_fingerprint": None,
+            "results": [],
+        },
+        failure=OperatorFailure(
+            code=code,
+            message=str(message or code),
+            retryable=retryable,
+            details={},
+        ),
+    )
 
 
-def to_operator_result(payload: Mapping[str, Any]) -> dict[str, Any]:
+def to_operator_result(payload: Mapping[str, Any]) -> OperatorV2Result:
     """Upgrade a validated v1 query document to the canonical v2 envelope."""
     reserved = {"schema", "version", "operation", "status", "failure"}
     failure_value = payload.get("failure")
@@ -55,7 +67,7 @@ def to_operator_result(payload: Mapping[str, Any]) -> dict[str, Any]:
         status=status,
         payload={key: value for key, value in payload.items() if key not in reserved},
         failure=failure,
-    ).to_dict()
+    )
 
 
 __all__ = ["error_payload", "to_operator_result"]

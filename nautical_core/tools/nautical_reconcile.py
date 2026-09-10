@@ -60,11 +60,12 @@ from nautical_core.taskwarrior_uow import (  # noqa: E402
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService  # noqa: E402
 from nautical_core.reconcile_cli import ReconcileRequest, build_parser  # noqa: E402
 from nautical_core.reconcile_report import action_style, describe_plan, describe_recovery_result, evidence_lines, exit_code, format_parent, recovery_action, render_human, to_operator_result  # noqa: E402
-from nautical_core.operator_presentation import render_json_document, render_result  # noqa: E402
+from nautical_core.operator_presentation import render_result  # noqa: E402
 from nautical_core.integrity_report import components as integrity_components  # noqa: E402
 from nautical_core.lifecycle_reconciliation import (  # noqa: E402
     CallbackLifecycleApplyOperations,
     LifecycleReconciliationService,
+    LifecycleRecoveryPolicy,
 )
 from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService  # noqa: E402
 from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks, ReconcileRecoveryCoordinator  # noqa: E402
@@ -1171,6 +1172,19 @@ def _virtual_expired_child(
     ), ""
 
 
+def _recovery_policy(hook: Any) -> LifecycleRecoveryPolicy:
+    """Build the lifecycle-owned recovery policy with Taskwarrior adapters."""
+    return LifecycleRecoveryPolicy(
+        parse_datetime=lambda value: _safe_parse_datetime(hook, value),
+        compare_datetimes=compare_datetimes,
+        validate_child=_validate_recovery_child,
+        virtual_uuid=lambda plan: (
+            f"dryrun-{str(plan.identity.chain_id or 'chain')}-"
+            f"{lifecycle.int_or_default(plan.identity.target_link or 0, 0)}"
+        ),
+    )
+
+
 def _reconcile_candidate(
     task_bin: str,
     hook: Any,
@@ -1192,6 +1206,7 @@ def _reconcile_candidate(
             return _recovery_manual_review(candidate, reason)
         return _recovery_error(candidate, reason)
 
+    recovery_policy = _recovery_policy(hook)
     coordinator = ReconcileRecoveryCoordinator(
         reconciliation_service,
         ReconcileRecoveryCallbacks(
@@ -1202,12 +1217,8 @@ def _reconcile_candidate(
                 hook, candidate, reconciliation_service=reconciliation_service, **kwargs,
             ),
             next_child=_next_recovery_child,
-            virtual_child=lambda candidate, **kwargs: _virtual_expired_child(
-                candidate, hook=hook, **kwargs,
-            ),
-            terminal_error=lambda child, recovery_at: _terminal_recovery_error(
-                child, hook, recovery_at,
-            ),
+            virtual_child=recovery_policy.virtual_expired_child,
+            terminal_error=recovery_policy.terminal_error,
             recovery_error=_recovery_error,
             recovery_partial=_recovery_partial,
             recovery_manual_review=_recovery_manual_review,
@@ -1314,7 +1325,7 @@ def _startup_failure(args: Any, stage: str, exc: Exception) -> int:
             "plans": [],
             "applied": [],
         }
-        print(render_json_document(payload, indent=2))
+        print(render_result(to_operator_result(payload), "json"))
     else:
         print(_style(f"error: {stage.replace('_', ' ')}: {reason}", "red", stream=sys.stderr), file=sys.stderr)
     return 1

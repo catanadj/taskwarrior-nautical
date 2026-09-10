@@ -21,9 +21,9 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import nautical_core as core  # noqa: E402
-from nautical_core.operator_presentation import render_json_document  # noqa: E402
+from nautical_core.operator_presentation import render_result  # noqa: E402
 from nautical_core.integration_context import IntegrationAccess  # noqa: E402
-from nautical_core.operator_models import OperatorScope, OperatorScopeKind  # noqa: E402
+from nautical_core.operator_models import OperatorScope, OperatorScopeKind, OperatorV2Result  # noqa: E402
 from nautical_core.query_report import error_payload, to_operator_result  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
     CAPABILITIES_SCHEMA,
@@ -132,15 +132,12 @@ def _capabilities_payload() -> dict[str, Any]:
     }
 
 
-def _emit(payload: Mapping[str, Any], *, exit_code: int = 0, budget: object | None = None) -> int:
-    if str(payload.get("schema") or "").startswith("nautical.query.") and payload.get("version") == 1:
-        payload = to_operator_result(payload)
-    if budget is not None:
-        report = getattr(budget, "report", None)
-        if callable(report):
-            payload = {**payload, "budget": report()}
+def _emit(result: OperatorV2Result, *, exit_code: int = 0, budget: object | None = None) -> int:
+    """Serialize one typed query result at the process presentation boundary."""
+    if not isinstance(result, OperatorV2Result):
+        raise TypeError("query transport requires an OperatorV2Result")
     try:
-        sys.stdout.write(render_json_document(payload) + "\n")
+        sys.stdout.write(render_result(result, "json", budget=budget) + "\n")
     except BrokenPipeError:
         return 0
     return exit_code
@@ -323,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         service = OccurrenceQueryService(unit_of_work, core=core)
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
-        return _emit(cast(Any, response).to_operator_v2().to_dict(), exit_code=exit_code, budget=service.budget)
+        return _emit(cast(Any, response).to_operator_v2(), exit_code=exit_code, budget=service.budget)
     except QueryContractError as exc:
         _diagnostic(str(exc))
         return _emit(error_payload("invalid_request", str(exc), operation=args.operation), exit_code=2)

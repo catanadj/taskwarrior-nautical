@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
@@ -146,6 +147,18 @@ class OnAddHookRouteTests(HookSubprocessFixture):
                     )
 
     def test_anchor_file_unicode_values_keep_json_stdout_for_implicit_due(self) -> None:
+        from nautical_core import anchor_files
+
+        records: list[tuple[date, tuple[int, int], str]] = []
+        specs = anchor_files.load_anchor_file_occurrence_specs(
+            "dates.csv@t=12:00",
+            str(self.anchor_files),
+            (9, 0),
+            _records_sink=records,
+        )
+        self.assertEqual(specs, [(date(2099, 1, 5), (12, 0))])
+        self.assertEqual(records, [(date(2099, 1, 5), (12, 0), "Întâlnire café")])
+
         task = self._task(description="întâlnire café", anchor_file="dates.csv@t=12:00")
         raw_process = self._run(task)
         self.assertEqual(raw_process.returncode, 0, raw_process.stderr)

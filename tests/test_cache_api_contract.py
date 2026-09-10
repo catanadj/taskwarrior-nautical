@@ -160,6 +160,46 @@ class CacheApiContractTests(unittest.TestCase):
             self.assertTrue(any(path.endswith("parsing/parser_dnf.py") for path in seen))
             self.assertNotEqual(before, after)
 
+    def test_dnf_fingerprint_tracks_parser_atoms_source(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td))
+
+            def stat_for(mtime: int):
+                def stat(path):
+                    path = str(path)
+                    if path.endswith("parsing/parser_atoms.py"):
+                        return SimpleNamespace(st_mtime_ns=mtime, st_size=1)
+                    return SimpleNamespace(st_mtime_ns=1, st_size=1)
+
+                return stat
+
+            with patch.object(cache_api.os, "stat", side_effect=stat_for(1)):
+                before = binding._dnf_cache_fingerprint()
+            with patch.object(cache_api.os, "stat", side_effect=stat_for(2)):
+                after = self._binding(Path(td))._dnf_cache_fingerprint()
+
+            self.assertNotEqual(before, after)
+
+    def test_dnf_fingerprint_tracks_parser_frontend_source(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td))
+
+            def stat_for(mtime: int):
+                def stat(path):
+                    path = str(path)
+                    if path.endswith("parsing/parser_frontend.py"):
+                        return SimpleNamespace(st_mtime_ns=mtime, st_size=1)
+                    return SimpleNamespace(st_mtime_ns=1, st_size=1)
+
+                return stat
+
+            with patch.object(cache_api.os, "stat", side_effect=stat_for(1)):
+                before = binding._dnf_cache_fingerprint()
+            with patch.object(cache_api.os, "stat", side_effect=stat_for(2)):
+                after = self._binding(Path(td))._dnf_cache_fingerprint()
+
+            self.assertNotEqual(before, after)
+
 
 if __name__ == "__main__":
     unittest.main()

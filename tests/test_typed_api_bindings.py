@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import FrozenInstanceError, is_dataclass
+import hashlib
 from pathlib import Path
 import unittest
 
 from nautical_core.api_bindings import ApiBinding, core_namespace
+from nautical_core import compat_api
 from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
 
 
@@ -64,6 +66,29 @@ class ApiBindingContractTests(unittest.TestCase):
         for event, files in HOOK_RUNTIME_FILES.items():
             with self.subTest(event=event):
                 self.assertTrue(required.issubset(files))
+
+    def test_public_surface_snapshot_classifies_legacy_and_unresolved_names(self) -> None:
+        self.assertEqual(len(compat_api.PUBLIC_EXPORTS), 133)
+        self.assertEqual(len(set(compat_api.PUBLIC_EXPORTS)), 133)
+        self.assertEqual(
+            hashlib.sha256("\n".join(compat_api.PUBLIC_EXPORTS).encode()).hexdigest(),
+            "37c7e605392942a8577d8e037880a39ded377b90fd86c9c5b9b66c481c0cbb3a",
+        )
+        self.assertIn("normalize_task_business_calendar_in_place", compat_api.PUBLIC_EXPORTS)
+        self.assertNotIn("normalize_task_business_calendar", compat_api.PUBLIC_EXPORTS)
+
+        import nautical_core as facade
+
+        unresolved = {
+            name for name in compat_api.LEGACY_UNRESOLVED_EXPORTS
+            if not hasattr(facade, name)
+        }
+        self.assertEqual(unresolved, {"py", "random", "time"})
+        for name in compat_api.PUBLIC_EXPORTS:
+            if name not in compat_api.LEGACY_UNRESOLVED_EXPORTS:
+                self.assertTrue(hasattr(facade, name), name)
+        self.assertTrue(callable(facade.normalize_task_business_calendar))
+        self.assertTrue(callable(facade.normalize_task_business_calendar_in_place))
 
 
 if __name__ == "__main__":

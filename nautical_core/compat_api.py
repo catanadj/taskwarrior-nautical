@@ -1,4 +1,12 @@
-"""Stable public export contract for the Nautical core facade."""
+"""Stable public export contract for the Nautical core facade.
+
+``py``, ``random``, and ``time`` are historical implementation names kept in
+the tuple for snapshot compatibility; they are not guaranteed facade exports.
+The explicit ``normalize_task_business_calendar_in_place`` name is the public
+mutator.  Its shorter predecessor remains a facade-only compatibility alias.
+"""
+
+LEGACY_UNRESOLVED_EXPORTS = ('py', 'random', 'time')
 
 PUBLIC_EXPORTS = (
     'AnchorMods', 'AnchorAtom', 'AnchorTerm', 'AnchorDNF', 'TaskDict',
@@ -33,7 +41,7 @@ PUBLIC_EXPORTS = (
     'describe_anchor_dnf', 'describe_anchor_expr', 'DiagnosticEvent', 'RecurrenceModeResult', 'diag',
     'fcntl', 'fmt_dt_local', 'fmt_isoz',
     'configured_business_calendars', 'get_configured_business_calendar',
-    'lint_anchor_expr', 'normalize_task_business_calendar', 'now_utc',
+    'lint_anchor_expr', 'normalize_task_business_calendar_in_place', 'now_utc',
     'omit_preset_display', 'panel_line', 'parse_anchor_expr_to_dnf',
     'parse_anchor_expr_to_dnf_cached', 'parse_cp_duration', 'parse_cp_sequence',
     'parse_cp_sequence_tokens', 'cp_sequence_parse_error',

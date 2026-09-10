@@ -114,6 +114,77 @@ class OperatorCommandContractTests(unittest.TestCase):
             self.assertEqual(payload.get("applied"), [])
             self.assertNotIn("modify", log.read_text(encoding="utf-8"))
 
+    def test_reconcile_apply_empty_export_never_invokes_mutation(self) -> None:
+        """A valid empty snapshot is a no-op even when apply is authorized."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            log = root / "task.log"
+            task = root / "task"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                f"log = Path({str(log)!r})\n"
+                "with log.open('a', encoding='utf-8') as stream: stream.write(' '.join(sys.argv[1:]) + '\\n')\n"
+                "print('[]')\n",
+                encoding="utf-8",
+            )
+            task.chmod(0o755)
+            process = self._run(
+                RECONCILE,
+                "--apply",
+                "--json",
+                "--no-housekeeping",
+                "--task-bin",
+                str(task),
+                env={"TASKDATA": str(taskdata)},
+            )
+            self.assertEqual(process.stderr, "")
+            payload = self._json(process)
+            self.assertEqual(payload.get("schema"), "nautical.reconcile")
+            self.assertEqual(payload.get("mode"), "apply")
+            self.assertEqual(payload.get("candidates"), 0)
+            self.assertEqual(payload.get("applied"), [])
+            self.assertNotIn("modify", log.read_text(encoding="utf-8"))
+
+    def test_reconcile_malformed_export_fails_at_candidate_export(self) -> None:
+        """Malformed Taskwarrior output cannot reach planning or mutation."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            taskdata = root / "taskdata"
+            taskdata.mkdir()
+            log = root / "task.log"
+            task = root / "task"
+            task.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                f"log = Path({str(log)!r})\n"
+                "with log.open('a', encoding='utf-8') as stream: stream.write(' '.join(sys.argv[1:]) + '\\n')\n"
+                "print('{not-json')\n",
+                encoding="utf-8",
+            )
+            task.chmod(0o755)
+            process = self._run(
+                RECONCILE,
+                "--apply",
+                "--json",
+                "--no-housekeeping",
+                "--task-bin",
+                str(task),
+                env={"TASKDATA": str(taskdata)},
+            )
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(process.stderr, "")
+            payload = self._json(process)
+            self.assertEqual(payload.get("schema"), "nautical.reconcile")
+            self.assertEqual(payload.get("stage"), "candidate_export")
+            self.assertEqual(payload.get("mode"), "apply")
+            self.assertEqual(payload.get("applied"), [])
+            self.assertNotIn("modify", log.read_text(encoding="utf-8"))
+
     def test_reconcile_apply_lock_contention_is_structured(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

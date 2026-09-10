@@ -147,11 +147,15 @@ class OnAddHookRouteTests(HookSubprocessFixture):
 
     def test_anchor_file_unicode_values_keep_json_stdout_for_implicit_due(self) -> None:
         task = self._task(description="întâlnire café", anchor_file="dates.csv@t=12:00")
+        raw_process = self._run(task)
+        self.assertEqual(raw_process.returncode, 0, raw_process.stderr)
+        self.assertIn("întâlnire café", raw_process.stdout)
+        self.assertNotIn("\\u00", raw_process.stdout)
+        self.assertEqual(json.loads(raw_process.stdout)["description"], "întâlnire café")
         result = self._assert_valid(task)
         self.assertEqual(result["description"], "întâlnire café")
         self.assertEqual(result["anchor_file"], "dates.csv@t=12:00")
         self.assertEqual(result["due"], "2099-01-05T12:00:00+00:00")
-        self.assertIn("Întâlnire café", self._run(task).stderr)
 
     def test_invalid_routes_fail_without_json_or_tracebacks(self) -> None:
         cases = (

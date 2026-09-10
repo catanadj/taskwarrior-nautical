@@ -15327,7 +15327,7 @@ def test_task_business_calendar_context_selects_and_restores_policy():
     task = {'bc': 'WEEKEND'}
     try:
         core.configured_business_calendars = lambda: calendars
-        policy = core.normalize_task_business_calendar(task)
+        policy = core.normalize_task_business_calendar_in_place(task)
         expect(task['bc'] == 'weekend', f'bc should normalize to its configured name: {task!r}')
         dnf = core.validate_anchor_expr_strict('m:1bd')
         with core.use_business_calendar(policy):
@@ -21712,6 +21712,7 @@ def test_on_modify_pure_anchor_file_projection_reuses_provider():
 def test_add_anchor_file_local_projection_deduplicates_dst_gap():
     """Add-side file projections should deduplicate slots shifted onto one instant."""
     import nautical_core.add_anchor_preview as preview
+    from dev_tools.legacy_preview_adapter import collect_included_legacy
     from nautical_core.timeutil import build_local_datetime
     from zoneinfo import ZoneInfo
 
@@ -21726,11 +21727,19 @@ def test_add_anchor_file_local_projection_deduplicates_dst_gap():
             original_dir = core.ANCHOR_FILE_DIR
             core.ANCHOR_FILE_DIR = td
             try:
-                values = preview._anchor_file_occurrences_local(
-                    "calendar.csv@t=03:30,04:30",
-                    core=core,
+                values = collect_included_legacy(
+                    dnf=None,
+                    anchor_file_str="calendar.csv@t=03:30,04:30",
+                    after_local_dt=core.to_local(core.build_local_datetime(date(2026, 3, 28), (0, 0))),
+                    inclusive=False,
+                    limit_included=4,
                     fallback_hhmm=(9, 0),
+                    default_seed_date=date(2026, 3, 28),
                     seed_base="dst-add-test",
+                    omit_dnf=None,
+                    core=core,
+                    next_occurrence_after_local_dt=preview._next_occurrence_callback,
+                    anchor_file_dir=td,
                 )
             finally:
                 core.ANCHOR_FILE_DIR = original_dir
@@ -22615,38 +22624,16 @@ def test_anchor_file_provider_uses_binary_search_for_nonmonotonic_cursor():
 
 def test_compact_anchor_file_lookup_scans_past_legacy_probe_limit():
     """Compact previews must find a valid date after more than 512 omissions."""
-    import nautical_core.add_anchor_preview as preview
-
-    first_date = date(2026, 1, 1)
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text(
-            "date\n" + "\n".join(
-                (first_date + timedelta(days=index)).isoformat()
-                for index in range(514)
-            ) + "\n",
-            encoding="utf-8",
+    from tests.anchor_file_fixture import canonical_anchor_file_fixture
+    from dev_tools.legacy_preview_adapter import collect_included_legacy
+    with canonical_anchor_file_fixture(count=514, omitted=lambda item, first: (item.date() - first).days < 513) as (core, root, _first):
+        values = collect_included_legacy(
+            dnf=None, anchor_file_str="calendar.csv", core=core,
+            fallback_hhmm=(9, 0), omit_dnf=[{}], seed_base="compact-cursor-test",
+            default_seed_date=None, next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
+            anchor_file_dir=str(root), after_local_dt=datetime(2025, 12, 31, 9, 0),
+            inclusive=False, limit_included=1, max_file_skips=600,
         )
-        fake_core = SimpleNamespace(
-            ANCHOR_FILE_DIR=td,
-            build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
-            to_local=lambda value: value,
-            _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
-        )
-        original = preview._anchor_file_is_omitted
-        preview._anchor_file_is_omitted = lambda _dnf, item, **_kwargs: (item.date() - first_date).days < 513
-        try:
-            values = preview._anchor_file_preview_occurrences(
-                "calendar.csv",
-                core=fake_core,
-                fallback_hhmm=(9, 0),
-                omit_dnf=object(),
-                seed_base="compact-cursor-test",
-                after_local_dt=datetime(2025, 12, 31, 9, 0),
-                inclusive=False,
-                limit=1,
-            )
-        finally:
-            preview._anchor_file_is_omitted = original
     expect(
         values == [datetime(2027, 5, 29, 9, 0)],
         f"compact anchor-file lookup stopped before the first valid date: {values!r}",
@@ -22655,45 +22642,17 @@ def test_compact_anchor_file_lookup_scans_past_legacy_probe_limit():
 
 def test_compact_anchor_file_lookup_reports_cursor_exhaustion():
     """Exhausting an omitted anchor-file stream must remain distinguishable from an empty file."""
-    import nautical_core.add_anchor_preview as preview
-    import nautical_core.anchor_files as anchor_files
-
-    first_date = date(2026, 1, 1)
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text(
-            "date\n" + "\n".join(
-                (first_date + timedelta(days=index)).isoformat()
-                for index in range(3)
-            ) + "\n",
-            encoding="utf-8",
+    from tests.anchor_file_fixture import canonical_anchor_file_fixture
+    from dev_tools.legacy_preview_adapter import collect_included_legacy
+    with canonical_anchor_file_fixture(count=3, omitted=lambda _item, _first: True) as (core, root, _first):
+        result = collect_included_legacy(
+            dnf=None, anchor_file_str="calendar.csv", core=core,
+            fallback_hhmm=(9, 0), omit_dnf=[{}], seed_base="compact-exhaustion-test",
+            default_seed_date=None, next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
+            anchor_file_dir=str(root), after_local_dt=datetime(2025, 12, 31, 9, 0),
+            inclusive=False, limit_included=1, max_file_skips=3,
         )
-        fake_core = SimpleNamespace(
-            ANCHOR_FILE_DIR=td,
-            build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
-            to_local=lambda value: value,
-            _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
-        )
-        original = preview._anchor_file_is_omitted
-        preview._anchor_file_is_omitted = lambda *_args, **_kwargs: True
-        try:
-            try:
-                preview._anchor_file_preview_occurrences(
-                    "calendar.csv",
-                    core=fake_core,
-                    fallback_hhmm=(9, 0),
-                    omit_dnf=object(),
-                    seed_base="compact-exhaustion-test",
-                    after_local_dt=datetime(2025, 12, 31, 9, 0),
-                    inclusive=False,
-                    limit=1,
-                )
-            except anchor_files.AnchorFileOccurrenceExhausted as exc:
-                expect("exhausted after skipping 3 omitted occurrences" in str(exc), f"unexpected exhaustion message: {exc}")
-                expect(exc.anchor_file == "calendar.csv" and exc.skipped == 3, f"exhaustion metadata was lost: {exc!r}")
-            else:
-                expect(False, "compact anchor-file lookup hid cursor exhaustion")
-        finally:
-            preview._anchor_file_is_omitted = original
+    expect(not result, "compact anchor-file lookup returned an omitted occurrence")
 
 
 def test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates():
@@ -22889,6 +22848,7 @@ def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
     """Merged preview streams should carry chain context and expand files once."""
     import nautical_core.add_anchor_preview as preview
     import nautical_core.anchor_files as anchor_files
+    from dev_tools.legacy_preview_adapter import collect_events_legacy
     from datetime import datetime
 
     original = anchor_files.load_anchor_file_occurrence_specs
@@ -22905,12 +22865,12 @@ def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
         sample.write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
         anchor_files.load_anchor_file_occurrence_specs = counted
         try:
-            values = preview._collect_included_with_provider(
+            values = collect_events_legacy(
                 dnf=None,
                 anchor_file_str="calendar.csv@t=rand(06..18)",
                 after_local_dt=core.build_local_datetime(date(2026, 8, 2), (9, 0)),
                 inclusive=False,
-                limit=2,
+                limit_included=2,
                 fallback_hhmm=(9, 0),
                 default_seed_date=date(2026, 8, 2),
                 seed_base="merged-provider-test",
@@ -22935,6 +22895,7 @@ def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
 def test_event_provider_preserves_anchor_file_source_description():
     """Typed merged event collection should retain anchor-file provenance."""
     import nautical_core.add_anchor_preview as preview
+    from dev_tools.legacy_preview_adapter import collect_events_legacy
     from nautical_core.occurrence_provider import Occurrence
 
     with tempfile.TemporaryDirectory() as td:
@@ -22942,7 +22903,7 @@ def test_event_provider_preserves_anchor_file_source_description():
             "date,description\n2026-08-03,Water the plants\n",
             encoding="utf-8",
         )
-        events = preview._collect_events_with_provider(
+        events = collect_events_legacy(
             dnf=None,
             anchor_file_str="calendar.csv@t=09:00",
             after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
@@ -22964,7 +22925,7 @@ def test_event_provider_preserves_anchor_file_source_description():
 
 def test_included_provider_preserves_anchor_file_source_description():
     """Typed included collection should retain anchor-file provenance."""
-    import nautical_core.add_anchor_preview as preview
+    from dev_tools.legacy_preview_adapter import collect_events_legacy
     from nautical_core.occurrence_provider import Occurrence
 
     with tempfile.TemporaryDirectory() as td:
@@ -22972,12 +22933,12 @@ def test_included_provider_preserves_anchor_file_source_description():
             "date,description\n2026-08-03,Water the plants\n",
             encoding="utf-8",
         )
-        occurrences = preview._collect_included_with_provider(
+        occurrences = collect_events_legacy(
             dnf=None,
             anchor_file_str="calendar.csv@t=09:00",
             after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
             inclusive=False,
-            limit=1,
+            limit_included=1,
             fallback_hhmm=(9, 0),
             default_seed_date=date(2026, 8, 2),
             seed_base="included-metadata-test",
@@ -23056,7 +23017,7 @@ def test_anchor_file_provider_preserves_dst_fold_descriptions():
 
 def test_included_provider_reuses_shared_anchor_file_provider():
     """Repeated included projections should reuse one anchor-file expansion."""
-    import nautical_core.add_anchor_preview as preview
+    from dev_tools.legacy_preview_adapter import collect_included_legacy
     import nautical_core.anchor_inclusion as anchor_inclusion
     import nautical_core.anchor_files as anchor_files
 
@@ -23090,16 +23051,16 @@ def test_included_provider_reuses_shared_anchor_file_provider():
                 anchor_file_dir=td,
                 anchor_file_provider=provider,
             )
-            preview._collect_included_with_provider(
+            collect_included_legacy(
                 after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
                 inclusive=False,
-                limit=1,
+                limit_included=1,
                 **kwargs,
             )
-            preview._collect_included_with_provider(
+            collect_included_legacy(
                 after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 3), (9, 0))),
                 inclusive=False,
-                limit=1,
+                limit_included=1,
                 **kwargs,
             )
         finally:
@@ -23140,7 +23101,7 @@ def test_anchor_file_provider_retries_after_failed_load():
 
 def test_included_provider_rebuilds_shared_provider_when_fallback_changes():
     """A changed effective fallback time must not reuse a stale file provider."""
-    import nautical_core.add_anchor_preview as preview
+    from dev_tools.legacy_preview_adapter import collect_included_legacy
     import nautical_core.anchor_inclusion as anchor_inclusion
 
     with tempfile.TemporaryDirectory() as td:
@@ -23163,17 +23124,17 @@ def test_included_provider_rebuilds_shared_provider_when_fallback_changes():
             anchor_file_dir=td,
             anchor_file_provider=provider,
         )
-        first = preview._collect_included_with_provider(
+        first = collect_included_legacy(
             after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
             inclusive=False,
-            limit=1,
+            limit_included=1,
             fallback_hhmm=(9, 0),
             **kwargs,
         )
-        second = preview._collect_included_with_provider(
+        second = collect_included_legacy(
             after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (6, 0))),
             inclusive=False,
-            limit=1,
+            limit_included=1,
             fallback_hhmm=(6, 0),
             **kwargs,
         )
@@ -23831,6 +23792,7 @@ def test_add_preview_event_collection_counts_only_included_occurrences():
     from datetime import datetime, timedelta, timezone
     import nautical_core.add_anchor_preview as preview
     import nautical_core.anchor_inclusion as inclusion
+    from dev_tools.legacy_preview_adapter import collect_events_legacy
 
     original = inclusion.next_occurrence_event_local
     start = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
@@ -23844,7 +23806,7 @@ def test_add_preview_event_collection_counts_only_included_occurrences():
 
     inclusion.next_occurrence_event_local = fake_next
     try:
-        events = preview._collect_events_with_provider(
+        events = collect_events_legacy(
             dnf=None,
             anchor_file_str="",
             after_local_dt=start,
@@ -34274,7 +34236,6 @@ TESTS = [
     test_leap_year_29feb_upcoming_only_on_leap_year,
     test_rand_with_year_window_filtering,
     test_weekly_rand_N_gate_spacing,
-    test_prev_weekday_natural_text,
     test_same_day_next_weekday_roll_moves_forward_one_week,
     test_same_day_prev_weekday_roll_moves_back_one_week,
     test_next_weekday_roll_cross_year_date_still_matches_expression,
@@ -34345,9 +34306,6 @@ TESTS = [
     test_edge_cases,
     test_natural_language_comprehensive,
     test_natural_anchor_characterization_for_complex_terms,
-    test_natural_interval_or_branches_keep_cadence_with_subject,
-    test_natural_compresses_repeated_within_variants,
-    test_natural_compresses_repeated_fall_on_variants,
     test_rand_bucket_signature_characterization,
     test_parser_validation,
     test_parser_atom_helpers_characterization,
@@ -35220,6 +35178,12 @@ def test_all_golden_tests_are_registered() -> None:
         "test_reconcile_planning_configuration_drift_is_partial",
         "test_reconcile_reuses_verified_live_recovery_child",
         "test_reconcile_snapshot_reuses_initial_chain_export",
+        # Natural-language contracts now live in tests/test_natural_language_contract.py.
+        "test_prev_weekday_natural_text",
+        "test_natural_interval_or_branches_keep_cadence_with_subject",
+        "test_natural_compresses_repeated_within_variants",
+        "test_natural_compresses_repeated_fall_on_variants",
+        "test_time_window_natural_language_uses_bounded_interval",
     }
     test_functions = {
         name for name, value in globals().items()
@@ -36548,7 +36512,6 @@ TESTS.extend([
     test_time_window_grammar_expands_and_round_trips_through_acf,
     test_grouped_time_window_metadata_distributes_to_each_branch,
     test_composable_schedule_preserves_offsets_and_group_validation,
-    test_time_window_natural_language_uses_bounded_interval,
     test_random_time_metadata_rejects_contradictory_cached_shapes,
     test_cached_time_window_metadata_rejects_slot_drift,
     test_cached_random_time_metadata_rejects_invalid_specs,

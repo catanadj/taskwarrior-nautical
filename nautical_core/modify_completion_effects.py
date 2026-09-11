@@ -52,7 +52,6 @@ class CompletionCapsPorts:
     compute: Any
     coerce_int: Any
     parse_datetime: Any
-    parse_cp_tokens: Any
     estimate_cp: Any
     estimate_anchor: Any
     cap_cp: Any
@@ -306,7 +305,6 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
                 compute=compute,
                 coerce_int=host.core.coerce_int,
                 parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-                parse_cp_tokens=host.core.parse_cp_sequence_tokens,
                 estimate_cp=lambda task, due: host._module("modify_schedule_effects").estimate_cp_final_by_max(host, task, due),
                 estimate_anchor=lambda task, due, expression: host._module("modify_schedule_effects").estimate_anchor_final_by_max(host, task, due, expression),
                 cap_cp=lambda task, due: host._module("modify_schedule_effects").cap_from_until_cp(host, task, due),

@@ -124,7 +124,13 @@ class ModifyRuntimeServices:
             show_analytics=host._SHOW_ANALYTICS,
             check_integrity=host._CHECK_CHAIN_INTEGRITY,
             analytics_style=host._ANALYTICS_STYLE,
-            seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, *tasks),
+            seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(
+                capabilities.modify_read_effects.SeedLookupPorts(
+                    service=capabilities.modify_read_effects.lifecycle_read_service(host),
+                    decode_row=capabilities.task_codec.DEFAULT_TASK_CODEC.decode_row,
+                    cache_set=host._query_ctx_set,
+                ), *tasks
+            ),
             lifecycle_read_service=lambda: capabilities.modify_read_effects.lifecycle_read_service(host),
             chain_health_advice=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_health_advice(
                 capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs

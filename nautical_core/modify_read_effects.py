@@ -33,6 +33,20 @@ class ChainExportPort:
     service: Any
 
 
+@dataclass(frozen=True, slots=True)
+class SeedLookupPorts:
+    service: Any
+    decode_row: Any
+    cache_set: Any
+
+
+@dataclass(frozen=True, slots=True)
+class PreviousChainPorts:
+    service: Any
+    panel_chain_by_link: Any
+    panel_chain_snapshot_loaded: Any
+
+
 def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
@@ -97,40 +111,37 @@ def lifecycle_read_service(host: Any):
     return service
 
 
-def seed_runtime_lookup_task(host: Any, payload: dict | None, *, lookup_short: str | None = None):
+def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict | None, *, lookup_short: str | None = None):
     if not isinstance(payload, dict):
         return None
     uuid_str = str(payload.get("uuid") or "").strip()
     if not uuid_str:
         return None
     short = uuid_str[:8]
-    service = lifecycle_read_service(host)
-    observation = host._module("task_codec").DEFAULT_TASK_CODEC.decode_row(payload, source_query="on-modify lookup seed")
-    task_obj = service.seed_lookup_task(observation, short_uuid=short)
+    observation = ports.decode_row(payload, source_query="on-modify lookup seed")
+    task_obj = ports.service.seed_lookup_task(observation, short_uuid=short)
     requested_short = str(lookup_short or "").strip()
     if requested_short and requested_short != short:
-        task_obj = service.seed_lookup_task(task_obj, short_uuid=requested_short)
+        task_obj = ports.service.seed_lookup_task(task_obj, short_uuid=requested_short)
     entry = task_obj.get("entry")
     if short and entry:
-        host._query_ctx_set("tw_get", f"{short}.entry", str(entry).strip())
+        ports.cache_set("tw_get", f"{short}.entry", str(entry).strip())
     return task_obj.to_mapping()
 
 
-def seed_runtime_lookup_tasks(host: Any, *tasks: dict | None) -> None:
+def seed_runtime_lookup_tasks(ports: SeedLookupPorts, *tasks: dict | None) -> None:
     for task in tasks:
-        seed_runtime_lookup_task(host, task)
+        seed_runtime_lookup_task(ports, task)
 
 
-def collect_prev_two(host: Any, current_task: dict, chain_by_link=None):
+def collect_prev_two(ports: PreviousChainPorts, current_task: dict, chain_by_link=None):
     from .integration_models import Absent, Found, Unavailable
 
-    service = lifecycle_read_service(host)
-    state = host._modify_runtime_state()
-    read = service.collect_prev_two(
+    read = ports.service.collect_prev_two(
         current_task,
-        get_chain_read=lambda chain_id: service.get_chain_read(chain_id),
-        panel_chain_by_link=state.panel_chain_by_link,
-        panel_chain_snapshot_loaded=state.panel_chain_snapshot_loaded,
+        get_chain_read=lambda chain_id: ports.service.get_chain_read(chain_id),
+        panel_chain_by_link=ports.panel_chain_by_link,
+        panel_chain_snapshot_loaded=ports.panel_chain_snapshot_loaded,
         chain_by_link=chain_by_link,
     )
     if isinstance(read, Unavailable):
@@ -187,4 +198,4 @@ def tw_get_cached(host: Any, ref: str) -> str:
         return ""
 
 
-__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "tw_get_cached")
+__all__ = ("parse_extra_tokens", "lifecycle_read_service", "SeedLookupPorts", "PreviousChainPorts", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "tw_get_cached")

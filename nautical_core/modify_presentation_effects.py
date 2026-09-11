@@ -50,7 +50,9 @@ def first_recurrence_target(host: Any, new: TaskPayload, source: str) -> Any:
         source,
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         format_datetime=host.core.fmt_isoz,
-        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(host),
+        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(
+            host._module("modify_generation_effects").generation_ports_for(host)
+        ),
     )
 
 
@@ -107,7 +109,9 @@ def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload,
             "⛔ Nautical chain stopped",
             [
                 ("Reason", reason),
-                ("Root", host._module("modify_queries").cached_format_root_and_age(host, old_view, now_utc)),
+                ("Root", host._module("modify_queries").cached_format_root_and_age(
+                    host._module("modify_queries").query_ports_for(host), old_view, now_utc
+                )),
                 ("Task", host.core.short_uuid(old_view.get("uuid")) or "–"),
             ],
             kind="summary",
@@ -182,7 +186,13 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
     evaluator_callback, service_callback = host._module("modify_schedule_effects").scheduler_callbacks(host)
     collector_override = kwargs.pop("_collect_prev_two_override", None)
     collect_prev_two = collector_override if callable(collector_override) else (
-        lambda task, chain_by_link=None: host._module("modify_read_effects").collect_prev_two(host, task, chain_by_link)
+        lambda task, chain_by_link=None: host._module("modify_read_effects").collect_prev_two(
+            host._module("modify_read_effects").PreviousChainPorts(
+                service=host._module("modify_read_effects").lifecycle_read_service(host),
+                panel_chain_by_link=host._modify_runtime_state().panel_chain_by_link,
+                panel_chain_snapshot_loaded=host._modify_runtime_state().panel_chain_snapshot_loaded,
+            ), task, chain_by_link
+        )
     )
     timeline = host._module("modify_timeline")
     services = timeline.TimelineServices(
@@ -222,7 +232,9 @@ def build_runtime_services(host: Any) -> Any:
         debug_wait_sched=host._DEBUG_WAIT_SCHED,
         last_wait_sched_debug=host._LAST_WAIT_SCHED_DEBUG,
         diag_enabled=host.os.environ.get("NAUTICAL_DIAG") == "1",
-        format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(host, task, now),
+        format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(
+            host._module("modify_queries").query_ports_for(host), task, now
+        ),
         append_next_wait_sched_rows=host._append_next_wait_sched_rows,
         timeline_lines=getattr(host, "_timeline_lines", lambda *args, **kwargs: timeline_lines(host, *args, **kwargs)),
         show_timeline_gaps=host._SHOW_TIMELINE_GAPS,

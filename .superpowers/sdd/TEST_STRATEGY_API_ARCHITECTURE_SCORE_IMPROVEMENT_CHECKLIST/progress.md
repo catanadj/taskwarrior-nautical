@@ -291,3 +291,9 @@
   `ChainExportPort`; diagnostics and lifecycle tests pass 45/45.
 - Task 11 regression pass: compilation, focused lifecycle suites, and diff
   checks are clean after the three-pass migration loop.
+- Task 11 seed lookup batch: runtime lookup seeding now consumes frozen
+  `SeedLookupPorts`; isolation/workflow/completion tests pass 30/30.
+- Task 11 predecessor batch: previous-chain collection now consumes frozen
+  `PreviousChainPorts`; diagnostics/workflow/isolation tests pass 31/31.
+- Task 11 three-pass regression: full focused lifecycle/operator slice passes
+  71/71 with clean diff checks.

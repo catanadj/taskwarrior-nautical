@@ -30,6 +30,28 @@ class CompletionPreflightPorts:
     existing_next_lookup: Any
 
 
+@dataclass(frozen=True, slots=True)
+class CompletionFeedbackPorts:
+    compute: Any
+    panel: Any
+    print_task: Any
+    end_chain_summary: Any
+
+
+def _feedback_ports(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
+    return CompletionFeedbackPorts(
+        compute=compute,
+        panel=_panel_callback(host),
+        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        end_chain_summary=(
+            lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(
+                host, task, reason, now, current_task
+            )
+            if summarize else (lambda *args, **kwargs: None)
+        ),
+    )
+
+
 def _panel(host: Any, title, rows, **kwargs):
     return host._module("modify_ui_effects").panel(host, title, rows, **kwargs)
 
@@ -201,17 +223,16 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
     )
 
 
-def until_guard_or_stop(host: Any, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> bool:
-    return host._module("modify_completion_compute").completion_until_guard_or_stop(
+def until_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> bool:
+    return ports.compute.completion_until_guard_or_stop(
         new, child_due, until_dt, now_utc,
-        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        end_chain_summary=ports.end_chain_summary, print_task=ports.print_task,
     )
 
 
-def require_child_due_or_fail(host: Any, new: TaskPayload, child_due) -> bool:
-    return host._module("modify_completion_compute").completion_require_child_due_or_fail(
-        new, child_due, panel=_panel_callback(host), print_task=lambda task: host._module("modify_ui_effects").print_task(host, task)
+def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, child_due) -> bool:
+    return ports.compute.completion_require_child_due_or_fail(
+        new, child_due, panel=ports.panel, print_task=ports.print_task
     )
 
 
@@ -239,11 +260,10 @@ def caps(host: Any, kind: str, new: TaskPayload, child_due, dnf):
     )
 
 
-def cap_guard_or_stop(host: Any, new: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
-    return host._module("modify_completion_compute").completion_cap_guard_or_stop(
+def cap_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, next_no: int, cap_no: int | None, now_utc: datetime) -> bool:
+    return ports.compute.completion_cap_guard_or_stop(
         new, next_no, cap_no, now_utc,
-        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task)
+        end_chain_summary=ports.end_chain_summary, print_task=ports.print_task
     )
 
 
@@ -253,11 +273,11 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
     services = models.CompletionComputeServices(
         completion_compute_child_due=lambda value, value_kind: compute_child_due(host, value, value_kind),
         completion_until_or_fail=lambda value, clock: until_or_fail(host, value, clock),
-        completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(host, value, due, until, clock),
-        completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(host, value, due),
+        completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(_feedback_ports(host, compute), value, due, until, clock),
+        completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(_feedback_ports(host, compute, summarize=False), value, due),
         completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(host, value, due, until, clock),
         completion_caps=lambda value_kind, value, due, dnf: caps(host, value_kind, value, due, dnf),
-        completion_cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(host, value, number, cap, clock),
+        completion_cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(_feedback_ports(host, compute), value, number, cap, clock),
     )
     computed = compute.completion_compute_next_and_limits(new, kind, next_no, now_utc, services=services)
     if computed is None:

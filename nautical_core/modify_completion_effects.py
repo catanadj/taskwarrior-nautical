@@ -38,6 +38,15 @@ class CompletionFeedbackPorts:
     end_chain_summary: Any
 
 
+@dataclass(frozen=True, slots=True)
+class UntilCompletionPorts:
+    compute: Any
+    parse_datetime: Any
+    validate_until_not_past: Any
+    panel: Any
+    print_task: Any
+
+
 def _feedback_ports(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
     return CompletionFeedbackPorts(
         compute=compute,
@@ -206,20 +215,12 @@ def compute_child_due(host: Any, new: TaskPayload, kind: str):
     )
 
 
-def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
-    compute = host._module("modify_completion_compute")
-    return compute.completion_until_or_fail(
+def until_or_fail(ports: UntilCompletionPorts, new: TaskPayload, now_utc: datetime):
+    return ports.compute.completion_until_or_fail(
         new, now_utc,
-        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
-        validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(
-            host._module("modify_validation_effects").UntilPorts(
-                lambda _now: host.timedelta(minutes=1),
-                host._module("timeutil").compare_datetimes,
-                host.core.humanize_delta,
-            ), until_dt, now,
-        ),
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        safe_parse_datetime=ports.parse_datetime,
+        validate_until_not_past=ports.validate_until_not_past,
+        panel=ports.panel, print_task=ports.print_task,
     )
 
 
@@ -272,7 +273,21 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
     models = host._module("modify_models")
     services = models.CompletionComputeServices(
         completion_compute_child_due=lambda value, value_kind: compute_child_due(host, value, value_kind),
-        completion_until_or_fail=lambda value, clock: until_or_fail(host, value, clock),
+        completion_until_or_fail=lambda value, clock: until_or_fail(
+            UntilCompletionPorts(
+                compute=compute,
+                parse_datetime=host._TASK_DATETIME_PARSER.parse,
+                validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(
+                    host._module("modify_validation_effects").UntilPorts(
+                        lambda _now: host.timedelta(minutes=1),
+                        host._module("timeutil").compare_datetimes,
+                        host.core.humanize_delta,
+                    ), until_dt, now,
+                ),
+                panel=_panel_callback(host),
+                print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+            ), value, clock
+        ),
         completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(_feedback_ports(host, compute), value, due, until, clock),
         completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(_feedback_ports(host, compute, summarize=False), value, due),
         completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(host, value, due, until, clock),

@@ -9,7 +9,7 @@ from datetime import date
 from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 
-from .core_context import CoreContext
+from .core_context import CoreContext, ParserDependencies
 
 
 def _core_module():
@@ -88,12 +88,14 @@ def _validate_anchor_dnf_atoms_strict(module: Any, dnf) -> None:
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create parser entry points bound to one core module instance."""
     if context is not None:
-        core = context.namespace
+        core = ParserDependencies.from_mapping(context.namespace)
         module = context
     else:
         if module is None and namespace is None:
             module = _core_module()
-        core = core_namespace(module, namespace, context, "parser_api")
+        core = ParserDependencies.from_mapping(
+            core_namespace(module, namespace, context, "parser_api")
+        )
     parser_atoms = context.import_sibling("parsing.parser_atoms") if context is not None else core["_parser_atoms"]
     parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else core["_parser_dnf"]
     parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else core["_parser_frontend"]

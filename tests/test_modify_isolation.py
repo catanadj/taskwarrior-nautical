@@ -32,6 +32,16 @@ class ModifyIsolationTests(unittest.TestCase):
         result = cp_add_period(ports, datetime(2026, 1, 1, tzinfo=timezone.utc), timedelta(days=1))
         self.assertEqual(result, datetime(2026, 1, 2, tzinfo=timezone.utc))
 
+    def test_sequence_period_helper_uses_only_sequence_port(self) -> None:
+        from datetime import timedelta
+        from nautical_core.modify_schedule_effects import SequencePorts, sequence_period_for_link
+
+        ports = SequencePorts(lambda token, **kwargs: timedelta(days=int(token["days"])))
+        self.assertEqual(
+            sequence_period_for_link(ports, [{"days": 2}], "cp", 1),
+            timedelta(days=2),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

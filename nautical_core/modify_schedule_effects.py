@@ -18,6 +18,13 @@ class SchedulePorts:
     build_local_datetime: Any
 
 
+@dataclass(frozen=True, slots=True)
+class SequencePorts:
+    """Minimal port for computing a CP sequence period."""
+
+    sequence_interval: Any
+
+
 def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
     """Return the stable one-argument callbacks used by projection services."""
     def service_for_task(task: TaskPayload) -> Any:
@@ -46,9 +53,9 @@ def cp_add_period(ports: SchedulePorts, dt: datetime, td: timedelta) -> datetime
     return (dt + td).replace(microsecond=0)
 
 
-def sequence_period_for_link(host: Any, tokens: list[dict], cp_str: str, link_no: int, chain_id: str | None = None) -> timedelta:
+def sequence_period_for_link(ports: SequencePorts, tokens: list[dict], cp_str: str, link_no: int, chain_id: str | None = None) -> timedelta:
     index = (max(1, int(link_no)) - 1) % len(tokens)
-    return host.core.cp_sequence_interval_for_token(
+    return ports.sequence_interval(
         tokens[index], cp=cp_str, link_no=link_no, token_index=index, chain_id=chain_id
     ) or timedelta()
 
@@ -85,12 +92,13 @@ def anchor_included_occurrences(
 
 
 def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
+    ports = SequencePorts(host.core.cp_sequence_interval_for_token)
     return host._module("modify_completion_compute").estimate_cp_final_by_max(
         task,
         next_due_utc,
         coerce_int=host.core.coerce_int,
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
-        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
+        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(ports, tokens, cp, link, chain),
         add_period=lambda dt, td: cp_add_period(SchedulePorts(host._tolocal, host.core.build_local_datetime), dt, td),
         max_iterations=host._MAX_ITERATIONS,
         diagnostic=host._diag,
@@ -118,13 +126,14 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
 
 
 def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
+    ports = SequencePorts(host.core.cp_sequence_interval_for_token)
     return host._module("modify_completion_compute").cap_from_until_cp(
         task,
         next_due_utc,
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
         coerce_int=host.core.coerce_int,
-        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
+        sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(ports, tokens, cp, link, chain),
         add_period=lambda dt, td: cp_add_period(SchedulePorts(host._tolocal, host.core.build_local_datetime), dt, td),
         max_iterations=host._MAX_ITERATIONS,
     )

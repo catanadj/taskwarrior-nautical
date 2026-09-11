@@ -183,7 +183,10 @@ def require_child_due_or_fail(host: Any, new: TaskPayload, child_due) -> bool:
 def warn_unreasonable_duration(host: Any, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> None:
     host._module("modify_completion_compute").completion_warn_unreasonable_duration(
         new, child_due, until_dt, now_utc,
-        validate_chain_duration_reasonable=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(host, child_due, until_dt, now),
+        validate_chain_duration_reasonable=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(
+            host._module("modify_validation_effects").DurationPorts(host._MIN_FUTURE_WARN, host.core.fmt_dt_local),
+            child_due, until_dt, now,
+        ),
         panel=_panel_callback(host),
     )
 

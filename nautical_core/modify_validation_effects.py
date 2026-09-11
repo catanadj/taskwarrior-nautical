@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 from .task_datetime import datetime_value, parser_for_host
+
+
+@dataclass(frozen=True, slots=True)
+class DurationPorts:
+    min_future_warn: int
+    format_local: Any
 
 
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
@@ -172,13 +179,13 @@ def until_not_past(host: Any, until_dt, now_utc) -> tuple[bool, str | None]:
     return True, None
 
 
-def chain_duration_reasonable(host: Any, child_due, until_dt, now_utc) -> tuple[bool, str | None]:
+def chain_duration_reasonable(ports: DurationPorts, child_due, until_dt, now_utc) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     days = (until_dt - now_utc).days
-    if days > host._MIN_FUTURE_WARN:
+    if days > ports.min_future_warn:
         years = days / 365.25
-        return True, f"Chain extends {years:.1f} years into future (until {host.core.fmt_dt_local(until_dt)})"
+        return True, f"Chain extends {years:.1f} years into future (until {ports.format_local(until_dt)})"
     return True, None
 
 

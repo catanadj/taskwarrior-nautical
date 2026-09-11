@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 from .task_datetime import datetime_value, parser_for_host
@@ -12,6 +13,13 @@ from .task_datetime import datetime_value, parser_for_host
 class DurationPorts:
     min_future_warn: int
     format_local: Any
+
+
+@dataclass(frozen=True, slots=True)
+class UntilPorts:
+    minute_delta: Any
+    compare: Any
+    humanize: Any
 
 
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
@@ -124,7 +132,10 @@ def validate_chain_limits(host: Any, task: dict) -> None:
         task,
         parse_chain_max=add_validation.parse_chain_max,
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-        validate_until_not_past=lambda until_dt, now: until_not_past(host, until_dt, now),
+        validate_until_not_past=lambda until_dt, now: until_not_past(
+            UntilPorts(lambda _now: timedelta(minutes=1), host._module("timeutil").compare_datetimes, host.core.humanize_delta),
+            until_dt, now,
+        ),
         now_utc=host.core.now_utc,
         fail=host._fail_and_exit,
     )
@@ -167,14 +178,12 @@ def validate_native_until_slots(host: Any, task: dict) -> None:
     )
 
 
-def until_not_past(host: Any, until_dt, now_utc) -> tuple[bool, str | None]:
+def until_not_past(ports: UntilPorts, until_dt, now_utc) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
-    grace = host.timedelta(minutes=1)
-    value_effects = host._module("modify_value_effects")
-    ports = value_effects.DatetimePorts(host._module("timeutil").compare_datetimes)
-    if value_effects.compare_datetimes(ports, until_dt, now_utc - grace) < 0:
-        past_s = host.core.humanize_delta(until_dt, now_utc, use_months_days=False)
+    grace = ports.minute_delta(now_utc)
+    if ports.compare(until_dt, now_utc - grace) < 0:
+        past_s = ports.humanize(until_dt, now_utc, use_months_days=False)
         return False, f"chainUntil is in the past (was {past_s} ago)"
     return True, None
 

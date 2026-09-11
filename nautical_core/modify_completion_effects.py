@@ -160,7 +160,13 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
     return compute.completion_until_or_fail(
         new, now_utc,
         safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
-        validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(host, until_dt, now),
+        validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(
+            host._module("modify_validation_effects").UntilPorts(
+                lambda _now: host.timedelta(minutes=1),
+                host._module("timeutil").compare_datetimes,
+                host.core.humanize_delta,
+            ), until_dt, now,
+        ),
         panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
     )

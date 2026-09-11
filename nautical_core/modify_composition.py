@@ -97,6 +97,7 @@ class ModifyRuntimeServices:
     check_integrity: bool
     analytics_style: str
     seed_runtime_lookup_tasks: Callable[..., Any]
+    lifecycle_read_service: Callable[[], Any]
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
@@ -111,6 +112,7 @@ class ModifyRuntimeServices:
             check_integrity=host._CHECK_CHAIN_INTEGRITY,
             analytics_style=host._ANALYTICS_STYLE,
             seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, *tasks),
+            lifecycle_read_service=lambda: capabilities.modify_read_effects.lifecycle_read_service(host),
         )
 
 

@@ -91,7 +91,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
         seed_runtime_lookup_tasks=runtime.seed_runtime_lookup_tasks,
         modify_chain_state=runtime.runtime_state,
-        lifecycle_read_service=capabilities.modify_read_effects.lifecycle_read_service(host),
+        lifecycle_read_service=runtime.lifecycle_read_service(),
         chain_health_advice=lambda chain, kind, task, tol_secs, style: diagnostics.chain_health_advice(host, chain, kind, task, tol_secs, style),
         chain_integrity_warnings=lambda chain, expected=None: diagnostics.chain_integrity_warnings(host, chain, expected),
         render_anchor_completion_feedback=lambda **kwargs: presentation.render_anchor_completion_feedback(host, **kwargs),

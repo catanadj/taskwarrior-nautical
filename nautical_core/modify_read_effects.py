@@ -23,6 +23,11 @@ class LifecycleReadCapabilities:
     repository: Any
 
 
+@dataclass(frozen=True, slots=True)
+class ExtraTokenPort:
+    parse: Any
+
+
 def _token_match(core: Any, task: Any, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
@@ -44,8 +49,8 @@ def _token_match(core: Any, task: Any, token: str) -> bool:
     return (not matched) if negate else matched
 
 
-def parse_extra_tokens(host: Any, extra: str | None) -> list[str] | None:
-    return host._module("hook_support", required=False).parse_extra_tokens(extra)
+def parse_extra_tokens(port: ExtraTokenPort, extra: str | None) -> list[str] | None:
+    return port.parse(extra)
 
 
 def lifecycle_read_service(host: Any):
@@ -58,7 +63,9 @@ def lifecycle_read_service(host: Any):
         state.chain_cache_store = module.ChainCacheStore()
     capabilities = LifecycleReadCapabilities(
         coerce_int=host.core.coerce_int,
-        parse_extra_tokens=lambda extra: parse_extra_tokens(host, extra),
+        parse_extra_tokens=lambda extra: parse_extra_tokens(
+            ExtraTokenPort(host._module("hook_support", required=False).parse_extra_tokens), extra
+        ),
         token_matcher=lambda task, token: _token_match(host.core, task, token),
         read_query_get=host._read_query_get,
         read_query_missing=host._READ_QUERY_MISSING,

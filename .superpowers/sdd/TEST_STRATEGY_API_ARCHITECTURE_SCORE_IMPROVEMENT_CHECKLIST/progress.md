@@ -303,3 +303,6 @@
   `SpawnIntentPorts`; completion/workflow/isolation tests pass 30/30.
 - Task 11 five-pass verification: compiled schedule/spawn routes and reran the
   focused migration suites successfully.
+- Task 11 completion preflight batch: link validation, chain identity, and
+  existing-next checks now consume frozen `CompletionPreflightPorts`; focused
+  completion/workflow/isolation tests pass 30/30.

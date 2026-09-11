@@ -18,6 +18,18 @@ class SnapshotPorts:
     task_observation: Any
 
 
+@dataclass(frozen=True, slots=True)
+class CompletionPreflightPorts:
+    preflight: Any
+    coerce_int: Any
+    max_link_number: int
+    short_uuid: Any
+    panel: Any
+    print_task: Any
+    end_chain_summary: Any
+    existing_next_lookup: Any
+
+
 def _panel(host: Any, title, rows, **kwargs):
     return host._module("modify_ui_effects").panel(host, title, rows, **kwargs)
 
@@ -26,13 +38,11 @@ def _panel_callback(host: Any):
     return lambda title, rows, **kwargs: _panel(host, title, rows, **kwargs)
 
 
-def link_numbers_or_fail(host: Any, new: TaskPayload):
-    return host._module("modify_completion_preflight").completion_link_numbers_or_fail(
+def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
+    return ports.preflight.completion_link_numbers_or_fail(
         new,
-        coerce_int=host.core.coerce_int,
-        max_link_number=host.core.MAX_LINK_NUMBER,
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        coerce_int=ports.coerce_int, max_link_number=ports.max_link_number,
+        panel=ports.panel, print_task=ports.print_task,
     )
 
 
@@ -46,26 +56,19 @@ def kind_or_stop(host: Any, new: TaskPayload, now_utc: datetime):
     )
 
 
-def chain_id_or_fail(host: Any, new: TaskPayload) -> str | None:
-    preflight = host._module("modify_completion_preflight")
-    return preflight.completion_chain_id_or_fail(
+def chain_id_or_fail(ports: CompletionPreflightPorts, new: TaskPayload) -> str | None:
+    return ports.preflight.completion_chain_id_or_fail(
         new,
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        panel=ports.panel, print_task=ports.print_task,
     )
 
 
-def existing_next_or_fail(host: Any, new: TaskPayload, next_no: int, chain_snapshot, repository) -> bool:
-    preflight = host._module("modify_completion_preflight")
-    return preflight.completion_existing_next_or_fail(
+def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, next_no: int, chain_snapshot) -> bool:
+    return ports.preflight.completion_existing_next_or_fail(
         new,
         next_no,
-        existing_next_lookup=lambda task, link: repository.exact_child_slot(
-            str(task.get("chainID") or ""), link
-        ),
-        short=host.core.short_uuid,
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        existing_next_lookup=ports.existing_next_lookup,
+        short=ports.short_uuid, panel=ports.panel, print_task=ports.print_task,
     )
 
 
@@ -120,20 +123,31 @@ def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository
         models=models,
         task_observation=host._module("task_models").TaskObservation,
     )
+    preflight_ports = CompletionPreflightPorts(
+        preflight=preflight,
+        coerce_int=host.core.coerce_int,
+        max_link_number=host.core.MAX_LINK_NUMBER,
+        short_uuid=host.core.short_uuid,
+        panel=_panel_callback(host),
+        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
+        existing_next_lookup=lambda task, link: repository.exact_child_slot(str(task.get("chainID") or ""), link),
+    )
     services = models.CompletionPreflightServices(
         short=host.core.short_uuid,
-        completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(host, task),
-        completion_kind_or_stop=lambda task, clock: kind_or_stop(host, task, clock),
-        completion_chain_id_or_fail=lambda task: chain_id_or_fail(host, task),
+        completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(preflight_ports, task),
+        completion_kind_or_stop=lambda task, clock: preflight.completion_kind_or_stop(task, clock, panel=preflight_ports.panel, print_task=preflight_ports.print_task, end_chain_summary=preflight_ports.end_chain_summary),
+        completion_chain_id_or_fail=lambda task: chain_id_or_fail(preflight_ports, task),
         completion_chain_snapshot=lambda chain_id, base_no, next_no: chain_snapshot(snapshot_ports, chain_id, base_no, next_no),
-        completion_existing_next_or_fail=lambda task, next_no, snapshot: existing_next_or_fail(host, task, next_no, snapshot, repository),
+        completion_existing_next_or_fail=lambda task, next_no, snapshot: existing_next_or_fail(preflight_ports, task, next_no, snapshot),
     )
     return preflight.completion_preflight_context(new, now_utc, services=services)
 
 
 def compute_child_due(host: Any, new: TaskPayload, kind: str):
     compute = host._module("modify_completion_compute")
-    generation = host._module("modify_generation_effects").chain_generation_service(host)
+    generation_module = host._module("modify_generation_effects")
+    generation = generation_module.chain_generation_service(generation_module.generation_ports_for(host))
     codec = host._module("task_codec")
     task_models = host._module("task_models")
     models = host._module("modify_models")
@@ -256,7 +270,9 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
     return compute.attach_lifecycle_plan(
         new, computed, next_no, now_utc,
         preflight=preflight,
-        generation=host._module("modify_generation_effects").chain_generation_service(host),
+        generation=host._module("modify_generation_effects").chain_generation_service(
+            host._module("modify_generation_effects").generation_ports_for(host)
+        ),
         scheduler_fingerprint=fingerprint_fn() if callable(fingerprint_fn) else "",
         compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(
             host._module("modify_value_effects").DatetimePorts(host._module("timeutil").compare_datetimes), left, right
@@ -275,7 +291,8 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
 
 def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
     spawn = host._module("modify_completion_spawn")
-    generation = host._module("modify_generation_effects").chain_generation_service(host)
+    generation_module = host._module("modify_generation_effects")
+    generation = generation_module.chain_generation_service(generation_module.generation_ports_for(host))
     codec = host._module("task_codec")
     task_models = host._module("task_models")
     models = host._module("modify_models")

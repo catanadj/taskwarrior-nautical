@@ -3,7 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleReadCapabilities:
+    """Explicit collaborators required to construct lifecycle read services."""
+
+    coerce_int: Any
+    parse_extra_tokens: Any
+    token_matcher: Any
+    read_query_get: Any
+    read_query_missing: Any
+    max_chain_walk: int
+    diag: Any
+    record_stat: Any
+    cache_store: Any
+    repository: Any
 
 
 def _token_match(core: Any, task: Any, token: str) -> bool:
@@ -35,27 +52,34 @@ def lifecycle_read_service(host: Any):
     state = host._modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)
     if existing is not None:
-        repository = getattr(state, "task_repository", None)
-        if repository is not None:
-            bind_repository = getattr(existing, "bind_repository", None)
-            if callable(bind_repository):
-                bind_repository(repository)
         return existing
     module = host._module("lifecycle_read_service")
     if getattr(state, "chain_cache_store", None) is None:
         state.chain_cache_store = module.ChainCacheStore()
-    service = module.LifecycleReadService(
+    capabilities = LifecycleReadCapabilities(
         coerce_int=host.core.coerce_int,
         parse_extra_tokens=lambda extra: parse_extra_tokens(host, extra),
         token_matcher=lambda task, token: _token_match(host.core, task, token),
         read_query_get=host._read_query_get,
-        chain_cache_get=lambda _chain_id: None,
-        repository=getattr(state, "task_repository", None),
+        read_query_missing=host._READ_QUERY_MISSING,
         max_chain_walk=host._MAX_CHAIN_WALK,
         diag=host._diag,
         record_stat=host._record_chain_snapshot_stat,
         cache_store=state.chain_cache_store,
-        read_query_missing=host._READ_QUERY_MISSING,
+        repository=getattr(state, "task_repository", None),
+    )
+    service = module.LifecycleReadService(
+        coerce_int=capabilities.coerce_int,
+        parse_extra_tokens=capabilities.parse_extra_tokens,
+        token_matcher=capabilities.token_matcher,
+        read_query_get=capabilities.read_query_get,
+        chain_cache_get=lambda _chain_id: None,
+        repository=capabilities.repository,
+        max_chain_walk=capabilities.max_chain_walk,
+        diag=capabilities.diag,
+        record_stat=capabilities.record_stat,
+        cache_store=capabilities.cache_store,
+        read_query_missing=capabilities.read_query_missing,
     )
     state.lifecycle_read_service = service
     return service

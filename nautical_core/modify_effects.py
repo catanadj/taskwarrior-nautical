@@ -89,7 +89,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     modify_completion_flow = runtime.import_module("nautical_core.modify_completion_flow")
     finalize_services = modify_completion_flow.CompletionFinalizeServices(
         build_and_spawn_child=lambda task, **kwargs: completion.build_and_spawn_child(host, task, **kwargs),
-        seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, *tasks),
+        seed_runtime_lookup_tasks=runtime.seed_runtime_lookup_tasks,
         modify_chain_state=runtime.runtime_state,
         lifecycle_read_service=capabilities.modify_read_effects.lifecycle_read_service(host),
         chain_health_advice=lambda chain, kind, task, tol_secs, style: diagnostics.chain_health_advice(host, chain, kind, task, tol_secs, style),
@@ -175,7 +175,7 @@ def expiration_services(host: Any):
     return modify_expiration.ExpirationServices(
         core=host.core,
         reconcile=capabilities.chain_integrity_lifecycle,
-        safe_parse_datetime=lambda value: capabilities.modify_datetime_effects.parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         compute_anchor_child_due=lambda task: generation.compute_anchor_child_due(typed_task(task)),
         compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
         build_child_draft=lambda task, *args, **kwargs: generation.build_child_draft(typed_task(task), *args, **kwargs),

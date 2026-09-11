@@ -25,6 +25,11 @@ class SequencePorts:
     sequence_interval: Any
 
 
+@dataclass(frozen=True, slots=True)
+class OccurrencePorts:
+    next_occurrence: Any
+
+
 def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
     """Return the stable one-argument callbacks used by projection services."""
     def service_for_task(task: TaskPayload) -> Any:
@@ -61,7 +66,7 @@ def sequence_period_for_link(ports: SequencePorts, tokens: list[dict], cp_str: s
 
 
 def next_occurrence_after_local_dt(
-    host: Any,
+    ports: OccurrencePorts,
     dnf: Any,
     after_local_dt: datetime,
     default_seed_date: Any,
@@ -71,10 +76,10 @@ def next_occurrence_after_local_dt(
 ) -> Any:
     if not dnf:
         return None
-    return host._module("add_anchor_compute").anchor_next_occurrence_after_local_dt(
+    return ports.next_occurrence(
         dnf, after_local_dt, fallback_hhmm=fallback_hhmm or (0, 0),
         interval_seed=default_seed_date, seed_base=seed_base,
-        omit_dnf=omit_dnf, default_seed_date=default_seed_date, core=host.core,
+        omit_dnf=omit_dnf, default_seed_date=default_seed_date,
     )
 
 

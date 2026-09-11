@@ -197,7 +197,11 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
         fmtlocal=host._fmtlocal,
         short=host.core.short_uuid,
         tolocal=host._tolocal,
-        next_occurrence_after_local_dt=lambda *args, **options: host._module("modify_schedule_effects").next_occurrence_after_local_dt(host, *args, **options),
+        next_occurrence_after_local_dt=lambda *args, **options: host._module("modify_schedule_effects").next_occurrence_after_local_dt(
+            host._module("modify_schedule_effects").OccurrencePorts(
+                host._module("add_anchor_compute").anchor_next_occurrence_after_local_dt
+            ), *args, **options
+        ),
         to_local_cached=host._to_local_cached,
         safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         format_gap=timeline.format_gap,

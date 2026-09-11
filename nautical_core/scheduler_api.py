@@ -24,6 +24,14 @@ class SchedulerAtomDependencies:
     resolve_moon: Any
 
 
+@dataclass(frozen=True, slots=True)
+class SchedulerIntervalDependencies:
+    """Explicit collaborators required by interval admission logic."""
+
+    weeks_between: Any
+    year_index: Any
+
+
 def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
     business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
     return module._schedule_utils.apply_day_offset(
@@ -83,14 +91,18 @@ def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, busines
     )
 
 
-def _interval_allowed_for_atom(module: Any, typ, ival, seed, cand, spec=""):
+def _interval_allowed_for_atom(module: Any, typ, ival, seed, cand, spec="", deps: SchedulerIntervalDependencies | None = None):
+    deps = deps or SchedulerIntervalDependencies(
+        weeks_between=lambda d1, d2: _weeks_between(module, d1, d2),
+        year_index=module._year_index,
+    )
     return module._scheduler_atom.interval_allowed_for_atom(
         typ,
         ival,
         seed,
         cand,
-        weeks_between=module._weeks_between,
-        year_index=module._year_index,
+        weeks_between=deps.weeks_between,
+        year_index=deps.year_index,
         spec=spec,
     )
 

@@ -47,6 +47,18 @@ class UntilCompletionPorts:
     print_task: Any
 
 
+@dataclass(frozen=True, slots=True)
+class CompletionCapsPorts:
+    compute: Any
+    coerce_int: Any
+    parse_datetime: Any
+    parse_cp_tokens: Any
+    estimate_cp: Any
+    estimate_anchor: Any
+    cap_cp: Any
+    cap_anchor: Any
+
+
 def _feedback_ports(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
     return CompletionFeedbackPorts(
         compute=compute,
@@ -248,16 +260,14 @@ def warn_unreasonable_duration(host: Any, new: TaskPayload, child_due, until_dt,
     )
 
 
-def caps(host: Any, kind: str, new: TaskPayload, child_due, dnf):
-    schedule = host._module("modify_schedule_effects")
-    return host._module("modify_completion_compute").completion_caps(
+def caps(ports: CompletionCapsPorts, kind: str, new: TaskPayload, child_due, dnf):
+    return ports.compute.completion_caps(
         kind, new, child_due, dnf,
-        coerce_int=host.core.coerce_int,
-        dtparse=lambda value: datetime_value(parser_for_host(host), value),
-        estimate_cp_final_by_max=lambda task, due: schedule.estimate_cp_final_by_max(host, task, due),
-        estimate_anchor_final_by_max=lambda task, due, expression: schedule.estimate_anchor_final_by_max(host, task, due, expression),
-        cap_from_until_cp=lambda task, due: schedule.cap_from_until_cp(host, task, due),
-        cap_from_until_anchor=lambda task, due, expression: schedule.cap_from_until_anchor(host, task, due, expression),
+        coerce_int=ports.coerce_int, dtparse=ports.parse_datetime,
+        estimate_cp_final_by_max=ports.estimate_cp,
+        estimate_anchor_final_by_max=ports.estimate_anchor,
+        cap_from_until_cp=ports.cap_cp,
+        cap_from_until_anchor=ports.cap_anchor,
     )
 
 
@@ -291,7 +301,18 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(_feedback_ports(host, compute), value, due, until, clock),
         completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(_feedback_ports(host, compute, summarize=False), value, due),
         completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(host, value, due, until, clock),
-        completion_caps=lambda value_kind, value, due, dnf: caps(host, value_kind, value, due, dnf),
+        completion_caps=lambda value_kind, value, due, dnf: caps(
+            CompletionCapsPorts(
+                compute=compute,
+                coerce_int=host.core.coerce_int,
+                parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
+                parse_cp_tokens=host.core.parse_cp_sequence_tokens,
+                estimate_cp=lambda task, due: host._module("modify_schedule_effects").estimate_cp_final_by_max(host, task, due),
+                estimate_anchor=lambda task, due, expression: host._module("modify_schedule_effects").estimate_anchor_final_by_max(host, task, due, expression),
+                cap_cp=lambda task, due: host._module("modify_schedule_effects").cap_from_until_cp(host, task, due),
+                cap_anchor=lambda task, due, expression: host._module("modify_schedule_effects").cap_from_until_anchor(host, task, due, expression),
+            ), value_kind, value, due, dnf
+        ),
         completion_cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(_feedback_ports(host, compute), value, number, cap, clock),
     )
     computed = compute.completion_compute_next_and_limits(new, kind, next_no, now_utc, services=services)

@@ -1,4 +1,4 @@
-"""Public anchor parser API layered over the core parser implementation."""
+"""Public anchor parser API layered over the deps parser implementation."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _core_module():
 
 
 def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDependencies | None = None):
-    """Run the parser pipeline against one isolated core facade."""
+    """Run the parser pipeline against one isolated deps facade."""
     s = module.resolve_anchor_presets(s)
     parser_dnf = module.import_sibling("parsing.parser_dnf") if isinstance(module, CoreContext) else module._parser_dnf
     deps = deps or ParserOwnerDependencies(
@@ -72,7 +72,7 @@ def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDepende
 
 
 def _validate_anchor_expr_strict_impl(module: Any, expr: Any):
-    """Run strict validation against one isolated core facade."""
+    """Run strict validation against one isolated deps facade."""
     return module._strict_validation.validate_anchor_expr_strict(
         expr,
         normalize_anchor_input_to_dnf=lambda value: _normalize_anchor_input_to_dnf(module, value),
@@ -119,20 +119,20 @@ def _validate_anchor_dnf_atoms_strict(module: Any, dnf) -> None:
 
 
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
-    """Create parser entry points bound to one core module instance."""
+    """Create parser entry points bound to one deps module instance."""
     if context is not None:
-        core = ParserDependencies.from_mapping(context.namespace)
+        deps = ParserDependencies.from_mapping(context.namespace)
         module = context
     else:
         if module is None and namespace is None:
             module = _core_module()
-        core = ParserDependencies.from_mapping(
+        deps = ParserDependencies.from_mapping(
             core_namespace(module, namespace, context, "parser_api")
         )
-    parser_atoms = context.import_sibling("parsing.parser_atoms") if context is not None else core["_parser_atoms"]
-    parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else core["_parser_dnf"]
-    parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else core["_parser_frontend"]
-    position_selection = context.import_sibling("position_selection") if context is not None else core["_position_selection"]
+    parser_atoms = context.import_sibling("parsing.parser_atoms") if context is not None else deps["_parser_atoms"]
+    parser_dnf = context.import_sibling("parsing.parser_dnf") if context is not None else deps["_parser_dnf"]
+    parser_frontend = context.import_sibling("parsing.parser_frontend") if context is not None else deps["_parser_frontend"]
+    position_selection = context.import_sibling("position_selection") if context is not None else deps["_position_selection"]
     preset_ref_re = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
 
     def resolve_preset_refs(
@@ -143,7 +143,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         label: str,
         _seen: tuple[str, ...] | frozenset[str] | None = None,
     ) -> str:
-        raw = core["_unwrap_quotes"](expr or "").strip()
+        raw = deps["_unwrap_quotes"](expr or "").strip()
         if not raw:
             return raw
         presets = dict(presets or {})
@@ -161,12 +161,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             if name not in presets:
                 available = ", ".join(f"@{item}" for item in sorted(presets))
                 hint = f" Available {label} presets: {available}." if presets else f" No {label} presets are configured."
-                raise core["ParseError"](
+                raise deps["ParseError"](
                     f"Unknown {label} preset '@{name}'.{hint} Define it under [{table_name}] in config-nautical.toml."
                 )
             if name in seen:
                 chain = " -> ".join([*(f"@{x}" for x in seen_chain), f"@{name}"])
-                raise core["ParseError"](f"Recursive {label} preset reference detected: {chain}")
+                raise deps["ParseError"](f"Recursive {label} preset reference detected: {chain}")
             resolved = resolve_preset_refs(
                 presets[name],
                 presets=presets,
@@ -181,7 +181,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def resolve_anchor_presets_impl(expr: str, *, _seen=None) -> str:
         return resolve_preset_refs(
             expr,
-            presets=core["ANCHOR_PRESETS"],
+            presets=deps["ANCHOR_PRESETS"],
             table_name="anchor_presets",
             label="anchor",
             _seen=_seen,
@@ -190,7 +190,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def resolve_omit_presets(expr: str, *, _seen=None) -> str:
         return resolve_preset_refs(
             expr,
-            presets=core["OMIT_PRESETS"],
+            presets=deps["OMIT_PRESETS"],
             table_name="omit_presets",
             label="omit",
             _seen=_seen,
@@ -206,28 +206,28 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                 label=label,
                 _seen=(name,),
             ).strip()
-        except core["ParseError"]:
+        except deps["ParseError"]:
             return raw
         return resolved[1:-1].strip() if resolved.startswith("(") and resolved.endswith(")") else resolved
 
     def anchor_preset_display(expr: str) -> tuple[str, str] | None:
-        raw = core["_unwrap_quotes"](expr or "").strip()
+        raw = deps["_unwrap_quotes"](expr or "").strip()
         match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
         if not match:
             return None
         name = match.group(1).strip().lower()
-        presets = dict(core["ANCHOR_PRESETS"] or {})
+        presets = dict(deps["ANCHOR_PRESETS"] or {})
         if name not in presets:
             return None
         return "Preset", f"@{name} → {preset_display_value(name, presets, table_name='anchor_presets', label='anchor')}"
 
     def omit_preset_display(expr: str) -> tuple[str, str] | None:
-        raw = core["_unwrap_quotes"](expr or "").strip()
+        raw = deps["_unwrap_quotes"](expr or "").strip()
         match = re.match(r"^@([A-Za-z][A-Za-z0-9_-]*)$", raw)
         if not match:
             return None
         name = match.group(1).strip().lower()
-        presets = dict(core["OMIT_PRESETS"] or {})
+        presets = dict(deps["OMIT_PRESETS"] or {})
         if name not in presets:
             return None
         return "Omit preset", f"@{name} → {preset_display_value(name, presets, table_name='omit_presets', label='omit')}"
@@ -235,25 +235,25 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def normalize_anchor_expr_input(value: str) -> str:
         return parser_frontend.normalize_anchor_expr_input(
             value,
-            unwrap_quotes=core["_unwrap_quotes"],
-            rewrite_weekly_multi_time_atoms=core["_rewrite_weekly_multi_time_atoms"],
-            re_mod=core["re"],
-            parse_error_cls=core["ParseError"],
+            unwrap_quotes=deps["_unwrap_quotes"],
+            rewrite_weekly_multi_time_atoms=deps["_rewrite_weekly_multi_time_atoms"],
+            re_mod=deps["re"],
+            parse_error_cls=deps["ParseError"],
         )
 
     def normalize_monthly_ordinal_spec(spec: str) -> str:
-        return parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=core["re"])
+        return parser_atoms.normalize_monthly_ordinal_spec(spec, re_mod=deps["re"])
 
     def build_anchor_atom_dnf(head: str, full_tail: str):
         return parser_atoms.build_anchor_atom_dnf(
             head,
             full_tail,
-            parse_atom_head=core["_parse_atom_head"],
-            parse_group_with_inline_mods=core["_parse_group_with_inline_mods"],
+            parse_atom_head=deps["_parse_atom_head"],
+            parse_group_with_inline_mods=deps["_parse_group_with_inline_mods"],
             normalize_monthly_ordinal_spec=normalize_monthly_ordinal_spec,
-            split_csv_lower=core["_split_csv_lower"],
-            parse_atom_mods=core["_parse_atom_mods"],
-            parse_error_cls=core["ParseError"],
+            split_csv_lower=deps["_split_csv_lower"],
+            parse_atom_mods=deps["_parse_atom_mods"],
+            parse_error_cls=deps["ParseError"],
         )
 
     def parse_anchor_atom_at(value: str, index: int, length: int):
@@ -261,125 +261,125 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             value,
             index,
             length,
-            skip_ws_pos=core["_skip_ws_pos"],
-            raise_if_comma_joined_anchors=core["_raise_if_comma_joined_anchors"],
+            skip_ws_pos=deps["_skip_ws_pos"],
+            raise_if_comma_joined_anchors=deps["_raise_if_comma_joined_anchors"],
             build_anchor_atom_dnf=build_anchor_atom_dnf,
-            parse_error_cls=core["ParseError"],
+            parse_error_cls=deps["ParseError"],
         )
 
     def yearly_pair_from_fmt(a: int, b: int, fmt: str) -> tuple[int, int]:
-        return core["_yearly_validation"].yearly_pair_from_fmt(a, b, fmt)
+        return deps["_yearly_validation"].yearly_pair_from_fmt(a, b, fmt)
 
     def yearly_mmdd_error(mm: int, dd: int) -> str | None:
-        return core["_yearly_validation"].yearly_mmdd_error(mm, dd)
+        return deps["_yearly_validation"].yearly_mmdd_error(mm, dd)
 
     def validate_yearly_token_allowlist(token: str, fmt: str) -> None:
-        core["_yearly_validation"].validate_yearly_token_allowlist(
+        deps["_yearly_validation"].validate_yearly_token_allowlist(
             token,
             fmt,
-            year_token_format_error_cls=core["YearTokenFormatError"],
-            month_from_alias=core["_month_from_alias"],
+            year_token_format_error_cls=deps["YearTokenFormatError"],
+            month_from_alias=deps["_month_from_alias"],
         )
 
     def validate_yearly_token_detailed(token: str, fmt: str) -> tuple[str, str] | None:
-        return core["_yearly_validation"].validate_yearly_token_detailed(
+        return deps["_yearly_validation"].validate_yearly_token_detailed(
             token,
             fmt,
-            year_token_format_error_cls=core["YearTokenFormatError"],
+            year_token_format_error_cls=deps["YearTokenFormatError"],
         )
 
     def validate_yearly_token_format(spec: str):
-        return core["_yearly_validation"].validate_yearly_token_format(
+        return deps["_yearly_validation"].validate_yearly_token_format(
             spec,
-            yearfmt=core["_yearfmt"],
-            split_csv_lower=core["_split_csv_lower"],
-            year_token_format_error_cls=core["YearTokenFormatError"],
-            month_from_alias=core["_month_from_alias"],
+            yearfmt=deps["_yearfmt"],
+            split_csv_lower=deps["_split_csv_lower"],
+            year_token_format_error_cls=deps["YearTokenFormatError"],
+            month_from_alias=deps["_month_from_alias"],
         )
 
     def validate_year_tokens_in_dnf(dnf):
-        return core["_yearly_validation"].validate_year_tokens_in_dnf(
+        return deps["_yearly_validation"].validate_year_tokens_in_dnf(
             dnf,
             validate_yearly_token_format=validate_yearly_token_format,
         )
 
     def validate_yearly_token(token: str):
-        return core["_yearly_validation"].validate_yearly_token(
+        return deps["_yearly_validation"].validate_yearly_token(
             token,
-            quarters=core["_QUARTERS"],
-            parse_y_token=core["_parse_y_token"],
-            parse_error_cls=core["ParseError"],
+            quarters=deps["_QUARTERS"],
+            parse_y_token=deps["_parse_y_token"],
+            parse_error_cls=deps["ParseError"],
         )
 
     def yearly_last_day(month: int) -> int:
-        return core["_yearly_validation"].yearly_last_day(month)
+        return deps["_yearly_validation"].yearly_last_day(month)
 
     def yearly_check_day_month(day: int, month: int, label: str, token: str) -> None:
-        core["_yearly_validation"].yearly_check_day_month(
+        deps["_yearly_validation"].yearly_check_day_month(
             day,
             month,
             label,
             token,
-            parse_error_cls=core["ParseError"],
-            month_full=core["_natural_language"]._MONTH_FULL,
+            parse_error_cls=deps["ParseError"],
+            month_full=deps["_natural_language"]._MONTH_FULL,
         )
 
     def validate_yearly_spec_token(token: str) -> None:
-        core["_yearly_validation"].validate_yearly_spec_token(
+        deps["_yearly_validation"].validate_yearly_spec_token(
             token,
-            parse_error_cls=core["ParseError"],
-            month_full=core["_natural_language"]._MONTH_FULL,
+            parse_error_cls=deps["ParseError"],
+            month_full=deps["_natural_language"]._MONTH_FULL,
         )
 
     def validate_yearly_spec(spec: str):
-        return core["_yearly_validation"].validate_yearly_spec(
+        return deps["_yearly_validation"].validate_yearly_spec(
             spec,
-            split_csv_lower=core["_split_csv_lower"],
+            split_csv_lower=deps["_split_csv_lower"],
             validate_yearly_spec_token=validate_yearly_spec_token,
-            parse_error_cls=core["ParseError"],
+            parse_error_cls=deps["ParseError"],
         )
 
     leap_year_for_checks = 2028
 
     def weekday_set_from_weekly_atom(atom) -> set[int]:
-        return core["_satisfiability"].weekday_set_from_weekly_atom(
+        return deps["_satisfiability"].weekday_set_from_weekly_atom(
             atom,
-            weekly_spec_to_wset=core["_weekly_spec_to_wset"],
+            weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
         )
 
     def md_pairs_from_yearly_spec(spec: str) -> set[tuple[int, int]]:
-        return core["_satisfiability"].md_pairs_from_yearly_spec(
+        return deps["_satisfiability"].md_pairs_from_yearly_spec(
             spec,
-            expand_yearly_cached=core["expand_yearly_cached"],
+            expand_yearly_cached=deps["expand_yearly_cached"],
             leap_year_for_checks=leap_year_for_checks,
         )
 
     def quick_weekly_and_check(term: list[dict]) -> None:
-        core["_satisfiability"].quick_weekly_and_check(
+        deps["_satisfiability"].quick_weekly_and_check(
             term,
             weekday_set_from_weekly_atom=weekday_set_from_weekly_atom,
-            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
         )
 
     def quick_yearly_and_check(term: list[dict]) -> None:
-        core["_satisfiability"].quick_yearly_and_check(
+        deps["_satisfiability"].quick_yearly_and_check(
             term,
             md_pairs_from_yearly_spec=md_pairs_from_yearly_spec,
-            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
         )
 
     def quick_moon_and_check(term: list[dict]) -> None:
-        core["_satisfiability"].quick_moon_and_check(
+        deps["_satisfiability"].quick_moon_and_check(
             term,
-            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
         )
 
     def term_has_any_match_within(term: list[dict], start, seed, years: int = 8) -> bool:
-        return core["_satisfiability"].term_has_any_match_within(
+        return deps["_satisfiability"].term_has_any_match_within(
             term,
             start,
             seed,
-            atom_matches_on=core["atom_matches_on"],
+            atom_matches_on=deps["atom_matches_on"],
             years=years,
         )
 
@@ -390,17 +390,17 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                     validate_and_terms_satisfiable(factor.get("expr") or [], ref_d)
                     if not position_selection.seasonal_candidate_has_match(
                         factor,
-                        matches_on=core["atom_matches_on"],
+                        matches_on=deps["atom_matches_on"],
                         default_seed=ref_d,
                     ):
                         scope = str(factor.get("scope") or "season")
-                        mode = core["_season_support"].active_mode()
+                        mode = deps["_season_support"].active_mode()
                         boundary = (
                             f"the four {mode} seasonal windows"
                             if scope == "season"
-                            else core["_season_support"].season_boundary_description(scope)
+                            else deps["_season_support"].season_boundary_description(scope)
                         )
-                        raise core["AndTermUnsatisfiable"](
+                        raise deps["AndTermUnsatisfiable"](
                             f"@in-{scope} candidate expression has no dates within its {mode} "
                             f"{boundary} window."
                         )
@@ -410,34 +410,34 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         ]
         if not plain_dnf:
             return
-        return core["_satisfiability"].validate_and_terms_satisfiable(
+        return deps["_satisfiability"].validate_and_terms_satisfiable(
             plain_dnf,
             ref_d,
             quick_weekly_and_check=quick_weekly_and_check,
             quick_yearly_and_check=quick_yearly_and_check,
             quick_moon_and_check=quick_moon_and_check,
             term_has_any_match_within=term_has_any_match_within,
-            normalize_spec_for_acf=core["_normalize_spec_for_acf"],
-            month_from_alias=core["_month_from_alias"],
-            and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
+            normalize_spec_for_acf=deps["_normalize_spec_for_acf"],
+            month_from_alias=deps["_month_from_alias"],
+            and_term_unsatisfiable_cls=deps["AndTermUnsatisfiable"],
         )
 
     def parse_anchor_expr_to_dnf_bound(s: str):
-        deps = ParserOwnerDependencies(
+        owner_deps = ParserOwnerDependencies(
             normalize_input=normalize_anchor_expr_input,
-            raise_bad_year_colons=core["_raise_on_bad_colon_year_tokens"],
+            raise_bad_year_colons=deps["_raise_on_bad_colon_year_tokens"],
             parse_atom=parse_anchor_atom_at,
-            parse_mods=core["_parse_atom_mods"],
-            skip_ws=core["_skip_ws_pos"],
-            rewrite_quarters=core["_rewrite_quarters_in_context"],
-            rewrite_year_month=core["_rewrite_year_month_aliases_in_context"],
+            parse_mods=deps["_parse_atom_mods"],
+            skip_ws=deps["_skip_ws_pos"],
+            rewrite_quarters=deps["_rewrite_quarters_in_context"],
+            rewrite_year_month=deps["_rewrite_year_month_aliases_in_context"],
             validate_year_tokens=validate_year_tokens_in_dnf,
             validate_satisfiable=validate_and_terms_satisfiable,
-            max_terms=core["MAX_ANCHOR_DNF_TERMS"],
-            parse_error=core["ParseError"],
+            max_terms=deps["MAX_ANCHOR_DNF_TERMS"],
+            parse_error=deps["ParseError"],
             today=date.today,
         )
-        return _parse_anchor_expr_to_dnf_impl(module, s, deps)
+        return _parse_anchor_expr_to_dnf_impl(module, s, owner_deps)
 
     return ApiBinding.from_kwargs(
         build_acf=lambda expr: module._build_acf_impl(expr),

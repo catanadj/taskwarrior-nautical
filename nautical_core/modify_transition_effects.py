@@ -8,6 +8,18 @@ from typing import Any
 from .task_models import TaskPayload
 from .task_changes import TaskTransition
 from .task_datetime import datetime_value, parser_for_host
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCarryPorts:
+    describe_carry: Any
+    parse_datetime: Any
+    to_local: Any
+    format_local: Any
+    anchor_field: Any
+    panel: Any
+    abort: Any
 
 
 def preserve_cp_relative_offsets_on_due_change(
@@ -45,7 +57,7 @@ def preserve_cp_relative_offsets_on_due_change(
 
 
 def reject_native_until_carry(
-    host: Any,
+    ports: NativeCarryPorts,
     old: TaskPayload,
     new: TaskPayload,
     new_target: datetime | None,
@@ -55,24 +67,23 @@ def reject_native_until_carry(
     """Reject a target edit when its native expiration cannot be carried."""
     carry = None
     try:
-        add_validation = host.core._import_sibling("add_validation")
-        carry = add_validation.describe_native_until_carry(
-            datetime_value(parser_for_host(host), old.get("until")),
-            datetime_value(parser_for_host(host), old.get(old_target_field)),
-            to_local=host.core.to_local,
+        carry = ports.describe_carry(
+            ports.parse_datetime(old.get("until")),
+            ports.parse_datetime(old.get(old_target_field)),
+            to_local=ports.to_local,
         )
     except Exception:
         pass
     target_label = (
-        host.core.fmt_dt_local(new_target)
+        ports.format_local(new_target)
         if isinstance(new_target, datetime)
-        else str(host._module("modify_task_fields").recurrence_anchor_field(new) or "–")
+        else str(ports.anchor_field(new) or "–")
     )
     rows = [("Target", target_label), ("Required", str(exc))]
     if carry:
         rows.insert(1, ("Carry", carry))
-    host._module("modify_ui_effects").panel(host, "❌ Invalid expiration window", rows, kind="error")
-    host.sys.exit(1)
+    ports.panel("❌ Invalid expiration window", rows, kind="error")
+    ports.abort(1)
 
 
 def preserve_native_until_on_target_change(
@@ -95,9 +106,19 @@ def preserve_native_until_on_target_change(
         recurrence_anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         native_until=host.core._import_sibling("native_until"),
-        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(host),
+        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(
+            host._module("modify_generation_effects").generation_ports_for(host)
+        ),
         reject_carry=lambda old_task, new_task, target, field, exc: reject_native_until_carry(
-            host, old_task, new_task, target, field, exc
+            NativeCarryPorts(
+                describe_carry=host.core._import_sibling("add_validation").describe_native_until_carry,
+                parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
+                to_local=host.core.to_local,
+                format_local=host.core.fmt_dt_local,
+                anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
+                panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
+                abort=host.sys.exit,
+            ), old_task, new_task, target, field, exc
         ),
         diagnostic=host._diag,
     )

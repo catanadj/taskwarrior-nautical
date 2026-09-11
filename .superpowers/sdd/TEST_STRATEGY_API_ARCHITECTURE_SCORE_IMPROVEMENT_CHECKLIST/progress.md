@@ -282,3 +282,6 @@
 - Task 11 spawn identity batch: lifecycle parent/child identity derivation now
   consumes frozen `SpawnIdentityPorts`; completion/workflow/isolation tests
   pass 44/44.
+- Task 11 carry rejection batch: native-until carry error reporting now
+  consumes frozen `NativeCarryPorts`; completion/workflow/isolation tests pass
+  44/44.

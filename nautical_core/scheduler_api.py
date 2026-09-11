@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 
 from .core_context import CoreContext, SchedulerDependencies
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerAtomDependencies:
+    """Explicit collaborators required by the scheduler-atom owner."""
+
+    expand_weekly: Any
+    split_csv: Any
+    expand_monthly: Any
+    expand_yearly: Any
+    weekly_random: Any
+    week_monday: Any
+    resolve_moon: Any
 
 
 def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
@@ -43,26 +57,29 @@ def _moon_phase_matches_date(module: Any, phase: str, day) -> bool:
     )
 
 
-def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, business_calendar=None):
+def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, business_calendar=None, deps: SchedulerAtomDependencies | None = None):
     scheduler_atom = module.import_sibling("scheduler_atom") if isinstance(module, CoreContext) else module._scheduler_atom
+    deps = deps or SchedulerAtomDependencies(
+        expand_weekly=module.expand_weekly_cached_mods,
+        split_csv=module._split_csv_tokens,
+        expand_monthly=module._with_business_calendar(module.expand_monthly_cached, business_calendar),
+        expand_yearly=module.expand_yearly_cached,
+        weekly_random=module._with_business_calendar(module._weekly_rand_pick, business_calendar),
+        week_monday=module._week_monday,
+        resolve_moon=module._resolve_moon_phase_date,
+    )
     return scheduler_atom.base_next_after_atom(
         atom,
         ref_d,
         seed_base=seed_base,
-        expand_weekly_cached_mods=module.expand_weekly_cached_mods,
-        split_csv_tokens=module._split_csv_tokens,
-        expand_monthly_cached=module._with_business_calendar(
-            module.expand_monthly_cached,
-            business_calendar,
-        ),
-        expand_yearly_cached=module.expand_yearly_cached,
-        weekly_rand_pick=module._with_business_calendar(
-            module._weekly_rand_pick,
-            business_calendar,
-        ),
-        week_monday=module._week_monday,
+        expand_weekly_cached_mods=deps.expand_weekly,
+        split_csv_tokens=deps.split_csv,
+        expand_monthly_cached=deps.expand_monthly,
+        expand_yearly_cached=deps.expand_yearly,
+        weekly_rand_pick=deps.weekly_random,
+        week_monday=deps.week_monday,
         date_cls=date,
-        resolve_moon_phase_date=module._resolve_moon_phase_date,
+        resolve_moon_phase_date=deps.resolve_moon,
     )
 
 

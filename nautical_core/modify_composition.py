@@ -98,6 +98,8 @@ class ModifyRuntimeServices:
     analytics_style: str
     seed_runtime_lookup_tasks: Callable[..., Any]
     lifecycle_read_service: Callable[[], Any]
+    chain_health_advice: Callable[..., Any]
+    chain_integrity_warnings: Callable[..., Any]
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
@@ -113,6 +115,8 @@ class ModifyRuntimeServices:
             analytics_style=host._ANALYTICS_STYLE,
             seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, *tasks),
             lifecycle_read_service=lambda: capabilities.modify_read_effects.lifecycle_read_service(host),
+            chain_health_advice=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_health_advice(host, *args, **kwargs),
+            chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(host, *args, **kwargs),
         )
 
 

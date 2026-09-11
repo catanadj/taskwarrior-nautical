@@ -1,4 +1,4 @@
-"""Public scheduler entry points bound to one core facade instance."""
+"""Public scheduler entry points bound to one deps facade instance."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
 
 
 def _weeks_between(module: Any, d1, d2) -> int:
-    # This helper has no per-core state; route directly to its owning module
+    # This helper has no per-deps state; route directly to its owning module
     # instead of traversing the mutable compatibility facade.
     from .schedule_utils import weeks_between
 
@@ -316,23 +316,23 @@ def _next_after_expr_impl(
 
 
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
-    """Create scheduler APIs without sharing state between core loaders."""
+    """Create scheduler APIs without sharing state between deps loaders."""
     if context is not None:
-        core = SchedulerDependencies.from_mapping(context.namespace)
+        deps = SchedulerDependencies.from_mapping(context.namespace)
         module = context
     else:
-        core = SchedulerDependencies.from_mapping(
+        deps = SchedulerDependencies.from_mapping(
             core_namespace(module, namespace, context, "scheduler_api")
         )
-    scheduler_expr = context.import_sibling("scheduler_expr") if context is not None else core["_scheduler_expr"]
-    cached_expansion = context.import_sibling("cached_expansion") if context is not None else core["_cached_expansion"]
-    ttl_lru_cache = core["_ttl_lru_cache"]
+    scheduler_expr = context.import_sibling("scheduler_expr") if context is not None else deps["_scheduler_expr"]
+    cached_expansion = context.import_sibling("cached_expansion") if context is not None else deps["_cached_expansion"]
+    ttl_lru_cache = deps["_ttl_lru_cache"]
 
     @ttl_lru_cache(maxsize=128)
     def expand_weekly_cached_impl(spec: str):
         return cached_expansion.expand_weekly(
             spec,
-            weekly_spec_to_wset=core["_weekly_spec_to_wset"],
+            weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
         )
 
     @ttl_lru_cache(maxsize=128)
@@ -348,27 +348,27 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return cached_expansion.expand_yearly(
             spec,
             year,
-            rewrite_month_names_to_ranges=core["_rewrite_month_names_to_ranges"],
-            split_csv_lower=core["_split_csv_lower"],
-            re_mod=core["re"],
-            month_len=core["month_len"],
-            yearfmt=core["_yearfmt"],
+            rewrite_month_names_to_ranges=deps["_rewrite_month_names_to_ranges"],
+            split_csv_lower=deps["_split_csv_lower"],
+            re_mod=deps["re"],
+            month_len=deps["month_len"],
+            yearfmt=deps["_yearfmt"],
         )
 
     @ttl_lru_cache(maxsize=128)
     def expand_monthly_cached_impl(spec: str, year: int, month: int, business_calendar=None):
-        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.expand_monthly(
             spec,
             year,
             month,
-            month_len=core["month_len"],
-            expand_monthly_aliases=core["_expand_monthly_aliases"],
-            split_csv_lower=core["_split_csv_lower"],
-            nth_weekday_re=core["_nth_weekday_re"],
-            bd_re=core["_bd_re"],
-            weekday_map=core["_WEEKDAYS"],
-            re_mod=core["re"],
+            month_len=deps["month_len"],
+            expand_monthly_aliases=deps["_expand_monthly_aliases"],
+            split_csv_lower=deps["_split_csv_lower"],
+            nth_weekday_re=deps["_nth_weekday_re"],
+            bd_re=deps["_bd_re"],
+            weekday_map=deps["_WEEKDAYS"],
+            re_mod=deps["re"],
             business_calendar=business_calendar,
         )
 
@@ -382,96 +382,96 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return expand_yearly_cached_impl(spec, year)
 
     def roll_apply_impl(dt, mods, business_calendar=None):
-        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
-        return core["_schedule_utils"].roll_apply(
+        business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
+        return deps["_schedule_utils"].roll_apply(
             dt,
             mods,
-            parse_error_cls=core["ParseError"],
+            parse_error_cls=deps["ParseError"],
             business_calendar=business_calendar,
         )
 
     def month_doms_safe(spec, year, month, business_calendar=None):
-        return core["_monthly_support"].month_doms_safe(
+        return deps["_monthly_support"].month_doms_safe(
             spec,
             year,
             month,
-            expand_monthly_cached=core["_with_business_calendar"](
+            expand_monthly_cached=deps["_with_business_calendar"](
                 expand_monthly_cached_impl,
                 business_calendar,
             ),
         )
 
     def month_has_hit(spec, year, month, business_calendar=None):
-        return core["_monthly_support"].month_has_hit(
+        return deps["_monthly_support"].month_has_hit(
             spec,
             year,
             month,
-            month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
+            month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
         )
 
     def first_hit_after_probe_in_month(spec, year, month, probe, business_calendar=None):
-        return core["_monthly_support"].first_hit_after_probe_in_month(
+        return deps["_monthly_support"].first_hit_after_probe_in_month(
             spec,
             year,
             month,
             probe,
-            month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
+            month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
         )
 
     def next_valid_month_on_or_after(spec, year, month, business_calendar=None):
-        return core["_monthly_support"].next_valid_month_on_or_after(
+        return deps["_monthly_support"].next_valid_month_on_or_after(
             spec,
             year,
             month,
-            month_has_hit=core["_with_business_calendar"](month_has_hit, business_calendar),
+            month_has_hit=deps["_with_business_calendar"](month_has_hit, business_calendar),
         )
 
     def advance_k_valid_months(spec, start_y, start_m, k, business_calendar=None):
-        return core["_monthly_support"].advance_k_valid_months(
+        return deps["_monthly_support"].advance_k_valid_months(
             spec,
             start_y,
             start_m,
             k,
-            next_valid_month_on_or_after=core["_with_business_calendar"](
+            next_valid_month_on_or_after=deps["_with_business_calendar"](
                 next_valid_month_on_or_after,
                 business_calendar,
             ),
         )
 
     def monthly_align_base_for_interval(spec, base, probe, seed, ival, business_calendar=None):
-        return core["_monthly_support"].monthly_align_base_for_interval(
+        return deps["_monthly_support"].monthly_align_base_for_interval(
             spec,
             base,
             probe,
             seed,
             ival,
-            month_has_hit=core["_with_business_calendar"](month_has_hit, business_calendar),
-            next_valid_month_on_or_after=core["_with_business_calendar"](
+            month_has_hit=deps["_with_business_calendar"](month_has_hit, business_calendar),
+            next_valid_month_on_or_after=deps["_with_business_calendar"](
                 next_valid_month_on_or_after,
                 business_calendar,
             ),
-            first_hit_after_probe_in_month=core["_with_business_calendar"](
+            first_hit_after_probe_in_month=deps["_with_business_calendar"](
                 first_hit_after_probe_in_month,
                 business_calendar,
             ),
-            advance_k_valid_months=core["_with_business_calendar"](
+            advance_k_valid_months=deps["_with_business_calendar"](
                 advance_k_valid_months,
                 business_calendar,
             ),
-            month_doms_safe=core["_with_business_calendar"](month_doms_safe, business_calendar),
+            month_doms_safe=deps["_with_business_calendar"](month_doms_safe, business_calendar),
         )
 
     @lru_cache(maxsize=32)
     def selection_inner_matcher(business_calendar):
-        return core["partial"](core["atom_matches_on"], business_calendar=business_calendar)
+        return deps["partial"](deps["atom_matches_on"], business_calendar=business_calendar)
 
     def apply_selection_date_modifiers(base, mods, business_calendar=None):
-        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
-        rolled = core["roll_apply"](base, mods, business_calendar=business_calendar)
-        return core["apply_day_offset"](rolled, mods, business_calendar=business_calendar)
+        business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
+        rolled = deps["roll_apply"](base, mods, business_calendar=business_calendar)
+        return deps["apply_day_offset"](rolled, mods, business_calendar=business_calendar)
 
     # Random candidate and boolean-expression scheduling stay bound to this
-    # core instance.  The callbacks are looked up through ``core`` at call
+    # deps instance.  The callbacks are looked up through ``deps`` at call
     # time so facade monkeypatches continue to affect scheduling.
     def week_monday(day):
         return cached_expansion.week_monday(day)
@@ -485,19 +485,19 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         atom_identity,
         business_calendar=None,
     ):
-        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.weekly_rand_pick(
             iso_year,
             iso_week,
             mods,
             seed_base=seed_base,
             atom_identity=atom_identity,
-            namespace=core["WRAND_SALT"],
+            namespace=deps["WRAND_SALT"],
             business_calendar=business_calendar,
         )
 
     def is_bd(day, business_calendar=None):
-        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.is_bd(day, business_calendar)
 
     def random_identity(value):
@@ -506,7 +506,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     def random_pick_index(seq_len, **kwargs):
         return cached_expansion.random_pick_index(
             seq_len,
-            namespace=core["WRAND_SALT"],
+            namespace=deps["WRAND_SALT"],
             **kwargs,
         )
 
@@ -514,7 +514,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return cached_expansion.random_pick_indices(
             seq_len,
             count,
-            namespace=core["WRAND_SALT"],
+            namespace=deps["WRAND_SALT"],
             **kwargs,
         )
 
@@ -528,24 +528,24 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return cached_expansion.filter_by_w(
             dt_list,
             term,
-            atype=core["_atype"],
-            aspec=core["_aspec"],
-            weekly_spec_to_wset=core["_weekly_spec_to_wset"],
+            atype=deps["_atype"],
+            aspec=deps["_aspec"],
+            weekly_spec_to_wset=deps["_weekly_spec_to_wset"],
         )
 
     @ttl_lru_cache(maxsize=128)
     def month_tokens_for_atom_cached(year, month, spec, business_calendar=None):
-        business_calendar = core["_business_calendar"].effective_business_calendar(business_calendar)
+        business_calendar = deps["_business_calendar"].effective_business_calendar(business_calendar)
         return cached_expansion.month_tokens_for_atom_values(
             year,
             month,
             spec,
-            expand_monthly_aliases=core["_expand_monthly_aliases"],
-            days_in_month=core["_days_in_month"],
-            bd_re=core["_bd_re"],
-            nth_weekday_re=core["_nth_weekday_re"],
-            weekday_map=core["_WD"],
-            re_mod=core["re"],
+            expand_monthly_aliases=deps["_expand_monthly_aliases"],
+            days_in_month=deps["_days_in_month"],
+            bd_re=deps["_bd_re"],
+            nth_weekday_re=deps["_nth_weekday_re"],
+            weekday_map=deps["_WD"],
+            re_mod=deps["re"],
             business_calendar=business_calendar,
         )
 
@@ -554,7 +554,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             atom,
             year,
             month,
-            month_tokens_for_atom_cached=core["_with_business_calendar"](
+            month_tokens_for_atom_cached=deps["_with_business_calendar"](
                 month_tokens_for_atom_cached,
                 business_calendar,
             ),
@@ -574,16 +574,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             month,
             rand_atom_idx,
             bd_only,
-            days_in_month=core["_days_in_month"],
-            is_bd=core["_with_business_calendar"](is_bd, business_calendar),
+            days_in_month=deps["_days_in_month"],
+            is_bd=deps["_with_business_calendar"](is_bd, business_calendar),
             filter_by_w=filter_by_w,
-            atype=core["_atype"],
-            aspec=core["_aspec"],
-            month_tokens_for_atom=core["_with_business_calendar"](
+            atype=deps["_atype"],
+            aspec=deps["_aspec"],
+            month_tokens_for_atom=deps["_with_business_calendar"](
                 month_tokens_for_atom,
                 business_calendar,
             ),
-            doms_allowed_by_year=core["_doms_allowed_by_year"],
+            doms_allowed_by_year=deps["_doms_allowed_by_year"],
         )
 
     def next_for_and_rand_yearly(term, ref_d, y_specs, seed_base=None):
@@ -594,16 +594,16 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             seed_base=seed_base,
             identity=random_identity(term),
             random_pick_index=random_pick_index,
-            days_in_month=core["_days_in_month"],
-            doms_allowed_by_year=core["_doms_allowed_by_year"],
-            intersect_monthly_atoms_allowed=core["_intersect_monthly_atoms_allowed"],
-            doms_for_weekly_spec=core["_doms_for_weekly_spec"],
+            days_in_month=deps["_days_in_month"],
+            doms_allowed_by_year=deps["_doms_allowed_by_year"],
+            intersect_monthly_atoms_allowed=deps["_intersect_monthly_atoms_allowed"],
+            doms_for_weekly_spec=deps["_doms_for_weekly_spec"],
             date_cls=date,
         )
 
     def next_for_and_fast_path(term, ref_d, seed, seed_base=None, business_calendar=None):
-        next_atom = core["_with_business_calendar"](core["next_after_factor"], business_calendar)
-        matches = core["_with_business_calendar"](core["factor_matches_on"], business_calendar)
+        next_atom = deps["_with_business_calendar"](deps["next_after_factor"], business_calendar)
+        matches = deps["_with_business_calendar"](deps["factor_matches_on"], business_calendar)
         return scheduler_expr.next_for_and_fast_path(
             term,
             ref_d,
@@ -611,15 +611,15 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             seed_base=seed_base,
             next_after_atom_with_mods=next_atom,
             atom_matches_on=matches,
-            max_anchor_iter=core["MAX_ANCHOR_ITER"],
-            warn_once_per_day=core["_warn_once_per_day"],
-            parse_error_cls=core["ParseError"],
-            os_mod=core["os"],
+            max_anchor_iter=deps["MAX_ANCHOR_ITER"],
+            warn_once_per_day=deps["_warn_once_per_day"],
+            parse_error_cls=deps["ParseError"],
+            os_mod=deps["os"],
         )
 
     def next_for_and(term, ref_d, seed, seed_base=None, business_calendar=None):
-        next_atom = core["_with_business_calendar"](core["next_after_factor"], business_calendar)
-        matches = core["_with_business_calendar"](core["factor_matches_on"], business_calendar)
+        next_atom = deps["_with_business_calendar"](deps["next_after_factor"], business_calendar)
+        matches = deps["_with_business_calendar"](deps["factor_matches_on"], business_calendar)
         return scheduler_expr.next_for_and(
             term,
             ref_d,
@@ -627,21 +627,21 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             seed_base=seed_base,
             random_identity=random_identity,
             random_pick_index=random_pick_index,
-            days_in_month=core["_days_in_month"],
-            doms_allowed_by_year=core["_doms_allowed_by_year"],
-            intersect_monthly_atoms_allowed=core["_intersect_monthly_atoms_allowed"],
-            doms_for_weekly_spec=core["_doms_for_weekly_spec"],
+            days_in_month=deps["_days_in_month"],
+            doms_allowed_by_year=deps["_doms_allowed_by_year"],
+            intersect_monthly_atoms_allowed=deps["_intersect_monthly_atoms_allowed"],
+            doms_for_weekly_spec=deps["_doms_for_weekly_spec"],
             next_after_atom_with_mods=next_atom,
             atom_matches_on=matches,
-            max_anchor_iter=core["MAX_ANCHOR_ITER"],
-            warn_once_per_day=core["_warn_once_per_day"],
-            parse_error_cls=core["ParseError"],
-            os_mod=core["os"],
+            max_anchor_iter=deps["MAX_ANCHOR_ITER"],
+            warn_once_per_day=deps["_warn_once_per_day"],
+            parse_error_cls=deps["ParseError"],
+            os_mod=deps["os"],
             date_cls=date,
         )
 
     def next_for_or(dnf, ref_d, seed, seed_base=None, business_calendar=None):
-        next_for_and_fn = core["_with_business_calendar"](next_for_and, business_calendar)
+        next_for_and_fn = deps["_with_business_calendar"](next_for_and, business_calendar)
         return scheduler_expr.next_for_or(
             dnf,
             ref_d,

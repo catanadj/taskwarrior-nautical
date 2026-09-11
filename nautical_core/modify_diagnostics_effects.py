@@ -13,30 +13,49 @@ class DatetimeValuePort:
     parser: Any
 
 
+@dataclass(frozen=True, slots=True)
+class AnalyticsPorts:
+    core: Any
+    parse_datetime: Any
+    format_delta: Any
+    coerce_int: Any
+    short_uuid: Any
+
+
 def _parse_datetime_value(port: DatetimeValuePort, value: object):
     return datetime_value(port.parser, value)
 
 
-def chain_health_advice(host: Any, chain, kind: str, task, tol_secs: int, style: str):
-    return host._module("modify_analytics").chain_health_advice(
+def chain_health_advice(ports: AnalyticsPorts, chain, kind: str, task, tol_secs: int, style: str):
+    return ports.core._import_sibling("modify_analytics").chain_health_advice(
         chain,
         kind,
         task,
-        core=host.core,
-        parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
-        format_delta=host._module("modify_value_effects").format_delta,
-        coerce_int=host.core.coerce_int,
+        core=ports.core,
+        parse_datetime=ports.parse_datetime,
+        format_delta=ports.format_delta,
+        coerce_int=ports.coerce_int,
         tol_secs=tol_secs,
         style=style,
     )
 
 
-def chain_integrity_warnings(host: Any, chain, expected_chain_id: str | None = None) -> list[str]:
-    return host._module("modify_analytics").chain_integrity_warnings(
+def chain_integrity_warnings(ports: AnalyticsPorts, chain, expected_chain_id: str | None = None) -> list[str]:
+    return ports.core._import_sibling("modify_analytics").chain_integrity_warnings(
         chain,
         expected_chain_id=expected_chain_id,
+        coerce_int=ports.coerce_int,
+        short=ports.short_uuid,
+    )
+
+
+def analytics_ports_for(host: Any) -> AnalyticsPorts:
+    return AnalyticsPorts(
+        core=host.core,
+        parse_datetime=lambda value: _parse_datetime_value(DatetimeValuePort(parser_for_host(host)), value),
+        format_delta=host._module("modify_value_effects").format_delta,
         coerce_int=host.core.coerce_int,
-        short=host.core.short_uuid,
+        short_uuid=host.core.short_uuid,
     )
 
 

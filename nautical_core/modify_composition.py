@@ -126,8 +126,12 @@ class ModifyRuntimeServices:
             analytics_style=host._ANALYTICS_STYLE,
             seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, *tasks),
             lifecycle_read_service=lambda: capabilities.modify_read_effects.lifecycle_read_service(host),
-            chain_health_advice=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_health_advice(host, *args, **kwargs),
-            chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(host, *args, **kwargs),
+            chain_health_advice=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_health_advice(
+                capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs
+            ),
+            chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(
+                capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs
+            ),
             render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_anchor_completion_feedback(host, **kwargs),
             render_cp_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_cp_completion_feedback(host, **kwargs),
             render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(host, result, task),

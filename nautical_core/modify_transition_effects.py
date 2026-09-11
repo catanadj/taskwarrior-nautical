@@ -34,6 +34,20 @@ class CPCarryPorts:
     workflow: Any
 
 
+@dataclass(frozen=True, slots=True)
+class NativePreservePorts:
+    carry: Any
+    field_changed: Any
+    anchor_field: Any
+    parse_datetime: Any
+    native_until: Any
+    generation_service: Any
+    reject_carry: Any
+    diagnostic: Any
+    workflow: Any
+    timestamp: Any
+
+
 def preserve_cp_relative_offsets_on_due_change(
     ports: CPCarryPorts,
     old: TaskPayload,
@@ -94,54 +108,67 @@ def reject_native_until_carry(
 
 
 def preserve_native_until_on_target_change(
-    host: Any,
+    ports: NativePreservePorts,
     old: TaskPayload,
     new: TaskPayload,
     kind: str,
     *,
     transition: TaskTransition | None = None,
 ) -> Any:
-    carried = host._module("modify_carry").preserve_native_until_on_target_change(
+    carried = ports.carry(
         old,
         new,
         kind,
         field_changed=(
             (lambda _old, _new, field: transition.changed(field))
             if transition is not None
-            else host._module("modify_task_fields").field_changed
+            else ports.field_changed
         ),
-        recurrence_anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
-        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
+        recurrence_anchor_field=ports.anchor_field,
+        parse_datetime=ports.parse_datetime,
+        native_until=ports.native_until,
+        generation_service=ports.generation_service,
+        reject_carry=ports.reject_carry,
+        diagnostic=ports.diagnostic,
+    )
+    if not carried:
+        return ports.workflow.NativeUntilDecision("unchanged")
+    value = ports.parse_datetime(new.get("until"))
+    if value is None:
+        return ports.workflow.NativeUntilDecision(
+            "rejected", reason="native-until carry produced no parseable value"
+        )
+    decision = ports.workflow.NativeUntilDecision(
+        "carried", value=ports.timestamp(value)
+    )
+    ports.workflow.apply_native_until_patch(new, decision)
+    ports.workflow.verify_native_until_task(new, decision)
+    return decision
+
+
+def native_preserve_ports_for(host: Any) -> NativePreservePorts:
+    generation = host._module("modify_generation_effects")
+    return NativePreservePorts(
+        carry=host._module("modify_carry").preserve_native_until_on_target_change,
+        field_changed=host._module("modify_task_fields").field_changed,
+        anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
+        parse_datetime=host._TASK_DATETIME_PARSER.parse,
         native_until=host.core._import_sibling("native_until"),
-        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(
-            host._module("modify_generation_effects").generation_ports_for(host)
-        ),
-        reject_carry=lambda old_task, new_task, target, field, exc: reject_native_until_carry(
+        generation_service=lambda: generation.chain_generation_service(generation.generation_ports_for(host)),
+        reject_carry=lambda *args: reject_native_until_carry(
             NativeCarryPorts(
                 describe_carry=host.core._import_sibling("add_validation").describe_native_until_carry,
-                parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-                to_local=host.core.to_local,
-                format_local=host.core.fmt_dt_local,
+                parse_datetime=host._TASK_DATETIME_PARSER.parse,
+                to_local=host.core.to_local, format_local=host.core.fmt_dt_local,
                 anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
                 panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
                 abort=host.sys.exit,
-            ), old_task, new_task, target, field, exc
+            ), *args
         ),
         diagnostic=host._diag,
+        workflow=host._module("modify_carry_workflow"),
+        timestamp=host._module("task_models").TaskTimestamp,
     )
-    if not carried:
-        return host._module("modify_carry_workflow").NativeUntilDecision("unchanged")
-    value = datetime_value(parser_for_host(host), new.get("until"))
-    if value is None:
-        return host._module("modify_carry_workflow").NativeUntilDecision(
-            "rejected", reason="native-until carry produced no parseable value"
-        )
-    decision = host._module("modify_carry_workflow").NativeUntilDecision(
-        "carried", value=host._module("task_models").TaskTimestamp(value)
-    )
-    host._module("modify_carry_workflow").apply_native_until_patch(new, decision)
-    host._module("modify_carry_workflow").verify_native_until_task(new, decision)
-    return decision
 
 
 def validate_completion_cp_and_anchor(

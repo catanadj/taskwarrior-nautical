@@ -155,7 +155,9 @@ class ModifyRuntimeServices:
                     workflow=host._module("modify_carry_workflow"),
                 ), old, new, cp, **kwargs
             ),
-            preserve_native_until=lambda old, new, kind, **kwargs: capabilities.modify_transition_effects.preserve_native_until_on_target_change(host, old, new, kind, **kwargs),
+            preserve_native_until=lambda old, new, kind, **kwargs: capabilities.modify_transition_effects.preserve_native_until_on_target_change(
+                capabilities.modify_transition_effects.native_preserve_ports_for(host), old, new, kind, **kwargs
+            ),
             validate_native_until=lambda task: capabilities.modify_validation_effects.validate_native_until(
                 capabilities.modify_validation_effects.native_until_ports_for(host), task
             ),

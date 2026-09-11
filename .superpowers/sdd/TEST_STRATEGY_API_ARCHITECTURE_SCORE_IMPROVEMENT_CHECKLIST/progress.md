@@ -306,3 +306,5 @@
 - Task 11 completion preflight batch: link validation, chain identity, and
   existing-next checks now consume frozen `CompletionPreflightPorts`; focused
   completion/workflow/isolation tests pass 30/30.
+- Task 11 native carry batch: native-until target preservation now consumes
+  frozen `NativePreservePorts`; workflow/carry/isolation tests pass 40/40.

@@ -56,7 +56,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         ),
         task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
         preserve_native_until=lambda old_task, new_task, kind: transition_effects.preserve_native_until_on_target_change(
-            host,
+            transition_effects.native_preserve_ports_for(host),
             old_task, new_task, kind, transition=transition,
         ),
         validate_native_until=lambda task: validation.validate_native_until(validation.native_until_ports_for(host), task),

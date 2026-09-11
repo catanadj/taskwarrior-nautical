@@ -21,6 +21,16 @@ class SpawnIntentPorts:
     data_dir: str
 
 
+def spawn_intent_ports_for(host: Any) -> SpawnIntentPorts:
+    return SpawnIntentPorts(
+        context=getattr(host, "_INTEGRATION_CONTEXT", None),
+        models=host._module("lifecycle_models"),
+        outbox_factory=host._module("lifecycle_outbox").LifecycleOutboxRepository,
+        application_service=host._module("lifecycle_application").LifecycleApplicationService,
+        data_dir=host.TW_DATA_DIR,
+    )
+
+
 def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
     """Stage one immutable lifecycle plan without re-entering Taskwarrior."""
     context = ports.context
@@ -119,4 +129,4 @@ def child_uuid_for_spawn(host: Any, parent_task: dict | None, child_task: dict |
     )
 
 
-__all__ = ("SpawnIdentityPorts", "SpawnIntentPorts", "enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic", "child_uuid_for_spawn")
+__all__ = ("SpawnIdentityPorts", "SpawnIntentPorts", "spawn_intent_ports_for", "enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic", "child_uuid_for_spawn")

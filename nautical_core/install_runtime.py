@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from nautical_core import hook_bootstrap
+from . import hook_bootstrap
 from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES, OPERATOR_RUNTIME_FILES
 
 fcntl: Any

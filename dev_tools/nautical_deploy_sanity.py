@@ -28,6 +28,7 @@ REQUIRED_RUNTIME_FILES = (
     "on-exit.nautical",
     "nautical_core/install_runtime.py",
     "nautical_core/runtime_manifest.py",
+    "nautical_core/architecture_contract.py",
     "nautical_core/runtime_command.py",
     "nautical_core/task_command.py",
     "nautical_core/taskwarrior_client.py",
@@ -56,6 +57,43 @@ REQUIRED_RUNTIME_FILES = (
     "nautical_core/tools/nautical_install.py",
     "nautical_core/tools/nautical_install_verify.py",
 )
+
+
+def _check_architecture_contract(root: Path) -> list[dict]:
+    """Run the candidate tree's own static dependency-direction contract."""
+    path = root / "nautical_core" / "architecture_contract.py"
+    if not path.is_file():
+        return [{
+            "kind": "architecture",
+            "name": "dependency-direction",
+            "ok": False,
+            "message": "architecture contract missing",
+        }]
+    try:
+        loader = importlib.machinery.SourceFileLoader("_nautical_architecture_contract_check", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("architecture contract spec could not be created")
+        module = importlib.util.module_from_spec(spec)
+        # dataclasses and other introspection helpers expect an executing
+        # module to be present in sys.modules; keep candidate loading isolated
+        # and remove the temporary name afterwards.
+        sys.modules[loader.name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(loader.name, None)
+        check = getattr(module, "check", None)
+        if not callable(check):
+            raise RuntimeError("architecture contract does not expose check()")
+        return list(check(root))
+    except Exception as exc:
+        return [{
+            "kind": "architecture",
+            "name": "dependency-direction",
+            "ok": False,
+            "message": f"{type(exc).__name__}: {exc}",
+        }]
 
 
 def _load_runtime_manifest(root: Path):
@@ -911,6 +949,7 @@ def main() -> int:
         results.extend(_check_query_operator(root, layout_env))
         results.extend(_check_lazy_lifecycle_modules(root, layout_env))
         results.extend(_check_manifest_alignment(root))
+        results.extend(_check_architecture_contract(root))
         results.extend(_check_removed_ownership(root))
         results.extend(_check_domain_model_boundaries(root))
         results.extend(_check_operator_legacy_symbols(root))

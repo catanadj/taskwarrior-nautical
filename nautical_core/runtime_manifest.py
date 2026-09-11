@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 
+# Static deployment contract loaded without importing the runtime package.
+ARCHITECTURE_CONTRACT_FILE = "architecture_contract.py"
+
 _SHARED_HOOK_MODULES = ("hook_runtime", "integration_context")
 
 _INTEGRATION_FILES = (
@@ -246,6 +249,7 @@ for _event in HOOK_RUNTIME_FILES:
 
 
 __all__ = (
+    "ARCHITECTURE_CONTRACT_FILE",
     "HOOK_LAZY_MODULES",
     "HOOK_RUNTIME_FILES",
     "OPERATOR_RUNTIME_FILES",

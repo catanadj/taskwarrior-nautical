@@ -5,7 +5,7 @@ import importlib
 from types import MappingProxyType
 from typing import Any, TypedDict
 
-from nautical_core import config_schema
+from . import config_schema
 
 cache_support: Any = None
 config_support: Any = None

@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from nautical_core import astronomy, native_until
+from . import astronomy, native_until
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.recurrence_context import RecurrenceContext
 from nautical_core.task_datetime import TaskDatetimeParser

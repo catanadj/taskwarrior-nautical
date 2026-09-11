@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 from dataclasses import dataclass
+import importlib
 from typing import Any
 
-from nautical_core import astronomy, native_until
+from . import astronomy, native_until
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
@@ -136,7 +137,7 @@ def _generation_service(hook: Any = None) -> ChainGenerationService:
         return hook
     if hook is not None:
         return ChainGenerationService.from_hook(hook)
-    import nautical_core as core
+    core = importlib.import_module("nautical_core")
 
     return ChainGenerationService.from_core(
         core,

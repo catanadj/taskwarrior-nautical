@@ -183,7 +183,8 @@ def render_lifecycle_result(host: Any, result: Any, task: Any) -> None:
 def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_short: str, dnf: Any, **kwargs: Any) -> list[str]:
     if not host._require_core():
         return []
-    evaluator_callback, service_callback = host._module("modify_schedule_effects").scheduler_callbacks(host)
+    schedule = host._module("modify_schedule_effects")
+    evaluator_callback, service_callback = schedule.scheduler_callbacks(schedule.scheduler_ports_for(host))
     collector_override = kwargs.pop("_collect_prev_two_override", None)
     collect_prev_two = collector_override if callable(collector_override) else (
         lambda task, chain_by_link=None: host._module("modify_read_effects").collect_prev_two(

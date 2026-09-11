@@ -319,7 +319,13 @@ def run_on_modify(host: Any) -> None:
         host._fail_and_exit("Invalid business calendar", str(exc))
         return
     request_t0 = host._ptime.perf_counter()
-    capabilities.modify_read_effects.seed_runtime_lookup_tasks(host, old, new)
+    capabilities.modify_read_effects.seed_runtime_lookup_tasks(
+        capabilities.modify_read_effects.SeedLookupPorts(
+            service=capabilities.modify_read_effects.lifecycle_read_service(host),
+            decode_row=capabilities.task_codec.DEFAULT_TASK_CODEC.decode_row,
+            cache_set=host._query_ctx_set,
+        ), old, new
+    )
     runtime = host._build_hook_runtime_context(new)
     host._modify_runtime_state().workflow_context = runtime.workflow
     request = hook_context.build_on_modify_request(

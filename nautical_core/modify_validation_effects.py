@@ -44,6 +44,19 @@ class CPValidationPorts:
     parse_datetime: Any
 
 
+@dataclass(frozen=True, slots=True)
+class ChainLimitPorts:
+    pipeline: Any
+    validate_limits: Any
+    parse_cp_sequence: Any
+    cp_sequence_error: Any
+    parse_chain_max: Any
+    parse_datetime: Any
+    validate_until_not_past: Any
+    now_utc: Any
+    fail: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
@@ -140,28 +153,41 @@ def validate_cp(ports: CPValidationPorts, cp_value: str, chain_max_value: Any, c
     )
 
 
-def validate_chain_limits(host: Any, task: dict) -> None:
-    add_validation = host.core._import_sibling("add_validation")
-    pipeline = host.core._import_sibling("hook_validation_pipeline")
-    cpmax, _until_dt, findings = pipeline.validate_recurrence_limits(
+def validate_chain_limits(ports: ChainLimitPorts, task: dict) -> None:
+    cpmax, _until_dt, findings = ports.pipeline.validate_recurrence_limits(
         task.get("cp"), task.get("chainMax"), task.get("chainUntil"),
-        parse_cp_sequence=host.core.parse_cp_sequence,
-        cp_sequence_parse_error=host.core.cp_sequence_parse_error,
-        parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
+        parse_cp_sequence=ports.parse_cp_sequence,
+        cp_sequence_parse_error=ports.cp_sequence_error,
+        parse_chain_max=ports.parse_chain_max,
+        parse_datetime=ports.parse_datetime,
     )
+
     if findings:
         finding = findings[0]
-        host._fail_and_exit(f"Invalid {finding.field}", finding.reason)
+        ports.fail(f"Invalid {finding.field}", finding.reason)
     if cpmax is not None:
         task["chainMax"] = cpmax
-    return host._module("modify_validation").validate_chain_limits_on_modify(
+    return ports.validate_limits(
         task,
+        parse_chain_max=ports.parse_chain_max,
+        parse_datetime=ports.parse_datetime,
+        validate_until_not_past=ports.validate_until_not_past,
+        now_utc=ports.now_utc,
+        fail=ports.fail,
+    )
+
+
+def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
+    add_validation = host.core._import_sibling("add_validation")
+    return ChainLimitPorts(
+        pipeline=host.core._import_sibling("hook_validation_pipeline"),
+        validate_limits=host._module("modify_validation").validate_chain_limits_on_modify,
+        parse_cp_sequence=host.core.parse_cp_sequence,
+        cp_sequence_error=host.core.cp_sequence_parse_error,
         parse_chain_max=add_validation.parse_chain_max,
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         validate_until_not_past=lambda until_dt, now: until_not_past(
-            UntilPorts(lambda _now: timedelta(minutes=1), host._module("timeutil").compare_datetimes, host.core.humanize_delta),
-            until_dt, now,
+            UntilPorts(lambda _now: timedelta(minutes=1), host._module("timeutil").compare_datetimes, host.core.humanize_delta), until_dt, now
         ),
         now_utc=host.core.now_utc,
         fail=host._fail_and_exit,

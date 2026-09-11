@@ -110,6 +110,7 @@ class ModifyRuntimeServices:
     validate_native_until: Callable[..., Any]
     validate_native_until_slots: Callable[..., Any]
     now_utc: Callable[[], Any]
+    compute_next_and_limits: Callable[..., Any]
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
@@ -137,6 +138,7 @@ class ModifyRuntimeServices:
             validate_native_until=lambda task: capabilities.modify_validation_effects.validate_native_until(host, task),
             validate_native_until_slots=lambda task: capabilities.modify_validation_effects.validate_native_until_slots(host, task),
             now_utc=host.core.now_utc,
+            compute_next_and_limits=lambda *args, **kwargs: capabilities.modify_completion_effects.compute_next_and_limits(host, *args, **kwargs),
         )
 
 

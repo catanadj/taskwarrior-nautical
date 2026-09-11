@@ -113,9 +113,7 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         validate_native_until_slots=runtime.validate_native_until_slots,
         now_utc=runtime.now_utc,
         preflight_context=lambda task, now, repository: completion.preflight_context(host, task, now, repository),
-        compute_next_and_limits=lambda task, kind, next_no, now, preflight=None: completion.compute_next_and_limits(
-            host, task, kind, next_no, now, preflight=preflight
-        ),
+        compute_next_and_limits=runtime.compute_next_and_limits,
         lifecycle_read_service=runtime.lifecycle_read_service(),
         diag_count=host._diag_count,
         diag_lifecycle_result=host._diag_lifecycle_result,

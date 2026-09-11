@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .task_models import TaskPayload
+from .task_datetime import datetime_value, parser_for_host
 
 
 def _panel(host: Any, title, rows, **kwargs):
@@ -158,7 +159,7 @@ def until_or_fail(host: Any, new: TaskPayload, now_utc: datetime):
     compute = host._module("modify_completion_compute")
     return compute.completion_until_or_fail(
         new, now_utc,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(host, until_dt, now),
         panel=_panel_callback(host),
         print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
@@ -192,7 +193,7 @@ def caps(host: Any, kind: str, new: TaskPayload, child_due, dnf):
     return host._module("modify_completion_compute").completion_caps(
         kind, new, child_due, dnf,
         coerce_int=host.core.coerce_int,
-        dtparse=host._dtparse,
+        dtparse=lambda value: datetime_value(parser_for_host(host), value),
         estimate_cp_final_by_max=lambda task, due: schedule.estimate_cp_final_by_max(host, task, due),
         estimate_anchor_final_by_max=lambda task, due, expression: schedule.estimate_anchor_final_by_max(host, task, due, expression),
         cap_from_until_cp=lambda task, due: schedule.cap_from_until_cp(host, task, due),
@@ -233,7 +234,9 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         preflight=preflight,
         generation=host._module("modify_generation_effects").chain_generation_service(host),
         scheduler_fingerprint=fingerprint_fn() if callable(fingerprint_fn) else "",
-        compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(host, left, right),
+        compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(
+            host._module("modify_value_effects").DatetimePorts(host._module("timeutil").compare_datetimes), left, right
+        ),
         invalid_relative_carry_reason=host._module("chain_integrity_lifecycle").invalid_relative_carry_reason,
         lifecycle_planner=host._module("lifecycle_planner"),
         lifecycle_models=host._module("lifecycle_models"),

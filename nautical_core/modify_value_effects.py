@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from dataclasses import dataclass
 from typing import Any
 
-def compare_datetimes(host: Any, left, right) -> int:
-    # Resolve through the current host so independently loaded hooks never
-    # share a process-global comparator.
-    return host.core._import_sibling("timeutil").compare_datetimes(left, right)
+@dataclass(frozen=True, slots=True)
+class DatetimePorts:
+    compare: Any
+
+
+def compare_datetimes(ports: DatetimePorts, left, right) -> int:
+    return ports.compare(left, right)
 
 
 def format_delta(delta: timedelta) -> str:

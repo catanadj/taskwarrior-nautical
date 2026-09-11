@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from .task_datetime import datetime_value, parser_for_host
 
 
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
@@ -93,7 +94,7 @@ def validate_cp(host: Any, cp_value: str, chain_max_value: Any, chain_until_valu
         parse_cp_sequence=host.core.parse_cp_sequence,
         cp_sequence_parse_error=host.core.cp_sequence_parse_error,
         parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
     )
 
 
@@ -105,7 +106,7 @@ def validate_chain_limits(host: Any, task: dict) -> None:
         parse_cp_sequence=host.core.parse_cp_sequence,
         cp_sequence_parse_error=host.core.cp_sequence_parse_error,
         parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
     )
     if findings:
         finding = findings[0]
@@ -115,7 +116,7 @@ def validate_chain_limits(host: Any, task: dict) -> None:
     return host._module("modify_validation").validate_chain_limits_on_modify(
         task,
         parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         validate_until_not_past=lambda until_dt, now: until_not_past(host, until_dt, now),
         now_utc=host.core.now_utc,
         fail=host._fail_and_exit,
@@ -127,7 +128,7 @@ def validate_native_until(host: Any, task: dict) -> None:
     host._module("modify_validation").validate_native_until_after_target_or_fail(
         task,
         validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         validate_after_target=add_validation.validate_native_until_after_target,
         format_local=host.core.fmt_dt_local,
         panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
@@ -143,7 +144,7 @@ def validate_native_until_slots(host: Any, task: dict) -> None:
     recurrence_context = host.core._import_sibling("recurrence_context").RecurrenceContext
     host._module("modify_validation").validate_native_until_anchor_slots_or_fail(
         task,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         validate_anchor=host._validate_anchor_expr_cached,
         collect_time_slots=add_validation.collect_anchor_time_slots,
         validate_time_slots=native_until.validate_calendar_slots,
@@ -163,7 +164,9 @@ def until_not_past(host: Any, until_dt, now_utc) -> tuple[bool, str | None]:
     if not until_dt:
         return True, None
     grace = host.timedelta(minutes=1)
-    if host._module("modify_value_effects").compare_datetimes(host, until_dt, now_utc - grace) < 0:
+    value_effects = host._module("modify_value_effects")
+    ports = value_effects.DatetimePorts(host._module("timeutil").compare_datetimes)
+    if value_effects.compare_datetimes(ports, until_dt, now_utc - grace) < 0:
         past_s = host.core.humanize_delta(until_dt, now_utc, use_months_days=False)
         return False, f"chainUntil is in the past (was {past_s} ago)"
     return True, None

@@ -146,7 +146,13 @@ def validate_completion_cp_and_anchor(
                 ), expr,
             ),
             validate_cp=lambda cp, chain_max, chain_until: validation_effects.validate_cp(
-                host, cp, chain_max, chain_until
+                validation_effects.CPValidationPorts(
+                    host._module("modify_validation").validate_cp_on_modify,
+                    host.core.parse_cp_sequence,
+                    host.core.cp_sequence_parse_error,
+                    host.core._import_sibling("add_validation").parse_chain_max,
+                    lambda value: validation_effects.datetime_value(validation_effects.parser_for_host(host), value),
+                ), cp, chain_max, chain_until,
             ),
             apply_transition=lambda old_task, new_task: modify_lifecycle.apply_nautical_transition(
                 old_task,

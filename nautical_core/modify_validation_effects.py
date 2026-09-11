@@ -35,6 +35,15 @@ class SharedValidationPorts:
     validate_omit: Any
 
 
+@dataclass(frozen=True, slots=True)
+class CPValidationPorts:
+    validate: Any
+    parse_cp_sequence: Any
+    cp_sequence_error: Any
+    parse_chain_max: Any
+    parse_datetime: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
@@ -119,16 +128,15 @@ def validate_shared_omit(ports: SharedValidationPorts, expr: str) -> None:
     )
 
 
-def validate_cp(host: Any, cp_value: str, chain_max_value: Any, chain_until_value: Any) -> None:
-    add_validation = host.core._import_sibling("add_validation")
-    host._module("modify_validation").validate_cp_on_modify(
+def validate_cp(ports: CPValidationPorts, cp_value: str, chain_max_value: Any, chain_until_value: Any) -> None:
+    ports.validate(
         cp_value,
         chain_max_value,
         chain_until_value,
-        parse_cp_sequence=host.core.parse_cp_sequence,
-        cp_sequence_parse_error=host.core.cp_sequence_parse_error,
-        parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
+        parse_cp_sequence=ports.parse_cp_sequence,
+        cp_sequence_parse_error=ports.cp_sequence_error,
+        parse_chain_max=ports.parse_chain_max,
+        parse_datetime=ports.parse_datetime,
     )
 
 

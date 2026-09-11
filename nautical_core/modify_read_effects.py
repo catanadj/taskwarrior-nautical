@@ -28,6 +28,11 @@ class ExtraTokenPort:
     parse: Any
 
 
+@dataclass(frozen=True, slots=True)
+class ChainExportPort:
+    service: Any
+
+
 def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
@@ -137,14 +142,13 @@ def collect_prev_two(host: Any, current_task: dict, chain_by_link=None):
     return list(read.value)
 
 
-def export_chain_required(host: Any, seed_payload: dict, env=None):
+def export_chain_required(port: ChainExportPort, seed_payload: dict, env=None):
     chain_id = seed_payload.get("chainID")
     if not chain_id:
         raise RuntimeError("ChainID is required (legacy chain traversal removed). Run chainID backfill, then retry.")
     if env is not None:
         raise RuntimeError("chain reads must use the invocation Taskwarrior repository")
-    service = lifecycle_read_service(host)
-    rows = service.get_chain_export(chain_id)
+    rows = port.service.get_chain_export(chain_id)
     if rows is None:
         raise RuntimeError(f"Chain export unavailable for chainID {chain_id}")
     return rows
@@ -183,4 +187,4 @@ def tw_get_cached(host: Any, ref: str) -> str:
         return ""
 
 
-__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "export_chain_required", "tw_get_cached")
+__all__ = ("parse_extra_tokens", "lifecycle_read_service", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "tw_get_cached")

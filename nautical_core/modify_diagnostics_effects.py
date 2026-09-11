@@ -134,7 +134,10 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
     summary = host._module("modify_chain_summary")
 
     def export_sorted_chain(chain_id: str, actual_current: dict) -> list:
-        chain = host._module("modify_read_effects").export_chain_required(host, actual_current)
+        read_effects = host._module("modify_read_effects")
+        chain = read_effects.export_chain_required(
+            read_effects.ChainExportPort(read_effects.lifecycle_read_service(host)), actual_current
+        )
         if actual_current and chain:
             for index, task in enumerate(chain):
                 if task.get("uuid") == actual_current.get("uuid"):
@@ -193,7 +196,9 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         export_sorted_chain=export_sorted_chain,
         root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload),
         short_uuid=host.core.short_uuid,
-        format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(host, task, now),
+        format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(
+            host._module("modify_queries").query_ports_for(host), task, now
+        ),
         kind_rows=kind_rows,
         span_fields=span_fields,
         stats_rows=stats_rows,

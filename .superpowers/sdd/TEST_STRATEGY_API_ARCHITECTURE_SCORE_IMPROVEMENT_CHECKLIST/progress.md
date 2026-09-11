@@ -285,3 +285,9 @@
 - Task 11 carry rejection batch: native-until carry error reporting now
   consumes frozen `NativeCarryPorts`; completion/workflow/isolation tests pass
   44/44.
+- Task 11 scheduler callback batch: scheduler service/evaluator construction
+  now consumes frozen `SchedulerPorts`; focused lifecycle tests pass 44/44.
+- Task 11 chain export batch: required chain reads now consume explicit
+  `ChainExportPort`; diagnostics and lifecycle tests pass 45/45.
+- Task 11 regression pass: compilation, focused lifecycle suites, and diff
+  checks are clean after the three-pass migration loop.

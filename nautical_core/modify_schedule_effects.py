@@ -30,13 +30,28 @@ class OccurrencePorts:
     next_occurrence: Any
 
 
-def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
+@dataclass(frozen=True, slots=True)
+class SchedulerPorts:
+    runtime_module: Any
+    state: Any
+    core: Any
+
+
+def scheduler_ports_for(host: Any) -> SchedulerPorts:
+    return SchedulerPorts(
+        runtime_module=host._module("modify_runtime"),
+        state=host._modify_runtime_state(),
+        core=host.core,
+    )
+
+
+def scheduler_callbacks(ports: SchedulerPorts) -> tuple[Any, Any]:
     """Return the stable one-argument callbacks used by projection services."""
     def service_for_task(task: TaskPayload) -> Any:
-        return host._module("modify_runtime").scheduler_service_for_task(
+        return ports.runtime_module.scheduler_service_for_task(
             task,
-            state=host._modify_runtime_state(),
-            core=host.core,
+            state=ports.state,
+            core=ports.core,
             recurrence_seed_base=recurrence_seed_base,
         )
 
@@ -92,7 +107,7 @@ def anchor_included_occurrences(
     limit: int,
     **_kwargs: Any,
 ) -> Any:
-    service = scheduler_callbacks(host)[1](parent)
+    service = scheduler_callbacks(scheduler_ports_for(host))[1](parent)
     return service.included_occurrences_after(after_local_dt, inclusive=inclusive, limit=limit)
 
 
@@ -112,7 +127,7 @@ def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any) ->
 
 
 def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any) -> Any:
-    evaluator_callback, _service_callback = scheduler_callbacks(host)
+    evaluator_callback, _service_callback = scheduler_callbacks(scheduler_ports_for(host))
     return host._module("modify_completion_compute").estimate_anchor_final_by_max(
         task,
         next_due_utc,
@@ -149,7 +164,7 @@ def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
 
 
 def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: Any) -> Any:
-    evaluator_callback, _service_callback = scheduler_callbacks(host)
+    evaluator_callback, _service_callback = scheduler_callbacks(scheduler_ports_for(host))
     return host._module("modify_completion_compute").cap_from_until_anchor(
         task,
         next_due_utc,

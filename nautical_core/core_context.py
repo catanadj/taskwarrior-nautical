@@ -58,6 +58,15 @@ class CacheDependencies:
         return self.values.get(name, default)
 
 
+@dataclass(slots=True)
+class CacheState:
+    """Mutable per-binding cache entries kept separate from configuration."""
+
+    memory: Any
+    max_entries: int
+    ttl: float
+
+
 @dataclass(frozen=True, slots=True)
 class CoreContext:
     """Own one core namespace and its sibling-module loader.

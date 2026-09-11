@@ -14,7 +14,7 @@ from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
-from .core_context import CacheDependencies, CoreContext
+from .core_context import CacheDependencies, CacheState, CoreContext
 
 fcntl: Any
 try:
@@ -38,6 +38,11 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         if not callable(import_sibling):
             raise TypeError("cache_api.for_core requires a callable sibling-module loader")
     cache_dir_state: list[str | None] = [None]
+    cache_state = CacheState(
+        memory=core["_CACHE_LOAD_MEM"],
+        max_entries=int(core["_CACHE_LOAD_MEM_MAX"]),
+        ttl=float(core["_CACHE_LOAD_MEM_TTL"]),
+    )
     cache_support = import_sibling("cache_support")
     cache_locking = import_sibling("cache_locking")
     cache_payload = import_sibling("cache_payload")
@@ -276,7 +281,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
                     return False
                 target = f"{path}.bad.{core['os'].getpid()}.{core.get('time', time).time_ns()}"
                 core["os"].replace(path, target)
-                core["_CACHE_LOAD_MEM"].pop(key, None)
+                cache_state.memory.pop(key, None)
                 return True
         except Exception:
             return False
@@ -288,12 +293,12 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             cache_path=cache_path,
             anchor_cache_ttl=core["ANCHOR_CACHE_TTL"],
             time_mod=core.get("time", time),
-            cache_load_mem=core["_CACHE_LOAD_MEM"],
-            cache_load_mem_ttl=core["_CACHE_LOAD_MEM_TTL"],
+            cache_load_mem=cache_state.memory,
+            cache_load_mem_ttl=cache_state.ttl,
             clone_cache_payload=core.get("_clone_cache_payload", clone_cache_payload),
             normalize_dnf_cached=core.get("_normalize_dnf_cached", normalize_dnf_cached),
             cache_payload_shape_ok=core.get("_cache_payload_shape_ok", cache_payload_shape_ok),
-            cache_load_mem_max=core["_CACHE_LOAD_MEM_MAX"],
+            cache_load_mem_max=cache_state.max_entries,
             diag=core["diag"],
             quarantine_cache=quarantine_cache,
             os_mod=core["os"],
@@ -317,7 +322,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             os_mod=core["os"],
             tempfile_mod=tempfile,
             cache_atomic_replace=core.get("_cache_atomic_replace", cache_atomic_replace),
-            cache_load_mem=core["_CACHE_LOAD_MEM"],
+            cache_load_mem=cache_state.memory,
         )
 
     def cache_gc_impl(

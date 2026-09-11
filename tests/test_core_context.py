@@ -3,11 +3,17 @@ from __future__ import annotations
 import types
 import unittest
 
-from nautical_core.core_context import CoreContext, ParserDependencies
+from nautical_core.core_context import CacheState, CoreContext, ParserDependencies
 from nautical_core import parser_api
 
 
 class CoreContextTests(unittest.TestCase):
+    def test_cache_state_is_mutable_and_separate_from_dependencies(self) -> None:
+        state = CacheState(memory={}, max_entries=4, ttl=30.0)
+        state.memory["key"] = {"value": 1}
+        self.assertEqual(state.memory["key"], {"value": 1})
+        self.assertEqual((state.max_entries, state.ttl), (4, 30.0))
+
     def test_parser_dependencies_are_immutable_snapshots(self) -> None:
         source = {"value": 1}
         dependencies = ParserDependencies.from_mapping(source)

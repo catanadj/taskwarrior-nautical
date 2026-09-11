@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .task_models import TaskPayload
+from .task_datetime import datetime_value, parser_for_host
 
 
 def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
@@ -15,13 +16,13 @@ def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
             task,
             state=host._modify_runtime_state(),
             core=host.core,
-            recurrence_seed_base=lambda value: recurrence_seed_base(host, value),
+            recurrence_seed_base=recurrence_seed_base,
         )
 
     return lambda task: service_for_task(task).session.evaluator, service_for_task
 
 
-def recurrence_seed_base(_host: Any, task: TaskPayload) -> str:
+def recurrence_seed_base(task: TaskPayload) -> str:
     return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
 
@@ -94,9 +95,9 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
         next_due_utc,
         dnf,
         coerce_int=host.core.coerce_int,
-        recurrence_seed_base=lambda task: recurrence_seed_base(host, task),
+        recurrence_seed_base=recurrence_seed_base,
         to_local_cached=host._to_local_cached,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
         omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(host, task),
         recurrence_evaluator_for_task=evaluator_callback,
@@ -111,7 +112,7 @@ def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
     return host._module("modify_completion_compute").cap_from_until_cp(
         task,
         next_due_utc,
-        parse_datetime=host._dtparse,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
         coerce_int=host.core.coerce_int,
         sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
@@ -126,11 +127,11 @@ def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: 
         task,
         next_due_utc,
         dnf,
-        parse_datetime=host._dtparse,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         coerce_int=host.core.coerce_int,
-        recurrence_seed_base=lambda task: recurrence_seed_base(host, task),
+        recurrence_seed_base=recurrence_seed_base,
         to_local_cached=host._to_local_cached,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
         omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(host, task),
         recurrence_evaluator_for_task=evaluator_callback,

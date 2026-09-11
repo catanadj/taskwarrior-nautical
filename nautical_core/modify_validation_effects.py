@@ -281,7 +281,9 @@ def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
         validate_anchor=host._validate_anchor_expr_cached,
         collect_time_slots=add_validation.collect_anchor_time_slots,
         validate_time_slots=native_until.validate_calendar_slots,
-        normalize_time_slots=lambda value, target_date=None: host._module("modify_time_effects").normalize_hhmm_list(host, value, target_date),
+        normalize_time_slots=lambda value, target_date=None: host._module("modify_time_effects").normalize_hhmm_list(
+            host._module("modify_time_effects").time_slot_ports_for(host), value, target_date
+        ),
         anchor_file_dir=getattr(host.core, "ANCHOR_FILE_DIR", ""),
         recurrence_context=recurrence_context.from_task,
         to_local=host._tolocal,

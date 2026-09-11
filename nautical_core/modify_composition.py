@@ -143,7 +143,18 @@ class ModifyRuntimeServices:
             render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(host, result, task),
             print_task=lambda task: capabilities.modify_ui_effects.print_task(host, task),
             prepare_recurrence=lambda old, new, **kwargs: capabilities.modify_transition_effects.validate_completion_cp_and_anchor(host, old, new, **kwargs),
-            preserve_cp_relative_offsets=lambda old, new, cp, **kwargs: capabilities.modify_transition_effects.preserve_cp_relative_offsets_on_due_change(host, old, new, cp, **kwargs),
+            preserve_cp_relative_offsets=lambda old, new, cp, **kwargs: capabilities.modify_transition_effects.preserve_cp_relative_offsets_on_due_change(
+                capabilities.modify_transition_effects.CPCarryPorts(
+                    carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
+                    field_changed=capabilities.modify_task_fields.field_changed,
+                    parse_datetime=host._TASK_DATETIME_PARSER.parse,
+                    utc_to_local_naive=host.core.utc_to_local_naive,
+                    local_naive_to_utc=host.core.local_naive_to_utc,
+                    format_datetime=host.core.fmt_isoz,
+                    carry_error=host._module("chain_generation").CarryFieldError,
+                    workflow=host._module("modify_carry_workflow"),
+                ), old, new, cp, **kwargs
+            ),
             preserve_native_until=lambda old, new, kind, **kwargs: capabilities.modify_transition_effects.preserve_native_until_on_target_change(host, old, new, kind, **kwargs),
             validate_native_until=lambda task: capabilities.modify_validation_effects.validate_native_until(
                 capabilities.modify_validation_effects.native_until_ports_for(host), task

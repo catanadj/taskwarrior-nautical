@@ -42,7 +42,16 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
         validate_chain_limits=lambda task: validation.validate_chain_limits(validation.chain_limit_ports_for(host), task),
         preserve_cp_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
-            host,
+            transition_effects.CPCarryPorts(
+                carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
+                field_changed=capabilities.modify_task_fields.field_changed,
+                parse_datetime=lambda value: host._TASK_DATETIME_PARSER.parse(value),
+                utc_to_local_naive=host.core.utc_to_local_naive,
+                local_naive_to_utc=host.core.local_naive_to_utc,
+                format_datetime=host.core.fmt_isoz,
+                carry_error=host._module("chain_generation").CarryFieldError,
+                workflow=host._module("modify_carry_workflow"),
+            ),
             old_task, new_task, cp, transition=transition,
         ),
         task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
@@ -142,7 +151,9 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
         terminal_chain_off=lambda task, event=None: presentation.ensure_terminal_chain_off(host, task, event),
         now_utc=host.core.now_utc,
         end_chain_summary=lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(host, task, reason, now, current_task),
-        format_root_and_age=lambda task, now: capabilities.modify_queries.cached_format_root_and_age(host, task, now),
+        format_root_and_age=lambda task, now: capabilities.modify_queries.cached_format_root_and_age(
+            capabilities.modify_queries.query_ports_for(host), task, now
+        ),
         short=host.core.short_uuid,
         panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
         diag=host._diag,
@@ -156,7 +167,9 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
 def expiration_services(host: Any):
     capabilities = _cap(host)
     modify_expiration = capabilities.modify_expiration
-    generation = capabilities.modify_generation_effects.chain_generation_service(host)
+    generation = capabilities.modify_generation_effects.chain_generation_service(
+        capabilities.modify_generation_effects.generation_ports_for(host)
+    )
     task_codec = capabilities.task_codec
     task_models = capabilities.task_models
 

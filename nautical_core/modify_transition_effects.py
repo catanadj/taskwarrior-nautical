@@ -22,37 +22,44 @@ class NativeCarryPorts:
     abort: Any
 
 
+@dataclass(frozen=True, slots=True)
+class CPCarryPorts:
+    carry: Any
+    field_changed: Any
+    parse_datetime: Any
+    utc_to_local_naive: Any
+    local_naive_to_utc: Any
+    format_datetime: Any
+    carry_error: Any
+    workflow: Any
+
+
 def preserve_cp_relative_offsets_on_due_change(
-    host: Any,
+    ports: CPCarryPorts,
     old: TaskPayload,
     new: TaskPayload,
     new_cp: str,
     *,
     transition: TaskTransition | None = None,
 ) -> Any:
-    result = host._module("modify_carry").preserve_cp_relative_offsets_on_due_change(
+    result = ports.carry(
         old,
         new,
         new_cp,
         field_changed=(
             (lambda _old, _new, field: transition.changed(field))
             if transition is not None
-            else host._module("modify_task_fields").field_changed
+            else ports.field_changed
         ),
-        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-        utc_to_local_naive=lambda value: host._module("modify_datetime_effects").utc_to_local_naive(
-            host._module("modify_datetime_effects").datetime_effect_ports_for(host), value
-        ),
-        local_naive_to_utc=lambda value: host._module("modify_datetime_effects").local_naive_to_utc(
-            host._module("modify_datetime_effects").datetime_effect_ports_for(host), value
-        ),
-        format_datetime=host.core.fmt_isoz,
-        carry_error=host._module("chain_generation").CarryFieldError,
+        parse_datetime=ports.parse_datetime,
+        utc_to_local_naive=ports.utc_to_local_naive,
+        local_naive_to_utc=ports.local_naive_to_utc,
+        format_datetime=ports.format_datetime,
+        carry_error=ports.carry_error,
     )
-    workflow = host._module("modify_carry_workflow")
-    decision = workflow.decision_from_cp_adjustments(result)
-    workflow.apply_temporal_carry_patch(new, decision)
-    workflow.verify_temporal_carry_task(new, decision)
+    decision = ports.workflow.decision_from_cp_adjustments(result)
+    ports.workflow.apply_temporal_carry_patch(new, decision)
+    ports.workflow.verify_temporal_carry_task(new, decision)
     return decision
 
 

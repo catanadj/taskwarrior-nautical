@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import re
 import sys
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 from .api_bindings import ApiBinding, core_namespace
@@ -12,29 +13,61 @@ from .api_bindings import ApiBinding, core_namespace
 from .core_context import CoreContext, ParserDependencies
 
 
+@dataclass(frozen=True, slots=True)
+class ParserOwnerDependencies:
+    """Explicit collaborators required by the pure DNF parser owner."""
+
+    normalize_input: Any
+    raise_bad_year_colons: Any
+    parse_atom: Any
+    parse_mods: Any
+    skip_ws: Any
+    rewrite_quarters: Any
+    rewrite_year_month: Any
+    validate_year_tokens: Any
+    validate_satisfiable: Any
+    max_terms: int
+    parse_error: type[Exception]
+    today: Any
+
+
 def _core_module():
     package = __package__ or "nautical_core"
     return sys.modules.get(package) or importlib.import_module(package)
 
 
-def _parse_anchor_expr_to_dnf_impl(module: Any, s: str):
+def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDependencies | None = None):
     """Run the parser pipeline against one isolated core facade."""
     s = module.resolve_anchor_presets(s)
     parser_dnf = module.import_sibling("parsing.parser_dnf") if isinstance(module, CoreContext) else module._parser_dnf
+    deps = deps or ParserOwnerDependencies(
+        normalize_input=module._normalize_anchor_expr_input,
+        raise_bad_year_colons=module._raise_on_bad_colon_year_tokens,
+        parse_atom=module._parse_anchor_atom_at,
+        parse_mods=module._parse_atom_mods,
+        skip_ws=module._skip_ws_pos,
+        rewrite_quarters=module._rewrite_quarters_in_context,
+        rewrite_year_month=module._rewrite_year_month_aliases_in_context,
+        validate_year_tokens=module._validate_year_tokens_in_dnf,
+        validate_satisfiable=module._validate_and_terms_satisfiable,
+        max_terms=module.MAX_ANCHOR_DNF_TERMS,
+        parse_error=module.ParseError,
+        today=date.today,
+    )
     return parser_dnf.parse_anchor_expr_to_dnf(
         s,
-        normalize_anchor_expr_input=module._normalize_anchor_expr_input,
-        raise_on_bad_colon_year_tokens=module._raise_on_bad_colon_year_tokens,
-        parse_anchor_atom_at=module._parse_anchor_atom_at,
-        parse_atom_mods=module._parse_atom_mods,
-        skip_ws_pos=module._skip_ws_pos,
-        rewrite_quarters_in_context=module._rewrite_quarters_in_context,
-        rewrite_year_month_aliases_in_context=module._rewrite_year_month_aliases_in_context,
-        validate_year_tokens_in_dnf=module._validate_year_tokens_in_dnf,
-        validate_and_terms_satisfiable=module._validate_and_terms_satisfiable,
-        max_anchor_dnf_terms=module.MAX_ANCHOR_DNF_TERMS,
-        parse_error_cls=module.ParseError,
-        today=date.today,
+        normalize_anchor_expr_input=deps.normalize_input,
+        raise_on_bad_colon_year_tokens=deps.raise_bad_year_colons,
+        parse_anchor_atom_at=deps.parse_atom,
+        parse_atom_mods=deps.parse_mods,
+        skip_ws_pos=deps.skip_ws,
+        rewrite_quarters_in_context=deps.rewrite_quarters,
+        rewrite_year_month_aliases_in_context=deps.rewrite_year_month,
+        validate_year_tokens_in_dnf=deps.validate_year_tokens,
+        validate_and_terms_satisfiable=deps.validate_satisfiable,
+        max_anchor_dnf_terms=deps.max_terms,
+        parse_error_cls=deps.parse_error,
+        today=deps.today,
     )
 
 
@@ -389,6 +422,23 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             and_term_unsatisfiable_cls=core["AndTermUnsatisfiable"],
         )
 
+    def parse_anchor_expr_to_dnf_bound(s: str):
+        deps = ParserOwnerDependencies(
+            normalize_input=normalize_anchor_expr_input,
+            raise_bad_year_colons=core["_raise_on_bad_colon_year_tokens"],
+            parse_atom=parse_anchor_atom_at,
+            parse_mods=core["_parse_atom_mods"],
+            skip_ws=core["_skip_ws_pos"],
+            rewrite_quarters=core["_rewrite_quarters_in_context"],
+            rewrite_year_month=core["_rewrite_year_month_aliases_in_context"],
+            validate_year_tokens=validate_year_tokens_in_dnf,
+            validate_satisfiable=validate_and_terms_satisfiable,
+            max_terms=core["MAX_ANCHOR_DNF_TERMS"],
+            parse_error=core["ParseError"],
+            today=date.today,
+        )
+        return _parse_anchor_expr_to_dnf_impl(module, s, deps)
+
     return ApiBinding.from_kwargs(
         build_acf=lambda expr: module._build_acf_impl(expr),
         _resolve_preset_refs=resolve_preset_refs,
@@ -420,7 +470,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         _term_has_any_match_within=term_has_any_match_within,
         _validate_and_terms_satisfiable=validate_and_terms_satisfiable,
         resolve_anchor_presets=resolve_anchor_presets_impl,
-        parse_anchor_expr_to_dnf=lambda s: _parse_anchor_expr_to_dnf_impl(module, s),
+        parse_anchor_expr_to_dnf=parse_anchor_expr_to_dnf_bound,
         parse_anchor_expr_to_dnf_cached=lambda s: module._parse_anchor_expr_to_dnf_cached_impl(s),
         validate_anchor_expr_strict=lambda expr: _validate_anchor_expr_strict_impl(module, expr),
         normalize_anchor_input_to_dnf=lambda expr: _normalize_anchor_input_to_dnf(module, expr),

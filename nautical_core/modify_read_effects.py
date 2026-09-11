@@ -168,8 +168,9 @@ def tw_get_cached(host: Any, ref: str) -> str:
             host._diag_count("tw_get_cache_hits")
             return cached
         host._diag_count("tw_get_cache_misses")
-        result = host._module("modify_command_effects").run_task_result(
-            host,
+        command = host._module("modify_command_effects")
+        result = command.run_task_result(
+            command.command_ports_for(host),
             host._task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
             env=host.os.environ.copy(),
             timeout=3.0,

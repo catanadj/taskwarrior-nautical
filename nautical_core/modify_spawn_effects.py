@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from .task_datetime import datetime_value, parser_for_host
 
 
 def enqueue_spawn_intent(host: Any, plan) -> tuple[bool, str]:
@@ -69,7 +70,7 @@ def spawn_child_atomic(host: Any, child_task, parent_task_with_nextlink: dict, *
             lifecycle_models=host._module("lifecycle_models"),
             lifecycle_spawn_identity=lambda parent, child: lifecycle_spawn_identity(host, parent, child),
             enqueue_spawn_intent=lambda plan: enqueue_spawn_intent(host, plan),
-            parse_datetime=getattr(host.core, "parse_dt_any", None),
+            parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
             diag_count=host._diag_count,
         ),
     )
@@ -89,7 +90,9 @@ def child_uuid_for_spawn(host: Any, parent_task: dict | None, child_task: dict |
             coerce_int=host.core.coerce_int,
             stable_child_uuid_namespace=host._STABLE_CHILD_UUID_NAMESPACE,
         ),
-        reserve_child_uuid=lambda value: command.reserve_child_uuid(host, value),
+        generate_child_uuid_candidate=lambda value: command.generate_child_uuid_candidate(
+            command.command_ports_for(host), value
+        ),
     )
 
 

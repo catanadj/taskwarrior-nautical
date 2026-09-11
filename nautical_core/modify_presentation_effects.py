@@ -206,7 +206,9 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
         safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         format_gap=timeline.format_gap,
         module_loader=host._module,
-        omit_dnf_from_parent=lambda value: host._module("modify_anchor_effects").omit_dnf_from_parent(host, value),
+        omit_dnf_from_parent=lambda value: host._module("modify_anchor_effects").omit_dnf_from_parent(
+            host._module("modify_anchor_effects").omit_ports_for(host), value
+        ),
         recurrence_evaluator_for_task=evaluator_callback,
         scheduler_service_for_task=service_callback,
     )

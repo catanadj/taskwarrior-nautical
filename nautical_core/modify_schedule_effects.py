@@ -122,7 +122,9 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
         to_local_cached=host._to_local_cached,
         safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
-        omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(host, task),
+        omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(
+            host._module("modify_anchor_effects").omit_ports_for(host), task
+        ),
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
         anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(host, *args, **kwargs),
@@ -158,7 +160,9 @@ def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: 
         to_local_cached=host._to_local_cached,
         safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         anchor_file_fallback_hhmm=host._anchor_file_fallback_hhmm,
-        omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(host, task),
+        omit_dnf_from_parent=lambda task: host._module("modify_anchor_effects").omit_dnf_from_parent(
+            host._module("modify_anchor_effects").omit_ports_for(host), task
+        ),
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
         anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(host, *args, **kwargs),

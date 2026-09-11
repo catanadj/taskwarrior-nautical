@@ -333,7 +333,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             max_entries=max_entries,
             stale_tmp_age=stale_tmp_age,
             stale_lock_age=stale_lock_age,
-            cache_lock=core.get("_cache_lock", cache_lock),
+            cache_lock=cache_lock,
             stale_lock_check=lambda path, age: safe_lock_stale_pid(path, age)
             and (safe_lock_age(path) or 0.0) >= float(age),
             time_mod=core.get("time", time),

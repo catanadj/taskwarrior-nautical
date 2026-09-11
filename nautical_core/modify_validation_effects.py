@@ -57,6 +57,18 @@ class ChainLimitPorts:
     fail: Any
 
 
+@dataclass(frozen=True, slots=True)
+class NativeUntilPorts:
+    validate: Any
+    validate_anchor_mode: Any
+    parse_datetime: Any
+    validate_after_target: Any
+    format_local: Any
+    panel: Any
+    fail: Any
+    abort: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
@@ -194,12 +206,25 @@ def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
     )
 
 
-def validate_native_until(host: Any, task: dict) -> None:
-    add_validation = host.core._import_sibling("add_validation")
-    host._module("modify_validation").validate_native_until_after_target_or_fail(
+def validate_native_until(ports: NativeUntilPorts, task: dict) -> None:
+    ports.validate(
         task,
+        validate_anchor_mode=ports.validate_anchor_mode,
+        safe_parse_datetime=ports.parse_datetime,
+        validate_after_target=ports.validate_after_target,
+        format_local=ports.format_local,
+        panel=ports.panel,
+        fail=ports.fail,
+        abort=ports.abort,
+    )
+
+
+def native_until_ports_for(host: Any) -> NativeUntilPorts:
+    add_validation = host.core._import_sibling("add_validation")
+    return NativeUntilPorts(
+        validate=host._module("modify_validation").validate_native_until_after_target_or_fail,
         validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
-        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
+        parse_datetime=host._TASK_DATETIME_PARSER.parse,
         validate_after_target=add_validation.validate_native_until_after_target,
         format_local=host.core.fmt_dt_local,
         panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),

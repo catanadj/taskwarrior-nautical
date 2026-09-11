@@ -50,7 +50,7 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
             host,
             old_task, new_task, kind, transition=transition,
         ),
-        validate_native_until=lambda task: validation.validate_native_until(host, task),
+        validate_native_until=lambda task: validation.validate_native_until(validation.native_until_ports_for(host), task),
         validate_native_until_slots=lambda task: validation.validate_native_until_slots(host, task),
         render_cp_adjustment=lambda adjustment: presentation.render_cp_schedule_adjusted_panel(host, adjustment),
         render_timing_warning=lambda task, fields: presentation.render_explicit_timing_order_warning(host, task, fields),

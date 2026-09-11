@@ -32,6 +32,26 @@ class SchedulerIntervalDependencies:
     year_index: Any
 
 
+@dataclass(frozen=True, slots=True)
+class SchedulerModifierDependencies:
+    """Calendar-bound collaborators for scheduler modifier evaluation."""
+
+    active_mod_keys: Any
+    base_next: Any
+    interval_allowed: Any
+    advance_probe: Any
+    monthly_align: Any
+    roll_apply: Any
+    day_offset: Any
+    accept_roll: Any
+    is_business_day: Any
+    max_anchor_iter: int
+    warn_once: Any
+    os_mod: Any
+    resolve_moon: Any
+    moon_matches: Any
+
+
 def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
     business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
     return module._schedule_utils.apply_day_offset(
@@ -124,31 +144,47 @@ def _accept_roll_candidate(module: Any, ref_d, base, cand, roll_kind):
     return module._scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
-def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed_base=None, business_calendar=None):
+def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed_base=None, business_calendar=None, deps: SchedulerModifierDependencies | None = None):
     business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
     base_next = module._with_business_calendar(module.base_next_after_atom, business_calendar)
     monthly_align = module._with_business_calendar(module._monthly_align_base_for_interval, business_calendar)
     roll = module._with_business_calendar(module.roll_apply, business_calendar)
     day_offset = module._with_business_calendar(module.apply_day_offset, business_calendar)
+    deps = deps or SchedulerModifierDependencies(
+        active_mod_keys=module._active_mod_keys,
+        base_next=base_next,
+        interval_allowed=lambda *args, **kwargs: _interval_allowed_for_atom(module, *args, **kwargs),
+        advance_probe=lambda *args, **kwargs: _advance_probe_for_interval_bucket(module, *args, **kwargs),
+        monthly_align=monthly_align,
+        roll_apply=roll,
+        day_offset=day_offset,
+        accept_roll=lambda *args, **kwargs: _accept_roll_candidate(module, *args, **kwargs),
+        is_business_day=business_calendar.is_business_day,
+        max_anchor_iter=module.MAX_ANCHOR_ITER,
+        warn_once=module._warn_once_per_day,
+        os_mod=module.os,
+        resolve_moon=module._resolve_moon_phase_date,
+        moon_matches=module._moon_phase_matches_date,
+    )
     return module._scheduler_atom.next_after_atom_with_mods(
         atom,
         ref_d,
         default_seed,
         seed_base=seed_base,
-        active_mod_keys=module._active_mod_keys,
-        base_next_after_atom=base_next,
-        interval_allowed_for_atom=lambda *args, **kwargs: _interval_allowed_for_atom(module, *args, **kwargs),
-        advance_probe_for_interval_bucket=lambda *args, **kwargs: _advance_probe_for_interval_bucket(module, *args, **kwargs),
-        monthly_align_base_for_interval=monthly_align,
-        roll_apply=roll,
-        apply_day_offset=day_offset,
-        accept_roll_candidate=lambda *args, **kwargs: _accept_roll_candidate(module, *args, **kwargs),
-        is_business_day=business_calendar.is_business_day,
-        max_anchor_iter=module.MAX_ANCHOR_ITER,
-        warn_once_per_day=module._warn_once_per_day,
-        os_mod=module.os,
-        resolve_moon_phase_date=module._resolve_moon_phase_date,
-        moon_phase_matches_date=module._moon_phase_matches_date,
+        active_mod_keys=deps.active_mod_keys,
+        base_next_after_atom=deps.base_next,
+        interval_allowed_for_atom=deps.interval_allowed,
+        advance_probe_for_interval_bucket=deps.advance_probe,
+        monthly_align_base_for_interval=deps.monthly_align,
+        roll_apply=deps.roll_apply,
+        apply_day_offset=deps.day_offset,
+        accept_roll_candidate=deps.accept_roll,
+        is_business_day=deps.is_business_day,
+        max_anchor_iter=deps.max_anchor_iter,
+        warn_once_per_day=deps.warn_once,
+        os_mod=deps.os_mod,
+        resolve_moon_phase_date=deps.resolve_moon,
+        moon_phase_matches_date=deps.moon_matches,
     )
 
 

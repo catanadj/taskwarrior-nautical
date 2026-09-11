@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import re
 from pathlib import Path
 
 from dev_tools import nautical_deploy_sanity
@@ -9,6 +10,17 @@ from nautical_core import architecture_contract
 
 
 class ArchitectureContractTests(unittest.TestCase):
+    def test_primary_bound_apis_do_not_reintroduce_facade_lookups(self) -> None:
+        root = Path(__file__).parents[1]
+        pattern = re.compile(r"\bcore\s*(?:\[|\.get\s*\()")
+        for relative in (
+            "nautical_core/parser_api.py",
+            "nautical_core/scheduler_api.py",
+            "nautical_core/cache_api.py",
+        ):
+            source = (root / relative).read_text(encoding="utf-8")
+            self.assertIsNone(pattern.search(source), relative)
+
     def test_module_map_assigns_explicit_layers(self) -> None:
         layers = architecture_contract.module_layer_map(Path(__file__).parents[1])
         self.assertEqual(layers["nautical_core/task_models.py"], architecture_contract.DOMAIN)

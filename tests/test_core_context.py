@@ -14,6 +14,20 @@ class CoreContextTests(unittest.TestCase):
         self.assertEqual(state.memory["key"], {"value": 1})
         self.assertEqual((state.max_entries, state.ttl), (4, 30.0))
 
+    def test_scheduler_and_cache_dependencies_are_immutable_snapshots(self) -> None:
+        source = {"clock": object(), "limit": 8}
+        from nautical_core.core_context import CacheDependencies, SchedulerDependencies
+
+        scheduler = SchedulerDependencies.from_mapping(source)
+        cache = CacheDependencies.from_mapping(source)
+        source["limit"] = 0
+        self.assertEqual(scheduler["limit"], 8)
+        self.assertEqual(cache["limit"], 8)
+        with self.assertRaises(TypeError):
+            scheduler.values["limit"] = 1
+        with self.assertRaises(TypeError):
+            cache.values["limit"] = 1
+
     def test_parser_dependencies_are_immutable_snapshots(self) -> None:
         source = {"value": 1}
         dependencies = ParserDependencies.from_mapping(source)

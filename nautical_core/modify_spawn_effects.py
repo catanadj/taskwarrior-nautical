@@ -12,18 +12,25 @@ class SpawnIdentityPorts:
     models: Any
 
 
-def enqueue_spawn_intent(host: Any, plan) -> tuple[bool, str]:
+@dataclass(frozen=True, slots=True)
+class SpawnIntentPorts:
+    context: Any
+    models: Any
+    outbox_factory: Any
+    application_service: Any
+    data_dir: str
+
+
+def enqueue_spawn_intent(ports: SpawnIntentPorts, plan) -> tuple[bool, str]:
     """Stage one immutable lifecycle plan without re-entering Taskwarrior."""
-    context = getattr(host, "_INTEGRATION_CONTEXT", None)
+    context = ports.context
     if context is None:
         return False, "validated integration context is unavailable"
-    models = host._module("lifecycle_models")
+    models = ports.models
     if not isinstance(plan, models.LifecyclePlan):
         return False, "invalid lifecycle plan"
-    outbox = host._module("lifecycle_outbox").LifecycleOutboxRepository(host.TW_DATA_DIR)
-    service = host._module("lifecycle_application").LifecycleApplicationService(
-        outbox=outbox, owner="on-modify"
-    )
+    outbox = ports.outbox_factory(ports.data_dir)
+    service = ports.application_service(outbox=outbox, owner="on-modify")
     result = service.stage(
         plan,
         configuration_fingerprint=context.configuration.fingerprint,
@@ -77,7 +84,15 @@ def spawn_child_atomic(host: Any, child_task, parent_task_with_nextlink: dict, *
             lifecycle_spawn_identity=lambda parent, child: lifecycle_spawn_identity(
                 SpawnIdentityPorts(host._module("lifecycle_models")), parent, child
             ),
-            enqueue_spawn_intent=lambda plan: enqueue_spawn_intent(host, plan),
+            enqueue_spawn_intent=lambda plan: enqueue_spawn_intent(
+                SpawnIntentPorts(
+                    context=getattr(host, "_INTEGRATION_CONTEXT", None),
+                    models=host._module("lifecycle_models"),
+                    outbox_factory=host._module("lifecycle_outbox").LifecycleOutboxRepository,
+                    application_service=host._module("lifecycle_application").LifecycleApplicationService,
+                    data_dir=host.TW_DATA_DIR,
+                ), plan
+            ),
             parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
             diag_count=host._diag_count,
         ),
@@ -104,4 +119,4 @@ def child_uuid_for_spawn(host: Any, parent_task: dict | None, child_task: dict |
     )
 
 
-__all__ = ("enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic", "child_uuid_for_spawn")
+__all__ = ("SpawnIdentityPorts", "SpawnIntentPorts", "enqueue_spawn_intent", "lifecycle_spawn_identity", "spawn_child_atomic", "child_uuid_for_spawn")

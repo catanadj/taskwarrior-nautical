@@ -37,6 +37,11 @@ class SchedulerPorts:
     core: Any
 
 
+@dataclass(frozen=True, slots=True)
+class AnchorOccurrencePorts:
+    scheduler: SchedulerPorts
+
+
 def scheduler_ports_for(host: Any) -> SchedulerPorts:
     return SchedulerPorts(
         runtime_module=host._module("modify_runtime"),
@@ -99,7 +104,7 @@ def next_occurrence_after_local_dt(
 
 
 def anchor_included_occurrences(
-    host: Any,
+    ports: AnchorOccurrencePorts,
     parent: TaskPayload,
     *,
     after_local_dt: datetime,
@@ -107,7 +112,7 @@ def anchor_included_occurrences(
     limit: int,
     **_kwargs: Any,
 ) -> Any:
-    service = scheduler_callbacks(scheduler_ports_for(host))[1](parent)
+    service = scheduler_callbacks(ports.scheduler)[1](parent)
     return service.included_occurrences_after(after_local_dt, inclusive=inclusive, limit=limit)
 
 
@@ -142,7 +147,9 @@ def estimate_anchor_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any
         ),
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
-        anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(host, *args, **kwargs),
+        anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(
+            AnchorOccurrencePorts(scheduler_ports_for(host)), *args, **kwargs
+        ),
         diagnostic=host._diag,
         max_iterations=host._MAX_ITERATIONS,
     )
@@ -180,7 +187,9 @@ def cap_from_until_anchor(host: Any, task: TaskPayload, next_due_utc: Any, dnf: 
         ),
         recurrence_evaluator_for_task=evaluator_callback,
         anchor_file_provider_for=host._anchor_file_provider_for,
-        anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(host, *args, **kwargs),
+        anchor_included_occurrences=lambda *args, **kwargs: anchor_included_occurrences(
+            AnchorOccurrencePorts(scheduler_ports_for(host)), *args, **kwargs
+        ),
         compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(
             host._module("modify_value_effects").DatetimePorts(host._module("timeutil").compare_datetimes), left, right
         ),

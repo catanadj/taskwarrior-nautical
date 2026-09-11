@@ -297,3 +297,9 @@
   `PreviousChainPorts`; diagnostics/workflow/isolation tests pass 31/31.
 - Task 11 three-pass regression: full focused lifecycle/operator slice passes
   71/71 with clean diff checks.
+- Task 11 anchor projection batch: included-occurrence lookup now consumes
+  `AnchorOccurrencePorts`; scheduling/completion/isolation tests pass 30/30.
+- Task 11 spawn staging batch: lifecycle outbox staging now consumes explicit
+  `SpawnIntentPorts`; completion/workflow/isolation tests pass 30/30.
+- Task 11 five-pass verification: compiled schedule/spawn routes and reran the
+  focused migration suites successfully.

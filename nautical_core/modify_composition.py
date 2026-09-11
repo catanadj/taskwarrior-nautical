@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from contextlib import nullcontext
 from typing import Any, Callable
-from .task_datetime import parser_for_core
+from .task_datetime import datetime_value, parser_for_core
 
 
 class _HookHost:
@@ -85,10 +85,139 @@ class ModifyHookCapabilities:
 
 
 @dataclass(frozen=True)
+class NonCompletionRouteCapabilities:
+    """Dependencies used only by the ordinary/recurring-edit route."""
+
+    modify_ordinary: Any
+    modify_lifecycle: Any
+    modify_presentation_effects: Any
+    modify_validation_effects: Any
+    modify_ui_effects: Any
+    modify_task_fields: Any
+
+
+@dataclass(frozen=True)
+class CompletionRouteCapabilities:
+    """Dependencies used only by the completion route."""
+
+    modify_completion_effects: Any
+    modify_presentation_effects: Any
+    modify_diagnostics_effects: Any
+    modify_validation_effects: Any
+
+
+@dataclass(frozen=True)
+class DeletionRouteCapabilities:
+    """Dependencies used only by deletion and expiration routes."""
+
+    modify_presentation_effects: Any
+    modify_diagnostics_effects: Any
+    modify_ui_effects: Any
+    modify_expiration: Any
+    modify_queries: Any
+
+
+def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+    transition_effects = capabilities.modify_transition_effects
+    return transition_effects.CPCarryPorts(
+        carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
+        field_changed=capabilities.modify_task_fields.field_changed,
+        parse_datetime=host._TASK_DATETIME_PARSER.parse,
+        utc_to_local_naive=host.core.utc_to_local_naive,
+        local_naive_to_utc=host.core.local_naive_to_utc,
+        format_datetime=host.core.fmt_isoz,
+        carry_error=host._module("chain_generation").CarryFieldError,
+        workflow=host._module("modify_carry_workflow"),
+    )
+
+
+def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+    transition_effects = capabilities.modify_transition_effects
+    generation = capabilities.modify_generation_effects
+    task_fields = capabilities.modify_task_fields
+    ui = capabilities.modify_ui_effects
+    ui_ports = ui.ui_ports_for(host)
+    return transition_effects.NativePreservePorts(
+        carry=host._module("modify_carry").preserve_native_until_on_target_change,
+        field_changed=task_fields.field_changed,
+        anchor_field=task_fields.recurrence_anchor_field,
+        parse_datetime=host._TASK_DATETIME_PARSER.parse,
+        native_until=host.core._import_sibling("native_until"),
+        generation_service=lambda: generation.chain_generation_service(
+            generation.generation_ports_for(host)
+        ),
+        reject_carry=lambda *args: transition_effects.reject_native_until_carry(
+            transition_effects.NativeCarryPorts(
+                describe_carry=host.core._import_sibling("add_validation").describe_native_until_carry,
+                parse_datetime=host._TASK_DATETIME_PARSER.parse,
+                to_local=host.core.to_local,
+                format_local=host.core.fmt_dt_local,
+                anchor_field=task_fields.recurrence_anchor_field,
+                panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
+                abort=host.sys.exit,
+            ),
+            *args,
+        ),
+        diagnostic=host._diag,
+        workflow=host._module("modify_carry_workflow"),
+        timestamp=capabilities.task_models.TaskTimestamp,
+    )
+
+
+def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
+    transition_effects = capabilities.modify_transition_effects
+    validation_effects = capabilities.modify_validation_effects
+    modify_validation = host._module("modify_validation")
+    pipeline = host.core._import_sibling("hook_validation_pipeline")
+    add_validation = host.core._import_sibling("add_validation")
+    shared_ports = validation_effects.SharedValidationPorts(
+        pipeline,
+        host.core.parse_anchor_expr_to_dnf,
+        host._validate_anchor_expr_cached,
+        host._validate_omit_expr_cached,
+    )
+    cp_ports = validation_effects.CPValidationPorts(
+        modify_validation.validate_cp_on_modify,
+        host.core.parse_cp_sequence,
+        host.core.cp_sequence_parse_error,
+        add_validation.parse_chain_max,
+        lambda value: datetime_value(host._TASK_DATETIME_PARSER, value),
+    )
+    return transition_effects.CompletionValidationPorts(
+        validate=modify_validation.validate_completion_cp_and_anchor,
+        services_type=modify_validation.CompletionValidationServices,
+        strip_quotes=capabilities.modify_task_fields.strip_quotes,
+        reject_conflicting_types=pipeline.reject_recurrence_kind_conflict,
+        validate_omit=lambda anchor, anchor_file, omit, omit_file: validation_effects.validate_omit(
+            host, anchor, anchor_file, omit, omit_file
+        ),
+        validate_chain_limits=lambda task: validation_effects.validate_chain_limits(
+            validation_effects.chain_limit_ports_for(host), task
+        ),
+        parse_cp_sequence=host.core.parse_cp_sequence,
+        cp_sequence_parse_error=host.core.cp_sequence_parse_error,
+        field_changed=capabilities.modify_task_fields.field_changed,
+        validate_anchor=lambda expr: validation_effects.validate_shared_anchor(shared_ports, expr),
+        validate_cp=lambda cp, chain_max, chain_until: validation_effects.validate_cp(
+            cp_ports, cp, chain_max, chain_until
+        ),
+        apply_transition=lambda old_task, new_task: capabilities.modify_lifecycle.apply_nautical_transition(
+            old_task,
+            new_task,
+            short_uuid=host.core.short_uuid,
+        ),
+        fail=host._fail_and_exit,
+        diagnostic=host._diag,
+    )
+
+
+@dataclass(frozen=True)
 class ModifyRuntimeServices:
     """Explicit runtime services supplied to route effects at composition time."""
 
-    capabilities: ModifyHookCapabilities
+    non_completion: NonCompletionRouteCapabilities
+    completion: CompletionRouteCapabilities
+    deletion: DeletionRouteCapabilities
     runtime_state: Callable[..., Any]
     import_module: Callable[..., Any]
     diag_summary: Callable[..., Any]
@@ -115,8 +244,31 @@ class ModifyRuntimeServices:
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
         capabilities = capabilities or capabilities_for(host)
+        cp_carry_ports = _cp_carry_ports(host, capabilities)
+        native_preserve_ports = _native_preserve_ports(host, capabilities)
+        completion_validation_ports = _completion_validation_ports(host, capabilities)
         return cls(
-            capabilities=capabilities,
+            non_completion=NonCompletionRouteCapabilities(
+                modify_ordinary=capabilities.modify_ordinary,
+                modify_lifecycle=capabilities.modify_lifecycle,
+                modify_presentation_effects=capabilities.modify_presentation_effects,
+                modify_validation_effects=capabilities.modify_validation_effects,
+                modify_ui_effects=capabilities.modify_ui_effects,
+                modify_task_fields=capabilities.modify_task_fields,
+            ),
+            completion=CompletionRouteCapabilities(
+                modify_completion_effects=capabilities.modify_completion_effects,
+                modify_presentation_effects=capabilities.modify_presentation_effects,
+                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
+                modify_validation_effects=capabilities.modify_validation_effects,
+            ),
+            deletion=DeletionRouteCapabilities(
+                modify_presentation_effects=capabilities.modify_presentation_effects,
+                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
+                modify_ui_effects=capabilities.modify_ui_effects,
+                modify_expiration=capabilities.modify_expiration,
+                modify_queries=capabilities.modify_queries,
+            ),
             runtime_state=host._modify_runtime_state,
             import_module=host.importlib.import_module,
             diag_summary=host._diag_summary,
@@ -140,23 +292,20 @@ class ModifyRuntimeServices:
             ),
             render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_anchor_completion_feedback(host, **kwargs),
             render_cp_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_cp_completion_feedback(host, **kwargs),
-            render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(host, result, task),
-            print_task=lambda task: capabilities.modify_ui_effects.print_task(host, task),
-            prepare_recurrence=lambda old, new, **kwargs: capabilities.modify_transition_effects.validate_completion_cp_and_anchor(host, old, new, **kwargs),
+            render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(
+                capabilities.modify_presentation_effects.lifecycle_result_port_for(host), result, task
+            ),
+            print_task=lambda task: capabilities.modify_ui_effects.print_task(
+                capabilities.modify_ui_effects.ui_ports_for(host), task
+            ),
+            prepare_recurrence=lambda old, new, **kwargs: capabilities.modify_transition_effects.validate_completion_cp_and_anchor(
+                completion_validation_ports, old, new, **kwargs
+            ),
             preserve_cp_relative_offsets=lambda old, new, cp, **kwargs: capabilities.modify_transition_effects.preserve_cp_relative_offsets_on_due_change(
-                capabilities.modify_transition_effects.CPCarryPorts(
-                    carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
-                    field_changed=capabilities.modify_task_fields.field_changed,
-                    parse_datetime=host._TASK_DATETIME_PARSER.parse,
-                    utc_to_local_naive=host.core.utc_to_local_naive,
-                    local_naive_to_utc=host.core.local_naive_to_utc,
-                    format_datetime=host.core.fmt_isoz,
-                    carry_error=host._module("chain_generation").CarryFieldError,
-                    workflow=host._module("modify_carry_workflow"),
-                ), old, new, cp, **kwargs
+                cp_carry_ports, old, new, cp, **kwargs
             ),
             preserve_native_until=lambda old, new, kind, **kwargs: capabilities.modify_transition_effects.preserve_native_until_on_target_change(
-                capabilities.modify_transition_effects.native_preserve_ports_for(host), old, new, kind, **kwargs
+                native_preserve_ports, old, new, kind, **kwargs
             ),
             validate_native_until=lambda task: capabilities.modify_validation_effects.validate_native_until(
                 capabilities.modify_validation_effects.native_until_ports_for(host), task

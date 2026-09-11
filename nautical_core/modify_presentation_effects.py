@@ -2,30 +2,62 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
 
 
-def chain_colour_for_task(host: Any, task: TaskPayload, kind: str) -> str:
+def _ui_ports_for(host: Any):
+    ui = host._module("modify_ui_effects")
+    return ui, ui.ui_ports_for(host)
+
+
+@dataclass(frozen=True, slots=True)
+class LifecycleResultPort:
+    panel: Any
+
+
+@dataclass(frozen=True, slots=True)
+class ChainStylePorts:
+    root_uuid: Any
+    chain_colour_root: Any
+    per_chain: bool
+
+
+def chain_style_ports_for(host: Any) -> ChainStylePorts:
+    return ChainStylePorts(
+        root_uuid=host._module("modify_task_fields").root_uuid,
+        chain_colour_root=host.core.chain_colour_root,
+        per_chain=host._CHAIN_COLOR_PER_CHAIN,
+    )
+
+
+def lifecycle_result_port_for(host: Any) -> LifecycleResultPort:
+    ui, ui_ports = _ui_ports_for(host)
+    return LifecycleResultPort(
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs)
+    )
+
+
+def chain_colour_for_task(ports: ChainStylePorts, task: TaskPayload, kind: str) -> str:
     """Resolve the configured presentation colour for a chain root."""
-    root_uuid = host._module("modify_task_fields").root_uuid(task)
-    return host.core.chain_colour_root(kind, root_uuid)
+    return ports.chain_colour_root(kind, ports.root_uuid(task))
 
 
-def future_style_for_chain(host: Any, task: TaskPayload, kind: str) -> str:
+def future_style_for_chain(ports: ChainStylePorts, task: TaskPayload, kind: str) -> str:
     """Return static or per-chain future styling for timeline presentation."""
-    if not host._CHAIN_COLOR_PER_CHAIN:
+    if not ports.per_chain:
         return "dark_orange" if kind == "cp" else "cyan"
-    return chain_colour_for_task(host, task, kind)
+    return chain_colour_for_task(ports, task, kind)
 
 
 def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str]], new: TaskPayload) -> None:
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
     add_validation = host.core._import_sibling("add_validation")
-    ui = host._module("modify_ui_effects")
+    ui, ui_ports = _ui_ports_for(host)
     feedback.render_recurrence_updated_panel(
         changes,
         models.TaskView.from_mapping(new),
@@ -39,7 +71,7 @@ def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str
         first_recurrence_target=lambda task, source: first_recurrence_target(host, task, source),
         panel_mode=getattr(host.core, "PANEL_MODE", "rich"),
         strip_markup=host.core.strip_rich_markup,
-        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
     )
 
 
@@ -69,24 +101,24 @@ def recurrence_enabled_rows(host: Any, new: TaskPayload, source: str) -> list[tu
 
 
 def render_cp_schedule_adjusted_panel(host: Any, adjustment: Any) -> None:
-    ui = host._module("modify_ui_effects")
+    ui, ui_ports = _ui_ports_for(host)
     host._module("modify_feedback").render_cp_schedule_adjusted_panel(
         adjustment,
         format_local=host._fmtlocal,
         semantic_diff_value=host._module("modify_validation_effects").semantic_diff_value,
         format_offset=host._module("modify_value_effects").format_delta,
-        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
     )
 
 
 def render_explicit_timing_order_warning(host: Any, new: TaskPayload, changed_fields: tuple[str, ...]) -> None:
     task = host._module("modify_models").TaskView.from_mapping(new)
-    ui = host._module("modify_ui_effects")
+    ui, ui_ports = _ui_ports_for(host)
     host._module("modify_feedback").render_explicit_timing_order_warning(
         task,
         changed_fields,
         format_offset=host._module("modify_value_effects").format_delta,
-        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
     )
 
 
@@ -104,8 +136,9 @@ def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload,
         )
     except Exception as exc:
         host._diag(f"removed recurrence chain summary failed: {exc}")
-        host._module("modify_ui_effects").panel(
-            host,
+        ui, ui_ports = _ui_ports_for(host)
+        ui.panel(
+            ui_ports,
             "⛔ Nautical chain stopped",
             [
                 ("Reason", reason),
@@ -137,16 +170,16 @@ def render_anchor_completion_feedback(host: Any, *, request: Any) -> None:
     calendar_feedback = host.importlib.import_module("nautical_core.calendar_feedback")
     feedback = host._module("modify_feedback")
     models = host._module("modify_models")
-    ui = host._module("modify_ui_effects")
+    ui, ui_ports = _ui_ports_for(host)
     feedback.orchestrate_anchor_completion_feedback(
         request=request,
         core=host.core,
-        panel=lambda title, rows, **options: ui.panel(host, title, rows, **options),
+        panel=lambda title, rows, **options: ui.panel(ui_ports, title, rows, **options),
         calendar_feedback=calendar_feedback,
         panel_diagnostics=host._module("panel_diagnostics"),
         modify_models=models,
         modify_runtime=host._module("modify_runtime"),
-        build_runtime_services=lambda: build_runtime_services(host),
+        build_runtime_services=lambda: runtime_services_for(host),
     )
 
 
@@ -159,11 +192,11 @@ def render_cp_completion_feedback(host: Any, *, request: Any) -> None:
         panel_diagnostics=host._module("panel_diagnostics"),
         modify_models=models,
         modify_runtime=host._module("modify_runtime"),
-        build_runtime_services=lambda: build_runtime_services(host),
+        build_runtime_services=lambda: runtime_services_for(host),
     )
 
 
-def render_lifecycle_result(host: Any, result: Any, task: Any) -> None:
+def render_lifecycle_result(ports: LifecycleResultPort, result: Any, task: Any) -> None:
     """Render one finalized non-success outcome without deciding its state."""
     state = str(getattr(result, "state", "retryable") or "retryable").strip().lower()
     title = "⛓ Chain warning" if state == "manual_review" else "⛓ Chain error"
@@ -177,7 +210,7 @@ def render_lifecycle_result(host: Any, result: Any, task: Any) -> None:
     intent_id = str(getattr(result, "spawn_intent_id", "") or "").strip()
     if intent_id:
         rows.append(("Intent", intent_id))
-    host._module("modify_ui_effects").panel(host, title, rows, kind="warning" if state == "manual_review" else "error")
+    ports.panel(title, rows, kind="warning" if state == "manual_review" else "error")
 
 
 def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_short: str, dnf: Any, **kwargs: Any) -> list[str]:
@@ -196,10 +229,11 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
         )
     )
     timeline = host._module("modify_timeline")
+    chain_style_ports = chain_style_ports_for(host)
     services = timeline.TimelineServices(
         core=host.core,
         max_iterations=host._MAX_ITERATIONS,
-        future_style_for_chain=lambda value, value_kind: future_style_for_chain(host, value, value_kind),
+        future_style_for_chain=lambda value, value_kind: future_style_for_chain(chain_style_ports, value, value_kind),
         collect_prev_two=collect_prev_two,
         dtparse=lambda value: datetime_value(parser_for_host(host), value),
         fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(
@@ -226,8 +260,10 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
     return timeline.timeline_lines_for_task(kind, task, child_due_utc, child_short, dnf, **kwargs, services=services)
 
 
-def build_runtime_services(host: Any) -> Any:
+def runtime_services_for(host: Any) -> Any:
     runtime = host._module("modify_runtime")
+    ui, ui_ports = _ui_ports_for(host)
+    chain_style_ports = chain_style_ports_for(host)
     return runtime.ModifyRuntimeServices(
         state=host._modify_runtime_state(), core=host.core,
         debug_wait_sched=host._DEBUG_WAIT_SCHED,
@@ -243,12 +279,12 @@ def build_runtime_services(host: Any) -> Any:
         format_next_anchor_rows=host._module("modify_feedback").format_next_anchor_rows,
         format_next_cp_rows=host._module("modify_feedback").format_next_cp_rows,
         format_line_preview=lambda *args, **kwargs: host._module("modify_format_effects").line_preview(host, *args, **kwargs),
-        panel_line=lambda title, line, **kwargs: host._module("modify_ui_effects").panel_line(host, title, line, **kwargs),
-        text_line=lambda line, **kwargs: host._module("modify_ui_effects").text_line(host, line, **kwargs),
-        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task), diag=host._diag,
+        panel_line=lambda title, line, **kwargs: ui.panel_line(ui_ports, title, line, **kwargs),
+        text_line=lambda line, **kwargs: ui.text_line(ui_ports, line, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
+        print_task=lambda task: ui.print_task(ui_ports, task), diag=host._diag,
         chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
-        chain_colour_for_task=lambda task, kind: chain_colour_for_task(host, task, kind),
+        chain_colour_for_task=lambda task, kind: chain_colour_for_task(chain_style_ports, task, kind),
         strip_quotes=host._module("modify_task_fields").strip_quotes,
         human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
     )
@@ -259,5 +295,7 @@ __all__ = (
     "render_cp_schedule_adjusted_panel", "render_explicit_timing_order_warning",
     "render_disabled_chain_summary", "ensure_terminal_chain_off",
     "render_anchor_completion_feedback", "render_cp_completion_feedback", "render_lifecycle_result",
-    "timeline_lines", "build_runtime_services",
+    "LifecycleResultPort", "lifecycle_result_port_for",
+    "timeline_lines", "runtime_services_for",
+    "ChainStylePorts", "chain_style_ports_for",
 )

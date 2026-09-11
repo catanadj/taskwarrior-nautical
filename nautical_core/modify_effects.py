@@ -21,14 +21,14 @@ def _cap(host: Any):
 def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None, runtime: ModifyRuntimeServices | None = None) -> None:
     runtime = runtime or ModifyRuntimeServices.from_host(host)
     runtime.runtime_state().task_repository = unit_of_work.repository
-    capabilities = runtime.capabilities
+    capabilities = runtime.non_completion
     modify_ordinary = capabilities.modify_ordinary
     modify_lifecycle = capabilities.modify_lifecycle
-    transition_effects = capabilities.modify_transition_effects
     presentation = capabilities.modify_presentation_effects
     diagnostics = capabilities.modify_diagnostics_effects
     validation = capabilities.modify_validation_effects
     ui = capabilities.modify_ui_effects
+    ui_ports = ui.ui_ports_for(host)
     field_changed = (
         (lambda _old, _new, field: transition.changed(field))
         if transition is not None
@@ -41,23 +41,12 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         validate_omit=lambda anchor, anchor_file, omit, omit_file: validation.validate_omit(host, anchor, anchor_file, omit, omit_file),
         reject_conflicting_types=host.core._import_sibling("hook_validation_pipeline").reject_recurrence_kind_conflict,
         validate_chain_limits=lambda task: validation.validate_chain_limits(validation.chain_limit_ports_for(host), task),
-        preserve_cp_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
-            transition_effects.CPCarryPorts(
-                carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
-                field_changed=capabilities.modify_task_fields.field_changed,
-                parse_datetime=lambda value: host._TASK_DATETIME_PARSER.parse(value),
-                utc_to_local_naive=host.core.utc_to_local_naive,
-                local_naive_to_utc=host.core.local_naive_to_utc,
-                format_datetime=host.core.fmt_isoz,
-                carry_error=host._module("chain_generation").CarryFieldError,
-                workflow=host._module("modify_carry_workflow"),
-            ),
-            old_task, new_task, cp, transition=transition,
+        preserve_cp_offsets=lambda old_task, new_task, cp: runtime.preserve_cp_relative_offsets(
+            old_task, new_task, cp, transition=transition
         ),
         task_has_recurrence=modify_lifecycle.task_has_nautical_recurrence_fields,
-        preserve_native_until=lambda old_task, new_task, kind: transition_effects.preserve_native_until_on_target_change(
-            transition_effects.native_preserve_ports_for(host),
-            old_task, new_task, kind, transition=transition,
+        preserve_native_until=lambda old_task, new_task, kind: runtime.preserve_native_until(
+            old_task, new_task, kind, transition=transition
         ),
         validate_native_until=lambda task: validation.validate_native_until(validation.native_until_ports_for(host), task),
         validate_native_until_slots=lambda task: validation.validate_native_until_slots(
@@ -70,13 +59,13 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
         ),
         short_uuid=host.core.short_uuid,
         recurrence_enabled_rows=lambda task, source: presentation.recurrence_enabled_rows(host, task, source),
-        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
         render_disabled_summary=lambda old_task, new_task, decision: presentation.render_disabled_chain_summary(host, old_task, new_task, decision),
         semantic_diff_value=validation.semantic_diff_value,
         first_recurrence_target=lambda task, source: presentation.first_recurrence_target(host, task, source),
         fmtlocal=host._fmtlocal,
         render_recurrence_updated=lambda changes, task: presentation.render_recurrence_updated_panel(host, changes, task),
-        print_task=lambda task: ui.print_task(host, task),
+        print_task=lambda task: ui.print_task(ui_ports, task),
     )
     try:
         modify_ordinary.handle_non_completion_modify(
@@ -91,9 +80,8 @@ def handle_non_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of
 def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None, runtime: ModifyRuntimeServices | None = None):
     runtime = runtime or ModifyRuntimeServices.from_host(host)
     runtime.runtime_state().task_repository = unit_of_work.repository
-    capabilities = runtime.capabilities
+    capabilities = runtime.completion
     completion = capabilities.modify_completion_effects
-    transition_effects = capabilities.modify_transition_effects
     presentation = capabilities.modify_presentation_effects
     diagnostics = capabilities.modify_diagnostics_effects
     validation = capabilities.modify_validation_effects
@@ -138,10 +126,11 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
 def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, *, transition=None, terminal_decision=None, runtime: ModifyRuntimeServices | None = None) -> None:
     runtime = runtime or ModifyRuntimeServices.from_host(host)
     runtime.runtime_state().task_repository = unit_of_work.repository
-    capabilities = runtime.capabilities
+    capabilities = runtime.deletion
     presentation = capabilities.modify_presentation_effects
     diagnostics = capabilities.modify_diagnostics_effects
     ui = capabilities.modify_ui_effects
+    ui_ports = ui.ui_ports_for(host)
     modify_expiration = capabilities.modify_expiration
     if modify_expiration is None:
         expiration_recovery_warning(host, new, "Expiration recovery module is unavailable; deletion was not classified.")
@@ -155,7 +144,7 @@ def handle_deleted(host: Any, old: TaskPayload, new: TaskPayload, unit_of_work, 
             capabilities.modify_queries.query_ports_for(host), task, now
         ),
         short=host.core.short_uuid,
-        panel=lambda title, rows, **kwargs: ui.panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
         diag=host._diag,
         recovery_warning=lambda task, reason: expiration_recovery_warning(host, task, reason),
     )
@@ -172,6 +161,8 @@ def expiration_services(host: Any):
     )
     task_codec = capabilities.task_codec
     task_models = capabilities.task_models
+    ui = capabilities.modify_ui_effects
+    ui_ports = ui.ui_ports_for(host)
 
     def typed_task(task):
         return task_models.NauticalTask.from_observation(
@@ -188,21 +179,24 @@ def expiration_services(host: Any):
         stage_recovery_plan=lambda plan: capabilities.modify_spawn_effects.enqueue_spawn_intent(
             capabilities.modify_spawn_effects.spawn_intent_ports_for(host), plan
         ),
-        panel=lambda title, rows, **kwargs: capabilities.modify_ui_effects.panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
         short=host.core.short_uuid,
         diag=host._diag,
     )
 
 
 def expiration_recovery_warning(host: Any, new: TaskPayload, reason: str) -> None:
-    modify_expiration = _cap(host).modify_expiration
+    capabilities = _cap(host)
+    modify_expiration = capabilities.modify_expiration
     if modify_expiration is not None:
         try:
             modify_expiration.render_recovery_warning(new, reason, services=expiration_services(host))
             return
         except Exception as exc:
             host._diag(f"expiration recovery warning render failed: {exc}")
-    _cap(host).modify_ui_effects.panel(
+    ui = capabilities.modify_ui_effects
+    ui.panel(
+        ui.ui_ports_for(host),
         "⚠ Nautical expiration recovery deferred",
         [("Task", host.core.short_uuid(new.get("uuid")) or "–"), ("Reason", reason or "The next occurrence could not be prepared."), ("Action", "Run nautical reconcile --apply.")],
         kind="warning",

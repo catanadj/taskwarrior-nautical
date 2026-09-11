@@ -308,3 +308,20 @@
   completion/workflow/isolation tests pass 30/30.
 - Task 11 native carry batch: native-until target preservation now consumes
   frozen `NativePreservePorts`; workflow/carry/isolation tests pass 40/40.
+- Task 11 hook-host architecture gate: added a fixture-backed AST contract that
+  rejects `host` parameters on modify effect operations while permitting only
+  explicitly named composition constructors (`*_port_for`, `*_ports_for`,
+  `*_services_for`, and `*_for_host`). The contract's focused fixtures pass; the repository
+  gate intentionally remains red with 47 operations until the remaining
+  presentation, transition, completion, diagnostic, read, schedule, spawn,
+  validation, format, and route migrations finish.
+- Task 11 transition/carry cutover: completion recurrence validation now
+  consumes frozen `CompletionValidationPorts`; CP and native carry ports are
+  assembled once at the composition root, and `modify_transition_effects` has
+  no hook-host or dynamic-module dependency. Focused workflow, carry,
+  completion, isolation, and operator tests pass 69/69.
+- Task 11 capability-bag cutover: removed `ModifyRuntimeServices.capabilities`
+  and replaced it with operation-scoped non-completion, completion, and
+  deletion capability sets. The isolation architecture gate and combined
+  presentation/lifecycle slice pass 76/76; remaining AST findings are tracked
+  for subsequent adapter extraction.

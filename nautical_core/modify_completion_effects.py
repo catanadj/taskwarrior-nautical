@@ -58,6 +58,21 @@ class CompletionCapsPorts:
     cap_anchor: Any
 
 
+@dataclass(frozen=True, slots=True)
+class ChildDuePorts:
+    compute: Any
+    generation: Any
+    decode_task: Any
+    task_model: Any
+    exhaustion_message: Any
+    ensure_terminal: Any
+    end_summary: Any
+    now_utc: Any
+    panel: Any
+    print_task: Any
+    diag: Any
+
+
 def _feedback_ports(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
     return CompletionFeedbackPorts(
         compute=compute,
@@ -186,42 +201,33 @@ def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository
     return preflight.completion_preflight_context(new, now_utc, services=services)
 
 
-def compute_child_due(host: Any, new: TaskPayload, kind: str):
-    compute = host._module("modify_completion_compute")
-    generation_module = host._module("modify_generation_effects")
-    generation = generation_module.chain_generation_service(generation_module.generation_ports_for(host))
-    codec = host._module("task_codec")
-    task_models = host._module("task_models")
-    models = host._module("modify_models")
+def compute_child_due(ports: ChildDuePorts, new: TaskPayload, kind: str):
+    compute = ports.compute
 
     def typed_task(task):
-        return task_models.NauticalTask.from_observation(
-            codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify completion")
-        )
+        return ports.task_model.NauticalTask.from_observation(ports.decode_task(task, source_query="on-modify completion"))
 
     def handle_terminal(exc) -> bool:
-        message = host.core._import_sibling("scheduler_models").occurrence_exhaustion_message(exc)
+        message = ports.exhaustion_message(exc)
         if exc.is_date_limit:
-            host._module("modify_presentation_effects").ensure_terminal_chain_off(host, new, "complete")
+            ports.ensure_terminal(new, "complete")
             try:
-                host._module("modify_diagnostics_effects").end_chain_summary(host, new, message, host._workflow_now_utc(), current_task=new)
+                ports.end_summary(new, message, ports.now_utc(), current_task=new)
             except Exception as summary_exc:
-                host._diag(f"terminal chain summary failed: {summary_exc}")
-                _panel(host, "⛔ Nautical chain stopped", [("Reason", message), ("Task", host.core.short_uuid(new.get("uuid")) or "–")], kind="summary")
-            host._module("modify_ui_effects").print_task(host, new)
+                ports.diag(f"terminal chain summary failed: {summary_exc}")
+                ports.panel("⛔ Nautical chain stopped", [("Reason", message), ("Task", str(new.get("uuid") or "")[:8] or "–")], kind="summary")
+            ports.print_task(new)
             return True
-        _panel(host, "⛔ Chain error", [("Scheduler", message), ("Fix", "Use a less sparse rule or adjust its search limits.")], kind="error")
-        host._module("modify_ui_effects").print_task(host, new)
+        ports.panel("⛔ Chain error", [("Scheduler", message), ("Fix", "Use a less sparse rule or adjust its search limits.")], kind="error")
+        ports.print_task(new)
         return True
 
     return compute.completion_compute_child_due(
         new,
         kind,
-        compute_anchor_child_due=lambda task: generation.compute_anchor_child_due(typed_task(task)),
-        compute_cp_child_due=lambda task: generation.compute_cp_child_due(typed_task(task)),
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-        diag=host._diag,
+        compute_anchor_child_due=lambda task: ports.generation.compute_anchor_child_due(typed_task(task)),
+        compute_cp_child_due=lambda task: ports.generation.compute_cp_child_due(typed_task(task)),
+        panel=ports.panel, print_task=ports.print_task, diag=ports.diag,
         on_terminal=handle_terminal,
     )
 
@@ -281,7 +287,23 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
     compute = host._module("modify_completion_compute")
     models = host._module("modify_models")
     services = models.CompletionComputeServices(
-        completion_compute_child_due=lambda value, value_kind: compute_child_due(host, value, value_kind),
+        completion_compute_child_due=lambda value, value_kind: compute_child_due(
+            ChildDuePorts(
+                compute=compute,
+                generation=host._module("modify_generation_effects").chain_generation_service(
+                    host._module("modify_generation_effects").generation_ports_for(host)
+                ),
+                decode_task=host._module("task_codec").DEFAULT_TASK_CODEC.decode_row,
+                task_model=host._module("task_models"),
+                exhaustion_message=host.core._import_sibling("scheduler_models").occurrence_exhaustion_message,
+                ensure_terminal=lambda task, event=None: host._module("modify_presentation_effects").ensure_terminal_chain_off(host, task, event),
+                end_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
+                now_utc=host._workflow_now_utc,
+                panel=_panel_callback(host),
+                print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
+                diag=host._diag,
+            ), value, value_kind
+        ),
         completion_until_or_fail=lambda value, clock: until_or_fail(
             UntilCompletionPorts(
                 compute=compute,

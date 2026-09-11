@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from typing import Any
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulePorts:
+    """Minimal clock/calendar ports needed by schedule projection helpers."""
+
+    to_local: Any
+    build_local_datetime: Any
 
 
 def scheduler_callbacks(host: Any) -> tuple[Any, Any]:
@@ -26,11 +35,11 @@ def recurrence_seed_base(task: TaskPayload) -> str:
     return str(task.get("chainID") or task.get("uuid") or "preview").strip()
 
 
-def cp_add_period(host: Any, dt: datetime, td: timedelta) -> datetime:
+def cp_add_period(ports: SchedulePorts, dt: datetime, td: timedelta) -> datetime:
     secs = int(td.total_seconds())
     if secs % 86400 == 0:
-        local = host._tolocal(dt)
-        return host.core.build_local_datetime(
+        local = ports.to_local(dt)
+        return ports.build_local_datetime(
             (local + timedelta(days=int(secs // 86400))).date(),
             (local.hour, local.minute),
         ).astimezone(timezone.utc)
@@ -82,7 +91,7 @@ def estimate_cp_final_by_max(host: Any, task: TaskPayload, next_due_utc: Any) ->
         coerce_int=host.core.coerce_int,
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
         sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
-        add_period=lambda dt, td: cp_add_period(host, dt, td),
+        add_period=lambda dt, td: cp_add_period(SchedulePorts(host._tolocal, host.core.build_local_datetime), dt, td),
         max_iterations=host._MAX_ITERATIONS,
         diagnostic=host._diag,
     )
@@ -116,7 +125,7 @@ def cap_from_until_cp(host: Any, task: TaskPayload, next_due_utc: Any) -> Any:
         parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
         coerce_int=host.core.coerce_int,
         sequence_period_for_link=lambda tokens, cp, link, chain=None: sequence_period_for_link(host, tokens, cp, link, chain),
-        add_period=lambda dt, td: cp_add_period(host, dt, td),
+        add_period=lambda dt, td: cp_add_period(SchedulePorts(host._tolocal, host.core.build_local_datetime), dt, td),
         max_iterations=host._MAX_ITERATIONS,
     )
 

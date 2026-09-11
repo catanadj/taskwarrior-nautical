@@ -27,6 +27,14 @@ class AnchorModePorts:
     panel: Any
 
 
+@dataclass(frozen=True, slots=True)
+class SharedValidationPorts:
+    pipeline: Any
+    parse_anchor: Any
+    validate_anchor: Any
+    validate_omit: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
@@ -72,7 +80,14 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
 
 def validate_omit(host: Any, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
     try:
-        validate_shared_omit(host, omit_expr)
+        validate_shared_omit(
+            SharedValidationPorts(
+                host.core._import_sibling("hook_validation_pipeline"),
+                host.core.parse_anchor_expr_to_dnf,
+                host._validate_anchor_expr_cached,
+                host._validate_omit_expr_cached,
+            ), omit_expr,
+        )
         findings = host.core._import_sibling("hook_validation_pipeline").validate_recurrence_files(
             anchor_expr,
             anchor_file_expr,
@@ -89,20 +104,18 @@ def validate_omit(host: Any, anchor_expr: str, anchor_file_expr: str, omit_expr:
         host._fail_and_exit(f"Invalid {finding.field}", finding.reason)
 
 
-def validate_shared_anchor(host: Any, expr: str) -> None:
-    pipeline = host.core._import_sibling("hook_validation_pipeline")
-    pipeline.validate_anchor_expression(
+def validate_shared_anchor(ports: SharedValidationPorts, expr: str) -> None:
+    ports.pipeline.validate_anchor_expression(
         expr,
-        parse_anchor_expr=host.core.parse_anchor_expr_to_dnf,
-        validate_anchor_expr=host._validate_anchor_expr_cached,
+        parse_anchor_expr=ports.parse_anchor,
+        validate_anchor_expr=ports.validate_anchor,
     )
 
 
-def validate_shared_omit(host: Any, expr: str) -> None:
-    pipeline = host.core._import_sibling("hook_validation_pipeline")
-    pipeline.validate_omit_expression(
+def validate_shared_omit(ports: SharedValidationPorts, expr: str) -> None:
+    ports.pipeline.validate_omit_expression(
         expr,
-        validate_omit_expr=host._validate_omit_expr_cached,
+        validate_omit_expr=ports.validate_omit,
     )
 
 

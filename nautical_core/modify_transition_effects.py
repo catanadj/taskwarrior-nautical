@@ -7,6 +7,7 @@ from typing import Any
 
 from .task_models import TaskPayload
 from .task_changes import TaskTransition
+from .task_datetime import datetime_value, parser_for_host
 
 
 def preserve_cp_relative_offsets_on_due_change(
@@ -26,7 +27,7 @@ def preserve_cp_relative_offsets_on_due_change(
             if transition is not None
             else host._module("modify_task_fields").field_changed
         ),
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         utc_to_local_naive=lambda value: host._module("modify_datetime_effects").utc_to_local_naive(host, value),
         local_naive_to_utc=lambda value: host._module("modify_datetime_effects").local_naive_to_utc(host, value),
         format_datetime=host.core.fmt_isoz,
@@ -52,8 +53,8 @@ def reject_native_until_carry(
     try:
         add_validation = host.core._import_sibling("add_validation")
         carry = add_validation.describe_native_until_carry(
-            host.core.parse_dt_any(old.get("until")),
-            host.core.parse_dt_any(old.get(old_target_field)),
+            datetime_value(parser_for_host(host), old.get("until")),
+            datetime_value(parser_for_host(host), old.get(old_target_field)),
             to_local=host.core.to_local,
         )
     except Exception:
@@ -88,7 +89,7 @@ def preserve_native_until_on_target_change(
             else host._module("modify_task_fields").field_changed
         ),
         recurrence_anchor_field=host._module("modify_task_fields").recurrence_anchor_field,
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         native_until=host.core._import_sibling("native_until"),
         generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(host),
         reject_carry=lambda old_task, new_task, target, field, exc: reject_native_until_carry(
@@ -98,7 +99,7 @@ def preserve_native_until_on_target_change(
     )
     if not carried:
         return host._module("modify_carry_workflow").NativeUntilDecision("unchanged")
-    value = host.core.parse_dt_any(new.get("until"))
+    value = datetime_value(parser_for_host(host), new.get("until"))
     if value is None:
         return host._module("modify_carry_workflow").NativeUntilDecision(
             "rejected", reason="native-until carry produced no parseable value"
@@ -136,7 +137,14 @@ def validate_completion_cp_and_anchor(
                 if transition is not None
                 else host._module("modify_task_fields").field_changed
             ),
-            validate_anchor=lambda expr: validation_effects.validate_shared_anchor(host, expr),
+            validate_anchor=lambda expr: validation_effects.validate_shared_anchor(
+                validation_effects.SharedValidationPorts(
+                    host.core._import_sibling("hook_validation_pipeline"),
+                    host.core.parse_anchor_expr_to_dnf,
+                    host._validate_anchor_expr_cached,
+                    host._validate_omit_expr_cached,
+                ), expr,
+            ),
             validate_cp=lambda cp, chain_max, chain_until: validation_effects.validate_cp(
                 host, cp, chain_max, chain_until
             ),

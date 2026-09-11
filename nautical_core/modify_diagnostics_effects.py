@@ -69,7 +69,9 @@ def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
         coerce_int=host.core.coerce_int,
         parse_datetime=lambda value: _parse_datetime_value(host, value),
         format_local=host._fmtlocal,
-        format_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol),
+        format_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(
+            host._module("modify_format_effects").HumanDeltaPort(host.core.humanize_delta), due, end, tol
+        ),
         short_uuid=host.core.short_uuid,
     )
 

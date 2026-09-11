@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .task_models import TaskPayload
+from .task_datetime import datetime_value, parser_for_host
 
 
 def chain_colour_for_task(host: Any, task: TaskPayload, kind: str) -> str:
@@ -28,7 +29,7 @@ def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str
     feedback.render_recurrence_updated_panel(
         changes,
         models.TaskView.from_mapping(new),
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         format_local=host._fmtlocal,
         describe_native_until_carry=add_validation.describe_native_until_carry,
         to_local=host.core.to_local,
@@ -47,7 +48,7 @@ def first_recurrence_target(host: Any, new: TaskPayload, source: str) -> Any:
     return host._module("modify_completion_compute").first_recurrence_target(
         task_view,
         source,
-        parse_datetime=host.core.parse_dt_any,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         format_datetime=host.core.fmt_isoz,
         generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(host),
     )
@@ -189,14 +190,16 @@ def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_sh
         max_iterations=host._MAX_ITERATIONS,
         future_style_for_chain=lambda value, value_kind: future_style_for_chain(host, value, value_kind),
         collect_prev_two=collect_prev_two,
-        dtparse=host._dtparse,
-        fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol),
+        dtparse=lambda value: datetime_value(parser_for_host(host), value),
+        fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(
+            host._module("modify_format_effects").HumanDeltaPort(host.core.humanize_delta), due, end, tol
+        ),
         fmtlocal=host._fmtlocal,
         short=host.core.short_uuid,
         tolocal=host._tolocal,
         next_occurrence_after_local_dt=lambda *args, **options: host._module("modify_schedule_effects").next_occurrence_after_local_dt(host, *args, **options),
         to_local_cached=host._to_local_cached,
-        safe_parse_datetime=lambda value: host._module("modify_datetime_effects").parse_datetime(host._TASK_DATETIME_PARSER, value),
+        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
         format_gap=timeline.format_gap,
         module_loader=host._module,
         omit_dnf_from_parent=lambda value: host._module("modify_anchor_effects").omit_dnf_from_parent(host, value),

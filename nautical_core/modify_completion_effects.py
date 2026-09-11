@@ -73,6 +73,13 @@ class ChildDuePorts:
     diag: Any
 
 
+@dataclass(frozen=True, slots=True)
+class DurationWarningPorts:
+    compute: Any
+    validate_duration: Any
+    panel: Any
+
+
 def _feedback_ports(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
     return CompletionFeedbackPorts(
         compute=compute,
@@ -254,14 +261,11 @@ def require_child_due_or_fail(ports: CompletionFeedbackPorts, new: TaskPayload, 
     )
 
 
-def warn_unreasonable_duration(host: Any, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> None:
-    host._module("modify_completion_compute").completion_warn_unreasonable_duration(
+def warn_unreasonable_duration(ports: DurationWarningPorts, new: TaskPayload, child_due, until_dt, now_utc: datetime) -> None:
+    ports.compute.completion_warn_unreasonable_duration(
         new, child_due, until_dt, now_utc,
-        validate_chain_duration_reasonable=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(
-            host._module("modify_validation_effects").DurationPorts(host._MIN_FUTURE_WARN, host.core.fmt_dt_local),
-            child_due, until_dt, now,
-        ),
-        panel=_panel_callback(host),
+        validate_chain_duration_reasonable=ports.validate_duration,
+        panel=ports.panel,
     )
 
 
@@ -321,7 +325,15 @@ def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int
         ),
         completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(_feedback_ports(host, compute), value, due, until, clock),
         completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(_feedback_ports(host, compute, summarize=False), value, due),
-        completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(host, value, due, until, clock),
+        completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(
+            DurationWarningPorts(
+                compute=compute,
+                validate_duration=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(
+                    host._module("modify_validation_effects").DurationPorts(host._MIN_FUTURE_WARN, host.core.fmt_dt_local), child_due, until_dt, now
+                ),
+                panel=_panel_callback(host),
+            ), value, due, until, clock
+        ),
         completion_caps=lambda value_kind, value, due, dnf: caps(
             CompletionCapsPorts(
                 compute=compute,

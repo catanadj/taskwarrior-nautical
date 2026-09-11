@@ -5,14 +5,10 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-_COMPARATOR = None
-
-
 def compare_datetimes(host: Any, left, right) -> int:
-    global _COMPARATOR
-    if _COMPARATOR is None:
-        _COMPARATOR = host.core._import_sibling("timeutil").compare_datetimes
-    return _COMPARATOR(left, right)
+    # Resolve through the current host so independently loaded hooks never
+    # share a process-global comparator.
+    return host.core._import_sibling("timeutil").compare_datetimes(left, right)
 
 
 def format_delta(delta: timedelta) -> str:

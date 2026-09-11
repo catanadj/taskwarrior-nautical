@@ -94,10 +94,10 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
         lifecycle_read_service=runtime.lifecycle_read_service(),
         chain_health_advice=runtime.chain_health_advice,
         chain_integrity_warnings=runtime.chain_integrity_warnings,
-        render_anchor_completion_feedback=lambda **kwargs: presentation.render_anchor_completion_feedback(host, **kwargs),
-        render_cp_completion_feedback=lambda **kwargs: presentation.render_cp_completion_feedback(host, **kwargs),
-        render_lifecycle_result=lambda result, task: presentation.render_lifecycle_result(host, result, task),
-        print_task=lambda task: capabilities.modify_ui_effects.print_task(host, task),
+        render_anchor_completion_feedback=runtime.render_anchor_completion_feedback,
+        render_cp_completion_feedback=runtime.render_cp_completion_feedback,
+        render_lifecycle_result=runtime.render_lifecycle_result,
+        print_task=runtime.print_task,
         diag_summary=runtime.diag_summary,
         show_analytics=runtime.show_analytics,
         check_integrity=runtime.check_integrity,
@@ -106,24 +106,17 @@ def handle_completion(host: Any, old: TaskPayload, new: TaskPayload, unit_of_wor
     )
     flow_services = modify_completion_flow.CompletionFlowServices(
         runtime_state=host._modify_runtime_state,
-        prepare_recurrence=lambda old_task, new_task: transition_effects.validate_completion_cp_and_anchor(
-            host,
-            old_task, new_task, transition=transition,
-        ),
-        preserve_cp_relative_offsets=lambda old_task, new_task, cp: transition_effects.preserve_cp_relative_offsets_on_due_change(
-            host, old_task, new_task, cp, transition=transition
-        ),
-        preserve_native_until=lambda old_task, new_task, kind: transition_effects.preserve_native_until_on_target_change(
-            host, old_task, new_task, kind, transition=transition
-        ),
-        validate_native_until=lambda task: validation.validate_native_until(host, task),
-        validate_native_until_slots=lambda task: validation.validate_native_until_slots(host, task),
-        now_utc=host.core.now_utc,
+        prepare_recurrence=lambda old_task, new_task: runtime.prepare_recurrence(old_task, new_task, transition=transition),
+        preserve_cp_relative_offsets=lambda old_task, new_task, cp: runtime.preserve_cp_relative_offsets(old_task, new_task, cp, transition=transition),
+        preserve_native_until=lambda old_task, new_task, kind: runtime.preserve_native_until(old_task, new_task, kind, transition=transition),
+        validate_native_until=runtime.validate_native_until,
+        validate_native_until_slots=runtime.validate_native_until_slots,
+        now_utc=runtime.now_utc,
         preflight_context=lambda task, now, repository: completion.preflight_context(host, task, now, repository),
         compute_next_and_limits=lambda task, kind, next_no, now, preflight=None: completion.compute_next_and_limits(
             host, task, kind, next_no, now, preflight=preflight
         ),
-        lifecycle_read_service=capabilities.modify_read_effects.lifecycle_read_service(host),
+        lifecycle_read_service=runtime.lifecycle_read_service(),
         diag_count=host._diag_count,
         diag_lifecycle_result=host._diag_lifecycle_result,
         finalize_completion=modify_completion_flow.finalize_completion_modify,

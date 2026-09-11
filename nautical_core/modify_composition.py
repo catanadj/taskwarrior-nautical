@@ -100,6 +100,16 @@ class ModifyRuntimeServices:
     lifecycle_read_service: Callable[[], Any]
     chain_health_advice: Callable[..., Any]
     chain_integrity_warnings: Callable[..., Any]
+    render_anchor_completion_feedback: Callable[..., Any]
+    render_cp_completion_feedback: Callable[..., Any]
+    render_lifecycle_result: Callable[..., Any]
+    print_task: Callable[..., Any]
+    prepare_recurrence: Callable[..., Any]
+    preserve_cp_relative_offsets: Callable[..., Any]
+    preserve_native_until: Callable[..., Any]
+    validate_native_until: Callable[..., Any]
+    validate_native_until_slots: Callable[..., Any]
+    now_utc: Callable[[], Any]
 
     @classmethod
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
@@ -117,6 +127,16 @@ class ModifyRuntimeServices:
             lifecycle_read_service=lambda: capabilities.modify_read_effects.lifecycle_read_service(host),
             chain_health_advice=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_health_advice(host, *args, **kwargs),
             chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(host, *args, **kwargs),
+            render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_anchor_completion_feedback(host, **kwargs),
+            render_cp_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_cp_completion_feedback(host, **kwargs),
+            render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(host, result, task),
+            print_task=lambda task: capabilities.modify_ui_effects.print_task(host, task),
+            prepare_recurrence=lambda old, new, **kwargs: capabilities.modify_transition_effects.validate_completion_cp_and_anchor(host, old, new, **kwargs),
+            preserve_cp_relative_offsets=lambda old, new, cp, **kwargs: capabilities.modify_transition_effects.preserve_cp_relative_offsets_on_due_change(host, old, new, cp, **kwargs),
+            preserve_native_until=lambda old, new, kind, **kwargs: capabilities.modify_transition_effects.preserve_native_until_on_target_change(host, old, new, kind, **kwargs),
+            validate_native_until=lambda task: capabilities.modify_validation_effects.validate_native_until(host, task),
+            validate_native_until_slots=lambda task: capabilities.modify_validation_effects.validate_native_until_slots(host, task),
+            now_utc=host.core.now_utc,
         )
 
 

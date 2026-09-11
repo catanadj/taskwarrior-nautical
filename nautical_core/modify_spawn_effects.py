@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 from .task_datetime import datetime_value, parser_for_host
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class SpawnIdentityPorts:
+    models: Any
 
 
 def enqueue_spawn_intent(host: Any, plan) -> tuple[bool, str]:
@@ -28,8 +34,8 @@ def enqueue_spawn_intent(host: Any, plan) -> tuple[bool, str]:
     return False, result.reason or "lifecycle outbox staging failed"
 
 
-def lifecycle_spawn_identity(host: Any, parent: dict, child: dict):
-    models = host._module("lifecycle_models")
+def lifecycle_spawn_identity(ports: SpawnIdentityPorts, parent: dict, child: dict):
+    models = ports.models
     chain_id = str(parent.get("chainID") or "").strip()
     parent_uuid = str(parent.get("uuid") or "").strip()
     try:
@@ -68,7 +74,9 @@ def spawn_child_atomic(host: Any, child_task, parent_task_with_nextlink: dict, *
             fmt_isoz=host.core.fmt_isoz,
             now_utc=host.core.now_utc,
             lifecycle_models=host._module("lifecycle_models"),
-            lifecycle_spawn_identity=lambda parent, child: lifecycle_spawn_identity(host, parent, child),
+            lifecycle_spawn_identity=lambda parent, child: lifecycle_spawn_identity(
+                SpawnIdentityPorts(host._module("lifecycle_models")), parent, child
+            ),
             enqueue_spawn_intent=lambda plan: enqueue_spawn_intent(host, plan),
             parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
             diag_count=host._diag_count,

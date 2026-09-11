@@ -273,3 +273,12 @@
 - Task 11 command boundary batch: Taskwarrior subprocess execution and UUID
   availability checks now consume frozen `CommandPorts`; completion/workflow,
   carry, isolation, and validation tests pass 44/44.
+- Task 11 generation boundary batch: chain-generation service caching now
+  consumes frozen `GenerationPorts`; all affected completion/workflow and
+  isolation tests pass 44/44.
+- Task 11 query boundary batch: chain-root/age caching and formatting now
+  consume frozen `QueryPorts`; completion/workflow and isolation tests pass
+  44/44.
+- Task 11 spawn identity batch: lifecycle parent/child identity derivation now
+  consumes frozen `SpawnIdentityPorts`; completion/workflow/isolation tests
+  pass 44/44.

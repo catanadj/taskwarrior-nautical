@@ -42,6 +42,23 @@ class SchedulerDependencies:
 
 
 @dataclass(frozen=True, slots=True)
+class CacheDependencies:
+    """Immutable cache configuration and collaborator snapshot."""
+
+    values: Mapping[str, Any]
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "CacheDependencies":
+        return cls(MappingProxyType(dict(values)))
+
+    def __getitem__(self, name: str) -> Any:
+        return self.values[name]
+
+    def get(self, name: str, default: Any = None) -> Any:
+        return self.values.get(name, default)
+
+
+@dataclass(frozen=True, slots=True)
 class CoreContext:
     """Own one core namespace and its sibling-module loader.
 

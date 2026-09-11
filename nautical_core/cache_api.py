@@ -14,7 +14,7 @@ from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
-from .core_context import CoreContext
+from .core_context import CacheDependencies, CoreContext
 
 fcntl: Any
 try:
@@ -25,7 +25,10 @@ except Exception:
 
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create cache APIs without sharing cache state across core loaders."""
-    core = core_namespace(module, namespace, context, "cache_api")
+    core = CacheDependencies.from_mapping(
+        context.namespace if context is not None
+        else core_namespace(module, namespace, context, "cache_api")
+    )
     if context is not None:
         import_sibling = context.import_sibling
     else:
@@ -179,7 +182,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             yield acquired
 
     def cache_dir() -> str:
-        current = core.get("_CACHE_DIR", cache_dir_state[0])
+        current = cache_dir_state[0]
         chosen = cache_locking.cache_dir(
             current,
             anchor_cache_dir_override=core["ANCHOR_CACHE_DIR_OVERRIDE"],
@@ -188,7 +191,6 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             select_cache_dir=cache_support.select_cache_dir,
         )
         cache_dir_state[0] = chosen
-        core["_CACHE_DIR"] = chosen
         return chosen
 
     def _source_signature(path: Any) -> str:
@@ -310,7 +312,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             base64_mod=core.get("base64", base64),
             cache_path=cache_path,
             cache_dir=cache_dir,
-            cache_lock=core.get("_cache_lock", cache_lock),
+            cache_lock=cache_lock,
             diag=core["diag"],
             os_mod=core["os"],
             tempfile_mod=tempfile,

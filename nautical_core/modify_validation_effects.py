@@ -69,6 +69,24 @@ class NativeUntilPorts:
     abort: Any
 
 
+@dataclass(frozen=True, slots=True)
+class NativeUntilSlotPorts:
+    validate: Any
+    parse_datetime: Any
+    validate_anchor: Any
+    collect_time_slots: Any
+    validate_time_slots: Any
+    normalize_time_slots: Any
+    anchor_file_dir: str
+    recurrence_context: Any
+    to_local: Any
+    format_local: Any
+    astronomy_is_error: Any
+    astronomy_error_message: Any
+    panel: Any
+    abort: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
@@ -233,14 +251,33 @@ def native_until_ports_for(host: Any) -> NativeUntilPorts:
     )
 
 
-def validate_native_until_slots(host: Any, task: dict) -> None:
+def validate_native_until_slots(ports: NativeUntilSlotPorts, task: dict) -> None:
+    ports.validate(
+        task,
+        safe_parse_datetime=ports.parse_datetime,
+        validate_anchor=ports.validate_anchor,
+        collect_time_slots=ports.collect_time_slots,
+        validate_time_slots=ports.validate_time_slots,
+        normalize_time_slots=ports.normalize_time_slots,
+        anchor_file_dir=ports.anchor_file_dir,
+        recurrence_context=ports.recurrence_context,
+        to_local=ports.to_local,
+        format_local=ports.format_local,
+        astronomy_is_error=ports.astronomy_is_error,
+        astronomy_error_message=ports.astronomy_error_message,
+        panel=ports.panel,
+        abort=ports.abort,
+    )
+
+
+def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
     add_validation = host.core._import_sibling("add_validation")
     astronomy = host.core._import_sibling("astronomy")
     native_until = host.core._import_sibling("native_until")
     recurrence_context = host.core._import_sibling("recurrence_context").RecurrenceContext
-    host._module("modify_validation").validate_native_until_anchor_slots_or_fail(
-        task,
-        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
+    return NativeUntilSlotPorts(
+        validate=host._module("modify_validation").validate_native_until_anchor_slots_or_fail,
+        parse_datetime=host._TASK_DATETIME_PARSER.parse,
         validate_anchor=host._validate_anchor_expr_cached,
         collect_time_slots=add_validation.collect_anchor_time_slots,
         validate_time_slots=native_until.validate_calendar_slots,
@@ -283,6 +320,6 @@ def semantic_diff_value(old_text: str, new_text: str) -> str:
 __all__ = (
     "validate_anchor", "validate_omit", "validate_shared_anchor",
     "validate_shared_omit", "validate_cp", "validate_chain_limits",
-    "validate_native_until", "validate_native_until_slots", "until_not_past",
+    "validate_native_until", "validate_native_until_slots", "native_until_slot_ports_for", "until_not_past",
     "chain_duration_reasonable", "semantic_diff_value",
 )

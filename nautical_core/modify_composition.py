@@ -88,7 +88,6 @@ class ModifyHookCapabilities:
 class ModifyRuntimeServices:
     """Explicit runtime services supplied to route effects at composition time."""
 
-    host: Any
     capabilities: ModifyHookCapabilities
     runtime_state: Callable[..., Any]
     import_module: Callable[..., Any]
@@ -102,7 +101,6 @@ class ModifyRuntimeServices:
     def from_host(cls, host: Any, capabilities: ModifyHookCapabilities | None = None):
         capabilities = capabilities or capabilities_for(host)
         return cls(
-            host=host,
             capabilities=capabilities,
             runtime_state=host._modify_runtime_state,
             import_module=host.importlib.import_module,

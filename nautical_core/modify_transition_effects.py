@@ -28,8 +28,12 @@ def preserve_cp_relative_offsets_on_due_change(
             else host._module("modify_task_fields").field_changed
         ),
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-        utc_to_local_naive=lambda value: host._module("modify_datetime_effects").utc_to_local_naive(host, value),
-        local_naive_to_utc=lambda value: host._module("modify_datetime_effects").local_naive_to_utc(host, value),
+        utc_to_local_naive=lambda value: host._module("modify_datetime_effects").utc_to_local_naive(
+            host._module("modify_datetime_effects").datetime_effect_ports_for(host), value
+        ),
+        local_naive_to_utc=lambda value: host._module("modify_datetime_effects").local_naive_to_utc(
+            host._module("modify_datetime_effects").datetime_effect_ports_for(host), value
+        ),
         format_datetime=host.core.fmt_isoz,
         carry_error=host._module("chain_generation").CarryFieldError,
     )

@@ -28,7 +28,7 @@ class ExtraTokenPort:
     parse: Any
 
 
-def _token_match(core: Any, task: Any, token: str) -> bool:
+def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
     if token.startswith("+"):
@@ -43,7 +43,7 @@ def _token_match(core: Any, task: Any, token: str) -> bool:
         key = key[:-4]
     actual = task.get(key)
     if key in {"link", "id"}:
-        matched = str(core.coerce_int(actual, None) if actual is not None else "") == value
+        matched = str(coerce_int(actual, None) if actual is not None else "") == value
     else:
         matched = str(actual or "").strip().lower() == value.strip().lower()
     return (not matched) if negate else matched
@@ -66,7 +66,7 @@ def lifecycle_read_service(host: Any):
         parse_extra_tokens=lambda extra: parse_extra_tokens(
             ExtraTokenPort(host._module("hook_support", required=False).parse_extra_tokens), extra
         ),
-        token_matcher=lambda task, token: _token_match(host.core, task, token),
+        token_matcher=lambda task, token: _token_match(host.core.coerce_int, task, token),
         read_query_get=host._read_query_get,
         read_query_missing=host._READ_QUERY_MISSING,
         max_chain_walk=host._MAX_CHAIN_WALK,

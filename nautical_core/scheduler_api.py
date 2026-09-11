@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Any
 from .api_bindings import ApiBinding, core_namespace
 
-from .core_context import CoreContext
+from .core_context import CoreContext, SchedulerDependencies
 
 
 def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
@@ -253,10 +253,12 @@ def _next_after_expr_impl(
 def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, context: CoreContext | None = None) -> ApiBinding:
     """Create scheduler APIs without sharing state between core loaders."""
     if context is not None:
-        core = context.namespace
+        core = SchedulerDependencies.from_mapping(context.namespace)
         module = context
     else:
-        core = core_namespace(module, namespace, context, "scheduler_api")
+        core = SchedulerDependencies.from_mapping(
+            core_namespace(module, namespace, context, "scheduler_api")
+        )
     scheduler_expr = context.import_sibling("scheduler_expr") if context is not None else core["_scheduler_expr"]
     cached_expansion = context.import_sibling("cached_expansion") if context is not None else core["_cached_expansion"]
     ttl_lru_cache = core["_ttl_lru_cache"]

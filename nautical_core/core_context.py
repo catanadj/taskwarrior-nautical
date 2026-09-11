@@ -25,6 +25,23 @@ class ParserDependencies:
 
 
 @dataclass(frozen=True, slots=True)
+class SchedulerDependencies:
+    """Immutable scheduler-owned snapshot translated at the API boundary."""
+
+    values: Mapping[str, Any]
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any]) -> "SchedulerDependencies":
+        return cls(MappingProxyType(dict(values)))
+
+    def __getitem__(self, name: str) -> Any:
+        return self.values[name]
+
+    def get(self, name: str, default: Any = None) -> Any:
+        return self.values.get(name, default)
+
+
+@dataclass(frozen=True, slots=True)
 class CoreContext:
     """Own one core namespace and its sibling-module loader.
 

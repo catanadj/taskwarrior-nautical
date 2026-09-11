@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from .task_datetime import datetime_value, parser_for_host
+
+
+def _parse_datetime_value(host: Any, value: object):
+    return datetime_value(parser_for_host(host), value)
 
 
 def chain_health_advice(host: Any, chain, kind: str, task, tol_secs: int, style: str):
@@ -12,7 +17,7 @@ def chain_health_advice(host: Any, chain, kind: str, task, tol_secs: int, style:
         kind,
         task,
         core=host.core,
-        parse_datetime=host._dtparse,
+        parse_datetime=lambda value: _parse_datetime_value(host, value),
         format_delta=host._module("modify_value_effects").format_delta,
         coerce_int=host.core.coerce_int,
         tol_secs=tol_secs,
@@ -31,13 +36,13 @@ def chain_integrity_warnings(host: Any, chain, expected_chain_id: str | None = N
 
 def lateness_stats(host: Any, chain, tol_secs: int = 60) -> dict:
     return host._module("modify_analytics").lateness_stats(
-        chain, parse_datetime=host._dtparse, tol_secs=tol_secs
+        chain, parse_datetime=lambda value: _parse_datetime_value(host, value), tol_secs=tol_secs
     )
 
 
 def sort_chain_for_analytics(host: Any, chain):
     return host._module("modify_analytics").sort_chain_for_analytics(
-        chain, coerce_int=host.core.coerce_int, parse_datetime=host._dtparse
+        chain, coerce_int=host.core.coerce_int, parse_datetime=lambda value: _parse_datetime_value(host, value)
     )
 
 
@@ -62,7 +67,7 @@ def last_n_timeline(host: Any, chain, n: int = 6) -> list[str]:
         chain,
         n,
         coerce_int=host.core.coerce_int,
-        parse_datetime=host._dtparse,
+        parse_datetime=lambda value: _parse_datetime_value(host, value),
         format_local=host._fmtlocal,
         format_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(host, due, end, tol),
         short_uuid=host.core.short_uuid,
@@ -73,9 +78,10 @@ def span_fields(host: Any, chain_id: str, chain, *, stop_at=None, stopped_by_del
     return host._module("modify_chain_summary").span_fields(
         chain_id, chain, stop_at=stop_at, stopped_by_delete=stopped_by_delete,
         export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
-        parse_datetime=host._dtparse,
+        parse_datetime=lambda value: _parse_datetime_value(host, value),
         human_delta=lambda start, end, prefer=True, *, prefer_months=None: host._module("modify_format_effects").human_delta(
-            host, start, end, prefer if prefer_months is None else prefer_months
+            host._module("modify_format_effects").HumanDeltaPort(host.core.humanize_delta),
+            start, end, prefer if prefer_months is None else prefer_months
         ),
     )
 
@@ -121,9 +127,10 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             stop_at=stop_at,
             stopped_by_delete=stopped_by_delete,
             export_endpoint=lambda chain_id, direction: export_chain_endpoint(host, chain_id, direction),
-            parse_datetime=host._dtparse,
+            parse_datetime=lambda value: _parse_datetime_value(host, value),
             human_delta=lambda start, end, prefer=True, *, prefer_months=None: host._module("modify_format_effects").human_delta(
-                host, start, end, prefer if prefer_months is None else prefer_months
+                host._module("modify_format_effects").HumanDeltaPort(host.core.humanize_delta),
+                start, end, prefer if prefer_months is None else prefer_months
             ),
         )
 
@@ -151,15 +158,11 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
             rows,
             task,
             coerce_int=host.core.coerce_int,
-            parse_datetime=host._dtparse,
+            parse_datetime=lambda value: _parse_datetime_value(host, value),
             format_local=host.core.fmt_dt_local,
         )
 
-    summary.render_chain_summary(
-        current,
-        reason,
-        now_utc,
-        current_task,
+    render_services = summary.ChainSummaryRenderServices(
         export_sorted_chain=export_sorted_chain,
         root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload),
         short_uuid=host.core.short_uuid,
@@ -175,6 +178,13 @@ def end_chain_summary(host: Any, current: dict, reason: str, now_utc, current_ta
         max_chain_walk=host._MAX_CHAIN_WALK,
         panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
         diagnostic=host._diag,
+    )
+    summary.render_chain_summary(
+        current,
+        reason,
+        now_utc,
+        current_task,
+        services=render_services,
     )
 
 

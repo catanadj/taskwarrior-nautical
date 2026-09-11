@@ -22,21 +22,24 @@ class UntilPorts:
     humanize: Any
 
 
+@dataclass(frozen=True, slots=True)
+class AnchorModePorts:
+    panel: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
     return f"{default_msg} (expected an anchor such as w:mon, m:15, or y:jul)"
 
 
-def anchor_mode(host: Any, old: Any, new: Any) -> str:
+def anchor_mode(ports: AnchorModePorts, old: Any, new: Any) -> str:
     raw = str(new.get("anchor_mode") or old.get("anchor_mode") or "skip").strip()
     mode = raw.lower()
     aliases = {"all": "all", "skip": "skip", "flex": "flex"}
     normalized = aliases.get(mode)
     if normalized is None:
-        host._module("modify_ui_effects").panel(
-            host, "⚠ Anchor mode", [("Warning", f"Unknown anchor mode {raw!r}; using skip.")], kind="warning"
-        )
+        ports.panel("⚠ Anchor mode", [("Warning", f"Unknown anchor mode {raw!r}; using skip.")], kind="warning")
         normalized = "skip"
         new["anchor_mode"] = normalized
     elif new.get("anchor_mode"):
@@ -51,7 +54,10 @@ def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
             host._module("modify_ui_effects").panel(
                 host, "ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note"
             )
-        anchor_mode(host, old, new)
+        anchor_mode(
+            AnchorModePorts(lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs)),
+            old, new,
+        )
         # Validation must remain decision-only. Hint persistence has no
         # synchronous consumer and would repeat scheduler work on every edit.
         host.core.validate_anchor_expr_strict(anchor_expr)

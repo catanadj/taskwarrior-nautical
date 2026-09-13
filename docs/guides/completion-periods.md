@@ -25,6 +25,26 @@ whole-day period:
 task add "Exact follow-up" cp:24h+1s
 ```
 
+## Keep `scheduled` and `wait` offsets when due moves
+
+When you move the due date of an existing completion-period task, Nautical
+shifts its unchanged `scheduled` and `wait` values by the same local-time
+amount. For example, if `scheduled` is 10 minutes before `due` and `wait` is
+20 minutes before `due`, moving `due` from July 10, 2026, at 09:00 to July 15,
+2026, at 09:00 moves those fields to July 15 at 08:50 and 08:40. Nautical
+preserves each field independently, so a `scheduled` or `wait` value you edit
+yourself takes precedence while the other unchanged value still follows `due`.
+
+Nautical applies the offset in its configured timezone. If the move crosses a
+daylight-saving transition, it preserves the local clock relationship; the
+elapsed UTC difference can therefore change. If Nautical cannot parse a
+timestamp needed for the carry, it rejects the update instead of guessing.
+
+When Nautical creates a successor, it carries `scheduled` and `wait` relative
+to the recurrence target. For a task with `due`, that target is `due`. For a
+scheduled-only task, `scheduled` is the target and the child remains
+scheduled-only; `wait` keeps its offset from `scheduled`.
+
 ## Period sequences
 
 ```bash

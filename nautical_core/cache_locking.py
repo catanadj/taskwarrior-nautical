@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 
 def cache_dir(
@@ -289,3 +290,40 @@ def cache_lock(
         stale_after=cache_lock_stale_after,
     ) as acquired:
         yield acquired
+
+
+def bind_locking(
+    *,
+    cache_lock_path,
+    retries: int,
+    sleep_base: float,
+    jitter: float,
+    stale_after: float,
+    fcntl_mod,
+    os_mod,
+    time_mod,
+    random_mod,
+):
+    """Bind lock dependencies once for one core facade instance."""
+    def bound_safe_lock(path, **kwargs):
+        return safe_lock(
+            path,
+            fcntl_mod=fcntl_mod,
+            os_mod=os_mod,
+            time_mod=time_mod,
+            random_mod=random_mod,
+            **kwargs,
+        )
+
+    def bound_cache_lock(key):
+        return cache_lock(
+            key,
+            cache_lock_path=cache_lock_path,
+            safe_lock=bound_safe_lock,
+            cache_lock_retries=retries,
+            cache_lock_sleep_base=sleep_base,
+            cache_lock_jitter=jitter,
+            cache_lock_stale_after=stale_after,
+        )
+
+    return SimpleNamespace(safe_lock=bound_safe_lock, cache_lock=bound_cache_lock)

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from nautical_core.integration_models import (
     GuardTimestamp,
@@ -22,11 +26,13 @@ from nautical_core.hook_workflow_models import FeedbackFacts, FeedbackFactKind
 from nautical_core.feedback_renderer import PanelView, panel_view_from_facts, render_panel_view
 from nautical_core.lifecycle_application import LifecycleApplicationOutcomeKind, LifecycleApplicationService
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
+from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
 from nautical_core.task_models import TaskObservation
 from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
 from nautical_core.lifecycle_models import recurrence_fingerprint
 from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
 from nautical_core.operator_presentation import render_result
+from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_WORKFLOW_MODULES = (
@@ -46,6 +52,21 @@ FORBIDDEN_IMPORTS = {
 
 
 class EffectBoundaryTests(unittest.TestCase):
+    def test_natural_language_anchor_descriptions_are_stable(self) -> None:
+        import nautical_core as core
+
+        self.assertEqual(core.describe_anchor_expr("w:mon"), "Mondays")
+        self.assertEqual(core.describe_anchor_expr("m:1"), "the 1st day of each month")
+        self.assertEqual(core.describe_anchor_expr("w:mon|w:fri"), "either Mondays or Fridays")
+        self.assertEqual(
+            core.describe_anchor_dnf(
+                core.parse_anchor_expr_to_dnf_cached("w:mon"),
+                {"anchor_mode": "skip"},
+            ),
+            "Mondays; skip missed anchors",
+        )
+        self.assertEqual(core.describe_anchor_expr("malformed"), "")
+
     def test_modify_command_boundary_has_no_legacy_text_wrappers(self) -> None:
         from nautical_core import modify_command_effects, modify_queries
 
@@ -155,11 +176,15 @@ class EffectBoundaryTests(unittest.TestCase):
                     reason="guard conflict",
                 )
 
-        outcome = LifecycleApplicationService(
-            unit_of_work=UnitOfWork(),
-            mutations=RejectingGateway(),
-            outbox=object(),
-        ).apply_immediate(plan)
+        gateway = RejectingGateway()
+        lifecycle_gateway = LifecycleExecutionFixture(gateway)
+        with TemporaryDirectory() as td:
+            outcome = LifecycleApplicationService(
+                unit_of_work=UnitOfWork(),
+                mutations=lifecycle_gateway,
+                execution=lifecycle_gateway,
+                outbox=LifecycleOutboxRepository(Path(td)),
+            ).apply_immediate(plan)
         self.assertEqual(outcome.kind, LifecycleApplicationOutcomeKind.MANUAL_REVIEW)
         self.assertFalse(outcome.ok)
 
@@ -221,11 +246,57 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(result.to_dict(), before)
 
     def test_production_feedback_paths_use_shared_renderer(self) -> None:
-        import inspect
         from nautical_core import modify_feedback
 
-        source = inspect.getsource(modify_feedback)
-        self.assertGreaterEqual(source.count("render_panel_view("), 3)
+        rendered: list[PanelView] = []
+
+        def record(view: PanelView, _panel) -> bool:
+            rendered.append(view)
+            return True
+
+        adjustment = SimpleNamespace(
+            target_old=SimpleNamespace(value=datetime(2026, 1, 1, tzinfo=timezone.utc)),
+            target_new=SimpleNamespace(value=datetime(2026, 1, 2, tzinfo=timezone.utc)),
+            adjustments=(),
+        )
+        with patch.object(modify_feedback, "render_panel_view", side_effect=record):
+            modify_feedback.render_cp_schedule_adjusted_panel(
+                adjustment,
+                format_local=lambda value: value.isoformat(),
+                semantic_diff_value=lambda old, new: f"{old} -> {new}",
+                format_offset=lambda value: str(value),
+                panel=object(),
+            )
+            modify_feedback.render_explicit_timing_order_warning(
+                {"due": "20260101T120000Z", "scheduled": "20260102T120000Z"},
+                ("scheduled",),
+                format_offset=lambda value: str(value),
+                panel=object(),
+            )
+            modify_feedback.render_recurrence_updated_panel(
+                [("cp", "1d", "2d")],
+                {"cp": "2d"},
+                parse_datetime=lambda _value: None,
+                format_local=lambda value: str(value),
+                describe_native_until_carry=lambda *_args, **_kwargs: None,
+                to_local=lambda value: value,
+                coerce_int=lambda value, default: default,
+                describe_anchor=lambda value: value,
+                resolve_omit_presets=lambda value: value,
+                first_recurrence_target=lambda *_args: None,
+                panel_mode="text",
+                strip_markup=lambda value: value,
+                panel=object(),
+            )
+
+        self.assertEqual([view.kind for view in rendered], ["note", "warning", "note"])
+        self.assertEqual(
+            [view.title for view in rendered],
+            ["⚓ Nautical schedule adjusted", "⚠ Nautical timing order", "⚓ Nautical recurrence updated"],
+        )
+        self.assertTrue(any(label == "Due" for label, _value in rendered[0].rows))
+        self.assertTrue(any(label == "Problem" for label, _value in rendered[1].rows))
+        self.assertTrue(any("Period" in value for _label, value in rendered[2].rows))
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ ROOT = TOOLS_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nautical_core import install_runtime  # noqa: E402
+import nautical_core.install_runtime as install_runtime  # noqa: E402
 from nautical_core.operator_presentation import render_json_document  # noqa: E402
 from nautical_core.operator_presentation import key_value_lines  # noqa: E402
 

@@ -54,7 +54,7 @@ def _canonical_cp_sequence(cp: str) -> str:
     return str(cp).strip() if error is not None else ",".join(parts)
 
 
-def parse_cp_duration(dur: str):
+def parse_cp_duration(dur: str) -> timedelta | None:
     """Parse one ISO-8601 or Nautical completion-period duration."""
     if not dur:
         return None
@@ -136,18 +136,18 @@ def _parse_cp_token(part: str) -> dict[str, Any] | None:
 
     lo_raw = random_match.group("lo").strip()
     hi_raw = random_match.group("hi").strip()
-    lo = parse_cp_duration(lo_raw)
-    hi = parse_cp_duration(hi_raw)
-    if lo is None or hi is None or lo > hi:
+    lower_duration = parse_cp_duration(lo_raw)
+    upper_duration = parse_cp_duration(hi_raw)
+    if lower_duration is None or upper_duration is None or lower_duration > upper_duration:
         return None
     return {
         "kind": "rand",
         "raw": raw,
         "lo_raw": lo_raw,
         "hi_raw": hi_raw,
-        "lo": lo,
-        "hi": hi,
-        "granularity_seconds": _cp_rand_granularity_seconds(lo, hi),
+        "lo": lower_duration,
+        "hi": upper_duration,
+        "granularity_seconds": _cp_rand_granularity_seconds(lower_duration, upper_duration),
     }
 
 
@@ -200,7 +200,7 @@ def cp_sequence_parse_error(cp: str) -> str | None:
     return None
 
 
-def parse_cp_sequence_tokens(cp: str):
+def parse_cp_sequence_tokens(cp: str) -> list[dict[str, Any]] | None:
     """Parse CP into fixed/random period tokens without resolving randomness."""
     if cp_sequence_parse_error(cp):
         return None
@@ -266,7 +266,7 @@ def cp_sequence_interval_for_token(
     return None
 
 
-def parse_cp_sequence(cp: str):
+def parse_cp_sequence(cp: str) -> list[timedelta] | None:
     tokens = parse_cp_sequence_tokens(cp)
     if not tokens:
         return None
@@ -284,7 +284,7 @@ def parse_cp_sequence(cp: str):
     return durations
 
 
-def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None):
+def cp_sequence_interval_for_link(cp: str, link_no: int, chain_id: str | None = None) -> timedelta | None:
     """Return the interval used to spawn ``link_no + 1`` from ``link_no``."""
     tokens = parse_cp_sequence_tokens(cp)
     if not tokens:

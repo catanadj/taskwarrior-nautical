@@ -15,6 +15,7 @@ import hashlib
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import time
 from typing import Any, Callable, Iterator, Mapping, Sequence
 import uuid
@@ -318,21 +319,112 @@ class LifecycleOutboxRepository:
 
     def _connect(self) -> sqlite3.Connection:
         self._metric("outbox_connections")
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.path.parent, 0o700)
+        self._secure_state_directory()
+        self._validate_state_files()
+        self._create_private_database_file()
+        self._secure_state_file(self.path)
         conn = sqlite3.connect(str(self.path), timeout=self.connect_timeout)
-        os.chmod(self.path, 0o600)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA synchronous=FULL")
-        conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute(f"PRAGMA busy_timeout={int(self.connect_timeout * 1000)}")
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
+    def _secure_state_directory(self) -> None:
+        """Create and secure the state directory without following symlinks."""
+        parent = self.path.parent
+        try:
+            parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            before = os.lstat(parent)
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot prepare outbox directory: {exc}") from exc
+        if not stat.S_ISDIR(before.st_mode):
+            raise LifecycleOutboxError("outbox state directory is not a real directory")
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(parent, flags)
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot safely open outbox directory: {exc}") from exc
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISDIR(opened.st_mode) or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+                raise LifecycleOutboxError("outbox state directory changed during validation")
+            os.fchmod(fd, 0o700)
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot secure outbox directory: {exc}") from exc
+        finally:
+            os.close(fd)
+
+    def _validate_state_files(self) -> None:
+        """Reject pre-existing symlinks and non-regular SQLite state files."""
+        for path in (
+            self.path,
+            self.path.with_name(f"{self.path.name}-wal"),
+            self.path.with_name(f"{self.path.name}-shm"),
+        ):
+            try:
+                state = os.lstat(path)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise LifecycleOutboxError(f"cannot inspect outbox state file {path.name}: {exc}") from exc
+            if not stat.S_ISREG(state.st_mode):
+                raise LifecycleOutboxError(f"outbox state file is not a regular file: {path.name}")
+
     def _secure_state_files(self) -> None:
-        """Keep the outbox and SQLite sidecars private to the Taskwarrior user."""
-        os.chmod(self.path.parent, 0o700)
-        for path in (self.path, self.path.with_name(f"{self.path.name}-wal"), self.path.with_name(f"{self.path.name}-shm")):
-            if path.exists():
-                os.chmod(path, 0o600)
+        """Apply the private-state policy without mutating active sidecars.
+
+        The containing directory is mode 0700 and the main database is secured
+        before SQLite opens it. WAL/SHM sidecars inherit protection from the
+        directory and are validated here, but not chmodded while live users may
+        hold them.
+        """
+        self._validate_state_files()
+
+    @staticmethod
+    def _secure_state_file(path: Path) -> None:
+        try:
+            before = os.lstat(path)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot inspect outbox state file {path.name}: {exc}") from exc
+        if not stat.S_ISREG(before.st_mode):
+            raise LifecycleOutboxError(f"outbox state file is not a regular file: {path.name}")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot safely open outbox state file {path.name}: {exc}") from exc
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+                raise LifecycleOutboxError(f"outbox state file changed during validation: {path.name}")
+            os.fchmod(fd, 0o600)
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot secure outbox state file {path.name}: {exc}") from exc
+        finally:
+            os.close(fd)
+
+    def _create_private_database_file(self) -> None:
+        """Pre-create SQLite's database with restrictive permissions and no symlink following."""
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(self.path, flags, 0o600)
+        except FileExistsError:
+            self._validate_state_files()
+            return
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot create outbox database safely: {exc}") from exc
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError as exc:
+            raise LifecycleOutboxError(f"cannot secure new outbox database: {exc}") from exc
+        finally:
+            os.close(fd)
 
     @contextmanager
     def session(self) -> Iterator["LifecycleOutboxRepository"]:

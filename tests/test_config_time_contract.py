@@ -3,11 +3,15 @@ from datetime import date, datetime, timezone
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
+import nautical_core as core
 from nautical_core import business_calendar_config
 from nautical_core import timeutil
 
 
 class BusinessCalendarConfigContractTests(unittest.TestCase):
+    def test_shared_config_exposes_anchor_file_directory(self):
+        self.assertTrue(hasattr(core, "ANCHOR_FILE_DIR"))
+
     def test_empty_config_is_immutable_and_definitions_are_normalized(self):
         empty = business_calendar_config.parse_business_calendar_definitions(None)
         self.assertIsInstance(empty, MappingProxyType)
@@ -159,6 +163,56 @@ class BusinessCalendarConfigContractTests(unittest.TestCase):
 
 
 class TimeUtilContractTests(unittest.TestCase):
+    def test_dst_gap_fold_and_noon_round_trips_preserve_local_contract(self):
+        zone = ZoneInfo("America/New_York")
+        for day in (
+            date(2025, 3, 8),
+            date(2025, 3, 9),
+            date(2025, 3, 10),
+            date(2025, 11, 1),
+            date(2025, 11, 2),
+            date(2025, 11, 3),
+        ):
+            with self.subTest(day=day):
+                utc_value = timeutil.build_local_datetime(day, (12, 0), zone)
+                local = timeutil.to_local(utc_value.astimezone(timezone.utc), zone)
+                self.assertEqual(local.date(), day)
+                self.assertEqual((local.hour, local.minute), (12, 0))
+
+        gap = timeutil.to_local(
+            timeutil.build_local_datetime(date(2025, 3, 9), (2, 30), zone), zone
+        )
+        self.assertEqual((gap.hour, gap.minute), (3, 30))
+
+        ambiguous = timeutil.to_local(
+            timeutil.build_local_datetime(date(2025, 11, 2), (1, 30), zone), zone
+        )
+        self.assertEqual(ambiguous.utcoffset().total_seconds(), -4 * 3600)
+
+    def test_datetime_comparator_orders_dst_fold_and_rejects_mixed_awareness(self):
+        from nautical_core.occurrence_provider import _compare_datetimes
+
+        zone = ZoneInfo("Europe/Bucharest")
+        first = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
+        second = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
+        self.assertLess(timeutil.compare_datetimes(first, second), 0)
+        self.assertLess(_compare_datetimes(first, second), 0)
+        with self.assertRaisesRegex(ValueError, "naive and aware"):
+            timeutil.compare_datetimes(first.replace(tzinfo=None), second)
+
+    def test_full_day_timezone_gap_advances_by_calendar_date(self):
+        zone = ZoneInfo("Pacific/Apia")
+        resolved = timeutil.build_local_datetime(date(2011, 12, 30), (12, 0), zone)
+        local = resolved.astimezone(zone)
+        self.assertEqual(local.date(), date(2011, 12, 31))
+        self.assertEqual((local.hour, local.minute), (12, 0))
+
+    def test_schedule_and_completion_share_the_time_comparator(self):
+        from nautical_core import modify_completion_effects, modify_schedule_effects
+
+        self.assertIs(modify_schedule_effects.compare_datetimes, timeutil.compare_datetimes)
+        self.assertIs(modify_completion_effects.compare_datetimes, timeutil.compare_datetimes)
+
     def test_comparison_and_utc_normalization(self):
         naive = datetime(2026, 1, 1, 12)
         aware = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)

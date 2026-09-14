@@ -6,11 +6,11 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import hashlib
 import json
-from types import ModuleType
-from typing import Any, Literal, Mapping, TypeAlias, cast
+from typing import Any, Callable, Literal, Mapping, TypeAlias, cast
 
 from .integration_models import Absent, Found, Unavailable
 from .integration_context import IntegrationAccess
+from .business_calendar import BusinessCalendar
 from .occurrence_outcomes import OccurrenceCollectionResult
 from .recurrence_context import RecurrenceContext
 from .task_codec import TaskCodec
@@ -20,6 +20,7 @@ from .chain_generation import ChainGenerationService
 from .task_read_repository import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES
 from .task_models import FieldPresence, NauticalTask, TaskObservation
 from .task_codec import DEFAULT_TASK_CODEC
+from .task_datetime import TaskDatetimeParser, parser_for_core
 from .query_models import (
     HARD_MAX_FILE_SKIPS,
     HARD_MAX_ITERATIONS,
@@ -51,6 +52,37 @@ class _AbsentTask:
 @dataclass(frozen=True, slots=True)
 class _AmbiguousTask:
     uuid: str
+
+
+@dataclass(frozen=True, slots=True)
+class OccurrenceQueryRuntime:
+    """Explicit recurrence services required by the operator query workflow."""
+
+    datetime_parser: TaskDatetimeParser
+    business_calendar_for_task: Callable[[TaskObservation], BusinessCalendar]
+    astronomy_config: Mapping[str, Any]
+    anchor_file_dir: str
+    format_isoz: Callable[[datetime], str]
+    chain_generation_factory: Callable[[], ChainGenerationService]
+
+    @classmethod
+    def from_compatibility_facade(cls, core: object) -> "OccurrenceQueryRuntime":
+        """Adapt the public hook facade at the CLI composition boundary."""
+        resolver = getattr(core, "business_calendar_for_task", None)
+        formatter = getattr(core, "fmt_isoz", None)
+        if not callable(resolver) or not callable(formatter):
+            raise TypeError("query runtime requires calendar and datetime-formatting ports")
+        astronomy_config = getattr(core, "ASTRONOMY_CONFIG", {})
+        if not isinstance(astronomy_config, Mapping):
+            astronomy_config = {}
+        return cls(
+            datetime_parser=parser_for_core(core),
+            business_calendar_for_task=resolver,
+            astronomy_config=astronomy_config,
+            anchor_file_dir=str(getattr(core, "ANCHOR_FILE_DIR", "") or ""),
+            format_isoz=formatter,
+            chain_generation_factory=lambda: ChainGenerationService.from_core(core),
+        )
 
 
 TaskRow: TypeAlias = TaskObservation | _AbsentTask | _AmbiguousTask
@@ -186,12 +218,14 @@ def _terminal(result: OccurrenceCollectionResult) -> Mapping[str, Any] | None:
 class OccurrenceQueryService:
     """Resolve bounded occurrence queries without mutation or subprocesses."""
 
-    def __init__(self, unit_of_work: Any, *, core: ModuleType) -> None:
+    def __init__(self, unit_of_work: Any, *, runtime: OccurrenceQueryRuntime) -> None:
         context = getattr(unit_of_work, "context", None)
         if context is None or getattr(context, "access", None) is not IntegrationAccess.READ_ONLY:
             raise QueryServiceError("occurrence queries require a read-only Taskwarrior unit of work")
+        if not isinstance(runtime, OccurrenceQueryRuntime):
+            raise TypeError("occurrence queries require explicit recurrence runtime services")
         self._uow = unit_of_work
-        self._core = core
+        self._runtime = runtime
         local_timezone = getattr(context, "local_timezone", None)
         if not isinstance(local_timezone, tzinfo):
             raise QueryServiceError("validated local timezone is unavailable")
@@ -233,15 +267,13 @@ class OccurrenceQueryService:
         if not chain_id:
             raise QueryServiceError("Nautical task has no chainID; recurrence identity is incomplete")
         calendar = None
-        resolver = getattr(self._core, "business_calendar_for_task", None)
-        if callable(resolver):
-            calendar = resolver(task)
+        calendar = self._runtime.business_calendar_for_task(task)
         return RecurrenceContext(
             chain_id=chain_id,
             timezone=self._timezone,
             business_calendar=calendar,
-            astronomy_config=getattr(self._core, "ASTRONOMY_CONFIG", {}),
-            anchor_file_dir=str(getattr(self._core, "ANCHOR_FILE_DIR", "") or ""),
+            astronomy_config=self._runtime.astronomy_config,
+            anchor_file_dir=self._runtime.anchor_file_dir,
         )
 
     def _starts_after_request_end(
@@ -398,13 +430,10 @@ class OccurrenceQueryService:
 
     def _task_reference_local(self, task: TaskObservation) -> datetime | None:
         """Return the task's current recurrence reference in query timezone."""
-        raw = _task_value(task, "due") or _task_value(task, "scheduled")
+        raw = _task_raw_value(task, "due") or _task_raw_value(task, "scheduled")
         if not raw:
             return None
-        parser = getattr(self._core, "parse_dt_any", None)
-        if not callable(parser):
-            raise QueryServiceError("Nautical datetime parser is unavailable")
-        parsed = parser(raw)
+        parsed, error = self._runtime.datetime_parser.parse(raw)
         if not isinstance(parsed, datetime) or parsed.tzinfo is None or parsed.utcoffset() is None:
             raise QueryServiceError("task due/scheduled value is not a valid timezone-aware datetime")
         return parsed.astimezone(self._timezone)
@@ -424,12 +453,9 @@ class OccurrenceQueryService:
             _boundary_local(request.end.value, request.end.date_only, self._timezone, end=True)
             if request.end is not None else None
         )
-        chain_until = _task_value(task, "chainUntil")
+        chain_until = _task_raw_value(task, "chainUntil")
         if chain_until:
-            parser = getattr(self._core, "parse_dt_any", None)
-            if not callable(parser):
-                raise QueryServiceError("Nautical datetime parser is unavailable")
-            parsed_until = parser(chain_until)
+            parsed_until, error = self._runtime.datetime_parser.parse(chain_until)
             if not isinstance(parsed_until, datetime) or parsed_until.tzinfo is None or parsed_until.utcoffset() is None:
                 raise QueryServiceError("chainUntil is not a valid timezone-aware datetime")
             until_local = parsed_until.astimezone(self._timezone)
@@ -442,7 +468,7 @@ class OccurrenceQueryService:
         limit = request.count or request.max_occurrences
         current = reference
         records: list[OccurrenceRecord] = []
-        generator = ChainGenerationService.from_core(self._core)
+        generator = self._runtime.chain_generation_factory()
         while len(records) < limit:
             within_start = current > start or (request.start_inclusive and current == start)
             within_end = end is None or current <= end
@@ -459,7 +485,7 @@ class OccurrenceQueryService:
                 break
             if max_link is not None and link >= max_link:
                 break
-            stamp = self._core.fmt_isoz(current.astimezone(timezone.utc))
+            stamp = self._runtime.format_isoz(current.astimezone(timezone.utc))
             parent = _task_with_overrides(task, end=stamp, due=stamp, link=link)
             child_due, _metadata = generator.compute_cp_child_due(parent)
             if child_due is None:
@@ -664,14 +690,11 @@ class OccurrenceQueryService:
         )
 
     def _reference_utc(self, task: TaskObservation) -> datetime:
-        parser = getattr(self._core, "parse_dt_any", None)
-        if not callable(parser):
-            raise QueryServiceError("Nautical datetime parser is unavailable")
         for field in (("end",) if TaskCodec.normalize_text(_task_value(task, "cp")) else ()) + ("due", "scheduled"):
-            value = _task_value(task, field)
+            value = _task_raw_value(task, field)
             if not value:
                 continue
-            parsed = parser(value)
+            parsed, error = self._runtime.datetime_parser.parse(value)
             if isinstance(parsed, datetime) and parsed.tzinfo is not None and parsed.utcoffset() is not None:
                 return parsed.astimezone(timezone.utc)
             raise QueryServiceError(f"task {field} is not a valid timezone-aware datetime")
@@ -779,32 +802,23 @@ class OccurrenceQueryService:
                     raise QueryServiceError("chainMax is not an integer") from exc
 
             def bounded(candidate: datetime) -> bool:
-                chain_until = _task_value(task, "chainUntil")
+                chain_until = _task_raw_value(task, "chainUntil")
                 if not chain_until:
                     return True
-                parser = getattr(self._core, "parse_dt_any", None)
-                if not callable(parser):
-                    raise QueryServiceError("Nautical datetime parser is unavailable")
-                limit = parser(chain_until)
+                limit, error = self._runtime.datetime_parser.parse(chain_until)
                 if not isinstance(limit, datetime) or limit.tzinfo is None or limit.utcoffset() is None:
                     raise QueryServiceError("chainUntil is not a valid timezone-aware datetime")
                 return candidate.astimezone(timezone.utc) <= limit.astimezone(timezone.utc)
 
             if TaskCodec.normalize_text(_task_value(task, "cp")):
                 if request.evaluation_at is not None:
-                    formatter = getattr(self._core, "fmt_isoz", None)
-                    if not callable(formatter):
-                        raise QueryServiceError("Nautical datetime formatter is unavailable")
-                    projected_end = formatter(evaluated_utc)
+                    projected_end = self._runtime.format_isoz(evaluated_utc)
                 elif not _task_value(task, "end"):
-                    formatter = getattr(self._core, "fmt_isoz", None)
-                    if not callable(formatter):
-                        raise QueryServiceError("Nautical datetime formatter is unavailable")
-                    projected_end = formatter(reference_utc)
+                    projected_end = self._runtime.format_isoz(reference_utc)
                 else:
                     projected_end = str(_task_value(task, "end") or "")
                 parent = _task_with_overrides(task, end=projected_end)
-                child_due, _metadata = ChainGenerationService.from_core(self._core).compute_cp_child_due(parent)
+                child_due, _metadata = self._runtime.chain_generation_factory().compute_cp_child_due(parent)
                 if child_due is None:
                     return TaskOccurrenceResult(identity, "empty", chain=chain_metadata, lifecycle=lifecycle_metadata)
                 if not bounded(child_due):

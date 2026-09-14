@@ -27,7 +27,7 @@ import nautical_core as core
 from nautical_core.integration_context import IntegrationAccess
 from nautical_core.integration_models import Found
 from nautical_core.query_models import OccurrenceQueryRequest
-from nautical_core.query_service import OccurrenceQueryService
+from nautical_core.query_service import OccurrenceQueryRuntime, OccurrenceQueryService
 
 
 TASK = {
@@ -84,7 +84,7 @@ def _service() -> OccurrenceQueryService:
         ),
         repository=repository,
     )
-    return OccurrenceQueryService(uow, core=core)
+    return OccurrenceQueryService(uow, runtime=OccurrenceQueryRuntime.from_compatibility_facade(core))
 
 
 def _batch_service() -> OccurrenceQueryService:
@@ -98,7 +98,7 @@ def _batch_service() -> OccurrenceQueryService:
         ),
         repository=repository,
     )
-    return OccurrenceQueryService(uow, core=core)
+    return OccurrenceQueryService(uow, runtime=OccurrenceQueryRuntime.from_compatibility_facade(core))
 
 
 def _read_call_baseline() -> dict[str, int]:
@@ -112,7 +112,7 @@ def _read_call_baseline() -> dict[str, int]:
         ),
         repository=repository,
     )
-    service = OccurrenceQueryService(uow, core=core)
+    service = OccurrenceQueryService(uow, runtime=OccurrenceQueryRuntime.from_compatibility_facade(core))
     requests = {
         "uuid": {"selector": {"uuids": [TASK["uuid"]]}},
         "chain": {"selector": {"chain_id": TASK["chainID"]}},

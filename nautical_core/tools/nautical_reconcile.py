@@ -7,14 +7,22 @@ import argparse
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import partial
 import json
 import os
+import random
 import sys
 import time
 import uuid
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
+
+_fcntl: ModuleType | None
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Taskwarrior is Unix-only; retain the lockfile fallback.
+    _fcntl = None
 
 
 CORE_DIR = Path(__file__).resolve().parents[1]
@@ -24,13 +32,14 @@ if str(BASE_DIR) not in sys.path:
 os.environ.setdefault("NAUTICAL_CORE_PATH", str(BASE_DIR))
 
 import nautical_core as nautical_core_package  # noqa: E402
-from nautical_core import chain_integrity_lifecycle as lifecycle, safe_lock  # noqa: E402
+import nautical_core.chain_integrity_lifecycle as lifecycle  # noqa: E402
+import nautical_core.cache_locking as cache_locking  # noqa: E402
 from nautical_core.lifecycle_state import parent_nextlink_lock_path, reconcile_lock_path  # noqa: E402
-from nautical_core import modify_spawn_prep  # noqa: E402
+import nautical_core.modify_spawn_prep as modify_spawn_prep  # noqa: E402
 from nautical_core.chain_generation import ChainGenerationService  # noqa: E402
 from nautical_core.chain_integrity_recovery import IntegrityRecoveryService  # noqa: E402
 from nautical_core.integrity_operator_owner import build_integrity_mutation_request  # noqa: E402
-from nautical_core.integration_context import IntegrationAccess  # noqa: E402
+from nautical_core.integration_context import IntegrationAccess, IntegrationRuntime  # noqa: E402
 from nautical_core.operator_control_plane import OperatorControlPlane  # noqa: E402
 from nautical_core.operator_application import DomainApplicationRegistry  # noqa: E402
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
@@ -70,6 +79,13 @@ from nautical_core.lifecycle_reconciliation import (  # noqa: E402
 from nautical_core.reconcile_snapshot_service import ReconcileSnapshotService  # noqa: E402
 from nautical_core.reconcile_operator_service import ReconcileRecoveryCallbacks, ReconcileRecoveryCoordinator  # noqa: E402
 
+safe_lock = partial(
+    cache_locking.safe_lock,
+    fcntl_mod=_fcntl,
+    os_mod=os,
+    time_mod=time,
+    random_mod=random,
+)
 
 _PARENT_LOCK_RETRIES = 600
 _PARENT_LOCK_SLEEP_SECONDS = 0.1
@@ -1348,6 +1364,7 @@ def _build_reconcile_session(
     lifecycle_application = LifecycleApplicationService(
         unit_of_work=unit_of_work,
         mutations=mutation_gateway,
+        execution=mutation_gateway,
         outbox=integrity_outbox,
         owner=f"reconcile-{os.getpid()}",
         lease_seconds=120.0,
@@ -1391,7 +1408,7 @@ def main(
     if _unit_of_work is None:
         try:
             _unit_of_work = build_operator_uow(
-                core=nautical_core_package,
+                runtime=IntegrationRuntime.from_compatibility_facade(nautical_core_package),
                 task_binary=args.task_bin,
                 env=os.environ,
                 access=IntegrationAccess.MUTATION if args.apply else IntegrationAccess.READ_ONLY,

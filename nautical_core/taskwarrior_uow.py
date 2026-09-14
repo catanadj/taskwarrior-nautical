@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 import os
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .integration_context import (
@@ -14,6 +13,7 @@ from .integration_context import (
     DiagnosticsSink,
     IntegrationAccess,
     IntegrationContext,
+    IntegrationRuntime,
     build_operator_context,
 )
 from .integration_models import CommandFailureKind
@@ -284,7 +284,7 @@ def build_taskwarrior_uow(
 
 def build_operator_uow(
     *,
-    core: ModuleType,
+    runtime: IntegrationRuntime,
     task_binary: str,
     taskdata: str | None = None,
     env: Mapping[str, str] | None = None,
@@ -293,7 +293,7 @@ def build_operator_uow(
 ) -> TaskwarriorUnitOfWork:
     """Build the sole unit of work for one operator invocation."""
     context = build_operator_context(
-        core=core,
+        runtime=runtime,
         task_binary=task_binary,
         taskdata=taskdata,
         env=env,

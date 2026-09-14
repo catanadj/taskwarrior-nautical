@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import shutil
@@ -53,8 +54,8 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertEqual(decoded.to_dict(), payload)
 
     def test_process_interruption_is_typed_and_retryable(self) -> None:
-        client = TaskwarriorClient((sys.executable, "-c", "import time; time.sleep(1)"))
-        result = client.execute((), purpose="interruption-test", timeout=0.01, attempts=1)
+        client = TaskwarriorClient((sys.executable, "-c", "import signal; signal.pause()"))
+        result = client.execute((), purpose="interruption-test", timeout=0.1, attempts=1)
         self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
         self.assertEqual(result.returncode, 124)
         self.assertGreaterEqual(result.duration, 0.0)
@@ -65,23 +66,53 @@ class OperatorProcessContractTests(unittest.TestCase):
         self.assertTrue(evidence.retryable)
 
     def test_timeout_terminates_descendant_process_group_within_bound(self) -> None:
-        code = (
-            "import subprocess,sys,time; "
-            "subprocess.Popen([sys.executable, '-c', 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']); "
-            "time.sleep(30)"
-        )
-        client = TaskwarriorClient((sys.executable, "-c", code))
-        started = time.monotonic()
-        result = client.execute((), purpose="descendant-timeout", timeout=0.05, attempts=1)
-        elapsed = time.monotonic() - started
-        self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
-        self.assertLess(elapsed, 2.0)
+        with tempfile.TemporaryDirectory() as directory:
+            ready = Path(directory) / "ready"
+            child_pid = Path(directory) / "child.pid"
+            code = (
+                "import os,signal,subprocess,sys,time; "
+                f"child=subprocess.Popen([sys.executable, '-c', "
+                "'import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.pause()']); "
+                f"open({str(child_pid)!r}, 'w').write(str(child.pid)); "
+                f"open({str(ready)!r}, 'w').close(); signal.pause()"
+            )
+            result_box: list[object] = []
+
+            def run() -> None:
+                result_box.append(TaskwarriorClient((sys.executable, "-c", code)).execute(
+                    (), purpose="descendant-timeout", timeout=0.5, attempts=1,
+                ))
+
+            thread = threading.Thread(target=run)
+            thread.start()
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not ready.exists():
+                time.sleep(0.01)
+            self.assertTrue(ready.exists(), "child did not signal readiness")
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive(), "timeout cleanup did not finish")
+            result = result_box[0]
+            self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
+            pid = int(child_pid.read_text())
+            # The child may briefly remain as a zombie while it is reaped by
+            # init; either absence or a zombie state proves it is no longer
+            # executing.  Do not mistake ``kill(pid, 0)`` for liveness.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+                except (FileNotFoundError, ProcessLookupError):
+                    state = "Z"
+                if state == "Z":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(state, "Z", f"descendant still running (state={state})")
 
     def test_timeout_with_tempfile_outputs_remains_bounded(self) -> None:
-        code = "import sys,time; print('partial output', flush=True); time.sleep(30)"
+        code = "import signal,sys; print('partial output', flush=True); signal.pause()"
         client = TaskwarriorClient((sys.executable, "-c", code))
         result = client.execute(
-            (), purpose="tempfile-timeout", timeout=0.05, attempts=1, use_tempfiles=True,
+            (), purpose="tempfile-timeout", timeout=0.5, attempts=1, use_tempfiles=True,
         )
         self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
         self.assertIn("partial output", result.stdout)
@@ -331,7 +362,7 @@ class OperatorProcessContractTests(unittest.TestCase):
 
     def test_timeout_is_typed_and_retryable(self) -> None:
         result = TaskwarriorClient((sys.executable,)).execute(
-            ("-c", "import time; time.sleep(1)"), purpose="timeout", timeout=0.01,
+            ("-c", "import signal; signal.pause()"), purpose="timeout", timeout=0.1,
         )
         self.assertEqual(result.kind, CommandFailureKind.TIMEOUT)
         self.assertIn(result.kind, {CommandFailureKind.TIMEOUT, CommandFailureKind.BUSY})

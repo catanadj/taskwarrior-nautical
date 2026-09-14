@@ -63,7 +63,7 @@ def completion_compute_child_due(
     print_task: PrintTaskCallback,
     diag: DiagnosticCallback | None = None,
     on_terminal: Any | None = None,
-) -> tuple[Any, Any, Any] | None:
+) -> tuple[datetime | None, dict[str, Any] | None, Any] | None:
     task_row = dict(new)
     try:
         if kind in {"anchor", "anchor_file"}:

@@ -32,7 +32,7 @@ def command_ports_for(host: Any) -> CommandPorts:
 
 def run_task_result(ports: CommandPorts, cmd: list[str], **kwargs):
     started = time.perf_counter()
-    result = execute(
+    result = ports.execute(
         cmd,
         purpose=f"on-modify {ports.purpose_bucket(cmd)}",
         **kwargs,

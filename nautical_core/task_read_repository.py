@@ -92,7 +92,7 @@ def _link_number(value: object) -> int | None:
         return None
     try:
         number = int(float(str(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number >= 0 else None
 

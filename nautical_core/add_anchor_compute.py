@@ -457,13 +457,13 @@ def anchor_until_summary(
     *,
     core: Any,
     to_local_cached: Callable[[Any], Any],
-    max_preview_iterations: int,
     max_iterations: int,
-    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     evaluator: Any | None = None,
 ):
     if not until_dt:
         return None, None
+    if evaluator is None:
+        raise TypeError("anchor_until_summary requires the evaluator contract")
     if evaluator is not None:
         start_local = core.build_local_datetime(first_date_local, first_hhmm)
         end_local = to_local_cached(until_dt)
@@ -485,47 +485,6 @@ def anchor_until_summary(
             return max(0, count - 1), None
         return max(0, count - 1), last.astimezone(timezone.utc)
 
-    end_day = to_local_cached(until_dt).date()
-    count = 0
-    prev = first_date_local - timedelta(days=1)
-    last = None
-    iterations = 0
-    for _ in range(max_preview_iterations):
-        if iterations >= max_iterations:
-            break
-        iterations += 1
-        nxt = anchor_step_once_with_omit(dnf, prev, interval_seed, seed_base, omit_dnf=omit_dnf, core=core)
-        if not nxt or nxt > end_day:
-            break
-        count += 1
-        last = nxt
-        prev = nxt
-    exact_until_count = max(0, count - 1)
-    if not last:
-        return exact_until_count, None
-    final_hhmm = None
-    if resolve_time_slots:
-        for term in dnf:
-            engine = _scheduler_engine(core)
-            if all(engine.factor_matches_on(atom, last, first_date_local, seed_base=seed_base) for atom in term):
-                for atom in term:
-                    mods = atom.get("mods") or {}
-                    slots = resolve_time_slots(mods, last)
-                    if slots:
-                        final_hhmm = slots[0]
-                        break
-                if final_hhmm:
-                    break
-    if final_hhmm is None:
-        final_hhmm = core.pick_hhmm_from_dnf_for_date(
-            dnf,
-            last,
-            first_date_local,
-            seed_base=seed_base,
-        ) or first_hhmm
-    final_until_dt = core.build_local_datetime(last, final_hhmm).astimezone(timezone.utc)
-    return exact_until_count, final_until_dt
-
 
 def anchor_build_preview(
     dnf,
@@ -538,10 +497,10 @@ def anchor_build_preview(
     omit_dnf=None,
     *,
     core: Any,
-    norm_t_mod: Callable[[Any], list[tuple[int, int]]],
-    resolve_time_slots: Callable[[Any, date], list[tuple[int, int]]] | None = None,
     evaluator: Any | None = None,
 ):
+    if evaluator is None:
+        raise TypeError("anchor_build_preview requires the evaluator contract")
     if evaluator is not None:
         events = evaluator.collect_after(
             first_due_local_dt,
@@ -561,28 +520,3 @@ def anchor_build_preview(
             color = colors[min(i, len(colors) - 1)]
             preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
         return OccurrenceBatch(preview, terminal=getattr(events, "terminal", None))
-
-    preview = []
-    colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
-    cur_dt = first_due_local_dt
-    for i in range(preview_limit):
-        nxt_dt = anchor_next_occurrence_after_local_dt(
-            dnf,
-            cur_dt,
-            fallback_hhmm,
-            interval_seed,
-            seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            norm_t_mod=norm_t_mod,
-            resolve_time_slots=resolve_time_slots,
-        )
-        if not nxt_dt:
-            break
-        dt_utc = nxt_dt.astimezone(timezone.utc)
-        if until_dt and compare_datetimes(dt_utc, until_dt) > 0:
-            break
-        color = colors[min(i, len(colors) - 1)]
-        preview.append(f"[{color}]{core.fmt_dt_local(dt_utc)}[/{color}]")
-        cur_dt = nxt_dt
-    return OccurrenceBatch(preview)

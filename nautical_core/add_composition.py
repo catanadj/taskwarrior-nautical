@@ -6,12 +6,21 @@ from datetime import datetime
 from typing import Any
 
 from .task_models import TaskPayload
-from .task_datetime import parser_for_core
+from .task_datetime import TaskDatetimeParser, parser_for_core
+
+
+def _datetime_parser(host: Any) -> TaskDatetimeParser:
+    parser = getattr(host, "_TASK_DATETIME_PARSER", None)
+    if parser is None:
+        parser = parser_for_core(host.core, diagnostic=getattr(host, "_diag", None))
+        setattr(host, "_TASK_DATETIME_PARSER", parser)
+    return parser
 
 
 def initialize_core(host: Any) -> None:
     """Own installed-layout integration context construction for on-add."""
     if getattr(host, "_INTEGRATION_CONTEXT", None) is not None:
+        _datetime_parser(host)
         return
     hook_runtime = host._hook_runtime_module()
     core, target, context = hook_runtime.initialize_integration_context(
@@ -28,6 +37,7 @@ def initialize_core(host: Any) -> None:
     host.TW_DATA_DIR = context.taskdata
     host._TASKDATA_RAW = str(context.taskdata)
     host._USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
+    _datetime_parser(host)
 
 
 def load_core(host: Any) -> None:
@@ -82,7 +92,7 @@ def validate_chain_limits(host: Any, task: TaskPayload, now_utc: datetime) -> da
         parse_cp_sequence=host.core.parse_cp_sequence,
         cp_sequence_parse_error=host.core.cp_sequence_parse_error,
         parse_chain_max=add_validation.parse_chain_max,
-        parse_datetime=lambda value: parser_for_core(host.core).parse(value)[0],
+        parse_datetime=lambda value: _datetime_parser(host).parse(value)[0],
     )
     if findings:
         finding = findings[0]
@@ -228,7 +238,7 @@ class AddCompositionServices:
         workflow = core._import_sibling("add_workflow")
         raw = task.get(target_field)
         try:
-            value, error = parser_for_core(core).parse(raw)
+            value, error = _datetime_parser(self._host).parse(raw)
             if error or value is None:
                 raise ValueError(error or "missing datetime")
             timestamp = core._import_sibling("task_models").TaskTimestamp
@@ -258,7 +268,7 @@ class AddCompositionServices:
             raw = task.get(field)
             if not raw:
                 return None
-            value, error = parser_for_core(core).parse(raw)
+            value, error = _datetime_parser(self._host).parse(raw)
             if error or value is None:
                 raise ValueError(error or f"missing {field} datetime")
             return timestamp(value)

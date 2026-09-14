@@ -11,6 +11,7 @@ from .lifecycle_outbox import OUTBOX_ACK_RETENTION_SECONDS, OUTBOX_SCHEMA_VERSIO
 from .operator_context import OperatorBudgetLedger
 from .taskwarrior_client import TaskwarriorClient
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
+from .lifecycle_models import recurrence_fingerprint
 
 
 class QueueStatusService:
@@ -167,6 +168,15 @@ class QueueStatusService:
                                         pass
                                 if str(expected if expected is not None else "") != str(actual if actual is not None else ""):
                                     comparisons.append({"field": field, "expected": expected, "actual": actual})
+                            expected_identity = str(guard.get("recurrence_identity") or "").strip()
+                            if expected_identity:
+                                try:
+                                    actual_identity = recurrence_fingerprint(current)
+                                except Exception as exc:
+                                    comparisons.append({"field": "recurrence_identity", "expected": expected_identity, "actual": f"unavailable: {exc}"})
+                                else:
+                                    if actual_identity != expected_identity:
+                                        comparisons.append({"field": "recurrence_identity", "expected": expected_identity, "actual": actual_identity})
                             record["guard_comparison"] = {"status": "changed" if comparisons else "matches", "differences": comparisons}
                             plan = record.get("plan") or {}
                             if plan.get("action") == "spawn_child":

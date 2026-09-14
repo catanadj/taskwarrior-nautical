@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+.coverage
+coverage.xml
 site/
 .venv-docs/
 nautical_core/.nautical-cache/

@@ -10,7 +10,7 @@ import os
 import random
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable
 from .api_bindings import ApiBinding, core_namespace
 import zlib
 
@@ -29,6 +29,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         context.namespace if context is not None
         else core_namespace(module, namespace, context, "cache_api")
     )
+    import_sibling: Callable[[str], Any] | None
     if context is not None:
         import_sibling = context.import_sibling
     else:

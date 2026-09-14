@@ -593,6 +593,7 @@ class MutationRequest:
     def parent_link(cls, guard: MutationGuard, patch: object) -> "MutationRequest":
         """Build a guarded parent-link request from a typed TaskPatch."""
         from .task_changes import PatchOperation, TaskPatch
+        from .task_models import TaskUUID
 
         if not isinstance(guard, MutationGuard):
             raise IntegrationContractError("parent link requires a MutationGuard")
@@ -601,9 +602,15 @@ class MutationRequest:
         if patch.target.value.lower() != guard.task_uuid.lower():
             raise IntegrationContractError("parent-link patch target differs from guard")
         values = patch.set_values()
-        child_short = str(values.get("nextLink") or "").strip()
-        if not child_short:
+        child_value = str(values.get("nextLink") or "").strip()
+        if not child_value:
             raise IntegrationContractError("parent-link patch requires nextLink")
+        try:
+            child_short = TaskUUID(child_value).value[:8]
+        except (TypeError, ValueError) as exc:
+            raise IntegrationContractError(
+                "parent-link patch requires a valid child UUID"
+            ) from exc
         return cls(
             MutationOperation.PARENT_LINK,
             guard,

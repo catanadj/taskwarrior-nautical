@@ -281,6 +281,7 @@ _MODULE_SPECS = {
     ),
 }
 core = None
+_TASK_DATETIME_PARSER = None
 _CORE_IMPORT_TARGET = None
 _CORE_IMPORT_ERROR = None
 
@@ -329,7 +330,7 @@ def _task_cmd_prefix() -> list[str]:
 def _initialize_integration_context() -> None:
     host = SimpleNamespace(**globals())
     _module("add_composition").initialize_core(host)
-    for name in ("core", "_CORE_IMPORT_TARGET", "_INTEGRATION_CONTEXT", "TW_DATA_DIR", "_TASKDATA_RAW", "_USE_RC_DATA_LOCATION"):
+    for name in ("core", "_TASK_DATETIME_PARSER", "_CORE_IMPORT_TARGET", "_INTEGRATION_CONTEXT", "TW_DATA_DIR", "_TASKDATA_RAW", "_USE_RC_DATA_LOCATION"):
         if hasattr(host, name):
             globals()[name] = getattr(host, name)
 
@@ -338,7 +339,7 @@ def _initialize_integration_context() -> None:
 def _load_core() -> None:
     host = SimpleNamespace(**globals())
     _module("add_composition").load_core(host)
-    for name in ("core", "_CORE_IMPORT_TARGET", "_INTEGRATION_CONTEXT", "TW_DATA_DIR", "_TASKDATA_RAW", "_USE_RC_DATA_LOCATION", "_MAX_JSON_BYTES", "_IMPORT_MS", "_CORE_READY"):
+    for name in ("core", "_TASK_DATETIME_PARSER", "_CORE_IMPORT_TARGET", "_INTEGRATION_CONTEXT", "TW_DATA_DIR", "_TASKDATA_RAW", "_USE_RC_DATA_LOCATION", "_MAX_JSON_BYTES", "_IMPORT_MS", "_CORE_READY"):
         if hasattr(host, name):
             globals()[name] = getattr(host, name)
 
@@ -387,11 +388,6 @@ class _Profiler:
 # --------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------
-@lru_cache(maxsize=512)
-def _parse_dt_any_cached(s: str):
-    return core.parse_dt_any(s)
-
-
 @lru_cache(maxsize=512)
 def _fmt_dt_local_cached(dt):
     return core.fmt_dt_local(dt)
@@ -627,10 +623,9 @@ def _append_wait_sched_rows(
         v = task.get(field)
         if not v:
             return None
-        try:
-            return core.parse_dt_any(v)
-        except Exception:
-            return None
+        from nautical_core.task_datetime import datetime_value, parser_for_core
+        parser = _TASK_DATETIME_PARSER or parser_for_core(core, diagnostic=_diag)
+        return datetime_value(parser, v)
 
     sched_dt = _p("scheduled")
     wait_dt = _p("wait")
@@ -814,10 +809,13 @@ def _validate_chain_duration_reasonable(
 def _validate_datetime_field(s, field_name) -> tuple[datetime | None, str | None]:
     add_validation = _module("add_validation")
     from nautical_core.task_datetime import parser_for_core
+    parser = _TASK_DATETIME_PARSER
+    if parser is None:
+        parser = parser_for_core(core, diagnostic=_diag)
     return add_validation.validate_datetime_field(
         s,
         field_name,
-        parser=parser_for_core(core, diagnostic=_diag),
+        parser=parser,
     )
 
 

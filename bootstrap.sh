@@ -104,6 +104,62 @@ print(", ".join(missing))
 PY
 }
 
+astronomy_configured() {
+    python3 - "$TASKDATA" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:
+    raise SystemExit(1)
+
+taskdata = Path(sys.argv[1]).expanduser()
+candidates = []
+configured = os.environ.get("NAUTICAL_CONFIG", "").strip()
+if configured:
+    candidates.append(Path(configured).expanduser())
+for name in ("config-nautical.toml", "nautical.toml"):
+    candidates.append(taskdata / name)
+
+for path in candidates:
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        continue
+    astronomy = data.get("astronomy")
+    if isinstance(astronomy, dict) and isinstance(astronomy.get("locations"), dict):
+        raise SystemExit(0 if astronomy["locations"] else 1)
+raise SystemExit(1)
+PY
+}
+
+incompatible_python_constraints() {
+    python3 - "$1" <<'PY'
+import re
+import sys
+from importlib import metadata
+from pathlib import Path
+
+for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    match = re.match(r"([A-Za-z0-9_.-]+)\s*==\s*([^;\s]+)", line)
+    if match is None:
+        continue
+    name, expected = match.groups()
+    try:
+        actual = metadata.version(name)
+    except metadata.PackageNotFoundError:
+        continue
+    if actual != expected:
+        print(f"{name} (installed {actual}, constrained {expected})")
+PY
+}
+
 render_legacy_verification() {
     python3 - "$1" "$2" "$3" <<'PY'
 import json
@@ -290,7 +346,24 @@ git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$VERSION" "$R
 step 2 "Checking Python requirements"
 requirements_file="$CHECKOUT/requirements.txt"
 [[ -f "$requirements_file" ]] || die "release is missing requirements.txt"
+constraints_file="$CHECKOUT/requirements-constraints.txt"
+[[ -f "$constraints_file" ]] || die "release is missing requirements-constraints.txt"
+astronomy_requirements_file="$CHECKOUT/requirements-astronomy.txt"
+if astronomy_configured; then
+    [[ -f "$astronomy_requirements_file" ]] || die "astronomy is configured but release is missing requirements-astronomy.txt"
+fi
+incompatible_constraints="$(incompatible_python_constraints "$constraints_file")"
+if [[ -n "$incompatible_constraints" ]]; then
+    printf '\nInstalled packages outside the compatibility set (read-only check):\n%s\n' "$incompatible_constraints"
+    printf 'Dependency installation is required to align them; no changes have been made.\n'
+fi
 missing_requirements="$(missing_python_requirements "$requirements_file")"
+if astronomy_configured; then
+    astronomy_missing_requirements="$(missing_python_requirements "$astronomy_requirements_file")"
+    if [[ -n "$astronomy_missing_requirements" ]]; then
+        missing_requirements="${missing_requirements}${missing_requirements:+, }${astronomy_missing_requirements}"
+    fi
+fi
 if [[ -n "$missing_requirements" ]]; then
     printf '\nMissing Python requirements: %s\n' "$missing_requirements"
     if ((DRY_RUN)); then
@@ -311,8 +384,16 @@ if [[ -n "$missing_requirements" ]]; then
     fi
     python3 -m pip --version >/dev/null 2>&1 || die "pip is unavailable for python3; install python3-pip (or Termux's python package)"
     printf '%sInstalling Python requirements...%s\n' "$STYLE_GREEN" "$STYLE_RESET"
-    python3 -m pip install -r "$requirements_file" || die "Python requirement installation failed"
+    pip_requirement_args=(-r "$requirements_file")
+    if astronomy_configured; then
+        pip_requirement_args+=(-r "$astronomy_requirements_file")
+    fi
+    python3 -m pip install "${pip_requirement_args[@]}" -c "$constraints_file" || die "Python requirement installation failed"
     remaining_requirements="$(missing_python_requirements "$requirements_file")"
+    if astronomy_configured; then
+        remaining_astronomy_requirements="$(missing_python_requirements "$astronomy_requirements_file")"
+        remaining_requirements="${remaining_requirements}${remaining_requirements:+, }${remaining_astronomy_requirements}"
+    fi
     [[ -z "$remaining_requirements" ]] || die "Python requirements remain unavailable: $remaining_requirements"
 fi
 

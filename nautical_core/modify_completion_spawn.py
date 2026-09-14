@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 import inspect
+from datetime import datetime
 from typing import Any
 
 from nautical_core.chain_generation import CarryFieldError
 from nautical_core.modify_models import CompletionSpawnResult, CompletionSpawnServices
+from nautical_core.lifecycle_models import LifecyclePlan
 from nautical_core.task_models import TaskDraft, TaskPayload
 
 
 def completion_build_and_spawn_child(
     new: TaskPayload,
     *,
-    child_due: Any,
+    child_due: datetime | None,
     child_field: str = "due",
     next_no: int,
     parent_short: str,
     kind: str,
     cpmax: int,
-    until_dt: Any,
-    lifecycle_plan: Any = None,
+    until_dt: datetime | None,
+    lifecycle_plan: LifecyclePlan | None = None,
     services: CompletionSpawnServices,
 ) -> CompletionSpawnResult | None:
     task_row = dict(new)

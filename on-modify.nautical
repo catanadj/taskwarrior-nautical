@@ -40,13 +40,13 @@ def _load_bootstrap():
     raw_core_path = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
     if raw_core_path:
         try:
-            core_path = Path(raw_core_path).expanduser()
-            candidates.extend(
-                (
-                    core_path / "hook_bootstrap.py",
-                    core_path / "nautical_core" / "hook_bootstrap.py",
-                )
-            )
+            core_path = Path(raw_core_path).expanduser().resolve()
+            trusted = (os.environ.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on")
+            if not trusted:
+                st = os.stat(core_path)
+                trusted = st.st_uid == os.getuid() and (st.st_mode & 0o002) == 0
+            if trusted:
+                candidates.extend((core_path / "hook_bootstrap.py", core_path / "nautical_core" / "hook_bootstrap.py"))
         except Exception:
             pass
 
@@ -93,13 +93,15 @@ def _read_input() -> bytes:
 
 def _emit_fallback(protocol, probe) -> None:
     task = getattr(probe, "task", None) if probe is not None else None
+    if not isinstance(task, dict):
+        return
     if protocol is not None:
         try:
             protocol.emit_passthrough_json(task)
             return
         except Exception:
             pass
-    sys.stdout.write(json.dumps(task if isinstance(task, dict) else {}, ensure_ascii=False))
+    sys.stdout.write(json.dumps(task, ensure_ascii=False))
     sys.stdout.flush()
 
 

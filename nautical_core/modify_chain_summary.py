@@ -4,9 +4,29 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from dataclasses import dataclass
 from typing import Any
 
 from .task_models import TaskObservation, TaskPayload
+
+
+@dataclass(frozen=True, slots=True)
+class ChainSummaryRenderServices:
+    export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]]
+    root_uuid_from: Callable[[dict[str, Any]], Any]
+    short_uuid: Callable[[Any], str]
+    format_root_and_age: Callable[[dict[str, Any], Any], str]
+    kind_rows: Callable[..., None]
+    span_fields: Callable[..., tuple[datetime | None, datetime | None, str]]
+    stats_rows: Callable[..., None]
+    limits_row: Callable[..., None]
+    last_n_timeline_rows: Callable[..., list[str]]
+    format_rows: Callable[..., list[tuple[str | None, str]]]
+    coerce_int: Callable[[Any, Any], int | None]
+    format_local: Callable[[Any], str]
+    max_chain_walk: int
+    panel: Callable[..., Any]
+    diagnostic: Callable[[str], None]
 
 
 def summary_current(current: TaskPayload, current_task: TaskPayload | None) -> TaskPayload:
@@ -189,21 +209,7 @@ def render_chain_summary(
     now_utc: Any,
     current_task: TaskPayload | None = None,
     *,
-    export_sorted_chain: Callable[[str, dict[str, Any]], list[TaskObservation]],
-    root_uuid_from: Callable[[dict[str, Any]], Any],
-    short_uuid: Callable[[Any], str],
-    format_root_and_age: Callable[[dict[str, Any], Any], str],
-    kind_rows: Callable[[list[tuple[str, str]], str, dict[str, Any]], None],
-    span_fields: Callable[..., tuple[datetime | None, datetime | None, str]],
-    stats_rows: Callable[[list[tuple[str, str]], list[TaskObservation], Any], None],
-    limits_row: Callable[[list[tuple[str, str]], dict[str, Any]], None],
-    last_n_timeline_rows: Callable[[list[TaskObservation], int], list[str]],
-    format_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
-    coerce_int: Callable[[Any, Any], int | None],
-    format_local: Callable[[Any], str],
-    max_chain_walk: int,
-    panel: Callable[..., Any],
-    diagnostic: Callable[[str], None],
+    services: ChainSummaryRenderServices,
 ) -> None:
     """Render the finished/stopped chain summary from focused collaborators."""
     actual_current = current_task if current_task else current
@@ -212,7 +218,7 @@ def render_chain_summary(
     kind = "anchor" if kind_anchor else ("anchor_file" if kind_anchor_file else "cp")
     chain_id = (actual_current.get("chainID") or "").strip()
     if not chain_id:
-        panel(
+        services.panel(
             "⚠ Chain summary skipped",
             [
                 ("Reason", "ChainID is required in v3+ and legacy link-walk is removed."),
@@ -224,49 +230,61 @@ def render_chain_summary(
 
     chain_read_error = ""
     try:
-        chain = export_sorted_chain(chain_id, dict(actual_current))
+        chain = services.export_sorted_chain(chain_id, dict(actual_current))
     except Exception as exc:
         chain = []
         chain_read_error = str(exc) or "chain export unavailable"
-        diagnostic(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
+        services.diagnostic(f"chain summary export unavailable (chainID={chain_id}): {chain_read_error}")
 
-    link_no = coerce_int(current.get("link"), len(chain))
-    root = short_uuid(root_uuid_from(current))
-    current_short = short_uuid(current.get("uuid"))
+    link_no = services.coerce_int(current.get("link"), len(chain))
+    root = services.short_uuid(services.root_uuid_from(current))
+    current_short = services.short_uuid(current.get("uuid"))
     stopped_by_delete = str(reason or "").strip().lower().startswith("pending task deleted")
-    first, last, span = span_fields(
+    first, last, span = services.span_fields(
         chain_id,
         chain,
         stop_at=now_utc,
         stopped_by_delete=stopped_by_delete,
     )
 
-    rows: list[tuple[str, str]] = [("Reason", reason), ("Root", format_root_and_age(current, now_utc))]
+    rows: list[tuple[str, str]] = [("Reason", reason), ("Root", services.format_root_and_age(current, now_utc))]
     chain_display = f"{root} … {current_short}  [dim](#{link_no}, {len(chain)} tasks"
-    if len(chain) >= max_chain_walk:
-        chain_display += f", truncated at {max_chain_walk})"
+    if len(chain) >= services.max_chain_walk:
+        chain_display += f", truncated at {services.max_chain_walk})"
     else:
         chain_display += ")"
     rows.append(("Chain", chain_display))
     if chain_read_error:
         rows.append(("Chain read", f"Unavailable: {chain_read_error}"))
 
-    kind_rows(rows, kind, current)
+    services.kind_rows(rows, kind, current)
     if first:
-        rows.append(("First due", format_local(first)))
+        rows.append(("First due", services.format_local(first)))
     if last:
-        rows.append(("Last end", format_local(last)))
+        rows.append(("Last end", services.format_local(last)))
     if stopped_by_delete:
-        rows.append(("Stopped at", format_local(now_utc)))
+        rows.append(("Stopped at", services.format_local(now_utc)))
     rows.append(("Span", span))
-    stats_rows(rows, chain, now_utc)
-    limits_row(rows, current)
-    tail = last_n_timeline_rows(chain, 6)
+    services.stats_rows(rows, chain, now_utc)
+    services.limits_row(rows, current)
+    tail = services.last_n_timeline_rows(chain, 6)
     if tail:
         rows.append(("History", "\n".join(tail)))
 
     title = "⛔ Chain stopped – summary" if stopped_by_delete else "⛔ Chain finished – summary"
-    panel(title, format_rows(rows), kind="summary")
+    services.panel(title, services.format_rows(rows), kind="summary")
+
+
+def render_chain_summary_with_services(
+    current: dict[str, Any],
+    reason: str,
+    now_utc: Any,
+    current_task: TaskPayload | None,
+    *,
+    services: ChainSummaryRenderServices,
+) -> None:
+    """Render through the typed composition-root service bundle."""
+    render_chain_summary(current, reason, now_utc, current_task, services=services)
 
 
 __all__ = (
@@ -274,6 +292,8 @@ __all__ = (
     "last_n_timeline",
     "limits_row",
     "render_chain_summary",
+    "render_chain_summary_with_services",
+    "ChainSummaryRenderServices",
     "span_fields",
     "stats_rows",
     "summary_chain_id",

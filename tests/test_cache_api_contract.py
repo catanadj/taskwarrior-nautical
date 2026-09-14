@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import fcntl
+import io
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -33,7 +36,16 @@ class _Clock:
 class CacheApiContractTests(unittest.TestCase):
     _namespaces: list[dict] = []
 
-    def _binding(self, root: Path, *, config: list[str] | None = None):
+    def _binding(
+        self,
+        root: Path,
+        *,
+        config: list[str] | None = None,
+        build_acf=None,
+        atomic_replace=None,
+        ttl: int = 0,
+        time_mod=None,
+    ):
         config = config if config is not None else ["config-a"]
         namespace = vars(core).copy()
         namespace.update(
@@ -43,23 +55,36 @@ class CacheApiContractTests(unittest.TestCase):
             _CACHE_LOAD_MEM_TTL=300,
             ANCHOR_CACHE_DIR_OVERRIDE=str(root),
             ENABLE_ANCHOR_CACHE=True,
-            ANCHOR_CACHE_TTL=0,
+            ANCHOR_CACHE_TTL=ttl,
             _CACHE_LOCK_RETRIES=2,
             _CACHE_LOCK_SLEEP_BASE=0,
             _CACHE_LOCK_JITTER=0,
             _CACHE_LOCK_STALE_AFTER=300,
             scheduler_config_fingerprint=lambda: config[0],
             effective_config_fingerprint=lambda: config[0],
-            time=_Clock(),
+            time=time_mod or _Clock(),
             random=__import__("random"),
             os=os,
             json=json,
         )
+        if build_acf is not None:
+            namespace["build_acf"] = build_acf
+        if atomic_replace is not None:
+            namespace["_cache_atomic_replace"] = atomic_replace
         namespace["_import_sibling"] = core._import_sibling
         binding = cache_api.for_core(namespace=namespace, module=core)
         namespace["_cache_lock"] = binding._cache_lock
         self._namespaces.append(namespace)
         return binding
+
+    def test_clear_cache_environment_toggle_invokes_global_clear(self) -> None:
+        with (
+            patch.dict(os.environ, {"NAUTICAL_CLEAR_CACHES": "1"}),
+            patch.object(core, "_clear_all_caches") as clear_all,
+        ):
+            core.parse_anchor_expr_to_dnf_cached("w:mon")
+
+        clear_all.assert_called_once_with()
 
     def test_cache_miss_then_hit_returns_stable_copies(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -67,6 +92,10 @@ class CacheApiContractTests(unittest.TestCase):
             value = {"natural": "café", "next_dates": ["2026-09-10"]}
             self.assertIsNone(binding.cache_load("key"))
             self.assertTrue(binding.cache_save("key", value))
+            self.assertEqual(
+                stat.S_IMODE(Path(binding._cache_path("key")).stat().st_mode),
+                0o600,
+            )
             loaded = binding.cache_load("key")
             self.assertEqual(loaded, value)
             self.assertIsNot(loaded, value)
@@ -85,6 +114,135 @@ class CacheApiContractTests(unittest.TestCase):
             self.assertEqual(len(quarantined), 1)
             self.assertEqual(quarantined[0].read_bytes(), b"not valid cache data")
             self.assertIsNone(binding.cache_load("broken"))
+
+    def test_reader_retries_when_file_generation_changes_during_read(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binding = self._binding(root)
+            old_value = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
+            new_value = {"dnf": [[{"typ": "w", "spec": "fri"}]]}
+            self.assertTrue(binding.cache_save("stable-read", old_value))
+            self.assertTrue(binding.cache_save("replacement", new_value))
+            path = Path(binding._cache_path("stable-read"))
+            replacement = Path(binding._cache_path("replacement"))
+            self._namespaces[-1]["_CACHE_LOAD_MEM"].clear()
+
+            original_stat = os.stat
+            calls = 0
+
+            def stat_with_publish(target, *args, **kwargs):
+                nonlocal calls
+                if os.fspath(target) == os.fspath(path):
+                    calls += 1
+                    if calls == 2:
+                        replacement.replace(path)
+                return original_stat(target, *args, **kwargs)
+
+            with patch.object(cache_api.os, "stat", side_effect=stat_with_publish):
+                loaded = binding.cache_load("stable-read")
+
+            self.assertEqual(loaded, new_value, f"reader did not observe replacement after {calls} stats")
+            self.assertGreaterEqual(calls, 4)
+
+    def test_save_removes_stale_temporary_files_for_same_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binding = self._binding(root)
+            stale = root / ".beeswax.stale.tmp"
+            stale.write_text("partial write", encoding="utf-8")
+
+            self.assertTrue(binding.cache_save("beeswax", {"natural": "Mondays"}))
+            self.assertFalse(stale.exists())
+
+    def test_explicit_gc_prunes_expired_overflow_and_stale_temp_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            clock = _Clock()
+            clock.now = time.time()
+            binding = self._binding(root, ttl=1, time_mod=clock)
+            expired = root / "expired.jsonz"
+            fresh_old = root / "fresh-old.jsonz"
+            fresh_new = root / "fresh-new.jsonz"
+            stale_tmp = root / ".orphan.tmp"
+            unrelated = root / "notes.txt"
+            for path in (expired, fresh_old, fresh_new, stale_tmp, unrelated):
+                path.write_bytes(b"fixture")
+            os.utime(expired, (clock.now - 10, clock.now - 10))
+            os.utime(fresh_old, (clock.now - 0.5, clock.now - 0.5))
+            os.utime(stale_tmp, (clock.now - 10, clock.now - 10))
+
+            result = binding.cache_gc(max_entries=1, stale_tmp_age=1)
+
+            self.assertEqual(result["expired"], 1)
+            self.assertEqual(result["overflow"], 1)
+            self.assertEqual(result["temporary"], 1)
+            self.assertTrue(fresh_new.exists())
+            self.assertFalse(expired.exists())
+            self.assertFalse(fresh_old.exists())
+            self.assertFalse(stale_tmp.exists())
+            self.assertTrue(unrelated.exists())
+
+    def test_cache_metrics_are_emitted_only_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            stderr = io.StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "NAUTICAL_DIAG": "1",
+                        "NAUTICAL_DIAG_METRICS": "1",
+                        "XDG_CACHE_HOME": td,
+                    },
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                core._emit_cache_metrics()
+
+            self.assertIn("nautical-metrics", stderr.getvalue())
+
+            stderr.seek(0)
+            stderr.truncate(0)
+            with (
+                patch.dict(
+                    os.environ,
+                    {"NAUTICAL_DIAG": "1", "NAUTICAL_DIAG_METRICS": ""},
+                ),
+                patch("sys.stderr", stderr),
+            ):
+                core._emit_cache_metrics()
+            self.assertEqual(stderr.getvalue(), "")
+
+    def test_unsupported_schema_and_invalid_shape_are_quarantined(self) -> None:
+        import base64
+        import zlib
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binding = self._binding(root)
+            invalid_payloads = {
+                "missing-schema": {"dnf": []},
+                "future-schema": {"_nautical_cache_version": 99, "dnf": []},
+                "invalid-shape": {"_nautical_cache_version": 2, "dnf": "not-dnf"},
+            }
+            for key, payload in invalid_payloads.items():
+                encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                Path(binding._cache_path(key)).write_bytes(
+                    base64.b85encode(zlib.compress(encoded))
+                )
+
+            for key in invalid_payloads:
+                with self.subTest(key=key):
+                    self.assertIsNone(binding.cache_load(key))
+                    self.assertEqual(len(list(root.glob(f"{key}.jsonz.bad.*"))), 1)
+
+    def test_atomic_replace_failure_returns_false_without_publishing(self) -> None:
+        def fail_replace(_source: str, _target: str) -> None:
+            raise OSError("simulated replace failure")
+
+        with tempfile.TemporaryDirectory() as td:
+            binding = self._binding(Path(td), atomic_replace=fail_replace)
+            self.assertFalse(binding.cache_save("replace-failure", {"natural": "Mondays"}))
+            self.assertFalse(Path(binding._cache_path("replace-failure")).exists())
 
     def test_lock_refusal_is_retry_safe_and_release_allows_save(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -121,6 +279,26 @@ class CacheApiContractTests(unittest.TestCase):
             second = binding.cache_key_for_task("m:1", "next", "calendar-a")
             self.assertNotEqual(first, second)
             self.assertNotEqual(second, binding.cache_key_for_task("m:1", "next", "calendar-b"))
+
+    def test_task_key_memoizes_acf_work_until_its_binding_cache_is_cleared(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            calls: list[str] = []
+            binding = self._binding(
+                Path(td),
+                build_acf=lambda expression: calls.append(expression) or f"acf:{expression}",
+            )
+
+            first = binding.cache_key_for_task("w:mon", "skip", "calendar")
+            repeated = binding.cache_key_for_task("w:mon", "skip", "calendar")
+            self.assertEqual(first, repeated)
+            self.assertEqual(calls, ["w:mon"])
+
+            binding.cache_key_for_task("w:tue", "skip", "calendar")
+            self.assertEqual(calls, ["w:mon", "w:tue"])
+
+            binding._cache_key_for_task_cached.cache_clear()
+            binding.cache_key_for_task("w:mon", "skip", "calendar")
+            self.assertEqual(calls, ["w:mon", "w:tue", "w:mon"])
 
     def test_instances_do_not_share_memory_entries_or_locks(self) -> None:
         with tempfile.TemporaryDirectory() as td:

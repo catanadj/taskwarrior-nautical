@@ -19,7 +19,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 KIT_SCHEMA = 1
-ROOT_FILES = ("nautical", "nautical_navigator.py", "on-add.nautical", "on-modify.nautical", "on-exit.nautical", "uda.conf", "requirements.txt", "config-nautical.toml")
+ROOT_FILES = ("nautical", "nautical_navigator.py", "on-add.nautical", "on-modify.nautical", "on-exit.nautical", "uda.conf", "requirements.txt", "requirements-astronomy.txt", "requirements-constraints.txt", "config-nautical.toml")
 KIT_TOOL = "dev_tools/nautical_offline_kit.py"
 DOC_FILES = ("docs/getting-started/installation.md", "docs/operations/troubleshooting.md", "docs/operations/offline-readiness.md")
 
@@ -112,7 +112,7 @@ def build(source: Path, destination: Path, archive: Path | None = None) -> dict[
         (staging / "kit-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         checksums = "".join(f"{record['sha256']}  {record['path']}\n" for record in records)
         (staging / "checksums.sha256").write_text(checksums, encoding="ascii")
-        (staging / "OFFLINE-README.txt").write_text("Use the included local source with: ./nautical install --source .\nVerify first with: python3 dev_tools/nautical_offline_kit.py verify .\nNetworking is not required.\n", encoding="utf-8")
+        (staging / "OFFLINE-README.txt").write_text("Use the included local source with: ./nautical install --source .\nVerify first with: python3 dev_tools/nautical_offline_kit.py verify .\nRuntime dependencies are pinned by requirements-constraints.txt.\nNetworking is not required.\n", encoding="utf-8")
         os.replace(staging, destination)
     result: dict[str, Any] = {"status": "created", "kit": str(destination), "files": len(records), "manifest": str(destination / "kit-manifest.json")}
     if archive is not None:

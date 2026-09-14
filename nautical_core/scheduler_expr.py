@@ -892,13 +892,17 @@ def next_after_expr(
             best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
             continue
 
-        cand, meta = _next_after_expr_term_candidate(
-            term,
-            after_date,
-            default_seed,
-            seed_base,
-            next_after_term=next_after_term,
-        )
+        try:
+            cand, meta = _next_after_expr_term_candidate(
+                term,
+                after_date,
+                default_seed,
+                seed_base,
+                next_after_term=next_after_term,
+            )
+        except OccurrenceSearchExhausted as exc:
+            exhausted = exc
+            continue
         best, best_meta = _pick_earlier_candidate(best, best_meta, cand, meta)
 
     if best is None and exhausted is not None:

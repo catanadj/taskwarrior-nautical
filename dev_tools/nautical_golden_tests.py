@@ -30,9 +30,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DEV_TOOLS = HERE
 CORE_TOOLS = os.path.join(ROOT, "nautical_core", "tools")
+_TEST_OPERATOR_TASKDATA = []
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 os.environ.setdefault("NAUTICAL_CORE_PATH", ROOT)
+
+from tests.support.lifecycle_execution import LifecycleExecutionFixture
+from nautical_core.query_service import OccurrenceQueryRuntime
 
 core = importlib.import_module("nautical_core")
 reconcile_report = importlib.import_module("nautical_core.reconcile_report")
@@ -147,7 +151,7 @@ def parse_due(v):
         return None
 
 
-def _test_operator_uow(taskdata: str | Path = "/tmp/nautical-test-taskdata"):
+def _test_operator_uow(taskdata: str | Path | None = None):
     """Provide one explicit unit of work to tests that enter below CLI startup."""
     from nautical_core.integration_context import (
         IntegrationAccess,
@@ -157,6 +161,11 @@ def _test_operator_uow(taskdata: str | Path = "/tmp/nautical-test-taskdata"):
         ValidatedNauticalConfiguration,
     )
     from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
+
+    if taskdata is None:
+        temporary = tempfile.TemporaryDirectory(prefix="nautical-test-taskdata-")
+        _TEST_OPERATOR_TASKDATA.append(temporary)
+        taskdata = temporary.name
 
     context = IntegrationContext(
         Path(taskdata).resolve(),
@@ -670,13 +679,28 @@ def _load_hook_module(path: str, module_name: str):
         path = os.path.join(ROOT, "nautical_core", "hooks", "modify_impl.py")
     elif os.path.basename(path) == "on-exit.nautical":
         path = os.path.join(ROOT, "nautical_core", "hooks", "exit_impl.py")
-    loader = importlib.machinery.SourceFileLoader(module_name, path)
-    spec = importlib.util.spec_from_loader(module_name, loader)
+    is_core_package = (
+        os.path.basename(path) == "__init__.py"
+        and os.path.basename(os.path.dirname(path)) == "nautical_core"
+    )
+    if is_core_package:
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            path,
+            submodule_search_locations=[os.path.dirname(path)],
+        )
+    else:
+        loader = importlib.machinery.SourceFileLoader(module_name, path)
+        spec = importlib.util.spec_from_loader(module_name, loader)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not create module spec for {path}")
     mod = importlib.util.module_from_spec(spec)
     # Ensure local imports work
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
-    loader.exec_module(mod)
+    if is_core_package:
+        sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
     # Heavy hook modules intentionally leave core unloaded at import time.
     # Private helper tests exercise lifecycle code directly, so initialize the
     # same state that the executable entrypoint initializes first.
@@ -689,10 +713,12 @@ def _load_hook_module(path: str, module_name: str):
         mod._presentation_effects = _BoundPresentationEffects(mod)
         mod._diagnostics_effects = _BoundDiagnosticsEffects(mod)
         schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
-        mod._estimate_cp_final_by_max = lambda task, due: schedule_effects.estimate_cp_final_by_max(mod, task, due)
-        mod._estimate_anchor_final_by_max = lambda task, due, dnf: schedule_effects.estimate_anchor_final_by_max(mod, task, due, dnf)
-        mod._cap_from_until_cp = lambda task, due: schedule_effects.cap_from_until_cp(mod, task, due)
-        mod._cap_from_until_anchor = lambda task, due, dnf: schedule_effects.cap_from_until_anchor(mod, task, due, dnf)
+        cp_schedule_ports = schedule_effects.cp_completion_ports_for(mod)
+        anchor_schedule_ports = schedule_effects.anchor_completion_ports_for(mod)
+        mod._estimate_cp_final_by_max = lambda task, due: schedule_effects.estimate_cp_final_by_max(cp_schedule_ports, task, due)
+        mod._estimate_anchor_final_by_max = lambda task, due, dnf: schedule_effects.estimate_anchor_final_by_max(anchor_schedule_ports, task, due, dnf)
+        mod._cap_from_until_cp = lambda task, due: schedule_effects.cap_from_until_cp(cp_schedule_ports, task, due)
+        mod._cap_from_until_anchor = lambda task, due, dnf: schedule_effects.cap_from_until_anchor(anchor_schedule_ports, task, due, dnf)
         def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
             override = getattr(mod, "_collect_prev_two", None)
             if callable(override):
@@ -706,12 +732,19 @@ def _load_hook_module(path: str, module_name: str):
 
 def _modify_effect(hook, name, *args, **kwargs):
     """Invoke an extracted typed modify effect for focused behavior tests."""
-    effects = importlib.import_module("nautical_core.modify_effects")
+    effects = importlib.import_module("nautical_core.modify_composition_adapters")
+    name = {"expiration_services": "expiration_services_for"}.get(name, name)
     return getattr(effects, name)(hook, *args, **kwargs)
 
 
 class _BoundCompletionEffects:
     """Test-only bound view of the extracted completion-effects module."""
+
+    _PORT_FACTORIES = {
+        "preflight_context": "completion_preflight_context_ports_for",
+        "compute_next_and_limits": "completion_compute_ports_for",
+        "build_and_spawn_child": "completion_spawn_ports_for",
+    }
 
     def __init__(self, hook):
         object.__setattr__(self, "_hook", hook)
@@ -734,6 +767,39 @@ class _BoundCompletionEffects:
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)
+        factory_name = self._PORT_FACTORIES.get(name)
+        if factory_name:
+            return lambda *args, **kwargs: fn(
+                getattr(self._module, factory_name)(self._hook), *args, **kwargs
+            )
+        if name == "chain_snapshot":
+            def bound_chain_snapshot(chain_id, base_no, next_no, repository):
+                context_ports = self._module.completion_preflight_context_ports_for(self._hook)
+                ports = self._module.SnapshotPorts(
+                    repository=repository,
+                    mode=context_ports.snapshot_mode,
+                    models=context_ports.models,
+                    task_observation=context_ports.task_observation,
+                )
+                return fn(ports, chain_id, base_no, next_no)
+            return bound_chain_snapshot
+        if name == "existing_next_or_fail":
+            def bound_existing_next(new, next_no, snapshot, repository):
+                context = self._module.completion_preflight_context_ports_for(self._hook)
+                ports = self._module.CompletionPreflightPorts(
+                    preflight=context.preflight,
+                    coerce_int=context.coerce_int,
+                    max_link_number=context.max_link_number,
+                    short_uuid=context.short_uuid,
+                    panel=context.panel,
+                    print_task=context.print_task,
+                    end_chain_summary=context.end_chain_summary,
+                    existing_next_lookup=lambda task, link: repository.exact_child_slot(
+                        str(task.get("chainID") or ""), link
+                    ),
+                )
+                return fn(ports, new, next_no, snapshot)
+            return bound_existing_next
         return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
 
     def __setattr__(self, name, value):
@@ -749,6 +815,21 @@ class _BoundTransitionEffects:
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)
+        if name in {
+            "preserve_cp_relative_offsets_on_due_change",
+            "preserve_native_until_on_target_change",
+            "validate_completion_cp_and_anchor",
+        }:
+            def bound(*args, **kwargs):
+                composition = self._hook._module("modify_composition")
+                capabilities = composition.capabilities_for(self._hook)
+                ports_for = {
+                    "preserve_cp_relative_offsets_on_due_change": composition._cp_carry_ports,
+                    "preserve_native_until_on_target_change": composition._native_preserve_ports,
+                    "validate_completion_cp_and_anchor": composition._completion_validation_ports,
+                }[name]
+                return fn(ports_for(self._hook, capabilities), *args, **kwargs)
+            return bound
         return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
 
     def __setattr__(self, name, value):
@@ -758,18 +839,31 @@ class _BoundTransitionEffects:
 class _BoundPresentationEffects:
     """Test-only bound view of the extracted presentation-effects module."""
 
+    _RENAMED = {
+        "render_anchor_completion_feedback": "render_anchor_completion_feedback_for",
+        "render_cp_completion_feedback": "render_cp_completion_feedback_for",
+        "render_recurrence_updated_panel": "render_recurrence_updated_panel_for",
+        "first_recurrence_target": "first_recurrence_target_for",
+        "recurrence_enabled_rows": "recurrence_enabled_rows_for",
+        "render_cp_schedule_adjusted_panel": "render_cp_schedule_adjusted_panel_for",
+        "render_explicit_timing_order_warning": "render_explicit_timing_order_warning_for",
+        "render_disabled_chain_summary": "render_disabled_chain_summary_for",
+        "ensure_terminal_chain_off": "ensure_terminal_chain_off_for",
+        "timeline_lines": "timeline_lines_for",
+    }
+
     def __init__(self, hook):
         object.__setattr__(self, "_hook", hook)
-        module = importlib.import_module("nautical_core.modify_presentation_effects")
+        module = importlib.import_module("nautical_core.modify_composition_adapters")
         object.__setattr__(self, "_module", module)
         originals = getattr(type(self), "_originals", None)
         if originals is None:
             originals = {
-                name: getattr(module, name)
-                for name in (
-                    "render_anchor_completion_feedback",
-                    "render_cp_completion_feedback",
-                    "render_recurrence_updated_panel",
+                current_name: getattr(module, current_name)
+                for current_name in (
+                    "render_anchor_completion_feedback_for",
+                    "render_cp_completion_feedback_for",
+                    "render_recurrence_updated_panel_for",
                 )
             }
             setattr(type(self), "_originals", originals)
@@ -778,15 +872,30 @@ class _BoundPresentationEffects:
                 setattr(module, name, fn)
 
     def __getattr__(self, name):
-        fn = getattr(self._module, name)
+        fn = getattr(self._module, self._RENAMED.get(name, name))
+        if name in {"render_anchor_completion_feedback", "render_cp_completion_feedback"}:
+            def bound_feedback(*args, **kwargs):
+                kwargs.setdefault("lifecycle_result", None)
+                return fn(self._hook, request=SimpleNamespace(**kwargs))
+            return bound_feedback
         return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
 
     def __setattr__(self, name, value):
-        setattr(self._module, name, lambda _host, *args, **kwargs: value(*args, **kwargs))
+        setattr(
+            self._module,
+            self._RENAMED.get(name, name),
+            lambda _host, *args, **kwargs: value(*args, **kwargs),
+        )
 
 
 class _BoundDiagnosticsEffects:
     """Test-only bound view of the extracted diagnostics-effects module."""
+
+    _PORT_FACTORIES = {
+        "last_n_timeline": "timeline_summary_ports_for",
+        "span_fields": "span_fields_ports_for",
+        "end_chain_summary": "end_chain_summary_ports_for",
+    }
 
     def __init__(self, hook):
         object.__setattr__(self, "_hook", hook)
@@ -794,6 +903,10 @@ class _BoundDiagnosticsEffects:
 
     def __getattr__(self, name):
         fn = getattr(self._module, name)
+        factory = self._PORT_FACTORIES.get(name)
+        if factory:
+            ports = getattr(self._module, factory)(self._hook)
+            return lambda *args, **kwargs: fn(ports, *args, **kwargs)
         return lambda *args, **kwargs: fn(self._hook, *args, **kwargs)
 
     def __setattr__(self, name, value):
@@ -856,12 +969,18 @@ def _load_core_module(path: str, module_name: str, config_path: str):
     prev_conf = os.environ.get("NAUTICAL_CONFIG")
     os.environ["NAUTICAL_CONFIG"] = config_path
     try:
-        loader = importlib.machinery.SourceFileLoader(module_name, path)
-        spec = importlib.util.spec_from_loader(module_name, loader)
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            path,
+            submodule_search_locations=[os.path.dirname(path)],
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not create package spec for {path}")
         mod = importlib.util.module_from_spec(spec)
         if HERE not in sys.path:
             sys.path.insert(0, HERE)
-        loader.exec_module(mod)
+        sys.modules[module_name] = mod
+        spec.loader.exec_module(mod)
         # The facade keeps compatibility exports lazy; dynamic test modules
         # need one explicit sync after loading their isolated config.
         refresh = getattr(mod, "_refresh_facade_config_exports", None)
@@ -916,86 +1035,6 @@ def _strip_markup(s: str) -> str:
     return re.sub(r"\[[^\]]*\]", "", s or "")
 
 
-
-def test_lint_formats():
-    """Test validator rejects malformed yearly tokens (':' instead of '-')"""
-    # Instead of relying on linter fatals, assert the validator rejects bad yearly tokens
-    try:
-        core.validate_anchor_expr_strict("y:05:15")
-        assert False, "Validator must fatal on 'y:05:15' (':' instead of '-')"
-    except core.ParseError as e:
-        low = str(e).lower()
-        expect(("uses ':'" in low) or ("example" in low),
-               f"Unexpected validator message: {e}")
-
-def test_warn_once_per_day_stamp_written():
-    """Ensure diagnostic stamp creation works without crashing."""
-    with tempfile.TemporaryDirectory() as td:
-        prev = os.environ.get("XDG_CACHE_HOME")
-        prev_diag = os.environ.get("NAUTICAL_DIAG")
-        os.environ["XDG_CACHE_HOME"] = td
-        os.environ["NAUTICAL_DIAG"] = "1"
-        try:
-            core._warn_once_per_day("golden_test", "golden test message")
-            stamp = os.path.join(td, "nautical", ".diag_golden_test.stamp")
-            expect(os.path.exists(stamp), f"stamp not created: {stamp}")
-            with open(stamp, "r", encoding="utf-8") as f:
-                val = f.read().strip()
-            expect(val == date.today().isoformat(), f"stamp has unexpected value: {val}")
-        finally:
-            if prev is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = prev
-            if prev_diag is None:
-                os.environ.pop("NAUTICAL_DIAG", None)
-            else:
-                os.environ["NAUTICAL_DIAG"] = prev_diag
-
-def test_warn_once_per_day_no_diag_silent():
-    """Ensure diagnostics are silent (no stamp) when NAUTICAL_DIAG is unset."""
-    with tempfile.TemporaryDirectory() as td:
-        prev = os.environ.get("XDG_CACHE_HOME")
-        prev_diag = os.environ.get("NAUTICAL_DIAG")
-        os.environ["XDG_CACHE_HOME"] = td
-        if "NAUTICAL_DIAG" in os.environ:
-            os.environ.pop("NAUTICAL_DIAG", None)
-        try:
-            core._warn_once_per_day("golden_test_silent", "golden test message")
-            stamp = os.path.join(td, "nautical", ".diag_golden_test_silent.stamp")
-            expect(not os.path.exists(stamp), f"stamp should not be created: {stamp}")
-        finally:
-            if prev is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = prev
-            if prev_diag is None:
-                os.environ.pop("NAUTICAL_DIAG", None)
-            else:
-                os.environ["NAUTICAL_DIAG"] = prev_diag
-
-def test_warn_once_per_day_any_no_diag_silent():
-    """Ensure _warn_once_per_day_any does not write to stderr when NAUTICAL_DIAG is unset."""
-    with tempfile.TemporaryDirectory() as td:
-        prev = os.environ.get("XDG_CACHE_HOME")
-        prev_diag = os.environ.get("NAUTICAL_DIAG")
-        os.environ["XDG_CACHE_HOME"] = td
-        if "NAUTICAL_DIAG" in os.environ:
-            os.environ.pop("NAUTICAL_DIAG", None)
-        buf = io.StringIO()
-        try:
-            with contextlib.redirect_stderr(buf):
-                core._warn_once_per_day_any("golden_test_any_silent", "golden test message")
-            expect(buf.getvalue() == "", "expected no stderr output when NAUTICAL_DIAG is unset")
-        finally:
-            if prev is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = prev
-            if prev_diag is None:
-                os.environ.pop("NAUTICAL_DIAG", None)
-            else:
-                os.environ["NAUTICAL_DIAG"] = prev_diag
 
 def test_on_add_fail_and_exit_emits_json():
     """_fail_and_exit should fail-closed without emitting task JSON."""
@@ -1157,29 +1196,6 @@ def test_hook_bootstrap_uses_symlink_path_and_core_path_rescue():
                 _assert_stdout_json_only(p.stdout or "")
             else:
                 expect((p.stdout or "").strip() == "", f"{name} should keep stdout empty, got {p.stdout!r}")
-
-
-def test_hook_bootstrap_numeric_env_parsing_is_bounded():
-    """Hook numeric environment helpers should fall back and clamp pathological values."""
-    bootstrap = importlib.import_module("nautical_core.hook_bootstrap")
-
-    expect(bootstrap.env_int("VALUE", 5, env={"VALUE": "bad"}) == 5, "invalid integer did not use its default")
-    expect(
-        bootstrap.env_int("VALUE", 5, env={"VALUE": "-99"}, min_value=0, max_value=10) == 0,
-        "negative integer was not clamped",
-    )
-    expect(
-        bootstrap.env_int("VALUE", 5, env={"VALUE": "999"}, min_value=0, max_value=10) == 10,
-        "excessive integer was not clamped",
-    )
-    expect(
-        bootstrap.env_float("VALUE", 1.5, env={"VALUE": "nan"}, min_value=0.1, max_value=10.0) == 1.5,
-        "non-finite float did not use its default",
-    )
-    expect(
-        bootstrap.env_float("VALUE", 1.5, env={"VALUE": "-4"}, min_value=0.1, max_value=10.0) == 0.1,
-        "negative float was not clamped",
-    )
 
 
 def test_hooks_survive_malformed_numeric_environment():
@@ -1393,1619 +1409,6 @@ def test_hook_protocol_loads_without_core_package():
     expect(proc.returncode == 0, f"protocol gate imported core: {proc.stderr!r}")
 
 
-def test_hook_protocol_on_add_classifies_and_validates():
-    """The add gate should distinguish plain and Nautical tasks without weakening JSON validation."""
-    protocol = _load_hook_protocol_module("_nautical_hook_protocol_add_test")
-    plain = {"uuid": "00000000-0000-4000-8000-000000000701", "description": "Cafe ăîșț ✅"}
-    result = protocol.probe_on_add(json.dumps(plain, ensure_ascii=False))
-    expect(result.valid and result.task == plain, f"plain add probe failed: {result.error!r}")
-    expect(not result.is_nautical, f"plain add task classified as Nautical: {result.task!r}")
-
-    for field, value in (
-        ("anchor", "w:mon"),
-        ("anchor_file", "dates.csv"),
-        ("anchor_mode", "skip"),
-        ("cp", "1d"),
-        ("chainID", "abcd1234"),
-        ("chainMax", 3),
-        ("chainUntil", "20270101T000000Z"),
-        ("omit", "w:sun"),
-        ("omit_file", "holidays.csv"),
-    ):
-        task = dict(plain, **{field: value})
-        probed = protocol.probe_on_add(json.dumps(task))
-        expect(probed.valid and probed.is_nautical, f"add field {field} was not classified as Nautical")
-
-    expect(not protocol.probe_on_add("").valid, "empty add input should be invalid")
-    expect(not protocol.probe_on_add("[]").valid, "array add input should be invalid")
-    expect(not protocol.probe_on_add('{"uuid":"broken"} trailing').valid, "trailing add input should be invalid")
-
-
-def test_hook_protocol_on_modify_accepts_supported_input_forms():
-    """The modify gate should accept concatenated, array, and single-task hook payloads."""
-    protocol = _load_hook_protocol_module("_nautical_hook_protocol_modify_forms_test")
-    uuid_str = "00000000-0000-4000-8000-000000000702"
-    old = {"uuid": uuid_str, "status": "pending", "description": "old"}
-    new = {"uuid": uuid_str, "status": "pending", "description": "new ăîșț"}
-
-    concatenated = protocol.probe_on_modify(
-        json.dumps(old, ensure_ascii=False) + "\n" + json.dumps(new, ensure_ascii=False)
-    )
-    expect(concatenated.valid, f"concatenated modify input failed: {concatenated.error!r}")
-    expect(concatenated.old == old and concatenated.new == new, "concatenated modify tasks changed")
-    expect(not concatenated.is_nautical, "plain modify pair classified as Nautical")
-
-    array_result = protocol.probe_on_modify(json.dumps([old, new], ensure_ascii=False))
-    expect(array_result.valid and array_result.old == old and array_result.new == new, "array modify input failed")
-
-    single_result = protocol.probe_on_modify(json.dumps(new, ensure_ascii=False))
-    expect(single_result.valid and single_result.old == new and single_result.new == new, "single modify input failed")
-
-
-def test_hook_protocol_on_modify_matches_nautical_route_rules():
-    """Modify classification should match modify_lifecycle's recurrence and lineage fields."""
-    protocol = _load_hook_protocol_module("_nautical_hook_protocol_modify_route_test")
-    uuid_str = "00000000-0000-4000-8000-000000000703"
-    base = {"uuid": uuid_str, "status": "pending"}
-    for field, value in (
-        ("anchor", "w:mon"),
-        ("anchor_file", "dates.csv"),
-        ("cp", "1d"),
-        ("omit", "w:sun"),
-        ("omit_file", "holidays.csv"),
-        ("chainID", "abcd1234"),
-        ("prevLink", "11111111"),
-        ("nextLink", "22222222"),
-        ("link", 2),
-    ):
-        task = dict(base, **{field: value})
-        result = protocol.probe_on_modify(json.dumps(task))
-        expect(result.valid and result.is_nautical, f"modify field {field} was not classified as Nautical")
-
-    anchor_mode_only = protocol.probe_on_modify(json.dumps(dict(base, anchor_mode="skip")))
-    expect(anchor_mode_only.valid and not anchor_mode_only.is_nautical, "anchor_mode alone should follow the plain route")
-
-
-def test_hook_protocol_modify_validation_limits_and_emission():
-    """The gate should preserve UUID policy, byte limits, strict JSON, and raw Unicode output."""
-    protocol = _load_hook_protocol_module("_nautical_hook_protocol_validation_test")
-    old = {"uuid": "00000000-0000-4000-8000-000000000704", "status": "pending"}
-    different = {"uuid": "00000000-0000-4000-8000-000000000705", "status": "deleted"}
-    plain_mismatch = protocol.probe_on_modify(json.dumps(old) + json.dumps(different))
-    expect(plain_mismatch.valid and not plain_mismatch.is_nautical, "plain UUID mismatch should remain ignorable")
-
-    nautical_mismatch = protocol.probe_on_modify(json.dumps(dict(old, cp="1d")) + json.dumps(dict(different, cp="1d")))
-    expect(not nautical_mismatch.valid, "Nautical UUID mismatch should be invalid")
-    expect(nautical_mismatch.error == "Old and new task UUIDs differ", f"unexpected mismatch error: {nautical_mismatch.error!r}")
-
-    missing_uuid = protocol.probe_on_modify(json.dumps({"status": "pending", "anchor": "w:mon"}))
-    expect(not missing_uuid.valid, "Nautical task without UUID should be invalid")
-    expect(not protocol.probe_on_modify(json.dumps(old) + " trailing").valid, "modify trailing input should be invalid")
-    expect(not protocol.probe_on_modify(b"12345", max_bytes=4).valid, "oversized modify input should be invalid")
-    expect(not protocol.probe_on_add(b"12345", max_bytes=4).valid, "oversized add input should be invalid")
-
-    add_stream = io.BytesIO(json.dumps(old).encode("utf-8"))
-    expect(protocol.read_on_add(stream=add_stream).valid, "read_on_add should accept a binary stdin-like stream")
-    modify_stream = io.StringIO(json.dumps(old) + "\n" + json.dumps(old))
-    expect(protocol.read_on_modify(stream=modify_stream).valid, "read_on_modify should accept a text stdin-like stream")
-
-    stream = io.StringIO()
-    protocol.emit_passthrough_json({"description": "Cafe ăîșț ✅"}, stream=stream)
-    output = stream.getvalue()
-    expect("ăîșț ✅" in output and "\\u" not in output, f"protocol emission escaped Unicode: {output!r}")
-    expect(json.loads(output)["description"] == "Cafe ăîșț ✅", f"protocol emission was not strict JSON: {output!r}")
-
-
-def test_hook_io_contract_preserves_unknown_task_fields_and_unicode():
-    """The boundary must preserve arbitrary UDAs and Unicode task content."""
-    from nautical_core import hook_protocol
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000901",
-        "description": "Répéter 🌊",
-        "custom_uda": {"nested": ["значение", 3]},
-        "link": 1.0,
-    }
-    result = hook_protocol.probe_on_add(json.dumps(task, ensure_ascii=False))
-    expect(result.valid, f"valid Taskwarrior task was rejected: {result.error}")
-    expect(result.task == task, f"boundary changed task payload: {result.task!r}")
-    expect(result.task.get("custom_uda") == task["custom_uda"], "unknown UDA was dropped")
-    expect(isinstance(result.request, hook_protocol.OnAddInput), "add request was not typed")
-
-
-def test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks():
-    """The supported Taskwarrior modify array form preserves old and new rows."""
-    from nautical_core import hook_protocol
-
-    old = {"uuid": "00000000-0000-4000-8000-000000000902", "description": "old", "custom": "keep"}
-    new = dict(old, description="new", custom_extra="also-keep")
-    result = hook_protocol.probe_on_modify(json.dumps([old, new], ensure_ascii=False))
-    expect(result.valid, f"modify array was rejected: {result.error}")
-    expect(result.old == old and result.new == new, "modify boundary changed old/new payloads")
-    expect(isinstance(result.request, hook_protocol.OnModifyInput), "modify request was not typed")
-
-
-def test_hook_io_contract_rejects_trailing_json_without_partial_success():
-    """Trailing bytes must be a protocol error, never silently ignored."""
-    from nautical_core import hook_protocol
-
-    task = {"uuid": "00000000-0000-4000-8000-000000000903", "description": "strict"}
-    result = hook_protocol.probe_on_add(json.dumps(task) + " trailing")
-    expect(not result.valid, "trailing on-add content was accepted")
-    expect(result.error_kind == "invalid_input", f"unexpected error kind: {result.error_kind!r}")
-    expect(isinstance(result.failure, hook_protocol.ProtocolFailure), "failure was not typed")
-
-
-def test_hook_io_contract_response_is_single_unescaped_json_object():
-    """Response serialization must remain one JSON object with readable Unicode."""
-    from nautical_core import hook_results
-
-    task = {"uuid": "00000000-0000-4000-8000-000000000904", "description": "Répéter 🌊"}
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        hook_results.emit_task_json(task)
-    text = output.getvalue()
-    expect(text.count("{") == 1 and text.count("}") == 1, "response emitted extra JSON content")
-    expect("Répéter 🌊" in text, "response escaped Unicode unexpectedly")
-    expect(json.loads(text) == task, "response JSON changed the task payload")
-
-
-def test_hook_response_models_keep_legacy_names_and_typed_roles():
-    """Typed response names must coexist with the established hook aliases."""
-    from nautical_core import hook_results
-
-    task = {"uuid": "00000000-0000-4000-8000-000000000906"}
-    task_result = hook_results.TaskHookResponse(task)
-    exit_result = hook_results.ExitHookResponse(exit_code=3, stats={"errors": 1})
-    expect(isinstance(task_result, hook_results.HookJsonResult), "legacy task result alias changed")
-    expect(isinstance(exit_result, hook_results.HookExitResult), "legacy exit result alias changed")
-    expect(task_result.task is task and exit_result.exit_code == 3, "typed response fields changed")
-
-
-def test_lifecycle_models_enforce_transition_contract():
-    """Lifecycle plans are immutable, tagged, identity-safe, and event-complete."""
-    from nautical_core.lifecycle_models import (
-        ExecutionStage,
-        LifecycleAction,
-        LifecycleContractError,
-        LifecycleEvent,
-        LifecycleIdentity,
-        LifecycleOutcome,
-        LifecycleOutcomeKind,
-        LifecyclePlan,
-        ParentGuard,
-        TaskLifecycleState,
-    )
-    from nautical_core.lifecycle_outbox import OutboxProcessingState
-
-    guard = ParentGuard("pending", "on", "chain-1", 4, "fp-1")
-    identity = LifecycleIdentity("chain-1", "parent-uuid", 4, 5, LifecycleEvent.COMPLETE)
-    plan = LifecyclePlan.from_draft(
-        identity=identity,
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=guard,
-        draft=_task_draft({
-            "uuid": "22222222-0000-4000-8000-000000000902",
-            "description": "next",
-            "status": "pending",
-            "chain": "on",
-            "chainID": "chain-1",
-            "link": 5,
-            "prevLink": "11111111",
-            "cp": "1d",
-            "due": "20260824T090000Z",
-            "nested": {"unicode": "Répéter 🌊"},
-        }),
-        parent_patch={"nextLink": "child-uuid"},
-        expected_postconditions=("child_exists", "parent_linked"),
-    )
-    expect(plan.child_dict()["nested"] == {"unicode": "Répéter 🌊"}, "child payload was not restored")
-    expect(plan.parent_patch_dict() == {"nextLink": "child-uuid"}, "parent patch was not restored")
-    expect(plan.identity.key.endswith(":complete"), "identity key omitted event")
-    expect(TaskLifecycleState.ACTIVE.value != OutboxProcessingState.READY.value, "state domains overlap")
-
-    outcome = LifecycleOutcome(
-        LifecycleOutcomeKind.APPLIED,
-        ExecutionStage.FINALIZED,
-        identity,
-        "child imported and parent linked",
-    )
-    expect(outcome.kind is LifecycleOutcomeKind.APPLIED, "outcome tag was not preserved")
-
-    invalid_cases = (
-        lambda: LifecycleIdentity("", "parent-uuid", 0, 1, LifecycleEvent.COMPLETE),
-        lambda: LifecycleIdentity("chain-1", "parent-uuid", 2, 2, LifecycleEvent.COMPLETE),
-        lambda: LifecyclePlan(
-            LifecycleIdentity("chain-1", "parent-uuid", 4, None, LifecycleEvent.ACTIVATE),
-            LifecycleAction.FINALIZE_CHAIN,
-            guard,
-        ),
-        lambda: LifecycleOutcome(LifecycleOutcomeKind.RETRYABLE, ExecutionStage.FINALIZED, identity),
-    )
-    for make_invalid in invalid_cases:
-        try:
-            make_invalid()
-        except LifecycleContractError:
-            continue
-        raise AssertionError("invalid lifecycle model was accepted")
-
-
-def test_chain_integrity_models_enforce_observation_and_repair_contract():
-    """Integrity observations may be incomplete, but repair plans may not."""
-    from dataclasses import FrozenInstanceError
-
-    from nautical_core.chain_integrity_models import (
-        ChainNode,
-        ChainReference,
-        ChainSnapshot,
-        FindingSeverity,
-        FindingStatus,
-        IntegrityContractError,
-        IntegrityFinding,
-        IntegrityOperation,
-        IntegrityReport,
-        IntegrityReportStatus,
-        IntegrityRepairPlan,
-        ReferenceState,
-        RepairOperationKind,
-        RepairSafety,
-        SnapshotCoverage,
-    )
-
-    node = _chain_node(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000991",
-            "status": "pending",
-            "link": "7.000000",
-            "nextLink": "00000000",
-        }
-    )
-    expect(node.link == 7, "numeric Taskwarrior link was not normalized")
-    expect(not node.has_complete_identity, "missing chainID became a repairable identity")
-    expect(node.field("nextLink") == "00000000", "raw row evidence was discarded")
-
-    complete = _chain_node(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000992",
-            "status": "pending",
-            "chainID": "chain-contract",
-            "link": 8,
-        }
-    )
-    reference = ChainReference(
-        "nextLink",
-        "00000000",
-        ReferenceState.RESOLVED,
-        target_uuid=complete.task_uuid,
-        target_link=8,
-    )
-    expect(reference.state is ReferenceState.RESOLVED, "reference state was not preserved")
-
-    snapshot = ChainSnapshot(
-        "snapshot-contract",
-        SnapshotCoverage.CANDIDATES,
-        "task export",
-        (node, complete),
-        "cfg-contract",
-    )
-    finding = IntegrityFinding(
-        "identity.chain_id_required",
-        FindingStatus.REPAIRABLE,
-        FindingSeverity.ERROR,
-        snapshot.snapshot_id,
-        "chain-contract",
-        (node.task_uuid,),
-        "missing_chain_id",
-        "Nautical recurrence has no chain identity.",
-        observed=(("chainID", ""),),
-        expected=(("chainID", "required"),),
-        evidence=(("coverage", snapshot.coverage.value),),
-    )
-    operation = IntegrityOperation(
-        "operation-contract",
-        RepairOperationKind.LINK_REPAIR,
-        "chain-contract",
-        complete.task_uuid,
-        (("modified", "20260821T120000Z"),),
-        ("target remains present",),
-        ("nextLink is reciprocal",),
-    )
-    plan = IntegrityRepairPlan(
-        "plan-contract",
-        snapshot.snapshot_id,
-        "chain-contract",
-        RepairSafety.SAFE,
-        "reciprocal_link",
-        "Repair one reciprocal chain link.",
-        (operation,),
-        "cfg-contract",
-    )
-    report = IntegrityReport(
-        snapshot,
-        IntegrityReportStatus.REPAIRABLE,
-        (finding,),
-        (plan,),
-    )
-    expect(report.plans[0].operations[0].kind is RepairOperationKind.LINK_REPAIR, "plan operation was changed")
-
-    invalid_cases = (
-        lambda: ChainReference("nextLink", "00000000", ReferenceState.RESOLVED),
-        lambda: ChainSnapshot("snapshot-unavailable", SnapshotCoverage.UNAVAILABLE, "task export"),
-        lambda: IntegrityRepairPlan(
-            "plan-dependency",
-            snapshot.snapshot_id,
-            "chain-contract",
-            RepairSafety.SAFE,
-            "reciprocal_link",
-            "invalid dependency",
-            (
-                IntegrityOperation(
-                    "operation-dependency",
-                    RepairOperationKind.LINK_REPAIR,
-                    "chain-contract",
-                    complete.task_uuid,
-                    (("modified", "20260821T120000Z"),),
-                    ("target remains present",),
-                    ("nextLink is reciprocal",),
-                    depends_on=("missing-operation",),
-                ),
-            ),
-        ),
-    )
-    for make_invalid in invalid_cases:
-        try:
-            make_invalid()
-        except IntegrityContractError:
-            continue
-        raise AssertionError("invalid integrity model was accepted")
-
-    try:
-        plan.plan_id = "changed"  # type: ignore[misc]
-    except FrozenInstanceError:
-        pass
-    else:
-        raise AssertionError("integrity repair plan was mutable")
-
-
-def test_chain_snapshot_service_preserves_authority_and_epoch_cache():
-    """Integrity snapshots reuse one authoritative export and fail closed."""
-    from nautical_core.chain_snapshot import ChainSnapshotService, IntegritySnapshotRequest
-    from nautical_core.integration_models import (
-        Absent,
-        CommandFailureKind,
-        FailureEvidence,
-        Found,
-        TaskCommand,
-        TaskCommandResult,
-        Unavailable,
-    )
-    from nautical_core.task_read_repository import (
-        AuthoritativeTaskSnapshot,
-        TaskQueryKind,
-        TaskSnapshotScope,
-    )
-
-    command = TaskCommand(("task", "export"), "chain integrity test", 1.0)
-    result = TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.001)
-    scope = TaskSnapshotScope(TaskQueryKind.BROAD, "chain:on", ("completed", "pending"))
-    rows = (
-        {"uuid": "00000000-0000-4000-8000-000000000901", "status": "pending", "chainID": "snap-chain", "link": 1},
-        {"uuid": "00000000-0000-4000-8000-000000000902", "status": "completed", "chainID": "snap-chain", "link": 2},
-    )
-    authoritative = AuthoritativeTaskSnapshot(scope, _task_observations(rows), result)
-
-    class Repository:
-        calls = 0
-        response = Found(authoritative, "broad:chain:on")
-
-        def broad_snapshot(self, **_kwargs):
-            self.calls += 1
-            return self.response
-
-    class Unit:
-        mutation_epoch = 0
-
-        def __init__(self):
-            self.repository = Repository()
-
-    unit = Unit()
-    service = ChainSnapshotService(unit, configuration_fingerprint="cfg-snapshot")
-    request = IntegritySnapshotRequest.chain("snap-chain")
-    first = service.collect(request)
-    second = service.collect(request)
-    expect(isinstance(first, Found) and isinstance(second, Found), "authoritative snapshot was not found")
-    expect(first.value.rows == second.value.rows and len(first.value.rows) == 2, "snapshot rows were not normalized")
-    expect(unit.repository.calls == 1, "normalized snapshot cache did not reuse the current epoch")
-
-    unit.mutation_epoch = 1
-    service.collect(request)
-    expect(unit.repository.calls == 2, "mutation epoch did not invalidate normalized snapshot cache")
-
-    unit.repository.response = Absent("broad:chain:on", "no matching chain")
-    empty = service.collect(IntegritySnapshotRequest.candidates())
-    expect(isinstance(empty, Found) and not empty.value.rows, "authoritative empty export was not represented as empty")
-
-    unavailable = Unavailable(
-        "broad:chain:on",
-        FailureEvidence(command, CommandFailureKind.INVALID_RESPONSE, 1, 1, 0.001, False, "malformed export"),
-    )
-    unit.repository.response = unavailable
-    failed = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
-    expect(isinstance(failed, Unavailable), "unavailable export was converted to an empty snapshot")
-
-    malformed = AuthoritativeTaskSnapshot(scope, _task_observations(({"status": "pending"},)), result)
-    unit.repository.response = Found(malformed, "broad:chain:on")
-    invalid = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
-    expect(isinstance(invalid, Unavailable), "malformed chain row did not fail closed")
-
-    truncated = AuthoritativeTaskSnapshot(scope, _task_observations(rows), result, truncated=True)
-    unit.repository.response = Found(truncated, "broad:chain:on")
-    truncated_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
-    expect(isinstance(truncated_read, Unavailable), "truncated export was treated as authoritative")
-
-    duplicate_rows = (
-        rows[0],
-        {**rows[0], "status": "completed", "link": 2},
-    )
-    duplicate = AuthoritativeTaskSnapshot(scope, _task_observations(duplicate_rows), result)
-    unit.repository.response = Found(duplicate, "broad:chain:on")
-    duplicate_read = service.collect(IntegritySnapshotRequest.candidates(refresh=True))
-    expect(isinstance(duplicate_read, Unavailable), "duplicate full UUID reached the integrity graph")
-    expect("duplicate full UUID" in duplicate_read.evidence.detail, "duplicate UUID failure lost its reason")
-
-    wrong_chain = AuthoritativeTaskSnapshot(
-        scope,
-        _task_observations(({**rows[0], "chainID": "other-chain"},)),
-        result,
-    )
-    unit.repository.response = Found(wrong_chain, "broad:chain:on")
-    wrong_chain_read = service.collect(IntegritySnapshotRequest.chain("snap-chain", refresh=True))
-    expect(isinstance(wrong_chain_read, Unavailable), "narrow chain scope accepted a mismatched row")
-
-    unit.repository.response = Found(authoritative, "broad:uuid")
-    uuid_read = service.collect(
-        IntegritySnapshotRequest.uuid(rows[0]["uuid"], refresh=True)
-    )
-    expect(isinstance(uuid_read, Found), "UUID integrity scope was not collected")
-    expect(unit.repository.calls == 9, "UUID scope did not use the shared snapshot provider")
-
-
-def test_chain_integrity_engine_owns_audit_and_empty_drain():
-    """The engine composes typed evidence and owns the integrity drain boundary."""
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage, IntegrityReportStatus
-    from nautical_core.chain_snapshot import IntegritySnapshotRequest
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        FailureEvidence,
-        Found,
-        TaskCommand,
-        Unavailable,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    class Provider:
-        def collect(self, _request):
-            return Found(
-                ChainSnapshot("engine-snapshot", SnapshotCoverage.CHAIN, "test.provider", complete_chain_history=True),
-                "engine snapshot",
-            )
-
-    with tempfile.TemporaryDirectory() as td:
-        repository = LifecycleOutboxRepository(Path(td))
-        expect(repository.open().ok, "engine test outbox did not open")
-        engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-engine")
-        audited = engine.audit(IntegritySnapshotRequest.chain("engine-chain"), outbox_repository=repository)
-        expect(audited.status is IntegrityReportStatus.HEALTHY, f"empty audit was not healthy: {audited}")
-        replayed = engine.audit_snapshot(audited.snapshot, outbox_repository=repository)
-        expect(replayed == audited, "authoritative snapshot audit was not deterministic")
-        applied = engine.apply(
-            audited,
-            executor=SimpleNamespace(),
-            request_factory=lambda _operation: None,
-            outbox_repository=repository,
-            owner="engine-test",
-        )
-        expect(applied.status is IntegrityReportStatus.HEALTHY, "empty engine apply changed status")
-        expect(not applied.applications, "empty engine apply produced mutation results")
-
-
-def test_integrity_engine_report_is_frontend_parity_contract():
-    """All front ends can serialize the same immutable audit findings."""
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_snapshot import IntegritySnapshotRequest
-    from nautical_core.integration_models import Found
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    node = _chain_node({
-        "uuid": "aaaaaaaa-0000-0000-0000-000000000936",
-        "status": "pending", "chainID": "parity-chain", "link": 1,
-        "chain": "on", "anchor": "w:mon",
-    })
-
-    class Provider:
-        def collect(self, _request):
-            return Found(ChainSnapshot("parity-snapshot", SnapshotCoverage.CHAIN, "test", (node,)), "test")
-
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        expect(outbox.open().ok, "parity outbox did not open")
-        engine = ChainIntegrityEngine(Provider(), configuration_fingerprint="cfg-parity")
-        first = engine.audit(IntegritySnapshotRequest.chain("parity-chain"), outbox_repository=outbox)
-        second = engine.audit_snapshot(first.snapshot, outbox_repository=outbox)
-        expect(
-            tuple(item.to_dict() for item in first.findings) == tuple(item.to_dict() for item in second.findings),
-            "front ends did not receive identical findings for one snapshot",
-        )
-        expect(
-            tuple(item.to_dict() for item in first.plans) == tuple(item.to_dict() for item in second.plans),
-            "front ends did not receive identical repair plans for one snapshot",
-        )
-
-
-def test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed():
-    """Unresolved candidate edges trigger bounded chain reads, not broad history exports."""
-    from nautical_core.chain_integrity_engine import ChainIntegrityEngine
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_snapshot import IntegritySnapshotKind, IntegritySnapshotRequest
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        FailureEvidence,
-        Found,
-        TaskCommand,
-        Unavailable,
-    )
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository
-
-    parent = _chain_node({
-        "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "hydrate-chain",
-        "link": 2,
-        "prevLink": "outside0",
-    })
-    predecessor = _chain_node({
-        "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
-        "status": "deleted",
-        "chain": "on",
-        "chainID": "hydrate-chain",
-        "link": 1,
-        "nextLink": parent.task_uuid,
-    })
-    broad = ChainSnapshot("hydrate-candidates", SnapshotCoverage.CANDIDATES, "test", (parent,))
-
-    class Provider:
-        def __init__(self):
-            self.requests = []
-
-        def collect(self, request):
-            self.requests.append(request)
-            if request.kind is IntegritySnapshotKind.CANDIDATES:
-                return Found(broad, "candidates")
-            return Found(
-                ChainSnapshot("hydrate-chain-full", SnapshotCoverage.CHAIN, "test", (parent, predecessor)),
-                "chain:hydrate-chain",
-            )
-
-    provider = Provider()
-    engine = ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1)
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        expect(outbox.open().ok, "hydration test outbox did not open")
-        result = engine.audit(IntegritySnapshotRequest.candidates(), outbox_repository=outbox)
-    expect(result.status.value != "unavailable", f"bounded hydration unexpectedly failed: {result}")
-    expect(len(result.snapshot.rows) == 2, "hydrated predecessor was not merged into the snapshot")
-    expect(any(item.kind is IntegritySnapshotKind.CHAIN for item in provider.requests), "narrow chain read was not used")
-
-    class UnavailableProvider(Provider):
-        def collect(self, request):
-            if request.kind is IntegritySnapshotKind.CHAIN:
-                command = TaskCommand(("task", "export"), "hydration test", 1.0)
-                return Unavailable(
-                    "chain:hydrate-chain",
-                    FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.001, True, "database busy"),
-                )
-            return super().collect(request)
-
-    unavailable_provider = UnavailableProvider()
-    unavailable_engine = ChainIntegrityEngine(
-        unavailable_provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=1,
-    )
-    with tempfile.TemporaryDirectory() as td:
-        outbox = LifecycleOutboxRepository(Path(td))
-        expect(outbox.open().ok, "unavailable hydration outbox did not open")
-        unavailable_result = unavailable_engine.audit(
-            IntegritySnapshotRequest.candidates(), outbox_repository=outbox,
-        )
-    expect(unavailable_result.status.value == "unavailable", "unavailable hydration did not fail closed")
-
-    try:
-        ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=0)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("zero hydration bound was accepted")
-
-
-def test_chain_graph_is_deterministic_and_preserves_reference_states():
-    """Graph indexes and edge evidence are immutable and order-independent."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
-
-    first = _chain_node(
-        {
-            "uuid": "aaaaaaaa-0000-0000-0000-000000000911",
-            "status": "pending",
-            "chainID": "graph-chain",
-            "link": 1,
-            "nextLink": "bbbbbbbb",
-        }
-    )
-    second = _chain_node(
-        {
-            "uuid": "bbbbbbbb-0000-0000-0000-000000000912",
-            "status": "completed",
-            "chainID": "graph-chain",
-            "link": 2,
-            "prevLink": first.task_uuid,
-        }
-    )
-    snapshot = ChainSnapshot("graph-snapshot", SnapshotCoverage.CHAIN, "test", (second, first))
-    graph = ChainGraph.from_snapshot(snapshot)
-    reordered = ChainGraph.from_snapshot(ChainSnapshot("graph-snapshot", SnapshotCoverage.CHAIN, "test", (first, second)))
-    expect(tuple(node.task_uuid for node in graph.nodes) == tuple(node.task_uuid for node in reordered.nodes), "graph order was not deterministic")
-    expect(graph.slot_nodes("graph-chain", 1) == (first,), "slot index did not resolve")
-    expect(graph.status_nodes("completed") == (second,), "status index did not resolve")
-    expect(graph.reference(first.task_uuid, "nextLink").state is ReferenceState.RESOLVED, "short UUID was not resolved")
-    expect(graph.reference(second.task_uuid, "prevLink").target_uuid == first.task_uuid, "full UUID was not resolved")
-    expect(graph.to_dict() == reordered.to_dict(), "equivalent graphs did not serialize deterministically")
-    expect(graph.to_dict()["references"][0]["state"] == "resolved", "serialized reference state was lost")
-
-    missing = _chain_node(
-        {
-            "uuid": "cccccccc-0000-0000-0000-000000000913",
-            "status": "pending",
-            "chainID": "graph-chain",
-            "link": 3,
-            "nextLink": "outside0",
-        }
-    )
-    missing_graph = ChainGraph.from_snapshot(ChainSnapshot("graph-missing", SnapshotCoverage.CHAIN, "test", (missing,)))
-    expect(
-        missing_graph.reference(missing.task_uuid, "nextLink").state is ReferenceState.OUTSIDE_COVERAGE,
-        "unresolved edge was silently discarded",
-    )
-
-
-def test_chain_graph_exposes_lifecycle_and_topology_queries():
-    """Graph consumers use semantic lifecycle and topology views."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, LifecycleIntent, SnapshotCoverage
-
-    rows = (
-        {
-            "uuid": "aaaaaaaa-0000-0000-0000-000000000914", "status": "pending",
-            "chainID": "query-chain", "link": 1, "nextLink": "bbbbbbbb",
-            "chain": "on",
-        },
-        {
-            "uuid": "bbbbbbbb-0000-0000-0000-000000000915", "status": "completed",
-            "chainID": "query-chain", "link": 2, "prevLink": "aaaaaaaa-0000-0000-0000-000000000914",
-            "chain": "on",
-        },
-        {
-            "uuid": "cccccccc-0000-0000-0000-000000000916", "status": "pending",
-            "chainID": "other-chain", "link": 1, "chain": "off",
-        },
-    )
-    graph = ChainGraph.from_snapshot(ChainSnapshot(
-        "graph-queries", SnapshotCoverage.CHAIN, "test",
-        tuple(_chain_node(row) for row in rows),
-    ))
-    expect(graph.lifecycle_nodes(LifecycleIntent.COMPLETED.value)[0].task_uuid.startswith("bbbb"), "completed view failed")
-    expect(len(graph.roots("query-chain")) == 1 and len(graph.tips("query-chain")) == 1, "root/tip query failed")
-    expect(graph.referenced_children()[0].task_uuid.startswith("bbbb"), "referenced child query failed")
-    expect(graph.lifecycle_nodes(LifecycleIntent.DISABLED.value)[0].task_uuid.startswith("cccc"), "disabled intent failed")
-
-
-def test_chain_graph_covers_required_structural_shapes():
-    """Branch, cycle, duplicate, disconnected, partial, and ambiguous evidence remain visible."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, ReferenceState, SnapshotCoverage
-
-    rows = (
-        {"uuid": "11111111-0000-0000-0000-000000000921", "status": "pending", "chainID": "shape", "link": 1,
-         "nextLink": "22222222"},
-        {"uuid": "22222222-0000-0000-0000-000000000922", "status": "pending", "chainID": "shape", "link": 2,
-         "prevLink": "11111111", "nextLink": "11111111"},
-        {"uuid": "33333333-0000-0000-0000-000000000923", "status": "pending", "chainID": "shape", "link": 2,
-         "prevLink": "11111111"},
-        {"uuid": "44444444-0000-0000-0000-000000000924", "status": "pending", "chainID": "other", "link": 1},
-        {"uuid": "44444444-0000-0000-0000-000000000925", "status": "pending", "chainID": "other", "link": 2},
-        {"uuid": "55555555-0000-0000-0000-000000000926", "status": "pending", "chainID": "shape", "link": 3,
-         "nextLink": "missing9"},
-    )
-    graph = ChainGraph.from_snapshot(ChainSnapshot(
-        "graph-shapes", SnapshotCoverage.CANDIDATES, "test",
-        tuple(_chain_node(row) for row in rows),
-    ))
-    expect(len(graph.slot_nodes("shape", 2)) == 2, "duplicate slot evidence was lost")
-    expect(graph.reference(rows[1]["uuid"], "nextLink").state is ReferenceState.RESOLVED, "cycle edge was lost")
-    expect(graph.reference(rows[5]["uuid"], "nextLink").state is ReferenceState.OUTSIDE_COVERAGE, "partial edge was hidden")
-    expect(len(graph.orphan_candidates()) == 1, "orphan candidate query was not deterministic")
-    expect(len(graph.chain_nodes("other")) == 2, "disconnected chain was lost")
-    ambiguous = _chain_node({
-        "uuid": "66666666-0000-0000-0000-000000000927", "status": "pending", "chainID": "shape", "link": 4,
-        "nextLink": "44444444",
-    })
-    ambiguous_graph = ChainGraph.from_snapshot(ChainSnapshot(
-        "graph-ambiguous", SnapshotCoverage.CANDIDATES, "test", graph.nodes + (ambiguous,)
-    ))
-    expect(
-        ambiguous_graph.reference(ambiguous.task_uuid, "nextLink").state is ReferenceState.AMBIGUOUS,
-        "ambiguous short reference was not preserved",
-    )
-
-
-def test_invariant_ownership_map_covers_operator_checks():
-    """Doctor, repair, native-until, and reconcile checks have registry owners."""
-    from nautical_core.chain_invariants import DEFAULT_INVARIANTS, INVARIANT_OWNERSHIP, validate_ownership_map
-
-    validate_ownership_map()
-    known = {rule.invariant_id for rule in DEFAULT_INVARIANTS}
-    expect(INVARIANT_OWNERSHIP, "invariant ownership map is empty")
-    expect(
-        all(owner in known for owners in INVARIANT_OWNERSHIP.values() for owner in owners),
-        "operator check ownership references an unknown invariant",
-    )
-
-
-def test_chain_invariant_registry_is_pure_and_deterministic():
-    """Identity, slot, and edge rules produce stable typed findings."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_invariants import evaluate_invariants
-
-    first = {
-        "uuid": "aaaaaaaa-0000-4000-8000-000000000921",
-        "status": "pending",
-        "chainID": "invariant-chain",
-        "link": 1,
-        "anchor": "w:mon",
-        "nextLink": "bbbbbbbb",
-    }
-    second = {
-        "uuid": "bbbbbbbb-0000-4000-8000-000000000922",
-        "status": "pending",
-        "chainID": "invariant-chain",
-        "link": 2,
-        "anchor": "w:mon",
-        "prevLink": "aaaaaaaa",
-    }
-    from nautical_core.chain_integrity_models import ChainNode
-    healthy = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-healthy", SnapshotCoverage.CHAIN, "test",
-        (_chain_node(second), _chain_node(first)),
-    ))
-    expect(evaluate_invariants(healthy) == (), "healthy graph produced findings")
-
-    broken = _chain_node({
-        "uuid": "cccccccc-0000-0000-0000-000000000923",
-        "status": "pending",
-        "link": 1,
-        "nextLink": "bbbbbbbb",
-    })
-    duplicate = _chain_node({
-        "uuid": "dddddddd-0000-0000-0000-000000000924",
-        "status": "pending",
-        "chainID": "invariant-chain",
-        "link": 1,
-    })
-    graph = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-broken", SnapshotCoverage.CANDIDATES, "test",
-        (duplicate, _chain_node(second), broken, _chain_node(first)),
-    ))
-    findings = evaluate_invariants(graph)
-    ids = {(finding.invariant_id, finding.reason_code) for finding in findings}
-    expect(("identity.chain_id_required", "missing_chain_id") in ids, "missing chainID was not reported")
-    expect(("identity.recurrence_required", "missing_recurrence_identity") in ids, "missing recurrence identity was not reported")
-    expect(("slot.duplicate_occupant", "duplicate_slot") in ids, "duplicate slot was not reported")
-    expect(("edge.reciprocal", "non_reciprocal_reference") in ids, "non-reciprocal edge was not reported")
-    expect(findings == evaluate_invariants(graph), "invariant output was not deterministic")
-
-    truncated = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-truncated", SnapshotCoverage.TRUNCATED, "test", (_chain_node(first),)
-    ))
-    unavailable = evaluate_invariants(truncated)
-    expect(unavailable and all(item.status.value == "unavailable" for item in unavailable), "truncation did not fail closed")
-
-    temporal = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-temporal", SnapshotCoverage.CHAIN, "test", (_chain_node({
-            "uuid": "eeeeeeee-0000-0000-0000-000000000925",
-            "status": "pending",
-            "chainID": "temporal-chain",
-            "link": 1,
-            "anchor": "w:mon",
-            "due": "20260821T120000Z",
-            "until": "20260821T110000Z",
-            "wait": "20260821T130000Z",
-        }),),
-    ))
-    temporal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(temporal)}
-    expect(("carry.until_after_due", "until_before_due") in temporal_ids, "until ordering was not reported")
-    expect(("carry.wait_before_due", "wait_after_due") in temporal_ids, "wait ordering was not reported")
-
-    terminal = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-terminal", SnapshotCoverage.CANDIDATES, "test", (_chain_node({
-            "uuid": "ffffffff-0000-0000-0000-000000000926",
-            "status": "completed",
-            "chain": "on",
-            "chainID": "terminal-chain",
-            "link": 4,
-            "chainMax": "not-a-number",
-            "chainUntil": "not-a-date",
-        }),),
-    ))
-    terminal_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(terminal)}
-    expect(
-        ("terminal.chain_max_valid", "invalid_chain_max_terminal_bound") in terminal_ids,
-        "malformed chainMax incorrectly justified terminal recovery",
-    )
-    expect(
-        ("terminal.chain_until_valid", "invalid_chain_until_terminal_bound") in terminal_ids,
-        "malformed chainUntil incorrectly justified terminal recovery",
-    )
-
-    deleted = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-deleted", SnapshotCoverage.CANDIDATES, "test", (_chain_node({
-            "uuid": "abababab-0000-0000-0000-000000000931",
-            "status": "deleted",
-            "chain": "on",
-            "chainID": "deleted-chain",
-            "link": 3,
-        }),),
-    ))
-    deleted_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(deleted)}
-    expect(
-        ("lifecycle.deleted_disposition", "deleted_expiration_evidence_unavailable") in deleted_ids,
-        "deleted tip without expiration evidence was treated as a spawn candidate",
-    )
-
-    backward = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-continuity", SnapshotCoverage.CANDIDATES, "test", (
-            _chain_node({
-                "uuid": "12121212-0000-0000-0000-000000000928",
-                "status": "completed",
-                "chain": "on",
-                "chainID": "continuity-chain",
-                "link": 1,
-                "anchor": "w:mon",
-                "due": "20260822T120000Z",
-                "scheduled": "20260822T110000Z",
-                "until": "20260822T230000Z",
-                "nextLink": "13131313",
-            }),
-            _chain_node({
-                "uuid": "13131313-0000-0000-0000-000000000929",
-                "status": "pending",
-                "chain": "on",
-                "chainID": "continuity-chain",
-                "link": 2,
-                "due": "20260822T110000Z",
-                "scheduled": "20260822T103000Z",
-                "until": "20260823T230000Z",
-                "prevLink": "12121212",
-            }),
-        ),
-    ))
-    continuity_ids = {(item.invariant_id, item.reason_code) for item in evaluate_invariants(backward)}
-    expect(
-        ("continuity.child_temporal_order", "child_not_after_parent") in continuity_ids,
-        "backward child target was not reported",
-    )
-    expect(
-        ("continuity.child_recurrence_identity", "child_recurrence_identity_mismatch") in continuity_ids,
-        "child recurrence identity loss was not reported",
-    )
-    expect(
-        ("carry.child_relative_offset", "child_carry_offset_changed") in continuity_ids,
-        "changed child carry offset was not reported",
-    )
-    until_findings = [
-        item for item in evaluate_invariants(backward)
-        if dict(item.observed).get("field") == "until"
-    ]
-    expect(not until_findings, "calendar until carry was incorrectly compared as an elapsed offset")
-
-    exact_until = ChainGraph.from_snapshot(ChainSnapshot(
-        "invariant-exact-until", SnapshotCoverage.CANDIDATES, "test", (
-            _chain_node({
-                "uuid": "14141414-0000-0000-0000-000000000930",
-                "status": "completed", "chain": "on", "chainID": "exact-until", "link": 1,
-                "cp": "1d", "due": "20260822T100000Z", "until": "20260822T230001Z",
-                "nextLink": "15151515",
-            }),
-            _chain_node({
-                "uuid": "15151515-0000-0000-0000-000000000931",
-                "status": "pending", "chain": "on", "chainID": "exact-until", "link": 2,
-                "cp": "1d", "due": "20260823T100000Z", "until": "20260823T220001Z",
-                "prevLink": "14141414",
-            }),
-        ),
-    ))
-    exact_findings = [
-        item for item in evaluate_invariants(exact_until)
-        if dict(item.observed).get("field") == "until"
-    ]
-    expect(exact_findings, "exact until carry offset change was not reported")
-
-
-def test_chain_integrity_finalization_evidence_matches_parent_postcondition():
-    """Acknowledged terminal plans require a disabled, unlinked persisted tip."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_invariants import evaluate_context
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-    from nautical_core.lifecycle_outbox import (
-        ExecutionStage,
-        LifecycleOutboxRecord,
-        OutboxProcessingState,
-    )
-
-    parent_uuid = "11111111-0000-4000-8000-000000000927"
-    identity = LifecycleIdentity("final-chain", parent_uuid, 2, None, LifecycleEvent.CHAIN_UNTIL)
-    guard = ParentGuard("completed", "on", "final-chain", 2, "fp-final")
-    plan = _plan_from_values(
-        identity=identity,
-        action=LifecycleAction.FINALIZE_CHAIN,
-        parent_guard=guard,
-        parent_patch={"chain": "off"},
-        expected_postconditions=("chain_off", "no_successor"),
-        terminal_kind="date_limit",
-    )
-    record = LifecycleOutboxRecord(
-        identity.idempotency_key,
-        plan,
-        "cfg-final",
-        "sched-final",
-        OutboxProcessingState.ACKNOWLEDGED,
-        ExecutionStage.FINALIZED,
-    )
-    node = _chain_node({
-        "uuid": parent_uuid,
-        "status": "completed",
-        "chain": "on",
-        "chainID": "final-chain",
-        "link": 2,
-    })
-    graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-test", SnapshotCoverage.CHAIN, "test", (node,)))
-    context = IntegrityContext(graph, OutboxSnapshot.from_records((record,)), "cfg-final")
-    findings = evaluate_context(context)
-    expect(
-        any(item.reason_code == "terminal_postcondition_mismatch" for item in findings),
-        "terminal postcondition mismatch was not reported",
-    )
-    expect(
-        any(item.reason_code == "terminal_recurrence_guard_mismatch" for item in findings),
-        "stale terminal recurrence evidence was not reported",
-    )
-
-    disabled = _chain_node({**node.to_dict(), "chain": "off"})
-    disabled_graph = ChainGraph.from_snapshot(ChainSnapshot("finalization-ok", SnapshotCoverage.CHAIN, "test", (disabled,)))
-    disabled_findings = evaluate_context(IntegrityContext(
-        disabled_graph, OutboxSnapshot.from_records((record,)), "cfg-final",
-    ))
-    expect(
-        not any(item.reason_code == "terminal_postcondition_mismatch" for item in disabled_findings),
-        "valid terminal postcondition was rejected",
-    )
-    restored = type(plan).from_dict(plan.to_dict())
-    expect(restored.terminal_kind == "date_limit", "terminal exhaustion kind was not durable")
-
-    spawn_identity = LifecycleIdentity("final-chain", parent_uuid, 2, 3, LifecycleEvent.COMPLETE)
-    spawn_plan = LifecyclePlan.from_draft(
-        identity=spawn_identity,
-        action=LifecycleAction.SPAWN_CHILD,
-        parent_guard=guard,
-        draft=_task_draft({
-            "uuid": "22222222-0000-4000-8000-000000000930",
-            "description": "next",
-            "status": "pending",
-            "chain": "on",
-            "chainID": "final-chain",
-            "link": 3,
-            "prevLink": parent_uuid[:8],
-            "cp": "1d",
-            "due": "20260824T090000Z",
-        }),
-        parent_patch={"nextLink": "22222222"},
-        expected_postconditions=("child_exists", "parent_linked"),
-    )
-    spawn_record = LifecycleOutboxRecord(
-        spawn_identity.idempotency_key,
-        spawn_plan,
-        "cfg-final",
-        "sched-final",
-        OutboxProcessingState.ACKNOWLEDGED,
-        ExecutionStage.FINALIZED,
-    )
-    spawn_findings = evaluate_context(IntegrityContext(
-        graph, OutboxSnapshot.from_records((spawn_record,)), "cfg-final",
-    ))
-    expect(
-        any(item.reason_code == "acknowledged_postcondition_mismatch" for item in spawn_findings),
-        "acknowledged spawn postcondition drift was not reported",
-    )
-
-
-def test_chain_integrity_context_keeps_outbox_evidence_separate():
-    """Task graph truth and lifecycle intent evidence retain separate provenance."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_context import IntegrityContext, OutboxCoverage, OutboxSnapshot, load_outbox_snapshot
-    from nautical_core.chain_integrity_models import ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_invariants import evaluate_context
-
-    graph = ChainGraph.from_snapshot(ChainSnapshot("context-graph", SnapshotCoverage.CANDIDATES, "taskwarrior", ()))
-    outbox = OutboxSnapshot.from_records(())
-    context = IntegrityContext(graph, outbox, "cfg-context", mutation_epoch=3, metadata={"source": "test"})
-    expect(context.snapshot_id == "context-graph", "context lost graph snapshot identity")
-    expect(context.outbox.coverage is OutboxCoverage.COMPLETE and context.outbox.records == (), "empty outbox was not complete")
-    expect(context.outbox.by_intent("missing") is None, "empty outbox returned a phantom intent")
-    expect(context.metadata["source"] == "test", "context metadata was not preserved")
-
-    unavailable = OutboxSnapshot.unavailable("sqlite unavailable")
-    failed = IntegrityContext(graph, unavailable)
-    expect(not failed.outbox_available and failed.outbox.reason == "sqlite unavailable", "outbox failure was hidden")
-    findings = evaluate_context(failed)
-    expect(
-        any(item.invariant_id == "outbox.snapshot_available" and item.status.value == "unavailable" for item in findings),
-        "unavailable outbox evidence did not produce an unavailable finding",
-    )
-
-    class Repository:
-        def snapshot_records(self):
-            return type("Result", (), {"ok": True, "reason": ""})(), ()
-
-    loaded = load_outbox_snapshot(Repository())
-    expect(loaded.coverage is OutboxCoverage.COMPLETE and not loaded.records, "repository outbox snapshot did not load")
-
-    class FailedRepository:
-        def snapshot_records(self):
-            return type("Result", (), {"ok": False, "reason": "database busy"})(), ()
-
-    rejected = load_outbox_snapshot(FailedRepository())
-    expect(rejected.coverage is OutboxCoverage.UNAVAILABLE, "outbox repository failure was not unavailable")
-
-
-def test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs():
-    """The planner emits one guarded link plan and refuses incomplete evidence."""
-    from nautical_core.chain_graph import ChainGraph
-    from nautical_core.chain_integrity_context import IntegrityContext, OutboxSnapshot
-    from nautical_core.chain_integrity_models import ChainNode, ChainSnapshot, SnapshotCoverage
-    from nautical_core.chain_invariants import evaluate_invariants
-    from nautical_core.chain_repair_planner import IntegrityRepairPlanner
-
-    source = _chain_node({
-        "uuid": "aaaaaaaa-0000-0000-0000-000000000931",
-        "status": "pending", "chainID": "planner-chain", "link": 1,
-        "anchor": "w:mon", "nextLink": "bbbbbbbb",
-    })
-    target = _chain_node({
-        "uuid": "bbbbbbbb-0000-0000-0000-000000000932",
-        "status": "pending", "chainID": "planner-chain", "link": 2,
-    })
-    graph = ChainGraph.from_snapshot(ChainSnapshot("planner-snapshot", SnapshotCoverage.CHAIN, "test", (target, source)))
-    context = IntegrityContext(graph, OutboxSnapshot.from_records(()), "cfg-planner")
-    findings = evaluate_invariants(graph)
-    result = IntegrityRepairPlanner().plan(context, findings)
-    expect(len(result.plans) == 1, "unique reciprocal repair was not planned")
-    operation = result.plans[0].operations[0]
-    expect(operation.payload == (("prevLink", source.task_uuid),), "repair payload was not explicit")
-    repeat = IntegrityRepairPlanner().plan(context, findings)
-    expect(result.plans == repeat.plans, "repair plan identity was not deterministic")
-    duplicate_result = IntegrityRepairPlanner().plan(context, findings + findings)
-    expect(len(duplicate_result.plans) == 1, "equivalent repair findings were not collapsed")
-
-    partial_graph = ChainGraph.from_snapshot(ChainSnapshot("partial-planner", SnapshotCoverage.CANDIDATES, "test", (target, source)))
-    partial_context = IntegrityContext(partial_graph, OutboxSnapshot.from_records(()))
-    partial = IntegrityRepairPlanner().plan(partial_context, findings)
-    expect(not partial.plans and partial.refusals, "partial evidence produced an automatic plan")
-
-    predecessor = _chain_node({
-        "uuid": "cccccccc-0000-0000-0000-000000000933",
-        "status": "pending", "chainID": "slot-chain", "link": 1,
-        "nextLink": "eeeeeeee",
-    })
-    missing = _chain_node({
-        "uuid": "eeeeeeee-0000-0000-0000-000000000934",
-        "status": "pending", "chainID": "slot-chain",
-        "prevLink": "cccccccc", "nextLink": "ffffffff",
-    })
-    successor = _chain_node({
-        "uuid": "ffffffff-0000-0000-0000-000000000935",
-        "status": "pending", "chainID": "slot-chain", "link": 3,
-        "prevLink": "eeeeeeee",
-    })
-    slot_graph = ChainGraph.from_snapshot(ChainSnapshot(
-        "slot-planner", SnapshotCoverage.CHAIN, "test", (successor, missing, predecessor)
-    ))
-    slot_context = IntegrityContext(slot_graph, OutboxSnapshot.from_records(()), "cfg-planner")
-    slot_result = IntegrityRepairPlanner().plan(slot_context, evaluate_invariants(slot_graph))
-    expect(any(plan.reason_code == "missing_link" for plan in slot_result.plans), "missing link was not planned")
-
-
-def test_chain_integrity_application_stays_on_typed_mutation_boundary():
-    """Application delegates metadata plans and refuses unregistered operation kinds."""
-    from types import SimpleNamespace
-
-    from nautical_core.chain_integrity_application import IntegrityApplicationResult, IntegrityApplicationService
-    from nautical_core.chain_integrity_models import (
-        IntegrityOperation,
-        IntegrityRepairPlan,
-        RepairOperationKind,
-        RepairSafety,
-    )
-    from nautical_core.integration_models import MutationOutcomeKind
-
-    operation = IntegrityOperation(
-        "application-op",
-        RepairOperationKind.LINK_REPAIR,
-        "application-chain",
-        "aaaaaaaa-0000-0000-0000-000000000941",
-        (("snapshot_id", "application-snapshot"),),
-        ("target remains present",),
-        ("link is reciprocal",),
-    )
-    plan = IntegrityRepairPlan(
-        "application-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
-        "reciprocal_link", "test application", (operation,), "cfg-application",
-    )
-    results = IntegrityApplicationService().apply(
-        plan,
-        SimpleNamespace(),
-        lambda _operation: SimpleNamespace(),
-    )
-    expect(results[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unregistered mutation was applied")
-    stale = IntegrityApplicationResult(
-        "stale-plan", "stale-op", MutationOutcomeKind.CONFLICT, "guard modified changed"
-    )
-    expect(stale.stale, "guard conflict was not classified as stale")
-
-    unsafe_plan = IntegrityRepairPlan(
-        "unsafe-application-plan", "application-snapshot", "application-chain", RepairSafety.MANUAL,
-        "manual_only", "must not be applied automatically", (operation,), "cfg-application",
-    )
-    unsafe = IntegrityApplicationService().apply(
-        unsafe_plan,
-        SimpleNamespace(repair_metadata=lambda _request: (_ for _ in ()).throw(AssertionError("mutated unsafe plan"))),
-        lambda _operation: SimpleNamespace(),
-    )
-    expect(
-        unsafe[0].kind is MutationOutcomeKind.MANUAL_REVIEW
-        and "SAFE" in unsafe[0].reason,
-        "unsafe integrity plan crossed the application boundary",
-    )
-
-    lifecycle_operation = IntegrityOperation(
-        "lifecycle-op", RepairOperationKind.LIFECYCLE_TRANSITION,
-        "application-chain", operation.target_uuid,
-        (("snapshot_id", "application-snapshot"),),
-        ("target remains present",), ("lifecycle transition applied",),
-        (("action", "complete"),),
-    )
-    lifecycle_plan = IntegrityRepairPlan(
-        "lifecycle-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
-        "lifecycle", "lifecycle work belongs to the lifecycle service", (lifecycle_operation,),
-        "cfg-application",
-    )
-    lifecycle_result = IntegrityApplicationService().apply(
-        lifecycle_plan,
-        SimpleNamespace(repair_metadata=lambda _request: (_ for _ in ()).throw(AssertionError("misrouted lifecycle operation"))),
-        lambda _operation: SimpleNamespace(),
-    )
-    expect(
-        lifecycle_result[0].kind is MutationOutcomeKind.MANUAL_REVIEW
-        and "no application adapter" in lifecycle_result[0].reason,
-        "lifecycle operation crossed the structural application boundary",
-    )
-
-    metadata_operation = IntegrityOperation(
-        "metadata-op",
-        RepairOperationKind.METADATA_REPAIR,
-        "application-chain",
-        "aaaaaaaa-0000-0000-0000-000000000941",
-        (("snapshot_id", "application-snapshot"),),
-        ("target remains present",),
-        ("link is 2",),
-        (("link", 2),),
-    )
-    metadata_plan = IntegrityRepairPlan(
-        "metadata-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
-        "missing_link", "test metadata application", (metadata_operation,), "cfg-application",
-    )
-    guarded = IntegrityApplicationService().apply(
-        metadata_plan,
-        SimpleNamespace(repair_metadata=lambda _request: SimpleNamespace(
-            kind=MutationOutcomeKind.APPLIED, reason=""
-        )),
-        lambda _operation: SimpleNamespace(),
-    )
-    expect(guarded[0].kind is MutationOutcomeKind.MANUAL_REVIEW, "unvalidated factory request was applied")
-
-    second_operation = IntegrityOperation(
-        "metadata-op-2",
-        RepairOperationKind.METADATA_REPAIR,
-        "application-chain",
-        "bbbbbbbb-0000-0000-0000-000000000942",
-        (("snapshot_id", "application-snapshot"),),
-        ("target remains present",),
-        ("link is 3",),
-        (("link", 3),),
-    )
-    multi_plan = IntegrityRepairPlan(
-        "multi-plan", "application-snapshot", "application-chain", RepairSafety.SAFE,
-        "structural_batch", "test multi-operation application", (metadata_operation, second_operation), "cfg-application",
-    )
-    multi = IntegrityApplicationService().apply(multi_plan, SimpleNamespace(), lambda _operation: SimpleNamespace())
-    expect(
-        multi and all(item.kind is MutationOutcomeKind.MANUAL_REVIEW for item in multi),
-        "multi-operation plan bypassed the outbox policy",
-    )
-
-    from nautical_core.integrity_outbox_envelope import IntegrityOutboxEnvelope
-    envelope = IntegrityOutboxEnvelope(metadata_plan, "cfg-application", "schedule-application")
-    restored = IntegrityOutboxEnvelope.from_dict(json.loads(envelope.to_json()))
-    expect(restored.intent_id == envelope.intent_id and restored.plan == metadata_plan, "integrity envelope round trip changed plan")
-
-
-def test_integration_command_and_read_models_enforce_contract():
-    """Integration reads cannot confuse unavailable data with absence."""
-    from dataclasses import FrozenInstanceError
-
-    from nautical_core.integration_models import (
-        Absent,
-        CommandFailureKind,
-        FailureEvidence,
-        Found,
-        IntegrationContractError,
-        TaskCommand,
-        TaskCommandResult,
-        Unavailable,
-    )
-
-    command = TaskCommand(("task", "rc.hooks=off", "export"), "chain snapshot", 12.0)
-    result = TaskCommandResult(
-        command,
-        0,
-        '[{"description":"Répéter 🌊"}]',
-        "",
-        CommandFailureKind.SUCCESS,
-        1,
-        0.25,
-    )
-    expect(result.ok, "successful integration command result was not successful")
-
-    evidence = FailureEvidence(
-        command,
-        CommandFailureKind.BUSY,
-        1,
-        2,
-        0.4,
-        True,
-        "Taskwarrior lock active",
-    )
-    found = Found({"uuid": "task-uuid"}, "uuid lookup")
-    absent = Absent("uuid lookup", "authoritative export contained no match")
-    unavailable = Unavailable("uuid lookup", evidence)
-    expect(found.value["uuid"] == "task-uuid", "found read changed its value")
-    expect(absent != unavailable, "unavailable read compared equal to absence")
-    expect(unavailable.retryable, "retryable failure evidence was lost")
-
-    invalid_cases = (
-        lambda: TaskCommand((), "query", 1.0),
-        lambda: TaskCommand(("task",), "", 1.0),
-        lambda: TaskCommand(("task",), "query", 0.0),
-        lambda: TaskCommandResult(command, 1, "", "", CommandFailureKind.SUCCESS, 1, 0.1),
-        lambda: FailureEvidence(command, CommandFailureKind.ABSENT, 1, 1, 0.1, False),
-        lambda: FailureEvidence(command, CommandFailureKind.REJECTED, 1, 1, 0.1, True),
-        lambda: Found(None, "uuid lookup"),
-        lambda: Absent("uuid lookup", ""),
-        lambda: Unavailable("uuid lookup", object()),
-    )
-    for make_invalid in invalid_cases:
-        try:
-            make_invalid()
-        except IntegrationContractError:
-            continue
-        raise AssertionError("invalid integration model was accepted")
-
-    try:
-        command.purpose = "changed"  # type: ignore[misc]
-    except FrozenInstanceError:
-        pass
-    else:
-        raise AssertionError("integration command was mutable")
-
-
-def test_task_observation_contract_is_lossless_and_immutable():
-    """Task observations preserve field states while isolating mutable JSON input."""
-    from nautical_core.task_models import FieldPresence, TaskObservation, TaskStatus
-
-    row = {
-        "uuid": "00000000-0000-4000-8000-000000000001",
-        "status": "pending",
-        "link": 1,
-        "due": "20260821T090000Z",
-        "description": "héllo",
-        "tags": ["a", "b"],
-        "id": 7,
-        "urgency": 4.2,
-    }
-    observation = TaskObservation.from_mapping(row, source_query="uuid:00000000", snapshot_id="snap-1")
-    row["tags"].append("mutated")
-    expect(observation.field("uuid").presence is FieldPresence.VALUE, "UUID value state was not retained")
-    expect(observation.field("status").value is TaskStatus.PENDING, "status was not decoded to its typed value")
-    expect(observation.field("until").presence is FieldPresence.ABSENT, "absent known fields were not retained")
-    null_observation = TaskObservation.from_mapping({"until": None}, source_query="uuid:00000000")
-    expect(null_observation.field("until").presence is FieldPresence.NULL, "explicit null was not retained")
-    expect(observation.field("missing").presence is FieldPresence.ABSENT, "missing fields must remain absent")
-    expect(observation.to_mapping()["tags"] == ["a", "b"], "arbitrary nested fields were not frozen")
-    expect(
-        "id" not in observation.semantic_fingerprint and "urgency" not in observation.semantic_fingerprint,
-        "presentation fields leaked into the semantic fingerprint",
-    )
-    equivalent = TaskObservation.from_mapping(
-        {
-            **observation.to_mapping(),
-            "link": 1.0,
-            "due": "2026-08-21T09:00:00+00:00",
-            "id": 99,
-            "urgency": 100.0,
-        },
-        source_query="uuid:00000000",
-        snapshot_id="snap-1",
-    )
-    expect(observation == equivalent, "equivalent rows should compare identically")
-    expect(equivalent.field("link").value.value == 1, "integer-valued float links were not normalized")
-    malformed = TaskObservation.from_mapping(
-        {"uuid": "bad", "link": 1.5, "status": "future"}, source_query="broad:all"
-    )
-    expect(
-        {issue.code for issue in malformed.issues} == {"invalid_value", "unknown_status"},
-        f"malformed field evidence was not retained: {malformed.issues!r}",
-    )
-
-
-def test_nautical_task_projection_validates_operations_without_losing_observation():
-    """Operational validation is strict while malformed source evidence remains inspectable."""
-    from nautical_core.task_models import (
-        InvalidTask,
-        NauticalTask,
-        TaskOperation,
-        TaskStatus,
-        ValidatedTask,
-        TaskObservation,
-        validate_task,
-    )
-
-    row = {
-        "uuid": "00000000-0000-4000-8000-000000000002",
-        "status": "pending",
-        "chain": "on",
-        "chainID": "chain-2",
-        "link": 2.0,
-        "anchor": "w:mon",
-        "anchor_mode": "skip",
-        "due": "20260824T090000Z",
-        "until": None,
-        "description": "typed task",
-    }
-    observation = TaskObservation.from_mapping(row, source_query="chain:chain-2", snapshot_id="snap-2")
-    result = validate_task(observation, TaskOperation.SCHEDULE)
-    expect(isinstance(result, ValidatedTask), f"valid Nautical task was rejected: {result!r}")
-    expect(
-        NauticalTask.from_observation(observation) is result.task,
-        "validated task projection was rebuilt instead of reused",
-    )
-    expect(result.task.status is TaskStatus.PENDING, "typed status was not retained")
-    expect(result.task.recurrence.kind.value == "anchor", "recurrence kind was not classified")
-    expect(result.task.temporal.presence["until"].value == "null", "temporal null state was lost")
-
-    malformed = TaskObservation.from_mapping(
-        {"uuid": "bad", "status": "pending", "chain": "on", "anchor": "w:mon"},
-        source_query="uuid:bad",
-    )
-    rejected = validate_task(malformed, TaskOperation.QUERY)
-    expect(isinstance(rejected, InvalidTask), "incomplete chain identity was accepted operationally")
-    expect(rejected.observation is malformed and rejected.issues, "invalid result lost source evidence")
-
-    missing_reference = TaskObservation.from_mapping(
-        {**row, "due": None, "scheduled": None}, source_query="chain:chain-2", snapshot_id="snap-3"
-    )
-    rejected_reference = validate_task(missing_reference, TaskOperation.COMPLETION)
-    expect(isinstance(rejected_reference, InvalidTask), "completion without a temporal reference was accepted")
-
-
-def test_task_view_exposes_typed_temporal_presence():
-    """Presentation views retain typed timestamps and absent/null distinctions."""
-    from nautical_core.modify_models import TaskView
-
-    base = {
-        "uuid": "00000000-0000-4000-8000-000000000003",
-        "status": "pending",
-        "chainID": "view-chain",
-        "link": 1,
-        "anchor": "w:mon",
-        "due": "20260824T090000Z",
-    }
-    view = TaskView.from_mapping(base)
-    expect(view.timestamp("due") is not None, "typed due timestamp was not exposed")
-    expect(view.timestamp("scheduled") is None, "absent scheduled timestamp was not normalized")
-    null_view = TaskView.from_mapping({**base, "due": None})
-    expect(null_view.temporal.presence["due"].value == "null", "explicit null presence was lost")
-    malformed_view = TaskView.from_mapping({**base, "due": "not-a-date"})
-    expect(malformed_view.timestamp("due") is None, "malformed timestamp was treated as valid")
-
-
-def test_task_codec_is_strict_lossless_and_contract_specific():
-    """The codec rejects malformed exports and keeps Taskwarrior, hook, query, and diagnostic JSON separate."""
-    from nautical_core.task_codec import TASK_OBSERVATION_SCHEMA, TaskCodec, TaskCodecError
-
-    codec = TaskCodec()
-    row = {
-        "uuid": "00000000-0000-4000-8000-000000000003",
-        "status": "pending",
-        "chainID": "codec-chain",
-        "link": 3.0,
-        "anchor": "w:mon",
-        "description": "Répéter 🌊",
-        "tags": ["one", "two"],
-    }
-    observation = codec.decode_export(
-        json.dumps([row], ensure_ascii=False), source_query="chain:codec-chain", snapshot_id="codec-snap"
-    )[0]
-    expect(json.loads(codec.encode_task_import(observation))["description"] == "Répéter 🌊",
-           "Taskwarrior import encoding escaped or changed Unicode")
-    hook_json = codec.encode_hook_stdout(observation.to_mapping())
-    expect("Répéter 🌊" in hook_json and json.loads(hook_json)["uuid"] == row["uuid"],
-           "hook encoding changed the plain task object")
-    query_json = codec.encode_query_json({"schema": "nautical.query.test", "value": "🌊"})
-    expect(json.loads(query_json)["schema"] == "nautical.query.test", "query encoding changed its public shape")
-    diagnostic = json.loads(codec.encode_diagnostic(observation))
-    expect(diagnostic["schema"] == TASK_OBSERVATION_SCHEMA and diagnostic["version"] == 1,
-           "diagnostic encoding did not include its versioned schema")
-
-    invalid_exports = ("", "{}", "[1]", '[{"link": NaN}]')
-    for invalid in invalid_exports:
-        try:
-            codec.decode_export(invalid, source_query="invalid")
-        except TaskCodecError:
-            continue
-        raise AssertionError(f"malformed export was accepted: {invalid!r}")
-    try:
-        codec.encode_hook_stdout({"bad": object()})
-    except TaskCodecError:
-        pass
-    else:
-        raise AssertionError("unsupported serializer value was stringified")
-
-
-def test_task_codec_decodes_hook_framing_once():
-    """The shared codec owns concatenated and array hook task framing."""
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-
-    first = {"uuid": "00000000-0000-4000-8000-000000000101", "status": "pending"}
-    second = {"uuid": "00000000-0000-4000-8000-000000000102", "status": "completed"}
-    concatenated = json.dumps(first) + json.dumps(second)
-    rows, index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
-        concatenated, source_query="golden hook framing"
-    )
-    expect(not error and len(rows) == 2 and index == len(concatenated), "concatenated rows were not decoded once")
-    rows, index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
-        json.dumps([first, second]), source_query="golden hook array"
-    )
-    expect(not error and len(rows) == 2 and index > 0, "hook row array was not decoded")
-    rows, _index, error = DEFAULT_TASK_CODEC.decode_leading_rows(
-        json.dumps([first, {"status": "pending", "link": "bad"}]),
-        source_query="golden malformed hook array",
-    )
-    expect(not error and len(rows) == 2 and rows[1].issues, "malformed row was not preserved with issues")
-
-
-def test_task_draft_and_patch_have_explicit_mutation_semantics():
-    """Drafts are complete child intents and patches distinguish set, clear, and preserve."""
-    from nautical_core.task_changes import ChangeAction, PatchOperation, TaskChangeError, TaskPatch
-    from nautical_core.task_models import TaskDraft, TaskObservation, TaskTimestamp, validate_task, TaskOperation, ValidatedTask
-
-    row = {
-        "uuid": "00000000-0000-4000-8000-000000000004",
-        "status": "pending", "chain": "on", "chainID": "draft-chain", "link": 4,
-        "anchor": "w:mon", "anchor_mode": "skip", "due": "20260824T090000Z",
-        "description": "draft source",
-    }
-    validated = validate_task(TaskObservation.from_mapping(row, source_query="chain:draft-chain"), TaskOperation.SCHEDULE)
-    expect(isinstance(validated, ValidatedTask), f"draft source was not valid: {validated!r}")
-    draft = TaskDraft(
-        identity=validated.task.identity,
-        description="draft child",
-        recurrence=validated.task.recurrence,
-        target=TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc)),
-        fields={"project": "Routines", "tags": ["🌊"]},
-    )
-    encoded = draft.to_mapping()
-    expect(encoded["status"] == "pending" and encoded["tags"] == ["🌊"], "draft fields were not encoded explicitly")
-    expect(draft.fingerprint == TaskDraft(
-        validated.task.identity, "draft child", validated.task.recurrence,
-        TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc)), {"tags": ["🌊"], "project": "Routines"}
-    ).fingerprint, "draft fingerprint depends on field insertion order")
-
-    target = validated.task.identity.task_uuid
-    patch = TaskPatch.set(target, PatchOperation.ORDINARY_CARRY, scheduled="2026-08-31T08:30:00Z")
-    clear = TaskPatch.clear(target, PatchOperation.ORDINARY_CARRY, "wait")
-    expect(patch.set_values()["scheduled"] == "2026-08-31T08:30:00Z", "set operation lost its value")
-    expect(clear.clear_fields() == ("wait",), "clear operation was not explicit")
-    expect(TaskPatch.parent_link(target, target).changes[0].action is ChangeAction.SET, "parent link was not a set")
-    expect(TaskPatch.set(target, PatchOperation.METADATA_REPAIR, a=1, b=2).fingerprint ==
-           TaskPatch.set(target, PatchOperation.METADATA_REPAIR, b=2, a=1).fingerprint,
-           "patch fingerprint depends on field insertion order")
-    invalid = (
-        lambda: TaskPatch.set(target, PatchOperation.METADATA_REPAIR, modified="now"),
-        lambda: TaskPatch.set(target, PatchOperation.METADATA_REPAIR, chainID="other"),
-        lambda: TaskPatch(target, PatchOperation.ORDINARY_CARRY, ()),
-    )
-    for make_invalid in invalid:
-        try:
-            make_invalid()
-        except TaskChangeError:
-            continue
-        raise AssertionError("unsafe task patch was accepted")
-    for field in ("uuid", "chainID", "nextLink", "description", "anchor"):
-        try:
-            TaskDraft(
-                validated.task.identity,
-                "invalid draft",
-                validated.task.recurrence,
-                TaskTimestamp(datetime(2026, 8, 31, 9, tzinfo=timezone.utc)),
-                fields={field: "unexpected"},
-            )
-        except ValueError:
-            continue
-        raise AssertionError(f"draft policy accepted owner-managed field {field!r}")
-
-
-def test_taskwarrior_client_preserves_evidence_and_redacts_observation():
-    """The process boundary preserves evidence without observing command contents."""
-    from nautical_core.integration_models import CommandFailureKind
-    from nautical_core.taskwarrior_client import TaskwarriorClient
-
-    observations = []
-
-    class Observer:
-        def observe(self, observation):
-            observations.append(observation)
-
-    client = TaskwarriorClient((sys.executable,), observer=Observer())
-    result = client.execute(
-        ("-c", "import sys; print('Répéter 🌊'); print('warning', file=sys.stderr)"),
-        purpose="test export",
-        timeout=2.0,
-        use_tempfiles=True,
-    )
-    expect(result.ok, f"typed client command failed: {result}")
-    expect(result.stdout.strip() == "Répéter 🌊", f"stdout evidence changed: {result.stdout!r}")
-    expect(result.stderr.strip() == "warning", f"stderr evidence changed: {result.stderr!r}")
-    expect(result.command.timeout == 2.0 and result.attempt == 1, f"command metadata changed: {result}")
-    expect(result.duration >= 0.0, f"command duration was invalid: {result.duration}")
-    expect(len(observations) == 1, f"observer did not receive one attempt: {observations!r}")
-    observation = observations[0]
-    expect(observation.purpose == "test export", f"observer lost purpose: {observation}")
-    expect(observation.kind is CommandFailureKind.SUCCESS, f"observer lost outcome: {observation}")
-    expect(not hasattr(observation, "argv") and not hasattr(observation, "stdout"), "observer exposed task contents")
-
-
 def test_taskwarrior_client_retries_only_transient_failures():
     """Busy commands retry with bounded backoff while rejection remains final."""
     from nautical_core.integration_models import CommandFailureKind
@@ -3041,122 +1444,6 @@ def test_taskwarrior_client_retries_only_transient_failures():
     )
     expect(timed_out.kind is CommandFailureKind.TIMEOUT, f"timeout was not classified: {timed_out}")
     expect(timed_out.returncode == 124 and timed_out.duration < 1.0, f"timeout was not bounded: {timed_out}")
-
-
-def test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation():
-    """Invocation reads carry provenance and cannot survive a mutation epoch."""
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContext,
-        SilentDiagnostics,
-        SystemClock,
-        ValidatedNauticalConfiguration,
-    )
-    from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
-
-    with tempfile.TemporaryDirectory() as td:
-        context = IntegrationContext(
-            Path(td),
-            "test",
-            (sys.executable,),
-            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
-            timezone.utc,
-            SilentDiagnostics(),
-            SystemClock(),
-            "uow-cache-test",
-            3,
-            IntegrationAccess.MUTATION,
-        )
-        uow = TaskwarriorUnitOfWork.create(context)
-        scope = QueryScope(QueryScopeKind.UUID, "task-uuid", ("pending",))
-        cached = uow.cache_read(scope, {"uuid": "task-uuid"})
-        expect(cached.provenance.scope is scope, f"cache scope provenance changed: {cached}")
-        expect(cached.provenance.covers == (scope,), f"cache coverage changed: {cached}")
-        expect(cached.provenance.mutation_epoch == 0, f"initial epoch changed: {cached}")
-        expect(uow.cached_read(scope) is cached, "authoritative read was not reused")
-
-        expect(uow.record_mutation(affected=(scope,)) == 1, "mutation epoch did not advance")
-        expect(uow.cached_read(scope) is None, "post-mutation read observed stale cache data")
-        uow.cache_read(scope, {"uuid": "task-uuid", "modified": "later"})
-        uow.record_mutation(uncertain=True)
-        expect(uow.mutation_epoch == 2 and uow.reads.size == 0, "uncertain mutation retained cached reads")
-        expect(uow.mutations.observations[-1].uncertain, "uncertain mutation was not retained as evidence")
-
-
-def test_taskwarrior_uow_broad_snapshot_declares_narrow_coverage():
-    """Broad authority may serve declared scopes without hiding a narrow read."""
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContext,
-        SilentDiagnostics,
-        SystemClock,
-        ValidatedNauticalConfiguration,
-    )
-    from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
-
-    with tempfile.TemporaryDirectory() as td:
-        context = IntegrationContext(
-            Path(td),
-            "test",
-            (sys.executable,),
-            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
-            timezone.utc,
-            SilentDiagnostics(),
-            SystemClock(),
-            "uow-broad-test",
-            8,
-            IntegrationAccess.READ_ONLY,
-        )
-        uow = TaskwarriorUnitOfWork.create(context)
-        broad = QueryScope(QueryScopeKind.BROAD, "taskdata", ("pending", "completed"))
-        task = QueryScope(QueryScopeKind.UUID, "task-uuid", ("pending", "completed"))
-        predecessor = QueryScope(QueryScopeKind.PREDECESSOR, "previous-uuid", ("completed", "deleted"))
-        snapshot = [{"uuid": "task-uuid", "status": "pending"}]
-
-        cached = uow.cache_read(broad, snapshot, covers=(task,))
-        expect(uow.cached_read(task) is cached, "declared broad coverage did not serve the task scope")
-        expect(cached.provenance.scope is broad, "narrow cache hit lost broad snapshot provenance")
-        expect(uow.cached_read(predecessor) is None, "broad snapshot invented predecessor coverage")
-        narrow = uow.cache_read(predecessor, {"uuid": "previous-uuid"})
-        expect(uow.cached_read(predecessor) is narrow, "required narrow predecessor read was not retained")
-
-
-def test_taskwarrior_uow_isolates_invocations_over_one_taskdata():
-    """Only the durable outbox location is shared by independent invocations."""
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContext,
-        SilentDiagnostics,
-        SystemClock,
-        ValidatedNauticalConfiguration,
-    )
-    from nautical_core.taskwarrior_uow import QueryScope, QueryScopeKind, TaskwarriorUnitOfWork
-
-    with tempfile.TemporaryDirectory() as td:
-        context = IntegrationContext(
-            Path(td),
-            "test",
-            (sys.executable,),
-            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
-            timezone.utc,
-            SilentDiagnostics(),
-            SystemClock(),
-            "uow-isolation-test",
-            8,
-            IntegrationAccess.MUTATION,
-        )
-        first = TaskwarriorUnitOfWork.create(context)
-        second = TaskwarriorUnitOfWork.create(context)
-        scope = QueryScope(QueryScopeKind.UUID, "task-uuid")
-        first.cache_read(scope, {"uuid": "task-uuid"})
-        first.record_mutation(affected=(scope,))
-
-        expect(first.reads is not second.reads, "independent invocations shared read caches")
-        expect(first.mutations is not second.mutations, "independent invocations shared mutation history")
-        expect(first.commands is not second.commands, "independent invocations shared command counters")
-        expect(first.diagnostics is not second.diagnostics, "independent invocations shared diagnostics")
-        expect(second.mutation_epoch == 0 and second.reads.size == 0, "one invocation changed another")
-        expect(first.outbox == second.outbox, "same Taskdata did not retain one durable outbox location")
 
 
 def test_taskwarrior_uow_observes_budget_without_blocking_commands():
@@ -3195,670 +1482,6 @@ def test_taskwarrior_uow_observes_budget_without_blocking_commands():
         expect(uow.commands.calls == 2 and uow.commands.attempts == 2, f"command counts changed: {uow.commands}")
         expect(uow.commands.budget_exceeded, "budget excess was not observable")
         expect(len(events) == 1 and events[0].stage == "command_budget", f"budget diagnostic changed: {events}")
-
-
-def test_task_read_snapshot_preserves_scope_and_builds_indexes():
-    """Authoritative exports retain status scope and indexed domain identities."""
-    from nautical_core.task_read_repository import (
-        AuthoritativeTaskSnapshot,
-        TaskQueryKind,
-        TaskSnapshotScope,
-    )
-
-    result = _typed_command_result(("task", "export"), True, "[]")
-    scope = TaskSnapshotScope(
-        TaskQueryKind.BROAD,
-        "active-nautical",
-        ("waiting", "pending", "pending"),
-        complete_chain_history=False,
-    )
-    source = {
-            "uuid": "aaaaaaaa-0000-4000-8000-000000000001",
-        "chainID": "chain-a",
-        "link": 2.0,
-        "status": "pending",
-    }
-    sibling = {
-        "uuid": "bbbbbbbb-0000-4000-8000-000000000002",
-        "chainID": "chain-a",
-        "link": 3,
-        "status": "waiting",
-    }
-    snapshot = AuthoritativeTaskSnapshot(scope, _task_observations((source, sibling)), result)
-
-    expect(scope.statuses == ("pending", "waiting"), f"scope statuses were not normalized: {scope}")
-    expect(not scope.complete_chain_history, "filtered snapshot claimed complete history")
-    expect(snapshot.uuid_matches(source["uuid"]) == (snapshot.rows[0],), "full UUID index missed")
-    expect(snapshot.uuid_matches("aaaaaaaa") == (snapshot.rows[0],), "short UUID index missed")
-    expect(snapshot.chain_rows("chain-a") == snapshot.rows, "chain index missed rows")
-    expect(snapshot.slot_rows("chain-a", 3) == (snapshot.rows[1],), "slot index missed row")
-    source["status"] = "deleted"
-    expect(
-        snapshot.rows[0].field("status").value.value == "pending",
-        "snapshot retained mutable caller state",
-    )
-    try:
-        snapshot.rows[0].fields["status"] = snapshot.rows[0].field("status")  # type: ignore[index]
-    except TypeError:
-        pass
-    else:
-        raise AssertionError("snapshot rows are mutable")
-
-
-def test_task_read_snapshot_retains_ambiguous_indexes():
-    """Indexes preserve duplicates so repository reads can fail closed."""
-    from nautical_core.task_read_repository import (
-        AuthoritativeTaskSnapshot,
-        TaskQueryKind,
-        TaskSnapshotScope,
-    )
-
-    result = _typed_command_result(("task", "export"), True, "[]")
-    rows = (
-        {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "chainID": "chain-a", "link": 2},
-        {"uuid": "aaaaaaaa-1111-0000-0000-000000000002", "chainID": "chain-a", "link": 2},
-    )
-    snapshot = AuthoritativeTaskSnapshot(
-        TaskSnapshotScope(TaskQueryKind.CHAIN, "chain-a", ("pending",), complete_chain_history=True),
-        _task_observations(rows),
-        result,
-    )
-    expect(len(snapshot.uuid_matches("aaaaaaaa")) == 2, "ambiguous short UUID was collapsed")
-    expect(len(snapshot.slot_rows("chain-a", 2)) == 2, "duplicate exact slot was collapsed")
-
-
-def test_authoritative_set_read_contracts_fail_closed():
-    """Bounded identity sets preserve absence, duplicates, contradictions, and epochs."""
-    from nautical_core.integration_models import (
-        Absent,
-        CommandFailureKind,
-        FailureEvidence,
-        Found,
-        TaskCommand,
-        TaskCommandResult,
-        Unavailable,
-    )
-    from nautical_core.task_read_repository import AuthoritativeTaskSnapshot, TaskQueryKind, TaskSnapshotScope
-    from nautical_core.task_set_reads import (
-        AuthoritativeSetReadService,
-        ChainSlot,
-        ChainSlotSetRequest,
-        SetReadStatus,
-        UUIDSetRequest,
-    )
-
-    first = "11111111-1111-4111-8111-111111111111"
-    second = "22222222-2222-4222-8222-222222222222"
-    command_result = _typed_command_result(("task", "export"), True, "[]")
-
-    class Repository:
-        mutation_epoch = 4
-
-        def __init__(self, rows):
-            self.rows = rows
-            self.calls = 0
-            self.fail_after = None
-
-        def broad_snapshot(self, *, identity, filters, statuses, refresh=False):
-            del identity, filters, statuses, refresh
-            self.calls += 1
-            if self.fail_after is not None and self.calls > self.fail_after:
-                command = TaskCommand(("task", "export"), "set read", 1.0)
-                result = TaskCommandResult(command, 1, "", "database is locked", CommandFailureKind.BUSY, 1, 0.1)
-                return Unavailable("set", FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.1, True, "locked"))
-            if not self.rows:
-                return Absent("set", "empty set")
-            snapshot = AuthoritativeTaskSnapshot(
-                TaskSnapshotScope(TaskQueryKind.BROAD, "set", ("pending",)),
-                _task_observations(self.rows),
-                command_result,
-            )
-            return Found(snapshot, "set")
-
-    service = AuthoritativeSetReadService(
-        Repository(({"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},))
-    )
-    result = service.read_uuids(UUIDSetRequest((first, second), expected_mutation_epoch=4))
-    expect(result.status is SetReadStatus.COMPLETE, f"mixed set read was not complete: {result}")
-    expect(first in result.found and second in result.absent, f"mixed found/absent set was lost: {result}")
-    expect(result.complete_for_requested_identities, "complete set did not assert requested authority")
-
-    duplicate = AuthoritativeSetReadService(
-        Repository((
-            {"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},
-            {"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 2},
-        ))
-    ).read_uuids(UUIDSetRequest((first,)))
-    expect(duplicate.status is SetReadStatus.DUPLICATE, f"duplicate UUID was accepted: {duplicate}")
-
-    slot = ChainSlot("abcdef12", 2)
-    contradictory = AuthoritativeSetReadService(
-        Repository(({"uuid": second, "status": "pending", "chainID": "abcdef12", "link": 2, "prevLink": "deadbeef"},))
-    ).read_slots(ChainSlotSetRequest((slot,), expected_predecessors={slot: "cafebabe"}))
-    expect(contradictory.status is SetReadStatus.CONTRADICTORY, f"slot contradiction was accepted: {contradictory}")
-
-    stale_repo = Repository(({"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},))
-    stale_repo.mutation_epoch = 5
-    stale = AuthoritativeSetReadService(stale_repo).read_uuids(UUIDSetRequest((first,), expected_mutation_epoch=4))
-    expect(stale.status is SetReadStatus.STALE, f"stale set read was not rejected: {stale}")
-
-    partial_repo = Repository(({"uuid": first, "status": "pending", "chainID": "abcdef12", "link": 1},))
-    partial_repo.fail_after = 1
-    partial = AuthoritativeSetReadService(partial_repo).read_uuids(
-        UUIDSetRequest((first, second), max_chunk_size=1)
-    )
-    expect(partial.status is SetReadStatus.PARTIAL, f"chunk failure was not preserved: {partial}")
-    try:
-        UUIDSetRequest(("deadbeef",))
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("short UUID was accepted as a set identity")
-
-
-def test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly():
-    """Compatible reads reuse broad authority while excluded history stays narrow."""
-    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
-
-    class ScriptedClient:
-        def __init__(self, outputs):
-            self.outputs = list(outputs)
-            self.calls = []
-
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            self.calls.append((tuple(args), purpose))
-            stdout = self.outputs.pop(0)
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(command, 0, stdout, "", CommandFailureKind.SUCCESS, 1, 0.001)
-
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        broad_rows = [
-            {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "chainID": "chain-a", "link": 1, "chain": "on", "status": "pending"},
-            {"uuid": "bbbbbbbb-0000-0000-0000-000000000002", "chainID": "chain-a", "link": 2, "chain": "on", "status": "completed"},
-        ]
-        predecessor = {
-            "uuid": "cccccccc-0000-0000-0000-000000000003",
-            "chainID": "chain-a",
-            "link": 0,
-            "status": "deleted",
-        }
-        client = ScriptedClient((json.dumps(broad_rows), json.dumps([predecessor]), json.dumps([broad_rows[0]])))
-        uow.client = client
-        repository = uow.repository
-
-        broad = repository.broad_snapshot(
-            identity="lifecycle",
-            filters=("chain:on",),
-            statuses=("pending", "completed"),
-        )
-        expect(isinstance(broad, Found), f"broad read failed: {broad}")
-        uuid_read = repository.by_uuid("aaaaaaaa", statuses=("pending",))
-        child_read = repository.exact_child_slot("chain-a", 2, statuses=("completed",))
-        expect(isinstance(uuid_read, Found) and isinstance(child_read, Found), "broad indexes were not reused")
-        expect(
-            isinstance(uuid_read, Found)
-            and uuid_read.value is broad.value.rows[0]
-            and uuid_read.value.provenance.source_query == "broad:lifecycle",
-            "exact read did not reuse the immutable broad observation",
-        )
-        expect(len(client.calls) == 1, f"compatible reads repeated the broad export: {client.calls!r}")
-
-        first_predecessor = repository.predecessor_slot("chain-a", 0)
-        second_predecessor = repository.predecessor_slot("chain-a", 0)
-        expect(isinstance(first_predecessor, Found) and isinstance(second_predecessor, Found), "narrow predecessor failed")
-        expect(len(client.calls) == 2, f"narrow predecessor was not cached: {client.calls!r}")
-
-        verified = repository.verification(broad_rows[0]["uuid"], statuses=("pending",))
-        expect(isinstance(verified, Found), f"verification refresh failed: {verified}")
-        expect(len(client.calls) == 3, "explicit verification refresh did not issue a fresh read")
-
-
-def test_task_read_repository_fails_closed_on_untrusted_output():
-    """Malformed, mismatched, duplicate, and failed reads never prove absence."""
-    from nautical_core.integration_models import (
-        Absent,
-        CommandFailureKind,
-        TaskCommand,
-        TaskCommandResult,
-        Unavailable,
-    )
-
-    class ScriptedClient:
-        def __init__(self, outputs):
-            self.outputs = list(outputs)
-            self.calls = 0
-
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            self.calls += 1
-            kind, stdout, stderr = self.outputs.pop(0)
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(command, 0 if kind is CommandFailureKind.SUCCESS else 1, stdout, stderr, kind, 1, 0.001)
-
-    duplicate = [
-        {"uuid": "aaaaaaaa-0000-0000-0000-000000000001", "status": "pending"},
-        {"uuid": "aaaaaaaa-1111-0000-0000-000000000002", "status": "pending"},
-    ]
-    mismatched = [{"uuid": "bbbbbbbb-0000-4000-8000-000000000003", "status": "pending"}]
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        client = ScriptedClient(
-            (
-                (CommandFailureKind.SUCCESS, '{"uuid":', ""),
-                (CommandFailureKind.SUCCESS, json.dumps(mismatched), ""),
-                (CommandFailureKind.SUCCESS, json.dumps(duplicate), ""),
-                (CommandFailureKind.BUSY, "", "database is locked"),
-                (CommandFailureKind.SUCCESS, "", ""),
-            )
-        )
-        uow.client = client
-        repository = uow.repository
-
-        malformed = repository.by_uuid("11111111", statuses=("pending",))
-        mismatched_read = repository.by_uuid("22222222", statuses=("pending",))
-        duplicate_read = repository.by_uuid("aaaaaaaa", statuses=("pending",))
-        busy = repository.by_uuid("33333333", statuses=("pending",))
-        absent = repository.by_uuid("44444444", statuses=("pending",))
-        expect(isinstance(malformed, Unavailable), f"malformed JSON became authoritative: {malformed}")
-        expect(isinstance(mismatched_read, Unavailable), f"mismatched UUID became absent: {mismatched_read}")
-        expect(isinstance(duplicate_read, Unavailable), f"duplicate UUID became found: {duplicate_read}")
-        expect(isinstance(busy, Unavailable) and busy.retryable, f"busy read classification changed: {busy}")
-        expect(isinstance(absent, Absent), f"contractual empty UUID export was not absent: {absent}")
-
-
-def test_task_read_repository_mutation_epoch_prevents_stale_reuse():
-    """A mutation invalidates both exact and broad repository authority."""
-    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
-
-    class Client:
-        def __init__(self):
-            self.calls = 0
-
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            self.calls += 1
-            row = {"uuid": "aaaaaaaa-0000-4000-8000-000000000001", "status": "pending", "modified": str(self.calls)}
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(command, 0, json.dumps([row]), "", CommandFailureKind.SUCCESS, 1, 0.001)
-
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        client = Client()
-        uow.client = client
-        first = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
-        repeated = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
-        expect(isinstance(first, Found) and isinstance(repeated, Found), "initial UUID read failed")
-        expect(client.calls == 1, "repeated read did not reuse authoritative data")
-        uow.record_mutation()
-        fresh = uow.repository.by_uuid("aaaaaaaa", statuses=("pending",))
-        expect(
-            isinstance(fresh, Found)
-            and fresh.value.field("modified").raw_value() == "2",
-            "post-mutation read stayed stale",
-        )
-        expect(client.calls == 2, "post-mutation read did not refresh")
-
-
-def test_task_read_repository_preserves_found_malformed_observation():
-    """A valid row with a malformed field remains found with decode evidence."""
-    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult, Found
-
-    class Client:
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            command = TaskCommand(("task", *args), purpose, timeout)
-            row = {
-            "uuid": "aaaaaaaa-0000-4000-8000-000000000001",
-                "status": "pending",
-                "link": "not-an-integer",
-            }
-            return TaskCommandResult(
-                command, 0, json.dumps([row]), "", CommandFailureKind.SUCCESS, 1, 0.001
-            )
-
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        uow.client = Client()
-        read = uow.repository.by_uuid(
-            "aaaaaaaa-0000-4000-8000-000000000001",
-            statuses=("pending",),
-        )
-        expect(isinstance(read, Found), f"malformed found row was not preserved: {read}")
-        expect(read.value.issues and read.value.field("link").raw_value() == "not-an-integer", "decode evidence was lost")
-
-
-def test_task_read_repository_preserves_missing_status_as_malformed_found():
-    """Missing status is malformed task data, not an out-of-scope export."""
-    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
-
-    class Client:
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            command = TaskCommand(("task", *args), purpose, timeout)
-            row = {"uuid": "aaaaaaaa-0000-4000-8000-000000000001", "chainID": "chain-a"}
-            return TaskCommandResult(
-                command, 0, json.dumps([row]), "", CommandFailureKind.SUCCESS, 1, 0.001
-            )
-
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        uow.client = Client()
-        read = uow.repository.by_uuid(
-            "aaaaaaaa-0000-4000-8000-000000000001",
-            statuses=("pending",),
-        )
-        expect(isinstance(read, Found), f"missing status became unavailable: {read}")
-        expect(read.value.field("status").presence.value == "absent", "missing status was not retained")
-
-
-def test_task_read_repository_exposes_all_domain_reads():
-    """Chain, root, and lifecycle reads share the same typed repository contract."""
-    from nautical_core.integration_models import CommandFailureKind, Found, TaskCommand, TaskCommandResult
-
-    class Client:
-        def __init__(self, payloads):
-            self.payloads = list(payloads)
-
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            command = TaskCommand(("task", *args), purpose, timeout)
-            return TaskCommandResult(
-                command,
-                0,
-                json.dumps(self.payloads.pop(0)),
-                "",
-                CommandFailureKind.SUCCESS,
-                1,
-                0.001,
-            )
-
-    chain_rows = [
-        {"uuid": "aaaaaaaa-0000-4000-8000-000000000001", "chainID": "chain-a", "link": 1, "chain": "on", "status": "pending"},
-        {"uuid": "bbbbbbbb-0000-4000-8000-000000000002", "chainID": "chain-a", "link": 2, "chain": "on", "status": "completed"},
-    ]
-    roots = [chain_rows[0]]
-    candidates = [chain_rows[1]]
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        uow.client = Client((chain_rows, roots, candidates))
-        repository = uow.repository
-        chain = repository.chain_snapshot("chain-a", statuses=("pending", "completed"))
-        active = repository.active_recurrence_roots()
-        lifecycle = repository.lifecycle_candidates(statuses=("completed",))
-        expect(isinstance(chain, Found) and len(chain.value) == 2, f"chain snapshot failed: {chain}")
-        expect(isinstance(active, Found) and active.value[0].field("link").value.value == 1, f"active-root read failed: {active}")
-        expect(isinstance(lifecycle, Found) and lifecycle.value[0].field("link").value.value == 2, f"candidate read failed: {lifecycle}")
-
-
-def test_integration_mutation_models_enforce_guards_and_postconditions():
-    """Mutation outcomes require complete guards and operation-specific proof."""
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        FailureEvidence,
-        GuardTimestamp,
-        GuardTimestampField,
-        IntegrationContractError,
-        MutationGuard,
-        MutationOperation,
-        MutationOutcome,
-        MutationOutcomeKind,
-        MutationPostcondition,
-        TaskCommand,
-        Unavailable,
-    )
-
-    command = TaskCommand(("task", "uuid", "modify", "chain:off"), "disable chain", 12.0)
-    busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.2, True, "lock active")
-    guard = MutationGuard(
-        task_uuid="00000000-0000-4000-8000-000000000921",
-        status="pending",
-        chain_id="chain-1",
-        link=7,
-        recurrence_identity="rf1-example",
-        timestamps=(
-            GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),
-            GuardTimestamp(GuardTimestampField.DUE, "20260814T070000Z"),
-        ),
-        expected_mutation_epoch=2,
-    )
-    applied = MutationOutcome(
-        MutationOperation.CHAIN_DISABLE,
-        MutationOutcomeKind.APPLIED,
-        guard,
-        (MutationPostcondition.CHAIN_DISABLED,),
-    )
-    retryable = MutationOutcome(
-        MutationOperation.CHAIN_DISABLE,
-        MutationOutcomeKind.RETRYABLE,
-        guard,
-        reason="Taskwarrior is busy",
-        failure=busy,
-    )
-    expect(applied.postconditions == (MutationPostcondition.CHAIN_DISABLED,), "postcondition was lost")
-    expect(retryable.failure is busy, "mutation failure evidence was lost")
-
-    unavailable = Unavailable("guard lookup", busy)
-    invalid_cases = (
-        lambda: MutationGuard("", "pending", "chain-1", 7, "rf1", guard.timestamps, 0),
-        lambda: MutationGuard("uuid", "pending", "", 7, "rf1", guard.timestamps, 0),
-        lambda: MutationGuard("uuid", "pending", "chain-1", -1, "rf1", guard.timestamps, 0),
-        lambda: MutationGuard("uuid", "pending", "chain-1", 7, "", guard.timestamps, 0),
-        lambda: MutationGuard(
-            "uuid",
-            "pending",
-            "chain-1",
-            7,
-            "rf1",
-            (GuardTimestamp(GuardTimestampField.DUE, "20260814T070000Z"),),
-            0,
-        ),
-        lambda: MutationGuard("uuid", "pending", "chain-1", 7, "rf1", guard.timestamps * 2, 0),
-        lambda: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.APPLIED,
-            guard,
-            (),
-        ),
-        lambda: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.REJECTED,
-            guard,
-            (MutationPostcondition.CHAIN_DISABLED,),
-            "guard mismatch",
-        ),
-        lambda: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.RETRYABLE,
-            guard,
-            reason="busy without evidence",
-        ),
-        lambda: MutationOutcome(
-            MutationOperation.CHAIN_DISABLE,
-            MutationOutcomeKind.APPLIED,
-            unavailable,  # type: ignore[arg-type]
-            (MutationPostcondition.CHAIN_DISABLED,),
-        ),
-    )
-    for make_invalid in invalid_cases:
-        try:
-            make_invalid()
-        except IntegrationContractError:
-            continue
-        raise AssertionError("invalid mutation contract was accepted")
-
-
-def test_integration_mutation_requests_use_named_typed_payloads():
-    """Gateway requests reject arbitrary commands and mismatched identities."""
-    from nautical_core.integration_models import (
-        ChainDisablePayload,
-        ChildImportPayload,
-        GuardTimestamp,
-        GuardTimestampField,
-        IntegrationContractError,
-        MetadataRepairPayload,
-        MutationGuard,
-        MutationOperation,
-        MutationRequest,
-        NativeUntilRepairPayload,
-        ParentLinkPayload,
-    )
-
-    parent_uuid = "00000000-0000-4000-8000-000000000922"
-    child_uuid = "00000000-0000-4000-8000-000000000923"
-    guard = MutationGuard(
-        parent_uuid,
-        "completed",
-        "chain-requests",
-        7,
-        "rf1-requests",
-        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),),
-        0,
-    )
-    child = _child_payload_from_values(
-        {
-            "uuid": child_uuid,
-            "chainID": "chain-requests",
-            "link": 8,
-            "prevLink": parent_uuid[:8],
-            "status": "pending",
-            "chain": "on",
-            "cp": "1d",
-            "due": "20260824T090000Z",
-            "description": "typed child",
-        },
-        parent_uuid=parent_uuid,
-    )
-    request = MutationRequest(MutationOperation.CHILD_IMPORT, guard, child)
-    expect(request.payload.child_uuid == child_uuid, "child identity was not retained")
-    expect(request.payload.to_dict()["description"] == "typed child", "child payload was not retained")
-
-    draft = _task_draft(child.to_dict())
-    draft_request = MutationRequest.child_import(guard, draft)
-    expect(
-        draft_request.payload.child_uuid == child_uuid,
-        "typed child draft request lost its identity",
-    )
-    from nautical_core.task_changes import TaskPatch
-    from nautical_core.task_models import TaskTimestamp, TaskUUID
-    link_request = MutationRequest.parent_link(
-        guard,
-        TaskPatch.parent_link(
-            TaskUUID(parent_uuid),
-            TaskUUID(child_uuid),
-        ),
-    )
-    expect(
-        link_request.payload.child_short_uuid == child_uuid,
-        "typed parent-link patch lost its child identity",
-    )
-    disable_request = MutationRequest.chain_disable(
-        guard,
-        TaskPatch.chain_disable(TaskUUID(parent_uuid)),
-    )
-    expect(
-        disable_request.payload.target_chain == "off",
-        "typed chain-disable patch lost its target state",
-    )
-    from datetime import datetime, timezone
-    repair_guard = MutationGuard(
-        parent_uuid,
-        "completed",
-        "chain-requests",
-        7,
-        "rf1-requests",
-        (
-            GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T070000Z"),
-            GuardTimestamp(GuardTimestampField.UNTIL, "20260813T200000Z"),
-        ),
-        0,
-    )
-    repair_request = MutationRequest.native_until_repair(
-        repair_guard,
-        TaskPatch.native_until_repair(
-            TaskUUID(parent_uuid),
-            TaskTimestamp(datetime(2026, 8, 14, 20, tzinfo=timezone.utc)),
-        ),
-    )
-    expect(
-        repair_request.payload.expected_until == "20260813T200000Z",
-        "native-until patch lost guarded prior value",
-    )
-    metadata_request = MutationRequest.metadata_repair(
-        guard,
-        TaskPatch.metadata_repair(TaskUUID(parent_uuid), nextLink=child_uuid[:8]),
-    )
-    expect(
-        metadata_request.payload.to_dict()["nextLink"] == child_uuid[:8],
-        "metadata patch lost its update",
-    )
-    carry_request = MutationRequest.ordinary_carry(
-        guard,
-        TaskPatch.ordinary_carry(TaskUUID(parent_uuid), scheduled="20260814T090000Z"),
-    )
-    expect(
-        carry_request.payload.to_dict()["scheduled"] == "20260814T090000Z",
-        "ordinary-carry patch lost its update",
-    )
-    restored_patch = TaskPatch.from_dict(TaskPatch.ordinary_carry(
-        TaskUUID(parent_uuid), scheduled="20260814T090000Z",
-    ).to_dict())
-    expect(
-        restored_patch.fingerprint == TaskPatch.ordinary_carry(
-            TaskUUID(parent_uuid), scheduled="20260814T090000Z",
-        ).fingerprint,
-        "task patch persistence changed its semantic fingerprint",
-    )
-
-    named = (
-        MutationRequest(MutationOperation.PARENT_LINK, guard, ParentLinkPayload(parent_uuid, child_uuid[:8])),
-        MutationRequest(MutationOperation.CHAIN_DISABLE, guard, ChainDisablePayload(parent_uuid)),
-        MutationRequest(
-            MutationOperation.NATIVE_UNTIL_REPAIR,
-            guard,
-            NativeUntilRepairPayload(parent_uuid, "20260813T200000Z", "20260814T200000Z"),
-        ),
-        MutationRequest(
-            MutationOperation.METADATA_REPAIR,
-            guard,
-            _metadata_payload_from_values(parent_uuid, {"nextLink": child_uuid[:8]}),
-        ),
-    )
-    expect(len(named) == 4, "named mutation payloads were not constructible")
-    invalid = (
-        lambda: _child_payload_from_values(
-            {"uuid": "short", "chainID": "chain-requests", "link": 8, "prevLink": parent_uuid[:8]},
-            parent_uuid=parent_uuid,
-        ),
-        lambda: MutationRequest(MutationOperation.CHILD_IMPORT, guard, {"uuid": child_uuid}),
-        lambda: MutationRequest(
-            MutationOperation.CHILD_IMPORT,
-            guard,
-_child_payload_from_values(
-                {
-                    "uuid": child_uuid,
-                    "chainID": "other-chain",
-                    "link": 8,
-                    "prevLink": parent_uuid[:8],
-                },
-                parent_uuid=parent_uuid,
-            ),
-        ),
-        lambda: MutationRequest(
-            MutationOperation.CHILD_IMPORT,
-            guard,
-            _child_payload_from_values(
-                {
-                    "uuid": child_uuid,
-                    "chainID": "chain-requests",
-                    "link": 7,
-                    "prevLink": parent_uuid[:8],
-                },
-                parent_uuid=parent_uuid,
-            ),
-        ),
-    )
-    for make_invalid in invalid:
-        try:
-            make_invalid()
-        except IntegrationContractError:
-            continue
-        raise AssertionError("untyped or mismatched mutation request was accepted")
 
 
 def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
@@ -4623,149 +2246,6 @@ def test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot()
         expect(child_result[child_uuid].kind is expected, f"{mode} child snapshot was misclassified: {child_result}")
         parent_result = service.verify_lifecycle_parents((MutationRequest(MutationOperation.PARENT_LINK, guard, link),))
         expect(parent_result[parent_uuid].kind is expected, f"{mode} parent snapshot was misclassified: {parent_result}")
-
-
-def test_integration_outbox_models_enforce_deterministic_identity_and_progress():
-    """Outbox work is deterministic and cannot finalize without verified mutations."""
-    from nautical_core.integration_models import (
-        CommandFailureKind,
-        FailureEvidence,
-        GuardTimestamp,
-        GuardTimestampField,
-        IntegrationContractError,
-        MutationGuard,
-        MutationOperation,
-        MutationOutcome,
-        MutationOutcomeKind,
-        MutationPostcondition,
-        OutboxIntent,
-        OutboxOutcome,
-        OutboxOutcomeKind,
-        OutboxStage,
-        TaskCommand,
-    )
-    from nautical_core.lifecycle_models import LifecycleEvent, LifecycleIdentity
-
-    identity = LifecycleIdentity("chain-2", "parent-uuid", 9, 10, LifecycleEvent.COMPLETE)
-    guard = MutationGuard(
-        "parent-uuid",
-        "completed",
-        "chain-2",
-        9,
-        "rf1-outbox",
-        (GuardTimestamp(GuardTimestampField.MODIFIED, "20260813T080000Z"),),
-        0,
-    )
-    intent = OutboxIntent(
-        identity,
-        guard,
-        (MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK),
-        (MutationPostcondition.CHILD_IMPORTED, MutationPostcondition.PARENT_LINKED),
-    )
-    same_identity = OutboxIntent(
-        identity,
-        guard,
-        intent.operations,
-        intent.expected_postconditions,
-        max_attempts=8,
-    )
-    expect(intent.intent_id == same_identity.intent_id, "retry policy changed durable outbox identity")
-    expect(intent.intent_id.startswith("ob1-"), "outbox identity omitted its schema prefix")
-
-    imported = MutationOutcome(
-        MutationOperation.CHILD_IMPORT,
-        MutationOutcomeKind.APPLIED,
-        guard,
-        (MutationPostcondition.CHILD_IMPORTED,),
-    )
-    linked = MutationOutcome(
-        MutationOperation.PARENT_LINK,
-        MutationOutcomeKind.ALREADY_APPLIED,
-        guard,
-        (MutationPostcondition.PARENT_LINKED,),
-    )
-    finalized = OutboxOutcome(
-        intent,
-        OutboxStage.FINALIZED,
-        OutboxOutcomeKind.FINALIZED,
-        (imported, linked),
-    )
-    expect(finalized.intent.intent_id == intent.intent_id, "outbox outcome changed intent identity")
-
-    command = TaskCommand(("task", "import"), "import child", 12.0)
-    busy = FailureEvidence(command, CommandFailureKind.BUSY, 1, 1, 0.1, True, "lock active")
-    retry = MutationOutcome(
-        MutationOperation.CHILD_IMPORT,
-        MutationOutcomeKind.RETRYABLE,
-        guard,
-        reason="Taskwarrior is busy",
-        failure=busy,
-    )
-    retryable = OutboxOutcome(
-        intent,
-        OutboxStage.RETRYABLE,
-        OutboxOutcomeKind.RETRYABLE,
-        (retry,),
-        "defer child import",
-    )
-    expect(retryable.kind is OutboxOutcomeKind.RETRYABLE, "retryable outbox state was lost")
-
-    wrong_guard = MutationGuard(
-        "other-parent",
-        "completed",
-        "chain-2",
-        9,
-        "rf1-outbox",
-        guard.timestamps,
-        0,
-    )
-    invalid_cases = (
-        lambda: OutboxIntent(
-            identity,
-            wrong_guard,
-            intent.operations,
-            intent.expected_postconditions,
-        ),
-        lambda: OutboxIntent(
-            identity,
-            guard,
-            (MutationOperation.PARENT_LINK, MutationOperation.CHILD_IMPORT),
-            intent.expected_postconditions,
-        ),
-        lambda: OutboxIntent(identity, guard, intent.operations, (MutationPostcondition.CHILD_IMPORTED,)),
-        lambda: OutboxIntent(
-            LifecycleIdentity("chain-2", "parent-uuid", 9, None, LifecycleEvent.COMPLETE),
-            guard,
-            intent.operations,
-            intent.expected_postconditions,
-        ),
-        lambda: OutboxOutcome(
-            intent,
-            OutboxStage.FINALIZED,
-            OutboxOutcomeKind.FINALIZED,
-            (imported,),
-        ),
-        lambda: OutboxOutcome(
-            intent,
-            OutboxStage.APPLYING,
-            OutboxOutcomeKind.RETRYABLE,
-            (retry,),
-            "wrong stage",
-        ),
-        lambda: OutboxOutcome(
-            intent,
-            OutboxStage.RETRYABLE,
-            OutboxOutcomeKind.RETRYABLE,
-            (imported,),
-            "no retry evidence",
-        ),
-    )
-    for make_invalid in invalid_cases:
-        try:
-            make_invalid()
-        except IntegrationContractError:
-            continue
-        raise AssertionError("invalid outbox contract was accepted")
 
 
 def test_lifecycle_outbox_persists_typed_plans_and_recovers_claims():
@@ -5680,88 +3160,6 @@ def test_integration_contract_covers_all_mutation_and_outbox_states():
     expect(set(outbox_states) == set(OutboxOutcomeKind), "outbox outcome coverage is incomplete")
 
 
-def test_integration_context_resolves_and_validates_invocation_once():
-    """A full invocation freezes one authoritative Taskdata/configuration view."""
-    from datetime import datetime, timezone
-    from pathlib import Path
-    from types import ModuleType
-
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContextError,
-        SilentDiagnostics,
-        build_integration_context,
-    )
-
-    with tempfile.TemporaryDirectory() as td:
-        taskdata = Path(td).resolve()
-        core = ModuleType("integration_context_test_core")
-        calls = {"resolve": 0, "reload": 0, "snapshot": 0}
-
-        def resolve_task_data_context(**_kwargs):
-            calls["resolve"] += 1
-            return str(taskdata), True, "test"
-
-        def reload_taskdata_config(selected):
-            calls["reload"] += 1
-            expect(Path(selected) == taskdata, "configuration reloaded for the wrong Taskdata")
-            return {"ok": True, "scheduler_fingerprint": "scheduler-fp"}
-
-        def effective_config_snapshot():
-            calls["snapshot"] += 1
-            return {
-                "source": str(taskdata / "nautical.toml"),
-                "fingerprint": "config-fp",
-                "values": {"tz": "UTC", "anchor_presets": {"weekday": "w:mon..fri"}},
-            }
-
-        core.resolve_task_data_context = resolve_task_data_context
-        core.reload_taskdata_config = reload_taskdata_config
-        core.effective_config_snapshot = effective_config_snapshot
-        core.scheduling_configuration_error = lambda: ""
-        core.LOCAL_TZ_NAME = "UTC"
-        core._LOCAL_TZ = timezone.utc
-
-        class FixedClock:
-            def now_utc(self):
-                return datetime(2026, 8, 13, 9, 0, tzinfo=timezone.utc)
-
-        context = build_integration_context(
-            core=core,
-            argv=(f"data:{taskdata}",),
-            env={"PATH": os.environ.get("PATH", "")},
-            tw_dir=str(taskdata),
-            task_binary=sys.executable,
-            access=IntegrationAccess.READ_ONLY,
-            command_budget=17,
-            diagnostics=SilentDiagnostics(),
-            clock=FixedClock(),
-            invocation_id="invocation-1",
-        )
-        expect(context.taskdata == taskdata, "context changed resolved Taskdata")
-        expect(context.command_prefix[0] == str(Path(sys.executable).resolve()), "task binary was not resolved")
-        expect(context.command_prefix[1] == f"rc.data.location={taskdata}", "Taskdata override was omitted")
-        expect(context.configuration.fingerprint == "config-fp", "configuration fingerprint was lost")
-        expect(context.local_timezone is timezone.utc, "context changed the validated timezone")
-        expect(not context.mutation_capable, "read-only context acquired mutation access")
-        expect(context.clock.now_utc() == datetime(2026, 8, 13, 9, 0, tzinfo=timezone.utc), "clock changed")
-        expect(calls == {"resolve": 1, "reload": 1, "snapshot": 1}, "context probed invocation state repeatedly")
-
-        core.scheduling_configuration_error = lambda: "invalid astronomy profile"
-        try:
-            build_integration_context(
-                core=core,
-                env={"PATH": os.environ.get("PATH", "")},
-                tw_dir=str(taskdata),
-                task_binary=sys.executable,
-            )
-        except IntegrationContextError as exc:
-            expect(exc.stage == "configuration", f"wrong failure stage: {exc.stage}")
-            expect("astronomy" in exc.detail, f"configuration error lost its cause: {exc}")
-        else:
-            raise AssertionError("invalid scheduling configuration was accepted")
-
-
 def test_full_hooks_receive_one_explicit_integration_context():
     """Full hooks share one context and on-modify cannot acquire mutation access."""
     from pathlib import Path
@@ -5806,760 +3204,6 @@ def test_full_hooks_receive_one_explicit_integration_context():
         else:
             os.environ["TASKDATA"] = previous_taskdata
 
-
-def test_operator_context_discovers_taskdata_once():
-    """Operator context owns Taskwarrior data-location discovery and config reload."""
-    from pathlib import Path
-    from types import ModuleType
-
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContextError,
-        build_operator_context,
-    )
-
-    with tempfile.TemporaryDirectory(prefix="nautical_operator_context_") as td:
-        root = Path(td)
-        taskdata = root / "taskdata"
-        taskdata.mkdir()
-        task_binary = root / "task"
-        task_binary.write_text(
-            f"#!/bin/sh\nprintf '%s\\n' '{taskdata}'\n",
-            encoding="utf-8",
-        )
-        task_binary.chmod(0o700)
-        core = ModuleType("operator_context_test_core")
-        calls = {"resolve": 0, "reload": 0}
-
-        def resolve_task_data_context(**kwargs):
-            calls["resolve"] += 1
-            return str(kwargs["tw_dir"]), False, "fallback"
-
-        def reload_taskdata_config(selected):
-            calls["reload"] += 1
-            expect(Path(selected) == taskdata, "operator reloaded the wrong Taskdata")
-            return {"ok": True, "scheduler_fingerprint": "operator-scheduler-fp"}
-
-        core.resolve_task_data_context = resolve_task_data_context
-        core.reload_taskdata_config = reload_taskdata_config
-        core.scheduling_configuration_error = lambda: ""
-        core.effective_config_snapshot = lambda: {
-            "source": str(taskdata / "nautical.toml"),
-            "fingerprint": "operator-config-fp",
-            "values": {"tz": "UTC"},
-        }
-        core.LOCAL_TZ_NAME = "UTC"
-        core._LOCAL_TZ = timezone.utc
-        context = build_operator_context(
-            core=core,
-            task_binary=str(task_binary),
-            env={"PATH": os.environ.get("PATH", "")},
-            access=IntegrationAccess.MUTATION,
-        )
-        expect(context.taskdata == taskdata, "operator context lost discovered Taskdata")
-        expect(context.taskdata_source == "taskwarrior", "operator discovery source was not retained")
-        expect(context.mutation_capable, "operator mutation capability was lost")
-        expect(calls == {"resolve": 1, "reload": 1}, "operator context repeated discovery or reload")
-
-        core.reload_taskdata_config = lambda _selected: (_ for _ in ()).throw(
-            RuntimeError("malformed operator config")
-        )
-        try:
-            build_operator_context(
-                core=core,
-                task_binary=str(task_binary),
-                env={"PATH": os.environ.get("PATH", "")},
-            )
-        except IntegrationContextError as exc:
-            expect(exc.stage == "configuration", f"wrong failure stage: {exc.stage!r}")
-            expect(exc.taskdata == taskdata, f"validated Taskdata was lost from the failure: {exc.taskdata!r}")
-        else:
-            raise AssertionError("operator context accepted malformed configuration")
-
-
-def test_recurrence_fingerprint_is_canonical_and_mutation_sensitive():
-    """Formatting-only recurrence changes are stable while scheduling edits invalidate guards."""
-    from nautical_core.lifecycle_models import recurrence_fingerprint
-
-    def parse_datetime(value):
-        text = str(value).strip()
-        if text == "2026-08-13T09:00:00Z":
-            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc)
-        if text == "20260813T090000Z":
-            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc)
-        return None
-
-    base = {
-        "anchor": " w:mon ",
-        "anchor_mode": "SKIP",
-        "chainMax": "5",
-        "due": "2026-08-13T09:00:00Z",
-        "description": "presentation",
-        "project": "same-plan",
-    }
-    equivalent = {
-        **base,
-        "anchor": "w:mon",
-        "anchor_mode": "skip",
-        "chainMax": 5,
-        "due": "20260813T090000Z",
-        "description": "renamed",
-        "modified": "20260813T100000Z",
-    }
-    expect(
-        recurrence_fingerprint(base, parse_datetime=parse_datetime)
-        == recurrence_fingerprint(equivalent, parse_datetime=parse_datetime),
-        "presentation or formatting changes altered recurrence fingerprint",
-    )
-    changed = {**equivalent, "anchor": "w:tue"}
-    expect(
-        recurrence_fingerprint(base, parse_datetime=parse_datetime)
-        != recurrence_fingerprint(changed, parse_datetime=parse_datetime),
-        "recurrence change did not invalidate fingerprint",
-    )
-
-
-def test_lifecycle_planner_is_pure_and_deterministic():
-    """The first planner contract produces repeatable plans without mutating snapshots."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import (
-        LifecyclePlanner,
-        LifecyclePlanningError,
-        LifecyclePreflight,
-        terminal_plan_for_snapshot,
-    )
-
-    source = {
-        "uuid": "00000000-0000-4000-8000-000000000501",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "chain-1",
-        "link": 4,
-        "anchor": "w:mon",
-    }
-    snapshot = _task_snapshot(source)
-
-    def build_child(task, event):
-        expect(event is LifecycleEvent.COMPLETE, "unexpected event passed to child builder")
-        expect(task.to_dict() == source, "planner changed the input snapshot")
-        return _task_draft({
-            **source,
-            "uuid": "00000000-0000-4000-8000-000000000502",
-            "description": "next",
-            "status": "pending",
-            "link": 5,
-            "prevLink": source["uuid"][:8],
-            "due": "20260824T090000Z",
-        })
-
-    class Recurrence:
-        def next_candidate(self, _snapshot, _event, _kind, _next_link):
-            from nautical_core.lifecycle_planner import RecurrenceCandidate
-            return RecurrenceCandidate(child_due="20260824T090000Z", metadata=(("target_field", "due"),))
-
-        def build_child(self, snapshot, event, _candidate, _next_link):
-            return build_child(snapshot, event)
-
-    planner = LifecyclePlanner(
-        {"scheduler_fingerprint": "fp-1"},
-        recurrence_service=Recurrence(),
-    )
-    first = planner.plan(snapshot, LifecycleEvent.COMPLETE)
-    second = planner.plan(snapshot, LifecycleEvent.COMPLETE)
-    expect(first == second, "equal snapshots did not produce equal plans")
-    expect(first.action is LifecycleAction.SPAWN_CHILD, "completion did not produce a spawn plan")
-    expect(first.child_dict()["uuid"] == "00000000-0000-4000-8000-000000000502", "child payload was not retained")
-    expect(first.parent_guard.recurrence_fingerprint.startswith("rf1-"), "planner omitted recurrence fingerprint")
-    expect(source == snapshot.to_dict(), "planner mutated the source task")
-    preflight = LifecyclePreflight.from_context(
-        base_link=4,
-        next_link=5,
-        kind="anchor",
-        chain_id="chain-1",
-    )
-    checked = planner.plan(snapshot, LifecycleEvent.COMPLETE, preflight=preflight)
-    expect(checked == first, "validated preflight changed the candidate plan")
-    rejected = False
-    try:
-        planner.plan(
-            snapshot,
-            LifecycleEvent.COMPLETE,
-            carry_validator=lambda _snapshot, _child, _candidate: "scheduled carry is missing",
-        )
-    except LifecyclePlanningError as exc:
-        rejected = "scheduled carry" in str(exc)
-    expect(rejected, "planner did not reject an invalid carry result")
-    try:
-        planner.plan(
-            snapshot,
-            LifecycleEvent.COMPLETE,
-            preflight=LifecyclePreflight.from_context(
-                base_link=4,
-                next_link=6,
-                kind="anchor",
-                chain_id="chain-1",
-            ),
-        )
-    except LifecyclePlanningError as exc:
-        expect("adjacent" in str(exc), f"preflight mismatch was not actionable: {exc}")
-    else:
-        raise AssertionError("planner accepted a non-adjacent preflight")
-
-    terminal = planner.plan(snapshot, LifecycleEvent.CHAIN_UNTIL)
-    expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil did not finalize")
-    for event in (
-        LifecycleEvent.DISABLE,
-        LifecycleEvent.MANUAL_DELETE,
-        LifecycleEvent.CHAIN_MAX,
-        LifecycleEvent.CHAIN_UNTIL,
-        LifecycleEvent.COMPLETE,
-        LifecycleEvent.EXPIRE,
-    ):
-        terminal = terminal_plan_for_snapshot(snapshot, event)
-        expect(terminal.parent_patch_dict() == {"chain": "off"}, f"terminal patch drifted for {event.value}")
-        expect(terminal.identity.event is event, f"terminal event was not retained for {event.value}")
-    linked_snapshot = _task_snapshot({**source, "nextLink": "child123"})
-    try:
-        terminal_plan_for_snapshot(linked_snapshot, LifecycleEvent.CHAIN_UNTIL)
-    except LifecyclePlanningError as exc:
-        expect("persisted successor" in str(exc), f"successor guard lost detail: {exc}")
-    else:
-        raise AssertionError("terminal finalization accepted an already-linked successor")
-    retained = terminal_plan_for_snapshot(linked_snapshot, LifecycleEvent.MANUAL_DELETE)
-    expect(retained.action is LifecycleAction.DISABLE_CHAIN, "manual disable should retain a persisted successor")
-    activation = planner.plan(snapshot, LifecycleEvent.RESUME)
-    expect(activation.parent_patch_dict() == {"chain": "on"}, "resume patch was incorrect")
-
-    try:
-        LifecyclePlanner({"scheduler_fingerprint": "fp-1"}).plan(
-            _task_snapshot({"uuid": "00000000-0000-4000-8000-000000000510", "status": "pending", "link": 1, "anchor": "w:mon"}),
-            LifecycleEvent.COMPLETE,
-        )
-    except LifecyclePlanningError:
-        pass
-    else:
-        raise AssertionError("planner accepted a task without mandatory chainID")
-
-
-def test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy():
-    """Candidate, chainUntil, and missing-recurrence decisions stay pure and typed."""
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import (
-        ChainGenerationLimitPolicy,
-        ChainGenerationPlanningService,
-        LifecyclePlanner,
-        RecurrenceCandidate,
-    )
-
-    class Service:
-        def __init__(self, candidate):
-            self.candidate = candidate
-            self.calls = []
-
-        def next_candidate(self, snapshot, event, kind, next_link):
-            self.calls.append((event, kind, next_link, snapshot.to_dict()))
-            return self.candidate
-
-        def build_child(self, snapshot, event, candidate, next_link):
-            values = snapshot.to_dict()
-            return _task_draft({
-                **values,
-                "uuid": f"00000000-0000-4000-8000-0000000005{next_link:02d}",
-                "description": "next",
-                "status": "pending",
-                "link": next_link,
-                "prevLink": str(values["uuid"])[:8],
-                "due": candidate.child_due,
-            })
-
-    source = _task_snapshot(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000502",
-            "status": "completed",
-            "chain": "on",
-            "chainID": "chain-1",
-            "link": 4,
-            "cp": "1d",
-        }
-    )
-    service = Service(RecurrenceCandidate("2026-08-13T09:00:00Z"))
-    planner = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=service)
-    plan = planner.plan(source, LifecycleEvent.COMPLETE)
-    expect(plan.action is LifecycleAction.SPAWN_CHILD, "candidate did not produce spawn")
-    expect(service.calls[0][1:] == ("cp", 5, source.to_dict()), "planner did not own kind/link calculation")
-    expect(plan.child_dict()["link"] == 5, "planner passed the wrong successor link")
-
-    limited = LifecyclePlanner(
-        {"scheduler_fingerprint": "fp-1"},
-        recurrence_service=service,
-        successor_limit_policy=lambda _task, _event, _candidate, link: "chainMax reached" if link > 4 else None,
-    ).plan(source, LifecycleEvent.COMPLETE)
-    expect(limited.action is LifecycleAction.FINALIZE_CHAIN, "chain limit did not stop successor planning")
-
-    terminal_service = Service(RecurrenceCandidate(None, terminal_reason="chainUntil reached"))
-    terminal = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=terminal_service).plan(
-        source,
-        LifecycleEvent.EXPIRE,
-    )
-    expect(terminal.action is LifecycleAction.FINALIZE_CHAIN, "terminal candidate spawned a child")
-
-    no_recurrence = _task_snapshot(
-        {"uuid": "00000000-0000-4000-8000-000000000503", "status": "completed", "chain": "on", "chainID": "chain-1", "link": 4}
-    )
-    empty = LifecyclePlanner({"scheduler_fingerprint": "fp-1"}, recurrence_service=service).plan(
-        no_recurrence,
-        LifecycleEvent.COMPLETE,
-    )
-    expect(empty.action is LifecycleAction.FINALIZE_CHAIN, "non-recurrence task was treated as spawnable")
-
-    class Generation:
-        class Core:
-            @staticmethod
-            def coerce_int(value, default=0):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-        core = Core()
-
-        def compute_cp_child_due(self, parent):
-            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc), {"target_field": "due"}
-
-        def compute_anchor_child_due(self, parent):
-            return datetime(2026, 8, 13, 9, tzinfo=timezone.utc), {"target_field": "due"}, None
-
-        def safe_parse_datetime(self, value):
-            return datetime(2026, 8, 12, 9, tzinfo=timezone.utc), None
-
-        def build_child_draft(self, parent, due, field, link, parent_short, kind, cpmax, until):
-            values = parent.observation.to_mapping()
-            return _task_draft({
-                **values,
-                "uuid": "00000000-0000-4000-8000-000000000504",
-                "description": "generated child",
-                "status": "pending",
-                "link": link,
-                "prevLink": parent_short,
-                field: due,
-            })
-
-    generated_source = _task_snapshot({**source.to_dict(), "chainUntil": "2026-08-12T09:00:00Z"})
-    generated = ChainGenerationPlanningService(Generation())
-    generated_planner = LifecyclePlanner(
-        {"scheduler_fingerprint": "fp-1"},
-        recurrence_service=generated,
-        successor_limit_policy=ChainGenerationLimitPolicy(
-            lambda left, right: (left > right) - (left < right),
-        ),
-    )
-    generated_plan = generated_planner.plan(generated_source, LifecycleEvent.COMPLETE)
-    expect(generated_plan.action is LifecycleAction.FINALIZE_CHAIN, "chainUntil policy did not stop generated child")
-
-
-def test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile():
-    """Completion and reconcile must use identical candidate-to-plan assembly."""
-    from datetime import datetime, timezone
-
-    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import RecurrenceCandidate, plan_candidate_successor
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
-    parent = {
-        "uuid": "00000000-0000-4000-8000-000000000508",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "planner-parity",
-        "link": 1,
-        "cp": "1d",
-        "due": "20260816T090000Z",
-    }
-
-    class Generation:
-        class Core:
-            @staticmethod
-            def coerce_int(value, default=0):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-            @staticmethod
-            def fmt_isoz(value):
-                return value.isoformat().replace("+00:00", "Z")
-
-        core = Core()
-
-        def build_child_draft(self, task, child_due, child_field, next_link, parent_short, kind, cpmax, until):
-            values = task.observation.to_mapping() if hasattr(task, "observation") else task
-            return _task_draft({
-                "uuid": "00000000-0000-4000-8000-000000000507",
-                "description": "parity child",
-                "status": "pending",
-                "chain": "on",
-                "chainID": values["chainID"],
-                "link": next_link,
-                "prevLink": parent_short,
-                child_field: child_due,
-                "cp": values.get("cp", "1d"),
-            })
-
-    generation = Generation()
-    candidate = RecurrenceCandidate(child_due=due, metadata=(("target_field", "due"),))
-    snapshot = _task_snapshot(parent)
-    completion_plan = plan_candidate_successor(
-        snapshot,
-        LifecycleEvent.COMPLETE,
-        candidate,
-        generation=generation,
-        validated_configuration={"scheduler_fingerprint": "completion"},
-        compare_datetimes=lambda left, right: (left > right) - (left < right),
-    )
-    reconcile_plan = reconcile.plan_recovery_decision(
-        snapshot.observation,
-        existing_children=[],
-        hook=None,
-        generation=type(
-            "ReconcileGeneration",
-            (Generation,),
-            {
-                "compute_cp_child_due": lambda self, _task: (due, {"target_field": "due"}),
-                "safe_parse_datetime": lambda self, _value: (None, None),
-            },
-        )(),
-    )
-    expect(hasattr(reconcile_plan, "plan"), "reconcile did not produce a typed lifecycle result")
-    actual = reconcile_plan.plan
-    expect(
-        actual == completion_plan,
-        f"completion/reconcile plans diverged:\ncompletion={completion_plan!r}\nreconcile={actual!r}",
-    )
-    expect(
-        actual.semantic_key() == completion_plan.semantic_key(),
-        "semantic plan key diverged across completion and reconcile",
-    )
-
-
-def test_expiration_candidate_uses_scheduled_recurrence_basis():
-    """Expired scheduled-only tasks must calculate from scheduled, not deletion end."""
-    from datetime import datetime, timezone
-    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import LifecyclePreflight, expiration_candidate, plan_candidate_successor
-
-    scheduled = "2026-08-16T09:00:00Z"
-    parent = {
-        "uuid": "00000000-0000-4000-8000-000000000504",
-        "status": "deleted",
-        "chain": "on",
-        "chainID": "expiration-parity",
-        "link": 4,
-        "cp": "1d",
-        "scheduled": scheduled,
-        "end": "2026-08-20T12:00:00Z",
-    }
-
-    class Generation:
-        class Core:
-            @staticmethod
-            def coerce_int(value, default=0):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-        core = Core()
-
-        def compute_cp_child_due(self, task):
-            values = task.observation.to_mapping() if hasattr(task, "observation") else task
-            expect(values["end"] == scheduled, "expiration candidate used deletion end instead of scheduled")
-            return datetime(2026, 8, 17, 9, tzinfo=timezone.utc), {"target_field": "scheduled"}
-
-        def build_child_draft(self, task, due, field, link, parent_short, kind, cpmax, until):
-            values = task.observation.to_mapping() if hasattr(task, "observation") else task
-            return _task_draft({
-                "uuid": "00000000-0000-4000-8000-000000000505",
-                "description": "expiration child",
-                "status": "pending",
-                "chain": "on",
-                "chainID": values["chainID"],
-                "link": link,
-                "prevLink": parent_short,
-                field: due,
-                "cp": values.get("cp", "1d"),
-            })
-
-    generation = Generation()
-    candidate = expiration_candidate(_task_snapshot(parent), generation=generation)
-    plan = plan_candidate_successor(
-        _task_snapshot(parent),
-        LifecycleEvent.EXPIRE,
-        candidate,
-        generation=generation,
-        validated_configuration={"scheduler_fingerprint": "expiration"},
-        compare_datetimes=lambda left, right: (left > right) - (left < right),
-        preflight=LifecyclePreflight.from_context(
-            base_link=4, next_link=5, kind="cp", chain_id="expiration-parity"
-        ),
-    )
-    expect(
-        plan.child_dict()["scheduled"] == candidate.child_due.isoformat().replace("+00:00", "Z"),
-        "expiration plan lost scheduled target field",
-    )
-
-def test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries():
-    """The shared planner must preserve semantic plans across supported recurrence boundaries."""
-    from datetime import datetime, timezone
-    from nautical_core.lifecycle_models import LifecycleEvent, TaskSnapshot
-    from nautical_core.lifecycle_planner import LifecyclePreflight, RecurrenceCandidate, plan_candidate_successor
-
-    due = datetime(2026, 8, 17, 9, tzinfo=timezone.utc)
-
-    class Generation:
-        class Core:
-            @staticmethod
-            def coerce_int(value, default=0):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-            @staticmethod
-            def fmt_isoz(value):
-                return value.isoformat().replace("+00:00", "Z")
-
-        core = Core()
-
-        def compute_cp_child_due(self, _task):
-            return due, {"target_field": "due"}
-
-        def compute_anchor_child_due(self, _task):
-            return due, {"target_field": "due"}, ["anchor"]
-
-        def safe_parse_datetime(self, value):
-            return (due, None) if value else (None, None)
-
-        def build_child_draft(self, task, child_due, field, link, parent_short, kind, cpmax, until):
-            values = task.observation.to_mapping() if hasattr(task, "observation") else task
-            child = {
-                "uuid": "00000000-0000-4000-8000-000000000506",
-                "description": "matrix child",
-                "status": "pending",
-                "chain": "on",
-                "chainID": values["chainID"],
-                "link": link,
-                "prevLink": parent_short,
-                field: child_due,
-            }
-            if values.get("until"):
-                child["until"] = values["until"]
-            if cpmax:
-                child["chainMax"] = cpmax
-            child.update({key: values[key] for key in ("cp", "anchor", "anchor_file", "anchor_mode") if values.get(key)})
-            return _task_draft(child)
-
-    generation = Generation()
-    cases = (
-        ({"cp": "1d", "due": "20260816T090000Z"}, "cp", {"target_field": "due"}),
-        ({"anchor": "w:mon", "due": "20260816T090000Z"}, "anchor", {"target_field": "due"}),
-        ({"anchor": "w:mon", "anchor_file": "null", "due": "20260816T090000Z"}, "anchor", {"target_field": "due"}),
-        ({"anchor_file": "dates.txt", "due": "20260816T090000Z"}, "anchor_file", {"target_field": "due"}),
-        ({"cp": "1d", "scheduled": "20260816T090000Z"}, "cp", {"target_field": "scheduled"}),
-        ({"cp": "1d", "due": "20260816T090000Z", "until": "20260818T090000Z"}, "cp", {"target_field": "due"}),
-    )
-    for index, (fields, kind, metadata) in enumerate(cases):
-        parent = {
-            "uuid": f"00000000-0000-4000-8000-0000000005{index:02d}",
-            "status": "completed",
-            "chain": "on",
-            "chainID": f"matrix-{index}",
-            "link": 1,
-            **fields,
-        }
-        snapshot = _task_snapshot(parent)
-        candidate = RecurrenceCandidate(child_due=due, metadata=tuple(metadata.items()))
-        preflight = LifecyclePreflight.from_context(base_link=1, next_link=2, kind=kind, chain_id=f"matrix-{index}")
-        first = plan_candidate_successor(
-            snapshot, LifecycleEvent.COMPLETE, candidate,
-            generation=generation, validated_configuration={"scheduler_fingerprint": "matrix"},
-            compare_datetimes=lambda left, right: (left > right) - (left < right), preflight=preflight,
-        )
-        second = plan_candidate_successor(
-            snapshot, LifecycleEvent.COMPLETE, candidate,
-            generation=generation, validated_configuration={"scheduler_fingerprint": "matrix"},
-            compare_datetimes=lambda left, right: (left > right) - (left < right), preflight=preflight,
-        )
-        expect(first.semantic_key() == second.semantic_key(), f"plan parity drifted for {kind} case")
-
-
-def test_lifecycle_terminal_policy_routes_all_terminal_events_through_one_patch():
-    """Terminal causes share typed validation and idempotent chain disablement."""
-    from nautical_core.lifecycle_models import LifecycleEvent
-    from nautical_core.modify_lifecycle import apply_terminal_transition
-
-    events = (
-        LifecycleEvent.DISABLE,
-        LifecycleEvent.MANUAL_DELETE,
-        LifecycleEvent.CHAIN_MAX,
-        LifecycleEvent.CHAIN_UNTIL,
-        LifecycleEvent.COMPLETE,
-        LifecycleEvent.EXPIRE,
-    )
-    for event in events:
-        task = {
-            "uuid": "77777777-0000-0000-0000-000000000007",
-            "status": "deleted" if event is LifecycleEvent.MANUAL_DELETE else "completed",
-            "chain": "on",
-            "chainID": "terminal-policy",
-            "link": 7,
-        }
-        changed = apply_terminal_transition(task, event)
-        expect(changed and task["chain"] == "off", f"{event.value} did not disable chain")
-        expect(not apply_terminal_transition(task, event), f"{event.value} was not idempotent")
-
-    from nautical_core.lifecycle_models import LifecycleAction, TaskSnapshot
-    from nautical_core.lifecycle_planner import terminal_plan_for_snapshot
-
-    linked = {
-        "uuid": "88888888-0000-0000-0000-000000000008",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "terminal-policy-linked",
-        "link": 8,
-        "nextLink": "successor",
-    }
-    try:
-        terminal_plan_for_snapshot(_task_snapshot(linked), LifecycleEvent.CHAIN_UNTIL)
-    except Exception as exc:
-        expect("persisted successor" in str(exc), "linked terminal rejection was not actionable")
-    else:
-        raise AssertionError("terminal finalization accepted a persisted successor")
-    manual_plan = terminal_plan_for_snapshot(
-        _task_snapshot({**linked, "status": "deleted"}),
-        LifecycleEvent.MANUAL_DELETE,
-    )
-    expect(manual_plan.action is LifecycleAction.DISABLE_CHAIN, "manual deletion did not retain successor policy")
-
-
-def test_diagnostic_event_renders_to_stderr_and_has_stable_record():
-    """Structured diagnostics must keep stdout clean and expose stable fields."""
-    from nautical_core import diagnostic_models, runtime
-
-    event = diagnostic_models.DiagnosticEvent(
-        "chain.export_failed",
-        "Taskwarrior lock active",
-        hook="on-modify",
-        level="warning",
-        context={"chain_id": "abcd1234"},
-    )
-    record = event.to_log_record()
-    expect(record["code"] == "chain.export_failed", "diagnostic code changed")
-    expect(record["level"] == "warning" and record["hook"] == "on-modify", "diagnostic metadata changed")
-    expect(record["context"] == {"chain_id": "abcd1234"}, "diagnostic context changed")
-
-    old_diag = os.environ.get("NAUTICAL_DIAG")
-    old_log = os.environ.get("NAUTICAL_DIAG_LOG")
-    out, err = io.StringIO(), io.StringIO()
-    try:
-        os.environ["NAUTICAL_DIAG"] = "1"
-        os.environ.pop("NAUTICAL_DIAG_LOG", None)
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            runtime.diag(event, "on-modify", "/tmp/nautical-diagnostic-contract")
-    finally:
-        if old_diag is None:
-            os.environ.pop("NAUTICAL_DIAG", None)
-        else:
-            os.environ["NAUTICAL_DIAG"] = old_diag
-        if old_log is None:
-            os.environ.pop("NAUTICAL_DIAG_LOG", None)
-        else:
-            os.environ["NAUTICAL_DIAG_LOG"] = old_log
-    expect(out.getvalue() == "", "diagnostic event wrote to stdout")
-    expect("Taskwarrior lock active" in err.getvalue(), "diagnostic event missed stderr")
-
-
-def test_taskwarrior_document_is_lossless_with_typed_scalar_accessors():
-    """The shared task model must retain UDAs while normalizing common scalars."""
-    from nautical_core.taskwarrior_io import TaskDocument
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000905",
-        "description": "routine",
-        "link": 7.0,
-        "chain": "on",
-        "custom_uda": {"nested": ["keep", 2]},
-    }
-    document = TaskDocument.from_object(task)
-    expect(document is not None, "valid task object was not accepted")
-    assert document is not None
-    expect(document.as_dict() is task, "task wrapper copied away the live payload")
-    expect(document.text("description") == "routine", "text accessor changed value")
-    expect(document.integer("link") == 7, "numeric Taskwarrior value was not normalized")
-    expect(document.boolean("chain") is True, "boolean text value was not normalized")
-    expect(document.get("custom_uda") == task["custom_uda"], "unknown UDA was lost")
-    task["description"] = "changed"
-    expect(document.text("description") == "changed", "wrapper stopped reflecting task mutations")
-
-
-def test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars():
-    """Malformed decoded values fail closed without raising from accessors."""
-    from nautical_core.taskwarrior_io import TaskDocument
-
-    expect(TaskDocument.from_object([{"uuid": "bad"}]) is None, "array became a task document")
-    document = TaskDocument.from_object({"link": "not-a-number", "chain": "maybe"})
-    expect(document is not None, "object with unknown scalar values was rejected")
-    assert document is not None
-    expect(document.integer("link", 4) == 4, "invalid number did not use its default")
-    expect(document.boolean("chain", False) is False, "invalid boolean did not use its default")
-
-
-def test_hook_protocol_classifies_safe_nautical_ordinary_edits():
-    """Only changes unrelated to Nautical behavior should qualify for thin modify handling."""
-    protocol = _load_hook_protocol_module("_nautical_hook_protocol_ordinary_edit_test")
-    old = {
-        "uuid": "00000000-0000-4000-8000-000000000707",
-        "status": "pending",
-        "description": "ordinary edit",
-        "project": "home",
-        "due": "20270101T090000Z",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "abcd1234",
-        "link": 1,
-        "cp": "1d",
-        "link": 4,
-    }
-    for field, value in (
-        ("description", "renamed"),
-        ("project", "work"),
-        ("priority", "H"),
-        ("tags", ["next", "phone"]),
-        ("depends", ["11111111-1111-1111-1111-111111111111"]),
-        ("start", "20260101T090000Z"),
-        ("parent", "22222222-2222-2222-2222-222222222222"),
-        ("blocks", ["33333333-3333-3333-3333-333333333333"]),
-        ("mask", "20270101T090000Z"),
-        ("imask", "20270101T090000Z"),
-        ("context", "work"),
-    ):
-        new = dict(old, **{field: value}, modified="20260101T000001Z")
-        expect(protocol.is_safe_nautical_ordinary_modify(old, new), f"ordinary {field} edit should use the thin path")
-
-    for field, value in (
-        ("status", "completed"),
-        ("cp", "P2D"),
-        ("chain", "off"),
-        ("chainMax", 8),
-        ("chainUntil", "20280101T000000Z"),
-        ("link", 5),
-        ("nextLink", "eeeeeeee"),
-        ("due", "20270102T090000Z"),
-        ("scheduled", "20270101T080000Z"),
-        ("wait", "20261231T090000Z"),
-        ("custom_uda", "changed"),
-    ):
-        new = dict(old, **{field: value}, modified="20260101T000001Z")
-        expect(not protocol.is_safe_nautical_ordinary_modify(old, new), f"Nautical-sensitive {field} edit must use the full path")
 
 
 def test_exit_probe_is_conservative_across_queue_states():
@@ -7190,67 +3834,15 @@ def test_hook_diag_redact_msg_masks_sensitive_json_fields():
     expect(obj_exit.get("safe") == "ok", f"on-exit non-sensitive key changed: {obj_exit}")
 
 
-def test_diag_log_structured_fields():
-    """Persistent diag log should include structured fields for dict messages."""
-    with tempfile.TemporaryDirectory() as td:
-        prev_taskdata = os.environ.get("TASKDATA")
-        prev_diag_log = os.environ.get("NAUTICAL_DIAG_LOG")
-        os.environ["TASKDATA"] = td
-        os.environ["NAUTICAL_DIAG_LOG"] = "1"
-        try:
-            core.diag({"msg": "hello", "description": "secret", "ok": "keep", "event": "test"})
-            log_path = Path(td) / ".nautical_diag.jsonl"
-            line = log_path.read_text(encoding="utf-8").strip().splitlines()[-1]
-            obj = json.loads(line)
-            expect(obj.get("msg") == "hello", f"unexpected msg: {obj.get('msg')!r}")
-            data = obj.get("data") or {}
-            expect(data.get("description") == "[redacted]", "structured redaction missing")
-            expect(data.get("ok") == "keep", "structured payload missing ok field")
-            expect("pid" in obj and "cwd" in obj, "structured fields missing pid/cwd")
-        finally:
-            if prev_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = prev_taskdata
-            if prev_diag_log is None:
-                os.environ.pop("NAUTICAL_DIAG_LOG", None)
-            else:
-                os.environ["NAUTICAL_DIAG_LOG"] = prev_diag_log
-
-def test_warn_rate_limited_any():
-    """Rate-limited warnings should only emit once per interval."""
-    with tempfile.TemporaryDirectory() as td:
-        prev_cache = os.environ.get("XDG_CACHE_HOME")
-        prev_diag = os.environ.get("NAUTICAL_DIAG")
-        os.environ["XDG_CACHE_HOME"] = td
-        os.environ["NAUTICAL_DIAG"] = "1"
-        buf = io.StringIO()
-        try:
-            with contextlib.redirect_stderr(buf):
-                core._warn_rate_limited_any("golden_rate_limit", "rate limit message", min_interval_s=3600.0)
-                core._warn_rate_limited_any("golden_rate_limit", "rate limit message", min_interval_s=3600.0)
-            out = buf.getvalue().strip().splitlines()
-            expect(len([ln for ln in out if "rate limit message" in ln]) == 1,
-                   f"expected 1 warning, got: {out}")
-        finally:
-            if prev_cache is None:
-                os.environ.pop("XDG_CACHE_HOME", None)
-            else:
-                os.environ["XDG_CACHE_HOME"] = prev_cache
-            if prev_diag is None:
-                os.environ.pop("NAUTICAL_DIAG", None)
-            else:
-                os.environ["NAUTICAL_DIAG"] = prev_diag
-
 def test_core_cache_dir_and_lock_permissions():
     """Core cache dir and lock files should have restricted permissions."""
     core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
         cache_dir = os.path.join(td, "cache")
         mod = _load_hook_module(core_path, "_nautical_core_cache_perm_test")
-        mod._cache_api._resolve()
-        mod._CACHE_DIR = None
+        mod._refresh_facade_config_exports()
         mod.ANCHOR_CACHE_DIR_OVERRIDE = cache_dir
+        mod._cache_api._resolve()
         previous_trust = os.environ.get("NAUTICAL_TRUST_CACHE_PATH")
         os.environ["NAUTICAL_TRUST_CACHE_PATH"] = "1"
         try:
@@ -7537,138 +4129,6 @@ def test_on_add_data_arg_overrides_taskdata_env():
                 os.environ["TASKDATA"] = prev_taskdata
         expect(Path(mod.TW_DATA_DIR) == Path(arg_dir), f"expected argv data dir, got: {mod.TW_DATA_DIR}")
 
-def test_core_resolve_task_data_context_precedence():
-    """core resolver should prefer argv data:, then TASKDATA env, then tw_dir fallback."""
-    d1, use1, src1 = core.resolve_task_data_context(
-        argv=["api:2", "command:modify", "data:/tmp/nautical_core_arg_test"],
-        env={"TASKDATA": "/tmp/nautical_core_env_test"},
-        tw_dir="/tmp/nautical_core_fallback_test",
-    )
-    expect(str(d1).endswith("/tmp/nautical_core_arg_test"), f"unexpected argv resolution: {(d1, use1, src1)!r}")
-    expect(bool(use1), "argv data: should enable rc.data.location")
-    expect(src1 == "argv", f"expected argv source, got {src1!r}")
-
-    d2, use2, src2 = core.resolve_task_data_context(
-        argv=["api:2", "command:modify"],
-        env={"TASKDATA": "/tmp/nautical_core_env_test"},
-        tw_dir="/tmp/nautical_core_fallback_test",
-    )
-    expect(str(d2).endswith("/tmp/nautical_core_env_test"), f"unexpected env resolution: {(d2, use2, src2)!r}")
-    expect(bool(use2), "TASKDATA should enable rc.data.location")
-    expect(src2 == "env", f"expected env source, got {src2!r}")
-
-    d3, use3, src3 = core.resolve_task_data_context(
-        argv=["api:2", "command:modify"],
-        env={},
-        tw_dir="/tmp/nautical_core_fallback_test",
-    )
-    expect(str(d3).endswith("/tmp/nautical_core_fallback_test"), f"unexpected fallback resolution: {(d3, use3, src3)!r}")
-    expect(not bool(use3), "fallback should not enable rc.data.location")
-    expect(src3 == "fallback", f"expected fallback source, got {src3!r}")
-
-def test_core_resolve_task_data_context_rejects_unsafe_world_writable_dir():
-    """core resolver should reject explicit world-writable data dirs by default."""
-    if os.name == "nt":
-        expect(True, "skip on non-POSIX")
-        return
-    with tempfile.TemporaryDirectory() as td:
-        unsafe = Path(td) / "unsafe-data-dir"
-        unsafe.mkdir()
-        try:
-            os.chmod(unsafe, 0o777)
-        except Exception:
-            expect(True, "chmod unavailable; skip")
-            return
-        fallback = Path(td) / "safe-fallback"
-        got, use_rc, src = core.resolve_task_data_context(
-            argv=["api:2", "command:modify", f"data:{unsafe}"],
-            env={},
-            tw_dir=str(fallback),
-        )
-        expect(src == "fallback", f"unsafe explicit dir should fall back, got source={src!r}")
-        expect(not bool(use_rc), "fallback path should disable rc.data.location")
-        expect(str(got).endswith("/safe-fallback"), f"unexpected fallback path: {got!r}")
-
-
-def test_core_resolve_task_data_context_trust_override_allows_explicit_dir():
-    """core resolver trust override should allow explicit paths without safety checks."""
-    if os.name == "nt":
-        expect(True, "skip on non-POSIX")
-        return
-    with tempfile.TemporaryDirectory() as td:
-        unsafe = Path(td) / "unsafe-data-dir"
-        unsafe.mkdir()
-        try:
-            os.chmod(unsafe, 0o777)
-        except Exception:
-            expect(True, "chmod unavailable; skip")
-            return
-        got, use_rc, src = core.resolve_task_data_context(
-            argv=["api:2", "command:modify", f"data:{unsafe}"],
-            env={"NAUTICAL_TRUST_TASKDATA_PATH": "1"},
-            tw_dir=str(Path(td) / "safe-fallback"),
-        )
-        expect(src == "argv", f"trusted explicit dir should keep argv source, got {src!r}")
-        expect(bool(use_rc), "trusted explicit dir should keep rc.data.location enabled")
-        expect(
-            got == os.path.abspath(str(unsafe)),
-            f"trusted explicit dir mismatch: got={got!r} want={os.path.abspath(str(unsafe))!r}",
-        )
-
-
-def test_core_resolve_task_data_context_rejects_parent_traversal_segments():
-    """core resolver should reject explicit data paths containing '..' by default."""
-    d, use_rc, src = core.resolve_task_data_context(
-        argv=["api:2", "command:modify", "data:../nautical_bad_dir"],
-        env={},
-        tw_dir="/tmp/nautical_core_fallback_test",
-    )
-    expect(src == "fallback", f"parent traversal path should fall back, got source={src!r}")
-    expect(not bool(use_rc), "fallback should disable rc.data.location for rejected path")
-    expect(str(d).endswith("/tmp/nautical_core_fallback_test"), f"unexpected fallback path: {d!r}")
-
-
-def test_core_config_paths_rejects_parent_traversal_in_env():
-    """_config_paths should reject NAUTICAL_CONFIG values containing '..' by default."""
-    prev_cfg = os.environ.get("NAUTICAL_CONFIG")
-    prev_trust = os.environ.get("NAUTICAL_TRUST_CONFIG_PATH")
-    try:
-        os.environ["NAUTICAL_CONFIG"] = "../nautical.toml"
-        os.environ.pop("NAUTICAL_TRUST_CONFIG_PATH", None)
-        got = core._config_paths()
-    finally:
-        if prev_cfg is None:
-            os.environ.pop("NAUTICAL_CONFIG", None)
-        else:
-            os.environ["NAUTICAL_CONFIG"] = prev_cfg
-        if prev_trust is None:
-            os.environ.pop("NAUTICAL_TRUST_CONFIG_PATH", None)
-        else:
-            os.environ["NAUTICAL_TRUST_CONFIG_PATH"] = prev_trust
-    expect(got == [], f"expected NAUTICAL_CONFIG traversal path to be rejected, got: {got!r}")
-
-
-def test_core_config_paths_trust_override_allows_parent_traversal_in_env():
-    """_config_paths trust override should permit parent-segment NAUTICAL_CONFIG values."""
-    prev_cfg = os.environ.get("NAUTICAL_CONFIG")
-    prev_trust = os.environ.get("NAUTICAL_TRUST_CONFIG_PATH")
-    try:
-        os.environ["NAUTICAL_CONFIG"] = "../nautical.toml"
-        os.environ["NAUTICAL_TRUST_CONFIG_PATH"] = "1"
-        got = core._config_paths()
-    finally:
-        if prev_cfg is None:
-            os.environ.pop("NAUTICAL_CONFIG", None)
-        else:
-            os.environ["NAUTICAL_CONFIG"] = prev_cfg
-        if prev_trust is None:
-            os.environ.pop("NAUTICAL_TRUST_CONFIG_PATH", None)
-        else:
-            os.environ["NAUTICAL_TRUST_CONFIG_PATH"] = prev_trust
-    expect(len(got) == 1, f"expected trusted NAUTICAL_CONFIG to be returned, got: {got!r}")
-    expect(got[0] == os.path.abspath(os.path.expanduser("../nautical.toml")), f"unexpected trusted path: {got!r}")
-
-
 def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
     hook = _find_hook_file(hook_name)
     prev_core = os.environ.get("NAUTICAL_CORE_PATH")
@@ -7687,11 +4147,12 @@ def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
             try:
                 _load_hook_module(hook, module_name)
                 raise AssertionError("expected hook import to fail without core data resolver")
-            except Exception as e:
+            except Exception as exc:
                 expect(
-                    "integration_context.py is required" in str(e)
-                    or "core resolver is unavailable" in str(e),
-                    f"unexpected error when context module is missing: {e!r}",
+                    "integration_context.py is required" in str(exc)
+                    or "core resolver is unavailable" in str(exc)
+                    or "required runtime port is unavailable" in str(exc),
+                    f"unexpected error when context module is missing: {exc!r}",
                 )
         finally:
             sys.argv = prev_argv
@@ -7699,6 +4160,7 @@ def _assert_hook_requires_integration_context(hook_name: str, module_name: str):
                 os.environ.pop("NAUTICAL_CORE_PATH", None)
             else:
                 os.environ["NAUTICAL_CORE_PATH"] = prev_core
+
 
 def test_on_add_requires_integration_context_helper():
     """on-add should fail closed when the integration context is unavailable."""
@@ -7784,92 +4246,6 @@ def test_on_modify_promotes_chain_when_task_becomes_nautical():
     )
     expect(repair.state == "disabled", f"malformed recurrence should remain repairable: {repair!r}")
     expect(repair_new.get("chain") == "off", f"repair disable changed chain unexpectedly: {repair_new!r}")
-
-
-def test_modify_ordinary_transition_failure_rejects_instead_of_noop():
-    """A failed recurrence transition must not silently continue as an ordinary edit."""
-    ordinary = core._import_sibling("modify_ordinary")
-    services = ordinary.OrdinaryModifyServices(
-        field_changed=lambda old, new, field: old.get(field) != new.get(field),
-        strip_quotes=lambda value: value,
-        validate_anchor=lambda *_args: None,
-        validate_omit=lambda *_args: None,
-        reject_conflicting_types=lambda *_args: None,
-        validate_chain_limits=lambda *_args: None,
-        preserve_cp_offsets=lambda *_args: None,
-        task_has_recurrence=lambda task: bool(str(task.get("anchor") or "").strip()),
-        preserve_native_until=lambda *_args: False,
-        validate_native_until=lambda *_args: None,
-        validate_native_until_slots=lambda *_args: None,
-        render_cp_adjustment=lambda *_args: None,
-        render_timing_warning=lambda *_args: None,
-        apply_transition=lambda *_args: (_ for _ in ()).throw(ValueError("chain identity unavailable")),
-        short_uuid=lambda value: str(value or "")[:8],
-        recurrence_enabled_rows=lambda *_args: [],
-        panel=lambda *_args, **_kwargs: None,
-        render_disabled_summary=lambda *_args: None,
-        semantic_diff_value=lambda old, new: f"{old} -> {new}",
-        first_recurrence_target=lambda *_args: None,
-        fmtlocal=lambda value: str(value),
-        render_recurrence_updated=lambda *_args: None,
-        print_task=lambda *_args: None,
-    )
-    candidate = {"uuid": "plain", "status": "pending", "anchor": "w:mon"}
-    try:
-        ordinary.handle_non_completion_modify(
-            {"uuid": "plain", "status": "pending"},
-            candidate,
-            services=services,
-            lifecycle=SimpleNamespace(recurrence_setting_changes=lambda *_args: []),
-        )
-    except ordinary.RecurrenceActivationError as exc:
-        expect("chain identity unavailable" in str(exc), f"transition detail was lost: {exc}")
-        expect("chain" not in candidate and "chainID" not in candidate, f"failed activation mutated task: {candidate!r}")
-    else:
-        raise AssertionError("failed recurrence transition was treated as no transition")
-
-
-def test_modify_lifecycle_activation_requires_complete_root_identity():
-    """Recurrence activation must reject missing, linked, or non-root identities."""
-    lifecycle = core._import_sibling("modify_lifecycle")
-    short_uuid = lambda value: str(value or "").split("-")[0]
-    cases = (
-        ({"anchor": "w:mon"}, "UUID is missing"),
-        ({"uuid": "11111111-0000-0000-0000-000000000001", "anchor": "w:mon", "prevLink": "aaaaaaaa"}, "unlinked root"),
-        ({"uuid": "11111111-0000-0000-0000-000000000001", "anchor": "w:mon", "link": 2}, "root link 1"),
-    )
-    for fields, expected in cases:
-        try:
-            lifecycle.apply_nautical_transition(
-                {"status": "pending"},
-                {"status": "pending", **fields},
-                short_uuid=short_uuid,
-            )
-        except ValueError as exc:
-            expect(expected in str(exc), f"activation error lost detail: {exc}")
-        else:
-            raise AssertionError(f"invalid activation identity was accepted: {fields!r}")
-
-    valid = {"uuid": "11111111-0000-0000-0000-000000000001", "status": "pending", "anchor": "w:mon"}
-    transition = lifecycle.apply_nautical_transition({"status": "pending"}, valid, short_uuid=short_uuid)
-    expect(transition.state == "enabled", f"valid root activation failed: {transition!r}")
-    expect(valid.get("chainID") == "11111111", f"valid activation missed chainID: {valid!r}")
-    expect(valid.get("link") == 1, f"valid activation missed root link: {valid!r}")
-
-
-def test_modify_lifecycle_terminal_chain_patch_is_idempotent():
-    """All hook-side terminal paths should share one idempotent chain-off patch."""
-    lifecycle = core._import_sibling("modify_lifecycle")
-    task = {"chain": "on", "chainID": "abcd1234"}
-    expect(lifecycle.ensure_terminal_chain_off(task), "first terminal patch should change an active chain")
-    expect(task["chain"] == "off", f"terminal patch did not disable chain: {task!r}")
-    expect(not lifecycle.ensure_terminal_chain_off(task), "replaying terminal patch should be a no-op")
-    try:
-        lifecycle.ensure_terminal_chain_off(None)
-    except ValueError as exc:
-        expect("task mapping" in str(exc), f"terminal patch error lost detail: {exc}")
-    else:
-        raise AssertionError("non-mapping terminal patch input was accepted")
 
 
 def test_on_modify_promotes_chain_emits_upgrade_panel():
@@ -8334,37 +4710,6 @@ def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
     expect(changes == [("anchor", "w:mon", "w:tue"), ("omit", "", "y:apr")], f"unexpected recurrence setting changes: {changes!r}")
 
 
-def test_chainid_legacy_reads_do_not_drive_chain_identity():
-    """Lowercase chainid should no longer participate in chain identity helpers."""
-    import uuid
-    import nautical_core.modify_spawn_prep as modify_spawn_prep
-
-    parent = {"chainid": "legacy-1", "uuid": "parent-uuid"}
-    child = {"chainid": "legacy-1", "link": 2}
-    try:
-        modify_spawn_prep.stable_child_uuid(
-            parent,
-            child,
-            task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
-            coerce_int=core.coerce_int,
-            stable_child_uuid_namespace=uuid.NAMESPACE_URL,
-        )
-    except modify_spawn_prep.SpawnIdentityError:
-        pass
-    else:
-        raise AssertionError("missing canonical chainID should reject stable child UUID generation")
-    try:
-        modify_spawn_prep.stable_child_uuid(
-            {"uuid": "parent-uuid"},
-            {"link": 2},
-            task_uuid_or_empty=lambda task: str(task.get("uuid") or "").strip(),
-            coerce_int=core.coerce_int,
-            stable_child_uuid_namespace=uuid.NAMESPACE_URL,
-        )
-    except modify_spawn_prep.SpawnIdentityError:
-        pass
-    else:
-        raise AssertionError("UUID-only parent should not provide a chain identity")
 def test_on_add_lowercase_chainid_does_not_mark_nautical():
     """on-add should ignore lowercase chainid when deciding whether a task is Nautical."""
     hook = _find_hook_file("on-add.nautical")
@@ -8549,37 +4894,6 @@ def test_hook_engine_reports_pending_nautical_delete_without_spawning():
     )
     expect(isinstance(result, HookJsonResult) and result.task is nautical_new, f"nautical delete should pass through: {result!r}")
     expect(calls == {"load": 1, "deleted": 1, "completion": 0, "non_completion": 0}, f"unexpected nautical delete routing: {calls!r}")
-
-
-def test_hook_engine_retains_completion_lifecycle_result_on_runtime_context():
-    """Completion routing should retain its typed result without changing JSON output."""
-    from nautical_core import hook_engine
-    from nautical_core.hook_results import HookJsonResult
-    from nautical_core.modify_models import CompletionLifecycleResult
-
-    lifecycle = CompletionLifecycleResult(state="retryable", reason="planner unavailable")
-    runtime = SimpleNamespace(lifecycle_result=None, uow=object())
-    request = SimpleNamespace(
-        old={"uuid": "00000000-0000-4000-8000-000000000303", "status": "pending", "chainID": "chain303"},
-        new={"uuid": "00000000-0000-4000-8000-000000000303", "status": "completed", "chainID": "chain303"},
-        runtime=runtime,
-    )
-    result = hook_engine.handle_on_modify(
-        request,
-        _test_modify_engine_services(
-            HookJsonResult,
-            has_nautical_fields=lambda task: bool(task.get("chainID")),
-            load_core=lambda: None,
-            diag=lambda _msg: None,
-            fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("completion should not fail")),
-            is_non_completion=lambda _old, _new: False,
-            handle_non_completion=lambda *_args: (_ for _ in ()).throw(AssertionError("non-completion route selected")),
-            handle_completion=lambda *_args: lifecycle,
-            handle_deleted=lambda *_args: (_ for _ in ()).throw(AssertionError("delete route selected")),
-        ),
-    )
-    expect(result is None, f"completion routing should not emit an alternate JSON result: {result!r}")
-    expect(runtime.lifecycle_result is lifecycle, f"hook engine dropped lifecycle result: {runtime.lifecycle_result!r}")
 
 
 def test_delete_chain_summary_span_uses_stop_time_without_last_end():
@@ -10040,132 +6354,6 @@ def test_nautical_dispatches_supported_subcommands():
             os.environ["NAUTICAL_SOURCE"] = previous_source
 
 
-def test_doctor_reports_missing_timezone_data():
-    """doctor should warn when the configured timezone cannot be loaded."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_timezone_test")
-
-    def _missing_zoneinfo(_name):
-        raise ZoneInfoNotFoundError("No time zone found")
-
-    try:
-        from zoneinfo import ZoneInfoNotFoundError
-    except Exception:
-        class ZoneInfoNotFoundError(Exception):
-            pass
-
-    prev_zoneinfo = mod.ZONEINFO_FACTORY
-    try:
-        mod.ZONEINFO_FACTORY = _missing_zoneinfo
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.timezone_findings({"tz": "Europe/Bucharest"}, mod.ZONEINFO_FACTORY))
-    finally:
-        mod.ZONEINFO_FACTORY = prev_zoneinfo
-
-    ids = {item.get("id") for item in findings}
-    expect("config.timezone.invalid" in ids, f"missing timezone warning: {findings!r}")
-    fix = next(item for item in findings if item.get("id") == "config.timezone.invalid").get("fix", "")
-    expect("pip install tzdata" in fix, f"missing tzdata fix hint: {findings!r}")
-
-
-def test_doctor_reports_missing_timezone_configuration():
-    """doctor should distinguish an absent timezone from an unavailable one."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_missing_timezone_config_test")
-    findings = []
-    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.timezone_findings({}, mod.ZONEINFO_FACTORY))
-    item = next((item for item in findings if item.get("id") == "config.timezone.missing"), None)
-    expect(item is not None, f"missing timezone configuration was not reported: {findings!r}")
-    expect(((item.get("details") or {}).get("observed") or {}).get("tz") == "UTC", f"missing timezone did not use UTC fallback: {item!r}")
-
-
-def test_doctor_reports_astronomy_preflight_health():
-    """doctor should expose astronomy setup health without mutating Taskwarrior."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_astronomy_preflight_test")
-    previous = mod.effective_config_snapshot
-    try:
-        mod.effective_config_snapshot = lambda: {"values": {}, "source": "defaults"}
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.astronomy_findings({}, effective_timezone="UTC", source_hint="defaults", preflight=mod.astronomy.preflight))
-    finally:
-        mod.effective_config_snapshot = previous
-    item = next((item for item in findings if item.get("id") == "astronomy.not_configured"), None)
-    expect(item is not None and item.get("severity") == "info", f"doctor astronomy status missing: {findings!r}")
-
-
-def test_doctor_reports_season_backend_and_astronomical_events():
-    """Doctor should make the selected seasonal backend and event dates visible."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_season_mode_test")
-    previous = mod.effective_config_snapshot
-    try:
-        mod.effective_config_snapshot = lambda: {"values": {}, "source": "defaults"}
-        findings = []
-        from nautical_core.astronomical_seasons import seasonal_events_utc
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.season_findings({"season_mode": "astronomical", "season_hemisphere": "north", "tz": "UTC"}, {}, mod.ZONEINFO_FACTORY, seasonal_events_utc))
-    finally:
-        mod.effective_config_snapshot = previous
-    item = next((item for item in findings if item.get("id") == "config.season_mode"), None)
-    expect(item is not None and item.get("severity") == "info", f"season backend status missing: {findings!r}")
-    details = item.get("details") or {}
-    observed = details.get("observed") or {}
-    expect(observed.get("mode") == "astronomical", f"season mode missing from doctor details: {item!r}")
-    expect("spring_equinox" in (observed.get("events") or {}), f"season event dates missing: {item!r}")
-
-    findings = []
-    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.season_findings({"season_mode": "sidereal", "tz": "UTC"}, {}, mod.ZONEINFO_FACTORY, seasonal_events_utc))
-    invalid = next((item for item in findings if item.get("id") == "config.season_mode.invalid"), None)
-    expect(invalid is not None and invalid.get("fix"), f"invalid season mode lacked an actionable fix: {findings!r}")
-
-
-def test_doctor_reports_matching_config_drift():
-    """Doctor should report unchanged and changed state only for its active config source."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_config_drift_test")
-    source = os.path.join(tempfile.gettempdir(), "nautical-config-drift-test.toml")
-    previous = mod.configuration_drift
-    try:
-        mod.configuration_drift = lambda: {
-            "changed": False,
-            "status": "ok",
-            "source": os.path.abspath(source),
-            "loaded_fingerprint": "abc",
-            "current_fingerprint": "abc",
-        }
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.configuration_drift_findings(source, mod.configuration_drift))
-        expect(findings and findings[0].get("severity") == "info", f"healthy config drift finding missing: {findings!r}")
-
-        mod.configuration_drift = lambda: {
-            "changed": True,
-            "status": "changed",
-            "source": os.path.abspath(source),
-            "loaded_fingerprint": "abc",
-            "current_fingerprint": "def",
-        }
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.configuration_drift_findings(source, mod.configuration_drift))
-        expect(findings and findings[0].get("severity") == "warning", f"changed config drift finding missing: {findings!r}")
-        expect("Restart Navigator" in findings[0].get("fix", ""), f"drift restart guidance missing: {findings!r}")
-    finally:
-        mod.configuration_drift = previous
-
-
-def test_effective_config_snapshot_isolated_and_provenanced():
-    """The effective configuration snapshot must be isolated and identify its source."""
-    snapshot = core.effective_config_snapshot()
-    values = snapshot.get("values")
-    expect(isinstance(values, dict), f"effective config values missing: {snapshot!r}")
-    expect(str(snapshot.get("source") or ""), f"effective config source missing: {snapshot!r}")
-    original_tz = values.get("tz")
-    values["tz"] = "mutated-in-test"
-    expect(
-        core._core_config.LOCAL_TZ_NAME == original_tz,
-        "effective config snapshot leaked mutable state",
-    )
-
-
 def test_config_fingerprint_invalidates_persistent_cache_keys():
     """Changing the selected config file must produce a new cache fingerprint and key."""
     previous = os.environ.get("NAUTICAL_CONFIG")
@@ -10212,38 +6400,19 @@ def test_config_fingerprint_invalidates_persistent_cache_keys():
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
-def test_hot_config_fingerprint_avoids_filesystem_stat():
-    """Repeated cache-key fingerprints should not perform metadata syscalls."""
-    import nautical_core.core_config as config
-
-    first = config.effective_config_fingerprint()
-    original_stat = config.os.stat
-    try:
-        config.os.stat = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("hot fingerprint touched the filesystem")
-        )
-        expect(
-            config.effective_config_fingerprint() == first,
-            "hot fingerprint changed without a source identity change",
-        )
-    finally:
-        config.os.stat = original_stat
-
-
 def test_hint_cache_keys_include_semantic_fingerprint():
     """Changing the semantic fingerprint must invalidate hint cache keys in-process."""
-    fingerprint = getattr(core, "_cache_semantic_fingerprint", None)
-    expect(callable(fingerprint), "semantic cache fingerprint API is missing")
-    original = fingerprint
-    try:
-        core._cache_semantic_fingerprint = lambda: "semantic-test-a"
-        first = core.cache_key_for_task("w:mon", "skip")
-        core._cache_semantic_fingerprint = lambda: "semantic-test-b"
-        second = core.cache_key_for_task("w:mon", "skip")
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        Path(cfg).write_text("", encoding="utf-8")
+        mod = _load_core_module(core_path, "_nautical_core_semantic_cache_test", cfg)
+        fingerprint = ["semantic-test-a"]
+        mod._cache_semantic_fingerprint = lambda: fingerprint[0]
+        first = mod.cache_key_for_task("w:mon", "skip")
+        fingerprint[0] = "semantic-test-b"
+        second = mod.cache_key_for_task("w:mon", "skip")
         expect(first != second, "semantic fingerprint changes did not invalidate hint cache keys")
-    finally:
-        core._cache_semantic_fingerprint = original
-        core._clear_all_caches()
 
 
 def test_configuration_drift_detects_edit_and_removal():
@@ -10275,22 +6444,6 @@ def test_configuration_drift_detects_edit_and_removal():
         expect(payload["removed"]["status"] == "changed", f"removed config drift missing: {payload}")
 
 
-def test_doctor_reports_missing_navigator_dependencies():
-    """doctor should identify missing required Navigator packages."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_navigator_dependencies_test")
-    previous = mod.RICH_SPEC_FACTORY
-    try:
-        mod.RICH_SPEC_FACTORY = lambda name: None if name in {"rich", "dateutil"} else object()
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.navigator_dependency_findings({}, lambda name: mod.RICH_SPEC_FACTORY(name) is not None, python_executable=sys.executable))
-    finally:
-        mod.RICH_SPEC_FACTORY = previous
-    item = next((item for item in findings if item.get("id") == "navigator.dependencies"), None)
-    expect(item is not None and item.get("severity") == "warning", f"missing Navigator packages were not reported: {findings!r}")
-    expect(set(((item.get("details") or {}).get("observed") or {}).get("missing") or []) == {"rich", "dateutil"}, f"wrong missing packages: {item!r}")
-
-
 def test_installer_initializes_explicit_timezone_config():
     """fresh installs should write an explicit detected timezone without touching upgrades."""
     from nautical_core import install_runtime
@@ -10311,266 +6464,6 @@ def test_installer_initializes_explicit_timezone_config():
             expect(config.read_text(encoding="utf-8") == "# Nautical timezone detected during installation.\ntz = \"UTC\"\n", "fresh config content was wrong")
     finally:
         install_runtime.detect_local_timezone = previous
-
-
-def test_doctor_text_timezone_summary():
-    """doctor text output should surface timezone health near the top."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_timezone_summary_test")
-    payload = {
-        "status": "warn",
-        "taskdata": "/tmp/task",
-        "operator_findings": [
-            {
-                "code": "config.timezone.invalid",
-                "domain": "config",
-                "severity": "warning",
-                "actionability": "actionable",
-                "message": "Nautical timezone 'Europe/Bucharest' is not available; hooks will use UTC fallback.",
-                "observed": {},
-                "expected": {},
-                "evidence": {"tz": "Europe/Bucharest"},
-                "guidance": "Use an available timezone.",
-            }
-        ],
-    }
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._render_text(payload)
-    out = buf.getvalue()
-    expect("Timezone: Europe/Bucharest unavailable; UTC fallback active" in out, f"missing timezone summary: {out!r}")
-
-
-def test_doctor_text_large_history_is_actionable_and_compact():
-    """Default Doctor text must not dump healthy inventory from large histories."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_large_history_output_test")
-    findings = [
-        {
-            "code": f"healthy.{index}", "domain": "configuration", "severity": "info",
-            "actionability": "informational", "message": f"healthy {index}",
-            "observed": {}, "expected": {}, "evidence": {}, "guidance": "",
-        }
-        for index in range(1000)
-    ]
-    findings.append({
-        "code": "chains.active_issue", "domain": "chains", "severity": "error",
-        "actionability": "actionable", "message": "one active issue", "observed": {},
-        "expected": {}, "evidence": {}, "guidance": "Run nautical query integrity --all.",
-    })
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._render_text({"status": "error", "taskdata": "/tmp/task", "operator_findings": findings})
-    output = buf.getvalue()
-    expect("one active issue" in output, f"actionable finding missing: {output!r}")
-    expect("healthy 0" not in output and "healthy 999" not in output, "healthy inventory leaked into default Doctor text")
-    expect(len(output.splitlines()) < 20, f"large-history Doctor output was not compact: {len(output.splitlines())} lines")
-
-
-def test_doctor_text_groups_historical_findings_across_chains():
-    """Historical summaries must not produce one line per affected chain."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_historical_grouping_test")
-    findings = [
-        {
-            "code": "chains.carry.child_relative_offset",
-            "domain": "chains",
-            "severity": "info",
-            "actionability": "informational",
-            "message": "historical carry difference",
-            "observed": {"field": "scheduled"},
-            "expected": {},
-            "evidence": {"historical": True, "chainID": f"chain-{index}"},
-            "guidance": "No action is required; current pending-chain findings are reported separately.",
-        }
-        for index in range(100)
-    ]
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        mod._render_text({"status": "ok", "taskdata": "/tmp/task", "operator_findings": findings})
-    output = buf.getvalue()
-    expect("100 completed-link scheduled observation(s)" in output, f"historical findings were not aggregated: {output!r}")
-    expect(output.count("chains.historical_summary") == 1, "historical findings were grouped per chain")
-
-
-def test_doctor_reports_live_panel_configuration_health():
-    """Doctor should explain effective live duration, fallback behavior, and Rich availability."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_live_panel_config_test")
-    original_rich_spec = mod.RICH_SPEC_FACTORY
-    try:
-        mod.RICH_SPEC_FACTORY = lambda _name: object()
-
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": 275}, mod.RICH_SPEC_FACTORY))
-        live = next(item for item in findings if item.get("id") == "config.panel.live")
-        details = live.get("details") or {}
-        expect(live.get("severity") == "info", f"valid live config should be healthy: {findings!r}")
-        observed = details.get("observed") or {}
-        expect(observed.get("configured_duration_ms") == 275, f"configured duration missing: {findings!r}")
-        expect(observed.get("effective_duration_ms") == 275, f"effective duration missing: {findings!r}")
-        expect(observed.get("non_tty_fallback") == "static", f"non-TTY fallback missing: {findings!r}")
-        expect(observed.get("rich_available") is True, f"Rich availability missing: {findings!r}")
-        expect("Rich is available" in str(live.get("message") or ""), f"text finding omits Rich health: {findings!r}")
-
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": "slow"}, mod.RICH_SPEC_FACTORY))
-        invalid = next(item for item in findings if item.get("id") == "config.panel.duration.invalid")
-        expect(invalid.get("severity") == "warning", f"malformed duration should warn: {findings!r}")
-        expect(
-            ((invalid.get("details") or {}).get("observed") or {}).get("effective_duration_ms") == 160,
-            f"invalid duration default missing: {findings!r}",
-        )
-
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": 5000}, mod.RICH_SPEC_FACTORY))
-        clamped = next(item for item in findings if item.get("id") == "config.panel.duration.clamped")
-        expect(clamped.get("severity") == "warning", f"out-of-range duration should warn: {findings!r}")
-        expect(
-            ((clamped.get("details") or {}).get("observed") or {}).get("effective_duration_ms") == 1000,
-            f"clamped duration missing: {findings!r}",
-        )
-
-        mod.RICH_SPEC_FACTORY = lambda _name: None
-        findings = []
-        findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.panel_findings({"panel_mode": "live", "live_panel_duration_ms": 160}, mod.RICH_SPEC_FACTORY))
-        missing = next(item for item in findings if item.get("id") == "config.panel.rich_missing")
-        expect(missing.get("severity") == "warning", f"missing Rich should warn in live mode: {findings!r}")
-        expect("pip install rich" in str(missing.get("fix") or ""), f"missing Rich fix is not actionable: {findings!r}")
-    finally:
-        mod.RICH_SPEC_FACTORY = original_rich_spec
-
-
-def test_doctor_reports_authoritative_config_schema_findings():
-    """Doctor should turn schema issues into stable, actionable warnings."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_config_schema_test")
-    findings = []
-    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.configuration_schema_findings(
-        {
-            "verify_import": False,
-            "outbox_drain_max_items": 0,
-            "panel_mode": "sparkle",
-            "setting_typo": True,
-        },
-    ))
-    ids = {item.get("id") for item in findings}
-    expect(
-        {
-            "config.schema.deprecated",
-            "config.schema.range",
-            "config.schema.choice",
-            "config.schema.unknown",
-        }
-        <= ids,
-        f"doctor schema findings were incomplete: {findings!r}",
-    )
-    expect(all(item.get("fix") for item in findings), f"schema finding lacked an actionable fix: {findings!r}")
-    drain = next(item for item in findings if ((item.get("details") or {}).get("observed") or {}).get("key") == "outbox_drain_max_items")
-    expect(
-        ((drain.get("details") or {}).get("observed") or {}).get("effective") == 1,
-        f"doctor omitted the effective drain limit: {findings!r}",
-    )
-
-
-def test_doctor_reports_uda_alias_configuration():
-    """Doctor should make the opt-in alias state and clearing syntax discoverable."""
-    path = os.path.join(CORE_TOOLS, "nautical_doctor.py")
-    mod = _load_hook_module(path, "_nautical_doctor_uda_aliases_test")
-    findings = []
-    findings.extend(item.to_doctor_dict() for item in mod.OperatorHealthService.uda_alias_findings({"enable_uda_aliases": True}))
-    item = next(item for item in findings if item.get("id") == "config.uda_aliases")
-    expect(item.get("severity") == "info", f"UDA alias config should be healthy: {findings!r}")
-    observed = (item.get("details") or {}).get("observed") or {}
-    expect(observed.get("enabled") is True, f"enabled state missing: {item!r}")
-    expect(observed.get("clear_syntax") == "alias:", f"clear syntax missing: {item!r}")
-    expect("Description UDA aliases are enabled" in str(item.get("message") or ""), f"message is unclear: {item!r}")
-    with tempfile.TemporaryDirectory() as td:
-        previous_home = os.environ.get("HOME")
-        previous_taskrc = os.environ.get("TASKRC")
-        previous_config = os.environ.get("NAUTICAL_CONFIG")
-        try:
-            # Keep this missing-config assertion independent of the developer's
-            # real Taskwarrior and Nautical configuration files.
-            os.environ["HOME"] = td
-            os.environ["TASKRC"] = os.path.join(td, ".taskrc")
-            os.environ["NAUTICAL_CONFIG"] = os.path.join(td, "missing-nautical.toml")
-            missing_findings = []
-            mod._check_config(missing_findings, Path(td))
-            missing = next(item for item in missing_findings if item.get("id") == "config.uda_aliases")
-            expect(((missing.get("details") or {}).get("observed") or {}).get("enabled") is False, f"missing config should default aliases off: {missing!r}")
-        finally:
-            if previous_home is None:
-                os.environ.pop("HOME", None)
-            else:
-                os.environ["HOME"] = previous_home
-            if previous_taskrc is None:
-                os.environ.pop("TASKRC", None)
-            else:
-                os.environ["TASKRC"] = previous_taskrc
-            if previous_config is None:
-                os.environ.pop("NAUTICAL_CONFIG", None)
-            else:
-                os.environ["NAUTICAL_CONFIG"] = previous_config
-
-
-def test_on_add_preview_warns_when_anchor_uses_utc_fallback():
-    """on-add preview helper should flag anchors when timezone data is unavailable."""
-    import nautical_core.add_anchor_preview as mod
-
-    core = SimpleNamespace(_LOCAL_TZ=None)
-    expect(mod._timezone_fallback_warning_needed(core, "w:mon@t=09:00", ""), "timed anchor should warn")
-    expect(mod._timezone_fallback_warning_needed(core, "", "calendar.csv@t=09:00"), "timed anchor_file should warn")
-    expect(mod._timezone_fallback_warning_needed(core, "w:mon", ""), "untimed anchor should warn")
-    expect(not mod._timezone_fallback_warning_needed(core, "", ""), "non-nautical task should not warn")
-    core._LOCAL_TZ = object()
-    expect(not mod._timezone_fallback_warning_needed(core, "w:mon@t=09:00", ""), "available timezone should not warn")
-
-
-def test_panel_diagnostics_warns_for_missing_env_config():
-    """Panel diagnostics should make missing explicit config visible without NAUTICAL_DIAG."""
-    import nautical_core.panel_diagnostics as mod
-
-    prev = os.environ.get("NAUTICAL_CONFIG")
-    try:
-        os.environ["NAUTICAL_CONFIG"] = "/tmp/nautical-definitely-missing-config.toml"
-        warnings = mod.config_warnings()
-    finally:
-        if prev is None:
-            os.environ.pop("NAUTICAL_CONFIG", None)
-        else:
-            os.environ["NAUTICAL_CONFIG"] = prev
-
-    expect(any("NAUTICAL_CONFIG points to a missing file" in item for item in warnings), f"missing config warning: {warnings}")
-
-
-def test_panel_diagnostics_warns_for_empty_file_sources():
-    """Panel diagnostics should flag file-backed rules that load but provide no usable dates."""
-    import nautical_core.panel_diagnostics as mod
-
-    with tempfile.TemporaryDirectory() as td:
-        Path(td, "weekend.csv").write_text("date,description\n2026-07-04,weekend\n", encoding="utf-8")
-        fake_core = SimpleNamespace(
-            ANCHOR_FILE_DIR=td,
-            OMIT_FILE_DIR=td,
-            _import_sibling=lambda name: importlib.import_module(f"nautical_core.{name}"),
-        )
-        warnings = mod.file_source_warnings(fake_core, {"anchor_file": "weekend.csv@bd", "omit_file": "weekend.csv@bd"})
-        pattern_warnings = mod.file_source_warnings(
-            fake_core,
-            {"anchor_file": "missing-*.csv | weekend.csv", "omit_file": "missing-?.txt"},
-        )
-
-    expect(any("anchor_file 'weekend.csv' has no usable dates" in item for item in warnings), f"missing anchor_file warning: {warnings}")
-    expect(any("omit_file 'weekend.csv' has no usable dates" in item for item in warnings), f"missing omit_file warning: {warnings}")
-    expect(
-        "anchor_file pattern 'missing-*.csv' matched no files." in pattern_warnings,
-        f"missing partial anchor wildcard warning: {pattern_warnings}",
-    )
-    expect(
-        "omit_file pattern 'missing-?.txt' matched no files." in pattern_warnings,
-        f"missing omit wildcard warning: {pattern_warnings}",
-    )
 
 
 def test_doctor_reports_actionable_broken_installation():
@@ -11081,44 +6974,14 @@ def test_core_import_defers_parser_scheduler_models():
     env["PYTHONPATH"] = os.pathsep.join(part for part in (ROOT, env.get("PYTHONPATH", "")) if part)
     probe = (
         "import sys, nautical_core; "
-        "assert 'nautical_core.parser_models' not in sys.modules; "
+        "assert 'nautical_core.parsing.parser_models' not in sys.modules; "
         "assert 'nautical_core.scheduler_models' not in sys.modules; "
         "assert nautical_core.ParseError.__name__ == 'ParseError'; "
-        "assert 'nautical_core.parser_models' in sys.modules; "
+        "assert 'nautical_core.parsing.parser_models' in sys.modules; "
         "assert 'nautical_core.scheduler_models' in sys.modules"
     )
     result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True)
     expect(result.returncode == 0, f"parser/scheduler models were eager or failed lazily: {result.stderr!r}")
-
-
-def test_runtime_manifest_covers_lazy_panel_colour_module():
-    """Every hook release must validate the lazily loaded panel-colour module."""
-    from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
-
-    for event in ("on-add", "on-modify", "on-exit"):
-        files = HOOK_RUNTIME_FILES.get(event, ())
-        expect(
-            "panel_colours.py" in files,
-            f"{event} runtime manifest omits panel_colours.py: {files!r}",
-        )
-
-
-def test_legacy_exit_flow_modules_are_not_runtime_owned():
-    """The removed pre-lifecycle exit modules must not return to the runtime tree."""
-    from nautical_core.runtime_manifest import HOOK_RUNTIME_FILES
-
-    legacy = (
-        "exit_drain_flow.py",
-        "exit_entry_flow.py",
-        "exit_models.py",
-        "exit_side_effects.py",
-    )
-    for name in legacy:
-        expect(not (Path(ROOT) / "nautical_core" / name).exists(), f"legacy exit module still exists: {name}")
-        expect(
-            all(name not in files for files in HOOK_RUNTIME_FILES.values()),
-            f"legacy exit module remains in runtime manifest: {name}",
-        )
 
 
 def test_deploy_sanity_enforces_removed_lifecycle_ownership():
@@ -11219,24 +7082,6 @@ def test_perf_hook_fast_path_ratio_enforcement():
         abs(float(managed.get("managed_to_source_ratio")) - 1.2) < 0.001,
         f"unexpected managed/source ratio: {managed}",
     )
-
-
-def test_hook_runtime_retains_module_import_failure_details():
-    """Required module failures should identify the underlying import error."""
-    from nautical_core.hook_runtime import HookModuleAccess
-
-    access = HookModuleAccess(
-        {},
-        {"broken": ("_broken", "_broken_failed", "broken.py", "nautical_core.no_such_module_for_test")},
-    )
-    expect(access.module("broken", required=False) is None, "broken module unexpectedly loaded")
-    expect("ModuleNotFoundError" in access.errors.get("broken", ""), f"missing import detail: {access.errors}")
-    try:
-        access.module("broken")
-    except RuntimeError as exc:
-        expect("ModuleNotFoundError" in str(exc), f"required module error hid import detail: {exc}")
-    else:
-        raise AssertionError("required broken module did not fail")
 
 
 def test_load_benchmark_installs_complete_hook_runtime():
@@ -11504,16 +7349,24 @@ def test_ops_templates_present_and_runner_executable():
 
 def test_tw_export_chain_extra_validation():
     """Chain snapshot filters should reject shell-like extra arguments."""
+    from nautical_core.hook_support import parse_extra_tokens
+
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_test")
-    expect(mod._module("modify_read_effects").parse_extra_tokens(mod, "status:pending; rm -rf /") is None, "unsafe filter was accepted")
+    effects = mod._module("modify_read_effects")
+    port = effects.ExtraTokenPort(parse_extra_tokens)
+    expect(effects.parse_extra_tokens(port, "status:pending; rm -rf /") is None, "unsafe filter was accepted")
 
 
 def test_tw_export_chain_extra_rejects_dash_prefixed_tokens():
     """tw_export_chain extra parser should reject dash-prefixed tokens."""
+    from nautical_core.hook_support import parse_extra_tokens
+
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_chain_export_extra_dash_test")
-    expect(mod._module("modify_read_effects").parse_extra_tokens(mod, "status:pending -rc.hooks=on") is None, "dash-prefixed token was accepted")
+    effects = mod._module("modify_read_effects")
+    port = effects.ExtraTokenPort(parse_extra_tokens)
+    expect(effects.parse_extra_tokens(port, "status:pending -rc.hooks=on") is None, "dash-prefixed token was accepted")
 
 
 def test_on_modify_diag_blocks_pretty_print():
@@ -11659,7 +7512,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     mod = _load_hook_module(hook, "_nautical_chain_cache_thread_safety_test")
 
     full_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-    mod._module("modify_read_effects").lifecycle_read_service(mod).replace_chain_cache(
+    mod._module("modify_composition").lifecycle_read_service_for(mod).replace_chain_cache(
         "cid-a",
         [{"uuid": full_uuid, "link": 1, "entry": "2026-01-01T00:00:00Z"}],
     )
@@ -11671,7 +7524,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     def _writer(chain_id: str):
         try:
             for i in range(300):
-                mod._module("modify_read_effects").lifecycle_read_service(mod).replace_chain_cache(
+                mod._module("modify_composition").lifecycle_read_service_for(mod).replace_chain_cache(
                     chain_id,
                     [{"uuid": full_uuid, "link": 1, "entry": f"2026-01-01T00:00:{i % 60:02d}Z"}],
                 )
@@ -11681,7 +7534,7 @@ def test_on_modify_chain_cache_thread_safety_smoke():
     def _reader():
         try:
             for _ in range(600):
-                s, _chain_id = mod._module("modify_read_effects").lifecycle_read_service(mod).lookup_short("aaaaaaaa")
+                s, _chain_id = mod._module("modify_composition").lifecycle_read_service_for(mod).lookup_short("aaaaaaaa")
                 if s is not None:
                     from nautical_core.task_models import TaskObservation
                     expect(isinstance(s, TaskObservation), f"short cache read should return observation, got {type(s)}")
@@ -11709,7 +7562,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
     mod = _load_hook_module(hook, "_nautical_get_chain_export_cached_filter_test")
     mod._reset_modify_runtime_state()
 
-    mod._module("modify_read_effects").lifecycle_read_service(mod).replace_chain_cache(
+    mod._module("modify_composition").lifecycle_read_service_for(mod).replace_chain_cache(
         "cid-1",
         [
             {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed", "entry": "2026-01-01T00:00:00Z"},
@@ -11718,7 +7571,7 @@ def test_on_modify_get_chain_export_filters_cached_chain_in_memory():
         ],
     )
 
-    rows = mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export(
+    rows = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export(
         "cid-1", extra="link:2 status.not:deleted"
     )
     expect(len(rows) == 1, f"expected exactly one filtered cached row, got {rows}")
@@ -11744,7 +7597,7 @@ def test_on_modify_chain_cache_reads_through_typed_repository():
             return Found(_task_observations(rows), "chain:cid")
 
     mod._modify_runtime_state().task_repository = Repository()
-    selected = mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export("cid", extra="status:pending")
+    selected = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export("cid", extra="status:pending")
     expect(calls == ["cid"], f"expected one repository read, got {calls!r}")
     expect([row.get("link") for row in selected] == [2], f"repository rows were not filtered: {selected!r}")
 
@@ -11764,7 +7617,7 @@ def test_on_modify_chain_cache_preserves_repository_unavailability():
 
     mod._modify_runtime_state().task_repository = Repository()
     try:
-        mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export("cid")
+        mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export("cid")
     except RuntimeError as exc:
         expect("malformed JSON" in str(exc), f"unavailable detail was lost: {exc}")
     else:
@@ -11786,240 +7639,18 @@ def test_on_modify_predecessor_read_preserves_repository_unavailability():
 
     mod._modify_runtime_state().task_repository = Repository()
     try:
-        mod._module("modify_read_effects").collect_prev_two(mod, {"chainID": "cid", "link": 3})
+        reads = mod._module("modify_read_effects")
+        state = mod._modify_runtime_state()
+        ports = reads.PreviousChainPorts(
+            service=mod._module("modify_composition").lifecycle_read_service_for(mod),
+            panel_chain_by_link=state.panel_chain_by_link,
+            panel_chain_snapshot_loaded=state.panel_chain_snapshot_loaded,
+        )
+        reads.collect_prev_two(ports, {"chainID": "cid", "link": 3})
     except RuntimeError as exc:
         expect("malformed JSON" in str(exc), f"predecessor failure detail was lost: {exc}")
     else:
         raise AssertionError("unavailable predecessor read became an empty list")
-
-
-def test_lifecycle_read_service_indexes_and_merges_chain_rows():
-    """The lifecycle read service owns snapshot indexes and child merges."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda extra: [] if not extra else str(extra).split(),
-        token_matcher=lambda row, token: token == "status:pending" and row.get("status") == "pending",
-        read_query_get=lambda _kind, _key: object(),
-        chain_cache_get=lambda _chain_id: None,
-        repository=object(),
-        max_chain_walk=10,
-    )
-    rows = _task_observations([
-        {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1},
-        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2},
-    ])
-    parent = rows[0]
-    indexes = service.build_indexes(rows)
-    expect(indexes.by_link[1][0].get("uuid") == parent.get("uuid"), f"unexpected link index: {indexes.by_link}")
-    expect(indexes.by_short["bbbbbbbb"].get("link") == 2, f"unexpected short index: {indexes.by_short}")
-    child = _task_observation({"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "link": 3})
-    merged = service.merge_spawned_child(
-        rows,
-        parent_task=parent,
-        child_task=child,
-        child_short="cccccccc",
-        short_uuid=lambda value: str(value)[:8],
-    )
-    expect(len(merged) == 3, f"expected merged child in chain, got {merged}")
-    expect(merged[0].get("nextLink") == "cccccccc", f"parent nextLink was not merged: {merged}")
-
-
-def test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads():
-    """Safe full-snapshot predicates must avoid a second Taskwarrior export."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    missing = object()
-    calls = {"export": 0}
-    snapshot = [
-        {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "link": 1, "status": "completed"},
-        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "link": 2, "status": "pending"},
-    ]
-
-    def _read(_kind, _key):
-        return snapshot
-
-    def _export(*_args):
-        calls["export"] += 1
-        return snapshot
-
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda extra: [] if not extra else str(extra).split(),
-        token_matcher=lambda row, token: token in {f"link:{row.get('link')}", f"status:{row.get('status')}"},
-        read_query_get=_read,
-        chain_cache_get=lambda _chain_id: None,
-        repository=object(),
-        max_chain_walk=10,
-    )
-    rows = service.get_chain_export(
-        "chain-1",
-        extra="link:2 status:pending",
-        read_query_missing=missing,
-        read_query_key=lambda chain_id, since, extra, limit: (chain_id, since, extra, limit),
-    )
-    expect(len(rows or []) == 1 and rows[0].get("link") == 2, f"unexpected filtered snapshot: {rows}")
-    expect(calls["export"] == 0, f"full snapshot filter unexpectedly exported Taskwarrior: {calls}")
-
-
-def test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed():
-    """The request cache store keeps rows and indexes together per chain."""
-    import nautical_core.lifecycle_read_service as read_service
-
-    store = read_service.ChainCacheStore()
-    service = read_service.LifecycleReadService(
-        coerce_int=lambda value, default=None: int(value) if str(value).isdigit() else default,
-        parse_extra_tokens=lambda _extra: [],
-        token_matcher=lambda _row, _token: True,
-        read_query_get=lambda _kind, _key: object(),
-        chain_cache_get=lambda _chain_id: None,
-        repository=object(),
-        max_chain_walk=10,
-        cache_store=store,
-    )
-    service.replace_chain_cache("cid", _task_observations([{"uuid": "aaaaaaaa", "link": 1}]))
-    rows = service.cached_chain_rows("cid")
-    expect(rows and rows[0].get("link") == 1, f"cache store did not retain rows: {rows}")
-    expect(store.indexes and store.indexes.by_short["aaaaaaaa"].get("link") == 1, "cache indexes were not retained")
-    expect(service.cached_chain_rows("other") is None, "cache leaked across chain IDs")
-
-
-def test_chain_integrity_warnings_detects_issues():
-    """Chain integrity checker should flag gaps and link inconsistencies."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_integrity_test")
-    chain = [
-        {
-            "uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "link": 1,
-            "nextLink": "bbbbbbbb",
-            "chainID": "cid",
-        },
-        {
-            "uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-            "link": 3,
-            "prevLink": "aaaaaaaa",
-            "chainID": "",
-        },
-    ]
-    analytics = mod.core._import_sibling("modify_analytics")
-    warnings = analytics.chain_integrity_warnings(
-        chain,
-        expected_chain_id="cid",
-        coerce_int=mod.core.coerce_int,
-        short=mod.core.short_uuid,
-    )
-    expect(any("missing link(s): 2" in w for w in warnings), f"expected link gap warning, got {warnings}")
-    expect(any("missing chainID" in w for w in warnings), f"expected chainID warning, got {warnings}")
-
-
-def test_chain_health_advice_coach_healthy_streak():
-    """Chain health advice should report healthy streak for steady on-time completions."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_healthy_test")
-    chain = [
-        {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250101T090500Z"},
-        {"uuid": "b", "link": 2, "status": "completed", "due": "20250104T090000Z", "end": "20250104T091000Z"},
-        {"uuid": "c", "link": 3, "status": "completed", "due": "20250107T090000Z", "end": "20250107T090800Z"},
-        {"uuid": "d", "link": 4, "status": "pending", "due": "20250110T090000Z"},
-    ]
-    analytics = mod.core._import_sibling("modify_analytics")
-    got = analytics.chain_health_advice(
-        chain,
-        "cp",
-        {"cp": "3d"},
-        core=mod.core,
-        parse_datetime=lambda value: mod._TASK_DATETIME_PARSER.parse(value)[0],
-        format_delta=mod._module("modify_value_effects").format_delta,
-        coerce_int=mod.core.coerce_int,
-        tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
-        style="coach",
-    )
-    expect(
-        got == "Chain looks healthy with a 3-link on-time streak; keep the current cadence.",
-        f"unexpected healthy advice: {got!r}",
-    )
-
-
-def test_chain_health_advice_coach_low_ontime_issue():
-    """Chain health advice should flag low on-time rate with actionable guidance."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_issue_test")
-    chain = [
-        {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250102T120000Z"},
-        {"uuid": "b", "link": 2, "status": "completed", "due": "20250102T090000Z", "end": "20250103T140000Z"},
-        {"uuid": "c", "link": 3, "status": "completed", "due": "20250103T090000Z", "end": "20250103T093000Z"},
-        {"uuid": "d", "link": 4, "status": "pending", "due": "20250105T090000Z"},
-    ]
-    analytics = mod.core._import_sibling("modify_analytics")
-    got = analytics.chain_health_advice(
-        chain,
-        "cp",
-        {"cp": "1d"},
-        core=mod.core,
-        parse_datetime=lambda value: mod._TASK_DATETIME_PARSER.parse(value)[0],
-        format_delta=mod._module("modify_value_effects").format_delta,
-        coerce_int=mod.core.coerce_int,
-        tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
-        style="coach",
-    )
-    expect(
-        got == "Chain needs attention (on-time rate is low); try smaller scopes or later due times.",
-        f"unexpected issue advice: {got!r}",
-    )
-
-
-def test_chain_health_advice_clinical_drift_and_style_normalization():
-    """Clinical style should include OT, drift, streak, and volatility with normalized style input."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_health_advice_clinical_test")
-    chain = [
-        {"uuid": "a", "link": 1, "status": "completed", "due": "20250101T090000Z", "end": "20250101T100000Z"},
-        {"uuid": "b", "link": 2, "status": "completed", "due": "20250102T090000Z", "end": "20250102T090500Z"},
-        {"uuid": "c", "link": 3, "status": "completed", "due": "20250103T090000Z", "end": "20250103T090500Z"},
-        {"uuid": "d", "link": 4, "status": "completed", "due": "20250105T090000Z", "end": "20250105T090500Z"},
-    ]
-    analytics = mod.core._import_sibling("modify_analytics")
-    got = analytics.chain_health_advice(
-        chain,
-        "anchor",
-        {},
-        core=mod.core,
-        parse_datetime=lambda value: mod._TASK_DATETIME_PARSER.parse(value)[0],
-        format_delta=mod._module("modify_value_effects").format_delta,
-        coerce_int=mod.core.coerce_int,
-        tol_secs=mod._ANALYTICS_ONTIME_TOL_SECS,
-        style=" Clinical ",
-    )
-    expect(
-        got == "OT 100% | Drift +1d 00h:00m | Streak 4 | Vol 0d 00h:23m",
-        f"unexpected clinical advice: {got!r}",
-    )
-
-
-def test_dst_round_trip_noon_preserves_local_date():
-    """Local date+time should round-trip through UTC across DST boundaries."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('tz = "America/New_York"\n')
-        mod = _load_core_module(core_path, "_nautical_core_dst_test", cfg)
-        dates = [
-            date(2025, 3, 8),
-            date(2025, 3, 9),
-            date(2025, 3, 10),
-            date(2025, 11, 1),
-            date(2025, 11, 2),
-            date(2025, 11, 3),
-        ]
-        for d in dates:
-            dt_local = mod.build_local_datetime(d, (12, 0))
-            dt_utc = dt_local.astimezone(timezone.utc)
-            back = mod.to_local(dt_utc)
-            expect(back.date() == d, f"DST round-trip date mismatch: {d} -> {back.date()}")
-            expect(back.hour == 12 and back.minute == 0, f"DST round-trip time mismatch: {back}")
 
 
 def test_core_invalid_timezone_warns_and_falls_back_to_utc():
@@ -12056,139 +7687,6 @@ def test_core_invalid_timezone_warns_and_falls_back_to_utc():
                 os.environ["XDG_CACHE_HOME"] = prev_xdg
 
 
-def test_config_support_reports_automatically_discovered_toml_parse_errors():
-    """Automatic config discovery must retain parse failures for scheduling guards."""
-    import nautical_core.config_support as config_support
-
-    with tempfile.TemporaryDirectory() as td:
-        path = os.path.join(td, "nautical.toml")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("tz = [\n")
-        errors = []
-        data = config_support.read_toml(
-            path,
-            tomllib_mod=__import__("tomllib"),
-            warn_missing_toml_parser=lambda _path: None,
-            warn_toml_parse_error=lambda _path, _err: None,
-            error_sink=errors.append,
-        )
-        expect(data == {}, f"malformed automatic config should not produce values: {data!r}")
-        expect(errors and path in errors[0], f"automatic config parse error was lost: {errors!r}")
-
-
-def test_config_support_rejects_unsafe_toml_and_reports_reason():
-    """Unsafe configuration files must be rejected with a path-safety diagnostic."""
-    import nautical_core.config_support as config_support
-
-    with tempfile.TemporaryDirectory() as td:
-        path = os.path.join(td, "nautical.toml")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write('tz = "Pacific/Auckland"\n')
-        try:
-            os.chmod(path, 0o666)
-        except OSError:
-            return
-        errors = []
-        data = config_support.read_toml(
-            path,
-            tomllib_mod=__import__("tomllib"),
-            warn_missing_toml_parser=lambda _path: None,
-            warn_toml_parse_error=lambda _path, _err: None,
-            error_sink=errors.append,
-        )
-        expect(data == {}, f"unsafe config should not produce values: {data!r}")
-        expect(errors and path in errors[0], f"unsafe config path was lost: {errors!r}")
-        expect("world-writable" in errors[0], f"unsafe config reason was lost: {errors!r}")
-
-
-def test_config_support_distinguishes_empty_missing_and_invalid_candidates():
-    """Empty candidates are authoritative; invalid candidates block lower fallbacks."""
-    import nautical_core.config_support as config_support
-
-    defaults = {
-        "wrand_salt": "default",
-        "tz": "UTC",
-        "holiday_region": "",
-        "anchor_file_dir": "",
-        "omit_file_dir": "",
-        "anchor_presets": {},
-        "omit_presets": {},
-        "business_calendar": {},
-    }
-    with tempfile.TemporaryDirectory() as td:
-        high = Path(td) / "high.toml"
-        low = Path(td) / "low.toml"
-        low.write_text('tz = "Pacific/Auckland"\n', encoding="utf-8")
-        previous_config = os.environ.pop("NAUTICAL_CONFIG", None)
-        try:
-            def read_result(path):
-                return config_support.read_toml_result(
-                    path,
-                    tomllib_mod=__import__("tomllib"),
-                    warn_missing_toml_parser=lambda _path: None,
-                    warn_toml_parse_error=lambda _path, _err: None,
-                )
-
-            high.write_text("", encoding="utf-8")
-            selected_empty = config_support.load_config(
-                defaults=defaults,
-                config_paths=lambda: [str(high), str(low)],
-                read_toml=lambda path: read_result(path).data,
-                read_toml_result=read_result,
-                normalize_keys=config_support.normalize_keys,
-            )
-            expect(
-                selected_empty["tz"] == "UTC",
-                f"valid empty config did not remain authoritative: {selected_empty!r}",
-            )
-
-            errors = []
-            high.write_text("tz = [\n", encoding="utf-8")
-
-            def invalid_result(path):
-                return config_support.read_toml_result(
-                    path,
-                    tomllib_mod=__import__("tomllib"),
-                    warn_missing_toml_parser=lambda _path: None,
-                    warn_toml_parse_error=lambda _path, _err: None,
-                    error_sink=errors.append,
-                )
-
-            blocked = config_support.load_config(
-                defaults=defaults,
-                config_paths=lambda: [str(high), str(low)],
-                read_toml=lambda path: invalid_result(path).data,
-                read_toml_result=invalid_result,
-                normalize_keys=config_support.normalize_keys,
-            )
-            expect(blocked["tz"] == "UTC", f"invalid config fell through to lower candidate: {blocked!r}")
-            expect(errors and str(high) in errors[0], f"invalid config reason was lost: {errors!r}")
-
-            original_exists = config_support.os.path.exists
-            try:
-                config_support.os.path.exists = lambda _path: (_ for _ in ()).throw(
-                    OSError("stat unavailable")
-                )
-                inspection_errors = []
-                inspected = config_support.read_toml_result(
-                    str(high),
-                    tomllib_mod=__import__("tomllib"),
-                    warn_missing_toml_parser=lambda _path: None,
-                    warn_toml_parse_error=lambda _path, _err: None,
-                    error_sink=inspection_errors.append,
-                )
-            finally:
-                config_support.os.path.exists = original_exists
-            expect(inspected.is_invalid, f"filesystem inspection failure was treated as absent: {inspected!r}")
-            expect(
-                inspection_errors and "inspection failed" in inspection_errors[0],
-                f"filesystem inspection reason was lost: {inspection_errors!r}",
-            )
-        finally:
-            if previous_config is not None:
-                os.environ["NAUTICAL_CONFIG"] = previous_config
-
-
 def test_explicit_unsafe_config_blocks_scheduling_with_actionable_error():
     """An explicit world-writable config must not silently fall back to UTC."""
     script = (
@@ -12221,9 +7719,9 @@ def test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone():
     script = (
         "import sys\n"
         "import nautical_core\n"
-        "from nautical_core.integration_context import build_operator_context\n"
+        "from nautical_core.integration_context import IntegrationRuntime, build_operator_context\n"
         "try:\n"
-        "    build_operator_context(core=nautical_core, task_binary=sys.executable, taskdata=sys.argv[1])\n"
+        "    build_operator_context(runtime=IntegrationRuntime.from_compatibility_facade(nautical_core), task_binary=sys.executable, taskdata=sys.argv[1])\n"
         "except Exception as exc:\n"
         "    print(type(exc).__name__ + ': ' + str(exc))\n"
         "else:\n"
@@ -12504,10 +8002,10 @@ def test_outbox_drain_limit_config_and_env_override():
         config_path.write_text("\n", encoding="utf-8")
         script = (
             "import json\n"
-            "from nautical_core import OUTBOX_DRAIN_MAX_ITEMS\n"
+            "import nautical_core\n"
             "from nautical_core.hooks import exit_impl\n"
             "exit_impl._load_core()\n"
-            "print(json.dumps([OUTBOX_DRAIN_MAX_ITEMS, exit_impl._OUTBOX_BATCH_MAX_ITEMS]))\n"
+            "print(json.dumps([nautical_core.OUTBOX_DRAIN_MAX_ITEMS, exit_impl._OUTBOX_BATCH_MAX_ITEMS]))\n"
         )
         env = os.environ.copy()
         env["NAUTICAL_CONFIG"] = str(config_path)
@@ -12552,83 +8050,6 @@ def test_outbox_drain_limit_config_and_env_override():
         )
 
 
-def test_shipped_config_keeps_hook_toggles_top_level():
-    """Preset tables in config-nautical.toml should not swallow later top-level hook settings."""
-    try:
-        import tomllib
-    except Exception:
-        import tomli as tomllib
-
-    cfg_path = Path(ROOT) / "config-nautical.toml"
-    data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
-    expect(data.get("panel_mode") == "rich", f"panel_mode should be top-level in shipped config: {data!r}")
-    expect(data.get("live_panel_duration_ms") == 160, f"live duration should be top-level in shipped config: {data!r}")
-    expect(data.get("show_analytics") is False, f"show_analytics should be top-level in shipped config: {data!r}")
-    omit_presets = data.get("omit_presets") if isinstance(data.get("omit_presets"), dict) else {}
-    expect("panel_mode" not in omit_presets, f"panel_mode was parsed as an omit preset: {omit_presets!r}")
-    expect("show_analytics" not in omit_presets, f"show_analytics was parsed as an omit preset: {omit_presets!r}")
-
-
-def test_shipped_config_matches_authoritative_schema():
-    """Every shipped config key should be active, typed correctly, and in range."""
-    try:
-        import tomllib
-    except Exception:
-        import tomli as tomllib
-    from nautical_core import config_schema
-
-    cfg_path = Path(ROOT) / "config-nautical.toml"
-    data = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
-    issues = config_schema.validate_config(data)
-    expect(not issues, f"shipped config does not match the runtime schema: {issues!r}")
-    expect("verify_import" not in data, "retired verify_import should not be advertised")
-    expect("holiday_region" not in data, "ineffective holiday_region should not be advertised")
-
-
-def test_config_schema_reports_retired_unknown_and_ineffective_values():
-    """Schema diagnostics should expose configuration drift and effective fallbacks."""
-    from nautical_core import config_schema
-
-    issues = config_schema.validate_config(
-        {
-            "verify_import": False,
-            "show_analytics": "yes",
-            "outbox_drain_max_items": 0,
-            "panel_mode": "sparkle",
-            "setting_typo": True,
-        }
-    )
-    kinds = {issue["kind"] for issue in issues}
-    expect(
-        {"deprecated", "type", "range", "choice", "unknown"} <= kinds,
-        f"schema issues were incomplete: {issues!r}",
-    )
-    drain = next(issue for issue in issues if issue["key"] == "outbox_drain_max_items")
-    expect(drain.get("effective") == 1, f"drain limit effective value was not reported: {issues!r}")
-    panel = next(issue for issue in issues if issue["key"] == "panel_mode")
-    expect(panel.get("effective") == "rich", f"panel fallback was not reported: {issues!r}")
-
-
-def test_season_mode_configuration_contract():
-    """Season mode should default to fixed and reject unsupported backend names."""
-    from nautical_core import config_schema
-
-    expect(config_schema.spec_default("season_mode") == "fixed", "season mode default changed")
-    expect(
-        not config_schema.validate_config({"season_mode": "fixed"}),
-        "fixed season mode was rejected",
-    )
-    expect(
-        not config_schema.validate_config({"season_mode": "astronomical"}),
-        "astronomical season mode was rejected",
-    )
-    issues = config_schema.validate_config({"season_mode": "lunar"})
-    expect(
-        any(issue.get("kind") == "choice" for issue in issues),
-        f"invalid season mode was not reported: {issues!r}",
-    )
-
-
 def test_on_modify_invalid_json_passthrough():
     """Malformed JSON should fail fast without stdout JSON."""
     path = _find_hook_file("on-modify.nautical")
@@ -12636,216 +8057,6 @@ def test_on_modify_invalid_json_passthrough():
     p = _run_hook_script_raw(path, raw)
     expect(p.returncode != 0, "on-modify should fail on invalid JSON input")
     expect((p.stdout or "").strip() == "", f"expected no stdout on failure, got: {p.stdout!r}")
-
-def test_next_for_and_no_progress_fails_fast():
-    """_next_for_and should fail fast when a term makes no forward progress."""
-    saved = core.next_after_atom_with_mods
-    try:
-        def _stub(_atom, ref_d, _seed, seed_base=None):
-            _ = seed_base
-            return ref_d
-        core.next_after_atom_with_mods = _stub
-        term = [{"typ": "w", "spec": "mon"}]
-        try:
-            core._next_for_and(term, date(2025, 1, 1), date(2025, 1, 1))
-            expect(False, "_next_for_and should raise ParseError on no-progress")
-        except core.ParseError:
-            pass
-    finally:
-        core.next_after_atom_with_mods = saved
-
-
-def test_next_for_and_transient_stall_recovers():
-    """_next_for_and should recover from brief no-progress stalls."""
-    saved_next = core.next_after_atom_with_mods
-    saved_match = core.atom_matches_on
-    try:
-        calls = {"n": 0}
-
-        def _stub(_atom, ref_d, _seed, seed_base=None):
-            _ = seed_base
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return ref_d
-            return ref_d + timedelta(days=1)
-
-        core.next_after_atom_with_mods = _stub
-        core.atom_matches_on = lambda _a, _d, _s, seed_base=None: True
-        term = [{"typ": "w", "spec": "mon"}]
-        got = core._next_for_and(term, date(2025, 1, 1), date(2025, 1, 1))
-        expect(got > date(2025, 1, 1), f"expected forward progress after transient stall, got {got}")
-    finally:
-        core.next_after_atom_with_mods = saved_next
-        core.atom_matches_on = saved_match
-
-def test_roll_apply_has_guard():
-    """roll_apply should fail fast if weekday never converges."""
-    class WeirdDate(date):
-        def weekday(self):
-            return 9
-
-    try:
-        core.roll_apply(WeirdDate(2025, 1, 1), {"roll": "pbd"})
-        expect(False, "roll_apply should raise ParseError when weekday never converges")
-    except core.ParseError:
-        pass
-
-def test_anchor_cache_cleans_stale_tmp_files():
-    """cache_save should remove stale temp files for the same key."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write("enable_anchor_cache = true\n")
-            td_path_norm = td.replace("\\", "/")
-            f.write(f'anchor_cache_dir = "{td_path_norm}"\n')
-        mod = _load_core_module(core_path, "_nautical_core_cache_tmp_test", cfg)
-        mod.ENABLE_ANCHOR_CACHE = True
-        mod.ANCHOR_CACHE_DIR_OVERRIDE = td
-        mod._CACHE_DIR = None
-        key = "beeswax"
-        stale = os.path.join(td, f".{key}.stale.tmp")
-        with open(stale, "w", encoding="utf-8") as f:
-            f.write("stale")
-        mod.cache_save(key, {"dnf": []})
-    expect(not os.path.exists(stale), "stale cache tmp file should be cleaned")
-
-
-def test_anchor_cache_garbage_collection_prunes_expired_and_overflow():
-    """Explicit cache GC should remove expired/overflow entries and stale temps only."""
-    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_cache_dir = getattr(core, "_CACHE_DIR", None)
-    saved_ttl = core.ANCHOR_CACHE_TTL
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-            setattr(core, "_CACHE_DIR", None)
-            core.ANCHOR_CACHE_TTL = 1
-            old_path = Path(td) / "old-entry.jsonz"
-            new_path = Path(td) / "new-entry.jsonz"
-            stale_tmp = Path(td) / ".orphan.tmp"
-            stale_lock = Path(td) / ".orphan.lock"
-            active_lock = Path(td) / ".active.lock"
-            malformed_lock = Path(td) / ".malformed.lock"
-            ignored = Path(td) / "notes.txt"
-            old_path.write_bytes(b"old")
-            new_path.write_bytes(b"new")
-            stale_tmp.write_bytes(b"tmp")
-            stale_lock.write_text("999999 1\n", encoding="ascii")
-            active_lock.write_text(f"{os.getpid()} {int(time.time())}\n", encoding="ascii")
-            malformed_lock.write_text("not-a-lock\n", encoding="ascii")
-            ignored.write_text("keep", encoding="utf-8")
-            old_time = time.time() - 10
-            os.utime(old_path, (old_time, old_time))
-            os.utime(stale_tmp, (old_time, old_time))
-            os.utime(stale_lock, (old_time, old_time))
-            os.utime(malformed_lock, (old_time, old_time))
-            result = core.cache_gc(max_entries=1, stale_tmp_age=1, stale_lock_age=1)
-            expect(result.get("expired") == 1, f"expired cache entry was not pruned: {result}")
-            expect(result.get("temporary") == 1, f"stale temp was not pruned: {result}")
-            expect(old_path.exists() is False and new_path.exists(), "cache GC removed the wrong entry")
-            expect(result.get("locks_removed") == 1, f"stale lock was not pruned: {result}")
-            expect(result.get("locks_skipped", 0) >= 1, f"ambiguous locks were not preserved: {result}")
-            expect(not stale_lock.exists() and active_lock.exists() and malformed_lock.exists(), "lock cleanup was unsafe")
-            expect(ignored.exists(), "cache GC touched an unrelated file")
-    finally:
-        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-        setattr(core, "_CACHE_DIR", saved_cache_dir)
-        core.ANCHOR_CACHE_TTL = saved_ttl
-
-def test_weeks_between_iso_boundary():
-    """_weeks_between should honor ISO week boundaries across years."""
-    d1 = date(2024, 12, 31)  # ISO week 2025-W01
-    d2 = date(2025, 1, 1)    # ISO week 2025-W01
-    expect(core._weeks_between(d1, d2) == 0, "same ISO week across year should be 0")
-    d3 = date(2024, 12, 29)  # ISO week 2024-W52
-    d4 = date(2024, 12, 30)  # ISO week 2025-W01
-    expect(core._weeks_between(d3, d4) == 1, "ISO week boundary should be 1")
-
-def test_short_uuid_invalid_inputs():
-    """short_uuid should not crash on invalid inputs."""
-    expect(core.short_uuid(None) == "", "short_uuid None should be empty")
-    expect(core.short_uuid(1234) == "", "short_uuid non-string should be empty")
-    expect(core.short_uuid("abcd") == "abcd", "short_uuid should keep short strings")
-
-def test_anchor_expr_length_limit():
-    """Anchor expressions over 1024 chars should fail fast."""
-    s = "w:mon" + ("+w:mon" * 300)
-    try:
-        core.parse_anchor_expr_to_dnf(s)
-        expect(False, "long anchor should raise ParseError")
-    except core.ParseError:
-        pass
-
-
-def test_parser_frontend_normalization_characterization():
-    """Parser frontend normalization should preserve current pre-parse rewrites."""
-    expect(
-        core._normalize_anchor_expr_input('"07-rand"') == "rand-07",
-        "mm-rand alias should normalize to rand-mm after quote stripping",
-    )
-
-
-def test_parser_frontend_year_colon_guard_characterization():
-    """Year-token colon guard should preserve its friendly error text."""
-    msg = core._fatal_bad_colon_in_year_tail("05:15")
-    expect(msg is not None and "uses ':' between numbers" in msg, f"unexpected colon guard message: {msg!r}")
-    try:
-        core._raise_on_bad_colon_year_tokens("y:05:15")
-        raise AssertionError("expected ParseError for colon year token")
-    except core.ParseError as e:
-        expect("uses ':' between numbers" in str(e), f"unexpected error: {e}")
-
-
-def test_parser_frontend_comma_join_guard_characterization():
-    """Frontend should keep rejecting comma-joined anchors with current guidance."""
-    for tail, needle in (
-        ("31, w:sun", "Anchors must be joined with '+'"),
-        ("31@t=14:00, w:sun", "It looks like you used a comma to join anchors."),
-    ):
-        try:
-            core._raise_if_comma_joined_anchors(tail)
-            raise AssertionError(f"expected ParseError for {tail!r}")
-        except core.ParseError as e:
-            expect(needle in str(e), f"unexpected message for {tail!r}: {e}")
-
-
-def test_anchor_parse_term_explosion_guard():
-    """Parser should reject DNF Cartesian explosions before exhausting memory."""
-    group = "(w:mon|w:tue|w:wed|w:thu|w:fri|w:sat)"
-    expr = "+".join([group] * 6)  # 6^6 = 46,656 combined terms
-    try:
-        core.parse_anchor_expr_to_dnf(expr)
-        expect(False, "expected ParseError for excessive combined terms")
-    except core.ParseError as e:
-        expect("too complex" in str(e).lower(), f"unexpected error for term explosion guard: {e}")
-
-def test_coerce_int_bounds():
-    """coerce_int should return default for out-of-bounds values."""
-    big = 2**63
-    expect(core.coerce_int(big, default=7) == 7, "coerce_int should reject too-large int")
-    expect(core.coerce_int(float(big), default=7) == 7, "coerce_int should reject too-large float")
-
-def test_build_local_datetime_dst_gap_and_ambiguous():
-    """build_local_datetime should handle DST gaps and ambiguities deterministically."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('tz = "America/New_York"\n')
-        mod = _load_core_module(core_path, "_nautical_core_dst_policy_test", cfg)
-
-        # Spring forward: 2025-03-09 02:30 does not exist -> shift forward.
-        dt_utc = mod.build_local_datetime(date(2025, 3, 9), (2, 30))
-        back = mod.to_local(dt_utc)
-        expect(back.hour == 3 and back.minute == 30, f"DST gap should shift forward: {back}")
-
-        # Fall back: 2025-11-02 01:30 is ambiguous -> choose earlier (EDT, UTC-4).
-        dt_utc = mod.build_local_datetime(date(2025, 11, 2), (1, 30))
-        back = mod.to_local(dt_utc)
-        offset = back.utcoffset()
-        expect(offset is not None and offset.total_seconds() == -4 * 3600, f"DST fall back should choose earlier: {back}")
-
 
 def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
     """A 30-minute DST gap must shift by its actual transition size everywhere."""
@@ -12867,7 +8078,10 @@ def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
     try:
         mod.core.LOCAL_TZ_NAME = "Australia/Lord_Howe"
         mod.core._LOCAL_TZ = zone
-        carried = mod._module("modify_datetime_effects").local_naive_to_utc(mod, datetime(2026, 10, 4, 2, 15))
+        effects = mod._module("modify_datetime_effects")
+        carried = effects.local_naive_to_utc(
+            effects.datetime_effect_ports_for(mod), datetime(2026, 10, 4, 2, 15)
+        )
     finally:
         mod.core.LOCAL_TZ_NAME = old_name
         mod.core._LOCAL_TZ = old_tz
@@ -12875,48 +8089,6 @@ def test_local_datetime_non_hour_dst_gap_is_shared_by_modify():
     expect(
         (carried_local.hour, carried_local.minute) == (2, 45),
         f"modify DST resolver diverged from scheduling: {carried_local}",
-    )
-
-
-def test_hook_datetime_comparator_resolves_once():
-    """Thin hooks should resolve the shared datetime comparator once per process."""
-    for hook_name, module_name in (
-        ("on-add.nautical", "_nautical_add_comparator_cache_test"),
-        ("on-modify.nautical", "_nautical_modify_comparator_cache_test"),
-    ):
-        mod = _load_hook_module(_find_hook_file(hook_name), module_name)
-        mod._load_core()
-        original_import = mod.core._import_sibling
-        calls = []
-
-        def counted_import(name):
-            if name == "timeutil":
-                calls.append(name)
-            return original_import(name)
-
-        mod.core._import_sibling = counted_import
-        value_effects = mod._module("modify_value_effects")
-        value_effects._COMPARATOR = None
-        instant = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        try:
-            value_effects.compare_datetimes(mod, instant, instant)
-            value_effects.compare_datetimes(mod, instant, instant)
-        finally:
-            mod.core._import_sibling = original_import
-        expect(len(calls) == 1, f"{hook_name} resolved comparator {len(calls)} times")
-
-
-def test_local_datetime_full_day_gap_shifts_to_next_valid_wall_time():
-    """The resolver must handle timezone date-line skips, not only DST gaps."""
-    from zoneinfo import ZoneInfo
-    from nautical_core.timeutil import build_local_datetime
-
-    zone = ZoneInfo("Pacific/Apia")
-    resolved = build_local_datetime(date(2011, 12, 30), (12, 0), zone)
-    local = resolved.astimezone(zone)
-    expect(
-        local.date() == date(2011, 12, 31) and (local.hour, local.minute) == (12, 0),
-        f"full-day timezone gap should advance to the next valid date: {local}",
     )
 
 
@@ -12967,7 +8139,14 @@ def test_modify_overnight_window_advances_past_second_dst_fold():
         mod.core._LOCAL_TZ = zone
         dnf = mod.core.validate_anchor_expr_strict("w:sat@t=22:20..03:20/6")
         cursor = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-        result = mod._module("modify_schedule_effects").next_occurrence_after_local_dt(mod,
+        schedule = mod._module("modify_schedule_effects")
+        from nautical_core.add_anchor_compute import anchor_next_occurrence_after_local_dt
+
+        result = schedule.next_occurrence_after_local_dt(schedule.OccurrencePorts(
+            lambda dnf, after, **kwargs: anchor_next_occurrence_after_local_dt(
+                dnf, after, core=mod.core, **kwargs
+            )
+        ),
             dnf,
             cursor,
             default_seed_date=date(2026, 10, 24),
@@ -13076,511 +8255,15 @@ def test_on_modify_collect_prev_two_prefers_live_statuses():
         ],
     }
 
-    prevs = mod._module("modify_read_effects").collect_prev_two(mod, current, chain_by_link=chain_by_link)
+    reads = mod._module("modify_read_effects")
+    state = mod._modify_runtime_state()
+    ports = reads.PreviousChainPorts(
+        service=mod._module("modify_composition").lifecycle_read_service_for(mod),
+        panel_chain_by_link=state.panel_chain_by_link,
+        panel_chain_snapshot_loaded=state.panel_chain_snapshot_loaded,
+    )
+    prevs = reads.collect_prev_two(ports, current, chain_by_link=chain_by_link)
     expect([t.get("uuid") for t in prevs] == ["pending-2", "completed-3"], f"unexpected prevs: {prevs}")
-
-def test_weekly_and_unsat():
-    """Test weekly AND (Sat AND Mon) must be unsatisfiable"""
-    fatal, _ = core.lint_anchor_expr("w:sat + w:mon")
-    expect(bool(fatal), "Weekly A+B must be unsatisfiable (Sat AND Mon)")
-
-
-def test_satisfiability_helpers_characterization():
-    """Direct satisfiability helpers should preserve fast weekly/yearly failures."""
-    try:
-        core._quick_weekly_and_check(
-            [{"typ": "w", "spec": "sat", "mods": {}}, {"typ": "w", "spec": "mon", "mods": {}}]
-        )
-        raise AssertionError("expected weekly AND helper to fail")
-    except core.AndTermUnsatisfiable as e:
-        expect("never coincide" in str(e), f"unexpected weekly unsat message: {e}")
-
-    try:
-        core._quick_yearly_and_check(
-            [{"typ": "y", "spec": "01-01"}, {"typ": "y", "spec": "12-25"}]
-        )
-        raise AssertionError("expected yearly AND helper to fail")
-    except core.AndTermUnsatisfiable as e:
-        expect("never overlap within a year" in str(e), f"unexpected yearly unsat message: {e}")
-
-    expect(
-        core._term_has_any_match_within(
-            [{"typ": "w", "spec": "mon", "mods": {}}, {"typ": "m", "spec": "1", "mods": {}}],
-            date(2026, 1, 1),
-            date(2026, 1, 1),
-            years=2,
-        ),
-        "simple satisfiable term should have a match within scan window",
-    )
-
-
-def test_parser_satisfiability_agrees_with_scheduler():
-    """Accepted AND terms should schedule, while impossible intersections remain rejected."""
-    import nautical_core as core
-
-    start = date(2026, 1, 1)
-    accepted = [
-        ("w:mon + y:01-01", date(2029, 1, 1)),
-        ("y:rand + w:sat", None),
-        ("m:rand + y:02-29", date(2028, 2, 29)),
-        ("m:5th-mon + y:02-29", date(2044, 2, 29)),
-        ("m:last-mon + y:02-29", date(2044, 2, 29)),
-    ]
-    for expr, expected in accepted:
-        dnf = core.parse_anchor_expr_to_dnf(expr)
-        validated = core.validate_anchor_expr_strict(dnf)
-        nxt, _meta = core.next_after_expr(
-            validated,
-            start,
-            default_seed=start,
-            seed_base="satisfiability-agreement-v1",
-        )
-        expect(nxt is not None and nxt > start, f"{expr}: accepted expression did not schedule")
-        if expected is not None:
-            expect(nxt == expected, f"{expr}: expected {expected}, got {nxt}")
-
-    impossible = [
-        "w:mon + w:sun",
-        "y:01-01 + y:12-25",
-        "m:31 + y:apr",
-        "m:30 + y:feb",
-    ]
-    for expr in impossible:
-        try:
-            core.parse_anchor_expr_to_dnf(expr)
-            raise AssertionError(f"{expr}: impossible expression should be rejected")
-        except core.AndTermUnsatisfiable:
-            pass
-
-
-def test_expansion_helpers_characterization():
-    """Weekly/yearly expansion helpers should preserve core support behavior."""
-    expect(core._weekly_spec_to_wset("mon..wed") == {0, 1, 2}, "weekly range should expand to Mon-Wed")
-    expect(
-        core._weekly_spec_to_wset("rand", mods={"bd": True}) == {0, 1, 2, 3, 4},
-        "weekly rand with bd should restrict to business days",
-    )
-    expect(
-        core._doms_for_weekly_spec("mon", 2026, 1) == {5, 12, 19, 26},
-        "weekly DOM expansion for January 2026 Mondays should stay stable",
-    )
-    expect(
-        core._y_ranges_from_spec("rand-07,01-10..01-12") == [(7, 1, 7, 31), (1, 10, 1, 12)],
-        "yearly ranges should preserve rand-month and numeric range expansion",
-    )
-    expect(
-        core._doms_allowed_by_year(2026, 7, ["rand-07"]) == set(range(1, 32)),
-        "rand-07 should allow the full July DOM range",
-    )
-
-def test_nth_weekday_range():
-    """Test nth weekday range validation (1..5 or last)"""
-    fatal, _ = core.lint_anchor_expr("m:6th-mon")
-    expect(bool(fatal), "6th-mon must fatal (nth in 1..5 or last)")
-
-def test_lint_anchor_expr_characterization():
-    """lint_anchor_expr should keep stable fatal messages for key malformed inputs."""
-    cases = [
-        ('"w:mon-fri"', "Weekly ranges must use '..' (e.g., 'w:mon..fri')."),
-        ("w:mon:fri", "Weekly ranges must use '..' (e.g., 'w:mon..fri')."),
-        ("y:01-01:12-31", "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."),
-        ("w:mno", "Unknown weekday 'mno'. Did you mean 'mon'?"),
-        ("m:6th-mon", "Invalid ordinal '6th'. Only 1st..5th are supported."),
-        (
-            "w:sat + w:mon",
-            "These anchors joined with '+' don't share any possible date. If you meant 'either/or', use '|'.",
-        ),
-        (
-            "y:q4..q2",
-            "Invalid quarter range 'qX..qY': end quarter precedes start quarter. Split across the year boundary, e.g., 'q4, q1'.",
-        ),
-    ]
-    for expr, expected in cases:
-        fatal, warns = core.lint_anchor_expr(expr)
-        expect(fatal == expected, f"{expr}: expected fatal {expected!r}, got {fatal!r}")
-        expect(warns == [], f"{expr}: expected no warnings, got {warns!r}")
-
-    too_long = "w:mon" + ("x" * 1100)
-    fatal, warns = core.lint_anchor_expr(too_long)
-    expect(fatal == "Anchor expression too long (max 1024 characters).", f"unexpected length fatal: {fatal!r}")
-    expect(warns == [], f"expected no warnings for long input, got {warns!r}")
-
-
-def test_month_alias_in_monthly_anchor_suggests_yearly_anchor():
-    """Month aliases in m: should point users toward y: syntax."""
-    try:
-        core.validate_anchor_expr_strict("m:jan")
-        raise AssertionError("m:jan: expected ParseError")
-    except core.ParseError as e:
-        msg = str(e)
-        expect("Month names belong to yearly anchors." in msg, f"unexpected message: {msg}")
-        expect("Use 'y:jan'" in msg, f"unexpected message: {msg}")
-
-
-def test_unsat_hint_uses_yearly_alias_for_month_name_examples():
-    """Unsat AND hints should not reinforce m:apr as valid month-name syntax."""
-    try:
-        core.validate_anchor_expr_strict("w:wed + m:apr")
-        raise AssertionError("w:wed + m:apr: expected ParseError")
-    except core.ParseError as e:
-        msg = str(e)
-        expect("Example: w:wed | y:apr" in msg, f"unexpected message: {msg}")
-
-def test_anchor_grouped_list_plus_expr_applies_filter_to_all_items():
-    """anchor should treat comma lists joined with '+' as a grouped unit."""
-    dnf = core.validate_anchor_expr_strict("w:mon,wed,fri + y:apr")
-    expect(len(dnf) == 3, f"expected grouped OR expansion, got {dnf!r}")
-    from datetime import date
-    expect(core.next_after_expr(dnf, date(2026, 4, 12), default_seed=date(2026, 4, 11), seed_base="anchor-test")[0] == date(2026, 4, 13), "April Monday should match")
-    expect(core.next_after_expr(dnf, date(2026, 4, 30), default_seed=date(2026, 4, 11), seed_base="anchor-test")[0] == date(2027, 4, 2), "May weekdays should not match; next match should be in next April")
-
-
-def test_lint_grouped_list_plus_expr_matches_current_grammar():
-    """lint should not warn that comma-list filters bind only to the final item."""
-    for expr in (
-        "w:mon,wed,fri + y:apr",
-        "m:1,15,-1bd + w:mon..fri",
-        "y:apr,jul,oct + w:sat",
-    ):
-        fatal, warns = core.lint_anchor_expr(expr)
-        expect(fatal is None, f"{expr}: unexpected lint fatal {fatal!r}")
-        expect(warns == [], f"{expr}: obsolete grouped-list warning returned: {warns!r}")
-
-
-def test_last_weekday():
-    """Test last weekday of month pattern"""
-    # Verify natural language mentions "last"
-    p = build_preview("m:last-fri")
-    expect("last" in p["natural"].lower(), "Natural should mention last Friday")
-    # Verify all upcoming dates are Fridays
-    for d in p["upcoming"][:5]:
-        dow = datetime.fromisoformat(d).weekday()  # 0=Mon
-        expect(dow == 4, f"{d} must be Friday")
-
-def test_monthly_valid_months_m2_5th_mon():
-    """Test monthly pattern with interval (/2) and 5th Monday constraint"""
-    # /2:5th-mon must count only months that HAVE the 5th Monday
-    p = build_preview("m/2:5th-mon")
-    expect(p["upcoming"], "Should produce upcoming dates")
-    # Each is Monday
-    for d in p["upcoming"][:6]:
-        expect(datetime.fromisoformat(d).weekday() == 0, f"{d} must be Monday")
-
-
-def test_monthly_support_helpers_characterization():
-    """Monthly DOM and valid-month support helpers should preserve current behavior."""
-    expect(core._doms_for_monthly_token("last-fri", 2026, 1) == {30}, "last-fri in Jan 2026 should resolve to the 30th")
-    expect(core._month_has_hit("5th-mon", 2026, 2) is False, "Feb 2026 should not have a 5th Monday")
-    expect(core._month_has_hit("5th-mon", 2026, 3) is True, "Mar 2026 should have a 5th Monday")
-    expect(core._next_valid_month_on_or_after("5th-mon", 2026, 2) == (2026, 3), "next valid month after Feb 2026 should be Mar 2026")
-    probe = date(2026, 3, 1)
-    nxt = core._first_hit_after_probe_in_month("5th-mon", 2026, 3, probe)
-    expect(nxt == date(2026, 3, 30), f"Unexpected first hit in Mar 2026: {nxt!r}")
-
-def test_leap_year_29feb():
-    """Test leap year handling for Feb 29"""
-    p = build_preview("y:02-29")
-    dates = p["upcoming"][:8]
-    expect(dates, "Need some upcoming for leap-day")
-    for d in dates:
-        dt = datetime.fromisoformat(d)
-        expect(dt.month == 2 and dt.day in (28,29), "Window around Feb; core may list anchor dates only")
-    # Must contain an actual Feb 29 within a 4-year span
-    expect(any(datetime.fromisoformat(d).day == 29 for d in dates), "Must include a Feb 29 occurrence")
-
-
-def test_year_day_ordinals_expand_and_schedule():
-    """Year-day selectors should resolve positive and reverse ordinals per calendar year."""
-    expect(
-        core.expand_yearly_for_year_strict("d1,d60,d-1", 2023)
-        == [date(2023, 1, 1), date(2023, 3, 1), date(2023, 12, 31)],
-        "common-year ordinal expansion drifted",
-    )
-    expect(
-        core.expand_yearly_for_year_strict("d1,d60,d-1", 2024)
-        == [date(2024, 1, 1), date(2024, 2, 29), date(2024, 12, 31)],
-        "leap-year ordinal expansion drifted",
-    )
-    expect(core.expand_yearly_for_year_strict("d366", 2023) == [], "d366 must be absent in a common year")
-    expect(
-        core.expand_yearly_for_year_strict("d1..d366", 2023)[-1] == date(2023, 12, 31),
-        "a missing d366 endpoint must not erase the valid common-year range",
-    )
-    expect(
-        core.expand_yearly_for_year_strict("d366,d-366", 2024)
-        == [date(2024, 1, 1), date(2024, 12, 31)],
-        "leap-year boundary ordinals expanded incorrectly",
-    )
-    expect(
-        core.expand_yearly_for_year_strict("d100..d102,d-2..d-1", 2024)
-        == [
-            date(2024, 4, 9),
-            date(2024, 4, 10),
-            date(2024, 4, 11),
-            date(2024, 12, 30),
-            date(2024, 12, 31),
-        ],
-        "year-day lists and ranges expanded incorrectly",
-    )
-
-    dnf = core.validate_anchor_expr_strict("y:d60")
-    nxt, _meta = core.next_after_expr(dnf, date(2023, 3, 1), default_seed=date(2023, 1, 1))
-    expect(nxt == date(2024, 2, 29), f"year-day scheduler skipped leap-sensitive d60: {nxt!r}")
-    expect(core.factor_matches_on(dnf[0][0], date(2024, 2, 29), date(2024, 1, 1)), "d60 should match leap day")
-    expect(not core.factor_matches_on(dnf[0][0], date(2024, 3, 1), date(2024, 1, 1)), "d60 matched the wrong leap-year date")
-
-
-def test_year_day_ordinals_validate_strictly():
-    """Year-day syntax should accept its compact forms and reject ambiguous or impossible values."""
-    for expr in ("y:d1", "y:d-1", "y:d1,d100,d-1", "y:d100..d110", "y:d-7..d-1"):
-        core.validate_anchor_expr_strict(expr)
-    for token in ("d1", "d-1", "d100..d110", "d-7..d-1"):
-        core._validate_yearly_spec_token(token)
-
-    invalid = (
-        ("y:d0", "Year-day '0' out of range"),
-        ("y:d367", "Year-day '367' out of range"),
-        ("y:d-367", "Year-day '-367' out of range"),
-        ("y:d01", "must not be zero-padded"),
-        ("y:d100..110", "Use 'd100..d110'"),
-        ("y:d-1..d1", "end precedes start"),
-    )
-    for expr, expected in invalid:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"{expr}: expected ParseError")
-        except core.ParseError as exc:
-            expect(expected in str(exc), f"{expr}: unexpected error: {exc}")
-
-    expect(core._parse_y_token("d100") == ("year_day", 100), "d100 token parsing drifted")
-    expect(core._parse_y_token("d-1") == ("year_day", -1), "d-1 token parsing drifted")
-    expect(core._parse_y_token("d0") is None, "d0 must not parse")
-
-
-def test_iso_week_ordinals_expand_across_year_boundaries():
-    """ISO week selectors should preserve week-year boundaries and dynamic reverse positions."""
-    expect(
-        core.expand_yearly_for_year_strict("w53", 2020)
-        == [date(2020, 12, 28), date(2020, 12, 29), date(2020, 12, 30), date(2020, 12, 31)],
-        "Gregorian 2020 should contain the first four dates of ISO week 53",
-    )
-    expect(
-        core.expand_yearly_for_year_strict("w53", 2021)
-        == [date(2021, 1, 1), date(2021, 1, 2), date(2021, 1, 3)],
-        "Gregorian 2021 should contain the final three dates of ISO week 53 of 2020",
-    )
-    expect(
-        core.expand_yearly_for_year_strict("w1", 2018)[-1] == date(2018, 12, 31),
-        "ISO week 1 should include its December boundary date",
-    )
-    expect(
-        core.expand_yearly_for_year_strict("w-1", 2021)
-        == [
-            date(2021, 1, 1),
-            date(2021, 1, 2),
-            date(2021, 1, 3),
-            date(2021, 12, 27),
-            date(2021, 12, 28),
-            date(2021, 12, 29),
-            date(2021, 12, 30),
-            date(2021, 12, 31),
-        ],
-        "final ISO weeks should resolve against their owning ISO years",
-    )
-    expect(
-        len(core.expand_yearly_for_year_strict("w20", 2024)) == 7,
-        "a complete ISO week within a Gregorian year should contain seven dates",
-    )
-    expect(
-        len(core.expand_yearly_for_year_strict("w1..w53", 2021)) == 365,
-        "a missing ISO week 53 must not erase valid weeks from a range",
-    )
-
-    dnf = core.validate_anchor_expr_strict("y:w53")
-    nxt, _meta = core.next_after_expr(dnf, date(2020, 12, 31), default_seed=date(2020, 1, 1))
-    expect(nxt == date(2021, 1, 1), f"scheduler lost the ISO week across New Year: {nxt!r}")
-    expect(core.factor_matches_on(dnf[0][0], date(2021, 1, 2), date(2020, 1, 1)), "w53 should match its January tail")
-
-
-def test_iso_week_ordinals_validate_strictly():
-    """ISO week syntax should accept compact positions and reject noncanonical or impossible forms."""
-    for expr in ("y:w1", "y:w-1", "y:w1,w20,w-1", "y:w10..w13", "y:w-4..w-1"):
-        core.validate_anchor_expr_strict(expr)
-    for token in ("w1", "w-1", "w10..w13", "w-4..w-1"):
-        core._validate_yearly_spec_token(token)
-
-    invalid = (
-        ("y:w0", "ISO week '0' out of range"),
-        ("y:w54", "ISO week '54' out of range"),
-        ("y:w-54", "ISO week '-54' out of range"),
-        ("y:w01", "must not be zero-padded"),
-        ("y:w10..13", "Use 'w10..w13'"),
-        ("y:w-1..w1", "end precedes start"),
-    )
-    for expr, expected in invalid:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"{expr}: expected ParseError")
-        except core.ParseError as exc:
-            expect(expected in str(exc), f"{expr}: unexpected error: {exc}")
-
-    expect(core._parse_y_token("w20") == ("iso_week", 20), "w20 token parsing drifted")
-    expect(core._parse_y_token("w-1") == ("iso_week", -1), "w-1 token parsing drifted")
-    expect(core._parse_y_token("w0") is None, "w0 must not parse")
-
-
-def test_year_ordinals_compose_with_weekdays_or_and_modifiers():
-    """Year-day and ISO-week selectors should compose through the normal expression engine."""
-    seed = date(2018, 1, 1)
-    cases = (
-        ("y:w20 + w:mon", date(2024, 1, 1), date(2024, 5, 13)),
-        ("y:w1 + w:mon", date(2018, 12, 29), date(2018, 12, 31)),
-        ("y:w1 + w:mon", date(2018, 12, 31), date(2019, 12, 30)),
-        ("y:w-1 + w:fri", date(2020, 12, 20), date(2021, 1, 1)),
-        ("y:w20@+1d + w:tue", date(2024, 5, 1), date(2024, 5, 14)),
-    )
-    for expr, after_date, expected in cases:
-        dnf = core.validate_anchor_expr_strict(expr)
-        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
-        expect(actual == expected, f"{expr}: expected {expected}, got {actual}")
-
-    union = core.validate_anchor_expr_strict("y:w20 + w:mon | y:d100")
-    first, _meta = core.next_after_expr(union, date(2024, 4, 1), default_seed=seed)
-    second, _meta = core.next_after_expr(union, first, default_seed=seed)
-    expect(first == date(2024, 4, 9), f"OR branch lost d100: {first}")
-    expect(second == date(2024, 5, 13), f"OR branch lost ISO-week Monday: {second}")
-
-
-def test_iso_week_interval_uses_iso_year_buckets():
-    """Yearly intervals on pure ISO-week specs must not split a week at New Year."""
-    seed = date(2018, 1, 1)
-    dnf = core.validate_anchor_expr_strict("y/2:w1")
-    cases = (
-        (date(2019, 12, 29), date(2019, 12, 30)),
-        (date(2019, 12, 31), date(2020, 1, 1)),
-        (date(2020, 1, 5), date(2022, 1, 3)),
-    )
-    for after_date, expected in cases:
-        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
-        expect(actual == expected, f"ISO /2 bucket split or skipped a week after {after_date}: {actual}")
-
-    expect(
-        core._interval_allowed_for_atom("y", 2, seed, date(2019, 12, 30), "w1"),
-        "ISO year 2020 should be allowed from an ISO year 2018 seed",
-    )
-    expect(
-        core._interval_allowed_for_atom("y", 2, seed, date(2020, 1, 3), "w1"),
-        "the January tail of an allowed ISO week should remain allowed",
-    )
-
-
-def test_year_ordinals_filter_random_and_omit_candidates():
-    """Ordinal yearly selectors should constrain random pools and participate in omissions."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    seed = date(2024, 1, 1)
-    exact = core.validate_anchor_expr_strict("y:rand + y:d60")
-    exact_next, _meta = core.next_after_expr(exact, seed, default_seed=seed, seed_base="ordinal-rand")
-    expect(exact_next == date(2024, 2, 29), f"yearly random ignored d60: {exact_next}")
-
-    for expr in ("m:rand + y:w20", "m:2rand + y:w20", "y:rand + y:w20"):
-        dnf = core.validate_anchor_expr_strict(expr)
-        first, _meta = core.next_after_expr(dnf, seed, default_seed=seed, seed_base="week-rand")
-        expect(first is not None and first.isocalendar().week == 20, f"{expr}: random date escaped ISO week 20: {first}")
-        if "2rand" in expr:
-            second, _meta = core.next_after_expr(dnf, first, default_seed=seed, seed_base="week-rand")
-            expect(second is not None and second != first, f"{expr}: counted random did not advance")
-            expect(second.isocalendar().week == 20, f"{expr}: second random date escaped ISO week 20: {second}")
-
-    anchor_dnf = core.validate_anchor_expr_strict("y:w20 + w:mon")
-    omit_dnf = anchor_omit.validate_omit_expr_strict(
-        "y:d134",
-        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-    )
-    next_unomitted, _meta = anchor_omit.next_after_expr_with_omit(
-        anchor_dnf,
-        seed,
-        default_seed=seed,
-        seed_base="ordinal-omit",
-        omit_dnf=omit_dnf,
-        core=core,
-    )
-    expect(next_unomitted == date(2025, 5, 12), f"d134 omission did not skip the 2024 week-20 Monday: {next_unomitted}")
-
-
-def test_year_ordinals_positional_acf_and_cache_round_trip():
-    """Ordinal selectors should survive positional evaluation and serialized recurrence forms."""
-    expr = "(y:w20 + w:mon)@in-year=first@+1d | y:d100"
-    seed = date(2024, 1, 1)
-    dnf = core.validate_anchor_expr_strict(expr)
-    first, _meta = core.next_after_expr(dnf, date(2024, 4, 1), default_seed=seed)
-    second, _meta = core.next_after_expr(dnf, first, default_seed=seed)
-    expect(first == date(2024, 4, 9), f"positional OR lost d100: {first}")
-    expect(second == date(2024, 5, 14), f"positional ISO-week candidate was not shifted: {second}")
-
-    canonical = core.acf_to_original_format(core.build_acf(expr))
-    reparsed = core.validate_anchor_expr_strict(canonical)
-    canonical_dates = []
-    cursor = date(2024, 4, 1)
-    for _ in range(4):
-        cursor, _meta = core.next_after_expr(reparsed, cursor, default_seed=seed)
-        canonical_dates.append(cursor)
-    original_dates = []
-    cursor = date(2024, 4, 1)
-    for _ in range(4):
-        cursor, _meta = core.next_after_expr(dnf, cursor, default_seed=seed)
-        original_dates.append(cursor)
-    expect(canonical_dates == original_dates, f"ACF round-trip changed ordinal scheduling: {canonical}")
-
-    json_roundtrip = json.loads(json.dumps(dnf, ensure_ascii=False))
-    expect(core.validate_anchor_expr_strict(json_roundtrip), "JSON cache round-trip rejected ordinal selectors")
-
-
-def test_year_ordinals_natural_language_and_validation_guidance():
-    """Ordinal selectors should read naturally and malformed shorthand should point to canonical syntax."""
-    expected = {
-        "y:d1": "the 1st day of each year",
-        "y:d-1": "the last day of each year",
-        "y:d100..d110": "days 100–110 of each year",
-        "y:d-7..d-1": "the final 7 days of each year",
-        "y:w20": "ISO week 20 each ISO year",
-        "y:w-1": "the final ISO week of each ISO year",
-        "y:w10..w13": "ISO weeks 10–13 each ISO year",
-        "y:w-4..w-1": "the final 4 ISO weeks of each ISO year",
-        "y:w20 + w:mon": "Mondays in ISO week 20 each ISO year",
-        "y/2:w1": "every 2 ISO years: ISO week 1",
-    }
-    for expr, natural in expected.items():
-        expect(core.describe_anchor_expr(expr) == natural, f"{expr}: unexpected natural description")
-
-    invalid = (
-        ("y:d100..110", "Use 'd100..d110'"),
-        ("y:w10..13", "Use 'w10..w13'"),
-        ("w:w01", "Use 'y:w1' instead of 'w:w01'"),
-        ("y:day100", "dN year-day"),
-    )
-    for expr, guidance in invalid:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"{expr}: expected ParseError")
-        except core.ParseError as exc:
-            expect(guidance in str(exc), f"{expr}: missing guidance in {exc}")
-
-
-def test_year_ordinals_documented_examples():
-    """Representative year-ordinal examples should remain parseable."""
-    examples = (
-        "y:d100",
-        "y:d-1",
-        "y:w20 + w:mon",
-        "y:w-1 + w:fri",
-        "y:d1,d100,d-1",
-        "y:w10..w13",
-        "y/2:w1",
-    )
-    for expr in examples:
-        core.validate_anchor_expr_strict(expr)
-
 
 def test_year_ordinals_hooks_modes_calendar_and_timeline():
     """Ordinal selectors should work through add, completion modes, named calendars, and timelines."""
@@ -13710,112 +8393,6 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     expect((child_local.hour, child_local.minute) == (9, 0), f"reconciler lost ordinal anchor time: {child_local}")
     expect(meta.get("basis") == "after_end", f"unexpected reconcile scheduling metadata: {meta}")
 
-def test_quarters_window():
-    """Test quarter window constraints (Q1-Q2)"""
-    # Quarter aliases paired with m:* are now rejected (ambiguous).
-    expr = "m:2nd-mon + y:q1..q2"
-    try:
-        build_preview(expr)
-        assert False, "Expected ParseError for quarter alias with m:*"
-    except core.ParseError as e:
-        msg = str(e).lower()
-        expect("ambiguous" in msg and "quarter" in msg, f"Unexpected error: {e}")
-
-def test_quarter_alias_unambiguous_month_selectors():
-    """Quarter aliases should work with unambiguous monthly start/end selectors."""
-    p_start = build_preview("m:1bd + y:q4")
-    expect(p_start["upcoming"], "Expected upcoming dates for start-month quarter selector")
-    for d in p_start["upcoming"][:6]:
-        m = datetime.fromisoformat(d).month
-        expect(m == 10, f"{d} should resolve to Q4 start month (October)")
-
-    p_end = build_preview("m:-1bd + y:q4")
-    expect(p_end["upcoming"], "Expected upcoming dates for end-month quarter selector")
-    for d in p_end["upcoming"][:6]:
-        m = datetime.fromisoformat(d).month
-        expect(m == 12, f"{d} should resolve to Q4 end month (December)")
-
-
-def test_quarter_selector_mode_characterization():
-    """Quarter selector mode should stay stable for accepted start/end monthly selectors."""
-    expect(core._quarter_month_selector_mode([{"spec": "1bd"}]) == "quarter_start", "1bd should map to quarter_start")
-    expect(core._quarter_month_selector_mode([{"spec": "1st-mon"}]) == "quarter_start", "1st-mon should map to quarter_start")
-    expect(core._quarter_month_selector_mode([{"spec": "-1bd"}]) == "quarter_end", "-1bd should map to quarter_end")
-    expect(core._quarter_month_selector_mode([{"spec": "last-fri"}]) == "quarter_end", "last-fri should map to quarter_end")
-
-
-def test_quarter_selector_mode_rejections():
-    """Quarter selector mode should keep rejecting ambiguous monthly combinations."""
-    cases = [
-        ([{"spec": "rand"}], "cannot be combined with m:rand"),
-        ([{"spec": "1,15"}], "require a single monthly selector token"),
-        ([{"spec": "15"}], "ambiguous"),
-        ([{"spec": "1bd"}, {"spec": "-1bd"}], "cannot be combined with multiple monthly atoms"),
-    ]
-    for m_atoms, needle in cases:
-        try:
-            core._quarter_month_selector_mode(m_atoms)
-            raise AssertionError(f"Expected ParseError for {m_atoms!r}")
-        except core.ParseError as e:
-            expect(needle in str(e), f"Unexpected error for {m_atoms!r}: {e}")
-
-
-def test_term_quarter_rewrite_mode_characterization():
-    """Plain quarter aliases should still consult monthly disambiguation, but suffixed ones should not."""
-    expect(
-        core._term_quarter_rewrite_mode([{"typ": "y", "spec": "q4"}], [{"typ": "m", "spec": "-1bd"}]) == "quarter_end",
-        "Plain q4 with -1bd should resolve to quarter_end",
-    )
-    expect(
-        core._term_quarter_rewrite_mode([{"typ": "y", "spec": "q4s"}], [{"typ": "m", "spec": "-1bd"}]) == "first_month",
-        "Suffixed q4s should not invoke monthly quarter disambiguation",
-    )
-
-
-def test_quarter_spec_rewrite_characterization():
-    """Quarter rewrite output and qmap annotations should stay stable."""
-    qmap = {}
-    expect(
-        core._rewrite_quarter_spec_mode("q4", "quarter_end", meta_out=qmap) == "12-01..12-31",
-        "q4 quarter_end should rewrite to the Q4 end-month window in MD format",
-    )
-    expect(qmap == {"12-01..12-31": "Q4 end month"}, f"Unexpected qmap: {qmap}")
-
-    qmap = {}
-    expect(
-        core._rewrite_quarter_spec_mode("q1..q2", "first_month", meta_out=qmap) == "01-01..01-31,04-01..04-30",
-        "q1..q2 first_month should expand to Q1/Q2 first-month windows",
-    )
-    expect(
-        qmap == {
-            "01-01..01-31": "Q1 first month",
-            "04-01..04-30": "Q2 first month",
-        },
-        f"Unexpected qmap: {qmap}",
-    )
-
-    expect(
-        core._rewrite_quarter_spec_mode("q1s..q2s", "first_month") == "01-01..01-31,04-01..04-30",
-        "q1s..q2s should expand to explicit start-month windows",
-    )
-
-
-def test_rewrite_quarters_in_context_characterization():
-    """Quarter rewrite should update yearly atoms and preserve per-atom qmap notes."""
-    dnf = [[{"typ": "m", "spec": "-1bd"}, {"typ": "y", "spec": "q4"}]]
-    out = core._rewrite_quarters_in_context(dnf)
-    y_atom = out[0][1]
-    expect(y_atom["spec"] == "12-01..12-31", f"Unexpected rewritten y spec: {y_atom['spec']}")
-    expect(y_atom.get("_qmap") == {"12-01..12-31": "Q4 end month"}, f"Unexpected qmap: {y_atom.get('_qmap')}")
-
-def test_yearly_month_names():
-    """Test month name constraints (Mar..Sep)"""
-    # y:mar..sep must constrain to Mar..Sep
-    p = build_preview("m:1st-mon + y:mar..sep")
-    for d in p["upcoming"][:6]:
-        m = datetime.fromisoformat(d).month
-        expect(3 <= m <= 9, f"{d} must be Mar..Sep")
-
 def test_weekday_weekend_single_time():
     """Weekday vs weekend @t should not merge into same-day multi-times."""
     expr = "w:wd@t=09:00 | w:we@t=11:00"
@@ -13869,553 +8446,25 @@ def test_weekday_weekend_single_time():
         seen.add(key)
 
 
-def test_rand_with_year_window():
-    """Test random pattern with yearly window constraint"""
-    # Only inside Apr 20 – May 15
-    p = build_preview("y:04-20..05-15 + m:rand")
-    expect(p["upcoming"], "Rand with window should produce dates")
-    for d in p["upcoming"][:8]:
-        dt = datetime.fromisoformat(d)
-        mmdd = f"{dt.month:02d}-{dt.day:02d}"
-        expect("04-20" <= mmdd <= "05-15", f"{d} must be within Apr 20–May 15")
-
-def test_weekly_rand_N_gate():
-    """Test weekly random with /N gating (ISO week modulo)"""
-    # /4:rand → ISO week index % 4 == constant (deterministic buckets)
-    p = build_preview("w/4:rand")
-    expect(p["upcoming"], "Need dates for w/4:rand")
-    # Compute mod value from the first
-    import datetime as _dt
-    def iso_week_index(dt: datetime.date) -> int:
-        y, w, _ = dt.isocalendar()
-        return y * 53 + w
-    base = datetime.fromisoformat(p["upcoming"][0]).date()
-    mod = iso_week_index(base) % 4
-    for d in p["upcoming"][:8]:
-        wk = iso_week_index(datetime.fromisoformat(d).date()) % 4
-        expect(wk == mod, f"{d} must satisfy /4 gating (got {wk}, want {mod})")
-
-
-def test_monthly_and_yearly_random_intervals_scale_and_exhaust():
-    """Random /N searches must honor cadence beyond the legacy guard windows."""
-    seed = date(2026, 1, 1)
-    cases = (
-        ("m/2:rand + y:01-01..12-31", "month", 2),
-        ("m/25:rand", "month", 25),
-        ("y/11:rand", "year", 11),
-    )
-    for expr, unit, interval in cases:
-        dnf = core.validate_anchor_expr_strict(expr)
-        first, _ = core.next_after_expr(dnf, seed, default_seed=seed, seed_base="large-interval")
-        second, _ = core.next_after_expr(dnf, first, default_seed=seed, seed_base="large-interval")
-        if unit == "month":
-            offset = (second.year - seed.year) * 12 + (second.month - seed.month)
-        else:
-            offset = second.year - seed.year
-        expect(offset % interval == 0, f"{expr} ignored /{interval}: {first} -> {second}")
-
-    for expr in ("m/25:rand", "y/11:rand"):
-        try:
-            core.next_after_expr(
-                core.validate_anchor_expr_strict(expr),
-                date(9999, 12, 31),
-                default_seed=seed,
-                seed_base="large-interval-exhaustion",
-            )
-        except core.OccurrenceSearchExhausted:
-            continue
-        expect(False, f"{expr} should report typed exhaustion at the calendar limit")
-
-
-def test_weekly_random_intervals_scale_and_exhaust():
-    """Weekly random /N searches must derive their bound from cadence and date range."""
-    seed = date(2026, 1, 1)
-    dnf = core.validate_anchor_expr_strict("w/100:2rand")
-    first, _ = core.next_after_expr(dnf, seed, default_seed=seed, seed_base="weekly-large-interval")
-    second, _ = core.next_after_expr(dnf, first, default_seed=seed, seed_base="weekly-large-interval")
-    seed_monday = seed - timedelta(days=seed.weekday())
-    second_monday = second - timedelta(days=second.weekday())
-    week_offset = (second_monday - seed_monday).days // 7
-    expect(week_offset % 100 == 0, f"w/100:2rand ignored its interval: {first} -> {second}")
-
-    try:
-        core.next_after_expr(
-            dnf,
-            date(9999, 12, 31),
-            default_seed=seed,
-            seed_base="weekly-large-interval-exhaustion",
-        )
-    except core.OccurrenceSearchExhausted:
-        return
-    expect(False, "w/100:2rand should report typed exhaustion at the calendar limit")
-
-def test_business_day_nbd_pbd_nw_natural():
-    """Test business day modifier natural language generation"""
-    # Natural must reflect rolls; dates must obey
-    cases = [
-        ("m:-1@nbd", ("next", "business")),
-        ("m:-1@pbd", ("previous", "business")),
-        ("m:15@nw", ("nearest", "business")),  # @nw = nearest business day
-    ]
-    for expr, want in cases:
-        p = build_preview(expr)
-        expect(p["natural"] is not None, "Natural must exist (string)")
-        low = (p["natural"] or "").lower()
-        # require both keywords in any order
-        expect(all(w in low for w in want), f"Natural for {expr} must mention {' & '.join(want)}")
-
-def test_time_splitting_per_atom():
-    """Test time splitting within weekly atoms"""
-    # w:mon@t=09:00,fri@t=15:00 (comma in same weekly atom)
-    # Requirement: no fatal; preview pathway should produce something.
-    p = build_preview("w:mon@t=09:00,fri@t=15:00")
-    expect(p is not None, "preview returned object")
-    # Either natural or upcoming should be non-empty if the parser accepted it
-    expect(bool(p["natural"]) or bool(p["upcoming"]),
-           "Multi-@t weekly should be accepted and produce output")
-
-def test_weekly_multi_days_and_every_2weeks():
-    """Test weekly pattern with multiple days and interval"""
-    p = build_preview("w/2:mon..tue,thu..sat")
-    expect(p["upcoming"], "weekly /2 preview must produce dates")
-    # all days are in allowed set
-    allowed = {0,1,3,4,5}  # mon,tue,thu,fri,sat
-    for d in p["upcoming"][:8]:
-        wd = datetime.fromisoformat(d).weekday()
-        expect(wd in allowed, f"{d} not in allowed weekdays")
-
 def test_performance_large_expressions():
     """Test performance with large/complex expressions"""
     import time
-    
+
     complex_expr = " | ".join([f"w:{dow}" for dow in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]])
-    
+
     start_time = time.time()
     dnf = core.validate_anchor_expr_strict(complex_expr)
     parse_time = time.time() - start_time
-    
+
     assert parse_time < 0.1, f"Parsing took {parse_time:.3f}s, should be < 0.1s"
-    
+
     # Test date calculation performance
     start_date = date(2024, 1, 1)
     start_time = time.time()
     next_date, _ = core.next_after_expr(dnf, start_date)
     calc_time = time.time() - start_time
-    
+
     assert calc_time < 0.05, f"Date calculation took {calc_time:.3f}s, should be < 0.05s"
-
-def test_cache_consistency():
-    """Test that cached and uncached results are identical"""
-    test_expressions = [
-        "w:mon",
-        "m:15",
-        "y:12-25",
-        "w:mon@t=09:00",
-        "m:rand",
-        "w/2:mon",
-    ]
-    
-    for expr in test_expressions:
-        # Get uncached result
-        dnf = core.validate_anchor_expr_strict(expr)
-        natural_uncached = core.describe_anchor_expr(expr)
-        
-        # Get cached result (if caching enabled)
-        if hasattr(core, "build_and_cache_hints"):
-            cached = core.build_and_cache_hints(expr)
-            assert cached, f"{expr}: cache should return data"
-            
-            # DNF in cache should match
-            cached_dnf = cached.get("dnf")
-            assert cached_dnf == dnf, f"{expr}: cached DNF doesn't match"
-            
-            # Natural language in cache should match
-            cached_natural = cached.get("natural")
-            assert cached_natural == natural_uncached, f"{expr}: cached natural doesn't match"
-
-def test_parse_cache_returns_isolated_dnf_instances():
-    """Cached parse should return independent DNF objects across calls."""
-    expr = "w:mon@t=09:00 + m:1"
-    dnf_a = core.parse_anchor_expr_to_dnf_cached(expr)
-    dnf_b = core.parse_anchor_expr_to_dnf_cached(expr)
-    expect(dnf_a is not dnf_b, "cached parse should return a new top-level object")
-    dnf_a[0][0]["spec"] = "tue"
-    expect(dnf_b[0][0]["spec"] == "mon", "mutating one parsed DNF should not affect later reads")
-
-
-def test_build_and_cache_hints_returns_isolated_cached_payload():
-    """build_and_cache_hints should return an isolated payload copy on cache hits."""
-    expr = "w:mon@t=09:00"
-    first = core.build_and_cache_hints(expr, "skip")
-    second = core.build_and_cache_hints(expr, "skip")
-    expect(first is not second, "cached hints should not return the same object identity")
-    first_dnf = first.get("dnf") or []
-    second_dnf = second.get("dnf") or []
-    if first_dnf and second_dnf:
-        first_dnf[0][0]["spec"] = "fri"
-        expect(second_dnf[0][0]["spec"] == "mon", "cached hint payload should be isolated per call")
-
-
-def test_build_and_cache_hints_rejects_stale_valid_dnf():
-    """A shape-valid payload for another expression must not bypass validation."""
-    saved_load = core.cache_load
-    saved_save = core.cache_save
-    saved = []
-    try:
-        stale = {"dnf": core.validate_anchor_expr_strict("w:tue"), "natural": "Tuesday"}
-        core.cache_load = lambda _key: stale
-        core.cache_save = lambda key, payload: saved.append((key, payload))
-        payload = core.build_and_cache_hints("w:mon", "skip")
-        expect(payload.get("dnf") == core.validate_anchor_expr_strict("w:mon"), "stale DNF was reused")
-        expect(saved, "revalidated payload was not saved")
-    finally:
-        core.cache_load = saved_load
-        core.cache_save = saved_save
-
-def test_cache_key_for_task_caches_build_acf_results():
-    """cache_key_for_task should memoize ACF work for repeated (expr, mode, fmt)."""
-    if hasattr(core, "_cache_key_for_task_cached"):
-        core._cache_key_for_task_cached.cache_clear()
-    calls = {"n": 0}
-    saved = core.build_acf
-    try:
-        def _stub_build_acf(expr: str) -> str:
-            calls["n"] += 1
-            return f"acf:{expr}"
-
-        core.build_acf = _stub_build_acf
-        k1 = core.cache_key_for_task("w:mon", "skip")
-        k2 = core.cache_key_for_task("w:mon", "skip")
-        expect(k1 == k2, "cache key should be stable for repeated inputs")
-        expect(calls["n"] == 1, f"expected one build_acf call, got {calls['n']}")
-
-        _ = core.cache_key_for_task("w:tue", "skip")
-        expect(calls["n"] == 2, "different expression should invoke build_acf once")
-
-        core._clear_all_caches()
-        _ = core.cache_key_for_task("w:mon", "skip")
-        expect(calls["n"] == 3, "clear-all-caches should reset cache_key_for_task memoization")
-    finally:
-        core.build_acf = saved
-        if hasattr(core, "_cache_key_for_task_cached"):
-            core._cache_key_for_task_cached.cache_clear()
-
-def test_build_and_cache_hints_parses_once_per_miss():
-    """build_and_cache_hints should avoid an extra parse for natural text on cache miss."""
-    calls = {"n": 0}
-    saved_validate = core.validate_anchor_expr_strict
-    saved_load = core.cache_load
-    saved_save = core.cache_save
-    try:
-        def _counting_validate(expr: str):
-            calls["n"] += 1
-            return saved_validate(expr)
-
-        core.validate_anchor_expr_strict = _counting_validate
-        core.cache_load = lambda _k: None
-        core.cache_save = lambda _k, _v: None
-        payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
-        expect(payload and payload.get("dnf"), "expected build_and_cache_hints payload on miss")
-        expect(calls["n"] == 1, f"expected one strict validation on miss, got {calls['n']}")
-    finally:
-        core.validate_anchor_expr_strict = saved_validate
-        core.cache_load = saved_load
-        core.cache_save = saved_save
-
-
-def test_build_and_cache_hints_routes_scheduler_through_service():
-    """Production hint builds must not fall back to callback scheduling."""
-    saved_next = core.next_after_expr
-    saved_or = core._next_for_or
-    saved_load = core.cache_load
-    saved_save = core.cache_save
-    try:
-        def _legacy_callback(*_args, **_kwargs):
-            raise AssertionError("hint build used a legacy scheduler callback")
-
-        core.next_after_expr = _legacy_callback
-        core._next_for_or = _legacy_callback
-        core.cache_load = lambda _key: None
-        core.cache_save = lambda _key, _value: None
-        payload = core.build_and_cache_hints("w:thu@t=08:45", "skip")
-        expect(payload["next_dates"], "service-backed hint build returned no dates")
-        expect(payload["per_year"]["est"] > 0, "service-backed annual hints were not collected")
-    finally:
-        core.next_after_expr = saved_next
-        core._next_for_or = saved_or
-        core.cache_load = saved_load
-        core.cache_save = saved_save
-
-
-def test_parser_validation():
-    """Test parser validation and error messages"""
-    # Valid expressions that should parse
-    valid_expressions = [
-        "w:mon",
-        "w:mon,tue",
-        "m:1",
-        "m:1,15,31",
-        "m:1..15",
-        "m:2nd-mon",
-        "m:last-fri",
-        "m:5bd",
-        "y:01-01",
-        "y:01-01..12-31",
-        "y:q1",
-        "y:q1..q2",
-        "w:mon@t=09:00",
-        "m:15@t=09:00@+1d",
-        "m:15@t=09:00@-1d",
-        "m:-1@pbd@-2bd",
-        "y:04-24@+1bd",
-        "(w:mon + m:1) | (w:fri + m:15)",
-    ]
-    
-    for expr in valid_expressions:
-        try:
-            dnf = core.validate_anchor_expr_strict(expr)
-            assert dnf, f"{expr}: should parse to non-empty DNF"
-        except Exception as e:
-            assert False, f"{expr}: should parse but got error: {e}"
-    
-    # Invalid expressions that should fail
-    invalid_expressions = [
-        ("w:mon-fri", "Invalid weekly range"),
-        ("m:1:15", "Invalid monthly range '1:15'. Use '..'"),
-        ("y:01-01:12-31", "Yearly ranges must use '..'"),
-        ("w:invalid", "Unknown weekday"),
-        ("m:32", "Day-of-month '32' out of range. Use 1..31 or -1..-31"),
-        ("m:6th-mon", "nth-weekday must be between 1 and 5 (or 'last'). Did you mean 'last-mon'? Offending token: '6th-mon'"),
-        ("y:13-01", "Yearly token '13-01' doesn’t match ANCHOR_YEAR_FMT=MD. month '13' is invalid. Did you mean MM-DD? e.g., '04-20'"),
-        ("y:01-32", "Yearly token '01-32' doesn’t match ANCHOR_YEAR_FMT=MD. day '32' is invalid. Did you mean MM-DD? e.g., '04-20'"),
-        ("w:mon + w:sun", "Weekly anchors joined with '+' never coincide (e.g., Saturday AND Monday). Use '|' instead"),
-    ]
-    
-    for expr, expected_error in invalid_expressions:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            assert False, f"{expr}: should fail but parsed successfully"
-        except core.ParseError as e:
-            assert expected_error.lower() in str(e).lower(), \
-                f"{expr}: wrong error message. Got: {e}"
-
-
-def test_parser_atom_helpers_characterization():
-    """Direct atom helper behavior should stay stable for common heads, mods, and single atoms."""
-    expect(core._parse_atom_head("w/2") == ("w", 2), f"Unexpected head parse: {core._parse_atom_head('w/2')!r}")
-    expect(core._parse_atom_head("w/1000") == ("w", 1000), "large recurrence intervals must not be clamped")
-    mods = core._parse_atom_mods("t=09:00,12:00@+1d")
-    expect(mods["t"] == [(9, 0), (12, 0)], f"Unexpected time mods: {mods!r}")
-    expect(mods["day_offset"] == 1, f"Unexpected day offset: {mods!r}")
-    neg_mods = core._parse_atom_mods("t=09:00@-2d")
-    expect(neg_mods["day_offset"] == -2, f"Unexpected negative day offset: {neg_mods!r}")
-    business_mods = core._parse_atom_mods("pbd@-2bd@+1bd")
-    expect(business_mods["business_day_offset"] == -1, f"Unexpected business-day offset: {business_mods!r}")
-    dnf = core._build_anchor_atom_dnf("m", "1st-mon@t=09:00")
-    expect(dnf == [[{"typ": "m", "spec": "1mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}}]], f"Unexpected atom dnf: {dnf!r}")
-    node, next_i = core._parse_anchor_atom_at("w:mon@t=09:00 + m:1", 0, len("w:mon@t=09:00 + m:1"))
-    expect(node == [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {"t": (9, 0), "roll": None, "wd": None, "bd": False, "day_offset": 0, "business_day_offset": 0}}]], f"Unexpected parsed node: {node!r}")
-    expect(next_i > 0, "Parser should advance index for single atom")
-    business_expr = "m:-1@pbd@-2bd"
-    expect(core.acf_to_original_format(core.build_acf(business_expr)) == business_expr, "ACF round-trip lost business-day offset")
-
-
-def test_large_weekly_interval_is_scheduled_without_clamping():
-    """Large /N intervals should retain their cadence instead of becoming /100."""
-    dnf = core.validate_anchor_expr_strict("w/1000:mon")
-    expect(dnf[0][0]["ival"] == 1000, f"large interval was rewritten: {dnf!r}")
-    result, _meta = core.next_after_expr(
-        dnf,
-        date(2026, 1, 5),
-        default_seed=date(2026, 1, 1),
-    )
-    expect(result == date(2045, 2, 27), f"large weekly interval was not honored: {result!r}")
-
-    monthly = core.validate_anchor_expr_strict("m/500:1")
-    monthly_result, _meta = core.next_after_expr(
-        monthly,
-        date(2026, 2, 1),
-        default_seed=date(2026, 1, 1),
-    )
-    expect(monthly_result == date(2067, 9, 1), f"large monthly interval was not honored: {monthly_result!r}")
-
-    accepted = core.validate_anchor_expr_strict("w/200:mon + y:01-01")
-    expect(accepted[0][0]["ival"] == 200, "long-period satisfiability probe rejected a valid interval")
-
-    try:
-        core.validate_anchor_expr_strict("y/500:mon + y:01-01")
-    except core.ParseError as exc:
-        expect("weekday selectors belong in 'w:'" in str(exc), f"unclear yearly atom error: {exc}")
-    else:
-        raise AssertionError("weekday token was accepted as a yearly anchor")
-
-    finite_proc = _run_hook_script(
-        _find_hook_file("on-add.nautical"),
-        {
-            "uuid": "00000000-0000-4000-8000-000000000901",
-            "description": "finite large interval",
-            "anchor": "w/500:mon + y:01-01",
-            "anchor_mode": "skip",
-            "chain": "on",
-            "chainID": "00000901",
-            "chainUntil": "20270101T000000Z",
-            "status": "pending",
-            "entry": "20260809T090000Z",
-        },
-        timeout_s=20.0,
-    )
-    expect(
-        finite_proc.returncode != 0,
-        "an unrepresentable finite conjunction must be rejected rather than creating an incomplete task",
-    )
-    expect(
-        "Chain end point is earlier" in finite_proc.stderr,
-        f"finite large interval rejection was not actionable: {finite_proc.stderr!r}",
-    )
-
-    hook = _find_hook_file("on-add.nautical")
-    proc = _run_hook_script(
-        hook,
-        {
-            "uuid": "00000000-0000-4000-8000-000000000900",
-            "description": "large interval hook regression",
-            "anchor": "w/200:mon + y:01-01",
-            "anchor_mode": "skip",
-            "chain": "on",
-            "chainID": "00000900",
-            "status": "pending",
-            "entry": "20260809T090000Z",
-        },
-        timeout_s=20.0,
-    )
-    expect(proc.returncode == 0, f"large interval on-add was rejected: {proc.stderr!r}")
-    payload = _assert_stdout_json_only(proc.stdout)
-    expect(payload.get("due"), "large interval on-add did not assign a first due")
-
-
-def test_yearly_spec_token_helper_accepts_known_valid_tokens():
-    """Yearly token helper should accept canonical quarter/date forms."""
-    for tok in ("q1", "q2s", "q1..q2", "q1s..q2s", "01-01", "01-01..31-12"):
-        core._validate_yearly_spec_token(tok)
-
-
-def test_yearly_spec_token_helper_rejects_bad_ranges():
-    """Yearly token helper should reject malformed or cross-year-like tokens."""
-    bad = (
-        ("3..4", "incomplete"),
-        ("13", "Invalid month"),
-        ("q3..q1", "end quarter precedes start quarter"),
-        ("20-04..10-03", "cross-year ranges"),
-    )
-    for tok, expected in bad:
-        try:
-            core._validate_yearly_spec_token(tok)
-            raise AssertionError(f"{tok}: expected ParseError")
-        except core.ParseError as e:
-            expect(expected.lower() in str(e).lower(), f"{tok}: unexpected message: {e}")
-
-
-def test_yearly_token_format_characterization():
-    """Yearly token format validator should preserve key error surfaces and allowances."""
-    cases = [
-        ("y:05:15", "Yearly token '05:15' uses ':' between numbers. Use '-' and order per ANCHOR_YEAR_FMT=MD. Example: '06-01'."),
-        ("y:01-01:12-31", "Yearly ranges must use '..' (e.g., '01-01..12-31', 'q1..q2')."),
-        ("y:13-01", "Yearly token '13-01' doesn’t match ANCHOR_YEAR_FMT=MD. month '13' is invalid. Did you mean MM-DD? e.g., '04-20'."),
-        ("y:01-32", "Yearly token '01-32' doesn’t match ANCHOR_YEAR_FMT=MD. day '32' is invalid. Did you mean MM-DD? e.g., '04-20'."),
-        ("y:04-20..03-10", "Yearly token '04-20..03-10' doesn’t match ANCHOR_YEAR_FMT=MD. end precedes start. Did you mean MM-DD? e.g., '04-20'."),
-        ("y:rand-13", "Invalid month in yearly token 'rand-13'. Expected 01..12."),
-    ]
-    for expr, expected in cases:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"{expr}: expected ParseError")
-        except core.ParseError as e:
-            msg = str(e)
-            expect(msg.startswith(expected), f"{expr}: expected prefix {expected!r}, got {msg!r}")
-
-    try:
-        core.validate_anchor_expr_strict("y:foo")
-    except core.ParseError as exc:
-        expect("Unknown yearly month alias" in str(exc), f"unclear unknown month error: {exc}")
-    else:
-        raise AssertionError("unknown yearly month alias should be rejected")
-    _must_parse("y:q1..q2")
-
-
-def test_yearly_token_format_helper_characterization():
-    """Direct yearly format helper should preserve accepted tokens and friendly failures."""
-    core._validate_yearly_token_format("01-01..12-31")
-    core._validate_yearly_token_format("rand-07")
-    core._validate_yearly_token_format("q1..q2")
-    try:
-        core._validate_yearly_token_format("13-01")
-        raise AssertionError("13-01: expected YearTokenFormatError")
-    except core.YearTokenFormatError as e:
-        expect("month '13' is invalid" in str(e), f"Unexpected message: {e}")
-
-
-def test_validate_year_tokens_in_dnf_characterization():
-    """DNF-level yearly validation should keep surfacing yearly format problems."""
-    core._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "01-01"}]])
-    try:
-        core._validate_year_tokens_in_dnf([[{"typ": "y", "spec": "05:15"}]])
-        raise AssertionError("Expected YearTokenFormatError for bad yearly token in DNF")
-    except core.YearTokenFormatError as e:
-        expect("uses ':' between numbers" in str(e), f"Unexpected message: {e}")
-
-
-def test_parse_y_token_characterization():
-    """Direct yearly token parsing should preserve known quarter/day interpretations."""
-    expect(core._parse_y_token("q1") == ("quarter", "q1"), f"Unexpected parse for q1: {core._parse_y_token('q1')!r}")
-    expect(core._parse_y_token("q2s") == ("quarter", "q2s"), f"Unexpected parse for q2s: {core._parse_y_token('q2s')!r}")
-    expect(core._parse_y_token("01-06") == ("day", (1, 6)), f"Unexpected parse for 01-06: {core._parse_y_token('01-06')!r}")
-    expect(core._parse_y_token("06-jan") == ("day", (6, 1)), f"Unexpected parse for 06-jan: {core._parse_y_token('06-jan')!r}")
-    expect(core._parse_y_token("13-01") is None, "Invalid month should not parse")
-    expect(core._parse_y_token("31-04") is None, "April 31 should not parse")
-
-def test_natural_language_comprehensive():
-    """Test natural language generation for various patterns"""
-    test_cases = [
-        ("w:mon", "Mondays"),
-        ("w:mon,tue,fri", "either Mondays, Tuesdays, or Fridays"),
-        ("w/2:mon", "every 2 weeks: Mondays"),
-        ("m:15", "the 15th day of each month"),
-        ("m:-1", "the last day of each month"),
-        ("m:2nd-mon", "the 2nd Monday of each month"),
-        ("m:last-fri", "the last Friday of each month"),
-        ("m:5bd", "the 5th business day of each month"),
-        ("y:12-25", "Dec 25 each year"),
-        ("y:01-01..01-31", "Jan each year"),
-        ("m:15@t=09:00", "the 15th day of each month at 09:00"),
-        ("m:-1@nbd", "the last day of each month if business day; otherwise the next business day"),
-        ("y:04-25@+2d", "Apr 25 each year, 2 days later"),
-        ("y:04-25@-2d", "Apr 25 each year, 2 days earlier"),
-        ("y:04-24@+1bd", "Apr 24 each year, 1 business day later"),
-        ("m:-1@pbd@-2bd", "the last day of each month if business day; otherwise the previous business day, 2 business days earlier"),
-    ]
-    
-    for anchor, expected_phrase in test_cases:
-        natural = core.describe_anchor_expr(anchor)
-        assert natural, f"{anchor}: natural description should not be empty"
-        # Check if expected phrase is contained (not exact match due to formatting)
-        assert expected_phrase.lower() in natural.lower(), \
-            f"{anchor}: expected '{expected_phrase}' in '{natural}'"
-
-def test_natural_anchor_characterization_for_complex_terms():
-    """Complex anchor prose should keep stable phrasing for key edge combinations."""
-    cases = [
-        ("m/2:31", "every 2 months among months that have day 31"),
-        ("m/2:2nd-mon", "every 2 months among months that have the 2nd Monday"),
-        ("m:-1@nbd@t=09:00", "the last day of each month if business day; otherwise the next business day at 09:00"),
-        ("m:1@nw", "the 1st day of each month if business day; otherwise the nearest business day (Fri if Saturday, Mon if Sunday)"),
-        ("y:04-25@-2d@t=12:00", "Apr 25 each year, 2 days earlier at 12:00"),
-        ("w/3:rand", "every 3 weeks: one random day every 3 weeks"),
-        ("w:mon + m:1 + y:01-01..03-31", "Mondays that fall on the 1st day of each month and within Jan–Mar each year"),
-    ]
-    for expr, expected in cases:
-        got = core.describe_anchor_expr(expr)
-        assert got == expected, f"{expr}: expected {expected!r}, got {got!r}"
-
 
 def test_natural_interval_or_branches_keep_cadence_with_subject():
     """Interval OR branches should not begin with an awkward nested prefix."""
@@ -14460,140 +8509,6 @@ def test_natural_compresses_repeated_fall_on_variants():
     assert "the 1st" in low and "the 3rd day of each month" in low, f"Natural lost monthly endpoints: {nat!r}"
     assert "skip missed anchors" in low, f"Natural should include mode tail: {nat!r}"
 
-def test_rand_bucket_signature_characterization():
-    """Bucket signature should remain stable for canonical monthly rand/range terms."""
-    term = [
-        {"typ": "m", "spec": "1..7", "mods": {"t": (9, 30)}},
-        {"typ": "m", "spec": "rand", "mods": {"bd": True}},
-    ]
-    got = core._rand_bucket_signature(term)
-    expect(got == (1, "09:30", True, "1–7"), f"unexpected rand bucket signature: {got!r}")
-
-    mixed = term + [{"typ": "w", "spec": "mon"}]
-    expect(core._rand_bucket_signature(mixed) is None, "weekly atoms should disable rand bucket compression")
-
-    bad_range = [
-        {"typ": "m", "spec": "1..7"},
-        {"typ": "m", "spec": "8..14"},
-        {"typ": "m", "spec": "rand"},
-    ]
-    expect(
-        core._rand_bucket_signature(bad_range) is None,
-        "multiple monthly ranges in a term should not produce a bucket signature",
-    )
-
-
-def test_edge_cases():
-    """Test edge cases and boundary conditions"""
-    test_cases = [
-        # Leap year handling
-        ("y:02-29", "2023-01-01", "2024-02-29"),  # Non-leap -> leap year
-        ("y:02-29", "2024-02-29", "2028-02-29"),  # Leap -> next leap
-        
-        # Month boundaries
-        ("m:31", "2024-02-01", "2024-03-31"),  # Feb doesn't have 31st
-        ("m:-31", "2024-02-01", "2024-03-01"),  # -31 means 1st (31 days before end; that is months that have 31 days, the other are skiped)
-        
-        # Year boundaries
-        ("y:12-31", "2024-12-31", "2025-12-31"),  # Year rollover
-        ("y:01-01", "2024-12-31", "2025-01-01"),  # Year rollover
-        
-        # Week boundaries with /N
-        ("w/2:mon", "2024-12-30", "2025-01-13"),  # Across year boundary
-    ]
-    
-    for anchor, start_str, expected_str in test_cases:
-        start = date.fromisoformat(start_str)
-        expected = date.fromisoformat(expected_str)
-        
-        dnf = core.validate_anchor_expr_strict(anchor)
-        next_date, _ = core.next_after_expr(dnf, start)
-        
-        assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
-
-def test_heads_with_slashN_parse_ok():
-    """
-    Ensure '/N' on heads parses cleanly across w/m/y
-    """
-    ok = [
-        "w/2:sun",
-        "m/3:1st-mon",
-        "y/4:06-01",
-    ]
-    for expr in ok:
-        _must_parse(expr)
-
-def test_monthly_valid_months_m2_5th_mon_upcoming_within_valid_months():
-    """
-    'm/2:5th-mon' should only yield months that actually have a 5th Monday.
-    We also allow for interval gating to skip valid months in-between;
-    the key property is that every produced date is truly the 5th Monday.
-    """
-    preview = _must_preview("m/2:5th-mon")
-    dates = preview["next_dates"]
-    assert dates, "No upcoming dates produced for m/2:5th-mon"
-
-    import datetime as _dt
-    import calendar as _cal
-
-    def _is_5th_monday(d: _dt.date) -> bool:
-        if d.weekday() != 0:  # Monday
-            return False
-        # Count Mondays in the month up to and including d
-        count = 0
-        for day in range(1, d.day+ 1):
-            if _dt.date(d.year, d.month, day).weekday() == 0:
-                count+= 1
-        return count == 5
-
-    for d in dates[:8]:  # check the first few
-        assert _is_5th_monday(d), f"{d} is not a 5th Monday"
-
-def test_leap_year_29feb_upcoming_only_on_leap_year():
-    """
-    'y:02-29' must produce dates only on leap years (i.e., exactly Feb 29)
-    """
-    preview = _must_preview("y:02-29")
-    dates = preview["next_dates"]
-    assert dates, "No upcoming dates for y:02-29"
-    for d in dates[:6]:
-        assert (d.month, d.day) == (2, 29), f"{d} is not Feb 29"
-
-def test_rand_with_year_window_filtering():
-    """
-    'y:04-20..05-15+ m:rand' must produce all dates within the yearly window
-    """
-    preview = _must_preview("y:04-20..05-15+ m:rand")
-    dates = preview["next_dates"]
-    assert dates, "No upcoming dates for window+ m:rand"
-    import datetime as _dt
-    def _in_window(d: _dt.date) -> bool:
-        # inclusive Apr 20 .. May 15
-        a = _dt.date(d.year, 4, 20)
-        b = _dt.date(d.year, 5, 15)
-        return a <= d <= b
-    for d in dates[:8]:
-        assert _in_window(d), f"{d} not within Apr 20–May 15"
-
-def test_weekly_rand_N_gate_spacing():
-    """
-    'w/4:rand' should respect 4-week ISO‐week gating between picks
-    """
-    preview = _must_preview("w/4:rand")
-    dates = preview["next_dates"]
-    assert len(dates) >= 4, "Need several upcoming for w/4:rand"
-    
-    # Compute mod value from the first
-    def iso_week_index(dt: date) -> int:
-        y, w, _ = dt.isocalendar()
-        return y * 53 + w  # Fixed: 53 weeks max per year, not 60
-    
-    base = dates[0]
-    mod = iso_week_index(base) % 4
-    for d in dates[:8]:
-        wk = iso_week_index(d) % 4
-        assert wk == mod, f"{d} must satisfy /4 gating (got {wk}, want {mod})"
-
 def test_prev_weekday_natural_text():
     """
     Natural for 'm:-1@prev-fri' should mention 'previous Friday before the last day of the month'
@@ -14605,681 +8520,6 @@ def test_prev_weekday_natural_text():
         "previous Friday before month end",
     ]
     assert any(w in nat for w in want_any), f"Natural missing expected phrasing: {nat!r}"
-
-
-def test_same_day_next_weekday_roll_moves_forward_one_week():
-    """@next-<dow> should skip same-day matches and roll to the following week."""
-    dnf = core.validate_anchor_expr_strict("y:12-31@next-thu")
-    nxt, _meta = core.next_after_expr(dnf, date(2026, 12, 1), default_seed=date(2026, 12, 1), seed_base="same-day-next")
-    expect(nxt == date(2027, 1, 7), f"expected next Thursday after 2026-12-31, got {nxt}")
-
-
-def test_same_day_prev_weekday_roll_moves_back_one_week():
-    """@prev-<dow> should skip same-day matches and roll to the previous week."""
-    dnf = core.validate_anchor_expr_strict("y:12-31@prev-thu")
-    nxt, _meta = core.next_after_expr(dnf, date(2026, 12, 1), default_seed=date(2026, 12, 1), seed_base="same-day-prev")
-    expect(nxt == date(2026, 12, 24), f"expected previous Thursday before 2026-12-31, got {nxt}")
-
-
-def test_next_weekday_roll_cross_year_date_still_matches_expression():
-    """rolled-forward weekday dates crossing year end should still be recognized as the next occurrence."""
-    dnf = core.validate_anchor_expr_strict("y:12-31@next-thu")
-    nxt, _meta = core.next_after_expr(dnf, date(2026, 12, 31), default_seed=date(2026, 12, 31), seed_base="same-day-next-cross-year")
-    expect(nxt == date(2027, 1, 7), f"expected 2027-01-07 after 2026-12-31 same-day next-thu roll, got {nxt}")
-
-
-def test_weekly_multi_days_every_2weeks_spacing_and_days():
-    """
-    'w/2:mon,thu' must parse and produce dates only on Mon/Thu,
-    with ISO week gaps respecting /2 gating
-    """
-    preview = _must_preview("w/2:mon,thu")
-    dates = preview["next_dates"]
-    assert len(dates) >= 4, "Need upcoming dates for w/2:mon,thu"
-    import datetime as _dt
-    def _iso_idx(d: _dt.date) -> int:
-        y, w, _ = d.isocalendar()
-        return y * 60+ w
-    for d in dates[:8]:
-        assert d.weekday() in (0, 3), f"{d} is not Mon/Thu"
-    idxs = [_iso_idx(d) for d in dates[:6]]
-    # successive picks may alternate Mon/Thu inside the same eligible week;
-    # ensure we do not see *disallowed* week buckets (i.e., every other week).
-    # Check that between picks that advance weeks, the gap is even.
-    for a, b in zip(idxs, idxs[1:]):
-        if b != a:  # if week advanced
-            assert (b - a) % 2 == 0, f"Week gap not even between {a}..{b}"
-
-def test_inline_time_mods_split_ok():
-    """
-    'w:mon@t=09:00,fri@t=15:00' should be accepted (rewritten to OR of singletons)
-    """
-    # Linter must not fatal, and strict-validate must pass
-    fatal, warns = core.lint_anchor_expr("w:mon@t=09:00,fri@t=15:00")
-    assert fatal is None, f"Unexpected lint fatal: {fatal}"
-    _must_parse("w:mon@t=09:00,fri@t=15:00")
-
-
-def test_weekly_trailing_time_modifier_applies_to_whole_list():
-    """A trailing @t on a weekly comma-list should apply to every listed weekday."""
-    expr = "w:mon,wed,fri@t=05:00"
-    dnf = core.parse_anchor_expr_to_dnf(expr)
-    specs = [term[0].get("spec") for term in dnf]
-    expect(specs == ["mon", "wed", "fri"], f"unexpected weekly list expansion: {dnf!r}")
-    expect(
-        all((term[0].get("mods") or {}).get("t") == (5, 0) for term in dnf),
-        f"trailing time did not apply to every weekday: {dnf!r}",
-    )
-
-    cursor = date(2026, 7, 7)
-    slots = []
-    for _idx in range(4):
-        nxt, _meta = core.next_after_expr(
-            dnf,
-            cursor,
-            default_seed=date(2026, 7, 7),
-            seed_base="weekly-list-trailing-time-test",
-        )
-        expect(nxt is not None, "expected another weekly occurrence")
-        assert nxt is not None
-        hhmm = core.pick_hhmm_from_dnf_for_date(
-            dnf,
-            nxt,
-            date(2026, 7, 7),
-            seed_base="weekly-list-trailing-time-test",
-        )
-        slots.append((nxt, hhmm))
-        cursor = nxt
-    expect(
-        slots == [
-            (date(2026, 7, 8), (5, 0)),
-            (date(2026, 7, 10), (5, 0)),
-            (date(2026, 7, 13), (5, 0)),
-            (date(2026, 7, 15), (5, 0)),
-        ],
-        f"weekly preview slots should all use 05:00, got {slots!r}",
-    )
-
-
-def test_group_time_modifier_distributes_to_all_branches():
-    """A time after a parenthesized expression should apply to every expanded branch."""
-    dnf = core.parse_anchor_expr_to_dnf("(w:mon | m:last-fri)@t=09:00")
-    expect(len(dnf) == 2, f"expected two OR branches, got: {dnf!r}")
-    expect(
-        all(atom.get("mods", {}).get("t") == (9, 0) for term in dnf for atom in term),
-        f"group time was not distributed to every atom: {dnf!r}",
-    )
-    natural = core.describe_anchor_expr("(w:mon | m:last-fri)@t=09:00")
-    expect("09:00" in natural, f"group time missing from natural text: {natural!r}")
-    canonical = core.acf_to_original_format(core.build_acf("(w:mon | m:last-fri)@t=09:00"))
-    reparsed = core.parse_anchor_expr_to_dnf(canonical)
-    expect(
-        all(atom.get("mods", {}).get("t") == (9, 0) for term in reparsed for atom in term),
-        f"group time was lost during ACF round-trip: {canonical!r}",
-    )
-
-
-def test_group_time_modifier_supports_multiple_times():
-    """Grouped time modifiers should retain the existing multi-time syntax."""
-    dnf = core.parse_anchor_expr_to_dnf("(w:mon | w:fri)@t=09:00,17:30")
-    expected = [(9, 0), (17, 30)]
-    expect(
-        all(atom.get("mods", {}).get("t") == expected for term in dnf for atom in term),
-        f"group time list was not distributed intact: {dnf!r}",
-    )
-
-
-def test_group_astronomical_time_offset_distributes_to_all_branches():
-    """A grouped astronomical time offset must survive distribution to each branch."""
-    expr = "(moon:full + y:jul)@t=sunset@+45m"
-    dnf = core.parse_anchor_expr_to_dnf(expr)
-    expect(len(dnf) == 1 and len(dnf[0]) == 2, f"unexpected grouped moon DNF: {dnf!r}")
-    expect(
-        all(
-            (atom.get("mods") or {}).get("t") == "sunset"
-            and (atom.get("mods") or {}).get("time_offset_minutes") == 45
-            for atom in dnf[0]
-        ),
-        f"grouped astronomical time offset was dropped: {dnf!r}",
-    )
-
-
-def test_group_date_modifiers_distribute_across_or_branches():
-    """Date modifiers on OR-only groups should schedule and round-trip exactly."""
-    expr = "(y:12-24 | (y:12-30 | y:12-31))@pbd@-1bd@t=09:00"
-    dnf = core.validate_anchor_expr_strict(expr)
-    expect(len(dnf) == 3 and all(len(term) == 1 for term in dnf), f"unexpected grouped DNF: {dnf!r}")
-    for term in dnf:
-        mods = term[0].get("mods") or {}
-        expect(mods.get("roll") == "pbd", f"grouped roll missing: {dnf!r}")
-        expect(mods.get("business_day_offset") == -1, f"grouped business offset missing: {dnf!r}")
-        expect(mods.get("t") == (9, 0), f"grouped time missing: {dnf!r}")
-
-    next_date, _meta = core.next_after_expr(dnf, date(2026, 12, 1))
-    expect(next_date == date(2026, 12, 23), f"grouped modifiers scheduled {next_date!r}")
-    natural = core.describe_anchor_expr(expr)
-    expect("previous business day" in natural and "1 business day earlier" in natural, f"grouped natural text missing: {natural!r}")
-    canonical = core.acf_to_original_format(core.build_acf(expr))
-    expect(core.parse_anchor_expr_to_dnf(canonical) == dnf, f"grouped modifiers were lost in ACF: {canonical!r}")
-
-    all_mods = core.parse_anchor_expr_to_dnf("(y:04-24 | y:04-30)@nbd@bd@+1d@-2bd@t=09:00")
-    expect(
-        all((term[0].get("mods") or {}).get("bd") for term in all_mods),
-        f"grouped business-day filter missing: {all_mods!r}",
-    )
-    cancelled = core.parse_anchor_expr_to_dnf("(w:mon | w:fri)@+1d@-1d")
-    expect(
-        all((term[0].get("mods") or {}).get("day_offset") == 0 for term in cancelled),
-        f"cancelling grouped offsets should normalize to zero: {cancelled!r}",
-    )
-
-
-def test_group_modifiers_reject_ambiguous_combinations():
-    """Grouped modifiers should reject representations that would change semantics."""
-    for expr, needle in (
-        ("(w:mon@t=10:00 | w:fri)@t=09:00", "already has"),
-        ("(m:1@pbd | m:15)@nbd", "already inside"),
-        ("(m:1 + w:sun)@nbd", "OR-only"),
-        ("(w:mon)@", "empty"),
-    ):
-        try:
-            core.parse_anchor_expr_to_dnf(expr)
-            expect(False, f"expected grouped modifier rejection for {expr!r}")
-        except core.ParseError as exc:
-            expect(needle in str(exc), f"unexpected grouped modifier error for {expr!r}: {exc}")
-
-
-def _counted_random_dates(expr: str, start: date, count: int, seed_base: str = "counted-rand-test") -> list[date]:
-    dnf = core.validate_anchor_expr_strict(expr)
-    out: list[date] = []
-    cursor = start
-    for _ in range(count):
-        cursor, _meta = core.next_after_expr(
-            dnf,
-            cursor,
-            default_seed=start,
-            seed_base=seed_base,
-        )
-        expect(cursor is not None, f"{expr!r} stopped before {count} occurrences")
-        out.append(cursor)
-    return out
-
-
-def test_counted_random_selects_unique_dates_per_period():
-    """w:Nrand, m:Nrand, and y:Nrand should emit exactly N unique dates per period."""
-    weekly = _counted_random_dates("w:2rand", date(2026, 1, 4), 2)
-    expect(len(set(weekly)) == 2, f"weekly counted random repeated a date: {weekly}")
-    expect(len({item.isocalendar()[:2] for item in weekly}) == 1, f"weekly picks crossed periods: {weekly}")
-
-    monthly = _counted_random_dates("m:3rand", date(2025, 12, 31), 3)
-    expect(len(set(monthly)) == 3, f"monthly counted random repeated a date: {monthly}")
-    expect({(item.year, item.month) for item in monthly} == {(2026, 1)}, f"monthly picks crossed periods: {monthly}")
-
-    yearly = _counted_random_dates("y:2rand", date(2025, 12, 31), 2)
-    expect(len(set(yearly)) == 2, f"yearly counted random repeated a date: {yearly}")
-    expect({item.year for item in yearly} == {2026}, f"yearly picks crossed periods: {yearly}")
-
-
-def test_counted_random_is_deterministic_chain_scoped_and_constrained():
-    """Counted draws should replay per chain while respecting the complete candidate pool."""
-    start = date(2025, 12, 31)
-    expr = "m:2rand + w:mon,sat"
-    first = _counted_random_dates(expr, start, 8, seed_base="chain-a")
-    replay = _counted_random_dates(expr, start, 8, seed_base="chain-a")
-    other = _counted_random_dates(expr, start, 8, seed_base="chain-b")
-    expect(first == replay, f"counted random replay changed: {first} != {replay}")
-    expect(first != other, "different chains should not share the same counted-random sequence")
-    expect(all(item.weekday() in (0, 5) for item in first), f"weekday constraint was ignored: {first}")
-    month_counts = {}
-    for item in first:
-        month_counts[(item.year, item.month)] = month_counts.get((item.year, item.month), 0) + 1
-    expect(all(value == 2 for value in month_counts.values()), f"monthly cardinality drifted: {month_counts}")
-
-
-def test_counted_random_omit_redraws_from_remaining_pool():
-    """An omitted counted-random pick should be replaced before the period is emitted."""
-    anchor_omit = importlib.import_module("nautical_core.anchor_omit")
-    dnf = core.validate_anchor_expr_strict("m:3rand")
-    start = date(2025, 12, 31)
-    baseline = _counted_random_dates("m:3rand", start, 3, seed_base="omit-redraw")
-    omitted = baseline[0]
-    omit_state = {"dnf": None, "dates": frozenset({omitted}), "descriptions": {}}
-    out = []
-    cursor = start
-    for _ in range(3):
-        cursor, _meta = anchor_omit.next_after_expr_with_omit(
-            dnf,
-            cursor,
-            default_seed=start,
-            seed_base="omit-redraw",
-            omit_dnf=omit_state,
-            core=core,
-        )
-        out.append(cursor)
-    expect(omitted not in out, f"omitted random date was still selected: {out}")
-    expect(len(set(out)) == 3, f"omission did not redraw a complete unique set: {out}")
-    expect({(item.year, item.month) for item in out} == {(2026, 1)}, f"redraw escaped its period: {out}")
-
-
-def test_counted_random_cadence_time_and_canonical_round_trip():
-    """Counted random should compose with /N cadence, grouped times, and ACF caching."""
-    expr = "(m/2:2rand + w:mon..fri)@t=09:00"
-    dnf = core.validate_anchor_expr_strict(expr)
-    dates = _counted_random_dates(expr, date(2025, 12, 31), 4)
-    expect(all(item.weekday() < 5 for item in dates), f"weekday filter was ignored: {dates}")
-    expect(
-        [(item.year, item.month) for item in dates[:2]] == [(2026, 2), (2026, 2)]
-        and [(item.year, item.month) for item in dates[2:]] == [(2026, 4), (2026, 4)],
-        f"monthly /2 cadence was not preserved: {dates}",
-    )
-    expect(
-        all(atom.get("mods", {}).get("t") == (9, 0) for term in dnf for atom in term),
-        f"group time was not applied to counted random: {dnf!r}",
-    )
-    canonical = core.acf_to_original_format(core.build_acf(expr))
-    reparsed = core.validate_anchor_expr_strict(canonical)
-    expect(core.dnf_has_counted_random(reparsed), f"ACF round-trip lost counted random: {canonical!r}")
-
-    yearly = _counted_random_dates("y/2:2rand", date(2025, 12, 31), 4)
-    expect(
-        [item.year for item in yearly] == [2027, 2027, 2029, 2029],
-        f"yearly /2 cadence was not preserved: {yearly}",
-    )
-
-
-def test_counted_random_validation_and_natural_text():
-    """Counted-random limits and natural descriptions should be explicit."""
-    expected = {
-        "w:2rand": "2 random days each week",
-        "m:3rand": "3 random days each month",
-        "y:2rand": "2 random days each year",
-        "y:2rand + y:apr,jul,oct": "2 random days each year in Apr, Jul, or Oct",
-    }
-    for expr, natural in expected.items():
-        expect(core.describe_anchor_expr(expr) == natural, f"unexpected natural text for {expr!r}")
-    for expr, needle in (
-        ("w:8rand", "cannot exceed 7"),
-        ("w:6rand@bd", "cannot exceed 5"),
-        ("m:32rand", "cannot exceed 31"),
-        ("y:367rand", "cannot exceed 366"),
-    ):
-        try:
-            core.validate_anchor_expr_strict(expr)
-            expect(False, f"expected counted-random validation failure for {expr!r}")
-        except (core.ParseError, core.YearTokenFormatError) as exc:
-            expect(needle in str(exc), f"unexpected validation error for {expr!r}: {exc}")
-
-
-def test_deterministic_randomness():
-    """Test that random patterns are deterministic with same seed"""
-    # Only valid random patterns
-    test_cases = [
-        "w:rand",      # Random weekday - valid
-        "m:rand",      # Random day of month - valid
-        "m:rand@bd",   # Random business day of month - valid
-        "m:1..10 + m:rand",  # Random day in first 10 days - valid
-        "y:07-rand", # random day in July
-        "y:rand-07", # random day in July
-        "y:rand" # random day in year
-    ]
-    
-    for anchor in test_cases:
-        dnf = core.validate_anchor_expr_strict(anchor)
-        
-        # Test with same seed produces same results
-        start_date = date(2024, 1, 1)
-        dates1 = []
-        dates2 = []
-        
-        # Generate first sequence
-        current = start_date
-        for _ in range(3):
-            next_date, _ = core.next_after_expr(dnf, current, seed_base="test_seed")
-            dates1.append(next_date)
-            current = next_date + timedelta(days=1)
-        
-        # Generate second sequence with same seed
-        current = start_date
-        for _ in range(3):
-            next_date, _ = core.next_after_expr(dnf, current, seed_base="test_seed")
-            dates2.append(next_date)
-            current = next_date + timedelta(days=1)
-        
-        # Should be identical
-        assert dates1 == dates2, f"{anchor}: random dates not deterministic"
-
-def test_business_day_modifiers():
-    """Test business day modifiers thoroughly"""
-    test_cases = [
-        # @bd - weekdays only (skip if weekend)
-        ("m:15@bd", "2024-01-14", "2024-01-15"),  # 15th is Monday (weekday)
-        ("m:15@bd", "2024-06-14", "2024-07-15"),  # 15th is Saturday, skip to next 15th that's weekday (July 15)
-        
-        # @pbd - previous business day
-        ("m:-1@pbd", "2024-03-28", "2024-03-29"),  # March 31 is Sunday -> Friday 29th
-        
-        # @nbd - next business day  
-        ("m:1@nbd", "2024-06-28", "2024-07-01"),  # July 1 is Monday (business day)
-        ("m:1@nbd", "2024-08-31", "2024-09-02"),  # Sep 1 is Sunday -> Monday 2nd
-        
-        # @nw - nearest business day
-        ("m:15@nw", "2024-06-14", "2024-07-15"),  # June's rolled date is not strictly after the cursor
-        ("m:15@nw", "2024-09-14", "2024-09-16"),  # Sep 15 is Sunday -> Sep 16 (Monday)
-    ]
-    
-    for anchor, start_str, expected_str in test_cases:
-        start = date.fromisoformat(start_str)
-        expected = date.fromisoformat(expected_str)
-        
-        dnf = core.validate_anchor_expr_strict(anchor)
-        next_date, _ = core.next_after_expr(dnf, start)
-        
-        assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
-
-
-def test_default_business_calendar_operations_characterization():
-    """the centralized default policy should preserve Monday-Friday rolls, offsets, and ordinals."""
-    from nautical_core import business_calendar
-
-    policy = business_calendar.DEFAULT_BUSINESS_CALENDAR
-    expect(policy.is_business_day(date(2026, 4, 24)), 'Friday should remain a default business day')
-    expect(not policy.is_business_day(date(2026, 4, 25)), 'Saturday should remain excluded by default')
-    expect(
-        business_calendar.find_business_day(date(2026, 4, 25), -1, policy) == date(2026, 4, 24),
-        'previous-business-day roll changed',
-    )
-    expect(
-        business_calendar.find_business_day(date(2026, 4, 25), 1, policy) == date(2026, 4, 27),
-        'next-business-day roll changed',
-    )
-    expect(
-        business_calendar.nearest_business_day(date(2026, 4, 25), policy) == date(2026, 4, 24),
-        'nearest-business-day selection changed',
-    )
-    expect(
-        business_calendar.shift_business_days(date(2026, 4, 24), 1, policy) == date(2026, 4, 27),
-        'positive exclusive business-day offset changed',
-    )
-    expect(
-        business_calendar.shift_business_days(date(2026, 4, 27), -1, policy) == date(2026, 4, 24),
-        'negative exclusive business-day offset changed',
-    )
-    expect(
-        business_calendar.nth_business_day_of_month(2026, 1, 1, policy) == date(2026, 1, 1),
-        'first business-day ordinal changed',
-    )
-    expect(
-        business_calendar.nth_business_day_of_month(2026, 1, -1, policy) == date(2026, 1, 30),
-        'last business-day ordinal changed',
-    )
-
-
-def test_business_calendar_policy_flows_through_scheduler_paths():
-    """alternate policies should control filters, rolls, offsets, ordinals, and random pools."""
-    class SetCalendar:
-        name = 'test-calendar'
-
-        def __init__(self, open_dates):
-            self.open_dates = frozenset(open_dates)
-
-        def is_business_day(self, value):
-            return value in self.open_dates
-
-    policy = SetCalendar(
-        {
-            date(2026, 1, 2),
-            date(2026, 1, 7),
-            date(2026, 1, 21),
-            date(2026, 4, 25),
-            date(2026, 4, 28),
-        }
-    )
-
-    cases = [
-        ('y:04-25@bd', date(2026, 4, 12), date(2026, 4, 25)),
-        ('y:04-26@pbd', date(2026, 4, 12), date(2026, 4, 25)),
-        ('y:04-26@nbd', date(2026, 4, 12), date(2026, 4, 28)),
-        ('y:04-26@nw', date(2026, 4, 12), date(2026, 4, 25)),
-        ('y:04-24@+1bd', date(2026, 4, 12), date(2026, 4, 25)),
-        ('m:1bd', date(2026, 1, 1), date(2026, 1, 2)),
-        ('m:-1bd', date(2026, 1, 1), date(2026, 1, 21)),
-        ('w:rand@bd', date(2026, 1, 4), date(2026, 1, 7)),
-        ('w:rand@bd', date(2026, 1, 7), date(2026, 1, 21)),
-    ]
-    for expr, start, expected in cases:
-        dnf = core.validate_anchor_expr_strict(expr)
-        got, _meta = core.next_after_expr(
-            dnf,
-            start,
-            default_seed=start,
-            seed_base='business-calendar-policy',
-            business_calendar=policy,
-        )
-        expect(got == expected, f'{expr} ignored the injected business calendar: got {got}, expected {expected}')
-    random_dnf = core.validate_anchor_expr_strict('m:rand@bd')
-    random_got, _meta = core.next_after_expr(
-        random_dnf,
-        date(2026, 1, 1),
-        default_seed=date(2026, 1, 1),
-        seed_base='business-calendar-policy',
-        business_calendar=policy,
-    )
-    expect(
-        random_got in {date(2026, 1, 2), date(2026, 1, 7), date(2026, 1, 21)},
-        f'm:rand@bd selected outside the injected business calendar: {random_got}',
-    )
-
-
-def test_business_calendar_displacement_capture_is_shift_only():
-    """Calendar feedback should capture real rolls without labeling unchanged dates."""
-    import nautical_core.anchor_files as anchor_files
-
-    calendars = core.resolve_business_calendar_config(
-        {'work': {'anchor': 'w:mon..fri', 'omit': 'y:04-24'}}
-    )
-    policy = calendars['work']
-    shifted_dnf = core.validate_anchor_expr_strict('y:04-24@nbd')
-    chained_dnf = core.validate_anchor_expr_strict('y:04-24@nbd@+1bd')
-    unchanged_dnf = core.validate_anchor_expr_strict('y:04-23@nbd')
-
-    with tempfile.TemporaryDirectory() as td:
-        Path(td, 'dates.csv').write_text('date\n2026-04-24\n', encoding='utf-8')
-        with core.use_business_calendar(policy), core.capture_business_calendar_displacements():
-            shifted, _meta = core.next_after_expr(shifted_dnf, date(2026, 4, 20), date(2026, 4, 20))
-            displacement = core.business_calendar_displacement_for_date(shifted, calendar_name='work')
-            chained, _meta = core.next_after_expr(chained_dnf, date(2026, 4, 20), date(2026, 4, 20))
-            chained_displacement = core.business_calendar_displacement_for_date(chained, calendar_name='work')
-            unchanged, _meta = core.next_after_expr(unchanged_dnf, date(2026, 4, 20), date(2026, 4, 20))
-            no_displacement = core.business_calendar_displacement_for_date(unchanged, calendar_name='work')
-        with core.capture_business_calendar_displacements():
-            file_dates = anchor_files.load_anchor_file_dates('dates.csv@nbd', td, business_calendar=policy)
-            file_displacement = core.business_calendar_displacement_for_date(date(2026, 4, 27), calendar_name='work')
-
-    expect(shifted == date(2026, 4, 27), f'configured holiday roll was ignored: {shifted}')
-    expect(displacement is not None, 'shifted occurrence did not retain displacement metadata')
-    expect(displacement.original == date(2026, 4, 24), f'unexpected displacement origin: {displacement!r}')
-    expect(displacement.adjusted == shifted and displacement.calendar_name == 'work', f'unexpected displacement: {displacement!r}')
-    expect(chained == date(2026, 4, 28), f'chained calendar movement was ignored: {chained}')
-    expect(chained_displacement.original == date(2026, 4, 24), f'chained displacement lost its origin: {chained_displacement!r}')
-    expect(chained_displacement.adjusted == date(2026, 4, 28), f'chained displacement lost its result: {chained_displacement!r}')
-    expect(file_dates == frozenset({date(2026, 4, 27)}), f'anchor_file roll was ignored: {file_dates!r}')
-    expect(file_displacement is not None and file_displacement.original == date(2026, 4, 24), f'anchor_file displacement missing: {file_displacement!r}')
-    expect(unchanged == date(2026, 4, 23), f'unchanged occurrence moved unexpectedly: {unchanged}')
-    expect(no_displacement is None, f'unchanged occurrence should remain silent: {no_displacement!r}')
-
-
-def test_business_calendar_policy_flows_through_file_modifiers():
-    """anchor_file and omit_file modifiers should use the same injected business-day policy."""
-    import nautical_core.anchor_files as anchor_files
-    import nautical_core.omit_files as omit_files
-
-    class SetCalendar:
-        name = 'file-calendar'
-
-        def __init__(self, open_dates):
-            self.open_dates = frozenset(open_dates)
-
-        def is_business_day(self, value):
-            return value in self.open_dates
-
-    policy = SetCalendar({date(2026, 4, 25), date(2026, 4, 27)})
-    with tempfile.TemporaryDirectory() as td:
-        source_dir = Path(td)
-        (source_dir / 'saturday.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
-        (source_dir / 'friday.csv').write_text('date\n2026-04-24\n', encoding='utf-8')
-
-        expect(
-            anchor_files.load_anchor_file_dates('saturday.csv@bd', str(source_dir)) == frozenset(),
-            'default file policy should still exclude Saturday',
-        )
-        expect(
-            anchor_files.load_anchor_file_dates(
-                'saturday.csv@bd',
-                str(source_dir),
-                business_calendar=policy,
-            )
-            == frozenset({date(2026, 4, 25)}),
-            'anchor_file @bd ignored the injected policy',
-        )
-        expect(
-            anchor_files.load_anchor_file_dates(
-                'friday.csv@+1bd',
-                str(source_dir),
-                business_calendar=policy,
-            )
-            == frozenset({date(2026, 4, 25)}),
-            'anchor_file business offset ignored the injected policy',
-        )
-        expect(
-            omit_files.load_omit_file_dates(
-                'saturday.csv@bd',
-                str(source_dir),
-                business_calendar=policy,
-            )
-            == frozenset({date(2026, 4, 25)}),
-            'omit_file @bd ignored the injected policy',
-        )
-
-
-def test_business_calendar_config_normalizes_immutable_definitions():
-    """business_calendar tables should normalize names and string/list fields without becoming mutable."""
-    import nautical_core.business_calendar_config as calendar_config
-
-    definitions = calendar_config.parse_business_calendar_definitions(
-        {
-            'Work-Days': {
-                'anchor': ['w:mon..fri', 'w:mon..fri', ' y:04-25 '],
-                'anchor_file': 'open-*.csv',
-                'omit': 'y:04-20',
-                'omit_file': ['closed-*.csv'],
-            }
-        }
-    )
-    definition = definitions['work-days']
-    expect(definition.anchor == ('w:mon..fri', 'y:04-25'), f'unexpected anchors: {definition.anchor!r}')
-    expect(definition.anchor_file == ('open-*.csv',), f'unexpected anchor files: {definition.anchor_file!r}')
-    expect(definition.omit == ('y:04-20',), f'unexpected omits: {definition.omit!r}')
-    expect(definition.omit_file == ('closed-*.csv',), f'unexpected omit files: {definition.omit_file!r}')
-    try:
-        definitions['other'] = definition
-        expect(False, 'resolved definition mapping should be immutable')
-    except TypeError:
-        pass
-
-
-def test_business_calendar_config_resolves_rules_files_and_omissions():
-    """configured calendars should union anchor sources and then apply omit sources."""
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td)
-        anchor_dir = base / 'anchors'
-        omit_dir = base / 'omits'
-        anchor_dir.mkdir()
-        omit_dir.mkdir()
-        (anchor_dir / 'open-local.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
-        (omit_dir / 'closed-local.csv').write_text('date\n2026-04-20\n', encoding='utf-8')
-
-        calendars = core.resolve_business_calendar_config(
-            {
-                'work': {
-                    'anchor': ['w:mon..fri', 'y:04-25'],
-                    'anchor_file': 'open-*.csv@+1d',
-                    'omit': 'y:04-22',
-                    'omit_file': 'closed-*.csv@+1d',
-                }
-            },
-            anchor_file_dir=str(anchor_dir),
-            omit_file_dir=str(omit_dir),
-        )
-        policy = calendars['work']
-        cases = [
-            (date(2026, 4, 17), True),
-            (date(2026, 4, 18), False),
-            (date(2026, 4, 21), False),
-            (date(2026, 4, 22), False),
-            (date(2026, 4, 25), True),
-            (date(2026, 4, 26), True),
-        ]
-        for value, expected in cases:
-            expect(
-                policy.is_business_day(value) is expected,
-                f'configured calendar mismatch for {value}: expected {expected}',
-            )
-        expect(hash(policy), 'configured calendars should be usable in scheduler cache keys')
-        try:
-            calendars['other'] = policy
-            expect(False, 'resolved calendar mapping should be immutable')
-        except TypeError:
-            pass
-
-
-def test_business_calendar_config_rejects_ambiguous_or_unstable_rules():
-    """invalid fields and rules without stable date membership should fail with field context."""
-    import nautical_core.business_calendar_config as calendar_config
-
-    parse_cases = [
-        ({'bad.name': {'anchor': 'w:mon'}}, 'Invalid business_calendar name'),
-        ({'work': {'anchor_files': '*.csv'}}, 'Unknown business_calendar.work field'),
-        ({'work': {'omit': 'y:04-20'}}, 'must define anchor or anchor_file'),
-    ]
-    for raw, expected in parse_cases:
-        try:
-            calendar_config.parse_business_calendar_definitions(raw)
-            expect(False, f'expected invalid calendar definition to fail: {raw!r}')
-        except calendar_config.BusinessCalendarConfigError as exc:
-            expect(expected in str(exc), f'unexpected definition error: {exc}')
-
-    resolve_cases = [
-        ({'work': {'anchor': 'w/2:mon'}}, 'interval recurrences'),
-        ({'work': {'anchor': 'w:rand'}}, 'random selectors'),
-        ({'work': {'anchor': 'w:mon@t=09:00'}}, 'time modifiers'),
-        ({'work': {'anchor': 'w:mon@bd'}}, 'business-day modifiers'),
-        ({'work': {'anchor': 'm:lbd'}}, 'business-day ordinals'),
-    ]
-    for raw, expected in resolve_cases:
-        try:
-            core.resolve_business_calendar_config(raw)
-            expect(False, f'expected unstable calendar rule to fail: {raw!r}')
-        except calendar_config.BusinessCalendarConfigError as exc:
-            expect(expected in str(exc), f'unexpected rule error: {exc}')
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / 'days.csv').write_text('date\n2026-04-20\n', encoding='utf-8')
-        try:
-            core.resolve_business_calendar_config(
-                {'work': {'anchor_file': 'missing-*.csv'}},
-                anchor_file_dir=td,
-            )
-            expect(False, 'expected unmatched calendar file pattern to fail')
-        except calendar_config.BusinessCalendarConfigError as exc:
-            expect('matched no files' in str(exc), f'unexpected unmatched-pattern error: {exc}')
-        try:
-            core.resolve_business_calendar_config(
-                {'work': {'anchor_file': 'days.csv@nbd'}},
-                anchor_file_dir=td,
-            )
-            expect(False, 'expected self-referential file modifiers to fail')
-        except calendar_config.BusinessCalendarConfigError as exc:
-            expect('business-day modifiers' in str(exc), f'unexpected file-modifier error: {exc}')
 
 
 def test_business_calendar_toml_section_resolves_lazily():
@@ -15316,64 +8556,6 @@ def test_business_calendar_toml_section_resolves_lazily():
         expect(proc.returncode == 0, f'calendar TOML subprocess failed: {proc.stderr}')
         payload = json.loads(proc.stdout)
         expect(payload == {'names': ['work'], 'open': True, 'closed': False}, f'unexpected TOML result: {payload!r}')
-
-
-def test_task_business_calendar_context_selects_and_restores_policy():
-    """task bc selection should be case-insensitive, scoped, and visible to schedulers and file modifiers."""
-    calendars = core.resolve_business_calendar_config(
-        {'weekend': {'anchor': 'w:sat,sun'}},
-    )
-    saved_registry = core.configured_business_calendars
-    task = {'bc': 'WEEKEND'}
-    try:
-        core.configured_business_calendars = lambda: calendars
-        policy = core.normalize_task_business_calendar_in_place(task)
-        expect(task['bc'] == 'weekend', f'bc should normalize to its configured name: {task!r}')
-        dnf = core.validate_anchor_expr_strict('m:1bd')
-        with core.use_business_calendar(policy):
-            selected, _meta = core.next_after_expr(dnf, date(2026, 6, 30))
-            expect(selected == date(2026, 7, 4), f'named calendar was not used: {selected}')
-            expect(
-                core.business_calendar_fingerprint() == policy.fingerprint,
-                'active calendar fingerprint should follow the scoped policy',
-            )
-        restored, _meta = core.next_after_expr(dnf, date(2026, 6, 30))
-        expect(restored == date(2026, 7, 1), f'default policy was not restored: {restored}')
-    finally:
-        core.configured_business_calendars = saved_registry
-
-
-def test_business_calendar_fingerprint_invalidates_rule_file_and_hint_caches():
-    """semantic rule or file-date changes should produce new persistent recurrence cache keys."""
-    monday = core.resolve_business_calendar_config({'work': {'anchor': 'w:mon'}})['work']
-    tuesday = core.resolve_business_calendar_config({'work': {'anchor': 'w:tue'}})['work']
-    expect(monday.fingerprint != tuesday.fingerprint, 'rule changes should alter the calendar fingerprint')
-    expect(
-        core.cache_key_for_task('m:1bd', 'skip')
-        == core.cache_key_for_task('m:1bd', 'skip', core.DEFAULT_BUSINESS_CALENDAR.fingerprint),
-        'the public cache helper should include the effective default calendar',
-    )
-    expect(
-        core.cache_key_for_task('m:1bd', 'skip', monday.fingerprint)
-        != core.cache_key_for_task('m:1bd', 'skip', tuesday.fingerprint),
-        'calendar fingerprints should participate in persistent cache keys',
-    )
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        source = anchor_dir / 'open.csv'
-        source.write_text('date\n2026-04-20\n', encoding='utf-8')
-        raw = {'work': {'anchor_file': 'open.csv'}}
-        first = core.resolve_business_calendar_config(raw, anchor_file_dir=td)['work']
-        source.write_text('date\n2026-04-21\n', encoding='utf-8')
-        second = core.resolve_business_calendar_config(raw, anchor_file_dir=td)['work']
-        expect(first.fingerprint != second.fingerprint, 'file date changes should alter the calendar fingerprint')
-
-    hints = core.build_and_cache_hints('m:1bd', 'skip', business_calendar=monday)
-    expect(
-        hints.get('meta', {}).get('cfg', {}).get('bc') == monday.fingerprint,
-        'hint metadata should record the selected calendar fingerprint',
-    )
 
 
 def test_hook_on_add_uses_and_normalizes_business_calendar():
@@ -15503,45 +8685,36 @@ def test_hook_on_add_rejects_invalid_timezone_for_nautical_task():
 
 def test_core_domain_configuration_validation_fails_closed():
     """Astronomy, preset, and business-calendar config errors block reload validation."""
-    saved = (
-        core.ASTRONOMY_CONFIG,
-        core.ANCHOR_PRESETS,
-        core.OMIT_PRESETS,
-        core.BUSINESS_CALENDAR_CONFIG,
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+
+    def expect_invalid(config_text: str, label: str, module_name: str) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "nautical.toml"
+            cfg.write_text(config_text, encoding="utf-8")
+            mod = _load_core_module(core_path, module_name, str(cfg))
+            try:
+                mod.validate_scheduling_configuration()
+            except RuntimeError as exc:
+                expect(label.lower() in str(exc).lower(), f"{label} detail missing: {exc}")
+            else:
+                raise AssertionError(f"{label} configuration was accepted")
+
+    expect_invalid(
+        '[astronomy]\ndefault_location = "home"\n'
+        '[astronomy.locations.home]\nlatitude = 91\nlongitude = 24\ntimezone = "Europe/Athens"\n',
+        "latitude",
+        "_nautical_core_bad_astronomy_test",
     )
-
-    def expect_invalid(label: str) -> None:
-        try:
-            core.validate_scheduling_configuration()
-        except RuntimeError as exc:
-            expect(label.lower() in str(exc).lower(), f"{label} detail missing: {exc}")
-        else:
-            raise AssertionError(f"{label} configuration was accepted")
-
-    try:
-        core.ASTRONOMY_CONFIG = {
-            "default_location": "home",
-            "locations": {
-                "home": {"latitude": 91, "longitude": 24, "timezone": "Europe/Athens"},
-            },
-        }
-        expect_invalid("latitude")
-
-        core.ASTRONOMY_CONFIG = {}
-        core.ANCHOR_PRESETS = {"bad": "w:not-a-day"}
-        expect_invalid("weekly")
-
-        core.ANCHOR_PRESETS = {}
-        core.BUSINESS_CALENDAR_CONFIG = {"work": {"anchor": "w:mon@t=09:00"}}
-        expect_invalid("business_calendar.work.anchor")
-    finally:
-        (
-            core.ASTRONOMY_CONFIG,
-            core.ANCHOR_PRESETS,
-            core.OMIT_PRESETS,
-            core.BUSINESS_CALENDAR_CONFIG,
-        ) = saved
-        core.validate_scheduling_configuration()
+    expect_invalid(
+        '[anchor_presets]\nbad = "w:not-a-day"\n',
+        "weekly",
+        "_nautical_core_bad_preset_test",
+    )
+    expect_invalid(
+        '[business_calendar.work]\nanchor = "w:mon@t=09:00"\n',
+        "business_calendar.work.anchor",
+        "_nautical_core_bad_calendar_test",
+    )
 
 
 def test_discovered_malformed_config_blocks_taskdata_reload():
@@ -15703,40 +8876,6 @@ def test_on_modify_spawned_child_preserves_business_calendar():
     expect(child.get('bc') == 'weekend', f'child lost its business calendar: {child!r}')
 
 
-def test_next_after_atom_with_mods_characterization():
-    """Direct atom scheduling should preserve seed-gated interval and roll/offset behavior."""
-    def _single_atom(expr: str):
-        dnf = core.validate_anchor_expr_strict(expr)
-        expect(len(dnf) == 1 and len(dnf[0]) == 1, f"expected single-atom DNF for {expr!r}")
-        return dnf[0][0]
-
-    cases = [
-        # Monthly /N uses valid-month buckets anchored to seed.
-        ("m/2:31", date(2024, 1, 1), date(2024, 1, 1), date(2024, 1, 31)),
-        ("m/2:31", date(2024, 2, 1), date(2024, 1, 1), date(2024, 5, 31)),
-        ("m/2:31", date(2024, 3, 31), date(2024, 1, 1), date(2024, 5, 31)),
-        # Weekly/yearly /N gating.
-        ("w/2:mon", date(2024, 12, 9), date(2024, 12, 9), date(2024, 12, 23)),
-        ("y/2:06-15", date(2024, 1, 1), date(2024, 1, 1), date(2024, 6, 15)),
-        # @bd skip behavior on weekend target.
-        ("m:3@bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 2, 3)),
-        # Roll then day_offset behavior.
-        ("m:1@nbd@+1d", date(2024, 8, 31), date(2024, 8, 31), date(2024, 9, 3)),
-        # Roll, then calendar-day offset, then business-day offset.
-        ("m:-1@pbd@-2bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 1, 28)),
-        ("y:04-24@+1bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 4, 27)),
-        ("y:04-27@-1bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 4, 24)),
-        ("y:04-25@+1d@+1bd", date(2026, 1, 1), date(2026, 1, 1), date(2026, 4, 27)),
-        # Low-level atom scheduling may expose an equal rolled date; expression scheduling filters it.
-        ("m:15@nw", date(2024, 6, 14), date(2024, 6, 14), date(2024, 6, 14)),
-    ]
-
-    for expr, ref_d, seed_d, expected in cases:
-        atom = _single_atom(expr)
-        got = core.next_after_atom_with_mods(atom, ref_d, seed_d)
-        expect(got == expected, f"{expr} from {ref_d} seed={seed_d}: got {got}, expected {expected}")
-
-
 def test_modifier_boundary_paths_agree_and_advance_strictly():
     """Rolled and shifted anchors should agree across preview, completion, timeline, and omit."""
     import nautical_core.anchor_omit as anchor_omit
@@ -15790,6 +8929,9 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
         expect((preview_next.hour, preview_next.minute) == expected_hhmm, f"{expr}: preview lost wall-clock time")
 
         parent = {
+            "uuid": "00000000-0000-4000-8000-000000000901",
+            "description": "modifier boundary fixture",
+            "status": "completed",
             "anchor": expr,
             "anchor_mode": "skip",
             "due": modify_mod.core.fmt_isoz(current_utc),
@@ -15802,6 +8944,9 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
         expect(completion_next == preview_next, f"{expr}: completion {completion_next} != preview {preview_next}")
 
         preview_after_child = next_preview(dnf, preview_next, expected_hhmm, current_day)
+        _evaluator_callback, scheduler_service_for_task = modify_mod._module("modify_schedule_effects").scheduler_callbacks(
+            modify_mod._module("modify_schedule_effects").scheduler_ports_for(modify_mod)
+        )
         timeline_items = modify_timeline._timeline_future_anchor_items(
             parent,
             completion_dnf,
@@ -15811,9 +8956,8 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
             cap_no=None,
             to_local_cached=modify_mod._to_local_cached,
             safe_parse_datetime=modify_mod._TASK_DATETIME_PARSER.parse,
-            next_occurrence_after_local_dt=lambda *args, **kwargs: modify_mod._module("modify_schedule_effects").next_occurrence_after_local_dt(modify_mod, *args, **kwargs),
+            scheduler_service=scheduler_service_for_task(parent),
             omit_dnf=None,
-            omit_expr_fires_on_date=None,
             omit_description_for_date=None,
             max_iterations=32,
         )
@@ -15838,862 +8982,16 @@ def test_modifier_boundary_paths_agree_and_advance_strictly():
     expect((after_dst.hour, after_dst.minute) == (9, 0), f"DST transition changed anchor wall clock: {after_dst}")
 
 
-def test_atom_matches_on_positive_day_offset_shifted_date():
-    """atom_matches_on should recognize dates reached via positive day offsets."""
-    dnf = core.validate_anchor_expr_strict("y:04-25@+10d")
-    atom = dnf[0][0]
-    expect(core.atom_matches_on(atom, date(2026, 5, 5), date(2026, 4, 12)), "shifted date should match positive day-offset atom")
-
-
-def test_pick_hhmm_from_dnf_for_positive_day_offset_shifted_date():
-    """pick_hhmm_from_dnf_for_date should retain @t on dates reached via positive day offsets."""
-    dnf = core.validate_anchor_expr_strict("y:04-25@+10d@t=12:00")
-    expect(core.pick_hhmm_from_dnf_for_date(dnf, date(2026, 5, 5), date(2026, 4, 12)) == (12, 0), "shifted date should keep configured @t")
-
-
-def test_scheduler_atom_helpers_characterization():
-    """Direct scheduler helpers should preserve interval-bucket and acceptance behavior."""
-    atom = core.validate_anchor_expr_strict("w:mon")[0][0]
-    expect(core.base_next_after_atom(atom, date(2024, 12, 9)) == date(2024, 12, 16), "base weekly next date should stay stable")
-    expect(core._interval_allowed_for_atom("w", 2, date(2024, 12, 9), date(2024, 12, 23)), "weekly /2 bucket should allow two-week jump")
-    expect(not core._interval_allowed_for_atom("w", 2, date(2024, 12, 9), date(2024, 12, 16)), "weekly /2 bucket should reject one-week jump")
-    expect(
-        core._advance_probe_for_interval_bucket("w", 2, date(2024, 12, 9), date(2024, 12, 16)) == date(2024, 12, 22),
-        "weekly probe advance should jump to day before next allowed week",
-    )
-    expect(core._accept_roll_candidate(date(2024, 6, 14), date(2024, 6, 15), date(2024, 6, 14), "nw"), "business-day roll may accept cand equal to ref_d")
-    expect(not core._accept_roll_candidate(date(2024, 6, 14), date(2024, 6, 14), date(2024, 6, 14), "nw"), "roll acceptance still requires future base")
-
-def test_complex_dnf_expressions():
-    """Test complex DNF expressions with OR and AND"""
-    test_cases = [
-        # OR expressions
-        ("w:mon | w:fri", "2024-12-11", "2024-12-13"),  # Wed -> Fri (closer than Mon)
-        ("m:1 | m:15", "2024-12-11", "2024-12-15"),  # 1st or 15th -> 15th
-        
-        # AND expressions  
-        ("w:mon + m:1", "2024-12-01", "2025-09-01"),  # Monday AND 1st of month (next is Sep 1, 2025)
-        ("w:fri + m:13", "2024-12-01", "2024-12-13"),  # Friday the 13th
-        
-        # Complex: (Monday in Jan) OR (Friday in Feb)
-        # From 2024-01-01, next is 2024-01-08 (Monday in Jan), not 2024-01-01 itself
-        ("(w:mon + y:01-01..01-31) | (w:fri + y:02-01..02-28)", "2024-01-01", "2024-01-08"),
-    ]
-    
-    for anchor, start_str, expected_str in test_cases:
-        start = date.fromisoformat(start_str)
-        expected = date.fromisoformat(expected_str)
-        
-        dnf = core.validate_anchor_expr_strict(anchor)
-        next_date, _ = core.next_after_expr(dnf, start)
-        
-        assert next_date == expected, f"{anchor}: got {next_date}, expected {expected}"
-
-def test_interval_patterns():
-    """Test /N intervals with different anchor types"""
-    test_cases = [
-        # w/2:mon - fixed: every 2 weeks on Monday
-        ("w/2:mon", "2024-12-09", ["2024-12-23", "2025-01-06", "2025-01-20"]),
-        
-        # m/2:15 from 2024-01-01: Jan 15, Mar 15, May 15
-        ("m/2:15", "2024-01-01", ["2024-01-15", "2024-03-15", "2024-05-15"]),
-        
-        # m/3:-1 from 2024-01-01: Jan 31, Apr 30, Jul 31
-        ("m/3:-1", "2024-01-01", ["2024-01-31", "2024-04-30", "2024-07-31"]),
-        
-        # y/2:06-15 from 2024-01-01: 2024-06-15, 2026-06-15, 2028-06-15
-        ("y/2:06-15", "2024-01-01", ["2024-06-15", "2026-06-15", "2028-06-15"]),
-    ]
-    
-    for anchor, start_str, expected_dates in test_cases:
-        start = date.fromisoformat(start_str)
-        expected = [date.fromisoformat(d) for d in expected_dates]
-        
-        dnf = core.validate_anchor_expr_strict(anchor)
-        
-        current = start
-        for i, exp in enumerate(expected):
-            next_date, _ = core.next_after_expr(dnf, current, default_seed=start)
-            assert next_date == exp, f"{anchor} iteration {i}: got {next_date}, expected {exp}"
-            current = next_date + timedelta(days=1)
-
-def test_symbolic_anchor_time_modifiers_accept_supported_events():
-    """Astronomical @t values should parse without changing numeric time storage."""
-    for event in ("sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"):
-        dnf = core.validate_anchor_expr_strict(f"w:mon@t={event}")
-        expect(dnf[0][0]["mods"]["t"] == event, f"symbolic time was not preserved: {event!r} -> {dnf!r}")
-    numeric = core.validate_anchor_expr_strict("w:mon@t=09:00")
-    expect(numeric[0][0]["mods"]["t"] == (9, 0), f"numeric time representation changed: {numeric!r}")
-    offset = core.validate_anchor_expr_strict("w:mon@t=dawn@-45m")
-    expect(offset[0][0]["mods"]["time_offset_minutes"] == -45, f"astronomical time offset was not preserved: {offset!r}")
-
-
-def test_moon_phase_anchor_grammar_normalizes_canonical_names():
-    """Moon-phase anchors should parse to stable canonical phase names before scheduling support lands."""
-    cases = {
-        "moon:new": "new",
-        "moon:first_quarter": "first-quarter",
-        "moon:full-moon": "full",
-        "moon:third-quarter": "last-quarter",
-    }
-    for expression, expected in cases.items():
-        dnf = core.validate_anchor_expr_strict(expression)
-        expect(dnf[0][0]["typ"] == "moon", f"moon source type was not preserved: {dnf!r}")
-        expect(dnf[0][0]["spec"] == expected, f"moon phase was not canonicalized: {dnf!r}")
-    try:
-        core.validate_anchor_expr_strict("moon:blue")
-    except Exception as exc:
-        expect("moon phase" in str(exc).lower(), f"invalid moon phase error was unclear: {exc}")
-    else:
-        raise AssertionError("unknown moon phase should be rejected")
-
-
-def test_astronomy_profile_requires_explicit_timezone():
-    """Astronomy profiles must state the civil timezone explicitly."""
-    astronomy = core._import_sibling("astronomy")
-    try:
-        astronomy._observer(
-            {"locations": {"home": {"latitude": 40.0, "longitude": -74.0}}},
-            "home",
-        )
-    except ValueError as exc:
-        expect("explicit timezone" in str(exc), f"unexpected astronomy profile error: {exc!r}")
-    else:
-        raise AssertionError("astronomy profile without timezone should be rejected")
-
-
-def test_moon_phase_resolver_uses_circular_phase_distance():
-    """Phase lookup must treat the new-moon boundary as circular, not linear."""
-    astronomy = core._import_sibling("astronomy")
-    expect(abs(astronomy._phase_distance(27.8, 0.0) - 0.2) < 1e-9, "new-moon wraparound distance is incorrect")
-    expect(astronomy._phase_distance(14.0, 14.0) == 0.0, "full-moon target distance is incorrect")
-    try:
-        astronomy.resolve_phase_date(
-            "full",
-            date(2026, 7, 28),
-            config={"locations": {"home": {"timezone": "UTC"}}},
-        )
-    except astronomy.AstronomyUnavailableError:
-        pass
-    except Exception as exc:
-        expect(False, f"unexpected phase resolver error: {exc!r}")
-
-
-def test_moon_phase_resolver_uses_documented_phase_bands():
-    """Moon matching follows Astral's documented seven-day phase bands."""
-    astronomy = core._import_sibling("astronomy")
-    expect(astronomy._phase_matches(14.0, "full"), "full phase lower bound should match")
-    expect(astronomy._phase_matches(20.99, "full"), "full phase upper bound should match")
-    expect(not astronomy._phase_matches(13.99, "full"), "first-quarter value should not match full")
-
-
-def test_moon_phase_real_astral_boundary_smoke():
-    """When Astral is installed, verify the real provider returns a phase boundary."""
-    if not _astral_test_available():
-        return
-    astronomy = core._import_sibling("astronomy")
-    config = {
-        "default_location": "test",
-        "locations": {"test": {"latitude": 40.0, "longitude": -74.0, "timezone": "UTC"}},
-    }
-    boundary = astronomy.resolve_phase_date("full", date(2026, 1, 1), config=config)
-    expect(astronomy.phase_matches_date("full", boundary, config=config), "real Astral boundary is not in full band")
-    expect(
-        not astronomy.phase_matches_date("full", boundary - timedelta(days=1), config=config),
-        "real Astral resolver did not return the beginning of the full band",
-    )
-
-
-def test_moon_astral_events_preserve_timezone_and_dst():
-    """Real Astral event times stay timezone-aware across civil-time transitions."""
-    if not _astral_test_available():
-        return
-    astronomy = core._import_sibling("astronomy")
-    config = {
-        "default_location": "new-york",
-        "locations": {"new-york": {"latitude": 40.7128, "longitude": -74.0060, "timezone": "America/New_York"}},
-    }
-    # DST starts on March 8, 2026 before sunrise; use the preceding day so
-    # the two event times are guaranteed to carry different UTC offsets.
-    before = astronomy.resolve_event("sunrise", date(2026, 3, 7), config=config)
-    after = astronomy.resolve_event("sunrise", date(2026, 3, 8), config=config)
-    expect(before.tzinfo is not None and after.tzinfo is not None, "Astral event must be timezone-aware")
-    expect(before.tzinfo.key == "America/New_York", f"unexpected pre-DST timezone: {before.tzinfo!r}")
-    expect(after.tzinfo.key == "America/New_York", f"unexpected post-DST timezone: {after.tzinfo!r}")
-    expect(before.utcoffset() != after.utcoffset(), "DST transition did not change the UTC offset")
-
-
-def test_astronomy_preflight_reports_configuration_and_provider_health():
-    """Astronomy preflight should distinguish disabled, invalid, and healthy profiles."""
-    astronomy = core._import_sibling("astronomy")
-    expect(astronomy.preflight({}).get("status") == "not_configured", "empty astronomy config should be disabled")
-
-    invalid = astronomy.preflight(
-        {"default_location": "home", "locations": {"home": {"latitude": "bad", "longitude": 0, "timezone": "UTC"}}}
-    )
-    expect(invalid.get("status") == "error", f"invalid profile was not rejected: {invalid}")
-
-    original_observer = astronomy._observer
-    original_resolve = astronomy.resolve_event
-    try:
-        astronomy._observer = lambda _config: ("home", object(), "UTC")
-        astronomy.resolve_event = lambda *_args, **_kwargs: datetime(2026, 7, 31, 6, 0, tzinfo=timezone.utc)
-        healthy = astronomy.preflight(
-            {"default_location": "home", "locations": {"home": {"latitude": 1, "longitude": 2, "timezone": "UTC"}}},
-            reference_day=date(2026, 7, 31),
-        )
-    finally:
-        astronomy._observer = original_observer
-        astronomy.resolve_event = original_resolve
-    expect(healthy.get("status") == "ok", f"healthy astronomy profile failed preflight: {healthy}")
-    expect(healthy.get("event") == "sunrise", f"preflight event missing: {healthy}")
-
-
-def test_moonrise_unavailable_location_fails_closed():
-    """A real Astral location without a moonrise must produce a clear lookup failure."""
-    if not _astral_test_available():
-        return
-    astronomy = core._import_sibling("astronomy")
-    config = {
-        "default_location": "tromso",
-        "locations": {"tromso": {"latitude": 69.6492, "longitude": 18.9553, "timezone": "Europe/Oslo"}},
-    }
-    unavailable = False
-    for day_offset in range(7):
-        try:
-            astronomy.resolve_event("moonrise", date(2026, 6, 21) + timedelta(days=day_offset), config=config)
-        except LookupError as exc:
-            expect("moonrise" in str(exc), f"unavailable event error omitted event name: {exc}")
-            unavailable = True
-            break
-    expect(unavailable, "expected at least one unavailable Tromso moonrise during polar summer")
-
-
-def test_moon_phase_source_and_filter_compose_with_weekday():
-    """Moon sources and @moon filters must preserve the other AND-term constraints."""
-    astronomy = core._import_sibling("astronomy")
-    original_resolve = astronomy.resolve_phase_date
-    original_matches = astronomy.phase_matches_date
-    try:
-        def fake_resolve(phase, reference_day, **_kwargs):
-            expect(phase == "full", f"unexpected phase passed to resolver: {phase!r}")
-            return date(2026, 8, 7) if reference_day < date(2026, 8, 7) else date(2026, 9, 4)
-
-        def fake_matches(phase, day, **_kwargs):
-            expect(phase == "full", f"unexpected phase passed to matcher: {phase!r}")
-            return date(2026, 8, 7) <= day <= date(2026, 8, 13) or date(2026, 9, 4) <= day <= date(2026, 9, 10)
-
-        astronomy.resolve_phase_date = fake_resolve
-        astronomy.phase_matches_date = fake_matches
-        source = core.validate_anchor_expr_strict("moon:full + w:fri")
-        source_next, _ = core.next_after_expr(source, date(2026, 7, 1), default_seed=date(2026, 7, 1))
-        expect(source_next == date(2026, 8, 7), f"moon source did not intersect Friday: {source_next}")
-        filtered = core.validate_anchor_expr_strict("w:fri@moon=full")
-        filtered_next, _ = core.next_after_expr(filtered, date(2026, 7, 1), default_seed=date(2026, 7, 1))
-        expect(filtered_next == date(2026, 8, 7), f"moon filter did not preserve Friday constraint: {filtered_next}")
-    finally:
-        astronomy.resolve_phase_date = original_resolve
-        astronomy.phase_matches_date = original_matches
-
-
-def test_moon_phase_source_emits_once_per_phase_window():
-    """A multi-day phase band must still create only one source occurrence."""
-    astronomy = core._import_sibling("astronomy")
-    original_resolve = astronomy.resolve_phase_date
-    original_matches = astronomy.phase_matches_date
-    windows = (
-        (date(2026, 7, 30), date(2026, 7, 31)),
-        (date(2027, 7, 19), date(2027, 7, 22)),
-        (date(2027, 8, 17), date(2027, 8, 23)),
-    )
-    try:
-        def fake_resolve(_phase, reference_day, **_kwargs):
-            return next(start for start, _end in windows if start > reference_day)
-
-        def fake_matches(_phase, day, **_kwargs):
-            return any(start <= day <= end for start, end in windows)
-
-        astronomy.resolve_phase_date = fake_resolve
-        astronomy.phase_matches_date = fake_matches
-        dnf = core.validate_anchor_expr_strict("moon:full + y:jul")
-        first, _ = core.next_after_expr(dnf, date(2026, 7, 1), default_seed=date(2026, 7, 1))
-        second, _ = core.next_after_expr(dnf, first, default_seed=date(2026, 7, 1))
-        expect(first == date(2026, 7, 30), f"unexpected first phase window: {first}")
-        expect(second == date(2027, 7, 19), f"same phase window emitted twice: {second}")
-    finally:
-        astronomy.resolve_phase_date = original_resolve
-        astronomy.phase_matches_date = original_matches
-
-
-def test_moon_phase_operational_errors_are_actionable():
-    """Missing astronomy support must become an actionable reconcile error."""
-    astronomy = core._import_sibling("astronomy")
-    message = astronomy.scheduling_error_message(
-        astronomy.AstronomyUnavailableError("moon phase anchors require astral")
-    )
-    expect("Install astral" in message and "moon-based recurrence" in message, message)
-    foreign_error = type("AstronomyUnavailableError", (RuntimeError,), {})("provider missing")
-    expect(astronomy.is_astronomy_error(foreign_error), "foreign hook-loaded astronomy error was not classified")
-    expect("Install astral" in astronomy.scheduling_error_message(foreign_error), "foreign error message was not actionable")
-
-
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    class FailingGeneration:
-        core = core
-
-        @staticmethod
-        def safe_parse_datetime(value):
-            parsed = core.parse_dt_any(value)
-            return parsed, None
-
-        @staticmethod
-        def compute_anchor_child_due(_parent):
-            raise astronomy.AstronomyUnavailableError("moon phase anchors require astral")
-
-    parent = {
-            "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 1,
-        "anchor": "moon:full",
-    }
-    plan = reconcile.plan_recovery_decision(
-        _task_observation(parent),
-        existing_children=[],
-        hook=type("Hook", (), {"core": core})(),
-        generation=FailingGeneration(),
-    )
-    expect(plan.status.value == "error", f"moon resolver failure should fail closed: {plan}")
-    expect("Astronomy provider unavailable" in plan.reason, plan.reason)
-
-
-def test_astronomical_time_skips_unavailable_candidate_dates():
-    """A missing moonrise on one phase date should advance to the next candidate."""
-    import nautical_core.add_anchor_compute as compute
-    astronomy = core._import_sibling("astronomy")
-    original_step = compute.anchor_step_once_with_omit
-    try:
-        first = date(2027, 7, 1)
-
-        class FakeCore:
-            MAX_ANCHOR_ITER = 4
-
-            _scheduler_api = SimpleNamespace()
-
-            @staticmethod
-            def factor_matches_on(_atom, _day, _seed, seed_base=None):
-                return True
-
-            @staticmethod
-            def dnf_has_counted_random(_dnf):
-                return False
-
-            @staticmethod
-            def _import_sibling(name):
-                return core._import_sibling(name)
-
-            @staticmethod
-            def build_local_datetime(day, hhmm):
-                return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc)
-
-            @staticmethod
-            def to_local(value):
-                return value
-
-        FakeCore._scheduler_api.factor_matches_on = FakeCore.factor_matches_on
-        FakeCore._scheduler_api.dnf_has_counted_random = FakeCore.dnf_has_counted_random
-
-        def fake_step(_dnf, previous, *_args, **_kwargs):
-            return None
-
-        def fake_slots(_mods, day):
-            if day == first:
-                raise astronomy.AstronomyEventUnavailableError(
-                    "astronomical event 'moonrise' is unavailable on 2027-07-01 at home"
-                )
-            return [(6, 10)]
-
-        compute.anchor_step_once_with_omit = fake_step
-        result = compute.anchor_next_occurrence_after_local_dt(
-            [[{"mods": {"t": "moonrise"}}]],
-            datetime(2027, 7, 1, 12, 0, tzinfo=timezone.utc),
-            (9, 0),
-            first,
-            first,
-            core=FakeCore(),
-            norm_t_mod=lambda _value: [],
-            resolve_time_slots=fake_slots,
-        )
-        expect(result == datetime(2027, 7, 2, 6, 10, tzinfo=timezone.utc), f"unavailable candidate was not skipped: {result!r}")
-    finally:
-        compute.anchor_step_once_with_omit = original_step
-
-
-def test_astronomy_none_event_is_actionable():
-    """Astral providers returning None must become a typed unavailable event."""
-    astronomy = core._import_sibling("astronomy")
-    original = astronomy._resolve_event_cached
-    try:
-        astronomy._resolve_event_cached = lambda *_args, **_kwargs: None
-        try:
-            astronomy.resolve_event(
-                "moonrise",
-                date(2027, 7, 1),
-                config={"default_location": "home", "locations": {"home": {
-                    "latitude": 45, "longitude": 27, "timezone": "UTC"
-                }}},
-            )
-        except AttributeError as exc:
-            raise AssertionError(f"None event leaked as AttributeError: {exc}")
-        except astronomy.AstronomyEventUnavailableError as exc:
-            expect("moonrise" in str(exc), f"event name missing from error: {exc}")
-        else:
-            raise AssertionError("None event should be rejected as unavailable")
-    finally:
-        astronomy._resolve_event_cached = original
-
-
-def test_moon_phase_natural_language_is_explicit():
-    """Natural descriptions must identify moon sources and filters."""
-    expect(
-        core.describe_anchor_expr("moon:full + y:jul") == "full-moon phase window begins in Jul each year",
-        core.describe_anchor_expr("moon:full + y:jul"),
-    )
-    expect(
-        core.describe_anchor_expr("w:fri@moon=full") == "Fridays on full-moon phase dates",
-        core.describe_anchor_expr("w:fri@moon=full"),
-    )
-
-
-def test_moon_phase_contradictions_are_rejected():
-    """Different moon phases in one AND term must fail before scheduling."""
-    for parser in (core.validate_anchor_expr_strict, core.parse_anchor_expr_to_dnf):
-        try:
-            parser("moon:full + moon:new")
-        except Exception as exc:
-            expect("incompatible moon phases" in str(exc), f"unclear contradiction error: {exc}")
-        else:
-            raise AssertionError("incompatible moon phases should be rejected")
-
-
-def test_moon_phase_intersection_fails_closed_without_synthetic_date():
-    """Moon intersections must return no candidate instead of ref+365 fallback."""
-    from nautical_core import scheduler_expr
-
-    ref = date(2026, 7, 1)
-    term = [{"typ": "moon", "spec": "full"}, {"typ": "w", "spec": "fri"}]
-    try:
-        scheduler_expr.next_after_term(
-            term,
-            ref,
-            ref,
-            next_after_atom_with_mods=lambda _atom, current, _seed, seed_base=None: current + timedelta(days=1),
-            atom_matches_on=lambda *_args, **_kwargs: False,
-            intersection_guard_steps=2,
-        )
-    except core.OccurrenceSearchExhausted as exc:
-        expect(exc.scope == "AND-term scheduling", f"unexpected exhaustion scope: {exc.scope}")
-    else:
-        raise AssertionError("moon intersection should raise typed scheduler exhaustion")
-
-
-def test_scheduler_exhaustion_never_fabricates_sparse_and_date():
-    """Sparse AND rules must find their real distant match, not a fallback date."""
-    dnf = core.validate_anchor_expr_strict("w/100:mon + y:01-01")
-    result, _meta = core.next_after_expr(
-        dnf,
-        date(2026, 1, 1),
-        default_seed=date(2026, 1, 1),
-    )
-    expect(result == date(3151, 1, 1), f"sparse AND match was not projected correctly: {result!r}")
-    expect(
-        all(core.factor_matches_on(atom, result, date(2026, 1, 1)) for atom in dnf[0]),
-        f"projected date does not satisfy every atom: {result!r}",
-    )
-
-
-def test_scheduler_or_skips_exhausted_branch_for_valid_alternative():
-    """An exhausted OR branch must not hide a valid alternative branch."""
-    from nautical_core import scheduler_expr
-
-    ref = date(2026, 1, 1)
-    exhausted = core.OccurrenceSearchExhausted("test branch", reference=ref, limit=2)
-
-    def next_for_and(term, _ref, _seed, seed_base=None):
-        if term[0].get("spec") == "exhausted":
-            raise exhausted
-        return date(2026, 1, 5)
-
-    result = scheduler_expr.next_for_or(
-        [[{"typ": "w", "spec": "exhausted"}], [{"typ": "w", "spec": "valid"}]],
-        ref,
-        ref,
-        next_for_and=next_for_and,
-    )
-    expect(result == date(2026, 1, 5), f"valid OR branch was hidden by exhaustion: {result!r}")
-
-
-def test_scheduler_periodic_cycle_finds_distant_valid_intersection():
-    """Periodic sparse intersections should use the Gregorian cycle driver."""
-    dnf = core.validate_anchor_expr_strict("w/20:mon + m:1")
-    result, _meta = core.next_after_expr(
-        dnf,
-        date(2026, 1, 1),
-        default_seed=date(2026, 1, 1),
-    )
-    expect(result == date(2134, 2, 1), f"distant periodic match was not found: {result!r}")
-
-
-def test_scheduler_date_boundary_exhaustion_is_typed():
-    """Date arithmetic at the upper boundary must fail closed with context."""
-    dnf = core.validate_anchor_expr_strict("w:mon")
-    try:
-        core.next_after_expr(dnf, date.max, default_seed=date.max)
-    except core.OccurrenceSearchExhausted as exc:
-        expect(exc.scope == "simple weekly scheduling", f"unexpected boundary scope: {exc.scope}")
-        expect(exc.kind == exc.DATE_LIMIT and exc.is_date_limit, f"boundary reason was not typed: {exc.kind!r}")
-    else:
-        raise AssertionError("date overflow should not escape as an untyped error")
-
-    search_limited = core.OccurrenceSearchExhausted(
-        "bounded test", reference=date(2026, 1, 1), limit=1
-    )
-    expect(search_limited.kind == search_limited.SEARCH_LIMIT, "ordinary search exhaustion was misclassified")
-
-    huge = core.validate_anchor_expr_strict("w/1000000000:mon")
-    try:
-        core.next_after_expr(huge, date(2026, 1, 1), default_seed=date(2026, 1, 1))
-    except core.OccurrenceSearchExhausted as exc:
-        expect(exc.is_date_limit, f"extreme interval did not fail as a date-limit result: {exc.kind!r}")
-    else:
-        raise AssertionError("extreme interval should not escape as an untyped overflow")
-
-
-def test_occurrence_collection_preserves_prefix_before_date_terminal():
-    """Finite recurrence previews retain valid events before date-boundary exhaustion."""
-    from nautical_core.occurrence_provider import Occurrence, AnchorOccurrenceProvider, collect_after
-
-    first = datetime(2026, 1, 5, 9, 0)
-    terminal = core.OccurrenceSearchExhausted(
-        "test stream", reference=date(9999, 1, 1), limit=1
-    )
-    calls = 0
-
-    def next_after(_cursor):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return Occurrence(first.date(), 9, 0, local_datetime=first)
-        raise terminal
-
-    provider = AnchorOccurrenceProvider(next_after)
-    collected = collect_after(
-        provider,
-        datetime(2026, 1, 1, 9, 0),
-        limit=3,
-        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-        to_local=lambda value: value,
-    )
-    expect(len(collected) == 1 and collected[0].local_datetime == first, f"valid prefix was lost: {collected!r}")
-    expect(collected.terminal is terminal, f"date-limit terminal state was lost: {collected.terminal!r}")
-
-
-def test_anchor_step_preserves_scheduler_exhaustion():
-    """The add-side occurrence adapter must not downgrade scheduler exhaustion to absence."""
-    import nautical_core.add_anchor_compute as compute
-
-    expected = core.OccurrenceSearchExhausted("test adapter", reference=date(2026, 1, 1), limit=1)
-
-    class FakeOmit:
-        @staticmethod
-        def next_after_expr_with_omit(*_args, **_kwargs):
-            raise expected
-
-    class FakeCore:
-        MAX_ANCHOR_ITER = 1
-
-        @staticmethod
-        def _import_sibling(_name):
-            return FakeOmit
-
-    try:
-        compute.anchor_step_once_with_omit(
-            [],
-            date(2026, 1, 1),
-            date(2026, 1, 1),
-            "test",
-            omit_dnf=None,
-            core=FakeCore(),
-        )
-    except core.OccurrenceSearchExhausted as exc:
-        expect(exc is expected, "scheduler exhaustion was replaced instead of preserved")
-    else:
-        raise AssertionError("add-side scheduler exhaustion should not become an absent occurrence")
-
-
-def test_anchor_date_calculations():
-    """Test specific date calculations for various anchor patterns"""
-    test_cases = [
-        # (anchor, start_date, expected_next_date)
-        ("w:mon", "2024-12-11", "2024-12-16"),  # Wednesday -> Next Monday
-        ("w:mon,fri", "2024-12-11", "2024-12-13"),  # Wednesday -> Friday (closer than Monday)
-        ("m:15", "2024-12-11", "2024-12-15"),  # 11th -> 15th of same month
-        ("m:15", "2024-12-20", "2025-01-15"),  # After 15th -> next month
-        ("m:-1", "2024-12-11", "2024-12-31"),  # Last day of month
-        ("m:1", "2024-12-31", "2025-01-01"),  # First day of next month
-        ("y:12-25", "2024-12-11", "2024-12-25"),  # Christmas
-        ("y:12-25", "2024-12-26", "2025-12-25"),  # After Christmas -> next year
-    ]
-    
-    for anchor, start_str, expected_str in test_cases:
-        start = date.fromisoformat(start_str)
-        expected = date.fromisoformat(expected_str)
-        
-        dnf = core.validate_anchor_expr_strict(anchor)
-        next_date, _ = core.next_after_expr(dnf, start)
-        
-        assert next_date == expected, f"{anchor} from {start_str}: got {next_date}, expected {expected}"
-
-def test_yearly_rand_natural_and_bounds():
-    """Test yearly random patterns natural language and constraints"""
-    # Natural for y:rand must mention random + each year
-    nat = _must_natural("y:rand")
-    low = nat.lower()
-    expect("random" in low and "each year" in low, f"Unexpected natural for y:rand: {nat!r}")
-
-    # y:07-rand → all picks are in July
-    p = build_preview("y:07-rand")
-    expect(p["upcoming"], "y:07-rand should produce upcoming dates")
-    for d in p["upcoming"][:8]:
-        expect(datetime.fromisoformat(d).month == 7, f"{d} must be in July")
-
-    # y:rand-07 is accepted and identical constraint (July)
-    p2 = build_preview("y:rand-07")
-    expect(p2["upcoming"], "y:rand-07 should produce upcoming dates")
-    for d in p2["upcoming"][:8]:
-        expect(datetime.fromisoformat(d).month == 7, f"{d} must be in July")
-
-    p3 = build_preview("y:rand + w:sat")
-    expect(p3["upcoming"], "y:rand + w:sat should produce upcoming dates")
-    for d in p3["upcoming"][:8]:
-        expect(datetime.fromisoformat(d).weekday() == 5, f"{d} must be a Saturday")
-
-
-def test_yearly_rand_respects_sibling_month_filter():
-    """y:rand should choose from sibling yearly constraints, not the whole year."""
-    dnf = core.parse_anchor_expr_to_dnf_cached("y:rand + y:apr,jul,oct")
-    current = date(2025, 1, 1)
-    dates = []
-    for _ in range(8):
-        nxt, meta = core.next_after_expr(dnf, current, seed_base="yearly-rand-month-filter")
-        expect(nxt is not None and nxt > current, "constrained yearly rand did not advance")
-        expect((meta or {}).get("basis") == "rand", f"unexpected constrained rand metadata: {meta}")
-        dates.append(nxt)
-        current = nxt
-    expect(
-        all(dt.month in {4, 7, 10} for dt in dates),
-        f"yearly rand escaped Apr/Jul/Oct: {dates}",
-    )
-    expect(
-        len({dt.year for dt in dates}) == len(dates),
-        f"yearly rand should produce one pick per year: {dates}",
-    )
-
-
-def test_yearly_rand_natural_compacts_sibling_filter():
-    """Constrained yearly random should describe its eligible date set compactly."""
-    cases = [
-        ("y:rand + y:apr", "one random day each year in Apr"),
-        (
-            "y:rand + y:apr,jul,oct",
-            "one random day each year in Apr, Jul, or Oct",
-        ),
-        (
-            "y:rand + y:04-20..05-15",
-            "one random day each year in Apr 20–May 15",
-        ),
-    ]
-    for expr, expected in cases:
-        expect(core.describe_anchor_expr(expr) == expected, f"{expr}: unexpected natural text")
-
-    union = core.describe_anchor_expr("y:rand | y:apr,jul,oct")
-    expect(
-        union.startswith("either one random day each year or "),
-        f"yearly random OR semantics were incorrectly collapsed: {union!r}",
-    )
-
-
-def test_yearly_rand_uses_independent_chain_scoped_draws():
-    """Constrained yearly rand should be deterministic without a forced shuffle cycle."""
-    dnf = core.parse_anchor_expr_to_dnf_cached("y:rand + y:apr,jul,oct")
-    start = date(2025, 12, 31)
-
-    def sequence(seed: str, count: int = 8) -> list[date]:
-        current = start
-        out = []
-        for _ in range(count):
-            nxt, _meta = core.next_after_expr(dnf, current, default_seed=start, seed_base=seed)
-            expect(nxt is not None and nxt > current, "constrained yearly rand did not advance")
-            out.append(nxt)
-            current = nxt
-        return out
-
-    first = sequence("yearly-chain-a")
-    expect(first == sequence("yearly-chain-a"), "yearly rand must replay identically for one chain")
-    expect(first != sequence("yearly-chain-b"), "different chains should not share one yearly rand sequence")
-
-    first_three_months = {
-        tuple(dt.month for dt in sequence(f"yearly-cycle-check-{idx}", 3))
-        for idx in range(24)
-    }
-    expect(
-        any(set(months) != {4, 7, 10} for months in first_three_months),
-        f"yearly rand still behaves like a forced three-month shuffle: {first_three_months}",
-    )
-
-    counts = {4: 0, 7: 0, 10: 0}
-    for idx in range(600):
-        nxt = sequence(f"yearly-distribution-{idx}", 1)[0]
-        counts[nxt.month] += 1
-    expect(
-        all(140 <= count <= 260 for count in counts.values()),
-        f"yearly rand distribution is unexpectedly skewed: {counts}",
-    )
-
-
-def test_weekly_rand_is_chain_scoped_and_deterministic():
-    """w:rand should roll independently per chain and ISO week."""
-    dnf = core.parse_anchor_expr_to_dnf_cached("w:rand")
-    start = date(2026, 6, 7)  # Sunday immediately before ISO week 24.
-
-    def pick(seed: str, current: date = start) -> date:
-        nxt, _meta = core.next_after_expr(dnf, current, default_seed=start, seed_base=seed)
-        expect(nxt is not None and nxt > current, "weekly rand did not advance")
-        return nxt
-
-    same_week = [pick(f"weekly-chain-{idx}") for idx in range(64)]
-    expect(
-        len({dt.weekday() for dt in same_week}) >= 5,
-        f"weekly rand did not separate chains in the same week: {same_week}",
-    )
-    expect(pick("weekly-replay") == pick("weekly-replay"), "weekly rand must replay identically")
-
-    current = start
-    sequence = []
-    for _ in range(24):
-        current = pick("weekly-periods", current)
-        sequence.append(current.weekday())
-    expect(
-        len(set(sequence)) >= 5,
-        f"weekly rand did not vary across periods for one chain: {sequence}",
-    )
-
-
-def test_monthly_rand_year_intersection_is_chain_scoped():
-    """m:rand combined with yearly constraints should include the chain seed."""
-    dnf = core.parse_anchor_expr_to_dnf_cached("m:rand + y:apr")
-    start = date(2026, 3, 31)
-
-    def pick(seed: str) -> date:
-        nxt, _meta = core.next_after_expr(dnf, start, default_seed=start, seed_base=seed)
-        expect(nxt is not None and nxt.month == 4, f"monthly/yearly rand escaped April: {nxt}")
-        return nxt
-
-    picks = [pick(f"monthly-intersection-{idx}") for idx in range(48)]
-    expect(len(set(picks)) >= 16, f"monthly/yearly rand did not separate chains: {picks}")
-    expect(pick("monthly-replay") == pick("monthly-replay"), "monthly/yearly rand must replay identically")
-
-
-def test_random_weekday_list_is_one_grouped_draw():
-    """A comma-separated weekday filter should form one random candidate pool."""
-    start = date(2025, 12, 31)
-    for expr in ("m:rand + w:mon,sat", "w:mon,sat + m:rand"):
-        dnf = core.validate_anchor_expr_strict(expr)
-        expect(len(dnf) == 1, f"{expr}: weekday pool expanded into multiple random branches: {dnf!r}")
-        expect(
-            core.describe_anchor_expr(expr) == "one random Monday or Saturday each month",
-            f"{expr}: unexpected grouped-random natural text",
-        )
-        current = start
-        picks = []
-        for _ in range(12):
-            current, _meta = core.next_after_expr(
-                dnf,
-                current,
-                default_seed=start,
-                seed_base=f"grouped-weekday-{expr}",
-            )
-            picks.append(current)
-        expect(
-            all(pick.weekday() in {0, 5} for pick in picks),
-            f"{expr}: random pick escaped Monday/Saturday: {picks}",
-        )
-        expect(
-            len({(pick.year, pick.month) for pick in picks}) == len(picks),
-            f"{expr}: produced more than one random date in a month: {picks}",
-        )
-
-    yearly = core.validate_anchor_expr_strict("y:rand + w:mon,sat")
-    expect(len(yearly) == 1, f"yearly weekday pool expanded into multiple branches: {yearly!r}")
-    expect(
-        core.describe_anchor_expr("y:rand + w:mon,sat") == "one random Monday or Saturday each year",
-        "unexpected yearly grouped-random natural text",
-    )
-
-
-def test_random_weekday_explicit_or_keeps_separate_draws():
-    """Explicit weekday OR should remain the opt-in form for one draw per branch."""
-    expr = "m:rand + (w:mon | w:sat)"
-    dnf = core.validate_anchor_expr_strict(expr)
-    expect(len(dnf) == 2, f"explicit random weekday OR should retain two branches: {dnf!r}")
-    start = date(2025, 12, 31)
-    from datetime import time
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-
-    zone = ZoneInfo("UTC")
-    service = _scheduler_for_fixture(
-        {"chainID": "explicit-random-weekday-or", "anchor": expr},
-        context=RecurrenceContext(chain_id="explicit-random-weekday-or", timezone=zone),
-    )
-    result = service.collect_request(
-        OccurrenceRangeRequest(
-            OccurrenceCursor.strict_after(datetime.combine(start, time.max, tzinfo=zone), timezone=zone),
-            end_local=datetime.combine(date(2026, 3, 31), time.max, tzinfo=zone),
-            limit=32,
-        )
-    )
-    dates = [occurrence.local_datetime.date() for occurrence in result]
-    by_month = {}
-    for pick in dates:
-        by_month.setdefault((pick.year, pick.month), []).append(pick)
-    expect(set(by_month) == {(2026, 1), (2026, 2), (2026, 3)}, f"unexpected OR months: {dates}")
-    expect(
-        all(len(picks) == 2 for picks in by_month.values()),
-        f"explicit OR should produce one Monday and one Saturday per month: {by_month}",
-    )
-    expect(
-        all({pick.weekday() for pick in picks} == {0, 5} for picks in by_month.values()),
-        f"explicit OR produced the wrong weekday branches: {by_month}",
-    )
-
-
 def test_random_salt_namespaces_draws():
     """wrand_salt should remain an explicit namespace for deterministic draws."""
-    dnf = core.parse_anchor_expr_to_dnf_cached("w:rand")
     start = date(2026, 6, 7)
-    original = core.WRAND_SALT
 
-    def sequence(salt: str) -> list[date]:
-        core.WRAND_SALT = salt
+    def sequence(mod) -> list[date]:
+        dnf = mod.parse_anchor_expr_to_dnf_cached("w:rand")
         current = start
         out = []
         for _ in range(12):
-            current, _meta = core.next_after_expr(
+            current, _meta = mod.next_after_expr(
                 dnf,
                 current,
                 default_seed=start,
@@ -16702,102 +9000,36 @@ def test_random_salt_namespaces_draws():
             out.append(current)
         return out
 
-    try:
-        first = sequence("salt-a")
-        expect(first == sequence("salt-a"), "the same random salt must replay identically")
-        expect(first != sequence("salt-b"), "changing wrand_salt should change the random sequence")
-    finally:
-        core.WRAND_SALT = original
-
-
-def test_random_anchor_cross_chain_matrix():
-    """Every random anchor form should replay per chain and vary across chains."""
-    cases = [
-        {
-            "expr": "w:rand",
-            "start": date(2026, 6, 7),
-            "key": lambda d: d.weekday(),
-            "valid": lambda d: True,
-            "min_unique": 5,
-        },
-        {
-            "expr": "m:rand",
-            "start": date(2026, 5, 31),
-            "key": lambda d: d.day,
-            "valid": lambda d: d.year == 2026 and d.month == 6,
-            "min_unique": 16,
-        },
-        {
-            "expr": "y:rand",
-            "start": date(2025, 12, 31),
-            "key": lambda d: (d.month, d.day),
-            "valid": lambda d: d.year == 2026,
-            "min_unique": 36,
-        },
-        {
-            "expr": "y:rand + y:apr,jul,oct",
-            "start": date(2025, 12, 31),
-            "key": lambda d: (d.month, d.day),
-            "valid": lambda d: d.year == 2026 and d.month in {4, 7, 10},
-            "min_unique": 32,
-        },
-        {
-            "expr": "m:rand@bd",
-            "start": date(2026, 5, 31),
-            "key": lambda d: d.day,
-            "valid": lambda d: d.year == 2026 and d.month == 6 and d.weekday() < 5,
-            "min_unique": 14,
-        },
-    ]
-
-    for case in cases:
-        dnf = core.validate_anchor_expr_strict(case["expr"])
-        picks = []
-        for idx in range(64):
-            seed = f"cross-chain-{case['expr']}-{idx}"
-            first, _meta = core.next_after_expr(
-                dnf,
-                case["start"],
-                default_seed=case["start"],
-                seed_base=seed,
-            )
-            replay, _meta = core.next_after_expr(
-                dnf,
-                case["start"],
-                default_seed=case["start"],
-                seed_base=seed,
-            )
-            expect(first == replay, f"{case['expr']}: one chain did not replay deterministically")
-            expect(case["valid"](first), f"{case['expr']}: random pick escaped its constraints: {first}")
-            picks.append(case["key"](first))
-        expect(
-            len(set(picks)) >= case["min_unique"],
-            f"{case['expr']}: insufficient cross-chain diversity: {picks}",
-        )
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    with tempfile.TemporaryDirectory() as td:
+        first_config = Path(td) / "salt-a.toml"
+        second_config = Path(td) / "salt-b.toml"
+        first_config.write_text('wrand_salt = "salt-a"\n', encoding="utf-8")
+        second_config.write_text('wrand_salt = "salt-b"\n', encoding="utf-8")
+        first_core = _load_core_module(core_path, "_nautical_core_salt_a_test", str(first_config))
+        second_core = _load_core_module(core_path, "_nautical_core_salt_b_test", str(second_config))
+        first = sequence(first_core)
+        expect(first == sequence(first_core), "the same random salt must replay identically")
+        expect(first != sequence(second_core), "changing wrand_salt should change the random sequence")
 
 
 def test_random_anchor_and_omit_presets_keep_chain_scope():
     """Random presets should preserve the same chain-scoped draw contract."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    previous_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
-    previous_omit_presets = getattr(core, "OMIT_PRESETS", {})
-    core.ANCHOR_PRESETS = {**previous_anchor_presets, "random-workday": "m:rand@bd"}
-    core.OMIT_PRESETS = {**previous_omit_presets, "random-weekday": "w:rand"}
-    start = date(2026, 6, 1)
-    try:
-        preset_dnf = core.validate_anchor_expr_strict("@random-workday")
-        direct_dnf = core.validate_anchor_expr_strict("m:rand@bd")
+    def verify(mod):
+        anchor_omit = mod._import_sibling("anchor_omit")
+        start = date(2026, 6, 1)
+        preset_dnf = mod.validate_anchor_expr_strict("@random-workday")
+        direct_dnf = mod.validate_anchor_expr_strict("m:rand@bd")
         preset_picks = []
         for idx in range(48):
             seed = f"random-preset-{idx}"
-            preset_pick, _meta = core.next_after_expr(
+            preset_pick, _meta = mod.next_after_expr(
                 preset_dnf,
                 start,
                 default_seed=start,
                 seed_base=seed,
             )
-            direct_pick, _meta = core.next_after_expr(
+            direct_pick, _meta = mod.next_after_expr(
                 direct_dnf,
                 start,
                 default_seed=start,
@@ -16809,15 +9041,15 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
 
         omit_dnf = anchor_omit.validate_omit_expr_strict(
             "@random-weekday",
-            validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-            resolve_omit_presets=core.resolve_omit_presets,
+            validate_anchor_expr_cached=mod.validate_anchor_expr_strict,
+            resolve_omit_presets=mod.resolve_omit_presets,
         )
         omit_picks = []
-        weekly_dnf = core.validate_anchor_expr_strict("w:rand")
+        weekly_dnf = mod.validate_anchor_expr_strict("w:rand")
         week_start = date(2026, 6, 7)
         for idx in range(48):
             seed = f"random-omit-{idx}"
-            selected, _meta = core.next_after_expr(
+            selected, _meta = mod.next_after_expr(
                 weekly_dnf,
                 week_start,
                 default_seed=week_start,
@@ -16829,15 +9061,21 @@ def test_random_anchor_and_omit_presets_keep_chain_scope():
                     selected,
                     week_start,
                     seed,
-                    core=core,
+                    core=mod,
                 ),
                 f"random omit preset did not recognize its selected date for {seed}",
             )
             omit_picks.append(selected.weekday())
         expect(len(set(omit_picks)) >= 5, f"random omit preset lacked chain diversity: {omit_picks}")
-    finally:
-        core.ANCHOR_PRESETS = previous_anchor_presets
-        core.OMIT_PRESETS = previous_omit_presets
+
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write('[anchor_presets]\nrandom-workday = "m:rand@bd"\n\n')
+            f.write('[omit_presets]\nrandom-weekday = "w:rand"\n')
+        mod = _load_core_module(core_path, "_nautical_core_random_preset_test", cfg)
+        verify(mod)
 
 
 def test_chain_colour_uses_complete_root_identity():
@@ -16931,214 +9169,6 @@ def test_on_add_preview_uses_configured_chain_colour():
         hook.core.CHAIN_COLOR_PER_CHAIN = original_setting
 
 
-def test_yearly_month_aliases_and_ranges():
-    """Test month name aliases and numeric shorthands"""
-    # Single month by name or numeric shorthand
-    for expr in ("y:apr", "y:04"):
-        p = build_preview(expr)
-        expect(p["upcoming"], f"{expr} should produce upcoming dates")
-        for d in p["upcoming"][:6]:
-            expect(datetime.fromisoformat(d).month == 4, f"{d} must be in April for {expr}")
-
-    # Month-name window (Jan..Jun) constrains outputs
-    p = build_preview("y:jan..jun + m:rand")
-    expect(p["upcoming"], "y:jan..jun + m:rand should produce upcoming dates")
-    for d in p["upcoming"][:8]:
-        m = datetime.fromisoformat(d).month
-        expect(1 <= m <= 6, f"{d} must be within Jan..Jun")
-
-def test_business_day_bd_skip_semantics():
-    """Test @bd skip semantics (skip to next month if not business day)"""
-    # @bd = only if business day else skip to next month's matching day (not roll)
-    # 2026-01-03 is Saturday → skip to 2026-02-03 (Tuesday)
-    start = date(2026, 1, 1)
-    dnf = core.validate_anchor_expr_strict("m:3@bd")
-    nxt, _ = core.next_after_expr(dnf, start)
-    expect(nxt == date(2026, 2, 3), f"@bd should skip Jan (Sat) → 2026-02-03, got {nxt}")
-
-def test_inline_time_mods_natural_contains_both_times():
-    """Test inline time modifiers show both times in natural language"""
-    expr = "w:mon@t=09:00,fri@t=15:00"
-    nat = _must_natural(expr)
-    low = nat.lower()
-    expect("09:00" in low and "15:00" in low,
-           f"Natural should reflect both times for {expr!r}: {nat!r}")
-    _must_parse(expr)  # ensure strict parser accepts the inline split
-
-def test_guard_commas_between_atoms_after_mods_fatal():
-    """Test comma between atoms after modifiers is fatal"""
-    bad = "m:31@t=14:00,w:sun@t=22:00"
-    try:
-        core.validate_anchor_expr_strict(bad)
-        assert False, "Comma between atoms after @mods must be fatal"
-    except core.ParseError as e:
-        msg = str(e)
-        expect("join" in msg.lower() or "use '+' (and) or '|'" in msg.lower(),
-               f"Unexpected error message for bad comma join: {msg}")
-
-def test_heads_with_slashN_parse_ok_again():
-    """Regression guard: '/N' heads must parse across w/m/y"""
-    # Regression guard: '/N' heads must parse across w/m/y
-    for expr in ("w/2:sun", "m/3:1st-mon", "y/4:06-01"):
-        _must_parse(expr)
-
-def test_monthname_and_numeric_equivalence():
-    """Test month name and numeric month equivalence"""
-    # y:jul should behave like a July window; y:07 numeric should match too (for month-only)
-    for expr in ("y:jul",):
-        p = build_preview(expr)
-        expect(p["upcoming"], f"{expr} should produce upcoming dates")
-        for d in p["upcoming"][:6]:
-            expect(datetime.fromisoformat(d).month == 7, f"{d} must be in July")
-
-def test_cp_duration_parser_and_dst_preserve_whole_days():
-    """CP branch: duration parsing + DST-safe whole-day stepping keeps wall-clock time stable."""
-
-    # --- 1) Duration parsing (core responsibility) ---
-    td = core.parse_cp_duration("P1DT2H30M")
-    assert td == timedelta(days=1, hours=2, minutes=30), f"Unexpected td for P1DT2H30M: {td}"
-    td_day = core.parse_cp_duration("P1D")
-    assert td_day == timedelta(days=1), f"Unexpected td for P1D: {td_day}"
-    assert core.parse_cp_duration("3d") == timedelta(days=3), "Taskwarrior-style days should parse"
-    assert core.parse_cp_duration("6h30m") == timedelta(hours=6, minutes=30), "compound hours/minutes should parse"
-    assert core.parse_cp_duration("24h+1s") == timedelta(hours=24, seconds=1), "signed component add should parse"
-    assert core.parse_cp_duration("3d-1s") == timedelta(days=3, seconds=-1), "signed component subtract should parse"
-    assert core.parse_cp_sequence("3d,P20D,16h") == [
-        timedelta(days=3),
-        timedelta(days=20),
-        timedelta(hours=16),
-    ], "cp sequence should accept mixed Taskwarrior-style and ISO tokens"
-    assert core.parse_cp_sequence("7d*3,14d") == [
-        timedelta(days=7),
-        timedelta(days=7),
-        timedelta(days=7),
-        timedelta(days=14),
-    ], "cp repeat groups should expand into ordinary sequence tokens"
-    assert core.cp_sequence_interval_for_link("7d*3,14d", 4) == timedelta(days=14), "repeat group sequence boundary is wrong"
-    assert core.cp_sequence_interval_for_link("7d*3,14d", 5) == timedelta(days=7), "repeat group sequence should cycle"
-    repeated_random = core.cp_sequence_interval_for_link("rand(3d..7d)*2", 2, "cp-repeat")
-    explicit_random = core.cp_sequence_interval_for_link("rand(3d..7d),rand(3d..7d)", 2, "cp-repeat")
-    assert repeated_random == explicit_random, "repeat-group random selection changed the canonical sequence"
-    assert "positive repeat count" in (core.cp_sequence_parse_error("7d*0") or ""), "zero repeat count should fail clearly"
-    assert core.cp_sequence_interval_for_link("3d,20d,7d", 1) == timedelta(days=3), "link #1 should use first interval"
-    assert core.cp_sequence_interval_for_link("3d,20d,7d", 2) == timedelta(days=20), "link #2 should use second interval"
-    assert core.cp_sequence_interval_for_link("3d,20d,7d", 4) == timedelta(days=3), "sequence should repeat"
-    assert core.parse_cp_sequence("3d,,7d") is None, "empty sequence item should be invalid"
-    assert core.cp_sequence_parse_error("3d,,7d") == "empty duration at position 2", "empty item should get a precise error"
-    assert core.cp_sequence_parse_error("3d,abc") == "invalid duration 'abc' at position 2", "bad item should get a precise error"
-    rand_a = core.cp_sequence_interval_for_link("rand(3d..7d)", 1)
-    rand_b = core.cp_sequence_interval_for_link("rand(3d..7d)", 1)
-    assert rand_a == rand_b, "random cp range should be deterministic for the same link"
-    assert timedelta(days=3) <= rand_a <= timedelta(days=7), f"random day range out of bounds: {rand_a}"
-    assert int(rand_a.total_seconds()) % 86400 == 0, f"day range should choose whole days: {rand_a}"
-    rand_h = core.cp_sequence_interval_for_link("rand(12h..36h)", 1)
-    assert timedelta(hours=12) <= rand_h <= timedelta(hours=36), f"random hour range out of bounds: {rand_h}"
-    assert int(rand_h.total_seconds()) % 3600 == 0, f"hour range should choose whole hours: {rand_h}"
-    rand_m = core.cp_sequence_interval_for_link("rand(30m..90m)", 1)
-    assert timedelta(minutes=30) <= rand_m <= timedelta(minutes=90), f"random minute range out of bounds: {rand_m}"
-    assert int(rand_m.total_seconds()) % 60 == 0, f"minute range should choose whole minutes: {rand_m}"
-    assert core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 1) == timedelta(days=3), "fixed first token should still work"
-    rand_seq = core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 2)
-    assert timedelta(days=10) <= rand_seq <= timedelta(days=20), f"random sequence token out of bounds: {rand_seq}"
-    assert core.cp_sequence_interval_for_link("3d,rand(10d..20d),7d", 3) == timedelta(days=7), "fixed third token should still work"
-    assert "lower bound must be <= upper bound" in (core.cp_sequence_parse_error("rand(7d..3d)") or ""), "reversed range should fail clearly"
-    assert "expected rand(<duration>..<duration>)" in (core.cp_sequence_parse_error("rand(3d-7d)") or ""), "malformed random range should fail clearly"
-    assert "expected rand(<duration>..<duration>)" in (core.cp_sequence_parse_error("3d,rand(3d..7d") or ""), "unterminated random range should fail clearly"
-    jitter_a = core.cp_sequence_interval_for_link("14d~2d", 1)
-    jitter_b = core.cp_sequence_interval_for_link("14d~2d", 1)
-    assert jitter_a == jitter_b, "jitter cp range should be deterministic for the same link"
-    assert timedelta(days=12) <= jitter_a <= timedelta(days=16), f"jitter day range out of bounds: {jitter_a}"
-    assert int(jitter_a.total_seconds()) % 86400 == 0, f"jitter day range should choose whole days: {jitter_a}"
-    jitter_seq = core.cp_sequence_interval_for_link("3d,14d~2d,7d", 2)
-    assert timedelta(days=12) <= jitter_seq <= timedelta(days=16), f"jitter sequence token out of bounds: {jitter_seq}"
-    assert "lower bound must be >= 0" in (core.cp_sequence_parse_error("2d~3d") or ""), "negative jitter lower bound should fail clearly"
-    assert "invalid duration bound" in (core.cp_sequence_parse_error("14d~abc") or ""), "bad jitter bound should fail clearly"
-
-    # --- 2) DST-safe stepping semantics used by CP preview (hook responsibility) ---
-    # If ZoneInfo isn't available, core runs in "UTC-only" mode; skip DST assertions.
-    if getattr(core, "_LOCAL_TZ", None) is None:
-        return
-
-    # Pick a date that crosses DST start for Europe/Bucharest (default config).
-    start_local = core.build_local_datetime(date(2026, 3, 28), (10, 0))
-    start_utc = start_local.astimezone(timezone.utc).replace(microsecond=0)
-
-    naive_next_utc = (start_utc + td_day).replace(microsecond=0)
-
-    # Hook-style “preserve local HH:MM” for whole-day steps:
-    dl = core.to_local(start_utc)
-    preserved_local = core.build_local_datetime(
-        (dl + timedelta(days=1)).date(), (dl.hour, dl.minute)
-    )
-    preserved_next_utc = preserved_local.astimezone(timezone.utc).replace(microsecond=0)
-
-    # Preserved step must keep local HH:MM stable.
-    pl = core.to_local(preserved_next_utc)
-    assert (pl.hour, pl.minute) == (dl.hour, dl.minute), (
-        f"Preserved CP step should keep local HH:MM stable: start={dl} -> preserved={pl}"
-    )
-
-    # If DST offset changed across the step, naive timedelta arithmetic will drift in wall-clock time.
-    nl = core.to_local(naive_next_utc)
-    if dl.utcoffset() != nl.utcoffset():
-        assert (nl.hour, nl.minute) != (dl.hour, dl.minute), (
-            f"Naive UTC+timedelta should drift across DST: start={dl} -> naive={nl}"
-        )            
-
-
-def test_cp_sequence_link_boundary_contract():
-    """CP sequence interval selection should be stable at first/last/wrapped/high links."""
-    cp = "3d,20d,7d"
-    expected = {
-        0: timedelta(days=3),
-        1: timedelta(days=3),
-        2: timedelta(days=20),
-        3: timedelta(days=7),
-        4: timedelta(days=3),
-        5: timedelta(days=20),
-        9999: timedelta(days=7),
-        10000: timedelta(days=3),
-    }
-    for link_no, td in expected.items():
-        got = core.cp_sequence_interval_for_link(cp, link_no)
-        expect(got == td, f"unexpected cp interval for link {link_no}: got {got}, want {td}")
-
-
-def test_cp_random_and_jitter_are_deterministic_per_link_and_bounded():
-    """CP rand/jitter should be repeatable per link while staying inside configured bounds."""
-    cases = [
-        ("rand(3d..7d)", timedelta(days=3), timedelta(days=7), 86400),
-        ("rand(12h..36h)", timedelta(hours=12), timedelta(hours=36), 3600),
-        ("14d~2d", timedelta(days=12), timedelta(days=16), 86400),
-        ("3d,14d~2d,7d", timedelta(days=12), timedelta(days=16), 86400),
-    ]
-    for cp, lo, hi, gran in cases:
-        link_no = 2 if "," in cp else 1
-        first = core.cp_sequence_interval_for_link(cp, link_no)
-        second = core.cp_sequence_interval_for_link(cp, link_no)
-        expect(first == second, f"{cp} should be deterministic for link {link_no}: {first} != {second}")
-        expect(lo <= first <= hi, f"{cp} picked out-of-bounds interval for link {link_no}: {first}")
-        expect(int(first.total_seconds()) % gran == 0, f"{cp} picked interval at wrong granularity: {first}")
-
-
-def test_cp_random_seed_is_chain_scoped_and_normalized():
-    """random CP ranges should be repeatable within a chain and vary across chains."""
-    cp = "rand(11d..14d)"
-
-    def days(link_no: int, chain_id: str) -> int:
-        td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
-        return int(td.total_seconds() // 86400)
-
-    chain_a = [days(link_no, "chain-a") for link_no in range(1, 17)]
-    chain_b = [days(link_no, "chain-b") for link_no in range(1, 17)]
-    expect(chain_a != chain_b, "different chains should not share the same random sequence")
-    expect(
-        chain_a == [days(link_no, " CHAIN-A ") for link_no in range(1, 17)],
-        "chain random scope should be normalized and repeatable",
-    )
-    expect(all(11 <= value <= 14 for value in chain_a + chain_b), "chain-scoped pick escaped its bounds")
-
-
 def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
     """on-add preview and on-modify completion should select the same cp interval for the same link."""
     add_mod = _load_hook_module(_find_hook_file("on-add.nautical"), "_nautical_on_add_cp_interval_agreement_test")
@@ -17160,7 +9190,10 @@ def test_cp_interval_helpers_agree_between_on_add_and_on_modify():
         tokens = core.parse_cp_sequence_tokens(cp)
         add_preview = add_mod._module("add_preview_composition")
         add_td = add_preview.cp_sequence_period_for_link(add_mod, tokens, cp, link_no, chain_id)
-        modify_td = modify_mod._module("modify_schedule_effects").sequence_period_for_link(modify_mod, tokens, cp, link_no, chain_id)
+        schedule = modify_mod._module("modify_schedule_effects")
+        modify_td = schedule.sequence_period_for_link(
+            schedule.SequencePorts(core.cp_sequence_interval_for_token), tokens, cp, link_no, chain_id
+        )
         core_td = core.cp_sequence_interval_for_link(cp, link_no, chain_id)
         expect(add_td == modify_td == core_td, f"cp interval mismatch for {cp!r} link {link_no}: add={add_td}, modify={modify_td}, core={core_td}")
 
@@ -17586,80 +9619,6 @@ def test_hook_on_add_cp_scheduled_only_preserves_no_due():
     expect(out_task.get("scheduled") == task["scheduled"], f"scheduled changed unexpectedly: {out_task}")
     stderr_txt = _strip_markup(p.stderr)
     expect("First scheduled" in stderr_txt, f"preview should label scheduled anchor. stderr={stderr_txt[:500]!r}")
-
-
-def test_core_anchor_preset_unknown_lists_available_names():
-    """Core preset resolution should give actionable guidance for unknown anchor aliases."""
-    prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
-    try:
-        core.ANCHOR_PRESETS = {"payday": "m:15", "workout": "w:mon,wed,fri"}
-        try:
-            core.resolve_anchor_presets("@missing")
-            expect(False, "expected unknown anchor preset to fail")
-        except Exception as e:
-            msg = str(e)
-            expect("Unknown anchor preset '@missing'" in msg, f"unexpected unknown preset message: {e}")
-            expect("Available anchor presets: @payday, @workout" in msg, f"expected available preset list: {e}")
-            expect("[anchor_presets]" in msg, f"expected config table hint: {e}")
-    finally:
-        core.ANCHOR_PRESETS = prev_anchor_presets
-
-
-def test_core_omit_preset_unknown_lists_available_names():
-    """Core preset resolution should give actionable guidance for unknown omit aliases."""
-    prev_omit_presets = getattr(core, "OMIT_PRESETS", {})
-    try:
-        core.OMIT_PRESETS = {"april": "y:apr", "weekends": "w:sat,sun"}
-        try:
-            core.resolve_omit_presets("@missing")
-            expect(False, "expected unknown omit preset to fail")
-        except Exception as e:
-            msg = str(e)
-            expect("Unknown omit preset '@missing'" in msg, f"unexpected unknown preset message: {e}")
-            expect("Available omit presets: @april, @weekends" in msg, f"expected available preset list: {e}")
-            expect("[omit_presets]" in msg, f"expected config table hint: {e}")
-    finally:
-        core.OMIT_PRESETS = prev_omit_presets
-
-
-def test_core_preset_recursion_chain_is_deterministic():
-    """Recursive preset diagnostics should preserve the actual reference path."""
-    prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
-    try:
-        core.ANCHOR_PRESETS = {"a": "@b", "b": "@c", "c": "@a"}
-        try:
-            core.resolve_anchor_presets("@a")
-            expect(False, "expected recursive anchor preset to fail")
-        except Exception as e:
-            expect(
-                "Recursive anchor preset reference detected: @a -> @b -> @c -> @a" in str(e),
-                f"unexpected recursive preset chain: {e}",
-            )
-    finally:
-        core.ANCHOR_PRESETS = prev_anchor_presets
-
-
-def test_core_nested_preset_display_shows_resolved_leaf():
-    """Preset display should show the effective resolved expression for simple nested aliases."""
-    # Resolve the lazy parser bundle before overriding facade config exports;
-    # the first resolution synchronizes those exports from Taskdata config.
-    core.anchor_preset_display("@__golden_missing__")
-    prev_anchor_presets = getattr(core, "ANCHOR_PRESETS", {})
-    prev_omit_presets = getattr(core, "OMIT_PRESETS", {})
-    try:
-        core.ANCHOR_PRESETS = {"payday": "m:15,-1bd", "salary": "@payday"}
-        core.OMIT_PRESETS = {"april": "y:apr", "spring": "@april"}
-        expect(
-            core.anchor_preset_display("@salary") == ("Preset", "@salary → m:15,-1bd"),
-            f"unexpected nested anchor preset display: {core.anchor_preset_display('@salary')!r}",
-        )
-        expect(
-            core.omit_preset_display("@spring") == ("Omit preset", "@spring → y:apr"),
-            f"unexpected nested omit preset display: {core.omit_preset_display('@spring')!r}",
-        )
-    finally:
-        core.ANCHOR_PRESETS = prev_anchor_presets
-        core.OMIT_PRESETS = prev_omit_presets
 
 
 def test_hook_on_add_anchor_preset_resolves_from_config():
@@ -18163,29 +10122,6 @@ def test_on_add_native_until_checks_generated_cp_due():
     )
 
 
-def test_native_until_carry_descriptions():
-    """Calendar and exact expiration policies should have concise, stable descriptions."""
-    add_validation = core._import_sibling("add_validation")
-    due = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
-    same_day = datetime(2026, 8, 3, 18, 0, tzinfo=timezone.utc)
-    next_day = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)
-    exact = datetime(2026, 8, 4, 0, 0, 1, tzinfo=timezone.utc)
-    identity = lambda value: value
-
-    expect(
-        add_validation.describe_native_until_carry(same_day, due, to_local=identity) == "Same day at 18:00",
-        "same-day calendar expiration description was wrong",
-    )
-    expect(
-        add_validation.describe_native_until_carry(next_day, due, to_local=identity) == "1 calendar day later at 09:00",
-        "next-day calendar expiration description was wrong",
-    )
-    expect(
-        add_validation.describe_native_until_carry(exact, due, to_local=identity) == "Exact · 14h 00m 01s after occurrence",
-        "exact expiration description was wrong",
-    )
-
-
 def test_on_add_preview_distinguishes_expiration_from_chain_end_point():
     """Add previews should distinguish native expiration from chain boundaries."""
     hook = _find_hook_file("on-add.nautical")
@@ -18612,14 +10548,16 @@ def test_native_until_shared_policy_covers_recurrence_kinds_and_conflicts():
         )
 
     late_target = mod.core.build_local_datetime(date(2026, 8, 1), (23, 30))
+    datetime_effects = mod._module("modify_datetime_effects")
+    datetime_ports = datetime_effects.datetime_effect_ports_for(mod)
     try:
         native_until.carry(
             parent_target,
             parent_until,
             late_target,
             "anchor",
-            utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
-            local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
+            utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
+            local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
         )
     except native_until.NativeUntilCarryError as exc:
         expect(exc.code == native_until.CARRY_CONFLICT, f"unexpected carry error code: {exc.code!r}")
@@ -18961,49 +10899,6 @@ def test_hook_on_add_anchor_preview_skips_omit_file_date():
         expect("2025-01-13" in stderr_txt, f"expected next anchor to skip file-blocked Friday and show Monday. stderr={stderr_txt[:500]!r}")
 
 
-def test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules():
-    """mixed anchor previews should describe explicit omit rules instead of the generic skip-mode tail."""
-    hook = _find_hook_file("on-add.nautical")
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td) / "anchor"
-        omit_dir = Path(td) / "omit"
-        anchor_dir.mkdir()
-        omit_dir.mkdir()
-        (anchor_dir / "2026.csv").write_text("date\n2026-05-01\n2026-05-06\n", encoding="utf-8")
-        (omit_dir / "2026.csv").write_text("date\n2026-05-05\n", encoding="utf-8")
-        conf = Path(td) / 'config-nautical.toml'
-        conf.write_text(
-            f'anchor_file_dir = "{anchor_dir}"\nomit_file_dir = "{omit_dir}"\n',
-            encoding='utf-8',
-        )
-        env = {"NO_COLOR": "1", "NAUTICAL_CONFIG": str(conf)}
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000114f",
-            "description": "hook test on-add anchor+file omit natural",
-            "status": "pending",
-            "project": "testing",
-            "entry": "20260413T000000Z",
-            "anchor": "w:tue,fri | y:05-05",
-            "anchor_file": "2026.csv@-1d@t=12:00,18:00",
-            "omit": "w:sun",
-            "omit_file": "2026.csv",
-            "anchor_mode": "skip",
-        }
-        p = _run_hook_script(hook, task, env_extra=env)
-        if p.returncode != 0:
-            raise AssertionError(f"on-add hook failed rc={p.returncode}. stderr={p.stderr[:400]!r}")
-        stderr_txt = _strip_markup(p.stderr)
-        expect(
-            "either Tuesdays, Fridays, or May 5 each year; omit" in stderr_txt
-            and "Sundays and Dates from 2026.csv" in stderr_txt,
-            f"expected omit-aware natural preview wording. stderr={stderr_txt[:700]!r}",
-        )
-        expect(
-            "skip missed anchors and Dates from 2026.csv" not in stderr_txt,
-            f"unexpected generic skip tail leaked into preview. stderr={stderr_txt[:700]!r}",
-        )
-
-
 def test_hook_on_add_anchor_preview_skips_omit_file_modifier_date():
     """on-add anchor preview should apply omit_file modifiers before skipping matching dates."""
     hook = _find_hook_file("on-add.nautical")
@@ -19314,14 +11209,14 @@ def test_hook_on_modify_timeline_cp_sequence_labels_future_intervals():
     evaluator_calls = {"count": 0}
     schedule = mod._module("modify_schedule_effects")
     original_callbacks = schedule.scheduler_callbacks
-    original_evaluator = original_callbacks(mod)[0]
+    original_evaluator = original_callbacks(schedule.scheduler_ports_for(mod))[0]
 
     def _shared_evaluator(task):
         evaluator_calls["count"] += 1
         return original_evaluator(task)
 
-    def _callbacks(host):
-        _evaluator, service = original_callbacks(host)
+    def _callbacks(ports):
+        _evaluator, service = original_callbacks(ports)
         return _shared_evaluator, service
     schedule.scheduler_callbacks = _callbacks
     child_due_utc = datetime(2026, 1, 4, 9, 0, tzinfo=timezone.utc)
@@ -19437,121 +11332,6 @@ def test_hook_on_modify_timeline_marks_omitted_anchor_slots():
     )
 
 
-def test_modify_timeline_marks_projection_failures_instead_of_silent_truncation():
-    """Timeline provider failures should become visible warning rows."""
-    import nautical_core.modify_timeline as timeline
-
-    child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
-
-    def broken(*args, **kwargs):
-        raise ValueError("provider contract broken")
-
-    items = timeline._timeline_future_anchor_items(
-        {"chainID": "timeline-warning-test", "due": "20260803T090000Z"},
-        [[{"kind": "w", "value": "mon", "mods": {}}]],
-        child_due,
-        start_no=2,
-        allowed_future=1,
-        cap_no=None,
-        to_local_cached=lambda value: value,
-        safe_parse_datetime=lambda value: (child_due, None),
-        next_occurrence_after_local_dt=broken,
-        omit_dnf=None,
-        omit_expr_fires_on_date=None,
-        omit_description_for_date=None,
-        max_iterations=4,
-    )
-    expect(items and items[-1][3] == "warning", f"projection failure was silently truncated: {items!r}")
-    expect("provider contract broken" in items[-1][2]["message"], f"warning lost failure detail: {items!r}")
-    line = timeline._timeline_base_line(
-        items[-1][0],
-        items[-1][1],
-        items[-1][2],
-        items[-1][3],
-        task={},
-        cap_no=None,
-        prev_style="",
-        cur_style="",
-        next_style="",
-        future_style="",
-        core=type("Core", (), {})(),
-        dtparse=lambda value: value,
-        fmt_on_time_delta=lambda left, right: "",
-        fmtlocal=lambda value: "",
-        short=lambda value: "",
-    )
-    expect("provider contract broken" in line, f"warning row did not render: {line!r}")
-
-
-def test_modify_timeline_preserves_typed_terminal_projection_evidence():
-    """Timeline cleanup must distinguish a date boundary from a provider failure."""
-    import nautical_core.modify_timeline as timeline
-
-    child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
-    terminal = core.OccurrenceSearchExhausted(
-        "timeline projection",
-        reference=date(9999, 12, 31),
-        limit=1,
-    )
-
-    def date_limited(*_args, **_kwargs):
-        raise terminal
-
-    items = timeline._timeline_future_anchor_items(
-        {"chainID": "timeline-terminal-test", "due": "20260803T090000Z"},
-        [[{"kind": "w", "value": "mon", "mods": {}}]],
-        child_due,
-        start_no=2,
-        allowed_future=1,
-        cap_no=None,
-        to_local_cached=lambda value: value,
-        safe_parse_datetime=lambda value: (child_due, None),
-        next_occurrence_after_local_dt=date_limited,
-        omit_dnf=None,
-        omit_expr_fires_on_date=None,
-        omit_description_for_date=None,
-        max_iterations=4,
-    )
-    expect(items and items[-1][3] == "warning", f"terminal projection was silently truncated: {items!r}")
-    expect(
-        "Projection ended" in items[-1][2]["message"]
-        and "9999-12-31" in items[-1][2]["message"],
-        f"date-limit evidence was not rendered distinctly: {items!r}",
-    )
-
-
-
-def test_modify_timeline_marks_omit_evaluation_failures():
-    """Timeline omission failures should not render the slot as an ordinary future link."""
-    import nautical_core.modify_timeline as timeline
-
-    child_due = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
-
-    def next_value(*args, **kwargs):
-        return child_due + timedelta(hours=1)
-
-    def broken_omit(*args, **kwargs):
-        raise RuntimeError("omit backend unavailable")
-
-    items = timeline._timeline_future_anchor_items(
-        {"chainID": "timeline-omit-warning-test", "due": "20260803T090000Z"},
-        [[{"kind": "w", "value": "mon", "mods": {}}]],
-        child_due,
-        start_no=2,
-        allowed_future=1,
-        cap_no=None,
-        to_local_cached=lambda value: value,
-        safe_parse_datetime=lambda value: (child_due, None),
-        next_occurrence_after_local_dt=next_value,
-        omit_dnf=[[{"kind": "w", "value": "mon", "mods": {}}]],
-        omit_expr_fires_on_date=broken_omit,
-        omit_description_for_date=None,
-        max_iterations=4,
-    )
-    expect(items and items[-1][3] == "warning", f"omit failure was rendered as a normal occurrence: {items!r}")
-    expect("omit backend unavailable" in items[-1][2]["message"], f"omit warning lost failure detail: {items!r}")
-
-
 def test_hook_on_modify_merged_timeline_marks_projection_failures():
     """Merged anchor/anchor-file timelines should expose provider failures as warning rows."""
     hook = _find_hook_file("on-modify.nautical")
@@ -19652,151 +11432,6 @@ def test_hook_on_modify_timeline_uses_omit_file_description_label():
     txt = _strip_markup("\n".join(lines))
     expect("(Company holida...)" in txt, f"expected truncated omit_file description marker in anchor timeline: {txt!r}")
     expect("(omitted)" not in txt, f"expected omit_file description to replace default omitted marker: {txt!r}")
-
-
-def test_hook_task_runner_handles_nonzero():
-    """Hook typed command runner handles success and non-zero exits."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_run_task_test")
-    result = mod._module("modify_command_effects").run_task_result(mod, [sys.executable, "-c", "print('ok')"], timeout=2, retries=1)
-    expect(result.ok and result.stdout.strip() == "ok", f"typed hook command failed: {result}")
-
-    failed = mod._module("modify_command_effects").run_task_result(
-        mod,
-        [sys.executable, "-c", "import sys; sys.exit(2)"],
-        timeout=2,
-        retries=1,
-    )
-    expect(not failed.ok, "typed hook command accepted non-zero exit")
-
-
-def test_shared_hook_subprocess_runner_preserves_output_and_status():
-    """The shared client preserves UTF-8 output and exit status."""
-    runtime = importlib.import_module("nautical_core.runtime_command")
-    result = runtime.run_task_result(
-        [sys.executable, "-c", "print('shared ✓')"], timeout=2.0, retries=1,
-    )
-    expect(result.ok and result.stdout.strip() == "shared ✓", f"shared client lost output: {result}")
-
-    failed = runtime.run_task_result(
-        [sys.executable, "-c", "import sys; sys.exit(3)"], timeout=2.0, retries=1,
-    )
-    expect(not failed.ok, "shared client should preserve a non-zero exit status")
-
-
-def test_hook_task_result_preserves_typed_runner_result():
-    """The hook boundary must preserve TaskCommandResult metadata unchanged."""
-    support = importlib.import_module("nautical_core.hook_support")
-    models = importlib.import_module("nautical_core.integration_models")
-    expected = models.TaskCommandResult(
-        models.TaskCommand(("task", "export"), "test export", 3.0),
-        0, "[]", "", models.CommandFailureKind.SUCCESS, 2, 0.1,
-    )
-    actual = support.run_task_result(
-        run_task=lambda *_args, **_kwargs: expected,
-        cmd=["task", "export"],
-    )
-    expect(actual is expected, "typed command result metadata was reconstructed or discarded")
-
-
-def test_hook_run_task_falls_back_when_core_load_fails():
-    """on-modify uses the typed client independently of core facade loading."""
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_modify_run_task_fallback_test")
-    result = core.run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
-    expect(result.ok, f"typed on-modify command failed: {result}")
-    expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
-
-
-def test_on_add_run_task_falls_back_when_core_load_fails():
-    """on-add uses the typed client independently of core facade loading."""
-    hook = _find_hook_file("on-add.nautical")
-    mod = _load_hook_module(hook, "_nautical_on_add_run_task_fallback_test")
-    result = core.run_task_result([sys.executable, "-c", "print('typed-ok')"], timeout=2, retries=1)
-    expect(result.ok, f"typed on-add command failed: {result}")
-    expect(result.stdout.strip() == "typed-ok", f"unexpected typed stdout: {result.stdout!r}")
-
-
-def test_core_run_task_tempfiles_accepts_text_input():
-    """core.run_task_result accepts text input with temporary output."""
-    result = core.run_task_result(
-        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
-        input_text="hello\n",
-        timeout=2.0,
-        retries=1,
-        use_tempfiles=True,
-    )
-    expect(result.ok, f"run_task_result failed: {result}")
-    expect(result.stdout == "hello\n", f"run_task_result expected echoed input, got {result.stdout!r}")
-
-
-def test_core_run_task_timeout_reports_timeout_with_tempfiles():
-    """core.run_task_result classifies temporary-output timeouts."""
-    result = core.run_task_result(
-        [sys.executable, "-c", "import time; time.sleep(0.25); print('late')"],
-        timeout=0.05,
-        retries=1,
-        use_tempfiles=True,
-    )
-    expect(not result.ok and result.kind.value == "timeout", f"timeout was not classified: {result}")
-
-
-def test_core_run_task_result_exposes_typed_metadata():
-    """The runtime facade should expose a TaskCommandResult boundary."""
-    result = core.run_task_result(
-        [sys.executable, "-c", "print('typed')"],
-        timeout=2.0,
-        retries=1,
-    )
-    expect(result.ok, f"typed run_task result should succeed: {result}")
-    expect(result.stdout.strip() == "typed", f"typed result lost stdout: {result.stdout!r}")
-    expect(result.attempt == 1 and result.command.timeout == 2.0, f"typed metadata was not preserved: {result}")
-
-
-def test_core_run_task_nonzero_retries_use_expected_backoff():
-    """core.run_task_result retries typed lock failures."""
-    result = core.run_task_result(
-        [sys.executable, "-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(3)"],
-        timeout=1.0,
-        retries=3,
-        retry_delay=0.0,
-    )
-    expect(not result.ok and result.kind.value == "busy", f"busy command changed: {result}")
-    expect(result.attempt == 3, f"busy command did not use its retry policy: {result}")
-
-
-def test_core_run_task_does_not_retry_ordinary_nonzero():
-    """Ordinary typed command failures are not retried."""
-    result = core.run_task_result(
-        [sys.executable, "-c", "import sys; print('invalid task', file=sys.stderr); sys.exit(3)"],
-        timeout=1.0,
-        retries=3,
-        retry_delay=0.0,
-    )
-    expect(not result.ok and "invalid task" in result.stderr, f"ordinary failure changed: {result}")
-    expect(result.attempt == 1, f"ordinary failure unexpectedly retried: {result}")
-
-
-def test_core_run_task_tempfiles_fallback_handles_bytes_input():
-    """Typed execution falls back to pipes if temporary output is unavailable."""
-    client_module = importlib.import_module("nautical_core.taskwarrior_client")
-    orig_tempfile = client_module.tempfile.TemporaryFile
-    try:
-        def _raise_tempfile(*_args, **_kwargs):
-            raise OSError("tempfile unavailable")
-
-        client_module.tempfile.TemporaryFile = _raise_tempfile
-        result = core.run_task_result(
-            [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
-            input_text="abc ✓\n",
-            timeout=1.0,
-            retries=1,
-            use_tempfiles=True,
-        )
-        expect(result.ok, f"pipe fallback failed: {result}")
-        expect(result.stdout == "abc ✓\n", f"pipe fallback changed output: {result.stdout!r}")
-    finally:
-        client_module.tempfile.TemporaryFile = orig_tempfile
 
 
 def test_on_add_dnf_cache_uses_central_api_and_fingerprints_parser():
@@ -20756,22 +12391,6 @@ def test_on_modify_stable_child_uuid_is_slot_deterministic():
     expect(uuid_a != uuid_c, "different link slot should yield different stable uuid")
 
 
-def test_normalize_spec_for_acf_cache_guards():
-    """normalize spec cache should bound inputs before caching."""
-    import nautical_core as core
-    core._normalize_spec_for_acf_cached("w", "mon", "MD")
-
-    res = core._normalize_spec_for_acf_cached("w", "mon", "MD")
-    expect(res == "mon", f"unexpected normalize result: {res}")
-
-    long_spec = "x" * 300
-    res = core._normalize_spec_for_acf_cached("w", long_spec, "MD")
-    expect(res is None, "expected None for overly long spec")
-
-    res = core._normalize_spec_for_acf_cached("q", "mon", "MD")
-    expect(res is None, "expected None for invalid typ")
-
-
 def test_on_modify_link_limit():
     """on-modify should block spawns when link exceeds max."""
     hook = _find_hook_file("on-modify.nautical")
@@ -20919,159 +12538,6 @@ def test_on_modify_completion_compute_next_and_limits_happy_path():
     expect(retryable.diagnostic.failure_kind == "scheduler_error", f"scheduler failure lost diagnostic kind: {retryable!r}")
 
 
-def test_completion_scheduler_terminal_outcomes_are_not_spawned():
-    """Completion must finish only on date exhaustion and reject search exhaustion."""
-    compute = core._import_sibling("modify_completion_compute")
-    terminal = core.OccurrenceSearchExhausted(
-        "anchor scheduling",
-        reference=date(9999, 12, 31),
-        limit=2,
-    )
-    search_limited = core.OccurrenceSearchExhausted(
-        "anchor scheduling",
-        reference=date(2026, 1, 1),
-        limit=2,
-        kind=core.OccurrenceSearchExhausted.SEARCH_LIMIT,
-    )
-    panels = []
-    printed = []
-    callbacks = []
-
-    def scheduler(_task):
-        raise callbacks.pop(0)
-
-    task = {"chain": "on", "uuid": "terminal-task"}
-    callbacks.append(terminal)
-    result = compute.completion_compute_child_due(
-        task,
-        "anchor",
-        compute_anchor_child_due=scheduler,
-        compute_cp_child_due=scheduler,
-        panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
-        print_task=lambda value: printed.append(dict(value)),
-        on_terminal=lambda exc: task.update({"chain": "off", "terminal": exc.kind}),
-    )
-    # The callback is invoked before the helper returns, and the helper must
-    # never turn terminal evidence into a child tuple.
-    expect(result is None, "date-limit exhaustion must not produce a child tuple")
-    expect(task.get("chain") == "off", "date-limit exhaustion must stop completion spawning")
-    expect(task.get("terminal") == "date_limit", f"terminal kind was lost: {task!r}")
-
-    callbacks.append(search_limited)
-    result = compute.completion_compute_child_due(
-        {"chain": "on"},
-        "anchor",
-        compute_anchor_child_due=scheduler,
-        compute_cp_child_due=scheduler,
-        panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
-        print_task=lambda value: printed.append(dict(value)),
-        on_terminal=lambda exc: panels.append(("terminal", [("kind", exc.kind)], {})),
-    )
-    expect(result is None, "search-limit exhaustion must not produce a child tuple")
-    expect(panels[-1][0] == "terminal" and panels[-1][1] == [("kind", "search_limit")], panels)
-
-
-
-def test_chain_cap_guards_are_inclusive_at_boundary():
-    """chainMax and chainUntil should allow the exact boundary and stop only beyond it."""
-    compute = core._import_sibling("modify_completion_compute")
-    now_utc = core.now_utc()
-
-    summaries = []
-    printed = []
-    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-4000-8000-00000000c001"}
-    expect(
-        compute.completion_cap_guard_or_stop(
-            task,
-            5,
-            5,
-            now_utc,
-            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
-            print_task=lambda obj: printed.append(dict(obj)),
-        ),
-        "chainMax should allow spawning the exact capped link",
-    )
-    expect(task.get("chain") == "on" and not summaries and not printed, f"exact chainMax boundary should not stop: {task!r}")
-
-    expect(
-        not compute.completion_cap_guard_or_stop(
-            task,
-            6,
-            5,
-            now_utc,
-            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
-            print_task=lambda obj: printed.append(dict(obj)),
-        ),
-        "chainMax should stop the first link beyond the cap",
-    )
-    expect(task.get("chain") == "off", f"cap stop should disable the chain: {task!r}")
-    expect(summaries and "Reached cap #5" in str(summaries[-1]), f"cap stop should explain the boundary: {summaries!r}")
-
-    until = now_utc + timedelta(days=2)
-    task = {"chain": "on", "chainID": "cap-boundary", "uuid": "00000000-0000-4000-8000-00000000c001"}
-    expect(
-        compute.completion_until_guard_or_stop(
-            task,
-            until,
-            until,
-            now_utc,
-            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
-            print_task=lambda obj: printed.append(dict(obj)),
-        ),
-        "chainUntil should include an occurrence exactly at the deadline",
-    )
-    expect(
-        not compute.completion_until_guard_or_stop(
-            task,
-            until + timedelta(seconds=1),
-            until,
-            now_utc,
-            end_chain_summary=lambda *_a, **_k: summaries.append((_a, _k)),
-            print_task=lambda obj: printed.append(dict(obj)),
-        ),
-        "chainUntil should stop an occurrence after the deadline",
-    )
-    expect(task.get("chain") == "off", f"until stop should disable the chain: {task!r}")
-
-
-def test_completion_caps_earliest_limit_wins():
-    """When chainMax and chainUntil coexist, the earlier numeric cap should control spawning."""
-    compute = core._import_sibling("modify_completion_compute")
-    child_due = (core.now_utc() + timedelta(days=1)).replace(microsecond=0)
-    until_dt = child_due + timedelta(days=10)
-
-    result = compute.completion_caps(
-        "cp",
-        {"chainMax": 8, "chainUntil": core.fmt_isoz(until_dt)},
-        child_due,
-        None,
-        coerce_int=core.coerce_int,
-        dtparse=core.parse_dt_any,
-        estimate_cp_final_by_max=lambda *_a: child_due + timedelta(days=7),
-        estimate_anchor_final_by_max=lambda *_a: None,
-        cap_from_until_cp=lambda *_a: (5, child_due + timedelta(days=4)),
-        cap_from_until_anchor=lambda *_a: (None, None),
-    )
-    cpmax, parsed_until, cap_no, finals, until_cap_no = result
-    expect(cpmax == 8 and parsed_until == until_dt, f"unexpected parsed caps: {result!r}")
-    expect(cap_no == 5 and until_cap_no == 5, f"earliest until cap should win: {result!r}")
-    expect([kind for kind, _dt in finals] == ["max", "until"], f"both final estimates should remain visible: {finals!r}")
-
-    later_until = compute.completion_caps(
-        "cp",
-        {"chainMax": 3, "chainUntil": core.fmt_isoz(until_dt)},
-        child_due,
-        None,
-        coerce_int=core.coerce_int,
-        dtparse=core.parse_dt_any,
-        estimate_cp_final_by_max=lambda *_a: child_due + timedelta(days=2),
-        estimate_anchor_final_by_max=lambda *_a: None,
-        cap_from_until_cp=lambda *_a: (5, child_due + timedelta(days=4)),
-        cap_from_until_anchor=lambda *_a: (None, None),
-    )
-    expect(later_until[2] == 3 and later_until[4] == 5, f"earlier chainMax should win: {later_until!r}")
-
-
 def test_cap_from_until_cp_includes_exact_deadline():
     """CP chainUntil counting should include a due timestamp exactly equal to the deadline."""
     hook = _find_hook_file("on-modify.nautical")
@@ -21090,26 +12556,6 @@ def test_cap_from_until_cp_includes_exact_deadline():
     final_no, final_dt = mod._cap_from_until_cp(task, next_due)
     expect(final_no == 3, f"exact deadline should include link #3: got #{final_no}")
     expect(final_dt == exact_until, f"exact deadline should be the final due: {final_dt!r} != {exact_until!r}")
-
-
-def test_chain_max_parser_requires_positive_integer():
-    """Shared chainMax parsing should accept integral values and reject ambiguous caps."""
-    import nautical_core.add_validation as add_validation
-
-    for value, expected_value in ((1, 1), (5, 5), (5.0, 5), ("5", 5), ("5.0", 5)):
-        parsed, err = add_validation.parse_chain_max(value)
-        expect(parsed == expected_value, f"unexpected parsed chainMax for {value!r}: {(parsed, err)!r}")
-        expect(err is None, f"valid chainMax should not error for {value!r}: {err!r}")
-
-    for value, expected in (
-        (0, "chainMax must be > 0"),
-        (-1, "chainMax must be > 0"),
-        (2.5, "chainMax must be a positive integer"),
-        ("abc", "chainMax must be a positive integer"),
-        (True, "chainMax must be a positive integer"),
-    ):
-        parsed, err = add_validation.parse_chain_max(value)
-        expect(parsed is None and err == expected, f"unexpected invalid chainMax result for {value!r}: {(parsed, err)!r}")
 
 
 def test_hook_on_add_rejects_invalid_chain_max_for_cp_and_anchor():
@@ -21238,9 +12684,10 @@ def test_on_modify_completion_finalize_skips_analytics_when_hidden():
         return SimpleNamespace(panel_chain_by_link=None, panel_chain_by_short=None)
 
     def fake_render_anchor_completion_feedback(**kwargs):
-        captured["analytics_advice"] = kwargs.get("analytics_advice")
-        captured["integrity_warnings"] = kwargs.get("integrity_warnings")
-        captured["lifecycle_result"] = kwargs.get("lifecycle_result")
+        request = kwargs["request"]
+        captured["analytics_advice"] = request.analytics_advice
+        captured["integrity_warnings"] = request.integrity_warnings
+        captured["lifecycle_result"] = request.lifecycle_result
 
     services = flow.CompletionFinalizeServices(
         build_and_spawn_child=fake_build_and_spawn_child,
@@ -21327,8 +12774,9 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         finalize_completion_modify=lambda **_kwargs: expected,
         handle_completion_modify=lambda *_args, **_kwargs: expected,
     )
+    validation = mod._module("modify_validation_effects")
     original = {
-        "validate": mod._completion_effects.validate_cp_and_anchor,
+        "validate_cp": validation.validate_cp,
         "preserve_cp": mod._transition_effects.preserve_cp_relative_offsets_on_due_change,
         "preserve_until": mod._transition_effects.preserve_native_until_on_target_change,
         "validate_until": mod._module("modify_validation_effects").validate_native_until,
@@ -21338,7 +12786,7 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
         "import_module": mod.importlib.import_module,
     }
     try:
-        mod._completion_effects.validate_cp_and_anchor = lambda *_a, **_k: ("", "w:mon", "")
+        validation.validate_cp = lambda *_a, **_k: None
         mod._transition_effects.preserve_cp_relative_offsets_on_due_change = lambda *_a, **_k: None
         mod._transition_effects.preserve_native_until_on_target_change = lambda *_a, **_k: None
         mod._module("modify_validation_effects").validate_native_until = lambda *_a, **_k: None
@@ -21352,13 +12800,13 @@ def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
             return original["import_module"](name)
 
         mod.importlib.import_module = fake_import
-        result = _modify_effect(mod, "handle_completion", 
+        result = _modify_effect(mod, "handle_completion",
             {"uuid": "parent", "status": "pending"},
             {"uuid": "parent", "status": "completed"},
             _test_operator_uow(),
         )
     finally:
-        mod._completion_effects.validate_cp_and_anchor = original["validate"]
+        validation.validate_cp = original["validate_cp"]
         mod._transition_effects.preserve_cp_relative_offsets_on_due_change = original["preserve_cp"]
         mod._transition_effects.preserve_native_until_on_target_change = original["preserve_until"]
         mod._module("modify_validation_effects").validate_native_until = original["validate_until"]
@@ -21436,22 +12884,6 @@ def test_on_modify_completion_snapshot_malformed_json_is_unavailable():
         mod.core.PANEL_MODE, mod._SHOW_ANALYTICS, mod._CHECK_CHAIN_INTEGRITY = saved
 
 
-def test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export():
-    """an intentionally empty snapshot should not fall back to a full chain export."""
-    from nautical_core.integration_models import Absent
-
-    reads = _new_lifecycle_read_service()
-    calls = []
-    rows = reads.collect_prev_two(
-        {"chainID": "cid", "link": 5},
-        get_chain_read=lambda *_a, **_k: calls.append(True) or Absent(
-            "chain:cid", "authoritative snapshot contains no matching chain"
-        ),
-        panel_chain_by_link={},
-        panel_chain_snapshot_loaded=True,
-    )
-    expect(isinstance(rows, Absent) and calls == [], f"empty snapshot triggered a full export: calls={calls}, rows={rows}")
-
 def test_on_modify_completion_defers_chain_export_until_after_preflight():
     """completion handling should not export the chain before preflight succeeds."""
     hook = _find_hook_file("on-modify.nautical")
@@ -21460,7 +12892,7 @@ def test_on_modify_completion_defers_chain_export_until_after_preflight():
         mod._load_core()
 
     called = {"chain_export": 0}
-    mod._completion_effects.validate_cp_and_anchor = lambda *_a, **_k: ("P1D", "", "")
+    mod._module("modify_validation_effects").validate_cp = lambda *_a, **_k: None
     mod._completion_effects.preflight_context = lambda *_a, **_k: None
     mod._completion_effects.compute_next_and_limits = lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("compute should not run after preflight failure"))
     mod._SHOW_ANALYTICS = True
@@ -21593,9 +13025,12 @@ def test_on_modify_anchor_chainmax_forecast_is_bounded():
         return value + timedelta(days=1)
 
     RecurrenceEvaluator._default_next_occurrence_after_local_dt = next_daily
-    mod._diag = diagnostics.append
     try:
-        final_due = mod._estimate_anchor_final_by_max(
+        from dataclasses import replace
+        schedule = mod._module("modify_schedule_effects")
+        anchor_ports = replace(schedule.anchor_completion_ports_for(mod), diagnostic=diagnostics.append)
+        final_due = schedule.estimate_anchor_final_by_max(
+            anchor_ports,
             {
                 "uuid": "00000000-0000-4000-8000-000000000118",
                 "description": "chain max bound",
@@ -21614,7 +13049,9 @@ def test_on_modify_anchor_chainmax_forecast_is_bounded():
     expect(final_due is None, "unbounded anchor forecast returned a fabricated final date")
     expect(len(calls) == mod._MAX_ITERATIONS, f"anchor forecast exceeded its iteration budget: {len(calls)}")
     expect(diagnostics and "final date is unavailable" in diagnostics[0], f"forecast bound was not diagnosed: {diagnostics!r}")
-    cp_final = mod._estimate_cp_final_by_max(
+    cp_ports = replace(schedule.cp_completion_ports_for(mod), diagnostic=diagnostics.append)
+    cp_final = schedule.estimate_cp_final_by_max(
+        cp_ports,
         {"cp": "1d", "link": 1, "chainMax": 5000},
         datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
     )
@@ -21707,76 +13144,6 @@ def test_on_modify_pure_anchor_file_projection_reuses_provider():
         anchor_inclusion._build_anchor_file_provider = original_builder
     expect(len(builders) == 1, f"pure anchor-file projection rebuilt provider {len(builders)} times")
     expect(mod.core.to_local(child_due).date() == date(2026, 8, 4), f"unexpected pure anchor-file child due: {child_due!r}")
-
-
-def test_add_anchor_file_local_projection_deduplicates_dst_gap():
-    """Add-side file projections should deduplicate slots shifted onto one instant."""
-    import nautical_core.add_anchor_preview as preview
-    from dev_tools.legacy_preview_adapter import collect_included_legacy
-    from nautical_core.timeutil import build_local_datetime
-    from zoneinfo import ZoneInfo
-
-    zone = ZoneInfo("Europe/Bucharest")
-    original_build = core.build_local_datetime
-    original_local = core.to_local
-    core.build_local_datetime = lambda day, hhmm: build_local_datetime(day, hhmm, zone)
-    core.to_local = lambda value: value.astimezone(zone)
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            Path(td, "calendar.csv").write_text("date\n2026-03-29\n", encoding="utf-8")
-            original_dir = core.ANCHOR_FILE_DIR
-            core.ANCHOR_FILE_DIR = td
-            try:
-                values = collect_included_legacy(
-                    dnf=None,
-                    anchor_file_str="calendar.csv@t=03:30,04:30",
-                    after_local_dt=core.to_local(core.build_local_datetime(date(2026, 3, 28), (0, 0))),
-                    inclusive=False,
-                    limit_included=4,
-                    fallback_hhmm=(9, 0),
-                    default_seed_date=date(2026, 3, 28),
-                    seed_base="dst-add-test",
-                    omit_dnf=None,
-                    core=core,
-                    next_occurrence_after_local_dt=preview._next_occurrence_callback,
-                    anchor_file_dir=td,
-                )
-            finally:
-                core.ANCHOR_FILE_DIR = original_dir
-    finally:
-        core.build_local_datetime = original_build
-        core.to_local = original_local
-    expect(len(values) == 1 and values[0].hour == 4 and values[0].minute == 30, f"DST-shifted file slots were not deduplicated: {values!r}")
-
-
-def test_anchor_and_file_tie_preserves_file_description():
-    """A same-instant merged occurrence keeps the anchor-file metadata."""
-    inclusion = importlib.import_module("nautical_core.anchor_inclusion")
-    occurrence_provider = importlib.import_module("nautical_core.occurrence_provider")
-    target = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
-
-    class Provider:
-        def next_after(self, *_args, **_kwargs):
-            return occurrence_provider.Occurrence(
-                target.date(), 9, 0, source="anchor_file", description="watering",
-                local_datetime=target,
-            )
-
-    result = inclusion.next_included_occurrence(
-        dnf=object(),
-        anchor_file_str="calendar.csv@t=09:00",
-        after_local_dt=target - timedelta(minutes=1),
-        inclusive=False,
-        fallback_hhmm=(9, 0),
-        default_seed_date=target.date(),
-        seed_base="tie-test",
-        omit_dnf=None,
-        core=core,
-        next_occurrence_after_local_dt=lambda *_args, **_kwargs: target,
-        anchor_file_provider=Provider(),
-    )
-    expect(result is not None and result.source == "anchor_file", "same-instant file source was lost")
-    expect(result is not None and result.description == "watering", "same-instant file description was lost")
 
 
 def test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode():
@@ -21948,979 +13315,15 @@ def test_on_modify_omit_dnf_accepts_configured_preset():
     try:
         mod.core.OMIT_PRESETS = {"april": "y:apr"}
         host = mod._module("modify_composition").hook_host(mod.__dict__, mod.__name__)
-        expr, omit_dnf = mod._module("modify_anchor_effects").omit_dnf_from_parent(
-            host, {"omit": "@april"}
+        omit_effects = mod._module("modify_anchor_effects")
+        expr, omit_dnf = omit_effects.omit_dnf_from_parent(
+            omit_effects.omit_ports_for(host), {"omit": "@april"}
         )
     finally:
         mod.core.OMIT_PRESETS = prev_omit_presets
 
     expect(expr == "@april", f"original omit preset should be preserved: {expr!r}")
     expect(omit_dnf, f"omit preset should resolve to DNF: {omit_dnf!r}")
-
-
-def test_anchor_omit_rejects_time_modifiers():
-    """omit expressions should reject @t modifiers because omit is date-based only."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    try:
-        anchor_omit.validate_omit_expr_strict(
-            "w:mon@t=09:00",
-            validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-        )
-        expect(False, "expected timed omit to be rejected")
-    except ValueError as e:
-        expect(
-            "omit does not support time modifiers (@t). Omit rules are date-based only." in str(e),
-            f"unexpected timed omit error: {e}",
-        )
-
-
-def test_omit_file_name_rejects_paths():
-    """omit_file should accept only basenames, not paths."""
-    import nautical_core.omit_files as omit_files
-
-    try:
-        omit_files.validate_omit_file_name('../holidays.csv')
-        expect(False, 'expected omit_file basename validation to fail')
-    except ValueError as e:
-        expect('omit_file must be a file name, not a path.' in str(e), f'unexpected omit_file name error: {e}')
-
-
-
-def test_omit_file_csv_header_parsing_is_order_independent_and_dedupes():
-    """omit_file CSV parsing should read the date column by header name and dedupe repeated dates."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        sample = omit_dir / 'holidays.csv'
-        sample.write_text(
-            'description,region,date\n'
-            'New Year,AU,2025-01-01\n'
-            'New Year duplicate,NSW,2025-01-01\n'
-            'Holiday,AU,2025-01-26\n',
-            encoding='utf-8',
-        )
-        got = omit_files.load_omit_file_dates('holidays.csv', str(omit_dir))
-        expect(got == frozenset({date(2025, 1, 1), date(2025, 1, 26)}), f'unexpected parsed omit_file dates: {got!r}')
-
-
-def test_omit_file_csv_description_mapping_is_order_independent():
-    """omit_file CSV parsing should retain per-date descriptions when a description column is present."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        sample = omit_dir / 'holidays.csv'
-        sample.write_text(
-            'region,description,date\n'
-            'AU,New Year,2025-01-01\n'
-            'NSW,Anniversary Day,2025-01-26\n',
-            encoding='utf-8',
-        )
-        got = omit_files.load_omit_file_descriptions('holidays.csv', str(omit_dir))
-        expect(
-            got == {
-                date(2025, 1, 1): 'New Year',
-                date(2025, 1, 26): 'Anniversary Day',
-            },
-            f'unexpected parsed omit_file descriptions: {got!r}',
-        )
-
-
-def test_file_backed_csv_missing_date_column_reports_columns():
-    """anchor_file and omit_file CSV errors should name the missing column and detected columns."""
-    import nautical_core.anchor_files as anchor_files
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td)
-        sample = base / 'calendar.csv'
-        sample.write_text('name,description\nHoliday,No date column\n', encoding='utf-8')
-
-        for loader, label in (
-            (anchor_files.load_anchor_file_dates, 'anchor_file'),
-            (omit_files.load_omit_file_dates, 'omit_file'),
-        ):
-            try:
-                loader('calendar.csv', str(base))
-                expect(False, f'expected {label} CSV without date column to fail')
-            except ValueError as e:
-                msg = str(e)
-                expect("CSV must contain a 'date' column" in msg, f'unexpected {label} missing-date error: {e}')
-                expect('Found columns: name, description' in msg, f'{label} error should report detected columns: {e}')
-
-
-def test_file_backed_empty_or_no_usable_dates_fail_cleanly():
-    """anchor_file and omit_file should reject empty files and CSV files with no usable date values."""
-    import nautical_core.anchor_files as anchor_files
-    import nautical_core.omit_files as omit_files
-
-    for module_label, loader in (
-        ('anchor_file', anchor_files.load_anchor_file_dates),
-        ('omit_file', omit_files.load_omit_file_dates),
-    ):
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            empty = base / 'empty.csv'
-            empty.write_text('# no dates here\n\n', encoding='utf-8')
-            try:
-                loader('empty.csv', str(base))
-                expect(False, f'expected empty {module_label} file to fail')
-            except ValueError as e:
-                expect('empty or has no date rows' in str(e), f'unexpected empty {module_label} error: {e}')
-
-            blank_dates = base / 'blank_dates.csv'
-            blank_dates.write_text('date,description\n,Missing date\n', encoding='utf-8')
-            try:
-                loader('blank_dates.csv', str(base))
-                expect(False, f'expected {module_label} CSV with no usable dates to fail')
-            except ValueError as e:
-                msg = str(e)
-                expect('did not contain any usable dates' in msg, f'unexpected no-date {module_label} error: {e}')
-                expect('1 data row(s), 0 non-empty date value(s)' in msg, f'{module_label} error should report row counts: {e}')
-
-
-def test_file_backed_cache_detects_same_size_content_replacement():
-    """anchor_file and omit_file caches should not serve stale dates after same-size file rewrites."""
-    import nautical_core.anchor_files as anchor_files
-    from nautical_core import file_backed_dates
-    import nautical_core.omit_files as omit_files
-
-    for module_label, loader in (
-        ('anchor_file', anchor_files.load_anchor_file_dates),
-        ('omit_file', omit_files.load_omit_file_dates),
-    ):
-        file_backed_dates._CACHE_BY_PATH.clear()
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            sample = base / 'calendar.csv'
-            sample.write_text('date\n2026-01-01\n', encoding='utf-8')
-            first_stat = sample.stat()
-            first = loader('calendar.csv', str(base))
-            expect(first == frozenset({date(2026, 1, 1)}), f'unexpected initial {module_label} cache value: {first!r}')
-
-            sample.write_text('date\n2026-01-02\n', encoding='utf-8')
-            os.utime(sample, ns=(first_stat.st_atime_ns, first_stat.st_mtime_ns))
-            second_stat = sample.stat()
-            if (
-                second_stat.st_dev == first_stat.st_dev
-                and second_stat.st_ino == first_stat.st_ino
-                and second_stat.st_size == first_stat.st_size
-                and second_stat.st_mtime_ns == first_stat.st_mtime_ns
-                and second_stat.st_ctime_ns == first_stat.st_ctime_ns
-            ):
-                # Some test filesystems expose no metadata change for a rewrite;
-                # force the cached metadata mismatch so the digest fallback is exercised.
-                cached = file_backed_dates._CACHE_BY_PATH[str(sample)]
-                file_backed_dates._CACHE_BY_PATH[str(sample)] = file_backed_dates._FileCacheEntry(
-                    (*cached.metadata[:4], cached.metadata[4] + 1),
-                    cached.digest,
-                    cached.dates,
-                    cached.descriptions,
-                )
-            second = loader('calendar.csv', str(base))
-            expect(second == frozenset({date(2026, 1, 2)}), f'{module_label} cache served stale same-size data: {second!r}')
-
-
-def test_file_backed_cache_uses_metadata_for_hot_reads_and_bounds_lru():
-    """Hot file reads should avoid I/O while the process cache remains bounded."""
-    from nautical_core import file_backed_dates
-
-    saved_limit = file_backed_dates._FILE_CACHE_MAX_ENTRIES
-    file_backed_dates._CACHE_BY_PATH.clear()
-    file_backed_dates._FILE_CACHE_MAX_ENTRIES = 2
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            first = base / 'first.txt'
-            second = base / 'second.txt'
-            third = base / 'third.txt'
-            first.write_text('2026-01-01\n' * 10_000, encoding='utf-8')
-            second.write_text('2026-01-02\n', encoding='utf-8')
-            third.write_text('2026-01-03\n', encoding='utf-8')
-
-            initial = file_backed_dates.load_file_date_data(str(first), label='anchor_file first.txt')
-            original_read_bytes = Path.read_bytes
-
-            def fail_read_bytes(_path):
-                raise AssertionError('metadata cache hit unexpectedly read the file')
-
-            Path.read_bytes = fail_read_bytes
-            try:
-                hot = file_backed_dates.load_file_date_data(str(first), label='anchor_file first.txt')
-            finally:
-                Path.read_bytes = original_read_bytes
-            expect(hot == initial, f'metadata cache hit changed the parsed result: {hot!r}')
-
-            file_backed_dates.load_file_date_data(str(second), label='anchor_file second.txt')
-            file_backed_dates.load_file_date_data(str(first), label='anchor_file first.txt')
-            file_backed_dates.load_file_date_data(str(third), label='anchor_file third.txt')
-            expect(len(file_backed_dates._CACHE_BY_PATH) == 2, 'file-backed cache exceeded its configured LRU bound')
-            expect(str(first) in file_backed_dates._CACHE_BY_PATH, 'recent file was evicted before the older entry')
-            expect(str(second) not in file_backed_dates._CACHE_BY_PATH, 'least-recent file was not evicted')
-    finally:
-        file_backed_dates._FILE_CACHE_MAX_ENTRIES = saved_limit
-        file_backed_dates._CACHE_BY_PATH.clear()
-
-
-def test_file_backed_cache_reuses_digest_matches_after_metadata_changes():
-    """Metadata changes with identical content should reuse parsed dates after digest verification."""
-    from nautical_core import file_backed_dates
-
-    file_backed_dates._CACHE_BY_PATH.clear()
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / 'calendar.txt'
-        sample.write_text('2026-01-01\n', encoding='utf-8')
-        original_parser = file_backed_dates._parse_text_dates
-        parse_calls = []
-
-        def counted_parser(*args, **kwargs):
-            parse_calls.append(1)
-            return original_parser(*args, **kwargs)
-
-        file_backed_dates._parse_text_dates = counted_parser
-        try:
-            first = file_backed_dates.load_file_date_data(str(sample), label='anchor_file calendar.txt')
-            os.utime(sample, ns=(sample.stat().st_atime_ns, sample.stat().st_mtime_ns + 1))
-            second = file_backed_dates.load_file_date_data(str(sample), label='anchor_file calendar.txt')
-        finally:
-            file_backed_dates._parse_text_dates = original_parser
-            file_backed_dates._CACHE_BY_PATH.clear()
-    expect(first == second == (frozenset({date(2026, 1, 1)}), {}), f'digest fallback changed the parsed data: {first!r}, {second!r}')
-    expect(len(parse_calls) == 1, f'identical digest was reparsed after metadata change: {len(parse_calls)} parses')
-
-
-def test_file_backed_resource_limits_reject_oversized_inputs():
-    """File-backed dates should reject excessive bytes, lines, ranges, and unique dates."""
-    from nautical_core import file_backed_dates
-    from nautical_core import file_resource_limits as limits
-
-    saved = (
-        limits.MAX_FILE_BYTES,
-        limits.MAX_FILE_LINES,
-        limits.MAX_DATE_RANGE_DAYS,
-        limits.MAX_RESOLVED_DATES,
-    )
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-
-            limits.MAX_FILE_BYTES = 16
-            oversized = base / 'oversized.txt'
-            oversized.write_text('2026-01-01\n2026-01-02\n', encoding='utf-8')
-            try:
-                file_backed_dates.load_file_date_data(str(oversized), label='anchor_file oversized.txt')
-                expect(False, 'oversized file was accepted')
-            except ValueError as exc:
-                expect('too large' in str(exc) and '16 bytes' in str(exc), f'unexpected size error: {exc}')
-
-            limits.MAX_FILE_BYTES = saved[0]
-            limits.MAX_FILE_LINES = 2
-            too_many_lines = base / 'lines.txt'
-            too_many_lines.write_text('2026-01-01\n2026-01-02\n2026-01-03\n', encoding='utf-8')
-            try:
-                file_backed_dates.load_file_date_data(str(too_many_lines), label='omit_file lines.txt')
-                expect(False, 'excessive line count was accepted')
-            except ValueError as exc:
-                expect('contains 3 lines' in str(exc) and 'maximum is 2' in str(exc), f'unexpected line error: {exc}')
-
-            limits.MAX_FILE_LINES = saved[1]
-            limits.MAX_DATE_RANGE_DAYS = 2
-            excessive_range = base / 'range.txt'
-            excessive_range.write_text('2026-01-01..2026-01-03\n', encoding='utf-8')
-            try:
-                file_backed_dates.load_file_date_data(str(excessive_range), label='anchor_file range.txt')
-                expect(False, 'excessive date range was accepted')
-            except ValueError as exc:
-                expect('range spans 3 days' in str(exc) and 'maximum is 2' in str(exc), f'unexpected range error: {exc}')
-
-            limits.MAX_DATE_RANGE_DAYS = saved[2]
-            limits.MAX_RESOLVED_DATES = 2
-            excessive_dates = base / 'dates.txt'
-            excessive_dates.write_text('2026-01-01\n2026-01-02\n2026-01-03\n', encoding='utf-8')
-            try:
-                file_backed_dates.load_file_date_data(str(excessive_dates), label='omit_file dates.txt')
-                expect(False, 'excessive unique date count was accepted')
-            except ValueError as exc:
-                expect('more than 2 unique dates' in str(exc), f'unexpected unique-date error: {exc}')
-
-            max_date = base / 'max-date.txt'
-            max_date.write_text('9999-12-31..9999-12-31\n', encoding='utf-8')
-            dates, _descriptions = file_backed_dates.load_file_date_data(
-                str(max_date),
-                label='anchor_file max-date.txt',
-            )
-            expect(dates == frozenset({date.max}), f'date.max range did not resolve safely: {dates!r}')
-    finally:
-        (
-            limits.MAX_FILE_BYTES,
-            limits.MAX_FILE_LINES,
-            limits.MAX_DATE_RANGE_DAYS,
-            limits.MAX_RESOLVED_DATES,
-        ) = saved
-
-
-def test_file_source_resource_limits_bound_wildcard_fanout():
-    """Wildcard source resolution should cap directory scans and matched file fan-out."""
-    import nautical_core.anchor_files as anchor_files
-    from nautical_core import file_resource_limits as limits
-
-    saved = (limits.MAX_DIRECTORY_ENTRIES, limits.MAX_RESOLVED_FILES)
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            for idx in range(3):
-                (base / f'{idx}.csv').write_text(f'date\n2026-01-0{idx + 1}\n', encoding='utf-8')
-
-            limits.MAX_DIRECTORY_ENTRIES = 2
-            try:
-                anchor_files.load_anchor_file_dates('*.csv', str(base))
-                expect(False, 'oversized source directory was accepted')
-            except ValueError as exc:
-                expect('contains more than 2 entries' in str(exc), f'unexpected directory limit error: {exc}')
-
-            limits.MAX_DIRECTORY_ENTRIES = 10
-            limits.MAX_RESOLVED_FILES = 2
-            try:
-                anchor_files.load_anchor_file_dates('*.csv', str(base))
-                expect(False, 'excessive wildcard fan-out was accepted')
-            except ValueError as exc:
-                expect('more than 2 files' in str(exc), f'unexpected file fan-out error: {exc}')
-    finally:
-        limits.MAX_DIRECTORY_ENTRIES, limits.MAX_RESOLVED_FILES = saved
-
-
-def test_file_date_aggregate_limits_cover_anchor_omit_and_business_calendars():
-    """Aggregate limits should apply after resolving multiple file sources and calendar expressions."""
-    import nautical_core.anchor_files as anchor_files
-    import nautical_core.omit_files as omit_files
-    from nautical_core import file_resource_limits as limits
-
-    saved = limits.MAX_RESOLVED_DATES
-    try:
-        limits.MAX_RESOLVED_DATES = 1
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            (base / 'one.csv').write_text('date\n2026-01-01\n', encoding='utf-8')
-            (base / 'two.csv').write_text('date\n2026-01-02\n', encoding='utf-8')
-
-            for label, loader in (
-                ('anchor_file', anchor_files.load_anchor_file_dates),
-                ('omit_file', omit_files.load_omit_file_dates),
-            ):
-                try:
-                    loader('one.csv | two.csv', str(base))
-                    expect(False, f'{label} aggregate limit was not enforced')
-                except ValueError as exc:
-                    expect(f'{label} resolves to more than 1 unique dates' in str(exc), f'unexpected {label} error: {exc}')
-
-            try:
-                anchor_files.load_anchor_file_occurrence_specs(
-                    'one.csv@t=09:00,17:00',
-                    str(base),
-                    (8, 0),
-                )
-                expect(False, 'anchor_file occurrence expansion limit was not enforced')
-            except ValueError as exc:
-                expect('more than 1 occurrences' in str(exc), f'unexpected occurrence error: {exc}')
-
-            try:
-                core.resolve_business_calendar_config(
-                    {'work': {'anchor_file': ['one.csv', 'two.csv']}},
-                    anchor_file_dir=str(base),
-                )
-                expect(False, 'business calendar aggregate limit was not enforced')
-            except ValueError as exc:
-                expect(
-                    'business_calendar.work.anchor_file resolves to more than 1 unique dates' in str(exc),
-                    f'unexpected business calendar error: {exc}',
-                )
-    finally:
-        limits.MAX_RESOLVED_DATES = saved
-
-
-def test_omit_file_modifiers_roll_dates_and_carry_descriptions():
-    """omit_file modifiers should transform loaded dates and move descriptions onto the transformed date."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        sample = omit_dir / 'holidays.csv'
-        sample.write_text(
-            'date,description\n'
-            '2026-04-25,Weekend holiday\n',
-            encoding='utf-8',
-        )
-        got_dates = omit_files.load_omit_file_dates('holidays.csv@nbd', str(omit_dir))
-        got_desc = omit_files.load_omit_file_descriptions('holidays.csv@nbd', str(omit_dir))
-        expect(got_dates == frozenset({date(2026, 4, 27)}), f'unexpected transformed omit_file dates: {got_dates!r}')
-        expect(got_desc == {date(2026, 4, 27): 'Weekend holiday'}, f'unexpected transformed omit_file descriptions: {got_desc!r}')
-
-
-def test_omit_file_modifiers_support_negative_day_offsets():
-    """omit_file modifiers should support calendar- and business-day offsets."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        sample = omit_dir / 'holidays.csv'
-        sample.write_text('date\n2026-04-27\n', encoding='utf-8')
-        got = omit_files.load_omit_file_dates('holidays.csv@-2d', str(omit_dir))
-        expect(got == frozenset({date(2026, 4, 25)}), f'unexpected negative-offset omit_file dates: {got!r}')
-        business_got = omit_files.load_omit_file_dates('holidays.csv@-2bd', str(omit_dir))
-        expect(business_got == frozenset({date(2026, 4, 23)}), f'unexpected business-day-offset omit_file dates: {business_got!r}')
-
-
-def test_omit_file_modifiers_apply_even_when_base_file_is_cached():
-    """omit_file modifiers should still apply when the underlying file data is served from cache."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        sample = omit_dir / 'holidays.csv'
-        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
-        plain = omit_files.load_omit_file_dates('holidays.csv', str(omit_dir))
-        shifted = omit_files.load_omit_file_dates('holidays.csv@nbd', str(omit_dir))
-        expect(plain == frozenset({date(2026, 4, 25)}), f'unexpected plain cached omit_file dates: {plain!r}')
-        expect(shifted == frozenset({date(2026, 4, 27)}), f'unexpected cached transformed omit_file dates: {shifted!r}')
-
-
-def test_anchor_file_name_rejects_paths():
-    """anchor_file should accept only basenames, not paths."""
-    import nautical_core.anchor_files as anchor_files
-
-    try:
-        anchor_files.validate_anchor_file_name('../calendar.csv')
-        expect(False, 'expected anchor_file basename validation to fail')
-    except ValueError as e:
-        expect('anchor_file must be a file name, not a path.' in str(e), f'unexpected anchor_file name error: {e}')
-
-
-def test_anchor_file_spec_parses_time_and_negative_offset():
-    """anchor_file spec should parse @t and date-shift modifiers."""
-    import nautical_core.anchor_files as anchor_files
-
-    file_name, mods = anchor_files.parse_anchor_file_spec('calendar.csv@t=09:00,17:00@-2d@+1bd')
-    expect(file_name == 'calendar.csv', f'unexpected anchor_file name parse: {file_name!r}')
-    expect(mods.get('t') == [(9, 0), (17, 0)], f'unexpected anchor_file time mods: {mods!r}')
-    expect(mods.get('day_offset') == -2, f'unexpected anchor_file day offset: {mods!r}')
-    expect(mods.get('business_day_offset') == 1, f'unexpected anchor_file business-day offset: {mods!r}')
-
-
-def test_anchor_file_spec_parses_bounded_time_window():
-    """anchor_file should share bounded time-window syntax with ordinary anchors."""
-    import nautical_core.anchor_files as anchor_files
-
-    file_name, mods = anchor_files.parse_anchor_file_spec("calendar.csv@t=06..17/3h")
-    expect(file_name == "calendar.csv", f"unexpected window anchor_file name: {file_name!r}")
-    expect(mods.get("time_window") == "06:00..17:00/3h", f"anchor_file window metadata was lost: {mods!r}")
-    expect(mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0)], f"anchor_file window slots are wrong: {mods!r}")
-
-    try:
-        anchor_files.parse_anchor_file_spec("calendar.csv@t=18..18/2h")
-        expect(False, "reversed anchor_file time window was accepted")
-    except ValueError as exc:
-        expect("end time must differ" in str(exc), f"unexpected anchor_file window error: {exc}")
-
-
-def test_anchor_file_occurrences_expand_bounded_time_window():
-    """File-backed occurrence expansion should emit only generated window slots."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
-        occurrences = anchor_files.load_anchor_file_occurrence_specs(
-            "calendar.csv@t=06..17/3h",
-            td,
-            (8, 0),
-        )
-    expect(
-        occurrences == [
-            (date(2026, 8, 3), (6, 0)),
-            (date(2026, 8, 3), (9, 0)),
-            (date(2026, 8, 3), (12, 0)),
-            (date(2026, 8, 3), (15, 0)),
-        ],
-        f"unexpected anchor_file window occurrences: {occurrences!r}",
-    )
-
-
-def test_anchor_file_occurrences_expand_random_time_window_with_context():
-    """File dates should use the supplied recurrence context for random times."""
-    import nautical_core.anchor_files as anchor_files
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.time_windows import parse_random_time_window_spec
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
-        occurrences = anchor_files.load_anchor_file_occurrence_specs(
-            "calendar.csv@t=rand(06..18/3)",
-            td,
-            (8, 0),
-            context=RecurrenceContext(chain_id="file-chain"),
-        )
-    slots = parse_random_time_window_spec("rand(06..18/3)").slots_with_offsets("file-chain/2026-08-03")
-    expected = [(date(2026, 8, 3), (slot[1], slot[2])) for slot in slots]
-    expect(occurrences == expected, f"unexpected random anchor_file occurrences: {occurrences!r}")
-
-
-def test_anchor_file_occurrence_provider_exposes_typed_values():
-    """The provider adapter should expose the existing file expansion as typed occurrences."""
-    import nautical_core.anchor_files as anchor_files
-    from nautical_core.occurrence_provider import Occurrence
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
-        values = anchor_files.AnchorFileOccurrenceProvider(
-            "calendar.csv@t=06,12:30",
-            td,
-            (8, 0),
-        ).occurrences()
-    expect(all(isinstance(value, Occurrence) for value in values), f"provider returned untyped values: {values!r}")
-    expect([(value.day, value.hhmm, value.source) for value in values] == [
-        (date(2026, 8, 3), (6, 0), "anchor_file"),
-        (date(2026, 8, 3), (12, 30), "anchor_file"),
-    ], f"provider occurrence values were incorrect: {values!r}")
-
-
-def test_anchor_file_occurrence_provider_supports_lazy_next_after():
-    """The provider can project one bounded successor without exporting all values."""
-    import nautical_core.anchor_files as anchor_files
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
-        provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=06,12:30", td, (8, 0))
-        occurrence = provider.next_after(
-            datetime(2026, 8, 3, 6, 0),
-            build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
-            to_local=lambda value: value,
-        )
-    expect(occurrence is not None and occurrence.hhmm == (12, 30), f"unexpected lazy occurrence: {occurrence!r}")
-
-
-def test_anchor_file_occurrence_provider_caches_expanded_specs():
-    """Repeated lazy lookups should expand an anchor file only once per provider."""
-    import nautical_core.anchor_files as anchor_files
-    from datetime import datetime
-
-    original = anchor_files.load_anchor_file_occurrence_specs
-    calls = []
-
-    def counted(*args, **kwargs):
-        calls.append(1)
-        return original(*args, **kwargs)
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
-        anchor_files.load_anchor_file_occurrence_specs = counted
-        try:
-            provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=09:00", td, (8, 0))
-            provider.next_after(
-                datetime(2026, 8, 2, 9, 0),
-                build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
-                to_local=lambda value: value,
-            )
-            provider.next_after(
-                datetime(2026, 8, 3, 9, 0),
-                build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
-                to_local=lambda value: value,
-            )
-        finally:
-            anchor_files.load_anchor_file_occurrence_specs = original
-    expect(len(calls) == 1, f"anchor file specs were expanded {len(calls)} times")
-
-
-def test_anchor_file_occurrence_provider_advances_cached_lookup_cursor():
-    """Sequential successor lookup should scan cached specs once and still reset backward."""
-    import nautical_core.anchor_files as anchor_files
-    from datetime import datetime
-
-    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
-    provider._spec_cache = [
-        (date(2026, 1, 1) + timedelta(days=index), (9, 0))
-        for index in range(1000)
-    ]
-    repeat_provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
-    repeat_provider._spec_cache = provider._spec_cache
-    calls = []
-
-    def build(day, hhmm):
-        calls.append(day)
-        return datetime(day.year, day.month, day.day, *hhmm)
-
-    identity = lambda value: value
-    repeat_cursor = datetime(2025, 12, 31, 9, 0)
-    repeat_first = repeat_provider.next_after(
-        repeat_cursor, build_local_datetime=build, to_local=identity
-    )
-    repeat_again = repeat_provider.next_after(
-        repeat_cursor, build_local_datetime=build, to_local=identity
-    )
-    expect(
-        repeat_first is not None
-        and repeat_again is not None
-        and repeat_first.local_datetime == repeat_again.local_datetime,
-        "repeating the same cursor returned a different successor",
-    )
-    calls.clear()
-    cursor = datetime(2025, 12, 31, 9, 0)
-    for _ in range(100):
-        occurrence = provider.next_after(cursor, build_local_datetime=build, to_local=identity)
-        expect(occurrence is not None, "cached provider unexpectedly exhausted during sequential lookup")
-        cursor = occurrence.local_datetime
-    expect(len(calls) == 1000, f"cached candidates were rebuilt during sequential lookup: {len(calls)} builds")
-
-    reset = provider.next_after(
-        datetime(2026, 1, 1, 9, 0),
-        build_local_datetime=build,
-        to_local=identity,
-    )
-    expect(reset is not None and reset.day == date(2026, 1, 2), "backward lookup did not reset the cached cursor")
-
-
-def test_anchor_file_provider_uses_binary_search_for_nonmonotonic_cursor():
-    """A cached anchor-file projection should handle backward cursors without rescanning records."""
-    import nautical_core.anchor_files as anchor_files
-
-    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
-    provider._record_cache = [
-        (date(2026, 1, 1) + timedelta(days=index), (9, 0), f"slot-{index}")
-        for index in range(10_000)
-    ]
-    identity = lambda value: value
-    build = lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm)
-    first = provider.next_after(
-        datetime(2026, 1, 1, 9, 0),
-        build_local_datetime=build,
-        to_local=identity,
-    )
-    expect(first is not None and first.description == "slot-1", f"unexpected first cached result: {first!r}")
-
-    original_compare = anchor_files.compare_datetimes
-    anchor_files.compare_datetimes = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("non-monotonic lookup rescanned cached candidates")
-    )
-    try:
-        backward = provider.next_after(
-            datetime(2026, 1, 1, 9, 0),
-            build_local_datetime=build,
-            to_local=identity,
-        )
-    finally:
-        anchor_files.compare_datetimes = original_compare
-    expect(
-        backward is not None and backward.description == "slot-1",
-        f"binary-search lookup returned the wrong backward successor: {backward!r}",
-    )
-
-
-def test_compact_anchor_file_lookup_scans_past_legacy_probe_limit():
-    """Compact previews must find a valid date after more than 512 omissions."""
-    from tests.anchor_file_fixture import canonical_anchor_file_fixture
-    from dev_tools.legacy_preview_adapter import collect_included_legacy
-    with canonical_anchor_file_fixture(count=514, omitted=lambda item, first: (item.date() - first).days < 513) as (core, root, _first):
-        values = collect_included_legacy(
-            dnf=None, anchor_file_str="calendar.csv", core=core,
-            fallback_hhmm=(9, 0), omit_dnf=[{}], seed_base="compact-cursor-test",
-            default_seed_date=None, next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
-            anchor_file_dir=str(root), after_local_dt=datetime(2025, 12, 31, 9, 0),
-            inclusive=False, limit_included=1, max_file_skips=600,
-        )
-    expect(
-        values == [datetime(2027, 5, 29, 9, 0)],
-        f"compact anchor-file lookup stopped before the first valid date: {values!r}",
-    )
-
-
-def test_compact_anchor_file_lookup_reports_cursor_exhaustion():
-    """Exhausting an omitted anchor-file stream must remain distinguishable from an empty file."""
-    from tests.anchor_file_fixture import canonical_anchor_file_fixture
-    from dev_tools.legacy_preview_adapter import collect_included_legacy
-    with canonical_anchor_file_fixture(count=3, omitted=lambda _item, _first: True) as (core, root, _first):
-        result = collect_included_legacy(
-            dnf=None, anchor_file_str="calendar.csv", core=core,
-            fallback_hhmm=(9, 0), omit_dnf=[{}], seed_base="compact-exhaustion-test",
-            default_seed_date=None, next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
-            anchor_file_dir=str(root), after_local_dt=datetime(2025, 12, 31, 9, 0),
-            inclusive=False, limit_included=1, max_file_skips=3,
-        )
-    expect(not result, "compact anchor-file lookup returned an omitted occurrence")
-
-
-def test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates():
-    """Successors should follow localized time after a DST gap shifts a wall time."""
-    import nautical_core.anchor_files as anchor_files
-    from nautical_core.timeutil import build_local_datetime
-    from zoneinfo import ZoneInfo
-
-    zone = ZoneInfo("Europe/Bucharest")
-    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
-    provider._spec_cache = [
-        (date(2026, 3, 29), (3, 30)),
-        (date(2026, 3, 29), (4, 0)),
-    ]
-
-    def build(day, hhmm):
-        return build_local_datetime(day, hhmm, zone)
-
-    def to_local(value):
-        return value.astimezone(zone)
-
-    first = provider.next_after(
-        datetime(2026, 3, 29, 2, 0, tzinfo=zone),
-        build_local_datetime=build,
-        to_local=to_local,
-    )
-    expect(first is not None, "DST-normalized anchor file produced no first successor")
-    expect(
-        first.local_datetime is not None
-        and (first.local_datetime.hour, first.local_datetime.minute) == (4, 0),
-        f"DST-normalized candidates were not sorted by local time: {first!r}",
-    )
-    second = provider.next_after(
-        first.local_datetime,
-        build_local_datetime=build,
-        to_local=to_local,
-    )
-    expect(second is not None, "DST-normalized anchor file produced no second successor")
-    expect(
-        second.local_datetime is not None
-        and (second.local_datetime.hour, second.local_datetime.minute) == (4, 30),
-        f"DST-shifted successor was not retained: {second!r}",
-    )
-
-
-def test_modify_anchor_file_mode_orders_dst_fold_by_instant():
-    """A repeated local hour must be filtered by instant, not wall-clock labels."""
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_provider import Occurrence
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    zone = ZoneInfo("Europe/Bucharest")
-    due = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-    end = datetime(2026, 10, 25, 3, 30, tzinfo=zone, fold=1)
-    first_fold = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
-    second_fold = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
-    after_end = datetime(2026, 10, 25, 3, 45, tzinfo=zone, fold=1)
-    class FoldProvider:
-        def next_after(self, after_local, *, build_local_datetime, to_local):
-            for value in (first_fold, second_fold, after_end):
-                if value.astimezone(timezone.utc) > after_local.astimezone(timezone.utc):
-                    return Occurrence(
-                        day=value.date(),
-                        hour=value.hour,
-                        minute=value.minute,
-                        source="anchor_file",
-                        local_datetime=value,
-                    )
-            return None
-
-    evaluator = _evaluator_for_fixture(
-        {"anchor_file": "fold.csv", "anchor_mode": "all", "chainID": "dst-fold"},
-        timezone=zone,
-    )
-    result = evaluator.select_mode(
-        "all",
-        due_local=due,
-        end_local=end,
-        due_explicit=True,
-        fallback_hhmm=(3, 15),
-        default_seed_date=due.date(),
-        anchor_file_provider=FoldProvider(),
-    )
-    next_local = result.selected_occurrence
-    info = result
-    expect(next_local is second_fold, f"DST fold selected the wrong occurrence: {next_local!r}")
-    expect(info.source == "anchor_file", f"anchor-file mode source was not typed: {info!r}")
-    expect(info.selected_occurrence is second_fold, f"typed result lost selected occurrence: {info!r}")
-    expect(info.get("missed_count") == 1, f"DST fold counted wall-clock duplicate: {info!r}")
-
-
-def test_native_until_validation_orders_dst_fold_by_instant():
-    """Native until validation must reject an expiration before the repeated-hour target."""
-    from zoneinfo import ZoneInfo
-    import nautical_core.native_until as native_until
-
-    zone = ZoneInfo("Europe/Bucharest")
-    target = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
-    earlier = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
-    valid, message = native_until.validate_after_target(earlier, target, "due")
-    expect(not valid and message == "until must be later than due", f"DST fold validation accepted an earlier instant: {message!r}")
-
-
-def test_native_until_exact_carry_orders_dst_fold_by_instant():
-    """Exact carry must preserve elapsed seconds between identical fold labels."""
-    from zoneinfo import ZoneInfo
-    import nautical_core.native_until as native_until
-
-    zone = ZoneInfo("Europe/Bucharest")
-    parent_target = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
-    parent_until = datetime(2026, 10, 25, 3, 20, 1, tzinfo=zone, fold=1)
-    child_target = datetime(2026, 10, 26, 3, 20, tzinfo=zone)
-    result = native_until.carry(
-        parent_target,
-        parent_until,
-        child_target,
-        "cp",
-        utc_to_local_naive=lambda value: value.astimezone(zone).replace(tzinfo=None),
-        local_naive_to_utc=lambda value: value.replace(tzinfo=zone).astimezone(timezone.utc),
-    )
-    expected = (child_target.astimezone(timezone.utc) + timedelta(seconds=3601)).astimezone(zone)
-    expect(
-        result.astimezone(timezone.utc) == expected.astimezone(timezone.utc),
-        f"exact carry lost the DST fold elapsed duration: {result!r} != {expected!r}",
-    )
-    expect(
-        native_until.describe_carry(parent_until, parent_target, to_local=lambda value: value)
-        == "Exact · 01h 00m 01s after occurrence",
-        "exact carry description did not preserve the DST fold duration",
-    )
-    try:
-        malformed_until = datetime(2026, 10, 25, 23, 0, tzinfo=zone)
-        native_until.carry(
-            parent_target,
-            malformed_until,
-            child_target,
-            "cp",
-            utc_to_local_naive=lambda value: value.astimezone(zone).replace(tzinfo=None),
-            local_naive_to_utc=lambda value: value.replace(tzinfo=None),
-        )
-    except native_until.NativeUntilCarryError as exc:
-        expect(exc.code == native_until.CARRY_FAILED, f"unexpected malformed carry code: {exc.code!r}")
-    else:
-        raise AssertionError("malformed native-until converter did not fail closed")
-
-
-def test_public_datetime_comparator_preserves_dst_fold_and_provider_alias():
-    """The neutral comparator and provider compatibility alias must agree."""
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_provider import _compare_datetimes
-    from nautical_core.timeutil import compare_datetimes
-
-    zone = ZoneInfo("Europe/Bucharest")
-    first = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=0)
-    second = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
-    expect(compare_datetimes(first, second) < 0, "public comparator lost DST fold ordering")
-    expect(_compare_datetimes(first, second) < 0, "provider alias disagrees with public comparator")
-    try:
-        compare_datetimes(first.replace(tzinfo=None), second)
-    except ValueError as exc:
-        expect("naive and aware" in str(exc), f"public comparator error is not neutral: {exc}")
-    else:
-        raise AssertionError("public comparator accepted mixed naive and aware values")
-
-
-def test_modify_until_past_guard_orders_dst_fold_by_instant():
-    """Completion validation must reject an earlier instant in a repeated hour."""
-    from zoneinfo import ZoneInfo
-    from nautical_core import add_validation, modify_completion_compute
-
-    zone = ZoneInfo("Europe/Bucharest")
-    now = datetime(2026, 10, 25, 3, 20, tzinfo=zone, fold=1)
-    earlier = datetime(2026, 10, 25, 3, 18, tzinfo=zone, fold=0)
-    panels = []
-    result = modify_completion_compute.completion_until_or_fail(
-        {"chainUntil": earlier},
-        now,
-        safe_parse_datetime=lambda _value: (earlier, None),
-        validate_until_not_past=lambda until_dt, now_utc: add_validation.validate_until_not_past(
-            until_dt,
-            now_utc,
-            core=core,
-        ),
-        panel=lambda _title, rows, **_kwargs: panels.extend(rows),
-        print_task=lambda _task: None,
-    )
-    expect(result is False, "completion boundary accepted an earlier repeated-hour instant")
-    reason = " ".join(str(value) for label, value in panels if label == "Reason")
-    expect("in the past" in reason, f"completion past guard omitted actionable reason: {reason!r}")
-
-
-def test_merged_anchor_file_provider_carries_context_and_reuses_specs():
-    """Merged preview streams should carry chain context and expand files once."""
-    import nautical_core.add_anchor_preview as preview
-    import nautical_core.anchor_files as anchor_files
-    from dev_tools.legacy_preview_adapter import collect_events_legacy
-    from datetime import datetime
-
-    original = anchor_files.load_anchor_file_occurrence_specs
-    calls = []
-    contexts = []
-
-    def counted(*args, **kwargs):
-        calls.append(1)
-        contexts.append(kwargs.get("context"))
-        return original(*args, **kwargs)
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
-        anchor_files.load_anchor_file_occurrence_specs = counted
-        try:
-            values = collect_events_legacy(
-                dnf=None,
-                anchor_file_str="calendar.csv@t=rand(06..18)",
-                after_local_dt=core.build_local_datetime(date(2026, 8, 2), (9, 0)),
-                inclusive=False,
-                limit_included=2,
-                fallback_hhmm=(9, 0),
-                default_seed_date=date(2026, 8, 2),
-                seed_base="merged-provider-test",
-                omit_dnf=None,
-                core=core,
-                next_occurrence_after_local_dt=lambda *args, **kwargs: None,
-                anchor_file_dir=td,
-            )
-        finally:
-            anchor_files.load_anchor_file_occurrence_specs = original
-    expect(len(values) == 2, f"merged provider returned the wrong occurrences: {values!r}")
-    expect(len(calls) == 1, f"merged provider expanded the file {len(calls)} times")
-    expect(
-        contexts
-        and contexts[0] is not None
-        and contexts[0].chain_id == "merged-provider-test"
-        and contexts[0].business_calendar is not None,
-        f"chain or business-calendar context was lost: {contexts!r}",
-    )
-
-
-def test_event_provider_preserves_anchor_file_source_description():
-    """Typed merged event collection should retain anchor-file provenance."""
-    import nautical_core.add_anchor_preview as preview
-    from dev_tools.legacy_preview_adapter import collect_events_legacy
-    from nautical_core.occurrence_provider import Occurrence
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text(
-            "date,description\n2026-08-03,Water the plants\n",
-            encoding="utf-8",
-        )
-        events = collect_events_legacy(
-            dnf=None,
-            anchor_file_str="calendar.csv@t=09:00",
-            after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
-            inclusive=False,
-            limit_included=1,
-            fallback_hhmm=(9, 0),
-            default_seed_date=date(2026, 8, 2),
-            seed_base="event-metadata-test",
-            omit_dnf=None,
-            core=core,
-            next_occurrence_after_local_dt=lambda *args, **kwargs: None,
-            anchor_file_dir=td,
-            return_occurrences=True,
-        )
-    expect(len(events) == 1 and isinstance(events[0], Occurrence), f"typed event was not retained: {events!r}")
-    expect(events[0].source == "anchor_file", f"event source was not preserved: {events[0]!r}")
-    expect(events[0].description == "Water the plants", f"event description was not preserved: {events[0]!r}")
 
 
 def test_included_provider_preserves_anchor_file_source_description():
@@ -22954,1228 +13357,6 @@ def test_included_provider_preserves_anchor_file_source_description():
     )
     expect(occurrences[0].source == "anchor_file", f"included source was not preserved: {occurrences!r}")
     expect(occurrences[0].description == "Water the plants", f"included description was not preserved: {occurrences!r}")
-
-
-def test_anchor_file_provider_keeps_description_for_overnight_slots():
-    """Overnight slots retain the description from their source calendar date."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text(
-            "date,description\n2026-08-03,Overnight maintenance\n",
-            encoding="utf-8",
-        )
-        provider = anchor_files.AnchorFileOccurrenceProvider(
-            "calendar.csv@t=22:30..06:30/2",
-            td,
-            (9, 0),
-        )
-        occurrences = provider.occurrences()
-    expect(len(occurrences) == 2, f"unexpected overnight slots: {occurrences!r}")
-    expect(occurrences[1].day == date(2026, 8, 4), f"overnight slot did not roll date: {occurrences!r}")
-    expect(all(item.description == "Overnight maintenance" for item in occurrences), f"source description was lost: {occurrences!r}")
-
-
-def test_anchor_file_provider_merges_duplicate_source_descriptions():
-    """A later duplicate source may supply metadata missing from the first source."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "first.csv").write_text("date,description\n2026-08-08,\n", encoding="utf-8")
-        (Path(td) / "second.csv").write_text("date,description\n2026-08-08,Backup description\n", encoding="utf-8")
-        provider = anchor_files.AnchorFileOccurrenceProvider(
-            "first.csv@t=09:00 | second.csv@t=09:00",
-            td,
-            (9, 0),
-        )
-        occurrences = provider.occurrences()
-    expect(len(occurrences) == 1, f"duplicate source occurrence was not deduplicated: {occurrences!r}")
-    expect(occurrences[0].description == "Backup description", f"duplicate source metadata was lost: {occurrences!r}")
-
-
-def test_anchor_file_provider_preserves_dst_fold_descriptions():
-    """Descriptions must follow DST-fold instants, not wall-clock equality."""
-    import nautical_core.anchor_files as anchor_files
-    from zoneinfo import ZoneInfo
-
-    zone = ZoneInfo("Europe/Bucharest")
-    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
-    provider._record_cache = [
-        (date(2026, 10, 25), (3, 30), "first fold"),
-        (date(2026, 10, 25), (3, 45), "second fold"),
-    ]
-
-    def build(day, hhmm):
-        fold = 1 if hhmm == (3, 45) else 0
-        return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone, fold=fold)
-
-    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-    occurrence = provider.next_after(after, build_local_datetime=build, to_local=lambda value: value)
-    expect(occurrence is not None, "DST-fold provider returned no successor")
-    expect(occurrence.description == "second fold", f"DST-fold description was misassigned: {occurrence!r}")
-
-
-def test_included_provider_reuses_shared_anchor_file_provider():
-    """Repeated included projections should reuse one anchor-file expansion."""
-    from dev_tools.legacy_preview_adapter import collect_included_legacy
-    import nautical_core.anchor_inclusion as anchor_inclusion
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
-        provider = anchor_inclusion._build_anchor_file_provider(
-            "calendar.csv@t=09:00",
-            anchor_file_dir=td,
-            fallback_hhmm=(9, 0),
-            seed_base="shared-provider-test",
-            core=core,
-        )
-        original = anchor_files._load_anchor_file_occurrence_records
-        calls = []
-
-        def counted(*args, **kwargs):
-            calls.append(1)
-            return original(*args, **kwargs)
-
-        anchor_files._load_anchor_file_occurrence_records = counted
-        try:
-            kwargs = dict(
-                dnf=None,
-                anchor_file_str="calendar.csv@t=09:00",
-                fallback_hhmm=(9, 0),
-                default_seed_date=date(2026, 8, 2),
-                seed_base="shared-provider-test",
-                omit_dnf=None,
-                core=core,
-                next_occurrence_after_local_dt=lambda *args, **kwargs: None,
-                anchor_file_dir=td,
-                anchor_file_provider=provider,
-            )
-            collect_included_legacy(
-                after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
-                inclusive=False,
-                limit_included=1,
-                **kwargs,
-            )
-            collect_included_legacy(
-                after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 3), (9, 0))),
-                inclusive=False,
-                limit_included=1,
-                **kwargs,
-            )
-        finally:
-            anchor_files._load_anchor_file_occurrence_records = original
-    expect(len(calls) == 1, f"shared anchor-file provider expanded specs {len(calls)} times")
-
-
-def test_anchor_file_provider_retries_after_failed_load():
-    """A failed provider load must not publish an empty cache."""
-    import nautical_core.anchor_files as anchor_files
-
-    provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv", ".", (9, 0))
-    original = anchor_files.load_anchor_file_occurrence_specs
-    calls = []
-
-    def flaky(*_args, **kwargs):
-        calls.append(1)
-        if len(calls) == 1:
-            raise ValueError("transient calendar read failure")
-        sink = kwargs.get("_records_sink")
-        if sink is not None:
-            sink.append((date(2026, 8, 8), (9, 0), "recovered"))
-        return [(date(2026, 8, 8), (9, 0))]
-
-    anchor_files.load_anchor_file_occurrence_specs = flaky
-    try:
-        try:
-            provider.occurrences()
-            expect(False, "failed provider load did not propagate")
-        except ValueError as exc:
-            expect("transient calendar read failure" in str(exc), f"unexpected first load error: {exc}")
-        occurrences = provider.occurrences()
-    finally:
-        anchor_files.load_anchor_file_occurrence_specs = original
-    expect(len(calls) == 2, f"provider did not retry after failed load: {len(calls)} calls")
-    expect(occurrences and occurrences[0].description == "recovered", f"retry did not publish recovered records: {occurrences!r}")
-
-
-def test_included_provider_rebuilds_shared_provider_when_fallback_changes():
-    """A changed effective fallback time must not reuse a stale file provider."""
-    from dev_tools.legacy_preview_adapter import collect_included_legacy
-    import nautical_core.anchor_inclusion as anchor_inclusion
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text("date\n2026-08-03\n2026-08-04\n", encoding="utf-8")
-        provider = anchor_inclusion._build_anchor_file_provider(
-            "calendar.csv",
-            anchor_file_dir=td,
-            fallback_hhmm=(9, 0),
-            seed_base="fallback-provider-test",
-            core=core,
-        )
-        kwargs = dict(
-            dnf=None,
-            anchor_file_str="calendar.csv",
-            default_seed_date=date(2026, 8, 2),
-            seed_base="fallback-provider-test",
-            omit_dnf=None,
-            core=core,
-            next_occurrence_after_local_dt=lambda *args, **kwargs: None,
-            anchor_file_dir=td,
-            anchor_file_provider=provider,
-        )
-        first = collect_included_legacy(
-            after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
-            inclusive=False,
-            limit_included=1,
-            fallback_hhmm=(9, 0),
-            **kwargs,
-        )
-        second = collect_included_legacy(
-            after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (6, 0))),
-            inclusive=False,
-            limit_included=1,
-            fallback_hhmm=(6, 0),
-            **kwargs,
-        )
-    expect(first and first[0].strftime("%Y-%m-%d %H:%M") == "2026-08-03 09:00", f"unexpected initial fallback: {first!r}")
-    expect(second and second[0].strftime("%Y-%m-%d %H:%M") == "2026-08-03 06:00", f"stale fallback provider was reused: {second!r}")
-
-
-def test_included_provider_bounds_anchor_file_omission_scan():
-    """An omission rule cannot make anchor-file lookup spin forever."""
-    import nautical_core.anchor_inclusion as anchor_inclusion
-    from nautical_core.occurrence_provider import Occurrence
-
-    after_local = core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0)))
-
-    class _DailyProvider:
-        def next_after(self, cursor, **_kwargs):
-            value = cursor + timedelta(days=1)
-            return Occurrence(value.date(), value.hour, value.minute, local_datetime=value)
-
-    original = anchor_inclusion._anchor_file_occurrence_is_omitted
-    anchor_inclusion._anchor_file_occurrence_is_omitted = lambda *_args, **_kwargs: True
-    try:
-        try:
-            anchor_inclusion.next_included_occurrence(
-                dnf=None,
-                anchor_file_str="calendar.csv",
-                after_local_dt=after_local,
-                inclusive=False,
-                fallback_hhmm=(9, 0),
-                default_seed_date=after_local.date(),
-                seed_base="omission-limit-test",
-                omit_dnf=None,
-                core=core,
-                next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
-                anchor_file_provider=_DailyProvider(),
-                max_file_skips=2,
-            )
-        except ValueError as exc:
-            expect("omission scan exceeded 2 occurrences" in str(exc), "omission limit error was not actionable")
-        else:
-            expect(False, "unbounded anchor-file omission scan did not fail closed")
-    finally:
-        anchor_inclusion._anchor_file_occurrence_is_omitted = original
-
-
-def test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup():
-    """Ordinary anchor projections share the typed provider contract."""
-    from datetime import datetime
-    from nautical_core.occurrence_provider import AnchorOccurrenceProvider, Occurrence
-
-    provider = AnchorOccurrenceProvider(
-        lambda after: datetime(2026, 8, 4, 9, 0) if after < datetime(2026, 8, 4, 9, 0) else None,
-    )
-    next_value = provider.next_after(
-        datetime(2026, 8, 3, 9, 0),
-        build_local_datetime=lambda day, hhmm: datetime(day.year, day.month, day.day, *hhmm),
-        to_local=lambda value: value,
-    )
-    expect(next_value == Occurrence(date(2026, 8, 4), 9, 0), f"unexpected ordinary provider value: {next_value!r}")
-
-
-def test_provider_contract_advertises_only_certified_capabilities():
-    """Capability flags are explicit metadata and do not enable execution by themselves."""
-    from nautical_core.anchor_files import AnchorFileOccurrenceProvider
-    from nautical_core.occurrence_provider import ProviderCapabilities, ProviderContract
-
-    ordinary = ProviderContract(source="anchor")
-    expect(ordinary.capabilities == ProviderCapabilities(), "ordinary provider gained an implicit optimization")
-    file_provider = AnchorFileOccurrenceProvider(None, None, (9, 0))
-    expect(file_provider.contract.capabilities.cursor_reuse, "anchor-file cursor reuse was not certified")
-    expect(file_provider.contract.capabilities.batch_generation, "anchor-file batch generation was not certified")
-    expect(not file_provider.contract.capabilities.arithmetic_counting, "uncertified arithmetic counting was advertised")
-
-
-def test_anchor_file_cursor_reuse_matches_fresh_provider_reference():
-    """The anchor-file cursor cache is equivalent to fresh authoritative lookups."""
-    import tempfile
-    from pathlib import Path
-    from zoneinfo import ZoneInfo
-    from nautical_core.anchor_files import AnchorFileOccurrenceProvider
-
-    zone = ZoneInfo("UTC")
-    with tempfile.TemporaryDirectory() as td:
-        Path(td, "calendar.csv").write_text(
-            "date,description\n2026-08-03,first\n2026-08-10,second\n2026-08-17,third\n",
-            encoding="utf-8",
-        )
-
-        def build(day, hhmm):
-            return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone)
-
-        identity = lambda value: value
-        cursors = (
-            datetime(2026, 8, 1, 9, tzinfo=zone),
-            datetime(2026, 8, 9, 9, tzinfo=zone),
-            datetime(2026, 8, 4, 9, tzinfo=zone),
-        )
-        cached = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
-        for cursor in cursors:
-            optimized = cached.next_after(cursor, build_local_datetime=build, to_local=identity)
-            reference = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0)).next_after(
-                cursor, build_local_datetime=build, to_local=identity
-            )
-            expect(
-                optimized is not None and reference is not None
-                and optimized.local_datetime == reference.local_datetime
-                and optimized.description == reference.description,
-                f"cached anchor-file lookup diverged at {cursor!s}",
-            )
-        stats = cached.cache_stats
-        expect(stats["lookups"] == 3 and stats["builds"] == 1, f"unexpected anchor-file cache stats: {stats!r}")
-        expect(stats["records"] == 3 and stats["hit_ratio"] > 0.6, f"anchor-file cache reuse was not measurable: {stats!r}")
-
-
-def test_anchor_file_batch_generation_matches_repeated_reference_lookups():
-    """The provider-owned batch slice matches its strict next-after reference."""
-    import tempfile
-    from pathlib import Path
-    from zoneinfo import ZoneInfo
-    from nautical_core.anchor_files import AnchorFileOccurrenceProvider
-    from nautical_core.occurrence_provider import collect_after
-
-    zone = ZoneInfo("UTC")
-    with tempfile.TemporaryDirectory() as td:
-        Path(td, "calendar.csv").write_text(
-            "date,description\n2026-08-03,first\n2026-08-10,second\n2026-08-17,third\n",
-            encoding="utf-8",
-        )
-
-        def build(day, hhmm):
-            return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone)
-
-        provider = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
-        optimized = collect_after(
-            provider,
-            datetime(2026, 8, 1, 9, tzinfo=zone),
-            limit=3,
-            build_local_datetime=build,
-            to_local=lambda value: value,
-            require_contract=True,
-        )
-        reference_provider = AnchorFileOccurrenceProvider("calendar.csv", td, (9, 0))
-        reference = collect_after(
-            reference_provider,
-            datetime(2026, 8, 1, 9, tzinfo=zone),
-            limit=3,
-            build_local_datetime=build,
-            to_local=lambda value: value,
-            require_contract=True,
-        )
-        expect(
-            [(item.local_datetime, item.description) for item in optimized]
-            == [(item.local_datetime, item.description) for item in reference],
-            "anchor-file batch generation diverged from the reference collector",
-        )
-
-
-def test_occurrence_provider_adapters_preserve_stream_metadata():
-    """Provider adapters should retain source and description metadata."""
-    from datetime import datetime, timedelta
-    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider, Occurrence
-
-    after = datetime(2026, 8, 3, 9, 0)
-    identity = lambda value: value
-    ordinary = AnchorOccurrenceProvider(
-        lambda value: value + timedelta(hours=1),
-        source="anchor+anchor_file",
-        description="merged source",
-    )
-    event = AnchorEventOccurrenceProvider(
-        lambda value: (value + timedelta(hours=1), False),
-        source="anchor_file",
-        description="calendar entry",
-    )
-    typed_ordinary = AnchorOccurrenceProvider(
-        lambda value: Occurrence(
-            value.date(),
-            value.hour + 1,
-            value.minute,
-            source="astronomy",
-            description="sunrise",
-            local_datetime=value + timedelta(hours=1),
-        )
-    )
-    for provider, expected_source, expected_description in (
-        (ordinary, "anchor+anchor_file", "merged source"),
-        (event, "anchor_file", "calendar entry"),
-        (typed_ordinary, "astronomy", "sunrise"),
-    ):
-        occurrence = provider.next_after(
-            after,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=identity,
-        )
-        expect(occurrence is not None, "metadata provider returned no occurrence")
-        expect(occurrence.source == expected_source, f"source metadata was lost: {occurrence!r}")
-        expect(occurrence.description == expected_description, f"description metadata was lost: {occurrence!r}")
-
-
-def test_occurrence_provider_rejects_dst_fallback_backward_progress():
-    """A repeated-hour candidate must advance by instant, not wall-clock label."""
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_provider import AnchorOccurrenceProvider
-
-    zone = ZoneInfo("Europe/Bucharest")
-    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-    backward = datetime(2026, 10, 25, 3, 30, tzinfo=zone, fold=0)
-    provider = AnchorOccurrenceProvider(lambda _value: backward)
-    try:
-        provider.next_after(
-            after,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        expect(False, "provider accepted a DST-fold occurrence that was earlier in UTC")
-    except ValueError as exc:
-        expect("non-advancing" in str(exc), f"unexpected DST-fold progress error: {exc}")
-
-
-def test_anchor_file_provider_orders_dst_fallback_by_instant():
-    """Anchor-file successors should skip wall-clock values earlier in the repeated hour."""
-    import nautical_core.anchor_files as anchor_files
-    from zoneinfo import ZoneInfo
-
-    zone = ZoneInfo("Europe/Bucharest")
-    provider = anchor_files.AnchorFileOccurrenceProvider(None, None, (9, 0))
-    provider._spec_cache = [
-        (date(2026, 10, 25), (3, 30)),
-        (date(2026, 10, 25), (3, 45)),
-    ]
-
-    def build(day, hhmm):
-        fold = 1 if hhmm == (3, 45) else 0
-        return datetime(day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=zone, fold=fold)
-
-    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-    occurrence = provider.next_after(after, build_local_datetime=build, to_local=lambda value: value)
-    expect(
-        occurrence is not None
-        and occurrence.local_datetime is not None
-        and occurrence.local_datetime.hour == 3
-        and occurrence.local_datetime.minute == 45
-        and occurrence.local_datetime.fold == 1,
-        f"anchor-file provider did not order DST-fold candidates by instant: {occurrence!r}",
-    )
-
-
-def test_occurrence_collection_inclusive_cursor_steps_back_by_instant():
-    """Inclusive collection must subtract epsilon in UTC across a repeated hour."""
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_provider import Occurrence, collect_after
-
-    zone = ZoneInfo("Europe/Bucharest")
-    after = datetime(2026, 10, 25, 3, 15, tzinfo=zone, fold=1)
-    seen = []
-
-    class Echo:
-        def next_after(self, cursor, **_kwargs):
-            seen.append(cursor)
-            return Occurrence(after.date(), after.hour, after.minute, local_datetime=after)
-
-    collect_after(
-        Echo(),
-        after,
-        limit=1,
-        inclusive=True,
-        build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-        to_local=lambda value: value,
-    )
-    expect(seen, "inclusive collector did not invoke provider")
-    expect(
-        seen[0].astimezone(timezone.utc) == after.astimezone(timezone.utc) - timedelta(microseconds=1),
-        f"inclusive cursor moved by wall time instead of instant: {seen[0]!r}",
-    )
-
-
-def test_occurrence_provider_rejects_malformed_callback_payloads():
-    """Provider adapters should explain malformed callback values instead of leaking unpack errors."""
-    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider
-
-    after = datetime(2026, 8, 3, 9, 0)
-    call_kwargs = {
-        "build_local_datetime": lambda day, hhmm: datetime.combine(day, hhmm),
-        "to_local": lambda value: value,
-    }
-    for payload, expected in (
-        ((after, False, "extra"), "tuple"),
-        ([after, False], "tuple"),
-        (("not-a-datetime", False), "non-datetime value"),
-    ):
-        provider = AnchorEventOccurrenceProvider(lambda _value, payload=payload: payload)
-        try:
-            provider.next_after(after, **call_kwargs)
-            expect(False, f"malformed event payload was accepted: {payload!r}")
-        except TypeError as exc:
-            expect(expected in str(exc), f"event payload error was not actionable: {exc}")
-
-    provider = AnchorOccurrenceProvider(lambda _value: "not-a-datetime")
-    try:
-        provider.next_after(after, **call_kwargs)
-        expect(False, "ordinary provider accepted a non-datetime callback value")
-    except TypeError as exc:
-        expect("non-datetime value" in str(exc), f"ordinary payload error was not actionable: {exc}")
-
-
-def test_occurrence_providers_reject_non_advancing_values():
-    """Provider adapters fail closed instead of allowing duplicate occurrence loops."""
-    from datetime import datetime
-    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider, AnchorOccurrenceProvider
-
-    after = datetime(2026, 8, 3, 9, 0)
-    identity = lambda value: value
-    for provider in (
-        AnchorOccurrenceProvider(lambda value: value),
-        AnchorEventOccurrenceProvider(lambda value: (value, False)),
-    ):
-        try:
-            provider.next_after(after, build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm), to_local=identity)
-            expect(False, "provider accepted a non-advancing occurrence")
-        except ValueError as exc:
-            expect("non-advancing" in str(exc), f"unexpected progress guard error: {exc}")
-
-
-def test_occurrence_values_reject_inconsistent_fields():
-    """Typed occurrences reject invalid clocks and mismatched local datetimes."""
-    from datetime import datetime
-    from nautical_core.occurrence_provider import Occurrence
-
-    for factory in (
-        lambda: Occurrence(date(2026, 8, 3), 24, 0),
-        lambda: Occurrence(date(2026, 8, 3), 9, 60),
-        lambda: Occurrence(date(2026, 8, 3), 9, 0, local_datetime=datetime(2026, 8, 3, 10, 0)),
-        lambda: Occurrence(date(2026, 8, 3), 9, 0, source=object()),
-        lambda: Occurrence(date(2026, 8, 3), 9, 0, description=object()),
-    ):
-        try:
-            factory()
-            expect(False, "invalid occurrence fields were accepted")
-        except (TypeError, ValueError):
-            pass
-
-
-def test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion():
-    """Bounded collection must reject malformed lazy values and cap exhaustion."""
-    from datetime import datetime, timedelta
-    from nautical_core.occurrence_provider import Occurrence, collect_after
-
-    after = datetime(2026, 8, 3, 9, 0)
-
-    class MissingLocal:
-        def next_after(self, *args, **kwargs):
-            return Occurrence(date(2026, 8, 3), 10, 0)
-
-    try:
-        collect_after(
-            MissingLocal(), after_local=after, limit=1, max_iterations=2,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        expect(False, "collection accepted an occurrence without lazy local datetime")
-    except ValueError as exc:
-        expect("no local datetime" in str(exc), f"unexpected lazy-value error: {exc}")
-
-    class NeverIncluded:
-        def __init__(self):
-            self.value = after
-
-        def next_after(self, *args, **kwargs):
-            self.value += timedelta(hours=1)
-            return Occurrence(
-                self.value.date(), self.value.hour, self.value.minute,
-                local_datetime=self.value, omitted=True,
-            )
-
-    try:
-        collect_after(
-            NeverIncluded(), after_local=after, limit=1, max_iterations=2,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        expect(False, "collection silently truncated after its iteration cap")
-    except ValueError as exc:
-        expect("iteration limit" in str(exc), f"unexpected cap error: {exc}")
-
-
-def test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency():
-    """The shared collector rejects duplicate timestamps and naive/aware drift."""
-    from datetime import datetime, timezone
-    from nautical_core.occurrence_provider import Occurrence, collect_after
-
-    after = datetime(2026, 8, 3, 9, 0)
-
-    class Duplicate:
-        def next_after(self, *args, **kwargs):
-            return Occurrence(date(2026, 8, 3), 9, 0, local_datetime=after)
-
-    try:
-        collect_after(
-            Duplicate(), after_local=after, limit=1,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        expect(False, "collector accepted a duplicate occurrence timestamp")
-    except ValueError as exc:
-        expect("non-advancing" in str(exc), f"unexpected duplicate timestamp error: {exc}")
-
-    class Aware:
-        def next_after(self, *args, **kwargs):
-            value = after.replace(tzinfo=timezone.utc)
-            return Occurrence(value.date(), value.hour, value.minute, local_datetime=value)
-
-    try:
-        collect_after(
-            Aware(), after_local=after, limit=1,
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        expect(False, "collector accepted mixed naive and aware cursors")
-    except ValueError as exc:
-        expect("incomparable" in str(exc), f"unexpected timezone consistency error: {exc}")
-
-
-def test_occurrence_event_provider_requires_boolean_omitted_flag():
-    """Event adapters must preserve the typed omission contract."""
-    from datetime import datetime, timedelta
-    from nautical_core.occurrence_provider import AnchorEventOccurrenceProvider
-
-    provider = AnchorEventOccurrenceProvider(
-        lambda value: (value + timedelta(hours=1), "false")
-    )
-    try:
-        provider.next_after(
-            datetime(2026, 8, 3, 9, 0),
-            build_local_datetime=lambda day, hhmm: datetime.combine(day, hhmm),
-            to_local=lambda value: value,
-        )
-        expect(False, "event provider accepted a non-boolean omitted flag")
-    except TypeError as exc:
-        expect("non-boolean" in str(exc), f"unexpected omitted-flag error: {exc}")
-
-
-def test_anchor_inclusion_scheduler_propagates_internal_errors():
-    """The typed scheduler callback is invoked once without retrying failures."""
-    import nautical_core.anchor_inclusion as inclusion
-
-    after = datetime(2026, 8, 3, 9, 0)
-    calls = []
-
-    def modern(dnf, value, *, default_seed_date, seed_base, omit_dnf, fallback_hhmm):
-        calls.append(value)
-        raise TypeError("internal scheduler defect")
-
-    try:
-        inclusion.next_included_occurrence(
-            dnf=[[]],
-            anchor_file_str="",
-            after_local_dt=after,
-            inclusive=False,
-            fallback_hhmm=(9, 0),
-            default_seed_date=date(2026, 8, 3),
-            seed_base="dispatch-test",
-            omit_dnf=None,
-            core=core,
-            next_occurrence_after_local_dt=modern,
-        )
-        expect(False, "internal scheduler TypeError was swallowed")
-    except TypeError as exc:
-        expect(str(exc) == "internal scheduler defect", f"unexpected scheduler error: {exc}")
-    expect(len(calls) == 1, f"scheduler was retried after an internal error: {calls!r}")
-
-
-def test_modify_inclusion_collection_uses_shared_progress_guard():
-    """Modify-side inclusion collection must fail instead of returning a partial stream."""
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    # The heavy hook is intentionally lazy; initialize its core context before
-    # exercising the private collection helper directly.
-    _hook._load_core()
-
-    original = RecurrenceEvaluator._default_next_occurrence_after_local_dt
-    RecurrenceEvaluator._default_next_occurrence_after_local_dt = (
-        lambda _self, _dnf, value, **_kwargs: value
-    )
-    try:
-        try:
-            import nautical_core.modify_schedule_effects as schedule_effects
-            schedule_effects.anchor_included_occurrences(
-                _hook,
-                {
-                    "uuid": "00000000-0000-4000-8000-000000000960",
-                    "status": "pending",
-                    "link": 1,
-                    "anchor": "w:mon",
-                    "chainID": "provider-guard-test",
-                },
-                after_local_dt=datetime(2026, 8, 3, 9, 0),
-                inclusive=False,
-                limit=1,
-                fallback_hhmm=(9, 0),
-                omit_dnf=None,
-                seed_base="provider-guard-test",
-                default_seed_date=date(2026, 8, 3),
-                dnf=[[{"kind": "w", "value": "mon", "mods": {}}]],
-            )
-            expect(False, "modify inclusion collection silently accepted a stalled stream")
-        except ValueError as exc:
-            expect("non-advancing" in str(exc), f"unexpected modify collection error: {exc}")
-    finally:
-        RecurrenceEvaluator._default_next_occurrence_after_local_dt = original
-
-
-def test_modify_until_projection_reuses_anchor_file_provider():
-    """Until-cap projection should expand an anchor file once per reconciliation."""
-    import nautical_core.anchor_inclusion as anchor_inclusion
-
-    _hook._load_core()
-    builders = []
-    providers = []
-    original_builder = anchor_inclusion._build_anchor_file_provider
-    schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
-    original_included = schedule_effects.anchor_included_occurrences
-
-    def build_provider(*_args, **_kwargs):
-        provider = object()
-        builders.append(provider)
-        return provider
-
-    def included(_task, *, after_local_dt, anchor_file_provider=None, **_kwargs):
-        providers.append(anchor_file_provider)
-        return [after_local_dt + timedelta(days=1)]
-
-    anchor_inclusion._build_anchor_file_provider = build_provider
-    schedule_effects.anchor_included_occurrences = lambda _host, task, **kwargs: included(task, **kwargs)
-    try:
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000961",
-            "status": "pending",
-            "chainID": "provider-reuse",
-            "link": 1,
-            "due": "20260801T090000Z",
-            "chainUntil": "20260805T090000Z",
-            "anchor_file": "calendar.csv",
-        }
-        final_no, final_dt = schedule_effects.cap_from_until_anchor(
-            _hook, task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None
-        )
-        expect(final_no == 6, f"unexpected capped link number: {final_no!r}")
-        expect(final_dt is not None, "until projection did not produce a final occurrence")
-        expect(len(builders) == 1, f"anchor file provider was rebuilt {len(builders)} times")
-        expect(providers and all(value is builders[0] for value in providers), "projection did not reuse the provider")
-    finally:
-        anchor_inclusion._build_anchor_file_provider = original_builder
-        schedule_effects.anchor_included_occurrences = original_included
-
-
-def test_modify_until_projection_fails_closed_at_iteration_limit():
-    """A long until horizon must not return a silently truncated cap."""
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    _hook._load_core()
-    original_next = RecurrenceEvaluator._default_next_occurrence_after_local_dt
-
-    def next_daily(_self, _dnf, value, **_kwargs):
-        return value + timedelta(days=1)
-
-    RecurrenceEvaluator._default_next_occurrence_after_local_dt = next_daily
-    try:
-        task = {
-            "uuid": "00000000-0000-4000-8000-000000000962",
-            "status": "pending",
-            "chainID": "projection-limit",
-            "anchor": "w:mon",
-            "link": 1,
-            "due": "20260801T090000Z",
-            "chainUntil": "20350801T090000Z",
-        }
-        try:
-            schedule_effects = importlib.import_module("nautical_core.modify_schedule_effects")
-            schedule_effects.cap_from_until_anchor(
-                _hook, task, datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc), None
-            )
-        except ValueError as exc:
-            expect("projection exceeded" in str(exc), f"unexpected iteration-limit error: {exc}")
-        else:
-            expect(False, "until projection silently truncated at its iteration limit")
-    finally:
-        RecurrenceEvaluator._default_next_occurrence_after_local_dt = original_next
-
-
-def test_anchor_file_provider_rejects_incomparable_datetimes():
-    """Anchor-file lookup should explain mixed naive and aware datetime inputs."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        Path(td, "calendar.csv").write_text("date\n2026-08-04\n", encoding="utf-8")
-        provider = anchor_files.AnchorFileOccurrenceProvider("calendar.csv@t=09:00", td, (8, 0))
-        try:
-            provider.next_after(
-                datetime(2026, 8, 3, 9, 0),
-                build_local_datetime=core.build_local_datetime,
-                to_local=core.to_local,
-            )
-            expect(False, "anchor-file provider accepted incomparable datetime values")
-        except ValueError as exc:
-            expect("incomparable" in str(exc), f"unexpected anchor-file comparison error: {exc}")
-
-
-def test_anchor_file_omit_evaluation_failures_propagate():
-    """An omit-rule failure must not be treated as an allowed occurrence."""
-    import nautical_core.anchor_inclusion as inclusion
-    import nautical_core.anchor_omit as anchor_omit
-
-    original = anchor_omit.omit_expr_fires_on_date
-    anchor_omit.omit_expr_fires_on_date = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("broken omit"))
-    try:
-        try:
-            inclusion._anchor_file_occurrence_is_omitted(
-                datetime(2026, 8, 3, 9, 0),
-                omit_dnf=[["omit"]],
-                default_seed_date=date(2026, 8, 3),
-                seed_base="omit-test",
-                core=core,
-            )
-            expect(False, "omit-rule failure was silently ignored")
-        except ValueError as exc:
-            expect("Unable to evaluate omit rule" in str(exc), f"unexpected omit error: {exc}")
-    finally:
-        anchor_omit.omit_expr_fires_on_date = original
-
-
-def test_omit_scheduler_failures_do_not_fail_open():
-    """Unexpected omit scheduler errors must not turn into allowed dates."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    original = core.next_after_expr
-    core.next_after_expr = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("scheduler unavailable"))
-    try:
-        try:
-            anchor_omit.omit_expr_fires_on_date(
-                [[{"kind": "w", "value": "mon", "mods": {}}]],
-                date(2026, 8, 3),
-                date(2026, 8, 1),
-                "omit-fail-closed",
-                core=core,
-            )
-            expect(False, "omit scheduler failure was treated as an allowed date")
-        except ValueError as exc:
-            expect("Unable to evaluate omit rule" in str(exc), f"unexpected omit failure: {exc}")
-    finally:
-        core.next_after_expr = original
-
-
-def test_add_preview_event_collection_counts_only_included_occurrences():
-    """Omitted events may fill the stream but must not consume the included limit."""
-    from datetime import datetime, timedelta, timezone
-    import nautical_core.add_anchor_preview as preview
-    import nautical_core.anchor_inclusion as inclusion
-    from dev_tools.legacy_preview_adapter import collect_events_legacy
-
-    original = inclusion.next_occurrence_event_local
-    start = datetime(2026, 8, 3, 9, 0, tzinfo=timezone.utc)
-
-    def fake_next(**kwargs):
-        cursor = kwargs["after_local_dt"]
-        step = int((cursor - start).total_seconds() // 3600) + 1
-        if step > 5:
-            return None
-        return (start + timedelta(hours=step), step <= 3)
-
-    inclusion.next_occurrence_event_local = fake_next
-    try:
-        events = collect_events_legacy(
-            dnf=None,
-            anchor_file_str="",
-            after_local_dt=start,
-            inclusive=False,
-            limit_included=2,
-            fallback_hhmm=(9, 0),
-            default_seed_date=start.date(),
-            seed_base="provider-test",
-            omit_dnf=None,
-            core=core,
-            next_occurrence_after_local_dt=lambda *args, **kwargs: None,
-        )
-    finally:
-        inclusion.next_occurrence_event_local = original
-    expect(len(events) == 5, f"omitted events consumed included limit: {events!r}")
-    expect(sum(not omitted for _value, omitted in events) == 2, "event collector returned the wrong included count")
-
-
-def test_anchor_file_occurrences_expand_overnight_time_window():
-    """File dates own overnight slots even when generated times land next day."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
-        occurrences = anchor_files.load_anchor_file_occurrence_specs(
-            "calendar.csv@t=22:30..06:30/7",
-            td,
-            (9, 0),
-        )
-    expect(
-        occurrences == [
-            (date(2026, 8, 3), (22, 30)),
-            (date(2026, 8, 3), (23, 50)),
-            (date(2026, 8, 4), (1, 10)),
-            (date(2026, 8, 4), (2, 30)),
-            (date(2026, 8, 4), (3, 50)),
-            (date(2026, 8, 4), (5, 10)),
-            (date(2026, 8, 4), (6, 30)),
-        ],
-        f"unexpected overnight anchor_file occurrences: {occurrences!r}",
-    )
-
-
-def test_anchor_file_occurrences_expand_composable_time_schedule():
-    """anchor_file should expand a window plus an explicit clock slot."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        sample = Path(td) / "calendar.csv"
-        sample.write_text("date\n2026-08-03\n", encoding="utf-8")
-        occurrences = anchor_files.load_anchor_file_occurrence_specs("calendar.csv@t=06..12/3h,18", td, (8, 0))
-    expect(
-        [hhmm for _day, hhmm in occurrences] == [(6, 0), (9, 0), (12, 0), (18, 0)],
-        f"unexpected composable anchor_file occurrences: {occurrences!r}",
-    )
-
-
-def test_anchor_file_spec_rejects_unpadded_times():
-    """anchor_file spec should reject 3:00 with a leading-zero hint."""
-    import nautical_core.anchor_files as anchor_files
-
-    try:
-        anchor_files.parse_anchor_file_spec('calendar.csv@t=3:00')
-        expect(False, 'expected anchor_file time padding validation to fail')
-    except ValueError as e:
-        msg = str(e)
-        expect('leading zero' in msg and '03:00' in msg, f'unexpected padding hint: {e}')
-
-
-def test_anchor_file_composable_schedule_rejects_empty_members():
-    """anchor_file should expose the same empty-member guard as ordinary anchors."""
-    import nautical_core.anchor_files as anchor_files
-
-    try:
-        anchor_files.parse_anchor_file_spec("calendar.csv@t=06..12/2h,,18")
-        expect(False, "malformed anchor_file schedule was accepted")
-    except ValueError as exc:
-        expect("empty" in str(exc).lower(), f"unexpected anchor_file schedule error: {exc}")
-
-
-def test_anchor_file_loader_transforms_dates_and_carries_descriptions():
-    """anchor_file should transform file dates and carry descriptions to the transformed date."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        sample = anchor_dir / 'calendar.csv'
-        sample.write_text(
-            'date,description\n'
-            '2026-04-25,Weekend anchor\n',
-            encoding='utf-8',
-        )
-        got_dates = anchor_files.load_anchor_file_dates('calendar.csv@nbd', str(anchor_dir))
-        got_desc = anchor_files.load_anchor_file_descriptions('calendar.csv@nbd', str(anchor_dir))
-        expect(got_dates == frozenset({date(2026, 4, 27)}), f'unexpected transformed anchor_file dates: {got_dates!r}')
-        expect(got_desc == {date(2026, 4, 27): 'Weekend anchor'}, f'unexpected transformed anchor_file descriptions: {got_desc!r}')
-        shifted = anchor_files.load_anchor_file_dates('calendar.csv@nbd@-1bd', str(anchor_dir))
-        expect(shifted == frozenset({date(2026, 4, 24)}), f'unexpected anchor_file business-day shift: {shifted!r}')
-
-
-def test_anchor_file_next_occurrence_after_uses_task_level_time():
-    """anchor_file next-occurrence helper should use task-level @t values over fallback time."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        sample = anchor_dir / 'calendar.csv'
-        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
-        after_local = core.to_local(core.build_local_datetime(date(2026, 4, 24), (10, 0)))
-        nxt = anchor_files.next_anchor_file_occurrence_after(
-            'calendar.csv@t=12:00,17:00',
-            str(anchor_dir),
-            after_local,
-            (9, 0),
-            build_local_datetime=core.build_local_datetime,
-            to_local=core.to_local,
-        )
-        expect(nxt is not None and nxt.date() == date(2026, 4, 25) and nxt.hour == 12 and nxt.minute == 0, f'unexpected anchor_file next occurrence: {nxt!r}')
-
-
-def test_anchor_file_next_occurrence_after_uses_shared_dst_ordering():
-    """The legacy helper should inherit provider ordering across a DST gap."""
-    import nautical_core.anchor_files as anchor_files
-    from nautical_core.timeutil import build_local_datetime
-    from zoneinfo import ZoneInfo
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text(
-            "date\n2026-03-29\n2026-03-29\n",
-            encoding="utf-8",
-        )
-        zone = ZoneInfo("Europe/Bucharest")
-        # Duplicate the date with explicit times by patching the loader-shaped cache
-        # through a provider is covered separately; this helper regression verifies
-        # that its implementation is the shared provider boundary.
-        original = anchor_files.load_anchor_file_occurrence_specs
-        anchor_files.load_anchor_file_occurrence_specs = lambda *args, **kwargs: [
-            (date(2026, 3, 29), (3, 30)),
-            (date(2026, 3, 29), (4, 0)),
-        ]
-        try:
-            after = datetime(2026, 3, 29, 2, 0, tzinfo=zone)
-            nxt = anchor_files.next_anchor_file_occurrence_after(
-                "calendar.csv",
-                td,
-                after,
-                (9, 0),
-                build_local_datetime=lambda day, hhmm: build_local_datetime(day, hhmm, zone),
-                to_local=lambda value: value.astimezone(zone),
-            )
-        finally:
-            anchor_files.load_anchor_file_occurrence_specs = original
-        expect(
-            nxt is not None and (nxt.hour, nxt.minute) == (4, 0),
-            f"legacy helper did not use normalized provider ordering: {nxt!r}",
-        )
-
-
-def test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns():
-    """file-source expressions should retain inner-to-outer modifier layers and reject unsupported paths/globs."""
-    from nautical_core.file_source_expr import parse_file_source_expression
-
-    sources = parse_file_source_expression(
-        '(one.csv@-1d | team-?.csv)@+1d | final.txt',
-        label='anchor_file',
-    )
-    expect(
-        [(item.pattern, item.modifier_layers) for item in sources]
-        == [
-            ('one.csv', ('@-1d', '@+1d')),
-            ('team-?.csv', ('@+1d',)),
-            ('final.txt', ()),
-        ],
-        f'unexpected flattened file sources: {sources!r}',
-    )
-
-    for expr, expected in (
-        ('one.csv || two.csv', 'empty branch'),
-        ('../one.csv', 'not a path'),
-        ('**', "recursive '**'"),
-        ('team-[ab].csv', "only '*' and '?'"),
-    ):
-        try:
-            parse_file_source_expression(expr, label='anchor_file')
-            expect(False, f'expected invalid file-source expression to fail: {expr!r}')
-        except ValueError as e:
-            expect(expected in str(e), f'unexpected expression error for {expr!r}: {e}')
-
-
-def test_anchor_file_expression_merges_sources_and_applies_group_modifiers():
-    """anchor_file should merge ordered sources while applying branch modifiers before group modifiers."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / 'first.csv').write_text(
-            'date,description\n2026-04-20,First description\n',
-            encoding='utf-8',
-        )
-        (anchor_dir / 'second.csv').write_text(
-            'date,description\n2026-04-21,Second description\n2026-04-22,Later date\n',
-            encoding='utf-8',
-        )
-
-        expr = '(first.csv@+1d | second.csv)@+1d'
-        got_dates = anchor_files.load_anchor_file_dates(expr, str(anchor_dir))
-        got_descriptions = anchor_files.load_anchor_file_descriptions(expr, str(anchor_dir))
-        expect(
-            got_dates == frozenset({date(2026, 4, 22), date(2026, 4, 23)}),
-            f'unexpected multi-source anchor dates: {got_dates!r}',
-        )
-        expect(
-            got_descriptions == {
-                date(2026, 4, 22): 'First description',
-                date(2026, 4, 23): 'Later date',
-            },
-            f'first source should win description conflicts: {got_descriptions!r}',
-        )
-
-
-def test_file_source_wildcards_are_deterministic_and_star_dot_star_means_all():
-    """exact *.* should include every non-hidden regular file, including names without a dot."""
-    import nautical_core.anchor_files as anchor_files
-    import nautical_core.file_source_expr as file_source_expr
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / 'b.csv').write_text('date\n2026-04-22\n', encoding='utf-8')
-        (anchor_dir / 'a').write_text('2026-04-21\n', encoding='utf-8')
-        (anchor_dir / '.hidden.csv').write_text('date\n2026-04-23\n', encoding='utf-8')
-        (anchor_dir / 'folder.csv').mkdir()
-
-        got = anchor_files.load_anchor_file_dates('*.*', str(anchor_dir))
-        expect(
-            got == frozenset({date(2026, 4, 21), date(2026, 4, 22)}),
-            f'*.* should include non-hidden regular files only: {got!r}',
-        )
-        expect(
-            anchor_files.load_anchor_file_dates('missing-*.csv', str(anchor_dir)) == frozenset(),
-            'an unmatched wildcard should contribute an empty date set',
-        )
-        expect(
-            anchor_files.unmatched_anchor_file_patterns('missing-*.csv | b.csv', str(anchor_dir))
-            == ('missing-*.csv',),
-            'unmatched wildcard should remain available to diagnostics',
-        )
-        scan_calls = 0
-        original_scandir = file_source_expr.os.scandir
-
-        def counted_scandir(path):
-            nonlocal scan_calls
-            scan_calls += 1
-            return original_scandir(path)
-
-        file_source_expr.os.scandir = counted_scandir
-        try:
-            file_source_expr.resolve_file_source_expression(
-                '* | *.csv | missing-?.txt',
-                str(anchor_dir),
-                label='anchor_file',
-            )
-        finally:
-            file_source_expr.os.scandir = original_scandir
-        expect(scan_calls == 1, f'wildcard branches should share one directory scan, got {scan_calls}')
-        try:
-            anchor_files.load_anchor_file_dates('missing-*.csv@unknown', str(anchor_dir))
-            expect(False, 'expected an invalid modifier on an unmatched wildcard to fail')
-        except ValueError as e:
-            expect("Unknown anchor_file modifier '@unknown'" in str(e), f'unexpected unmatched modifier error: {e}')
-
-
-def test_anchor_file_expression_preserves_per_source_times_and_dedupes_matches():
-    """independent source times should survive merging and identical literal/glob matches should dedupe."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        anchor_dir = Path(td)
-        (anchor_dir / 'early.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
-        (anchor_dir / 'late.csv').write_text('date\n2026-04-25\n', encoding='utf-8')
-
-        specs = anchor_files.load_anchor_file_occurrence_specs(
-            'late.csv@t=15:00 | early.csv@t=09:00 | early*.csv@t=09:00',
-            str(anchor_dir),
-            (12, 0),
-        )
-        expect(
-            specs == [(date(2026, 4, 25), (9, 0)), (date(2026, 4, 25), (15, 0))],
-            f'unexpected per-source occurrence times: {specs!r}',
-        )
-        grouped_specs = anchor_files.load_anchor_file_occurrence_specs(
-            '(early.csv | late.csv)@t=11:00',
-            str(anchor_dir),
-            (12, 0),
-        )
-        expect(
-            grouped_specs == [(date(2026, 4, 25), (11, 0))],
-            f'grouped @t should apply to every source and dedupe occurrences: {grouped_specs!r}',
-        )
-        try:
-            anchor_files.load_anchor_file_dates('(early.csv@t=09:00 | late.csv)@t=15:00', str(anchor_dir))
-            expect(False, 'expected layered @t modifiers on one source to fail')
-        except ValueError as e:
-            expect('more than one @t modifier' in str(e), f'unexpected layered @t error: {e}')
-        after_local = core.to_local(core.build_local_datetime(date(2026, 4, 25), (10, 0)))
-        nxt = anchor_files.next_anchor_file_occurrence_after(
-            'late.csv@t=15:00 | early.csv@t=09:00',
-            str(anchor_dir),
-            after_local,
-            (12, 0),
-            build_local_datetime=core.build_local_datetime,
-            to_local=core.to_local,
-        )
-        expect(nxt is not None and (nxt.hour, nxt.minute) == (15, 0), f'unexpected next merged occurrence: {nxt!r}')
-
-
-def test_omit_file_expression_merges_sources_atomically_and_rejects_group_times():
-    """omit_file expressions should merge date layers, reject @t, and never return a partial malformed result."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        (omit_dir / 'public.csv').write_text('date\n2026-04-20\n', encoding='utf-8')
-        (omit_dir / 'local.txt').write_text('2026-04-21\n', encoding='utf-8')
-        (omit_dir / 'bad.csv').write_text('date\nnot-a-date\n', encoding='utf-8')
-
-        got = omit_files.load_omit_file_dates('(public.csv | local.txt)@+1d', str(omit_dir))
-        expect(
-            got == frozenset({date(2026, 4, 21), date(2026, 4, 22)}),
-            f'unexpected merged omit dates: {got!r}',
-        )
-        try:
-            omit_files.load_omit_file_dates('(public.csv | local.txt)@t=09:00', str(omit_dir))
-            expect(False, 'expected grouped omit_file time modifier to fail')
-        except ValueError as e:
-            expect('omit_file does not support time modifiers (@t).' in str(e), f'unexpected grouped @t error: {e}')
-        try:
-            omit_files.load_omit_file_dates('missing-*.csv@t=09:00', str(omit_dir))
-            expect(False, 'expected a timed unmatched omit_file pattern to fail')
-        except ValueError as e:
-            expect('omit_file does not support time modifiers (@t).' in str(e), f'unexpected unmatched @t error: {e}')
-        try:
-            omit_files.load_omit_file_dates('public.csv | bad.csv', str(omit_dir))
-            expect(False, 'expected a malformed matched file to invalidate the expression')
-        except ValueError as e:
-            expect("omit_file 'bad.csv'" in str(e), f'malformed source error should identify its file: {e}')
-
-
-def test_file_source_symlink_must_remain_inside_configured_directory():
-    """literal and wildcard sources should reject file symlinks escaping the configured directory."""
-    import nautical_core.anchor_files as anchor_files
-
-    with tempfile.TemporaryDirectory() as td:
-        base = Path(td)
-        anchor_dir = base / 'anchors'
-        anchor_dir.mkdir()
-        outside = base / 'outside.csv'
-        outside.write_text('date\n2026-04-20\n', encoding='utf-8')
-        (anchor_dir / 'linked.csv').symlink_to(outside)
-        try:
-            anchor_files.load_anchor_file_dates('linked.csv', str(anchor_dir))
-            expect(False, 'expected an escaping file symlink to fail')
-        except ValueError as e:
-            expect('resolves outside its configured directory' in str(e), f'unexpected symlink error: {e}')
-
-
-def test_config_exposes_anchor_file_dir():
-    """shared config defaults should expose anchor_file_dir alongside omit_file_dir."""
-    expect(hasattr(core, 'ANCHOR_FILE_DIR'), 'core should expose ANCHOR_FILE_DIR')
 
 
 def test_navigator_uses_anchor_and_anchor_file_sources():
@@ -24235,195 +13416,6 @@ def test_navigator_uses_anchor_and_anchor_file_sources():
             )
         finally:
             navigator.core.ANCHOR_FILE_DIR = old_dir
-
-
-def test_navigator_uses_task_business_calendar_for_anchor_projection():
-    """Navigator projections and due checks should honor the task's bc selection."""
-    module_name = '_nautical_navigator_business_calendar_test'
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, 'nautical_navigator.py'))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-    finally:
-        sys.modules.pop(module_name, None)
-
-    calendars = navigator.core.resolve_business_calendar_config(
-        {'weekend': {'anchor': 'w:sat,sun'}},
-    )
-    saved_registry = navigator.core.configured_business_calendars
-    try:
-        navigator.core.configured_business_calendars = lambda: calendars
-        analyzer = navigator.TaskAnalyzer()
-        task = {
-            'uuid': '00000000-0000-4000-8000-000000000901',
-            'status': 'pending',
-            'link': 1,
-            'chainID': 'navigator-business-calendar',
-            'description': 'weekend navigator anchor',
-            'anchor': 'm:1bd@t=09:00',
-            'bc': 'weekend',
-        }
-        projected = analyzer._project_anchor_dates(
-            task,
-            limit=1,
-            start_from_date=date(2026, 6, 30),
-        )
-        expect(
-            projected and projected[0].date() == date(2026, 7, 4),
-            f'named calendar was ignored by Navigator projection: {projected!r}',
-        )
-        due = navigator.core.fmt_isoz(
-            navigator.core.build_local_datetime(date(2026, 7, 4), (9, 0)),
-        )
-        expect(
-            analyzer._due_is_anchor_day(due, task) is True,
-            'Navigator due validation ignored the named calendar',
-        )
-    finally:
-        navigator.core.configured_business_calendars = saved_registry
-
-
-def test_navigator_surfaces_anchor_projection_failures():
-    """Navigator should retain actionable projection failures instead of showing a blank forecast."""
-    module_name = "_nautical_navigator_projection_warning_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        analyzer = navigator.TaskAnalyzer()
-        original = navigator.core.business_calendar_for_task
-        navigator.core.business_calendar_for_task = lambda _task: (_ for _ in ()).throw(
-            ValueError("calendar is invalid")
-        )
-        try:
-            projected = analyzer._project_anchor_dates(
-                {"anchor": "w:mon", "uuid": "navigator-warning-test"},
-                limit=1,
-                start_from_date=date(2026, 8, 2),
-            )
-        finally:
-            navigator.core.business_calendar_for_task = original
-        expect(projected == [], f"failed projection should not fabricate dates: {projected!r}")
-        expect(
-            analyzer._projection_warnings == ["Business calendar: calendar is invalid"],
-            f"projection failure was not retained: {analyzer._projection_warnings!r}",
-        )
-    finally:
-        sys.modules.pop(module_name, None)
-
-
-def test_navigator_projection_preserves_scheduler_terminal_evidence():
-    """Navigator projections retain bounded scheduler exhaustion metadata."""
-    module_name = "_nautical_navigator_projection_terminal_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        from nautical_core.occurrence_provider import Occurrence
-        from nautical_core.occurrence_outcomes import ExhaustedOccurrence
-        from nautical_core.scheduler_models import OccurrenceSearchExhausted
-
-        class FakeContext:
-            timezone = timezone.utc
-
-        class FakeResult:
-            occurrences = [Occurrence(date(2026, 8, 24), 9, 0, local_datetime=datetime(2026, 8, 24, 9, 0, tzinfo=timezone.utc))]
-            terminal = ExhaustedOccurrence(OccurrenceSearchExhausted("navigator test", limit=1))
-
-        class FakeService:
-            def __init__(self):
-                self.session = SimpleNamespace(evaluator=SimpleNamespace(context=FakeContext()))
-
-            def collect(self, *_args, **_kwargs):
-                return FakeResult()
-
-        original = navigator._build_navigator_scheduler
-        navigator._build_navigator_scheduler = lambda *_args, **_kwargs: (FakeService(), FakeContext())
-        try:
-            result = navigator.TaskAnalyzer()._project_anchor_dates(
-                {"anchor": "w:mon", "uuid": "00000000-0000-4000-8000-000000000903", "chainID": "terminal-test"},
-                limit=1,
-                start_from_date=date(2026, 8, 1),
-            )
-        finally:
-            navigator._build_navigator_scheduler = original
-        expect(len(result) == 1 and result[0].date() == date(2026, 8, 24), f"unexpected projection: {result!r}")
-        expect(getattr(result, "terminal", None) is not None, "scheduler terminal evidence was discarded")
-    finally:
-        sys.modules.pop(module_name, None)
-
-
-def test_navigator_snapshot_metadata_preserves_typed_chain_identity():
-    """Navigator's operator snapshot adapter must retain typed chain identity."""
-    module_name = "_nautical_navigator_snapshot_metadata_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        metadata = navigator.NavigatorTaskMetadata.from_mapping({
-            "uuid": "aaaaaaaa-0000-4000-8000-000000000001",
-            "chainID": "chain-test",
-            "link": 4,
-            "prevLink": "bbbbbbbb",
-            "nextLink": "cccccccc",
-            "status": "pending",
-            "chain": "on",
-            "anchor": "w:mon",
-        })
-        expect(metadata.chain_id == "chain-test", f"chain identity was lost: {metadata!r}")
-        expect(metadata.link == 4 and metadata.previous == "bbbbbbbb", f"link refs were lost: {metadata!r}")
-        expect(metadata.is_active and metadata.has_anchor, f"lifecycle metadata was not classified: {metadata!r}")
-    finally:
-        sys.modules.pop(module_name, None)
-
-
-def test_navigator_resolves_symbolic_anchor_time_offsets():
-    """Navigator projections should convert symbolic event times and preserve offsets."""
-    if not _astral_test_available():
-        return
-    module_name = "_nautical_navigator_symbolic_time_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        old_config = navigator.core.ASTRONOMY_CONFIG
-        navigator.core.ASTRONOMY_CONFIG = {
-            "default_location": "test",
-            "locations": {"test": {"latitude": 40.7128, "longitude": -74.0060, "timezone": "America/New_York"}},
-        }
-        try:
-            analyzer = navigator.TaskAnalyzer()
-            task = {
-                "uuid": "00000000-0000-4000-8000-000000000902",
-                "description": "symbolic navigator time",
-                "status": "pending",
-                "link": 1,
-                "anchor": "w:mon@t=sunset@+45m",
-                "chainID": "navigator-symbolic",
-            }
-            projected = analyzer._project_anchor_dates(task, limit=1, start_from_date=date(2026, 7, 1))
-            expect(projected, "symbolic anchor time produced no projection")
-            astronomy = navigator.core._import_sibling("astronomy")
-            event = astronomy.resolve_event("sunset", date(2026, 7, 6), config=navigator.core.ASTRONOMY_CONFIG)
-            expected = (navigator.core.to_local(event) + timedelta(minutes=45)).replace(second=0, microsecond=0)
-            expect(
-                projected[0].hour == expected.hour and projected[0].minute == expected.minute,
-                f"symbolic time offset was not applied: {projected[0]!r} != {expected!r}",
-            )
-        finally:
-            navigator.core.ASTRONOMY_CONFIG = old_config
-    finally:
-        sys.modules.pop(module_name, None)
 
 
 def test_navigator_surfaces_configuration_drift_warning():
@@ -24519,25 +13511,6 @@ def test_navigator_reloads_validated_taskdata_configuration():
         sys.modules.pop(module_name, None)
 
 
-def test_navigator_uses_nautical_configured_timezone():
-    """Navigator display conversions must use Nautical's configured timezone."""
-    module_name = "_nautical_navigator_timezone_initialization_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        configured = str(getattr(navigator.core, "LOCAL_TZ_NAME", "")).strip()
-        expect(configured, "Nautical core did not expose a configured timezone")
-        expect(
-            getattr(navigator.LOCAL_ZONE, "key", "") == configured,
-            f"Navigator ignored Nautical timezone {configured!r}: {navigator.LOCAL_ZONE!r}",
-        )
-    finally:
-        sys.modules.pop(module_name, None)
-
-
 def test_navigator_fallback_export_uses_empty_filter():
     """Navigator's broad fallback must use Taskwarrior's valid empty filter."""
     from dataclasses import replace
@@ -24594,7 +13567,9 @@ def test_shared_time_slot_resolver_keeps_hook_and_navigator_parity():
         expect(add_mod._resolve_time_slots(value, date(2026, 7, 6)) == expected, "on-add resolver drifted")
         modify_time = modify_mod._module("modify_time_effects")
         expect(
-            modify_time.normalize_hhmm_list(modify_mod, value, date(2026, 7, 6)) == expected,
+            modify_time.normalize_hhmm_list(
+                modify_time.time_slot_ports_for(modify_mod), value, date(2026, 7, 6)
+            ) == expected,
             "on-modify resolver drifted",
         )
     finally:
@@ -24696,299 +13671,6 @@ def test_navigator_projects_all_slots_in_a_time_window():
         sys.modules.pop(module_name, None)
 
 
-def test_time_window_parser_expands_inclusive_exact_boundary():
-    """A time window expands by interval and includes the end only when reached exactly."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    exact = parse_time_window_spec("09:00..17:00/2h")
-    expect(exact is not None, "exact time window was not parsed")
-    expect(
-        exact.slots == ((9, 0), (11, 0), (13, 0), (15, 0), (17, 0)),
-        f"unexpected exact-boundary slots: {exact.slots!r}",
-    )
-    bounded = parse_time_window_spec("09:00..18:00/2h")
-    expect(bounded is not None, "bounded time window was not parsed")
-    expect(
-        bounded.slots == ((9, 0), (11, 0), (13, 0), (15, 0), (17, 0)),
-        f"non-divisible boundary was incorrectly forced: {bounded.slots!r}",
-    )
-    expect(bounded.canonical == "09:00..18:00/2h", f"window canonical form drifted: {bounded.canonical!r}")
-
-
-def test_time_window_parser_rejects_unsafe_or_ambiguous_ranges():
-    """Time windows reject equal, invalid, and excessively dense ranges."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    expect(parse_time_window_spec("09:00") is None, "ordinary time was mistaken for a window")
-    cases = (
-        "09:00..09:00/2h",
-        "09:00..17:00/0m",
-        "09:00..17:00/2d",
-        "09:00..17:00/9h",
-        "09:00..17:00/1m",
-    )
-    for value in cases:
-        try:
-            parse_time_window_spec(value)
-        except ValueError:
-            continue
-        raise AssertionError(f"unsafe time window was accepted: {value}")
-
-
-def test_time_window_slot_limit_uses_shared_resource_policy():
-    """Window density should follow the shared resource-limit module."""
-    from nautical_core import file_resource_limits
-    from nautical_core.time_windows import parse_time_window_spec
-
-    original = file_resource_limits.MAX_TIME_WINDOW_SLOTS
-    try:
-        file_resource_limits.MAX_TIME_WINDOW_SLOTS = 3
-        try:
-            parse_time_window_spec("06:00..18:00/3h")
-            expect(False, "window exceeded the injected shared slot limit")
-        except ValueError as exc:
-            expect("below 3 slots" in str(exc), f"unexpected shared slot-limit error: {exc}")
-    finally:
-        file_resource_limits.MAX_TIME_WINDOW_SLOTS = original
-
-
-def test_time_window_parser_accepts_compound_minute_intervals():
-    """Window intervals accept compact, long-form, and decimal durations."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    window = parse_time_window_spec("08:00..12:00/1h30m")
-    expect(window is not None, "compound interval was not parsed")
-    expect(window.interval_minutes == 90, f"compound interval was misparsed: {window!r}")
-    expect(window.slots == ((8, 0), (9, 30), (11, 0)), f"compound slots are wrong: {window.slots!r}")
-
-    long_form = parse_time_window_spec("04:30..19:30/3h30min")
-    expect(long_form is not None, "long-form minute interval was not parsed")
-    expect(long_form.interval_minutes == 210, f"long-form interval was misparsed: {long_form!r}")
-    expect(long_form.slots == ((4, 30), (8, 0), (11, 30), (15, 0), (18, 30)), f"long-form slots are wrong: {long_form.slots!r}")
-    decimal = parse_time_window_spec("04:30..19:30/3.5h")
-    expect(decimal is not None, "decimal-hour interval was not parsed")
-    expect(decimal.interval_minutes == 210, f"decimal interval was misparsed: {decimal!r}")
-    expect(decimal.canonical == "04:30..19:30/3h30m", f"decimal interval canonical form drifted: {decimal.canonical!r}")
-
-
-def test_time_window_parser_accepts_hour_only_and_mixed_endpoints():
-    """Window endpoints may omit minutes and normalize to :00."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    shorthand = parse_time_window_spec("06..18/3h")
-    expect(shorthand is not None, "hour-only window was not parsed")
-    expect(shorthand.slots == ((6, 0), (9, 0), (12, 0), (15, 0), (18, 0)), f"bad shorthand slots: {shorthand.slots!r}")
-    expect(shorthand.canonical == "06:00..18:00/3h", f"bad shorthand canonical form: {shorthand.canonical!r}")
-
-    mixed = parse_time_window_spec("06:30..18/2h")
-    expect(mixed is not None, "mixed-precision window was not parsed")
-    expect(mixed.slots == ((6, 30), (8, 30), (10, 30), (12, 30), (14, 30), (16, 30)), f"bad mixed slots: {mixed.slots!r}")
-    expect(mixed.canonical == "06:30..18:00/2h", f"bad mixed canonical form: {mixed.canonical!r}")
-
-
-def test_time_window_parser_accepts_even_partition_counts():
-    """Unitless window divisors select an inclusive, evenly partitioned slot count."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    window = parse_time_window_spec("04:30..19:30/3")
-    expect(window is not None, "partitioned time window was not parsed")
-    expect(window.partition_count == 3, f"partition count was not retained: {window!r}")
-    expect(window.interval_minutes is None, f"partitioned window gained a duration interval: {window!r}")
-    expect(window.slots == ((4, 30), (12, 0), (19, 30)), f"partitioned slots are wrong: {window.slots!r}")
-    expect(window.canonical == "04:30..19:30/3", f"partitioned canonical form drifted: {window.canonical!r}")
-
-    four = parse_time_window_spec("06..18/4")
-    expect(four is not None and four.slots == ((6, 0), (10, 0), (14, 0), (18, 0)), f"hour-only partition failed: {four!r}")
-
-    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=04:30..19:30/3")
-    mods = dnf[0][0]["mods"]
-    expect(mods.get("time_window") == "04:30..19:30/3", f"partition metadata was lost: {mods!r}")
-    expect(mods.get("t") == [(4, 30), (12, 0), (19, 30)], f"partition slots did not reach the parser: {mods!r}")
-
-    overnight = parse_time_window_spec("22:30..06:30/7")
-    expect(overnight is not None and overnight.crosses_midnight, "overnight window was not recognized")
-    expect(
-        overnight.slots_with_offsets == ((0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)),
-        f"overnight partition slots were wrong: {overnight!r}",
-    )
-    overnight_interval = parse_time_window_spec("22:30..06:30/2h")
-    expect(overnight_interval is not None and overnight_interval.interval_minutes == 120, "overnight duration window was not parsed")
-    expect(
-        overnight_interval.slots_with_offsets == ((0, 22, 30), (1, 0, 30), (1, 2, 30), (1, 4, 30), (1, 6, 30)),
-        f"overnight duration slots were wrong: {overnight_interval!r}",
-    )
-    parsed_overnight = core.parse_anchor_expr_to_dnf("w:mon@t=22:30..06:30/7")
-    expect(parsed_overnight[0][0]["mods"].get("time_window") == "22:30..06:30/7", "overnight metadata was not retained")
-    expect(
-        parsed_overnight[0][0]["mods"].get("time_window_offsets") == [(0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)],
-        "overnight slot ownership metadata was not retained",
-    )
-
-    from nautical_core.time_slots import resolve_time_slots_with_offsets
-    resolved = resolve_time_slots_with_offsets(
-        {"t": [(22, 30)], "time_window": "22:30..06:30/7"},
-        date(2026, 8, 4),
-    )
-    expect(
-        resolved == [(0, 22, 30), (0, 23, 50), (1, 1, 10), (1, 2, 30), (1, 3, 50), (1, 5, 10), (1, 6, 30)],
-        f"offset-aware resolver lost overnight slots: {resolved!r}",
-    )
-
-    for invalid in ("06..18/1", "06..18/800"):
-        try:
-            parse_time_window_spec(invalid)
-        except ValueError:
-            continue
-        raise AssertionError(f"invalid partition count was accepted: {invalid}")
-
-
-def test_random_time_window_parser_selects_deterministic_bucketed_slots():
-    """Random time windows select stable, ordered minutes from separate buckets."""
-    from nautical_core.time_windows import parse_random_time_window_spec
-
-    single = parse_random_time_window_spec("rand(06..18)")
-    expect(single is not None and single.count == 1, f"single random window was not parsed: {single!r}")
-    first = single.slots_with_offsets("chain-a/2026-08-04")
-    expect(first == single.slots_with_offsets("chain-a/2026-08-04"), "random time selection was not deterministic")
-    expect(0 <= first[0][1] <= 18 and (first[0][1], first[0][2]) >= (6, 0), f"random slot escaped bounds: {first!r}")
-
-    grouped = parse_random_time_window_spec("rand(06..18/3)")
-    expect(grouped is not None and grouped.count == 3, f"bucketed random window was not parsed: {grouped!r}")
-    slots = grouped.slots_with_offsets("chain-a/2026-08-04")
-    minutes = [offset * 1440 + hour * 60 + minute for offset, hour, minute in slots]
-    expect(len(set(minutes)) == 3 and minutes == sorted(minutes), f"random slots were not unique and ordered: {slots!r}")
-    expect(all(6 * 60 <= minute <= 18 * 60 for minute in minutes), f"bucketed random slots escaped bounds: {slots!r}")
-
-    overnight = parse_random_time_window_spec("rand(22:30..02:30/3)")
-    expect(overnight is not None and overnight.crosses_midnight, "overnight random window was not recognized")
-    overnight_slots = overnight.slots_with_offsets("chain-a/2026-08-04")
-    expect(all(slot[0] in (0, 1) for slot in overnight_slots), f"overnight random offsets were invalid: {overnight_slots!r}")
-
-    try:
-        single.slots_with_offsets("")
-        expect(False, "random slot generation accepted an empty stability seed")
-    except ValueError as exc:
-        expect("stable chain seed" in str(exc), f"unexpected empty-seed error: {exc}")
-    for invalid in ("rand(06..18/0)", "rand(06..18/1441)"):
-        try:
-            parse_random_time_window_spec(invalid)
-            expect(False, f"invalid random count was accepted: {invalid}")
-        except ValueError:
-            pass
-
-
-def test_random_time_window_flows_through_anchor_parser_and_resolver():
-    """Random @t expressions retain canonical metadata and resolve from the chain seed."""
-    from nautical_core.time_slots import resolve_time_slots_with_offsets
-
-    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=rand(06..18/3)")
-    mods = dnf[0][0]["mods"]
-    expect(mods.get("time_random") == "rand(06:00..18:00/3)", f"random metadata was not canonicalized: {mods!r}")
-    round_trip = core.acf_to_original_format(core.build_acf("w:mon@t=rand(06..18/3)"))
-    expect("@t=rand(06:00..18:00/3)" in round_trip, f"random time metadata was lost in ACF round-trip: {round_trip!r}")
-    resolved = resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a")
-    expect(resolved == resolve_time_slots_with_offsets(mods, date(2026, 8, 3), seed_base="chain-a"), "random resolver was not deterministic")
-    expect(len(resolved) == 3, f"random resolver returned the wrong slot count: {resolved!r}")
-    expect(resolved == sorted(resolved), f"random resolver slots were not ordered: {resolved!r}")
-    from nautical_core.recurrence_context import RecurrenceContext
-
-    contextual = resolve_time_slots_with_offsets(
-        mods,
-        date(2026, 8, 3),
-        context=RecurrenceContext(chain_id="chain-a"),
-    )
-    expect(contextual == resolved, "recurrence context drifted from the compatibility seed path")
-    try:
-        resolve_time_slots_with_offsets(
-            mods,
-            date(2026, 8, 3),
-            seed_base="chain-a",
-            context=RecurrenceContext(chain_id="chain-b"),
-        )
-        expect(False, "random resolver accepted conflicting recurrence identities")
-    except ValueError as exc:
-        expect("Conflicting recurrence identities" in str(exc), f"unexpected identity mismatch error: {exc}")
-    try:
-        RecurrenceContext(chain_id="")
-        expect(False, "recurrence context accepted an empty chainID")
-    except ValueError as exc:
-        expect("chain ID" in str(exc), f"unexpected missing-chain-id error: {exc}")
-
-
-def test_recurrence_spec_normalizes_task_fields_and_context():
-    """The typed recurrence view should normalize fields without changing semantics."""
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.recurrence_spec import RecurrenceSpec
-
-    def spec_from_row(row):
-        return RecurrenceSpec.from_observation(
-            DEFAULT_TASK_CODEC.decode_row(row, source_query="test:recurrence-spec")
-        )
-
-    spec = spec_from_row({
-        "uuid": "00000000-0000-4000-8000-000000000505",
-        "status": "pending",
-        "chainID": "spec-chain",
-        "link": 1,
-        "anchor": " w:mon ",
-        "anchor_file": " events.csv ",
-        "omit": " y:12-25 ",
-        "cp": "",
-        "anchor_mode": "ALL",
-        "chainMax": "4",
-        "chainUntil": " 20261231T230000Z ",
-    })
-    expect(spec.context.chain_id == "spec-chain", f"spec context lost chain identity: {spec!r}")
-    expect(spec.anchor == "w:mon" and spec.anchor_file == "events.csv", f"spec fields were not normalized: {spec!r}")
-    expect(spec.omit == "y:12-25" and spec.chain_max == 4, f"spec limits were not normalized: {spec!r}")
-    expect(spec.anchor_mode == "all" and spec.kind == "anchor" and spec.enabled, f"spec kind was incorrect: {spec!r}")
-    observation = DEFAULT_TASK_CODEC.decode_row(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000501",
-            "chainID": "spec-observation-chain",
-            "link": 1,
-            "status": "pending",
-            "anchor": " w:mon ",
-            "anchor_mode": "ALL",
-            "chainMax": "4",
-        },
-        source_query="test:recurrence-spec",
-    )
-    typed_spec = RecurrenceSpec.from_observation(observation)
-    expect(
-        typed_spec.context.chain_id == "spec-observation-chain"
-        and typed_spec.anchor == "w:mon"
-        and typed_spec.chain_max == 4,
-        f"typed observation was not converted to a recurrence spec: {typed_spec!r}",
-    )
-    null_spec = spec_from_row({
-        "uuid": "00000000-0000-4000-8000-000000000506",
-        "status": "pending",
-        "chainID": "spec-null-chain",
-        "link": 1,
-        "anchor": "w:mon",
-        "anchor_file": "null",
-        "anchor_mode": "skip",
-    })
-    expect(null_spec.anchor_file == "" and null_spec.kind == "anchor", f"literal null UDA was not unset: {null_spec!r}")
-    supplied = RecurrenceContext(chain_id="supplied")
-    supplied_observation = DEFAULT_TASK_CODEC.decode_row(
-        {"uuid": "00000000-0000-4000-8000-000000000502", "status": "pending", "chainID": "supplied", "link": 1, "anchor": "w:fri"},
-        source_query="test:recurrence-spec",
-    )
-    expect(RecurrenceSpec.from_observation(supplied_observation, context=supplied).context is supplied, "supplied context was replaced")
-    try:
-        conflicting_observation = DEFAULT_TASK_CODEC.decode_row(
-            {"uuid": "00000000-0000-4000-8000-000000000504", "status": "pending", "chainID": "task-chain", "link": 1, "anchor": "w:fri"},
-            source_query="test:recurrence-spec",
-        )
-        RecurrenceSpec.from_observation(conflicting_observation, context=supplied)
-        expect(False, "recurrence spec accepted a conflicting context identity")
-    except ValueError as exc:
-        expect("Conflicting recurrence identities" in str(exc), f"unexpected spec identity error: {exc}")
-
-
 def test_compiled_schedule_is_canonical_and_reusable():
     """Equivalent recurrence formatting compiles to one immutable schedule."""
     import json
@@ -25085,723 +13767,6 @@ def test_compiled_schedule_is_canonical_and_reusable():
             expect(message in str(exc), f"compiled validation error was unclear: {exc}")
         else:
             raise AssertionError(f"invalid compiled schedule was accepted: {invalid!r}")
-
-
-def test_occurrence_cursor_makes_lookup_semantics_explicit():
-    """Strict-after and inclusive cursors carry their policy explicitly."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-
-    zone = ZoneInfo("Europe/Sofia")
-    evaluator = _evaluator_for_fixture(
-        {"chainID": "cursor-chain", "anchor": "w:mon@t=09:00"},
-        context=RecurrenceContext(chain_id="cursor-chain", timezone=zone),
-    )
-    instant = datetime(2026, 8, 3, 9, 0, tzinfo=zone)
-    strict = OccurrenceCursor.strict_after(instant, timezone=zone)
-    inclusive = OccurrenceCursor.inclusive_at(instant, timezone=zone)
-    expect(not strict.inclusive and inclusive.inclusive, "cursor inclusivity was not explicit")
-    expect(evaluator.next_after_cursor(strict) is not None, "strict cursor returned no occurrence")
-    collected = evaluator.collect_after_cursor(strict, limit=1)
-    expect(len(collected) == 1, "cursor collection did not honor its limit")
-    try:
-        evaluator.next_after_cursor(OccurrenceCursor.strict_after(instant, timezone=ZoneInfo("UTC")))
-    except ValueError as exc:
-        expect("timezone" in str(exc), f"cursor timezone error was unclear: {exc}")
-    else:
-        raise AssertionError("cursor accepted a conflicting timezone")
-
-
-def test_occurrence_cursor_keeps_adjacent_weekday_occurrences():
-    """Strict-after lookup must not skip the first valid day after a gap."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-
-    evaluator = _evaluator_for_fixture(
-        {"chainID": "cursor-weekday", "anchor": "w:mon..fri"},
-        context=RecurrenceContext(chain_id="cursor-weekday", timezone=ZoneInfo("Europe/Sofia")),
-    )
-    result = evaluator.next_after_cursor(
-        OccurrenceCursor.strict_after(datetime(2026, 8, 7, 9, 0, tzinfo=ZoneInfo("Europe/Sofia")), timezone=ZoneInfo("Europe/Sofia"))
-    )
-    expect(result is not None and result.day.isoformat() == "2026-08-10", f"weekday cursor skipped Monday: {result!r}")
-
-
-def test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states():
-    """Evaluator lookup exposes mutation-safe typed outcome states."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import FoundOccurrence, InvalidOccurrence
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-
-    zone = ZoneInfo("Europe/Sofia")
-    evaluator = _evaluator_for_fixture(
-        {"chainID": "outcome-chain", "anchor": "w:mon@t=09:00"},
-        context=RecurrenceContext(chain_id="outcome-chain", timezone=zone),
-    )
-    found = evaluator.next_outcome(
-        OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
-    )
-    expect(isinstance(found, FoundOccurrence), f"expected found outcome, got {found!r}")
-    absent = evaluator.next_outcome(
-        OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone),
-        max_file_skips=0,
-    )
-    expect(isinstance(absent, InvalidOccurrence), "invalid lookup was not typed")
-    expect(isinstance(evaluator.next_outcome("bad-cursor"), InvalidOccurrence), "bad cursor was not invalid")
-
-
-def test_typed_occurrence_outcomes_preserve_terminal_evidence():
-    """Exhaustion remains distinct from ordinary absence and keeps bounds."""
-    from nautical_core.occurrence_outcomes import AbsentOccurrence, ExhaustedOccurrence
-    from nautical_core.scheduler_models import OccurrenceSearchExhausted
-
-    error = OccurrenceSearchExhausted(
-        "yearly atom scheduling", reference="9999-01-01", limit=12,
-        kind=OccurrenceSearchExhausted.DATE_LIMIT,
-    )
-    exhausted = ExhaustedOccurrence(error)
-    expect(exhausted.terminal_evidence["kind"] == "date_limit", "date-limit exhaustion lost its kind")
-    expect(exhausted.to_dict()["limit"] == 12, "exhaustion limit was not retained")
-    expect(AbsentOccurrence().status == "absent", "ordinary absence was conflated with exhaustion")
-
-
-def test_typed_occurrence_outcomes_fail_closed_for_mutation():
-    """Mutation helpers must not accept unavailable or invalid outcomes."""
-    from nautical_core.occurrence_outcomes import AbsentOccurrence, mutation_candidate
-
-    try:
-        mutation_candidate(AbsentOccurrence())
-    except RuntimeError as exc:
-        expect("requires a found occurrence" in str(exc), "mutation rejection was unclear")
-    else:
-        raise AssertionError("mutation helper accepted an absent occurrence")
-
-
-def test_typed_occurrence_outcomes_define_compact_presentation_summary():
-    """UI summaries may be compact without changing mutation semantics."""
-    from nautical_core.occurrence_outcomes import AbsentOccurrence, presentation_summary
-
-    expect(presentation_summary(AbsentOccurrence("no match")) == "absent: no match", "UI outcome summary drifted")
-
-
-def test_evaluation_session_is_task_scoped_and_fingerprint_bound():
-    """A session reuses one evaluator but cannot cross task identities."""
-    from nautical_core.evaluation_session import EvaluationSession
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.recurrence_spec import RecurrenceSpec
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-
-    first_observation = DEFAULT_TASK_CODEC.decode_row(
-        {"uuid": "00000000-0000-4000-8000-000000000512", "status": "pending", "link": 1, "chainID": "session-a", "anchor": "w:mon"},
-        source_query="test:evaluation-session",
-    )
-    first = EvaluationSession.from_observation(
-        first_observation,
-        context=RecurrenceContext(chain_id="session-a"),
-    )
-    expect(first.evaluator is first.evaluator, "session evaluator was rebuilt")
-    first.get_or_create("provider", lambda: object())
-    expect(first.get_or_create("provider", lambda: object()) is first.get_or_create("provider", lambda: object()), "session cache was not reused")
-    other = RecurrenceSpec.from_observation(DEFAULT_TASK_CODEC.decode_row(
-        {"uuid": "00000000-0000-4000-8000-000000000513", "status": "pending", "link": 1, "chainID": "session-b", "anchor": "w:mon"},
-        source_query="test:evaluation-session",
-    ))
-    expect(not first.matches(other), "session accepted a different task identity")
-    changed = RecurrenceSpec.from_observation(DEFAULT_TASK_CODEC.decode_row(
-        {"uuid": "00000000-0000-4000-8000-000000000514", "status": "pending", "link": 1, "chainID": "session-a", "anchor": "w:tue"},
-        source_query="test:evaluation-session",
-    ))
-    expect(first.refresh(changed), "session did not refresh after scheduling state changed")
-    expect(first.evaluator.spec.anchor == "w:tue", "session retained stale evaluator after refresh")
-    expect(first.next_outcome is not None and first.collect_after_cursor is not None, "session service boundary missing")
-
-
-def test_scheduler_service_is_one_typed_occurrence_entry_point():
-    """Service next, collection, and preview share one session boundary."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import FoundOccurrence, OccurrenceCollectionResult
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-    from nautical_core.scheduler_service import SchedulerService
-    from nautical_core.task_models import NauticalTask
-
-    zone = ZoneInfo("Europe/Sofia")
-    service = _scheduler_for_fixture(
-        {"chainID": "service-chain", "anchor": "w:mon@t=09:00"},
-        context=RecurrenceContext(chain_id="service-chain", timezone=zone),
-    )
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-    typed_service = SchedulerService.from_observation(
-        DEFAULT_TASK_CODEC.decode_row(
-            {
-                "uuid": "00000000-0000-4000-8000-000000000502",
-                "chainID": "service-observation-chain",
-                "link": 1,
-                "status": "pending",
-                "anchor": "w:mon@t=09:00",
-            },
-            source_query="test:scheduler-service",
-        ),
-        context=RecurrenceContext(chain_id="service-observation-chain", timezone=zone),
-    )
-    expect(typed_service.fingerprint, "typed scheduler service did not compile an observation")
-    typed_task = NauticalTask.from_observation(
-        DEFAULT_TASK_CODEC.decode_row(
-            {
-                "uuid": "00000000-0000-4000-8000-000000000515",
-                "chainID": "service-task-chain",
-                "link": 1,
-                "status": "pending",
-                "anchor": "w:mon@t=09:00",
-            },
-            source_query="test:scheduler-service-task",
-        )
-    )
-    direct_service = SchedulerService.from_task(
-        typed_task,
-        context=RecurrenceContext(chain_id="service-task-chain", timezone=zone),
-    )
-    expect(direct_service.fingerprint, "typed scheduler service did not accept NauticalTask")
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
-    expect(isinstance(service.next(cursor), FoundOccurrence), "service next did not return typed occurrence")
-    collected = service.collect(cursor, limit=2)
-    expect(isinstance(collected, OccurrenceCollectionResult), "service collection was not typed")
-    expect(len(collected) == 2 and collected.status == "found", "service collection limit was not honored")
-    preview = service.preview(cursor.local_datetime, limit=1, timezone=zone)
-    expect(isinstance(preview, OccurrenceCollectionResult), "service preview was not typed")
-    expect(len(preview) == 1, "service preview failed")
-    expect(preview.to_dict()["status"] == "found", "service preview evidence was incomplete")
-
-
-def test_scheduler_trace_is_disabled_bounded_and_redacted():
-    """Tracing stays inert by default and cannot leak file-backed configuration."""
-    import json
-    from nautical_core.scheduler_trace import SchedulerTrace
-
-    disabled = SchedulerTrace()
-    disabled.record("selected", provider="anchor", term="w:mon")
-    expect(not disabled.events, "disabled scheduler tracing recorded an event")
-
-    trace = SchedulerTrace(enabled=True, max_events=2)
-    trace.record("proposed", provider="anchor_file", term="/private/calendar.csv")
-    trace.record("selected", provider="anchor_file", term="calendar.csv")
-    trace.record("selected", provider="anchor_file", term="third")
-    payload = json.dumps(trace.summary(), ensure_ascii=False)
-    expect(trace.dropped == 1, "scheduler trace did not enforce its event bound")
-    expect("/private/calendar.csv" not in payload, "scheduler trace leaked a file path")
-    expect("<redacted>" in payload, "scheduler trace redaction marker is missing")
-
-
-def test_scheduler_parity_harness_compares_legacy_callback_only_in_tests():
-    """Migration parity is test-only and detects timestamp divergence."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from dev_tools.nautical_scheduler_parity import compare_next, compare_collection
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-    from nautical_core.scheduler_service import SchedulerService
-
-    zone = ZoneInfo("Europe/Sofia")
-    service = _scheduler_for_fixture(
-        {"chainID": "parity-chain", "anchor": "w:mon@t=09:00"},
-        context=RecurrenceContext(chain_id="parity-chain", timezone=zone),
-    )
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, 0, tzinfo=zone), timezone=zone)
-    legacy_evaluator = service.session.evaluator
-    compare_next(service, cursor, lambda: legacy_evaluator.next_after_cursor(cursor))
-    compare_collection(
-        service,
-        cursor,
-        lambda: legacy_evaluator.collect_after_cursor(cursor, limit=2),
-        limit=2,
-    )
-
-
-def test_scheduler_parity_matrix_covers_context_sensitive_rules():
-    """The migration harness exercises omission, time, DST, calendar, and random inputs."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from dev_tools.nautical_scheduler_parity import compare_collection
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-    from nautical_core.scheduler_service import SchedulerService
-
-    cases = (
-        ("w:mon,wed,fri@t=09:00", "w:wed", "2026-03-01T09:00:00"),
-        ("w:sun@t=01:30", "", "2026-10-24T01:00:00"),
-        ("m:rand", "", "2026-04-01T09:00:00"),
-    )
-    for index, (anchor, omit, stamp) in enumerate(cases):
-        zone = ZoneInfo("Europe/Sofia")
-        task = {"chainID": f"parity-matrix-{index}", "anchor": anchor}
-        if omit:
-            task["omit"] = omit
-        context = RecurrenceContext(chain_id=task["chainID"], timezone=zone)
-        service = _scheduler_for_fixture(task, context=context)
-        cursor = OccurrenceCursor.strict_after(
-            datetime.fromisoformat(stamp).replace(tzinfo=zone), timezone=zone
-        )
-        evaluator = service.session.evaluator
-        compare_collection(
-            service,
-            cursor,
-            lambda evaluator=evaluator, cursor=cursor: evaluator.collect_after_cursor(cursor, limit=2),
-            limit=2,
-        )
-
-
-def test_scheduler_cross_path_conformance_matrix():
-    """Next, preview, collection, and range paths agree across recurrence families."""
-    from datetime import datetime, timedelta
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import FoundOccurrence
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-    from dev_tools.nautical_scheduler_parity import assert_monotonic, _occurrence_signature
-
-    zone = ZoneInfo("Europe/Sofia")
-    cases = (
-        ("ordinary", {"anchor": "w:mon,wed,fri@t=09:00"}, "2026-03-01T09:00:00", 3),
-        ("sparse", {"anchor": "y:02-29@t=09:00"}, "2026-01-01T09:00:00", 2),
-        ("interval", {"anchor": "m/2:15@t=09:00"}, "2026-01-01T09:00:00", 3),
-        ("and-or", {"anchor": "(w:mon + m:1) | w:fri@t=09:00"}, "2026-03-01T09:00:00", 3),
-        ("omit", {"anchor": "w:mon | w:wed@t=09:00", "omit": "w:wed"}, "2026-03-01T09:00:00", 3),
-        ("random", {"anchor": "m:rand@t=09:00"}, "2026-04-01T09:00:00", 3),
-        ("overnight", {"anchor": "w:mon@t=22:30..06:30/2"}, "2026-08-03T23:00:00", 3),
-    )
-    for name, task, stamp, limit in cases:
-        task = dict(task, chainID=f"conformance-{name}")
-        context = RecurrenceContext(chain_id=task["chainID"], timezone=zone)
-        service = _scheduler_for_fixture(task, context=context)
-        cursor = OccurrenceCursor.strict_after(
-            datetime.fromisoformat(stamp).replace(tzinfo=zone), timezone=zone
-        )
-        first = service.next(cursor)
-        collected = service.collect(cursor, limit=limit)
-        preview = service.preview(cursor.local_datetime, limit=1, timezone=zone)
-        ranged = service.collect_request(
-            OccurrenceRangeRequest(
-                cursor,
-                end_local=cursor.local_datetime + timedelta(days=2400),
-                limit=limit,
-            )
-        )
-        assert_monotonic(collected.occurrences)
-        assert_monotonic(ranged.occurrences)
-        expect(isinstance(first, FoundOccurrence), f"{name} next path did not find an occurrence: {first!r}")
-        expect(collected.occurrences, f"{name} collection returned no occurrence")
-        expect(preview.occurrences, f"{name} preview returned no occurrence")
-        expect(ranged.occurrences, f"{name} range returned no occurrence")
-        first_signature = _occurrence_signature(first.occurrence)
-        expect(first_signature == _occurrence_signature(collected.occurrences[0]), f"{name} next/collection diverged")
-        expect(first_signature == _occurrence_signature(preview.occurrences[0]), f"{name} next/preview diverged")
-        expect(first_signature == _occurrence_signature(ranged.occurrences[0]), f"{name} next/range diverged")
-        repeat = service.collect(cursor, limit=limit)
-        expect(
-            tuple(_occurrence_signature(item) for item in collected.occurrences)
-            == tuple(_occurrence_signature(item) for item in repeat.occurrences),
-            f"{name} collection was not deterministic",
-        )
-
-    if _astral_test_available() and getattr(core, "ASTRONOMY_CONFIG", {}):
-        task = {"anchor": "w:mon@t=sunrise", "chainID": "conformance-astronomy"}
-        context = RecurrenceContext(
-            chain_id=task["chainID"], timezone=zone,
-            astronomy_config=core.ASTRONOMY_CONFIG,
-        )
-        service = _scheduler_for_fixture(task, context=context)
-        cursor = OccurrenceCursor.strict_after(
-            datetime(2026, 6, 1, 9, tzinfo=zone), timezone=zone
-        )
-        expect(isinstance(service.next(cursor), FoundOccurrence), "astronomy next path did not find an occurrence")
-
-    with tempfile.TemporaryDirectory() as td:
-        Path(td, "calendar.csv").write_text("date,description\n2026-08-03,first\n2026-08-10,second\n", encoding="utf-8")
-        task = {"anchor_file": "calendar.csv@t=09:00", "chainID": "conformance-file"}
-        context = RecurrenceContext(chain_id=task["chainID"], timezone=zone, anchor_file_dir=td)
-        service = _scheduler_for_fixture(task, context=context)
-        cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, 9, tzinfo=zone), timezone=zone)
-        first = service.next(cursor)
-        ranged = service.collect_request(OccurrenceRangeRequest(cursor, limit=2))
-        expect(isinstance(first, FoundOccurrence), "file next path did not find an occurrence")
-        expect(ranged.occurrences and ranged.occurrences[0].description == "first", "file range lost description")
-        expect(_occurrence_signature(first.occurrence) == _occurrence_signature(ranged.occurrences[0]), "file next/range diverged")
-
-
-def test_domain_scheduler_parity_across_operational_consumers():
-    """Typed scheduling agrees across direct, query, Navigator, and reconcile paths."""
-    from datetime import datetime, timezone as dt_timezone
-    from types import SimpleNamespace
-    from zoneinfo import ZoneInfo
-
-    from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-    from nautical_core.scheduler_service import SchedulerService
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-    from nautical_core.task_models import NauticalTask
-    from nautical_core.occurrence_outcomes import FoundOccurrence
-
-    zone = ZoneInfo("Europe/Sofia")
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000721",
-        "description": "domain parity task",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "domain-parity-consumers",
-        "link": 7,
-        "anchor": "w:mon@t=09:00",
-        "anchor_mode": "skip",
-        "due": "20260817T060000Z",
-        "end": "20260817T060000Z",
-    }
-    observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="domain parity")
-    typed_task = NauticalTask.from_observation(observation)
-    context = RecurrenceContext(chain_id=typed_task.identity.chain_id, timezone=zone)
-    scheduler = SchedulerService.from_task(typed_task, context=context)
-    cursor = OccurrenceCursor.strict_after(
-        datetime(2026, 8, 17, 9, tzinfo=zone), timezone=zone,
-    )
-    direct = scheduler.next(cursor)
-    expect(isinstance(direct, FoundOccurrence), f"direct scheduler did not find parity occurrence: {direct!r}")
-    expected_local = direct.occurrence.local_datetime
-    expect(expected_local is not None, "direct parity occurrence has no local timestamp")
-
-    class _Repository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(task, f"uuid:{value}")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=zone,
-            configuration=SimpleNamespace(fingerprint="domain-parity"),
-        ),
-        repository=_Repository(),
-    )
-    query_request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": [task["uuid"]]},
-            "from": "2026-08-24",
-            "to": "2026-08-24",
-        }
-    )
-    query_result = OccurrenceQueryService(uow, core=core).query(query_request).results[0]
-    expect(query_result.status == "found", f"query parity returned {query_result.status}")
-    expect(query_result.occurrences, "query parity returned no occurrence")
-    expect(query_result.occurrences[0].local == expected_local, "query occurrence diverged from direct scheduler")
-
-    module_name = "_nautical_navigator_domain_parity_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    loader.exec_module(navigator)
-    old_zone = navigator.LOCAL_ZONE
-    navigator.LOCAL_ZONE = zone
-    try:
-        projected = navigator.TaskAnalyzer()._project_anchor_dates(
-            task, limit=1, start_from_date=date(2026, 8, 17),
-        )
-    finally:
-        navigator.LOCAL_ZONE = old_zone
-    expect(projected and projected[0] == expected_local, "Navigator projection diverged from direct scheduler")
-
-    previous_tz_name = getattr(core, "LOCAL_TZ_NAME", "")
-    previous_tz = getattr(core, "_LOCAL_TZ", None)
-    core.LOCAL_TZ_NAME = "Europe/Sofia"
-    core._LOCAL_TZ = zone
-    try:
-        recovery = plan_recovery_decision(observation, existing_children=[], hook=None)
-    finally:
-        core.LOCAL_TZ_NAME = previous_tz_name
-        core._LOCAL_TZ = previous_tz
-    expect(recovery.plan.action.value == "spawn_child", f"reconcile parity did not plan a successor: {recovery!r}")
-    expect(recovery.child_due == expected_local.astimezone(dt_timezone.utc), "reconcile target diverged from direct scheduler")
-
-
-def test_scheduler_cross_path_preserves_terminal_evidence():
-    """A valid prefix followed by exhaustion stays terminal in every service path."""
-    from datetime import datetime
-    from types import SimpleNamespace
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import ExhaustedOccurrence
-    from nautical_core.occurrence_provider import Occurrence, OccurrenceBatch
-    from nautical_core.scheduler_models import OccurrenceSearchExhausted
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-
-    zone = ZoneInfo("UTC")
-    cursor = OccurrenceCursor.strict_after(datetime(9998, 12, 30, 9, tzinfo=zone), timezone=zone)
-    value = Occurrence(
-        cursor.local_datetime.date() + timedelta(days=1), 9, 0,
-        local_datetime=datetime(9998, 12, 31, 9, tzinfo=zone),
-    )
-    terminal = OccurrenceSearchExhausted(
-        "conformance finite provider", reference=date(9999, 12, 31), limit=2,
-        kind=OccurrenceSearchExhausted.DATE_LIMIT,
-    )
-
-    class FiniteSession:
-        evaluator = SimpleNamespace(context=SimpleNamespace(timezone=zone), kind="finite")
-
-        def collect_after_cursor(self, *_args, **_kwargs):
-            return OccurrenceBatch((value,), terminal=terminal)
-
-        def collect_events_after_cursor(self, *_args, **_kwargs):
-            return OccurrenceBatch((value,), terminal=terminal)
-
-    service = SchedulerService(FiniteSession())
-    result = service.collect(cursor, limit=3)
-    expect(result.terminal is terminal, "collection dropped terminal evidence")
-    expect(result.occurrences == (value,), "collection dropped valid prefix")
-    ranged = service.collect_request(OccurrenceRangeRequest(cursor, limit=3))
-    expect(ranged.terminal is terminal, "range dropped terminal evidence")
-
-    class EmptyFiniteSession(FiniteSession):
-        def collect_after_cursor(self, *_args, **_kwargs):
-            return OccurrenceBatch((), terminal=terminal)
-
-        def collect_events_after_cursor(self, *_args, **_kwargs):
-            return OccurrenceBatch((), terminal=terminal)
-
-    empty_service = SchedulerService(EmptyFiniteSession())
-    empty = empty_service.collect(cursor, limit=1)
-    expect(empty.status == "exhausted", "empty terminal result became ordinary absence")
-    outcome = ExhaustedOccurrence(terminal)
-    expect(outcome.terminal_evidence["kind"] == "date_limit", "terminal kind was not retained")
-
-
-def test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic():
-    """Generated recurrence cases preserve cursor order, timezone, and replay."""
-    import random
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import FoundOccurrence
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-    from nautical_core.scheduler_service import SchedulerService
-    from dev_tools.nautical_scheduler_parity import assert_monotonic
-
-    rng = random.Random(20260812)
-    anchors = [
-        "w:mon", "w/2:tue", "m:1", "m/2:15", "y:01-01", "y:02-29",
-        "w:mon + m:1", "w:mon | w:fri", "m:rand", "w:sun@t=01:30",
-    ]
-    rng.shuffle(anchors)
-    zone = ZoneInfo("Europe/Sofia")
-    for index, anchor in enumerate(anchors):
-        chain_id = f"generated-matrix-{index}"
-        task = {"anchor": anchor, "chainID": chain_id}
-        context = RecurrenceContext(chain_id=chain_id, timezone=zone)
-        service = _scheduler_for_fixture(task, context=context)
-        cursor = OccurrenceCursor.strict_after(
-            datetime(2026, 1, 1, 0, 0, tzinfo=zone), timezone=zone,
-        )
-        collected = service.collect(cursor, limit=3, max_iterations=2048)
-        assert_monotonic(collected.occurrences)
-        expect(collected.occurrences, f"generated case produced no events: {anchor}")
-        expect(
-            all(item.local_datetime is not None and item.local_datetime.tzinfo is not None for item in collected),
-            f"generated case lost timezone: {anchor}",
-        )
-        replay = service.collect(cursor, limit=3, max_iterations=2048)
-        expect(
-            [item.local_datetime for item in collected] == [item.local_datetime for item in replay],
-            f"generated case was not deterministic: {anchor}",
-        )
-        step = cursor
-        for _ in range(3):
-            outcome = service.next(step, max_file_skips=2048)
-            expect(isinstance(outcome, FoundOccurrence), f"generated cursor lookup failed: {anchor}: {outcome!r}")
-            expect(outcome.local_datetime > step.local_datetime, f"generated cursor did not advance: {anchor}")
-            step = OccurrenceCursor.strict_after(outcome.local_datetime, timezone=zone)
-
-
-def test_scheduler_conformance_isolated_under_shuffled_session_order():
-    """Fresh task sessions produce identical streams regardless of case order."""
-    import random
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-    from nautical_core.scheduler_service import SchedulerService
-
-    cases = (
-        ("w:mon", "shuffle-weekly"),
-        ("m/2:15", "shuffle-monthly"),
-        ("y:02-29", "shuffle-leap"),
-        ("w:mon | w:fri", "shuffle-or"),
-        ("m:rand", "shuffle-random"),
-    )
-    zone = ZoneInfo("Europe/Sofia")
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 1, 1, tzinfo=zone), timezone=zone)
-
-    def collect(anchor: str, chain_id: str) -> tuple[datetime | None, ...]:
-        service = _scheduler_for_fixture(
-            {"anchor": anchor, "chainID": chain_id},
-            context=RecurrenceContext(chain_id=chain_id, timezone=zone),
-        )
-        return tuple(item.local_datetime for item in service.collect(cursor, limit=3, max_iterations=2048))
-
-    baseline = {anchor: collect(anchor, chain_id) for anchor, chain_id in cases}
-    for seed in (11, 29, 47):
-        order = list(cases)
-        random.Random(seed).shuffle(order)
-        for anchor, chain_id in order:
-            expect(collect(anchor, chain_id) == baseline[anchor], f"shuffled session leaked state: {anchor}")
-
-
-def test_occurrence_range_request_validates_context_bounds_and_policy():
-    """Range requests are explicit, bounded, and context-checked."""
-    from datetime import datetime, timedelta
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import OccurrenceCollectionResult
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-
-    zone = ZoneInfo("Europe/Sofia")
-    task = {"chainID": "range-contract", "anchor": "w:mon@t=09:00"}
-    service = _scheduler_for_fixture(task, context=RecurrenceContext(chain_id="range-contract", timezone=zone))
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 9, tzinfo=zone), timezone=zone)
-    request = OccurrenceRangeRequest(
-        cursor,
-        end_local=datetime(2026, 8, 31, 23, tzinfo=zone),
-        limit=3,
-    )
-    result = service.collect_request(request)
-    expect(isinstance(result, OccurrenceCollectionResult), "range request did not return typed result")
-    expect(result.request == request and all(item.local_datetime <= request.end_local for item in result), "range boundary was not preserved")
-    for bad in (
-        lambda: OccurrenceRangeRequest(cursor, end_local=cursor.local_datetime - timedelta(days=1)),
-        lambda: OccurrenceRangeRequest(cursor, omission_policy="unknown"),
-    ):
-        try:
-            bad()
-        except (ValueError, NotImplementedError) as exc:
-            expect(str(exc), "range contract rejection was not actionable")
-        else:
-            raise AssertionError("invalid range contract was accepted")
-    included = service.collect_request(OccurrenceRangeRequest(cursor, omission_policy="include"))
-    expect(isinstance(included, OccurrenceCollectionResult), "include omission policy was not accepted")
-
-
-def test_occurrence_range_request_exposes_omission_provenance():
-    """Range policies expose omitted events without changing normal exclusion."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-
-    zone = ZoneInfo("Europe/Sofia")
-    task = {"chainID": "omission-contract", "anchor": "w:mon", "omit": "w:mon"}
-    service = _scheduler_for_fixture(
-        task,
-        context=RecurrenceContext(chain_id="omission-contract", timezone=zone),
-    )
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 2, 23, 59, tzinfo=zone), timezone=zone)
-    end = datetime(2026, 8, 31, 23, 59, tzinfo=zone)
-    excluded = service.collect_request(OccurrenceRangeRequest(cursor, end_local=end, limit=4))
-    expect(not excluded.occurrences, "excluded omission policy returned an omitted occurrence")
-    included = service.collect_request(
-        OccurrenceRangeRequest(cursor, end_local=end, limit=4, omission_policy="include")
-    )
-    expect(included.occurrences and all(item.omitted for item in included), "include policy lost omission markers")
-    reported = service.collect_request(
-        OccurrenceRangeRequest(cursor, end_local=end, limit=4, omission_policy="report")
-    )
-    expect(not reported.occurrences and len(reported.omitted_occurrences) == 4, "report policy lost omitted evidence")
-
-
-def test_occurrence_range_request_wraps_unavailable_and_invalid_failures():
-    """Collection failures are typed instead of becoming empty success results."""
-    from datetime import datetime
-    from types import SimpleNamespace
-    from zoneinfo import ZoneInfo
-    from nautical_core.occurrence_outcomes import InvalidOccurrence, UnavailableOccurrence
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-
-    zone = ZoneInfo("UTC")
-    context = RecurrenceContext(chain_id="failure-contract", timezone=zone)
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, tzinfo=zone), timezone=zone)
-    request = OccurrenceRangeRequest(cursor, limit=1)
-
-    class FailingSession:
-        evaluator = SimpleNamespace(context=context, kind="anchor")
-
-        def collect_after_cursor(self, *_args, **_kwargs):
-            raise LookupError("astronomy profile unavailable")
-
-    unavailable = SchedulerService(FailingSession()).collect_request(request)
-    expect(isinstance(unavailable.failure, UnavailableOccurrence), "unavailable failure was not typed")
-    expect(unavailable.status == "unavailable", "unavailable failure changed into empty result")
-
-    class InvalidSession:
-        evaluator = SimpleNamespace(context=context, kind="anchor")
-
-        def collect_after_cursor(self, *_args, **_kwargs):
-            raise ValueError("malformed recurrence result")
-
-    invalid = SchedulerService(InvalidSession()).collect_request(request)
-    expect(isinstance(invalid.failure, InvalidOccurrence), "invalid failure was not typed")
-    expect(invalid.status == "invalid", "invalid failure changed into empty result")
-
-
-def test_hint_builder_does_not_convert_typed_failure_to_empty_hints():
-    """Hint generation fails closed when its typed range result is unavailable."""
-    from datetime import datetime
-    from types import SimpleNamespace
-    from zoneinfo import ZoneInfo
-    from nautical_core.hint_builder import HintBuilder
-    from nautical_core.occurrence_outcomes import OccurrenceCollectionResult, UnavailableOccurrence
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor
-
-    zone = ZoneInfo("UTC")
-    cursor = OccurrenceCursor.strict_after(datetime(2026, 8, 1, tzinfo=zone), timezone=zone)
-    failure = OccurrenceCollectionResult(
-        occurrences=(),
-        cursor=cursor,
-        failure=UnavailableOccurrence("astronomy profile unavailable", "LookupError"),
-    )
-
-    class FailingService:
-        session = SimpleNamespace(
-            evaluator=SimpleNamespace(context=RecurrenceContext(chain_id="hint-failure", timezone=zone))
-        )
-
-        def collect_request(self, _request):
-            return failure
-
-    try:
-        HintBuilder(FailingService()).build(
-            start_dt=datetime(2026, 8, 1, tzinfo=zone),
-            k_next=2,
-            sample_days_for_year=2,
-            now_local=lambda: datetime(2026, 8, 1, tzinfo=zone),
-        )
-    except RuntimeError as exc:
-        expect("unavailable" in str(exc), "hint failure message was not actionable")
-    else:
-        raise AssertionError("hint builder converted typed failure to empty output")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
@@ -26087,49 +14052,6 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         raise AssertionError("evaluator silently invented a chain identity")
 
 
-def test_recurrence_evaluator_events_between_preserves_terminal_evidence():
-    """A valid event prefix must retain date-limit exhaustion evidence."""
-    from unittest.mock import patch
-
-    from nautical_core.occurrence_provider import Occurrence
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-    from nautical_core.scheduler_models import OccurrenceSearchExhausted
-
-    evaluator = _evaluator_for_fixture(
-        {"chainID": "terminal-events", "anchor": "w:mon"},
-        timezone=timezone.utc,
-    )
-    first_local = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
-    terminal = OccurrenceSearchExhausted(
-        "terminal event stream",
-        reference=date(9999, 12, 31),
-        limit=1,
-    )
-    calls = 0
-
-    def next_event(_self, _cursor, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return Occurrence(
-                first_local.date(),
-                first_local.hour,
-                first_local.minute,
-                local_datetime=first_local,
-            )
-        raise terminal
-
-    with patch.object(RecurrenceEvaluator, "next_event_after", next_event):
-        events = evaluator.events_between(
-            datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
-            datetime(9999, 12, 31, 9, 0, tzinfo=timezone.utc),
-            limit=3,
-        )
-    expect(len(events) == 1, f"terminal stream lost its valid prefix: {events!r}")
-    expect(events[0].local_datetime == first_local, f"wrong event prefix: {events!r}")
-    expect(events.terminal is terminal, "terminal exhaustion evidence was discarded")
-
-
 def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
     """Hook adaptation must keep generation decisions inside the shared service."""
     from nautical_core.chain_generation import ChainGenerationService
@@ -26210,7 +14132,7 @@ def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
     mod._reset_modify_runtime_state()
     try:
         schedule = mod._module("modify_schedule_effects")
-        evaluator, _service = schedule.scheduler_callbacks(mod)
+        evaluator, _service = schedule.scheduler_callbacks(schedule.scheduler_ports_for(mod))
         first = evaluator(task)
         second = evaluator(dict(task))
         expect(first is second, "equivalent task copies rebuilt the evaluator within one hook session")
@@ -26219,253 +14141,6 @@ def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
         expect(binding_a is binding_b, "scheduler binding was rebuilt within one evaluator session")
     finally:
         mod._reset_modify_runtime_state()
-
-
-def test_recurrence_evaluator_loads_omit_file_without_text_rule():
-    """Evaluator omission state must include an omit_file-only recurrence."""
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_path = Path(td) / "holidays.csv"
-        omit_path.write_text("date,description\n2025-01-06,Holiday\n", encoding="utf-8")
-        previous_dir = getattr(core, "OMIT_FILE_DIR", "")
-        proxy = getattr(core, "_PKG_PROXY", core)
-        previous_proxy_dir = getattr(proxy, "OMIT_FILE_DIR", "")
-        original_core_module = RecurrenceEvaluator._core_module
-        core.OMIT_FILE_DIR = td
-        proxy.OMIT_FILE_DIR = td
-        RecurrenceEvaluator._core_module = staticmethod(lambda: core)
-        try:
-            evaluator = _evaluator_for_fixture(
-                {
-                    "chainID": "omit-file-only",
-                    "anchor": "w:mon",
-                    "omit_file": "holidays.csv",
-                }
-            )
-            expect(evaluator.omit_dnf, "omit_file-only evaluator produced no omission state")
-        finally:
-            RecurrenceEvaluator._core_module = staticmethod(original_core_module)
-            core.OMIT_FILE_DIR = previous_dir
-            proxy.OMIT_FILE_DIR = previous_proxy_dir
-
-
-def test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once():
-    """Evaluator omission parsing should use one combined file-backed load."""
-    from nautical_core import omit_files
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_path = Path(td) / "holidays.csv"
-        omit_path.write_text("date,description\n2025-01-06,Holiday\n", encoding="utf-8")
-        previous_dir = getattr(core, "OMIT_FILE_DIR", "")
-        proxy = getattr(core, "_PKG_PROXY", core)
-        previous_proxy_dir = getattr(proxy, "OMIT_FILE_DIR", "")
-        original_core_module = RecurrenceEvaluator._core_module
-        original_loader = omit_files.load_omit_file_data
-        calls = []
-
-        def counted_loader(*args, **kwargs):
-            calls.append(1)
-            return original_loader(*args, **kwargs)
-
-        core.OMIT_FILE_DIR = td
-        proxy.OMIT_FILE_DIR = td
-        RecurrenceEvaluator._core_module = staticmethod(lambda: core)
-        omit_files.load_omit_file_data = counted_loader
-        try:
-            evaluator = _evaluator_for_fixture(
-                {
-                    "chainID": "omit-file-combined",
-                    "anchor": "w:mon",
-                    "omit": "w:sun",
-                    "omit_file": "holidays.csv",
-                }
-            )
-            evaluator.omit_dnf
-            evaluator.omit_dnf
-            expect(len(calls) == 1, f"omit file was loaded {len(calls)} times")
-            expect(evaluator.omit_dnf is evaluator.omit_dnf, "omit state was rebuilt or copied")
-            try:
-                evaluator.omit_dnf.dnf[0] = ()
-            except TypeError:
-                pass
-            else:
-                raise AssertionError("evaluator omission DNF remained mutable")
-        finally:
-            RecurrenceEvaluator._core_module = staticmethod(original_core_module)
-            omit_files.load_omit_file_data = original_loader
-            core.OMIT_FILE_DIR = previous_dir
-            proxy.OMIT_FILE_DIR = previous_proxy_dir
-
-
-def test_modify_timeline_uses_explicit_recurrence_identity():
-    """Timeline seed selection should honor chainID and require fallback opt-in."""
-    from nautical_core.modify_timeline import _timeline_seed_base
-
-    expect(
-        _timeline_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a",
-        "timeline preferred UUID over chainID",
-    )
-    expect(_timeline_seed_base({}) == "preview", "timeline fallback identity changed")
-
-
-def test_recurrence_evaluator_shadow_parity_time_matrix():
-    """Evaluator and hook mode selection agree across daily time forms."""
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_evaluator_shadow_time_matrix_test")
-    due_local = mod.core.build_local_datetime(date(2026, 8, 3), (9, 0))
-    end_local = mod.core.build_local_datetime(date(2026, 8, 3), (10, 0))
-    cases = (
-        "w:mon@t=09:00",
-        "w:mon@t=09:00,13:00",
-        "w:mon@t=06..18/3",
-        "w:mon@t=rand(06..18/3)",
-        "w:mon@t=22:30..06:30/7",
-    )
-    for index, expression in enumerate(cases):
-        chain_id = f"shadow-time-{index}"
-        parent = {
-            "anchor": expression,
-            "anchor_mode": "skip",
-            "chainID": chain_id,
-            "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
-            "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
-        }
-        hook_due, hook_meta, _dnf = _compute_anchor_child_due(mod, parent)
-        evaluator = _evaluator_for_fixture(
-            parent,
-            timezone=mod.core._LOCAL_TZ,
-        )
-        result = evaluator.select_mode(
-            "skip",
-            due_local=due_local,
-            end_local=end_local,
-            fallback_hhmm=(9, 0),
-        )
-        expect(
-            result.selected_occurrence is not None
-            and result.selected_occurrence.astimezone(timezone.utc) == hook_due,
-            f"time-form shadow parity drifted for {expression}: {result!r} vs {hook_due!r}",
-        )
-        expect(
-            result.basis == hook_meta.get("basis")
-            and result.source == hook_meta.get("source"),
-            f"time-form shadow evidence drifted for {expression}: {result!r} vs {hook_meta!r}",
-        )
-
-
-def test_recurrence_evaluator_shadow_parity_dst_and_business_calendar():
-    """Evaluator and hook mode selection preserve DST and business-calendar policy."""
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-
-    hook = _find_hook_file("on-modify.nautical")
-    mod = _load_hook_module(hook, "_nautical_evaluator_shadow_dst_business_test")
-    old_tz = mod.core._LOCAL_TZ
-    mod.core._LOCAL_TZ = ZoneInfo("America/New_York")
-    try:
-        due_local = mod.core.build_local_datetime(date(2025, 3, 9), (1, 30))
-        end_local = mod.core.build_local_datetime(date(2025, 3, 9), (2, 0))
-        parent = {
-            "anchor": "w:sun@t=02:30",
-            "anchor_mode": "skip",
-            "chainID": "shadow-dst",
-            "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
-            "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
-        }
-        hook_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
-        evaluator = _evaluator_for_fixture(parent, timezone_value=mod.core._LOCAL_TZ)
-        result = evaluator.select_mode(
-            "skip",
-            due_local=due_local,
-            end_local=end_local,
-            fallback_hhmm=(9, 0),
-        )
-        expect(
-            result.selected_occurrence is not None
-            and result.selected_occurrence.astimezone(timezone.utc) == hook_due,
-            f"DST shadow parity drifted: {result!r} vs {hook_due!r}",
-        )
-    finally:
-        mod.core._LOCAL_TZ = old_tz
-
-    class SetCalendar:
-        name = "shadow-business"
-        fingerprint = "shadow-business-v1"
-
-        def is_business_day(self, value):
-            return value in {date(2026, 1, 2), date(2026, 1, 7)}
-
-    policy = SetCalendar()
-    due_local = mod.core.build_local_datetime(date(2026, 1, 1), (9, 0))
-    end_local = mod.core.build_local_datetime(date(2026, 1, 1), (10, 0))
-    parent = {
-        "anchor": "m:1bd",
-        "anchor_mode": "skip",
-        "chainID": "shadow-business",
-        "due": mod.core.fmt_isoz(due_local.astimezone(timezone.utc)),
-        "end": mod.core.fmt_isoz(end_local.astimezone(timezone.utc)),
-    }
-
-    def calendar_next(dnf, after_local, *, default_seed_date, seed_base, omit_dnf, fallback_hhmm):
-        next_date, _ = mod.core.next_after_expr(
-            dnf,
-            after_local.date(),
-            default_seed=default_seed_date,
-            seed_base=seed_base,
-            business_calendar=policy,
-        )
-        return mod.core.build_local_datetime(next_date, fallback_hhmm)
-
-    with mod.core.use_business_calendar(policy):
-        hook_due, _meta, _dnf = _compute_anchor_child_due(mod, parent)
-    evaluator = _evaluator_for_fixture(
-        parent,
-        timezone=mod.core._LOCAL_TZ,
-        business_calendar=policy,
-    )
-    result = evaluator.select_mode(
-        "skip",
-        due_local=due_local,
-        end_local=end_local,
-        fallback_hhmm=(9, 0),
-    )
-    expect(
-        result.selected_occurrence is not None
-        and result.selected_occurrence.astimezone(timezone.utc) == hook_due,
-        f"business-calendar shadow parity drifted: {result!r} vs {hook_due!r}",
-    )
-
-
-def test_modify_hook_uses_explicit_recurrence_identity():
-    """Modify hook cap paths should share the chainID-first identity policy."""
-    schedule = _hook._module("modify_schedule_effects")
-    expect(schedule.recurrence_seed_base(_hook, {"chainID": "chain-a", "uuid": "uuid-a"}) == "chain-a", "modify hook preferred UUID over chainID")
-    expect(schedule.recurrence_seed_base(_hook, {}) == "preview", "modify hook fallback identity changed")
-
-
-def test_add_preview_uses_explicit_recurrence_identity():
-    """Add-preview seed selection should share the chainID-first policy."""
-    from nautical_core.add_anchor_preview import _preview_seed_base
-
-    expect(_preview_seed_base({"chainID": "chain-a", "uuid": "uuid-a"}, "preview") == "chain-a", "add preview preferred UUID over chainID")
-    expect(_preview_seed_base({}, "root-uuid") == "root-uuid", "add preview root fallback identity changed")
-
-
-def test_random_time_window_composition_and_anchor_file_guidance():
-    """Unsupported random-time compositions fail with actionable guidance."""
-    try:
-        core.parse_anchor_expr_to_dnf("w:mon@t=rand(06..18),22")
-        expect(False, "random time was accepted inside a composable schedule")
-    except core.ParseError as exc:
-        expect("separate anchor branches" in str(exc), f"unexpected composition error: {exc}")
-    from nautical_core.anchor_files import parse_anchor_file_spec
-    file_name, file_mods = parse_anchor_file_spec("events.csv@t=rand(06..18)")
-    expect(file_name == "events.csv", f"anchor_file name changed: {file_name!r}")
-    expect(file_mods.get("time_random") == "rand(06:00..18:00)", f"anchor_file random metadata was lost: {file_mods!r}")
 
 
 def test_random_time_window_is_stable_across_processes():
@@ -26480,390 +14155,6 @@ def test_random_time_window_is_stable_across_processes():
         for _ in range(2)
     ]
     expect(outputs[0] == outputs[1], f"random slots changed across processes: {outputs!r}")
-
-
-def test_random_time_window_dst_projection_is_deterministic():
-    """Random wall-clock slots remain deterministic through DST gap/fallback handling."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write('tz = "America/New_York"\n')
-        mod = _load_core_module(core_path, "_nautical_core_random_dst_test", cfg)
-        from nautical_core.time_windows import parse_random_time_window_spec
-
-        window = parse_random_time_window_spec("rand(01:00..04:00/3)")
-        for day in (date(2025, 3, 9), date(2025, 11, 2)):
-            slots = window.slots_with_offsets(f"dst/{day.isoformat()}")
-            instants = [mod.build_local_datetime(day, (slot[1], slot[2])) for slot in slots]
-            expect(len(instants) == len(set(instants)), f"random DST slots duplicated: {day} {instants!r}")
-            expect(all(mod.to_local(value).tzinfo is not None for value in instants), f"random DST slot lost timezone: {day}")
-
-
-def test_time_window_partition_rounding_preserves_boundaries():
-    """Non-divisible partitions retain endpoints and use deterministic minute rounding."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    window = parse_time_window_spec("06:00..18:01/4")
-    expect(window is not None, "non-divisible partition window was not parsed")
-    expect(
-        window.slots == ((6, 0), (10, 0), (14, 1), (18, 1)),
-        f"unexpected rounded partition slots: {window.slots!r}",
-    )
-    minutes = [hour * 60 + minute for hour, minute in window.slots]
-    expect(minutes[0] == 6 * 60 and minutes[-1] == 18 * 60 + 1, "partition endpoints were not preserved")
-    expect(all(left < right for left, right in zip(minutes, minutes[1:])), "partition slots were not strictly increasing")
-
-
-def test_hour_only_time_lists_normalize_across_anchor_and_anchor_file():
-    """Ordinary @t lists should accept hour-only tokens consistently across sources."""
-    dnf = core.parse_anchor_expr_to_dnf("w:mon@t=9,12:30,18")
-    expect(
-        dnf[0][0]["mods"].get("t") == [(9, 0), (12, 30), (18, 0)],
-        f"hour-only anchor list was not normalized: {dnf!r}",
-    )
-    import nautical_core.anchor_files as anchor_files
-
-    _name, mods = anchor_files.parse_anchor_file_spec("events.csv@t=9,12:30,18")
-    expect(
-        mods.get("t") == [(9, 0), (12, 30), (18, 0)],
-        f"hour-only anchor_file list was not normalized: {mods!r}",
-    )
-
-
-def test_composable_time_schedule_unions_windows_and_clock_slots():
-    """A composable schedule should expand, sort, deduplicate, and round-trip."""
-    expr = "w:mon@t=06..18/3h,22"
-    dnf = core.parse_anchor_expr_to_dnf(expr)
-    mods = dnf[0][0]["mods"]
-    expect(mods.get("time_schedule") == "06:00..18:00/3h,22:00", f"schedule metadata was lost: {mods!r}")
-    expect(
-        mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0), (18, 0), (22, 0)],
-        f"composable schedule slots are wrong: {mods!r}",
-    )
-    round_trip = core.acf_to_original_format(core.build_acf(expr))
-    expect("@t=06:00..18:00/3h,22:00" in round_trip, f"schedule ACF round-trip failed: {round_trip!r}")
-    natural = core.describe_anchor_expr(expr)
-    expect("every 3h within 06:00\N{EN DASH}18:00 plus 22:00" in natural, f"schedule natural language is unclear: {natural!r}")
-
-
-def test_composable_time_schedule_rejects_non_numeric_members():
-    """Composable schedules fail clearly instead of partially accepting a member."""
-    try:
-        core.parse_anchor_expr_to_dnf("w:mon@t=06..18/3h,sunset")
-        expect(False, "astronomical member was accepted in a numeric schedule")
-    except core.ParseError as exc:
-        expect("numeric" in str(exc).lower(), f"unexpected schedule error: {exc}")
-
-
-def test_composable_time_schedule_rejects_empty_members():
-    """Composable schedules should reject trailing and repeated commas."""
-    for value in ("06..18/3h,", "06..18/3h,,22"):
-        try:
-            core.parse_anchor_expr_to_dnf(f"w:mon@t={value}")
-            expect(False, f"malformed schedule was accepted: {value}")
-        except core.ParseError as exc:
-            expect("empty" in str(exc).lower(), f"unexpected empty-member error: {exc}")
-
-
-def test_composable_time_schedule_deduplicates_overlaps_and_boundaries():
-    """Overlapping windows and exact day boundaries should produce stable slots."""
-    from nautical_core.time_windows import parse_time_schedule_spec
-
-    schedule = parse_time_schedule_spec("00..04/2h,04..08/2h,08,23")
-    expect(schedule is not None, "boundary schedule was not parsed")
-    expect(
-        schedule.slots == ((0, 0), (2, 0), (4, 0), (6, 0), (8, 0), (23, 0)),
-        f"overlap or boundary slots were expanded incorrectly: {schedule.slots!r}",
-    )
-
-    overlap = parse_time_schedule_spec("06..12/2h,08..14/3h,08")
-    expect(overlap is not None, "overlapping schedule was not parsed")
-    expect(
-        overlap.slots == ((6, 0), (8, 0), (10, 0), (11, 0), (12, 0), (14, 0)),
-        f"overlapping slots were not deduplicated and sorted: {overlap.slots!r}",
-    )
-
-    reordered = parse_time_schedule_spec("22,06..18/3h,06..18/3h,02")
-    expect(reordered is not None, "reordered schedule was not parsed")
-    expect(
-        reordered.canonical == "02:00,06:00..18:00/3h,22:00",
-        f"schedule canonicalization was unstable: {reordered.canonical!r}",
-    )
-
-
-def test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints():
-    """Hour shorthand remains strict about padding and valid clock bounds."""
-    from nautical_core.time_windows import parse_time_window_spec
-
-    for value in ("6..18/3h", "06:0..18/3h", "06..24/3h"):
-        try:
-            parse_time_window_spec(value)
-        except ValueError:
-            continue
-        raise AssertionError(f"invalid hour endpoint was accepted: {value}")
-
-
-def test_time_window_grammar_expands_and_round_trips_through_acf():
-    """The parser expands windows for runtime while ACF preserves compact syntax."""
-    expr = "w:mon@t=06..18/3h"
-    dnf = core.parse_anchor_expr_to_dnf(expr)
-    mods = dnf[0][0]["mods"]
-    expect(mods.get("time_window") == "06:00..18:00/3h", f"window metadata was lost: {mods!r}")
-    expect(
-        mods.get("t") == [(6, 0), (9, 0), (12, 0), (15, 0), (18, 0)],
-        f"window was not expanded into runtime slots: {mods!r}",
-    )
-    acf = core.build_acf(expr)
-    round_trip = core.acf_to_original_format(acf)
-    expect("@t=06:00..18:00/3h" in round_trip, f"ACF did not preserve compact window: {round_trip!r}")
-    decorated = core.acf_to_original_format(core.build_acf("w:mon@t=06..17/3h@+1d@+15m"))
-    expect("@t=06:00..17:00/3h" in decorated, f"decorated window was not preserved: {decorated!r}")
-    expect("@+1d" in decorated and "@+15m" in decorated, f"window modifiers were lost in ACF: {decorated!r}")
-
-
-def test_grouped_time_window_metadata_distributes_to_each_branch():
-    """A grouped window modifier must reach every branch without duplicating slots."""
-    dnf = core.parse_anchor_expr_to_dnf("(w:mon | w:fri)@t=06..18/3h")
-    expect(len(dnf) == 2, f"unexpected grouped window DNF: {dnf!r}")
-    for term in dnf:
-        mods = term[0]["mods"]
-        expect(mods.get("time_window") == "06:00..18:00/3h", f"group window metadata was lost: {dnf!r}")
-        expect(len(mods.get("t") or []) == 5, f"group window slots were not distributed: {dnf!r}")
-
-
-def test_composable_schedule_preserves_offsets_and_group_validation():
-    """Schedules should survive grouped distribution, offsets, and strict validation."""
-    expr = "(w:mon | w:fri)@t=06..12/2h,16..20/2h,22@+15m"
-    dnf = core.parse_anchor_expr_to_dnf(expr)
-    expect(len(dnf) == 2, f"unexpected grouped schedule DNF: {dnf!r}")
-    for term in dnf:
-        mods = term[0]["mods"]
-        expect(
-            mods.get("time_schedule") == "06:00..12:00/2h,16:00..20:00/2h,22:00",
-            f"group schedule metadata was lost: {dnf!r}",
-        )
-        expect(mods.get("time_offset_minutes") == 15, f"schedule offset was lost: {dnf!r}")
-    core.validate_anchor_expr_strict(expr)
-    round_trip = core.acf_to_original_format(core.build_acf(expr))
-    expect("@+15m" in round_trip, f"schedule offset was lost in ACF: {round_trip!r}")
-
-    try:
-        core.parse_anchor_expr_to_dnf("(w:mon@t=06..12/2h | w:fri)@t=16..20/2h")
-        expect(False, "duplicate grouped schedule was accepted")
-    except core.ParseError as exc:
-        expect("timed term" in str(exc), f"unexpected duplicate schedule error: {exc}")
-
-
-def test_time_window_natural_language_uses_bounded_interval():
-    """Natural descriptions should explain a window rather than list every generated slot."""
-    text = core.describe_anchor_expr("w:mon..fri@t=06..17/3h")
-    expect("every 3h within 06:00\N{EN DASH}17:00" in text, f"window natural language is unclear: {text!r}")
-    expect("06:00, 09:00" not in text, f"window natural language leaked expanded slots: {text!r}")
-    partitioned = core.describe_anchor_expr("w:mon..fri@t=06..18/3")
-    expect(
-        "3 evenly spaced times (every 6h) within 06:00\N{EN DASH}18:00" in partitioned,
-        f"partitioned window natural language is unclear: {partitioned!r}",
-    )
-    approximate = core.describe_anchor_expr("w:mon..fri@t=06:00..18:01/4")
-    expect("4 evenly spaced times (every ~4h)" in approximate, f"approximate partition interval was unclear: {approximate!r}")
-    overnight = core.describe_anchor_expr("w:mon@t=22:30..06:30/7")
-    expect(
-        "7 evenly spaced times (every 1h20m) within 22:30\N{EN DASH}06:30 next day" in overnight,
-        f"overnight window natural language was unclear: {overnight!r}",
-    )
-    random = core.describe_anchor_expr("w:mon@t=rand(06..18/3)")
-    expect(
-        "3 deterministic random times, one per bucket, within 06:00\N{EN DASH}18:00" in random,
-        f"random window natural language was unclear: {random!r}",
-    )
-
-
-def test_random_time_metadata_rejects_contradictory_cached_shapes():
-    """Random time metadata must not coexist with another timed representation."""
-    contradictory = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_random": "rand(06:00..18:00/3)",
-        "time_window": "06:00..18:00/3h",
-        "t": [],
-    }}]]
-    try:
-        core.validate_anchor_expr_strict(contradictory)
-        expect(False, "contradictory random timing metadata was accepted")
-    except core.ParseError as exc:
-        expect("cannot be combined" in str(exc), f"unexpected contradictory timing error: {exc}")
-
-
-def test_cached_time_window_metadata_rejects_slot_drift():
-    """Cached window metadata must agree with the expanded runtime slot list."""
-    valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_window": "06:00..17:00/3h",
-        "t": [[6, 0], [9, 0], [12, 0], [15, 0]],
-    }}]]
-    normalized = core._normalize_dnf_cached(valid)
-    expect(
-        normalized[0][0]["mods"]["t"] == [(6, 0), (9, 0), (12, 0), (15, 0)],
-        "valid window cache was not normalized",
-    )
-    invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_window": "06:00..17:00/3h",
-        "t": [[6, 0], [10, 0]],
-    }}]]
-    try:
-        core._normalize_dnf_cached(invalid)
-        expect(False, "inconsistent cached window slots were accepted")
-    except ValueError as exc:
-        expect("does not match" in str(exc), f"unexpected cache consistency error: {exc}")
-
-    partitioned = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_window": "04:30..19:30/3",
-        "t": [[4, 30], [12, 0], [19, 30]],
-    }}]]
-    normalized_partitioned = core._normalize_dnf_cached(partitioned)
-    expect(
-        normalized_partitioned[0][0]["mods"]["t"] == [(4, 30), (12, 0), (19, 30)],
-        "valid partitioned window cache was not normalized",
-    )
-    invalid_partitioned = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_window": "04:30..19:30/3",
-        "t": [[4, 30], [11, 0], [19, 30]],
-    }}]]
-    try:
-        core._normalize_dnf_cached(invalid_partitioned)
-        expect(False, "inconsistent partitioned window slots were accepted")
-    except ValueError as exc:
-        expect("does not match" in str(exc), f"unexpected partition cache consistency error: {exc}")
-
-    overnight = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_window": "22:30..06:30/7",
-        "time_window_offsets": [[0, 22, 30], [0, 23, 50], [1, 1, 10], [1, 2, 30], [1, 3, 50], [1, 5, 10], [1, 6, 30]],
-        "t": [[22, 30], [23, 50], [1, 10], [2, 30], [3, 50], [5, 10], [6, 30]],
-    }}]]
-    core._normalize_dnf_cached(overnight)
-    overnight[0][0]["mods"]["time_window_offsets"][2] = [0, 1, 10]
-    try:
-        core._normalize_dnf_cached(overnight)
-        expect(False, "inconsistent overnight offset metadata was accepted")
-    except ValueError as exc:
-        expect("offset metadata" in str(exc), f"unexpected overnight cache consistency error: {exc}")
-
-
-def test_cached_random_time_metadata_rejects_invalid_specs():
-    """Cached random-time metadata must remain canonical and parseable."""
-    valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_random": "rand(06:00..18:00/3)",
-        "t": [],
-    }}]]
-    core._normalize_dnf_cached(valid)
-    invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_random": "rand(06..18/3)",
-        "t": [],
-    }}]]
-    try:
-        core._normalize_dnf_cached(invalid)
-        expect(False, "non-canonical cached random metadata was accepted")
-    except ValueError as exc:
-        expect("random" in str(exc).lower(), f"unexpected random cache error: {exc}")
-
-
-def test_cached_time_schedule_metadata_rejects_slot_drift():
-    """Cached composable schedules must agree with their expanded slots."""
-    valid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_schedule": "06:00..12:00/2h,18:00",
-        "t": [[6, 0], [8, 0], [10, 0], [12, 0], [18, 0]],
-    }}]]
-    normalized = core._normalize_dnf_cached(valid)
-    expect(
-        normalized[0][0]["mods"]["t"] == [(6, 0), (8, 0), (10, 0), (12, 0), (18, 0)],
-        "valid schedule cache was not normalized",
-    )
-    invalid = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_schedule": "06:00..12:00/2h,18:00",
-        "t": [[6, 0], [8, 0], [10, 0], [18, 0]],
-    }}]]
-    try:
-        core._normalize_dnf_cached(invalid)
-        expect(False, "inconsistent cached schedule slots were accepted")
-    except ValueError as exc:
-        expect("does not match" in str(exc), f"unexpected schedule cache error: {exc}")
-
-    partitioned = [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {
-        "time_schedule": "04:30..19:30/3,22:00",
-        "t": [[4, 30], [12, 0], [19, 30], [22, 0]],
-    }}]]
-    normalized_partitioned = core._normalize_dnf_cached(partitioned)
-    expect(
-        normalized_partitioned[0][0]["mods"]["t"] == [(4, 30), (12, 0), (19, 30), (22, 0)],
-        "valid partitioned schedule cache was not normalized",
-    )
-
-
-def test_composable_time_schedule_enforces_aggregate_slot_limit():
-    """The shared slot limit applies to a union, not just each individual window."""
-    from nautical_core import file_resource_limits
-    from nautical_core.time_windows import parse_time_schedule_spec
-
-    original = file_resource_limits.MAX_TIME_WINDOW_SLOTS
-    try:
-        file_resource_limits.MAX_TIME_WINDOW_SLOTS = 4
-        try:
-            parse_time_schedule_spec("06..12/2h,16..20/2h")
-            expect(False, "composed schedule exceeded the injected aggregate slot limit")
-        except ValueError as exc:
-            expect("too many slots" in str(exc), f"unexpected aggregate limit error: {exc}")
-    finally:
-        file_resource_limits.MAX_TIME_WINDOW_SLOTS = original
-
-
-def test_description_alias_parser_extracts_short_udas():
-    """Description aliases should map to canonical fields and leave clean text."""
-    from nautical_core.description_aliases import parse_description_aliases
-
-    description, fields = parse_description_aliases("test task a:(w:mon | w:fri) am:all")
-    expect(description == "test task", f"alias directives were not removed: {description!r}")
-    expect(
-        fields == {"anchor": "(w:mon | w:fri)", "anchor_mode": "all"},
-        f"alias fields were not normalized: {fields!r}",
-    )
-
-
-def test_description_alias_parser_avoids_prose_and_rejects_duplicates():
-    """Whitespace prose stays intact while duplicate aliases fail clearly."""
-    from nautical_core.description_aliases import parse_description_aliases
-
-    description, fields = parse_description_aliases("read a: book today")
-    expect(description == "read a: book today" and not fields, "ordinary prose was treated as an alias")
-    try:
-        parse_description_aliases("test a:w:mon a:w:tue")
-        expect(False, "duplicate description aliases were accepted")
-    except ValueError as exc:
-        expect("more than once" in str(exc), f"unexpected duplicate alias error: {exc}")
-    description, fields = parse_description_aliases("test am:")
-    expect(description == "test" and fields == {"anchor_mode": ""}, f"empty alias was not normalized as clear: {description!r}, {fields!r}")
-    try:
-        parse_description_aliases("test am:-")
-        expect(False, "dash clearing syntax was accepted")
-    except ValueError as exc:
-        expect("leave it empty" in str(exc), f"unexpected dash clearing error: {exc}")
-
-    description, fields = parse_description_aliases("note a:book today")
-    expect(description == "note a:book today" and not fields, "obvious prose collision was accepted")
-
-
-def test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime():
-    """Every supported astronomical event must parse through the shared vocabulary."""
-    import nautical_core.astronomy as astronomy
-
-    for event in sorted(astronomy.EVENT_NAMES):
-        dnf = core.parse_anchor_expr_to_dnf(f"w:mon@t={event}")
-        expect(dnf[0][0]["mods"]["t"] == event, f"parser rejected shared event {event!r}")
-        expect(astronomy.is_event_name(event), f"runtime rejected shared event {event!r}")
-
-    try:
-        core.parse_anchor_expr_to_dnf("w:mon@t=not-an-event")
-    except Exception:
-        pass
-    else:
-        raise AssertionError("parser accepted an unknown astronomical event")
 
 
 def test_navigator_reads_through_read_only_invocation_repository():
@@ -26905,32 +14196,6 @@ def test_navigator_reads_through_read_only_invocation_repository():
     finally:
         navigator._UNIT_OF_WORK = None
         sys.modules.pop(module_name, None)
-
-def test_navigator_sparse_calendar_renders_only_active_months():
-    """Sparse recurrence projections should not render empty months between occurrences."""
-    module_name = "_nautical_navigator_sparse_calendar_test"
-    loader = importlib.machinery.SourceFileLoader(module_name, os.path.join(ROOT, "nautical_navigator.py"))
-    spec = importlib.util.spec_from_loader(module_name, loader)
-    navigator = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = navigator
-    try:
-        loader.exec_module(navigator)
-        navigator._UNIT_OF_WORK = SimpleNamespace(context=SimpleNamespace(command_prefix=("task",)))
-        analyzer = navigator.TaskAnalyzer()
-        panel = analyzer.create_enhanced_calendar(
-            completed_dates=[date(2026, 7, 1)],
-            upcoming_dates=[date(2027, 7, 1), date(2035, 7, 1)],
-            pending_due_dates=[],
-        )
-        from rich.console import Console
-        rendered = Console(record=True, width=120)
-        rendered.print(panel)
-        output = rendered.export_text()
-        expect("July 2026" in output and "July 2027" in output and "July 2035" in output, f"active months missing: {output!r}")
-        expect("August 2026" not in output and "January 2035" not in output, f"empty months were rendered: {output!r}")
-    finally:
-        sys.modules.pop(module_name, None)
-
 
 def test_on_add_anchor_and_anchor_file_can_coexist():
     """on-add should allow anchor and anchor_file to coexist as inclusion sources."""
@@ -27461,108 +14726,6 @@ def test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_str
     expect("(omitted)" in txt, f"expected merged timeline omitted marker for anchor-side omit_file date: {txt!r}")
 
 
-def test_omit_file_modifiers_reject_time_modifiers():
-    """omit_file should reject @t because omit rules are date-based only."""
-    import nautical_core.omit_files as omit_files
-
-    with tempfile.TemporaryDirectory() as td:
-        omit_dir = Path(td)
-        sample = omit_dir / 'holidays.csv'
-        sample.write_text('date\n2026-04-25\n', encoding='utf-8')
-        try:
-            omit_files.load_omit_file_dates('holidays.csv@t=09:00', str(omit_dir))
-            expect(False, 'expected timed omit_file modifier to fail')
-        except ValueError as e:
-            expect('omit_file does not support time modifiers (@t).' in str(e), f'unexpected timed omit_file error: {e}')
-
-
-def test_anchor_omit_next_after_expr_skips_matching_dates():
-    """next-after helper should skip dates that match the omit expression."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    dnf = core.validate_anchor_expr_strict("w:mon,wed,fri")
-    omit_dnf = anchor_omit.validate_omit_expr_strict(
-        "w:wed",
-        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-    )
-    nxt, _meta = anchor_omit.next_after_expr_with_omit(
-        dnf,
-        date(2025, 1, 6),
-        default_seed=date(2025, 1, 6),
-        seed_base="omit-test",
-        omit_dnf=omit_dnf,
-        core=core,
-    )
-    expect(nxt == date(2025, 1, 10), f"expected Friday after omitted Wednesday, got {nxt}")
-
-
-def test_anchor_omit_next_after_expr_skips_omit_file_dates():
-    """next-after helper should skip dates loaded from omit_file state."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    dnf = core.validate_anchor_expr_strict("w:mon,wed,fri")
-    omit_state = anchor_omit.combine_omit_state(omit_dates={date(2025, 1, 10)})
-    nxt, _meta = anchor_omit.next_after_expr_with_omit(
-        dnf,
-        date(2025, 1, 8),
-        default_seed=date(2025, 1, 6),
-        seed_base="omit-file-test",
-        omit_dnf=omit_state,
-        core=core,
-    )
-    expect(nxt == date(2025, 1, 13), f"expected Monday after file-blocked Friday, got {nxt}")
-
-
-def test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items():
-    """omit should treat comma lists joined with '+' as a grouped unit."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    omit_dnf = anchor_omit.validate_omit_expr_strict(
-        "w:mon,wed,fri + y:apr",
-        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-    )
-    expect(anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 13), date(2026, 4, 11), "omit-test", core=core), "April Monday should be omitted")
-    expect(anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 15), date(2026, 4, 11), "omit-test", core=core), "April Wednesday should be omitted")
-    expect(not anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 5, 4), date(2026, 4, 11), "omit-test", core=core), "May Monday should not be omitted")
-    expect(not anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 5, 6), date(2026, 4, 11), "omit-test", core=core), "May Wednesday should not be omitted")
-
-
-def test_anchor_omit_business_day_roll_matches_rolled_date():
-    """omit should fire on the rolled business-day result, not only on the base date."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    omit_dnf = anchor_omit.validate_omit_expr_strict(
-        "y:04-25@nbd",
-        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-    )
-    expect(
-        anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-roll-test", core=core),
-        "rolled Monday should be omitted for 2026-04-25@nbd",
-    )
-
-
-def test_anchor_omit_positive_day_offset_matches_shifted_date():
-    """omit should fire on dates reached via positive calendar- and business-day offsets."""
-    import nautical_core.anchor_omit as anchor_omit
-
-    omit_dnf = anchor_omit.validate_omit_expr_strict(
-        "y:04-25@+2d",
-        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-    )
-    expect(
-        anchor_omit.omit_expr_fires_on_date(omit_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-offset-test", core=core),
-        "shifted date should be omitted for 2026-04-25@+2d",
-    )
-    business_dnf = anchor_omit.validate_omit_expr_strict(
-        "y:04-24@+1bd",
-        validate_anchor_expr_cached=core.validate_anchor_expr_strict,
-    )
-    expect(
-        anchor_omit.omit_expr_fires_on_date(business_dnf, date(2026, 4, 27), date(2026, 4, 12), "omit-business-offset-test", core=core),
-        "shifted Monday should be omitted for 2026-04-24@+1bd",
-    )
-
-
 def test_on_modify_compute_anchor_child_due_skips_omit_date():
     """anchor completion should skip omitted anchor dates and choose the next valid one."""
     hook = _find_hook_file("on-modify.nautical")
@@ -27719,7 +14882,7 @@ def test_on_modify_completion_build_and_spawn_child_happy_path():
     generation_effects.chain_generation_service = lambda _host: StubGeneration.from_core(mod.core)
     spawn_effects = mod._module("modify_spawn_effects")
     original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda _host, _child, _parent, **_kwargs: ("beeswax", set(), True, False, None, "si_test")
+    spawn_effects.spawn_child_atomic = lambda _ports, _child, _parent, **_kwargs: ("beeswax", set(), True, False, None, "si_test")
     try:
         out = mod._completion_effects.build_and_spawn_child(
             new,
@@ -27959,9 +15122,9 @@ def test_on_modify_render_anchor_completion_feedback_wrapper():
     expect("title" in captured, "expected preview panel emission")
     expect("Next anchor" in captured["title"], f"unexpected panel title: {captured}")
     fb = captured.get("fb") or []
-    expect(any(k == "Omit preset" and "@wed → w:wed" in str(v) for k, v in fb), f"expected omit preset expansion row in anchor feedback: {fb}")
+    expect(any(k == "Omit" and "@wed" in str(v) for k, v in fb), f"expected omit row in anchor feedback: {fb}")
     expect(any(k == "Preset" and "@payday → m:15,-1bd" in str(v) for k, v in fb), f"expected preset expansion row in anchor feedback: {fb}")
-    expect(any(k == "Except" and ("Wednesday" in str(v) or "Wednesdays" in str(v)) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
+    expect(any(k == "Natural" and "skip @wed" in str(v) for k, v in fb), f"expected natural omit row in anchor feedback: {fb}")
     expect(any(k == "Result" and "Applied now" in str(v) for k, v in fb), f"expected applied lifecycle result in anchor feedback: {fb}")
     expect(not any(k == "Analytics" for k, _v in fb), f"analytics row should be hidden when show_analytics is false: {fb}")
 
@@ -28100,8 +15263,12 @@ def test_on_modify_render_anchor_file_completion_feedback_wrapper():
     mod._panel = lambda title, fb, **_k: captured.update({"title": title, "fb": list(fb)})
 
     prev_panel_mode = mod.core.PANEL_MODE
+    prev_anchor_dir = mod.core.ANCHOR_FILE_DIR
+    anchor_dir = tempfile.TemporaryDirectory(prefix="nautical-anchor-feedback-")
+    Path(anchor_dir.name, "calendar.csv").write_text("date\n2025-01-01\n", encoding="utf-8")
     try:
         mod.core.PANEL_MODE = "panel"
+        mod.core.ANCHOR_FILE_DIR = anchor_dir.name
         mod._presentation_effects.render_anchor_completion_feedback(
             new={"anchor_file": "calendar.csv@t=12:00", "anchor_mode": "skip", "uuid": "00000000-0000-4000-8000-000000000333", "chainID": "abcd1234"},
             child={"uuid": "00000000-0000-4000-8000-000000000444"},
@@ -28126,54 +15293,14 @@ def test_on_modify_render_anchor_file_completion_feedback_wrapper():
         )
     finally:
         mod.core.PANEL_MODE = prev_panel_mode
+        mod.core.ANCHOR_FILE_DIR = prev_anchor_dir
+        anchor_dir.cleanup()
 
     expect("title" in captured, "expected anchor_file preview panel emission")
     expect("Next anchor" in captured["title"], f"unexpected anchor_file panel title: {captured}")
     fb = captured.get("fb") or []
     expect(any(k == "Anchor file" for k, _v in fb), f"expected anchor_file row in feedback: {fb}")
 
-
-
-def test_anchor_natural_language_normalizes_grouped_list_plus_expr():
-    """natural language should collapse grouped comma-list filters into one readable phrase."""
-    natural = core.describe_anchor_expr("w:mon,wed,fri + y:apr")
-    expect(natural == "Mondays, Wednesdays, or Fridays in Apr each year", f"expected compact grouped phrase, got {natural!r}")
-
-
-def test_timeline_completed_rows_place_uuid_before_delta():
-    """completed timeline rows should consistently place the UUID before the timing delta."""
-    timeline = importlib.import_module("nautical_core.modify_timeline")
-    common = {
-        "dt": None,
-        "cap_no": None,
-        "prev_style": "prev",
-        "cur_style": "current",
-        "next_style": "next",
-        "future_style": "future",
-        "core": SimpleNamespace(fmt_dt_local=lambda _dt: "DATE"),
-        "dtparse": lambda value: value,
-        "fmt_on_time_delta": lambda _due, _end: "(DELTA)",
-        "fmtlocal": lambda _dt: "DATE",
-        "short": lambda value: str(value).replace("-", "")[:8],
-    }
-
-    prev = timeline._timeline_base_line(
-        1,
-        obj={"due": "due", "end": "end", "uuid": "beeswax"},
-        item_type="prev",
-        task={},
-        **common,
-    )
-    current = timeline._timeline_base_line(
-        2,
-        obj={},
-        item_type="current",
-        task={"due": "due", "end": "end", "uuid": "cafebabe-0000"},
-        **common,
-    )
-
-    expect("DATE beeswax (DELTA)" in prev, f"unexpected previous-row ordering: {prev!r}")
-    expect("DATE cafebabe (DELTA)" in current, f"unexpected current-row ordering: {current!r}")
 
 
 def test_on_modify_render_cp_completion_feedback_wrapper():
@@ -28488,19 +15615,6 @@ def test_on_add_preview_hard_cap():
     expect(len(preview) == 3, "preview hard cap should limit preview length")
 
 
-def test_on_add_compact_anchor_preview_requests_one_occurrence():
-    """Compact anchor previews need only the first file-backed occurrence."""
-    preview = importlib.import_module("nautical_core.add_anchor_preview")
-    expect(
-        preview._initial_occurrence_limit(200, True) == 1,
-        "compact previews should request one occurrence",
-    )
-    expect(
-        preview._initial_occurrence_limit(3, False) == 19,
-        "full previews should retain their collection headroom",
-    )
-
-
 def test_on_add_flushes_stdout():
     """on-add should flush stdout after emitting JSON."""
     hook = _find_hook_file("on-add.nautical")
@@ -28648,89 +15762,6 @@ def test_on_modify_panel_forwards_live_duration():
     )
 
 
-def test_core_render_panel_line_mode_uses_panel_line():
-    calls = []
-    orig_panel_line = core.panel_line
-    try:
-        def _fake_panel_line(title, line, **kwargs):
-            calls.append((title, line, kwargs.get("kind")))
-        core.panel_line = _fake_panel_line
-        core.render_panel("Title", [("Key", "Value")], kind="info", panel_mode="line")
-    finally:
-        core.panel_line = orig_panel_line
-
-    expect(len(calls) == 1, "line mode should route through panel_line once")
-    expect(calls[0][1] == "Title — Key: Value", f"unexpected line payload: {calls[0][1]!r}")
-
-
-def test_core_render_panel_line_force_rich_kind_skips_panel_line():
-    calls = []
-    orig_panel_line = core.panel_line
-    stderr = io.StringIO()
-    orig_stderr = sys.stderr
-    try:
-        def _fake_panel_line(title, line, **kwargs):
-            calls.append((title, line, kwargs.get("kind")))
-        core.panel_line = _fake_panel_line
-        sys.stderr = stderr
-        core.render_panel(
-            "Title",
-            [("Key", "Value")],
-            kind="preview_anchor",
-            panel_mode="line",
-            line_force_rich_kinds={"preview_anchor"},
-        )
-    finally:
-        sys.stderr = orig_stderr
-        core.panel_line = orig_panel_line
-
-    expect(not calls, "line-forced rich kind should bypass panel_line")
-    out = stderr.getvalue()
-    expect("Title" in out and "Key" in out, "promoted rich/fast path should emit fallback panel text")
-
-
-def test_ui_build_rich_panel_preserves_static_layout_and_theme():
-    """The shared Rich builder should preserve the existing panel content and theme contract."""
-    import nautical_core.ui as ui
-    from rich.console import Console
-
-    panel = ui._build_rich_panel(
-        "Nautical title",
-        [("Pattern", "w:mon"), (None, "separator"), ("Warning", "check this")],
-        kind="preview_anchor",
-        themes={
-            "preview_anchor": {
-                "border": "magenta",
-                "title": "bright_cyan",
-                "label": "green",
-            }
-        },
-    )
-    output = io.StringIO()
-    Console(file=output, width=80, color_system=None).print(panel)
-    rendered = output.getvalue()
-
-    expect("Nautical title" in rendered, f"builder lost panel title: {rendered!r}")
-    expect("Pattern" in rendered and "w:mon" in rendered, f"builder lost normal row: {rendered!r}")
-    expect("separator" in rendered, f"builder lost unlabeled row: {rendered!r}")
-    expect("Warning" in rendered and "check this" in rendered, f"builder lost warning row: {rendered!r}")
-    expect(str(panel.border_style) == "magenta", f"builder lost border theme: {panel.border_style!r}")
-
-    semantic = ui.panel_themes()
-    expect(
-        semantic["preview_anchor"] == {"border": "turquoise2", "title": "bright_cyan", "label": "sea_green2"},
-        f"anchor theme lost its shared identity: {semantic!r}",
-    )
-    expect(
-        semantic["preview_cp"] == {"border": "dark_orange", "title": "orange_red1", "label": "gold3"},
-        f"cp theme lost its shared identity: {semantic!r}",
-    )
-    expect(semantic["summary"]["border"] == "magenta", f"summary should not use error red: {semantic!r}")
-    expect(semantic["error"]["border"] == "red", f"error theme should remain red: {semantic!r}")
-    semantic["info"]["border"] = "changed"
-    expect(ui.panel_themes()["info"]["border"] == "blue", "panel theme callers should receive independent copies")
-
-
 def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
     """Only live panels should carry the restrained Nautical footer treatment."""
     import nautical_core.ui as ui
@@ -28832,42 +15863,6 @@ def test_ui_live_test_term_guard_restores_environment():
             os.environ.pop("TERM", None)
         else:
             os.environ["TERM"] = original
-
-
-def test_ui_static_rich_renderer_delegates_to_shared_builder():
-    """Static Rich rendering should print exactly the renderable returned by the shared builder."""
-    import nautical_core.ui as ui
-    from rich.text import Text
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    captured = {}
-    stderr = TtyBuffer()
-    original_stderr = sys.stderr
-    original_builder = ui._build_rich_panel
-    try:
-        def fake_builder(title, rows, *, kind, themes):
-            captured.update(title=title, rows=list(rows), kind=kind, themes=themes)
-            return Text("shared builder output")
-
-        ui._build_rich_panel = fake_builder
-        sys.stderr = stderr
-        rendered = ui._render_panel_rich(
-            "Delegated",
-            [("Key", "Value")],
-            kind="info",
-            themes={"info": {"border": "blue"}},
-        )
-    finally:
-        sys.stderr = original_stderr
-        ui._build_rich_panel = original_builder
-
-    expect(rendered is True, "static Rich renderer should report successful output")
-    expect(captured.get("title") == "Delegated", f"builder did not receive title: {captured!r}")
-    expect(captured.get("rows") == [("Key", "Value")], f"builder did not receive rows: {captured!r}")
-    expect("shared builder output" in stderr.getvalue(), f"renderer did not print builder result: {stderr.getvalue()!r}")
 
 
 def test_ui_live_renderer_reveals_cumulative_row_frames():
@@ -29026,28 +16021,6 @@ def test_ui_live_renderer_reveals_multiline_values_progressively():
     expect(len(sleep_delays) == 5, f"unexpected multiline transition count: {sleep_delays!r}")
     expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"multiline reveal exceeded its total budget: {sleep_delays!r}")
     expect(sleep_delays[0] < sleep_delays[-1], f"multiline reveal did not ease toward settle: {sleep_delays!r}")
-
-
-def test_ui_live_renderer_reveals_timeline_without_highlight():
-    """Timeline content should reveal plainly without injected markers or colors."""
-    import nautical_core.ui as ui
-
-    frames = ui._live_reveal_frames(
-        [("Summary", "ready"), ("Timeline", "old\ncurrent\nnext"), ("Chain", "on")]
-    )
-    timeline_frames = [rows[-1][1] for rows, active in frames if active == 1]
-    expect(
-        timeline_frames == [
-            "old",
-            "old\ncurrent",
-            "old\ncurrent\nnext",
-        ],
-        f"timeline did not reveal plainly: {timeline_frames!r}",
-    )
-    expect(
-        all("▸" not in value and "bright_cyan" not in value for value in timeline_frames),
-        f"timeline retained highlight markup: {timeline_frames!r}",
-    )
 
 
 def test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels():
@@ -29241,736 +16214,31 @@ def test_ui_live_oversized_panel_settles_without_starting_animation():
     expect(not live_starts, "oversized panel started Live animation")
 
 
-def test_ui_live_renderer_rejects_dumb_terminal():
-    """Live cursor control should not run on terminals explicitly marked as dumb."""
-    import nautical_core.ui as ui
-    import rich.live
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    original_stderr = sys.stderr
-    original_term = os.environ.get("TERM")
-    original_live = rich.live.Live
-    live_calls = []
-    try:
-        class ForbiddenLive:
-            def __init__(self, *_args, **_kwargs):
-                live_calls.append(True)
-
-        sys.stderr = TtyBuffer()
-        os.environ["TERM"] = "dumb"
-        rich.live.Live = ForbiddenLive
-        rendered = ui._render_panel_live("Dumb", [("Key", "Value")], kind="info", themes=None)
-    finally:
-        sys.stderr = original_stderr
-        rich.live.Live = original_live
-        if original_term is None:
-            os.environ.pop("TERM", None)
-        else:
-            os.environ["TERM"] = original_term
-
-    expect(rendered is False, "live renderer should defer to static output on TERM=dumb")
-    expect(not live_calls, "Live must not start on TERM=dumb")
-
-
-def test_ui_live_mode_non_tty_falls_back_without_live_control_codes():
-    """Captured hook stderr should bypass Live and use the existing static fallback."""
-    import nautical_core.ui as ui
-    import rich.live
-
-    stderr = io.StringIO()
-    stdout = io.StringIO()
-    original_stderr = sys.stderr
-    original_stdout = sys.stdout
-    original_live = rich.live.Live
-    try:
-        class ForbiddenLive:
-            def __init__(self, *_args, **_kwargs):
-                raise AssertionError("Live must not start when stderr is captured")
-
-        rich.live.Live = ForbiddenLive
-        sys.stderr = stderr
-        sys.stdout = stdout
-        with _test_term("xterm"):
-            ui.render_panel("Captured", [("Key", "Value")], panel_mode="live")
-    finally:
-        sys.stderr = original_stderr
-        sys.stdout = original_stdout
-        rich.live.Live = original_live
-
-    output = stderr.getvalue()
-    expect("Captured" in output and "Key" in output and "Value" in output, f"live fallback lost panel: {output!r}")
-    expect("\x1b[" not in output, f"captured live fallback emitted terminal controls: {output!r}")
-    expect(stdout.getvalue() == "", f"panel output polluted stdout: {stdout.getvalue()!r}")
-
-
-def test_ui_render_panel_routes_live_mode_without_static_duplicate():
-    """A successful live render should not also print the static panel."""
-    import nautical_core.ui as ui
-
-    calls = []
-    original_live = ui._render_panel_live
-    original_rich = ui._render_panel_rich
-    try:
-        ui._render_panel_live = lambda title, rows, **kwargs: calls.append(("live", title, list(rows), kwargs)) or True
-        ui._render_panel_rich = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("static Rich duplicated live output"))
-        ui.render_panel("Routed", [("Key", "Value")], kind="info", panel_mode="live")
-    finally:
-        ui._render_panel_live = original_live
-        ui._render_panel_rich = original_rich
-
-    expect(len(calls) == 1 and calls[0][0] == "live", f"live mode did not route exactly once: {calls!r}")
-
-
-def test_ui_live_failure_preserves_rows_for_static_fallback():
-    """A failed live render must not consume generator-backed rows before fallback."""
-    import nautical_core.ui as ui
-
-    stderr = io.StringIO()
-    stdout = io.StringIO()
-    original_stderr = sys.stderr
-    original_stdout = sys.stdout
-    original_live = ui._render_panel_live
-    try:
-        def fail_after_consuming(_title, rows, **_kwargs):
-            list(rows)
-            return False
-
-        ui._render_panel_live = fail_after_consuming
-        sys.stderr = stderr
-        sys.stdout = stdout
-        rows = ((key, value) for key, value in [("Key", "Value")])
-        ui.render_panel("Fallback", rows, panel_mode="live")
-    finally:
-        sys.stderr = original_stderr
-        sys.stdout = original_stdout
-        ui._render_panel_live = original_live
-
-    output = stderr.getvalue()
-    expect("Fallback" in output and "Key" in output and "Value" in output, f"live fallback lost rows: {output!r}")
-    expect(stdout.getvalue() == "", f"panel output polluted stdout: {stdout.getvalue()!r}")
-
-
-def test_cache_metrics_emits_when_enabled():
-    """cache metrics should emit when NAUTICAL_DIAG_METRICS=1."""
-    import nautical_core as core
-
-    stderr = io.StringIO()
-    orig_err = sys.stderr
-    os.environ["NAUTICAL_DIAG_METRICS"] = "1"
-    os.environ["NAUTICAL_DIAG"] = "1"
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            os.environ["XDG_CACHE_HOME"] = td
-            sys.stderr = stderr
-            core._emit_cache_metrics()
-    finally:
-        sys.stderr = orig_err
-        os.environ.pop("NAUTICAL_DIAG_METRICS", None)
-        os.environ.pop("NAUTICAL_DIAG", None)
-        os.environ.pop("XDG_CACHE_HOME", None)
-
-    out = stderr.getvalue()
-    expect("nautical-metrics" in out, f"unexpected metrics output: {out!r}")
-
-
-def test_sanitize_task_strings_removes_controls():
-    """sanitize_task_strings should remove control chars and clamp length."""
-    import nautical_core as core
-
-    task = {"description": "hi\x00there\x1f!"}
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-    DEFAULT_TASK_CODEC.sanitize_task_mapping(task, max_len=8)
-    expect("\x00" not in task["description"], "control chars should be removed")
-    expect(len(task["description"]) == 8, "should clamp length to max_len")
-
-
-def test_clear_all_caches_env():
-    """_clear_all_caches should be callable via env toggle."""
-    import nautical_core as core
-
-    os.environ["NAUTICAL_CLEAR_CACHES"] = "1"
-    try:
-        core.parse_anchor_expr_to_dnf_cached("w:mon")
-    finally:
-        os.environ.pop("NAUTICAL_CLEAR_CACHES", None)
-
-    expect(True, "cache clear hook executed")
-
-
-def test_cache_save_writes_all_bytes():
-    """cache_save should write full blob and set 0600 permissions when possible."""
-    import nautical_core as core
-
-    with tempfile.TemporaryDirectory() as td:
-        core.ENABLE_ANCHOR_CACHE = True
-        core.ANCHOR_CACHE_DIR_OVERRIDE = td
-        key = "testcache"
-        obj = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
-        core.cache_save(key, obj)
-
-        path = core._cache_path(key)
-        expect(os.path.exists(path), "cache file should exist")
-        st = os.stat(path)
-        expect(st.st_size > 0, "cache file should not be empty")
-
-
 def test_cache_load_quarantines_corrupt_entries_and_gc_removes_them():
     """Broken cache payloads should become misses and be removed by explicit GC."""
-    import nautical_core as core
     import base64
     import zlib
 
-    saved_enabled = core.ENABLE_ANCHOR_CACHE
-    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_cache_dir = getattr(core, "_CACHE_DIR", None)
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            core.ENABLE_ANCHOR_CACHE = True
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-            core._CACHE_DIR = None
-            for key, payload in (("broken", b"not-a-cache"), ("invalid", None)):
-                path = Path(core._cache_path(key))
-                if payload is None:
-                    raw = json.dumps({"dnf": "invalid"}, separators=(",", ":")).encode("utf-8")
-                    payload = base64.b85encode(zlib.compress(raw))
-                path.write_bytes(payload)
-                expect(core.cache_load(key) is None, f"corrupt cache {key} should be a miss")
-            quarantined = list(Path(td).glob("*.jsonz.bad.*"))
-            expect(len(quarantined) == 2, f"corrupt cache entries were not quarantined: {quarantined!r}")
-            result = core.cache_gc(stale_tmp_age=0)
-            expect(result.get("temporary") >= 2, f"quarantine artifacts were not collected: {result}")
-            expect(not list(Path(td).glob("*.jsonz.bad.*")), "quarantine artifacts remained after GC")
-    finally:
-        core.ENABLE_ANCHOR_CACHE = saved_enabled
-        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-        core._CACHE_DIR = saved_cache_dir
-
-
-def test_cache_schema_rejects_legacy_and_future_versions():
-    """Cache reads should quarantine missing and unsupported schema versions."""
-    import nautical_core as core
-    import base64
-    import zlib
-
-    saved_enabled = core.ENABLE_ANCHOR_CACHE
-    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_cache_dir = core._CACHE_DIR
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            core.ENABLE_ANCHOR_CACHE = True
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-            core._CACHE_DIR = None
-            for key, version in (("legacy", None), ("future", 99)):
-                payload = {"dnf": []}
-                if version is not None:
-                    payload["_nautical_cache_version"] = version
-                raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-                Path(core._cache_path(key)).write_bytes(base64.b85encode(zlib.compress(raw)))
-                expect(core.cache_load(key) is None, f"cache schema {version!r} should be rejected")
-            expect(len(list(Path(td).glob("*.jsonz.bad.*"))) == 2, "unsupported cache versions were not quarantined")
-    finally:
-        core.ENABLE_ANCHOR_CACHE = saved_enabled
-        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-        core._CACHE_DIR = saved_cache_dir
-
-
-def test_cache_load_retries_when_file_is_replaced_during_read():
-    """A reader should retry if another process publishes a new generation."""
-    import nautical_core as core
-    core.cache_load("__golden_cache_probe__")
+    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
     with tempfile.TemporaryDirectory() as td:
-        saved_enabled = core.ENABLE_ANCHOR_CACHE
-        saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-        original_stat = core.os.stat
-        try:
-            core.ENABLE_ANCHOR_CACHE = True
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-            key = "stable-read"
-            old_obj = {"dnf": [[{"typ": "w", "spec": "mon"}]]}
-            new_obj = {"dnf": [[{"typ": "w", "spec": "fri"}]]}
-            core.cache_save(key, old_obj)
-            path = core._cache_path(key)
-            replacement = os.path.join(td, "replacement.cache")
-            core.cache_save("replacement", new_obj)
-            shutil.copyfile(core._cache_path("replacement"), replacement)
-            core._CACHE_LOAD_MEM.clear()
-
-            calls = 0
-
-            def stat_with_publish(target):
-                nonlocal calls
-                result = original_stat(target)
-                calls += 1
-                # The second stat is the post-read check for the first attempt.
-                if calls == 2:
-                    shutil.copyfile(replacement, path)
-                return result
-
-            core.os.stat = stat_with_publish
-            loaded = core.cache_load(key)
-            expect(loaded == new_obj, f"replacement generation should be loaded, got {loaded!r}")
-            expect(calls >= 4, "cache load should perform a second stable-read check")
-        finally:
-            core.os.stat = original_stat
-            core.ENABLE_ANCHOR_CACHE = saved_enabled
-            core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-
-
-def test_cache_save_returns_false_when_lock_busy():
-    """cache_save should return False when cache lock is unavailable."""
-    import nautical_core as core
-
-    saved_enabled = core.ENABLE_ANCHOR_CACHE
-    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_lock = core._cache_lock
-    try:
-        core.ENABLE_ANCHOR_CACHE = True
-        with tempfile.TemporaryDirectory() as td:
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-
-            @contextlib.contextmanager
-            def _busy_lock(_key: str):
-                yield False
-
-            core._cache_lock = _busy_lock
-            ok = core.cache_save("busylock", {"dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]]})
-            expect(ok is False, f"expected cache_save False on busy lock, got {ok!r}")
-    finally:
-        core._cache_lock = saved_lock
-        core.ENABLE_ANCHOR_CACHE = saved_enabled
-        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-
-
-def test_cache_save_returns_false_when_atomic_replace_fails():
-    """cache_save should return False when atomic replace fails."""
-    import nautical_core as core
-
-    saved_enabled = core.ENABLE_ANCHOR_CACHE
-    saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-    saved_replace = core._cache_atomic_replace
-    try:
-        core.ENABLE_ANCHOR_CACHE = True
-        with tempfile.TemporaryDirectory() as td:
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-
-            def _raise_replace(_src: str, _dst: str) -> None:
-                raise OSError("replace failed")
-
-            core._cache_atomic_replace = _raise_replace
-            ok = core.cache_save("replacefail", {"dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]]})
-            expect(ok is False, f"expected cache_save False on replace failure, got {ok!r}")
-    finally:
-        core._cache_atomic_replace = saved_replace
-        core.ENABLE_ANCHOR_CACHE = saved_enabled
-        core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-
-
-def test_cache_load_rejects_invalid_payload_shape():
-    """cache_load should reject cached payloads with invalid field types."""
-    import nautical_core as core
-
-    with tempfile.TemporaryDirectory() as td:
-        saved_enabled = core.ENABLE_ANCHOR_CACHE
-        saved_dir = core.ANCHOR_CACHE_DIR_OVERRIDE
-        try:
-            core.ENABLE_ANCHOR_CACHE = True
-            core.ANCHOR_CACHE_DIR_OVERRIDE = td
-            key = "invalidshape"
-            core.cache_save(
-                key,
-                {
-                    "dnf": [[{"typ": "w", "spec": "mon", "mods": {}}]],
-                    "natural": ["wrong-type"],
-                    "next_dates": ["2026-01-05T00:00"],
-                },
-            )
-            loaded = core.cache_load(key)
-            expect(loaded is None, f"invalid payload shape should be rejected, got {loaded!r}")
-        finally:
-            core.ENABLE_ANCHOR_CACHE = saved_enabled
-            core.ANCHOR_CACHE_DIR_OVERRIDE = saved_dir
-
-
-def test_parse_anchor_expr_fuzz_inputs():
-    """Parser should not crash on mixed valid/invalid inputs."""
-    import nautical_core as core
-
-    samples = [
-        "",
-        " ",
-        "w:mon",
-        "m:15",
-        "y:06-01",
-        "w:mon..fri@t=09:00",
-        "m:rand",
-        "y:rand-12",
-        "w:rand,mon",
-        "w:mon..fri + m:bad",
-        "w:mon | m:1st-mon",
-        "w:mon..fri@t=99:99",
-        "x:bad",
-    ]
-    for s in samples:
-        try:
-            dnf = core.parse_anchor_expr_to_dnf_cached(s)
-            if s.strip():
-                expect(isinstance(dnf, list), f"unexpected dnf type for {s!r}")
-        except core.ParseError:
-            pass
-        except Exception as e:
-            raise AssertionError(f"unexpected exception for {s!r}: {e}")
-
-
-def _random_anchor_expr(rng: random.Random) -> str:
-    """Generate deterministic mixed-quality anchor expressions for fuzz/property tests."""
-    w_specs = ["mon", "fri", "mon..fri", "mon,tue", "rand", "rand,mon", "bad"]
-    m_specs = ["1", "-1", "2nd-mon", "last-fri", "rand", "1..15", "35", "bad"]
-    y_specs = ["01-01", "12-31", "01-01..01-31", "q1", "rand-07", "13-01", "bad"]
-    mods = ["", "@t=09:00", "@bd", "@wd", "@nbd", "@pbd", "@nw", "@t=99:99", "@@@"]
-    sep = [" + ", " | ", "  ", ""]
-
-    def atom() -> str:
-        typ = rng.choice(["w", "m", "y", "x"])
-        if typ == "w":
-            spec = rng.choice(w_specs)
-        elif typ == "m":
-            spec = rng.choice(m_specs)
-        elif typ == "y":
-            spec = rng.choice(y_specs)
-        else:
-            spec = rng.choice(["bad", "noop", ""])
-        intv = rng.choice(["", "/2", "/3", "/0"])
-        mod = rng.choice(mods)
-        return f"{typ}{intv}:{spec}{mod}"
-
-    mode = rng.randint(0, 4)
-    if mode == 0:
-        return atom()
-    if mode == 1:
-        return atom() + rng.choice(sep) + atom()
-    if mode == 2:
-        return "(" + atom() + rng.choice(sep) + atom() + ")"
-    if mode == 3:
-        noise = "".join(rng.choice("()|+@:,- abcXYZ0123") for _ in range(rng.randint(1, 40)))
-        return noise
-    return " " + atom() + " "
-
-
-def test_anchor_parse_validate_fuzz_no_unexpected_exceptions():
-    """Fuzz parse/validate/normalize surfaces; only ParseError is allowed for invalid input."""
-    import nautical_core as core
-
-    rng = random.Random(20260309)
-    for _ in range(250):
-        expr = _random_anchor_expr(rng)
-        try:
-            dnf = core.validate_anchor_expr_strict(expr)
-        except core.ParseError:
-            continue
-        except Exception as e:
-            raise AssertionError(f"unexpected exception for {expr!r}: {type(e).__name__}: {e}")
-
-        expect(isinstance(dnf, list), f"validate should return DNF list for {expr!r}")
-        try:
-            dnf2 = core.validate_anchor_expr_strict(dnf)
-        except Exception as e:
-            raise AssertionError(f"validate should accept parsed DNF for {expr!r}: {e}")
-        expect(isinstance(dnf2, list), f"DNF re-validation should return list for {expr!r}")
-
-
-def test_anchor_validate_roundtrip_preserves_next_occurrence():
-    """Validating parsed DNF should preserve next-occurrence behavior vs validating source string."""
-    import nautical_core as core
-
-    anchors = [
-        "w:mon",
-        "w:mon,tue,wed",
-        "w/2:fri",
-        "m:15",
-        "m:last-fri",
-        "m:rand",
-        "y:01-01..01-31",
-        "w:mon + m:1",
-        "m:rand + y:01-01..01-31",
-    ]
-    start = date(2025, 1, 1)
-    for expr in anchors:
-        dnf_from_str = core.validate_anchor_expr_strict(expr)
-        dnf_from_dnf = core.validate_anchor_expr_strict(dnf_from_str)
-        ref_a = start
-        ref_b = start
-        for _ in range(5):
-            nxt_a, _ = core.next_after_expr(dnf_from_str, ref_a, seed_base="roundtrip")
-            nxt_b, _ = core.next_after_expr(dnf_from_dnf, ref_b, seed_base="roundtrip")
-            expect(nxt_a == nxt_b, f"round-trip mismatch for {expr!r}: {nxt_a} vs {nxt_b}")
-            ref_a = nxt_a
-            ref_b = nxt_b
-
-
-def test_anchor_normalization_is_semantically_idempotent():
-    """Normalization should preserve DNF, natural text, and scheduled dates."""
-    import nautical_core as core
-
-    expressions = [
-        "w:mon,wed,fri + y:apr",
-        "(w:mon | w:fri) + y:apr",
-        "y:jan",
-        "m:1bd + y:q4",
-        "m:-1bd + y:q4",
-        "w/2:fri@t=09:00",
-        "y:rand + w:sat",
-        "w:mon@t=09:00,fri@t=15:00",
-        "y:07-rand",
-        "m:15@+2d | m:last-fri@nbd",
-        "@workout + y:apr",
-    ]
-    previous_presets = getattr(core, "ANCHOR_PRESETS", {})
-    core.ANCHOR_PRESETS = {**previous_presets, "workout": "w:mon,wed,fri"}
-    try:
-        start = date(2026, 1, 1)
-        for expr in expressions:
-            parsed = core.parse_anchor_expr_to_dnf_cached(expr)
-            parsed_again = core.parse_anchor_expr_to_dnf_cached(expr)
-            validated = core.validate_anchor_expr_strict(expr)
-            revalidated = core.validate_anchor_expr_strict(parsed)
-            revalidated_again = core.validate_anchor_expr_strict(revalidated)
-
-            expect(parsed == parsed_again, f"{expr}: repeated parsing changed normalized DNF")
-            expect(parsed is not parsed_again, f"{expr}: cached parsing returned a shared outer list")
-            expect(validated == revalidated == revalidated_again, f"{expr}: DNF validation is not idempotent")
-            mutation_probe = core.parse_anchor_expr_to_dnf_cached(expr)
-            original_spec = mutation_probe[0][0]["spec"]
-            mutation_probe[0][0]["spec"] = "__mutated__"
-            parsed_after_mutation = core.parse_anchor_expr_to_dnf_cached(expr)
-            expect(
-                parsed_again[0][0]["spec"] == original_spec
-                and parsed_after_mutation[0][0]["spec"] == original_spec,
-                f"{expr}: cached parsing leaked a shared nested atom",
-            )
-
-            source_natural = core.describe_anchor_expr(expr)
-            normalized_natural = core._describe_anchor_expr_from_dnf(revalidated)
-            expect(source_natural == normalized_natural, f"{expr}: natural text changed after normalization")
-
-            refs = [start, start, start]
-            streams = [[], [], []]
-            dnfs = [validated, revalidated, revalidated_again]
-            for _ in range(20):
-                for idx, dnf in enumerate(dnfs):
-                    nxt, _meta = core.next_after_expr(
-                        dnf,
-                        refs[idx],
-                        default_seed=start,
-                        seed_base="normalization-invariance-v1",
-                    )
-                    expect(nxt is not None and nxt > refs[idx], f"{expr}: normalized scheduler made no progress")
-                    streams[idx].append(nxt)
-                    refs[idx] = nxt
-            expect(streams[0] == streams[1] == streams[2], f"{expr}: normalization changed scheduled dates")
-
-        grouped_natural = core.describe_anchor_expr("w:mon,wed,fri + y:apr")
-        expect(
-            grouped_natural == "Mondays, Wednesdays, or Fridays in Apr each year",
-            f"grouped natural text lost compact grouping: {grouped_natural!r}",
-        )
-    finally:
-        core.ANCHOR_PRESETS = previous_presets
-
-
-def test_anchor_expression_characterization_matrix():
-    """Freeze representative parse, normalization, natural text, and scheduling behavior."""
-    import nautical_core as core
-
-    cases = [
-        {
-            "expr": "w:mon,wed,fri + y:apr",
-            "terms": [
-                [("w", "mon", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)],
-                [("w", "wed", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)],
-                [("w", "fri", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)],
-            ],
-            "natural": "Mondays, Wednesdays, or Fridays in Apr each year",
-            "dates": ["2026-04-01", "2026-04-03", "2026-04-06", "2026-04-08", "2026-04-10", "2026-04-13"],
-        },
-        {
-            "expr": "w:mon | m:15",
-            "terms": [
-                [("w", "mon", 1, None, False, 0)],
-                [("m", "15", 1, None, False, 0)],
-            ],
-            "natural": "either Mondays or the 15th day of each month",
-            "dates": ["2026-01-05", "2026-01-12", "2026-01-15", "2026-01-19", "2026-01-26", "2026-02-02"],
-        },
-        {
-            "expr": "m:last-fri",
-            "terms": [[("m", "last-fri", 1, None, False, 0)]],
-            "natural": "the last Friday of each month",
-            "dates": ["2026-01-30", "2026-02-27", "2026-03-27", "2026-04-24", "2026-05-29", "2026-06-26"],
-        },
-        {
-            "expr": "m:-1bd",
-            "terms": [[("m", "-1bd", 1, None, False, 0)]],
-            "natural": "the last business day of each month",
-            "dates": ["2026-01-30", "2026-02-27", "2026-03-31", "2026-04-30", "2026-05-29", "2026-06-30"],
-        },
-        {
-            "expr": "y:02-29",
-            "terms": [[("y", "02-29", 1, None, False, 0)]],
-            "natural": "Feb 29 each leap year",
-            "dates": ["2028-02-29", "2032-02-29", "2036-02-29"],
-        },
-        {
-            "expr": "y:rand + w:sat",
-            "terms": [[("y", "rand", 1, None, False, 0), ("w", "sat", 1, None, False, 0)]],
-            "natural": "one random Saturday each year",
-            "dates": None,
-            "count": 3,
-            "valid_date": lambda d: d.weekday() == 5,
-        },
-        {
-            "expr": "m:rand + y:apr",
-            "terms": [[("m", "rand", 1, None, False, 0), ("y", "04-01..04-31", 1, None, False, 0)]],
-            "natural": "one random day each month and within Apr each year",
-            "dates": None,
-            "count": 3,
-            "valid_date": lambda d: d.month == 4,
-        },
-        {
-            "expr": "w/2:fri",
-            "terms": [[("w", "fri", 2, None, False, 0)]],
-            "natural": "every 2 weeks: Fridays",
-            "dates": ["2026-01-02", "2026-01-16", "2026-01-30", "2026-02-13", "2026-02-27", "2026-03-13"],
-        },
-        {
-            "expr": "w:mon..fri@t=09:00",
-            "terms": [[("w", "mon..fri", 1, (9, 0), False, 0)]],
-            "natural": "Mondays through Fridays at 09:00",
-            "dates": ["2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"],
-        },
-    ]
-
-    def signature(dnf):
-        return [
-            [
-                (
-                    atom.get("typ"),
-                    atom.get("spec"),
-                    atom.get("ival"),
-                    (atom.get("mods") or {}).get("t"),
-                    bool((atom.get("mods") or {}).get("bd")),
-                    (atom.get("mods") or {}).get("day_offset"),
-                )
-                for atom in term
-            ]
-            for term in dnf
-        ]
-
-    start = date(2026, 1, 1)
-    for case in cases:
-        expr = case["expr"]
-        parsed = core.parse_anchor_expr_to_dnf_cached(expr)
-        validated = core.validate_anchor_expr_strict(expr)
-        revalidated = core.validate_anchor_expr_strict(parsed)
-        expect(signature(parsed) == case["terms"], f"{expr}: normalized DNF drifted: {parsed!r}")
-        expect(signature(validated) == case["terms"], f"{expr}: strict validation changed DNF: {validated!r}")
-        expect(signature(revalidated) == case["terms"], f"{expr}: DNF re-validation changed normalization: {revalidated!r}")
-        expect(core.describe_anchor_expr(expr) == case["natural"], f"{expr}: natural text drifted")
-
-        current = start
-        generated = []
-        expected_dates = case["dates"]
-        for _ in range(len(expected_dates) if expected_dates is not None else case["count"]):
-            nxt, _meta = core.next_after_expr(
-                validated,
-                current,
-                default_seed=start,
-                seed_base="anchor-characterization-v1",
-            )
-            expect(nxt is not None, f"{expr}: scheduler stopped before the expected characterization dates")
-            generated.append(nxt.isoformat())
-            current = nxt
-        if expected_dates is not None:
-            expect(generated == expected_dates, f"{expr}: scheduled dates drifted: {generated!r}")
-        else:
-            valid_date = case["valid_date"]
-            expect(
-                all(valid_date(date.fromisoformat(value)) for value in generated),
-                f"{expr}: random dates escaped their constraints: {generated!r}",
-            )
-
-
-def test_anchor_parse_deep_nesting_guard():
-    """Deeply nested expressions should fail with ParseError, not recursion/runtime failures."""
-    import nautical_core as core
-
-    expr = "(" * 64 + "w:mon" + ")" * 64
-    try:
-        core.parse_anchor_expr_to_dnf_cached(expr)
-        raise AssertionError("expected ParseError for deep nesting")
-    except core.ParseError as e:
-        expect("nesting too deep" in str(e).lower(), f"unexpected deep nesting message: {e}")
-
-
-def test_anchor_validate_rejects_legacy_tuple_error_payload():
-    """Legacy tuple-style parse error payloads should be rejected defensively."""
-    import nautical_core as core
-
-    try:
-        core.validate_anchor_expr_strict(("legacy parser error", None))
-        raise AssertionError("expected ParseError for tuple error payload")
-    except core.ParseError as e:
-        expect(str(e) == "legacy parser error", f"unexpected tuple payload message: {e!r}")
-
-
-def test_rand_determinism_with_seed():
-    """Random anchors should be deterministic with the same seed."""
-    import nautical_core as core
-
-    dnf = core.parse_anchor_expr_to_dnf_cached("m:rand")
-    after = date(2025, 1, 1)
-    a1, _meta1 = core.next_after_expr(dnf, after, seed_base="test-seed")
-    a2, _meta2 = core.next_after_expr(dnf, after, seed_base="test-seed")
-    expect(a1 == a2, f"rand picks should match: {a1} vs {a2}")
-
-def test_next_after_expr_branch_characterization():
-    """next_after_expr should preserve basis/meta behavior across major branches."""
-    # Simple weekly fast path.
-    dnf_simple = core.parse_anchor_expr_to_dnf_cached("w:mon")
-    d_simple, m_simple = core.next_after_expr(dnf_simple, date(2024, 12, 11))
-    expect(d_simple == date(2024, 12, 16), f"unexpected simple weekly date: {d_simple}")
-    expect((m_simple or {}).get("basis") == "simple_weekly", f"unexpected simple basis: {m_simple}")
-
-    # Normal term path.
-    dnf_term = core.parse_anchor_expr_to_dnf_cached("w:mon + m:1")
-    d_term, m_term = core.next_after_expr(dnf_term, date(2024, 12, 1))
-    expect(d_term == date(2025, 9, 1), f"unexpected term date: {d_term}")
-    expect((m_term or {}).get("basis") == "term", f"unexpected term basis: {m_term}")
-
-    # Monthly random path.
-    dnf_mrand = core.parse_anchor_expr_to_dnf_cached("m:rand")
-    d_mrand, m_mrand = core.next_after_expr(dnf_mrand, date(2025, 1, 1), seed_base="branch-seed")
-    expect((m_mrand or {}).get("basis") == "rand", f"unexpected m:rand basis: {m_mrand}")
-    period_m = (m_mrand or {}).get("rand_period") or ""
-    expect(bool(re.fullmatch(r"\d{6}", period_m)), f"unexpected m:rand period: {period_m!r}")
-    expect(d_mrand > date(2025, 1, 1), f"m:rand should be strictly after start, got {d_mrand}")
-
-    # Yearly random path with target month.
-    dnf_yrand = core.parse_anchor_expr_to_dnf_cached("y:rand-07")
-    d_yrand, m_yrand = core.next_after_expr(dnf_yrand, date(2025, 1, 1), seed_base="branch-seed")
-    expect((m_yrand or {}).get("basis") == "rand", f"unexpected y:rand basis: {m_yrand}")
-    period_y = (m_yrand or {}).get("rand_period") or ""
-    expect(bool(re.fullmatch(r"\d{4}-\d{2}", period_y)), f"unexpected y:rand period: {period_y!r}")
-    expect(d_yrand.month == 7, f"y:rand-07 should stay in July, got {d_yrand}")
-
-    # Monthly random constrained by yearly window.
-    dnf_rand_year = core.parse_anchor_expr_to_dnf_cached("m:rand + y:01-01..01-31")
-    d_rand_year, m_rand_year = core.next_after_expr(dnf_rand_year, date(2025, 1, 1), seed_base="branch-seed")
-    expect((m_rand_year or {}).get("basis") == "rand+yearly", f"unexpected rand+yearly basis: {m_rand_year}")
-    expect(d_rand_year.month == 1, f"rand+yearly should stay in January, got {d_rand_year}")
-
+        cfg = os.path.join(td, "nautical.toml")
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write("enable_anchor_cache = true\n")
+            td_path_norm = td.replace("\\", "/")
+            f.write(f'anchor_cache_dir = "{td_path_norm}"\n')
+        mod = _load_core_module(core_path, "_nautical_core_cache_quarantine_test", cfg)
+        for key, payload in (("broken", b"not-a-cache"), ("invalid", None)):
+            path = Path(mod._cache_path(key))
+            if payload is None:
+                raw = json.dumps({"dnf": "invalid"}, separators=(",", ":")).encode("utf-8")
+                payload = base64.b85encode(zlib.compress(raw))
+            path.write_bytes(payload)
+            expect(mod.cache_load(key) is None, f"corrupt cache {key} should be a miss")
+        quarantined = list(Path(td).glob("*.jsonz.bad.*"))
+        expect(len(quarantined) == 2, f"corrupt cache entries were not quarantined: {quarantined!r}")
+        result = mod.cache_gc(stale_tmp_age=0)
+        expect(result.get("temporary") >= 2, f"quarantine artifacts were not collected: {result}")
+        expect(not list(Path(td).glob("*.jsonz.bad.*")), "quarantine artifacts remained after GC")
 
 
 def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
@@ -30029,7 +16297,7 @@ def test_on_modify_recompleted_task_with_nextlink_skips_spawn():
 
     spawn_effects = mod._module("modify_spawn_effects")
     original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda _host, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
+    spawn_effects.spawn_child_atomic = lambda _ports, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",
@@ -30084,9 +16352,9 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
 
     spawn_effects = mod._module("modify_spawn_effects")
     original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda _host, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
+    spawn_effects.spawn_child_atomic = lambda _ports, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
     modify_models = mod._module("modify_models")
-    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
+    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
         mode="recent", rows=[], loaded=False, chain_id=str(chain_id)
     )
     def _existing_next_guard(task, *_args, **_kwargs):
@@ -30107,7 +16375,7 @@ def test_on_modify_recompleted_task_with_existing_link_skips_spawn():
             ]
         return []
 
-    mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export = _get_chain_export_stub
+    mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export = _get_chain_export_stub
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",
@@ -31485,38 +17753,6 @@ def test_reconcile_evidence_prefers_due_over_carried_scheduled():
     expect(evidence.get("child_target") == "2026-07-06T14:00:00Z", f"expected due target, got: {evidence!r}")
 
 
-def test_reconcile_evidence_includes_local_child_time_when_formatter_available():
-    """Reconcile evidence should include the local interpretation of a planned child."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "description": "remote completion",
-        "cp": "1d",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 1,
-        "due": "20260703T090000Z",
-    }
-    from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard, recurrence_fingerprint
-    from nautical_core.lifecycle_recovery_models import RecoveryPlanResult
-    observation = _fixture_observation(parent)
-    guard = ParentGuard(status="completed", chain="on", chain_id="11111111", link=1,
-                        recurrence_fingerprint=recurrence_fingerprint(parent), modified="")
-    identity = LifecycleIdentity(chain_id="11111111", parent_uuid=parent["uuid"], source_link=1,
-                                 target_link=2, event=LifecycleEvent.COMPLETE)
-    plan = RecoveryPlanResult(
-        observation,
-        LifecyclePlan(identity=identity, action=LifecycleAction.SPAWN_CHILD, parent_guard=guard,
-                      child_payload=(("due", "20260704T110000Z"),)),
-        reason="missing next link",
-        child_due=datetime(2026, 7, 4, 11, 0, tzinfo=timezone.utc),
-    )
-    evidence = reconcile_report.describe_recovery_result(plan, fmt_dt_local=lambda _dt: "Sat 2026-07-04 14:00 EEST")
-    expect(evidence.get("child_local") == "Sat 2026-07-04 14:00 EEST", f"missing child_local evidence: {evidence!r}")
-
-
 def test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone():
     """Actual reconcile tool loading should compute @t slots as configured-local time."""
     path = Path(ROOT) / "nautical_core" / "tools" / "nautical_reconcile.py"
@@ -31669,47 +17905,6 @@ def test_reconcile_subprocess_output_contracts():
     expect(human_run.returncode == 1, f"human startup failure returned {human_run.returncode}")
     expect(human_run.stdout == "", f"human startup failure polluted stdout: {human_run.stdout!r}")
     expect("Taskwarrior executable was not found" in human_run.stderr, f"human diagnostic was not actionable: {human_run.stderr!r}")
-
-
-def test_task_command_classifies_boundary_failures():
-    """The operator boundary should classify launch, timeout, and malformed-output failures."""
-    from nautical_core import task_command
-    from nautical_core.integration_models import CommandFailureKind
-
-    missing = task_command.run_task_command("/missing/nautical-task", ["export"], timeout=1.0)
-    expect(missing.kind is CommandFailureKind.MISSING_BINARY and missing.returncode == 127, f"missing binary was not classified: {missing}")
-    expect("/missing/nautical-task" in task_command.failure_message(missing, "task export"), "missing binary message was not actionable")
-
-    timed_out = task_command.run_task_command(
-        sys.executable,
-        ["-c", "import sys,time; print('partial Ω', flush=True); time.sleep(2)"],
-        timeout=0.05,
-    )
-    expect(timed_out.kind is CommandFailureKind.TIMEOUT and "Ω" in timed_out.stdout, f"timeout output was not preserved: {timed_out}")
-    expect("0.05s" in task_command.failure_message(timed_out, "task export"), "timeout message omitted its bound")
-
-    failed = task_command.run_task_command(
-        sys.executable,
-        ["-c", "import sys; print('bad command', file=sys.stderr); sys.exit(3)"],
-    )
-    expect(failed.kind is CommandFailureKind.REJECTED and task_command.failure_message(failed, "task export") == "bad command", f"rejected failure changed: {failed}")
-
-def test_task_command_retries_only_opted_in_locks():
-    """Read retries should recover one lock while the default write policy stays single-attempt."""
-    from nautical_core import task_command
-    from nautical_core.integration_models import CommandFailureKind
-
-    busy_args = ["-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(1)"]
-    retried = task_command.run_task_command(
-        sys.executable,
-        busy_args,
-        retry_locks=True,
-        retry_delay=0.0,
-    )
-    expect(retried.kind is CommandFailureKind.BUSY and retried.attempt == 2, f"read lock was not retried: {retried}")
-
-    write = task_command.run_task_command(sys.executable, busy_args)
-    expect(write.kind is CommandFailureKind.BUSY and write.attempt == 1, f"write was unexpectedly retried: {write}")
 
 
 def test_on_modify_completion_reuses_single_chain_export_when_chain_needed():
@@ -31884,7 +18079,7 @@ def test_on_modify_lifecycle_export_reuses_completion_chain_snapshot():
     uow.client = Client()
     mod._modify_runtime_state().task_repository = uow.repository
     try:
-        rows = mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export("reuse02")
+        rows = mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export("reuse02")
         expect(len(rows) == 1, f"lifecycle chain export returned unexpected rows: {rows!r}")
         snapshot = mod._completion_effects.chain_snapshot("reuse02", 1, 2, uow.repository)
         expect(snapshot.loaded and snapshot.rows, f"completion snapshot did not reuse chain rows: {snapshot!r}")
@@ -31910,15 +18105,15 @@ def test_on_modify_cp_completion_spawns_next_link():
 
     spawn_effects = mod._module("modify_spawn_effects")
     original_spawn = spawn_effects.spawn_child_atomic
-    spawn_effects.spawn_child_atomic = lambda _host, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
+    spawn_effects.spawn_child_atomic = lambda _ports, child, parent, **_kwargs: _spawn_child_atomic_stub(child, parent)
     modify_models = mod._module("modify_models")
-    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next, _repository: modify_models.CompletionChainSnapshot(
+    mod._completion_effects.chain_snapshot = lambda chain_id, _base, _next: modify_models.CompletionChainSnapshot(
         mode="next", rows=[], loaded=True, chain_id=str(chain_id)
     )
     mod._completion_effects.existing_next_or_fail = lambda *_a, **_k: True
     # A confirmed empty chain is distinct from an unavailable Taskwarrior
     # export; keep this spawn-path test deterministic and network-free.
-    mod._module("modify_read_effects").lifecycle_read_service(mod).get_chain_export = lambda *_a, **_k: []
+    mod._module("modify_composition").lifecycle_read_service_for(mod).get_chain_export = lambda *_a, **_k: []
 
     old = {
         "uuid": "00000000-0000-4000-8000-000000000111",
@@ -31968,7 +18163,8 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     original_enqueue = spawn_effects.enqueue_spawn_intent
     spawn_effects.enqueue_spawn_intent = lambda _host, _entry: (False, "queue lock busy")
 
-    child_short, _stripped, verified, deferred, reason, intent = spawn_effects.spawn_child_atomic(mod,
+    spawn_ports = spawn_effects.spawn_child_ports_for(mod)
+    child_short, _stripped, verified, deferred, reason, intent = spawn_effects.spawn_child_atomic(spawn_ports,
         {
             "uuid": "00000000-0000-4000-8000-000000000999",
             "description": "x",
@@ -31996,27 +18192,6 @@ def test_on_modify_spawn_intent_queue_failure_is_reported():
     expect(bool(intent), "spawn intent id should still be generated")
 
 
-def test_completion_parent_guard_uses_persisted_terminal_timestamp():
-    """Terminal plans guard stable end evidence, not volatile modified time."""
-    from nautical_core.integration_models import GuardTimestamp, GuardTimestampField, MutationGuard
-    from nautical_core.taskwarrior_mutations import TaskwarriorMutationService
-
-    guard = MutationGuard(
-        task_uuid="00000000-0000-4000-8000-000000000777",
-        status="completed",
-        chain_id="terminal1",
-        link=1,
-        recurrence_identity="rf1-terminal",
-        timestamps=(GuardTimestamp(GuardTimestampField.END, "20260824T123939Z"),),
-        expected_mutation_epoch=0,
-    )
-    selectors = TaskwarriorMutationService._selectors(guard)
-    expect(
-        "end:20260824T123939Z" in selectors and not any(item.startswith("modified:") for item in selectors),
-        f"terminal mutation selectors did not preserve stable end evidence: {selectors!r}",
-    )
-
-
 def test_on_add_run_task_timeout():
     """on-add typed command execution reports timeouts."""
     hook = _find_hook_file("on-add.nautical")
@@ -32031,29 +18206,12 @@ def test_on_modify_run_task_timeout():
     """on-modify typed command execution reports timeouts."""
     hook = _find_hook_file("on-modify.nautical")
     mod = _load_hook_module(hook, "_nautical_on_modify_run_task_timeout_test")
-    result = mod._module("modify_command_effects").run_task_result(
-        mod,
+    command = mod._module("modify_command_effects")
+    result = command.run_task_result(
+        command.command_ports_for(mod),
         [sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.02, retries=1,
     )
     expect(not result.ok and result.kind.value == "timeout", f"on-modify timeout changed: {result}")
-
-
-def test_completion_preflight_stops_on_unavailable_next_lookup():
-    """Completion must stop before spawn when the next-link lookup is unavailable."""
-    preflight = core._import_sibling("modify_completion_preflight")
-    panels = []
-    printed = []
-    ok = preflight.completion_existing_next_or_fail(
-        {"uuid": "parent", "link": 1},
-        2,
-        existing_next_lookup=lambda *_a: _unavailable_task("lock busy"),
-        short=lambda value: str(value)[:8],
-        panel=lambda *args, **kwargs: panels.append((args, kwargs)),
-        print_task=lambda task: printed.append(task),
-    )
-    expect(not ok, "unavailable lookup should stop completion")
-    expect(panels and "unavailable" in str(panels[0]).lower(), f"missing unavailable panel: {panels}")
-    expect(printed, "stopped completion should print the unchanged task")
 
 
 def test_on_modify_missing_taskdata_uses_tw_dir():
@@ -32113,176 +18271,6 @@ def test_hooks_no_direct_subprocess_run():
         expect(not bad, f"Direct subprocess.run found in {hook_name}: {bad}")
 
 
-def test_position_selection_parses_arbitrary_ordinals():
-    """Position vocabulary should normalize aliases and preserve first-seen order."""
-    selection = importlib.import_module("nautical_core.position_selection")
-
-    expect(
-        selection.parse_positions("first, 2nd, 11th, 21st, last, 2nd-last", "month")
-        == (1, 2, 11, 21, -1, -2),
-        "readable position aliases were not normalized",
-    )
-    expect(
-        selection.parse_positions("first,1st,1,last,1st-last", "month") == (1, -1),
-        "equivalent position aliases were not deduplicated",
-    )
-    expect(
-        selection.parse_positions("92nd", "quarter") == (92,),
-        "quarter maximum should be accepted",
-    )
-    expect(
-        selection.parse_positions("100th,366th", "year") == (100, 366),
-        "large valid yearly positions should be accepted",
-    )
-
-
-def test_position_selection_rejects_invalid_tokens_and_bounds():
-    """Position vocabulary should reject malformed ordinals and impossible scope positions."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    invalid = (
-        ("", "month", "cannot be empty"),
-        ("first,,last", "month", "empty item"),
-        ("0", "month", "zero is invalid"),
-        ("11st", "month", "Use '11th'"),
-        ("22th", "month", "Use '22nd'"),
-        ("22th-last", "month", "Use '22nd-last'"),
-        ("second", "month", "Invalid position"),
-        ("8th", "week", "week limit of 7"),
-        ("32nd", "month", "month limit of 31"),
-        ("93rd", "quarter", "quarter limit of 92"),
-        ("367th", "year", "year limit of 366"),
-    )
-    for value, scope, message in invalid:
-        try:
-            selection.parse_positions(value, scope)
-            raise AssertionError(f"{scope}:{value!r} should be rejected")
-        except ValueError as exc:
-            expect(message in str(exc), f"unexpected error for {scope}:{value!r}: {exc}")
-
-    try:
-        selection.parse_positions("first", "decade")
-        raise AssertionError("unknown selection scope should be rejected")
-    except ValueError as exc:
-        expect("Unknown selection scope" in str(exc), f"unexpected scope error: {exc}")
-
-
-def test_position_selection_candidate_capacity_bounds():
-    """Candidate bounds should stay conservative while tightening common deterministic selectors."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    cases = (
-        ("(w:mon)@in-week=first", 1),
-        ("(w:mon)@in-month=5th", 5),
-        ("(w:mon | w:fri)@in-month=10th", 10),
-        ("(m:15)@in-year=12th", 12),
-        ("(y:d1..d10)@in-year=10th", 10),
-        ("(y:w-1)@in-year=14th", 14),
-        ("(y:w-1 + w:fri)@in-year=2nd", 2),
-    )
-    for expr, expected in cases:
-        dnf = core.validate_anchor_expr_strict(expr)
-        node = dnf[0][0]
-        actual = selection.candidate_capacity_upper_bound(node)
-        expect(actual == expected, f"{expr}: expected candidate capacity {expected}, got {actual}")
-
-
-def test_position_selection_candidate_capacity_bounds_are_sound():
-    """Structural bounds must never fall below actual candidate counts."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    candidates = (
-        "w:fri..mon",
-        "w:mon | w:fri",
-        "m:1,-1",
-        "m:1..7",
-        "m:last-fri",
-        "y:d1..d10",
-        "y:w-1",
-        "y:w52..w53",
-        "y:01-01..01-31",
-        "y:apr",
-        "y:q1",
-        "y:q1..q2",
-        "y:w-1 + w:fri",
-    )
-    probes = {
-        "week": [date(2023, 12, 25) + timedelta(days=7 * offset) for offset in range(106)],
-        "month": [date(year, month, 1) for year in range(2024, 2027) for month in range(1, 13)],
-        "quarter": [date(year, month, 1) for year in range(2024, 2027) for month in (1, 4, 7, 10)],
-        "year": [date(year, 1, 1) for year in range(2024, 2029)],
-    }
-    seed = date(2024, 1, 1)
-    for candidate in candidates:
-        for scope, scope_probes in probes.items():
-            dnf = core.validate_anchor_expr_strict(f"({candidate})@in-{scope}=first")
-            node = dnf[0][0]
-            upper = selection.candidate_capacity_upper_bound(node)
-            inner = node["expr"]
-            for probe in scope_probes:
-                start, end = selection.period_bounds(scope, probe)
-                current = start
-                count = 0
-                while current <= end:
-                    if any(
-                        all(core.atom_matches_on(atom, current, seed, seed_base="capacity-soundness") for atom in term)
-                        for term in inner
-                    ):
-                        count += 1
-                    current += timedelta(days=1)
-                expect(
-                    count <= upper,
-                    f"{candidate} in {scope} at {start}: actual {count} exceeds bound {upper}",
-                )
-
-
-def test_position_selection_rejects_only_fully_impossible_candidates():
-    """Strict validation should reject positions only when none can ever contribute."""
-    impossible = (
-        ("(w:mon)@in-week=2nd", "at most 1 matching date per week"),
-        ("(w:mon)@in-month=6th", "at most 5 matching dates per month"),
-        ("(m:15)@in-month=2nd", "at most 1 matching date per month"),
-        ("(y:d100)@in-year=2nd", "at most 1 matching date per year"),
-        ("(y:w-1 + w:fri)@in-year=3rd", "at most 2 matching dates per year"),
-    )
-    for expr, expected in impossible:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"{expr}: provably impossible position should be rejected")
-        except core.ParseError as exc:
-            expect(expected in str(exc), f"{expr}: unexpected capacity guidance: {exc}")
-
-    mixed = core.validate_anchor_expr_strict("(w:mon)@in-month=first,6th")
-    expect(mixed[0][0].get("positions") == (1, 6), f"mixed useful/dead positions should remain valid: {mixed}")
-
-
-def test_position_selection_semantic_advice():
-    """Semantic advice should explain dead, redundant, and cross-calendar selections."""
-    selection = importlib.import_module("nautical_core.position_selection")
-
-    mixed = selection.selection_advice_for_dnf(
-        core.validate_anchor_expr_strict("(w:mon)@in-month=first,6th")
-    )
-    expect(any("6th can never contribute" in message for message in mixed), f"missing dead-position advice: {mixed}")
-
-    redundant = selection.selection_advice_for_dnf(
-        core.validate_anchor_expr_strict("(m:15)@in-month=first")
-    )
-    expect(any("is redundant here" in message for message in redundant), f"missing redundancy advice: {redundant}")
-
-    boundary = selection.selection_advice_for_dnf(
-        core.validate_anchor_expr_strict("(y:w-1)@in-year=8th")
-    )
-    expect(
-        any("ISO-week candidates by calendar year" in message for message in boundary),
-        f"missing ISO/calendar boundary advice: {boundary}",
-    )
-    nxt, _meta = core.next_after_expr(
-        core.validate_anchor_expr_strict("(y:w-1)@in-year=8th"),
-        date(2026, 1, 1),
-        default_seed=date(2026, 1, 1),
-        seed_base="semantic-advice",
-    )
-    expect(nxt == date(2027, 12, 31), f"advisory expression should remain schedulable: {nxt}")
-
-
 def test_on_add_position_selection_renders_semantic_advice():
     """The on-add preview should include one advice row without disturbing hook JSON."""
     hook = _find_hook_file("on-add.nautical")
@@ -32301,294 +18289,6 @@ def test_on_add_position_selection_renders_semantic_advice():
     stderr = _strip_markup(proc.stderr)
     expect("Advice" in stderr, f"on-add preview omitted advice row: {stderr}")
     expect("ISO-week candidates by calendar year" in stderr, f"on-add preview omitted boundary explanation: {stderr}")
-
-
-def test_position_selection_period_boundaries():
-    """Selection periods should use ISO weeks and exact calendar boundaries."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    cases = (
-        ("week", date(2024, 12, 31), date(2024, 12, 30), date(2025, 1, 5)),
-        ("month", date(2024, 2, 15), date(2024, 2, 1), date(2024, 2, 29)),
-        ("month", date(2023, 2, 15), date(2023, 2, 1), date(2023, 2, 28)),
-        ("quarter", date(2024, 5, 20), date(2024, 4, 1), date(2024, 6, 30)),
-        ("quarter", date(2024, 12, 31), date(2024, 10, 1), date(2024, 12, 31)),
-        ("year", date(2024, 2, 29), date(2024, 1, 1), date(2024, 12, 31)),
-    )
-    for scope, value, expected_start, expected_end in cases:
-        actual = selection.period_bounds(scope, value)
-        expect(
-            actual == (expected_start, expected_end),
-            f"unexpected {scope} boundaries for {value}: {actual}",
-        )
-
-    try:
-        selection.period_bounds("month", "2024-02-01")
-        raise AssertionError("non-date period input should be rejected")
-    except TypeError as exc:
-        expect("must be a date" in str(exc), f"unexpected date type error: {exc}")
-
-
-def test_position_selection_internal_evaluator():
-    """The dormant evaluator should select signed positions from real anchor matches."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    inner = core.validate_anchor_expr_strict("w:tue | w:thu")
-    node = {
-        "kind": "select",
-        "scope": "month",
-        "positions": [1, -1, 1],
-        "expr": inner,
-        "mods": {},
-    }
-
-    normalized = selection.normalize_selection_node(node)
-    expect(normalized["positions"] == (1, -1), f"unexpected node positions: {normalized}")
-    selected = selection.selected_candidates_in_period(
-        node,
-        date(2026, 7, 15),
-        matches_on=core.atom_matches_on,
-        default_seed=date(2026, 1, 1),
-        seed_base="chain-a",
-    )
-    expect(
-        selected == (date(2026, 7, 2), date(2026, 7, 30)),
-        f"unexpected monthly positional selection: {selected}",
-    )
-
-    direct = selection.select_positions(
-        [date(2026, 7, 2), date(2026, 7, 2), date(2026, 7, 30)],
-        (1, -1, 4),
-    )
-    expect(
-        direct == (date(2026, 7, 2), date(2026, 7, 30)),
-        f"candidate deduplication or missing-position handling changed: {direct}",
-    )
-
-
-def test_position_selection_internal_evaluator_validation():
-    """Internal selection nodes should reject malformed and nested structures defensively."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    atom = core.validate_anchor_expr_strict("w:mon")[0][0]
-    invalid_nodes = (
-        {},
-        {"kind": "select", "scope": "month", "positions": [], "expr": [[atom]]},
-        {"kind": "select", "scope": "month", "positions": [0], "expr": [[atom]]},
-        {"kind": "select", "scope": "week", "positions": [8], "expr": [[atom]]},
-        {"kind": "select", "scope": "month", "positions": [1], "expr": []},
-        {"kind": "select", "scope": "month", "positions": [1], "expr": [[]]},
-        {
-            "kind": "select",
-            "scope": "month",
-            "positions": [1],
-            "expr": [[{"kind": "select"}]],
-        },
-    )
-    for node in invalid_nodes:
-        try:
-            selection.normalize_selection_node(node)
-            raise AssertionError(f"invalid selection node should be rejected: {node}")
-        except ValueError:
-            pass
-
-    try:
-        selection.select_positions([date(2026, 1, 1)], (0,))
-        raise AssertionError("direct position zero should be rejected")
-    except ValueError as exc:
-        expect("non-zero integers" in str(exc), f"unexpected direct selection error: {exc}")
-
-
-def test_position_selection_next_date_jumps_periods():
-    """Next-date selection should remain strict and jump over exhausted or empty periods."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    node = {
-        "kind": "select",
-        "scope": "month",
-        "positions": [-1],
-        "expr": core.validate_anchor_expr_strict("w:tue | w:thu"),
-        "mods": {},
-    }
-    next_date = selection.next_selected_date(
-        node,
-        date(2026, 7, 30),
-        matches_on=core.atom_matches_on,
-        default_seed=date(2026, 1, 1),
-        seed_base="chain-a",
-    )
-    expect(next_date == date(2026, 8, 27), f"did not jump to next month: {next_date}")
-
-    calls = {"count": 0}
-
-    def never_matches(atom, value, default_seed, seed_base=None):
-        _ = atom, value, default_seed, seed_base
-        calls["count"] += 1
-        return False
-
-    empty = selection.next_selected_date(
-        node,
-        date(2026, 7, 1),
-        matches_on=never_matches,
-        default_seed=date(2026, 1, 1),
-        max_periods=3,
-    )
-    expect(empty is None, f"empty bounded scan should return None, got {empty}")
-    expect(
-        calls["count"] == 184,
-        f"expected two branch checks across three calendar months, got {calls['count']}",
-    )
-
-
-def test_position_selection_candidate_cache_identity():
-    """Candidate caching should include expression, chain seed, and business-calendar identity."""
-    selection = importlib.import_module("nautical_core.position_selection")
-    selection.clear_candidate_cache()
-    calls = {"count": 0}
-
-    def counting_match(atom, value, default_seed, seed_base=None):
-        calls["count"] += 1
-        return core.atom_matches_on(atom, value, default_seed, seed_base=seed_base)
-
-    node = {
-        "kind": "select",
-        "scope": "month",
-        "positions": [-1],
-        "expr": core.validate_anchor_expr_strict("w:tue | w:thu"),
-        "mods": {},
-    }
-    kwargs = {
-        "matches_on": counting_match,
-        "default_seed": date(2026, 1, 1),
-        "seed_base": "chain-a",
-        "calendar_fingerprint": "calendar-a",
-    }
-    first = selection.selected_candidates_in_period(node, date(2026, 7, 1), **kwargs)
-    first_call_count = calls["count"]
-    second = selection.selected_candidates_in_period(node, date(2026, 7, 20), **kwargs)
-    expect(first == second == (date(2026, 7, 30),), f"unexpected cached result: {first}, {second}")
-    expect(calls["count"] == first_call_count, f"same-period lookup missed cache: {calls['count']}")
-
-    reversed_node = dict(node)
-    reversed_node["expr"] = list(reversed(node["expr"]))
-    selection.selected_candidates_in_period(reversed_node, date(2026, 7, 1), **kwargs)
-    expect(calls["count"] == first_call_count, "canonical OR order should share the candidate cache")
-
-    changed_calendar = dict(kwargs, calendar_fingerprint="calendar-b")
-    selection.selected_candidates_in_period(node, date(2026, 7, 1), **changed_calendar)
-    expect(
-        calls["count"] == first_call_count * 2,
-        "calendar fingerprint should separate cache entries",
-    )
-
-    changed_seed = dict(kwargs, seed_base="chain-b")
-    selection.selected_candidates_in_period(node, date(2026, 7, 1), **changed_seed)
-    expect(calls["count"] == first_call_count * 3, "chain seed should separate cache entries")
-    info = selection.candidate_cache_info()
-    expect(info.hits >= 2 and info.misses == 3, f"unexpected candidate cache metrics: {info}")
-
-
-def test_position_selection_public_monthly_parser_validation():
-    """The public monthly selector should require a deterministic parenthesized candidate set."""
-    dnf = core.validate_anchor_expr_strict(
-        "(w:tue | w:thu)@in-month=first,3rd,last"
-    )
-    node = dnf[0][0]
-    expect(node.get("kind") == "select", f"selector was not preserved as a factor: {node}")
-    expect(node.get("scope") == "month", f"unexpected selector scope: {node}")
-    expect(node.get("positions") == (1, 3, -1), f"unexpected selector positions: {node}")
-
-    invalid = (
-        ("w:tue@in-month=last", "parenthesized candidate group"),
-        ("(w:tue | w:thu)@in-decade=last", "Invalid positional selector"),
-        ("(w:rand | w:thu)@in-month=last", "cannot contain random selectors"),
-        ("(w:tue@bd | w:thu)@in-month=last", "cannot contain modifiers"),
-        ("(w:tue | w:thu)@in-month=last@bd", "candidate filter"),
-        ("(w:tue | w:thu)@t=09:00@in-month=last", "must appear before"),
-        ("((w:tue | w:thu)@in-month=last)@in-month=last", "Nested positional"),
-        (
-            "(w:tue)@in-month=last + (w:thu)@in-month=last",
-            "only one positional selection",
-        ),
-    )
-    for expr, message in invalid:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"invalid positional selector should be rejected: {expr}")
-        except core.ParseError as exc:
-            expect(message in str(exc), f"unexpected error for {expr!r}: {exc}")
-
-
-def test_position_selection_public_monthly_scheduler():
-    """The production scheduler should select positions and jump empty monthly buckets."""
-    seed = date(2026, 1, 1)
-    dnf = core.validate_anchor_expr_strict(
-        "(w:tue | w:thu)@in-month=first,last"
-    )
-    expected = (
-        (date(2026, 7, 1), date(2026, 7, 2)),
-        (date(2026, 7, 2), date(2026, 7, 30)),
-        (date(2026, 7, 30), date(2026, 8, 4)),
-    )
-    for after_date, expected_date in expected:
-        actual, _meta = core.next_after_expr(
-            dnf,
-            after_date,
-            default_seed=seed,
-            seed_base="chain-a",
-        )
-        expect(actual == expected_date, f"unexpected selection after {after_date}: {actual}")
-
-    constrained = core.validate_anchor_expr_strict(
-        "(m:20..-1 + w:tue,thu)@in-month=first"
-    )
-    actual, _meta = core.next_after_expr(
-        constrained,
-        date(2026, 7, 1),
-        default_seed=seed,
-        seed_base="chain-a",
-    )
-    expect(actual == date(2026, 7, 21), f"candidate intersection was not selected: {actual}")
-
-    sparse = core.validate_anchor_expr_strict("(w:mon)@in-month=5th")
-    actual, _meta = core.next_after_expr(
-        sparse,
-        date(2026, 7, 1),
-        default_seed=seed,
-        seed_base="chain-a",
-    )
-    expect(actual == date(2026, 8, 31), f"empty July bucket was not skipped: {actual}")
-
-
-def test_position_selection_public_acf_natural_and_cache_shape():
-    """Monthly selectors should round-trip through ACF, descriptions, and JSON cache payloads."""
-    expr = "(w:tue | w:thu)@in-month=first,last"
-    dnf = core.validate_anchor_expr_strict(expr)
-    acf = core.build_acf(expr)
-    canonical = core.acf_to_original_format(acf)
-    reparsed = core.validate_anchor_expr_strict(canonical)
-    expect(reparsed[0][0].get("positions") == (1, -1), f"ACF lost positions: {canonical}")
-
-    seed = date(2026, 1, 1)
-    original_next = core.next_after_expr(dnf, date(2026, 7, 1), default_seed=seed)[0]
-    canonical_next = core.next_after_expr(reparsed, date(2026, 7, 1), default_seed=seed)[0]
-    expect(original_next == canonical_next, "ACF round-trip changed selection scheduling")
-
-    natural = core.describe_anchor_expr(expr)
-    expect(
-        "first and last matching dates" in natural and "in each month" in natural,
-        f"unexpected positional natural language: {natural!r}",
-    )
-    json_roundtrip = json.loads(json.dumps(dnf, ensure_ascii=False))
-    expect(core.validate_anchor_expr_strict(json_roundtrip), "JSON cache round-trip rejected selection DNF")
-
-    hints = core.build_and_cache_hints(expr, "skip", default_due_dt=datetime(2026, 7, 1))
-    expect(
-        hints.get("next_dates", [])[:4]
-        == [
-            "2026-07-02T00:00",
-            "2026-07-30T00:00",
-            "2026-08-04T00:00",
-            "2026-08-27T00:00",
-        ],
-        f"unexpected positional preview hints: {hints}",
-    )
 
 
 def test_position_selection_on_add_and_modify_completion():
@@ -32671,86 +18371,6 @@ def test_position_selection_modify_timeline_projects_future_dates():
     expect("2026-09-29" in text, f"timeline omitted future positional date: {text}")
 
 
-def test_position_selection_post_modifiers_parser_and_scheduler():
-    """Post-selection modifiers should transform selected dates without changing the candidate bucket."""
-    expr = "(w:tue | w:thu)@in-month=last@next-mon@+1d@-2bd@t=09:00,17:30"
-    dnf = core.validate_anchor_expr_strict(expr)
-    mods = dnf[0][0].get("mods") or {}
-    expect(mods.get("roll") == "next-wd" and mods.get("wd") == 0, f"bad roll mods: {mods}")
-    expect(mods.get("day_offset") == 1, f"bad calendar offset: {mods}")
-    expect(mods.get("business_day_offset") == -2, f"bad business offset: {mods}")
-    expect(mods.get("t") == [(9, 0), (17, 30)], f"bad time list: {mods}")
-
-    seed = date(2026, 1, 1)
-    cases = (
-        ("(w:tue | w:thu)@in-month=last@+2d", date(2026, 7, 1), date(2026, 7, 2)),
-        ("(w:tue | w:thu)@in-month=last@+2d", date(2026, 7, 2), date(2026, 8, 1)),
-        ("(w:tue | w:thu)@in-month=last@-2d", date(2026, 7, 1), date(2026, 7, 28)),
-        ("(m:-1)@in-month=last@pbd", date(2026, 1, 1), date(2026, 1, 30)),
-        ("(m:-1)@in-month=last@nbd", date(2026, 1, 1), date(2026, 2, 2)),
-        ("(w:thu)@in-month=last@next-mon", date(2026, 7, 1), date(2026, 8, 3)),
-        ("(w:thu)@in-month=last@+1bd", date(2026, 7, 1), date(2026, 7, 31)),
-    )
-    for anchor, after_date, expected_date in cases:
-        parsed = core.validate_anchor_expr_strict(anchor)
-        actual, _meta = core.next_after_expr(parsed, after_date, default_seed=seed)
-        expect(actual == expected_date, f"unexpected transformed selection for {anchor}: {actual}")
-        expect(
-            core.factor_matches_on(parsed[0][0], expected_date, seed),
-            f"transformed selection did not match its output date: {anchor}",
-        )
-
-    collision = core.validate_anchor_expr_strict("(m:-2,-1)@in-month=first,last@pbd")
-    first, _meta = core.next_after_expr(collision, date(2026, 1, 1), default_seed=seed)
-    second, _meta = core.next_after_expr(collision, first, default_seed=seed)
-    expect(first == date(2026, 1, 30), f"unexpected rolled collision date: {first}")
-    expect(second == date(2026, 2, 27), f"rolled collision was not deduplicated: {second}")
-
-    class HolidayCalendar:
-        name = "selector-holidays"
-        fingerprint = "selector-holidays-v1"
-
-        def is_business_day(self, value):
-            return value.weekday() < 5 and value != date(2026, 7, 31)
-
-    custom = core.validate_anchor_expr_strict("(w:thu)@in-month=last@+1bd")
-    custom_next, _meta = core.next_after_expr(
-        custom,
-        date(2026, 7, 1),
-        default_seed=seed,
-        business_calendar=HolidayCalendar(),
-    )
-    expect(custom_next == date(2026, 8, 3), f"selector ignored custom business calendar: {custom_next}")
-
-
-def test_position_selection_post_modifiers_acf_natural_and_time():
-    """Post-selection modifiers should survive ACF and remain visible in descriptions and time lookup."""
-    expr = "(w:tue | w:thu)@in-month=last@next-mon@+1d@-2bd@t=09:00,17:30"
-    dnf = core.validate_anchor_expr_strict(expr)
-    canonical = core.acf_to_original_format(core.build_acf(expr))
-    reparsed = core.validate_anchor_expr_strict(canonical)
-    expect(reparsed[0][0].get("mods") == dnf[0][0].get("mods"), f"ACF lost modifiers: {canonical}")
-
-    natural = core.describe_anchor_expr(expr)
-    for phrase in (
-        "last matching date",
-        "shifted to the next Monday",
-        "1 day later",
-        "2 business days earlier",
-        "at 09:00, 17:30",
-    ):
-        expect(phrase in natural, f"natural description omitted {phrase!r}: {natural}")
-
-    timed = core.validate_anchor_expr_strict(
-        "(w:tue | w:thu)@in-month=last@+2d@t=09:00,17:30"
-    )
-    target = date(2026, 8, 1)
-    expect(
-        core.pick_hhmm_from_dnf_for_date(timed, target, date(2026, 1, 1)) == (9, 0),
-        "post-selection time was not available on the transformed date",
-    )
-
-
 def test_position_selection_post_modifiers_modify_completion():
     """Modify completion should schedule the next transformed positional occurrence and time."""
     expr = "(w:tue | w:thu)@in-month=last@+2d@t=09:00"
@@ -32820,375 +18440,6 @@ def test_position_selection_post_modifiers_modify_completion():
     expect("2026-10-01" in timeline, f"timeline omitted next transformed date: {timeline}")
 
 
-def test_position_selection_public_period_scopes_validation():
-    """Week, quarter, and year selectors should parse with scope-specific position limits."""
-    cases = (
-        ("(w:mon | w:wed | w:fri)@in-week=first,last", "week", (1, -1)),
-        ("(w:mon)@in-quarter=10th,2nd-last", "quarter", (10, -2)),
-        ("(w:mon)@in-year=100th,last", "year", (100, -1)),
-    )
-    for expr, expected_scope, expected_positions in cases:
-        node = core.validate_anchor_expr_strict(expr)[0][0]
-        expect(node.get("scope") == expected_scope, f"unexpected scope for {expr}: {node}")
-        expect(node.get("positions") == expected_positions, f"unexpected positions for {expr}: {node}")
-
-    invalid = (
-        ("w:mon@in-year=last", "parenthesized candidate group"),
-        ("(w:mon)@in-week=8th", "week limit of 7"),
-        ("(w:mon)@in-quarter=93rd", "quarter limit of 92"),
-        ("(w:mon)@in-year=367th", "year limit of 366"),
-        ("(w:mon)@in-year=last@bd", "candidate filter"),
-        ("(w:rand)@in-quarter=last", "cannot contain random selectors"),
-        ("((w:mon)@in-week=last)@in-year=last", "Nested positional"),
-    )
-    for expr, message in invalid:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"invalid period selector should be rejected: {expr}")
-        except core.ParseError as exc:
-            expect(message in str(exc), f"unexpected error for {expr!r}: {exc}")
-
-
-def test_fixed_season_calendar_boundaries():
-    """Fixed seasons should expose deterministic inclusive windows identified by start year."""
-    from nautical_core import season_support
-
-    previous = season_support.active_hemisphere()
-    season_support.configure_hemisphere("north")
-    try:
-        expected = {
-            "spring": (date(2026, 3, 1), date(2026, 5, 31)),
-            "summer": (date(2026, 6, 1), date(2026, 8, 31)),
-            "autumn": (date(2026, 9, 1), date(2026, 11, 30)),
-            "winter": (date(2026, 12, 1), date(2027, 2, 28)),
-        }
-        expect(season_support.SEASON_NAMES == tuple(expected), "season names changed unexpectedly")
-        for name, bounds in expected.items():
-            expect(season_support.season_bounds(name, 2026) == bounds, f"bad {name} bounds")
-            expect(
-                season_support.season_bounds(f" {name.upper()} ", 2026) == bounds,
-                f"{name} normalization changed its bounds",
-            )
-
-        expect(
-            season_support.season_bounds("winter", 2027)
-            == (date(2027, 12, 1), date(2028, 2, 29)),
-            "winter did not include leap day",
-        )
-    finally:
-        season_support.configure_hemisphere(previous)
-
-
-def test_astronomical_season_calculator_contract():
-    """The isolated astronomical provider returns ordered, UTC-aware boundaries."""
-    from nautical_core import astronomical_seasons
-
-    events = astronomical_seasons.seasonal_events_utc(2026)
-    expect(tuple(events) == astronomical_seasons.SEASON_EVENT_NAMES, f"event order changed: {events}")
-    values = tuple(events.values())
-    expect(all(value.tzinfo == timezone.utc for value in values), f"events are not UTC-aware: {events}")
-    expect(all(left < right for left, right in zip(values, values[1:])), f"events are not ordered: {events}")
-    expect(
-        tuple(value.date().isoformat() for value in values)
-        == ("2026-03-20", "2026-06-21", "2026-09-23", "2026-12-21"),
-        f"unexpected 2026 astronomical dates: {events}",
-    )
-    expect(
-        astronomical_seasons.season_boundary_utc(2026, "spring") == events["spring_equinox"],
-        "season name lookup did not map to its event",
-    )
-
-    # Public calls return independent mappings even though the calculation is cached.
-    events["spring_equinox"] = datetime.min.replace(tzinfo=timezone.utc)
-    expect(
-        astronomical_seasons.seasonal_event_utc(2026, "spring-equinox").date().isoformat() == "2026-03-20",
-        "cached astronomical results leaked mutable mapping state",
-    )
-    for invalid_year in (True, 2026.0, 0, 10000):
-        try:
-            astronomical_seasons.seasonal_events_utc(invalid_year)
-            raise AssertionError(f"invalid astronomical year was accepted: {invalid_year!r}")
-        except (TypeError, ValueError):
-            pass
-    try:
-        astronomical_seasons.seasonal_event_utc(2026, "equinox")
-        raise AssertionError("ambiguous astronomical event was accepted")
-    except astronomical_seasons.AstronomicalSeasonError as exc:
-        expect("Expected one of" in str(exc), f"unclear astronomical event error: {exc}")
-    try:
-        astronomical_seasons.solar_longitude(datetime(2026, 1, 1))
-        raise AssertionError("naive solar-longitude input was accepted")
-    except TypeError:
-        pass
-
-
-def test_astronomical_season_support_boundaries_are_mode_and_hemisphere_aware():
-    """Astronomical mode should expose non-overlapping local-date season windows."""
-    from nautical_core import season_support
-
-    previous_mode = season_support.active_mode()
-    previous_hemisphere = season_support.active_hemisphere()
-    try:
-        season_support.configure_mode("astronomical")
-        season_support.configure_timezone("UTC")
-        season_support.configure_hemisphere("north")
-        expect(
-            season_support.season_bounds("spring", 2026) == (date(2026, 3, 20), date(2026, 6, 20)),
-            "astronomical northern spring boundary drifted",
-        )
-        expect(
-            season_support.season_bounds("winter", 2026) == (date(2026, 12, 21), date(2027, 3, 19)),
-            "astronomical northern winter rollover is incorrect",
-        )
-        season_support.configure_hemisphere("south")
-        expect(
-            season_support.season_bounds("summer", 2026) == (date(2026, 12, 21), date(2027, 3, 19)),
-            "astronomical southern summer rollover is incorrect",
-        )
-        try:
-            season_support.configure_mode("sidereal")
-            raise AssertionError("invalid season mode was accepted by season support")
-        except ValueError as exc:
-            expect("fixed, astronomical" in str(exc), f"unclear season mode error: {exc}")
-        try:
-            season_support.configure_timezone("Not/A_Timezone")
-            raise AssertionError("invalid season timezone was accepted")
-        except ValueError as exc:
-            expect("invalid or unavailable" in str(exc), f"unclear season timezone error: {exc}")
-    finally:
-        season_support.configure_mode(previous_mode)
-        season_support.configure_hemisphere(previous_hemisphere)
-        season_support.configure_timezone(core.LOCAL_TZ_NAME)
-
-
-def test_fixed_season_calendar_finds_active_or_next_window():
-    """Season lookup should retain an active window and otherwise advance to that season."""
-    from nautical_core import season_support
-
-    previous = season_support.active_hemisphere()
-    season_support.configure_hemisphere("north")
-    try:
-        cases = (
-            ("spring", date(2026, 1, 15), (date(2026, 3, 1), date(2026, 5, 31))),
-            ("spring", date(2026, 4, 15), (date(2026, 3, 1), date(2026, 5, 31))),
-            ("spring", date(2026, 5, 31), (date(2026, 3, 1), date(2026, 5, 31))),
-            ("spring", date(2026, 6, 1), (date(2027, 3, 1), date(2027, 5, 31))),
-            ("winter", date(2026, 1, 15), (date(2025, 12, 1), date(2026, 2, 28))),
-            ("winter", date(2026, 2, 28), (date(2025, 12, 1), date(2026, 2, 28))),
-            ("winter", date(2026, 7, 1), (date(2026, 12, 1), date(2027, 2, 28))),
-            ("winter", date(2026, 12, 1), (date(2026, 12, 1), date(2027, 2, 28))),
-        )
-        for name, probe, expected in cases:
-            actual = season_support.season_window_on_or_after(name, probe)
-            expect(actual == expected, f"bad {name} window for {probe}: {actual}")
-    finally:
-        season_support.configure_hemisphere(previous)
-
-
-def test_fixed_season_calendar_rejects_invalid_contract_values():
-    """Season primitives should reject ambiguous names, years, and reference values."""
-    from nautical_core import season_support
-    season_support.configure_hemisphere("north")
-
-    for value in ("", "rainy", "monsoon"):
-        try:
-            season_support.season_bounds(value, 2026)
-            raise AssertionError(f"invalid season should fail: {value!r}")
-        except ValueError as exc:
-            expect("Expected one of" in str(exc), f"unclear invalid-season error: {exc}")
-
-    for year in (True, 2026.0):
-        try:
-            season_support.season_bounds("spring", year)
-            raise AssertionError(f"non-integer year should fail: {year!r}")
-        except TypeError:
-            pass
-
-    try:
-        season_support.season_bounds("winter", 9999)
-        raise AssertionError("unrepresentable winter should fail")
-    except ValueError as exc:
-        expect("supported date range" in str(exc), f"unclear winter overflow error: {exc}")
-
-    try:
-        season_support.season_window_on_or_after("spring", "2026-03-01")
-        raise AssertionError("non-date season reference should fail")
-    except TypeError:
-        pass
-
-
-def test_fixed_season_calendar_supports_southern_hemisphere_profile():
-    """Southern fixed seasons should remap names and retain cross-year semantics."""
-    from nautical_core import position_selection, season_support
-
-    previous = season_support.active_hemisphere()
-    try:
-        expect(season_support.configure_hemisphere("south") == "south", "south profile was not selected")
-        expect(
-            season_support.season_bounds("spring", 2026)
-            == (date(2026, 9, 1), date(2026, 11, 30)),
-            "southern spring boundaries are incorrect",
-        )
-        expect(
-            season_support.season_bounds("summer", 2026)
-            == (date(2026, 12, 1), date(2027, 2, 28)),
-            "southern summer should cross the calendar year",
-        )
-        expect(
-            season_support.fixed_season_boundary_description("winter") == "June 1 through August 31",
-            "southern winter description is incorrect",
-        )
-        expect(
-            position_selection.period_bounds("summer", date(2027, 1, 15))
-            == (date(2026, 12, 1), date(2027, 2, 28)),
-            "southern summer period lookup is incorrect",
-        )
-        actual, _meta = core.next_after_expr(
-            core.validate_anchor_expr_strict("(y:12-01)@in-summer=first"),
-            date(2026, 7, 1),
-            default_seed=date(2026, 1, 1),
-        )
-        expect(actual == date(2026, 12, 1), f"southern summer selector drifted: {actual}")
-        try:
-            season_support.configure_hemisphere("equatorial")
-            raise AssertionError("invalid hemisphere should fail")
-        except ValueError as exc:
-            expect("north, south" in str(exc), f"unclear hemisphere error: {exc}")
-    finally:
-        season_support.configure_hemisphere(previous)
-
-
-def test_seasonal_selection_parser_contract():
-    """Seasonal selectors should parse into bounded normalized nodes."""
-    from nautical_core import position_selection
-
-    limits = {
-        "spring": 92,
-        "summer": 92,
-        "autumn": 91,
-        "winter": 91,
-    }
-    for scope, limit in limits.items():
-        final_position = position_selection.format_position(limit)
-        parsed = position_selection.parse_group_selection_modifier(
-            f"@in-{scope}=first,{final_position},last@+1d"
-        )
-        expect(parsed == (scope, (1, limit, -1), "@+1d"), f"bad {scope} parse: {parsed}")
-        node = position_selection.normalize_selection_node(
-            {
-                "kind": "select",
-                "scope": scope,
-                "positions": parsed[1],
-                "expr": [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]],
-                "mods": {"day_offset": 1},
-            }
-        )
-        expect(node["scope"] == scope, f"bad normalized {scope} scope: {node}")
-
-        try:
-            position_selection.parse_positions(str(limit + 1), scope)
-            raise AssertionError(f"{scope} position limit was not enforced")
-        except ValueError as exc:
-            expect(f"{scope} limit of {limit}" in str(exc), f"unclear {scope} limit error: {exc}")
-
-    generic = position_selection.parse_group_selection_modifier("@in-season=first,92nd,last")
-    expect(generic == ("season", (1, 92, -1), ""), f"bad generic season parse: {generic}")
-    try:
-        position_selection.parse_positions("93rd", "season")
-        raise AssertionError("generic season position limit was not enforced")
-    except ValueError as exc:
-        expect("season limit of 92" in str(exc), f"unclear generic season limit error: {exc}")
-
-    impossible = (
-        ("(w:mon)@in-autumn=15th", "at most 14 matching dates per autumn"),
-        ("(m:1)@in-winter=4th", "at most 3 matching dates per winter"),
-    )
-    for expression, message in impossible:
-        try:
-            core.validate_anchor_expr_strict(expression)
-            raise AssertionError(f"impossible seasonal position should fail: {expression}")
-        except core.ParseError as exc:
-            expect(message in str(exc), f"unclear seasonal capacity error: {exc}")
-
-
-def test_seasonal_selection_acf_round_trip():
-    """Public parsing and ACF should preserve seasonal scope and modifiers."""
-    from nautical_core import acf_support, cache_payload, position_selection
-
-    node = {
-        "kind": "select",
-        "scope": "spring",
-        "positions": (1, -1),
-        "expr": [[{"typ": "w", "spec": "mon", "ival": 1, "mods": {}}]],
-        "mods": {},
-    }
-    terms = acf_support._build_acf_terms(
-        [[node]],
-        coerce_int=lambda value, default: int(value or default),
-        normalize_spec_for_acf=lambda _typ, spec: spec,
-        mods_to_acf=lambda _mods: {},
-        atom_sort_key=lambda atom: acf_support.atom_sort_key(atom, json_mod=json),
-        json_mod=json,
-    )
-    expect(terms[0][0].get("c") == "spring", f"ACF lost seasonal scope: {terms}")
-    rendered = acf_support.acf_to_original_format(
-        "valid:payload",
-        is_valid_acf=lambda _value: True,
-        acf_unpack=lambda _payload: {"terms": terms},
-        acf_spec_to_string=lambda _typ, spec: spec,
-        acf_mods_to_string=lambda _mods: "",
-        format_selection_positions=position_selection.format_positions,
-    )
-    expect(
-        rendered == "(w:mon)@in-spring=first,last",
-        f"seasonal ACF did not round-trip: {rendered!r}",
-    )
-
-    expression = "(w:mon)@in-spring=last@+7d"
-    dnf = core.validate_anchor_expr_strict(expression)
-    expect(dnf[0][0].get("scope") == "spring", f"strict parser lost season: {dnf}")
-    expect(cache_payload.is_selection_like(dnf[0][0]), "cache shape rejected seasonal scope")
-    acf = core.build_acf(expression)
-    expect(acf not in ("", "!PARSE_ERROR"), f"public ACF rejected a season: {acf!r}")
-    expect(core.acf_to_original_format(acf) == expression, "public ACF lost seasonal syntax")
-
-
-def test_seasonal_selection_scheduler_windows_and_rollover():
-    """Seasonal scheduling should traverse fixed windows, winter rollover, and leap years."""
-    from nautical_core import position_selection, season_support
-    season_support.configure_hemisphere("north")
-
-    seed = date(2026, 1, 1)
-    expect(
-        position_selection.next_period_start("spring", date(2026, 4, 1))
-        == date(2027, 3, 1),
-        "spring traversal did not advance to the next opening date",
-    )
-    expect(
-        position_selection.next_period_start("winter", date(2026, 1, 1))
-        == date(2026, 12, 1),
-        "winter traversal did not advance from the active cross-year window",
-    )
-    cases = (
-        ("(w:mon)@in-spring=first", date(2026, 1, 1), date(2026, 3, 2)),
-        ("(w:mon)@in-spring=last", date(2026, 1, 1), date(2026, 5, 25)),
-        ("(w:mon)@in-summer=first", date(2026, 1, 1), date(2026, 6, 1)),
-        ("(w:fri)@in-autumn=last", date(2026, 1, 1), date(2026, 11, 27)),
-        ("(w:mon)@in-winter=first", date(2026, 7, 1), date(2026, 12, 7)),
-        ("(w:mon)@in-winter=last", date(2026, 7, 1), date(2027, 2, 22)),
-        ("(w:mon)@in-winter=last", date(2027, 2, 22), date(2028, 2, 28)),
-        ("(y:02-29)@in-winter=first", date(2026, 3, 1), date(2028, 2, 29)),
-    )
-    for expression, after_date, expected in cases:
-        dnf = core.validate_anchor_expr_strict(expression)
-        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
-        expect(actual == expected, f"unexpected seasonal date for {expression}: {actual}")
-        expect(
-            core.factor_matches_on(dnf[0][0], expected, seed),
-            f"seasonal factor did not match its scheduled date: {expression}",
-        )
-
-
 def test_astronomical_season_selection_scheduler_uses_transition_dates():
     """Public seasonal scheduling should consume astronomical local-date windows."""
     with tempfile.TemporaryDirectory() as td:
@@ -33229,231 +18480,6 @@ def test_astronomical_season_selection_scheduler_uses_transition_dates():
         )
         expect(payload["bounds"] == ["2026-03-20", "2026-06-20"], f"astronomical bounds drifted: {payload!r}")
         expect(any("astronomical" in line for line in payload["advice"]), f"astronomical advice missing: {payload!r}")
-
-
-def test_astronomical_season_local_date_and_overflow_contract():
-    """Astronomical season dates should follow local midnight and fail at range limits."""
-    from nautical_core import season_support
-
-    previous_mode = season_support.active_mode()
-    previous_hemisphere = season_support.active_hemisphere()
-    try:
-        season_support.configure_mode("astronomical")
-        season_support.configure_hemisphere("north")
-        season_support.configure_timezone("Pacific/Kiritimati")
-        expect(
-            season_support.season_bounds("spring", 2026)
-            == (date(2026, 3, 21), date(2026, 6, 20)),
-            "positive-offset local transition date was not preserved",
-        )
-        season_support.configure_timezone("America/Adak")
-        expect(
-            season_support.season_bounds("summer", 2026)
-            == (date(2026, 6, 20), date(2026, 9, 21)),
-            "negative-offset local transition date was not preserved",
-        )
-        for timezone_name in ("Pacific/Kiritimati", "America/Adak"):
-            season_support.configure_timezone(timezone_name)
-            windows = [season_support.season_bounds(name, 2026) for name in season_support.SEASON_NAMES]
-            expect(
-                all(left[1] + timedelta(days=1) == right[0] for left, right in zip(windows, windows[1:])),
-                f"astronomical windows have a gap or overlap in {timezone_name}: {windows}",
-            )
-        season_support.configure_timezone("UTC")
-        expect(
-            season_support.season_bounds("spring", 9999)[0].year == 9999,
-            "last representable astronomical spring was not available",
-        )
-        try:
-            season_support.season_bounds("winter", 9999)
-            raise AssertionError("astronomical winter overflow was accepted")
-        except ValueError as exc:
-            expect("supported date range" in str(exc), f"unclear astronomical overflow: {exc}")
-    finally:
-        season_support.configure_mode(previous_mode)
-        season_support.configure_hemisphere(previous_hemisphere)
-        season_support.configure_timezone(core.LOCAL_TZ_NAME)
-
-
-def test_generic_seasonal_selection_scheduler_and_round_trip():
-    """@in-season should select one position independently in every fixed season."""
-    from nautical_core import season_support
-
-    previous = season_support.active_hemisphere()
-    season_support.configure_hemisphere("north")
-    expression = "(w:mon)@in-season=1st"
-    try:
-        dnf = core.validate_anchor_expr_strict(expression)
-        node = dnf[0][0]
-        expect(node.get("scope") == "season", f"generic season scope was lost: {node}")
-        first, _meta = core.next_after_expr(dnf, date(2026, 1, 1), default_seed=date(2026, 1, 1))
-        expect(first == date(2026, 3, 2), f"generic season spring date drifted: {first}")
-        for reference, expected in (
-            (date(2026, 3, 2), date(2026, 6, 1)),
-            (date(2026, 6, 1), date(2026, 9, 7)),
-            (date(2026, 9, 7), date(2026, 12, 7)),
-            (date(2026, 12, 7), date(2027, 3, 1)),
-        ):
-            actual, _meta = core.next_after_expr(dnf, reference, default_seed=date(2026, 1, 1))
-            expect(actual == expected, f"generic season rollover drifted: {reference} -> {actual}")
-        expect(
-            core.describe_anchor_expr(expression) == "the first Monday of each season",
-            "generic season natural text is unclear",
-        )
-        expect(
-            core.acf_to_original_format(core.build_acf(expression)) == "(w:mon)@in-season=first",
-            "generic season ACF did not round-trip",
-        )
-        season_support.configure_hemisphere("south")
-        southern, _meta = core.next_after_expr(
-            dnf, date(2026, 8, 1), default_seed=date(2026, 1, 1)
-        )
-        expect(southern == date(2026, 9, 7), f"southern generic season drifted: {southern}")
-    finally:
-        season_support.configure_hemisphere(previous)
-
-
-def test_seasonal_selection_scheduler_post_modifiers():
-    """Seasonal modifiers should select first, then move dates across window boundaries."""
-    from nautical_core import season_support
-    previous_hemisphere = season_support.active_hemisphere()
-    season_support.configure_hemisphere("north")
-    try:
-        seed = date(2026, 1, 1)
-        cases = (
-            ("(w:mon)@in-spring=last@+7d", date(2026, 1, 1), date(2026, 6, 1)),
-            ("(w:mon)@in-spring=first@-7d", date(2026, 1, 1), date(2026, 2, 23)),
-            ("(w:fri)@in-winter=last@+1bd", date(2026, 7, 1), date(2027, 3, 1)),
-        )
-        for expression, after_date, expected in cases:
-            dnf = core.validate_anchor_expr_strict(expression)
-            actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
-            expect(actual == expected, f"unexpected shifted season date for {expression}: {actual}")
-            expect(
-                core.factor_matches_on(dnf[0][0], expected, seed),
-                f"shifted seasonal factor did not match its output: {expression}",
-            )
-
-        next_year, _meta = core.next_after_expr(
-            core.validate_anchor_expr_strict("(w:mon)@in-spring=last@+7d"),
-            date(2026, 6, 1),
-            default_seed=seed,
-        )
-        expect(next_year == date(2027, 6, 7), f"shifted season did not advance a year: {next_year}")
-    finally:
-        season_support.configure_hemisphere(previous_hemisphere)
-
-
-def test_seasonal_selection_boundary_and_overflow_contract():
-    """Season selectors should include exact edges and fail clearly at date limits."""
-    from nautical_core import position_selection, season_support
-    season_support.configure_hemisphere("north")
-
-    seed = date(2026, 1, 1)
-    edge_cases = (
-        ("(y:03-01)@in-spring=first", date(2026, 3, 1)),
-        ("(y:05-31)@in-spring=first", date(2026, 5, 31)),
-        ("(y:06-01)@in-summer=first", date(2026, 6, 1)),
-        ("(y:08-31)@in-summer=first", date(2026, 8, 31)),
-        ("(y:09-01)@in-autumn=first", date(2026, 9, 1)),
-        ("(y:11-30)@in-autumn=first", date(2026, 11, 30)),
-        ("(y:12-01)@in-winter=first", date(2026, 12, 1)),
-        ("(y:02-28)@in-winter=first", date(2026, 2, 28)),
-    )
-    for expression, expected in edge_cases:
-        actual, _meta = core.next_after_expr(
-            core.validate_anchor_expr_strict(expression),
-            date(2026, 1, 1),
-            default_seed=seed,
-        )
-        expect(actual == expected, f"season edge was excluded for {expression}: {actual}")
-
-    crossing_cases = (
-        ("(y:05-31)@in-spring=first@+1d", date(2026, 6, 1)),
-        ("(y:03-01)@in-spring=first@-1d", date(2026, 2, 28)),
-        ("(y:12-01)@in-winter=first@-1d", date(2026, 11, 30)),
-    )
-    for expression, expected in crossing_cases:
-        actual, _meta = core.next_after_expr(
-            core.validate_anchor_expr_strict(expression),
-            date(2026, 1, 1),
-            default_seed=seed,
-        )
-        expect(actual == expected, f"season boundary modifier drifted for {expression}: {actual}")
-
-    expect(
-        season_support.season_bounds("spring", 9999)
-        == (date(9999, 3, 1), date(9999, 5, 31)),
-        "last representable spring window changed unexpectedly",
-    )
-    try:
-        season_support.season_window_on_or_after("spring", date(9999, 6, 1))
-    except OverflowError:
-        pass
-    except Exception as exc:
-        raise AssertionError(f"unexpected season overflow type: {exc!r}")
-    else:
-        raise AssertionError("season lookup beyond year 9999 should overflow")
-    try:
-        position_selection.next_period_start("spring", date(9999, 4, 1))
-    except ValueError as exc:
-        expect("between 1 and 9999" in str(exc), f"unclear period overflow: {exc}")
-    else:
-        raise AssertionError("season next-period lookup beyond year 9999 should fail")
-
-
-def test_seasonal_selection_natural_language_and_advice():
-    """Seasonal rules should read naturally and disclose their fixed boundaries."""
-    from nautical_core import position_selection, season_support
-    season_support.configure_hemisphere("north")
-
-    descriptions = (
-        ("(w:mon)@in-spring=first", "the first Monday of each spring"),
-        (
-            "(w:mon)@in-spring=first,last",
-            "the first and last Mondays of each spring",
-        ),
-        (
-            "(m:1)@in-summer=first",
-            "the first matching date from the 1st day of each month during each summer",
-        ),
-    )
-    for expression, expected in descriptions:
-        actual = core.describe_anchor_expr(expression)
-        expect(actual == expected, f"unclear seasonal description for {expression}: {actual!r}")
-
-    advised = core.validate_anchor_expr_strict("(w:mon)@in-spring=first,15th")
-    advice = position_selection.selection_advice_for_dnf(advised)
-    expect(any("15th can never contribute" in message for message in advice), f"missing dead position: {advice}")
-    expect(
-        any("fixed March 1 through May 31 boundaries" in message for message in advice),
-        f"missing fixed season boundary advice: {advice}",
-    )
-
-
-def test_seasonal_selection_semantic_guard():
-    """Seasonal validation should reject candidates whose date domain cannot enter the window."""
-    from nautical_core import season_support
-    season_support.configure_hemisphere("north")
-    invalid = (
-        ("(y:jan)@in-spring=first", "fixed March 1 through May 31 window"),
-        ("(y:q4)@in-summer=first", "fixed June 1 through August 31 window"),
-        ("(y:jan + w:mon)@in-spring=first", "fixed March 1 through May 31 window"),
-    )
-    for expression, message in invalid:
-        try:
-            core.validate_anchor_expr_strict(expression)
-            raise AssertionError(f"seasonally impossible candidate should fail: {expression}")
-        except core.ParseError as exc:
-            expect(message in str(exc), f"unclear seasonal semantic error: {exc}")
-
-    valid = (
-        "(y:02-29)@in-winter=first",
-        "(y:jan | w:mon)@in-spring=first",
-        "(w/100:mon)@in-spring=first",
-    )
-    for expression in valid:
-        core.validate_anchor_expr_strict(expression)
 
 
 def test_on_add_seasonal_selection_feedback():
@@ -33750,6 +18776,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         "due": stamp(date(2026, 7, 22), (9, 0)),
         "until": stamp(date(2026, 7, 21), (23, 0)),
     }
+    datetime_effects = mod._module("modify_datetime_effects")
+    datetime_ports = datetime_effects.datetime_effect_ports_for(mod)
     expect(
         reconcile.invalid_native_until_reason(_task_observation(current), safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse),
         "invalid native-until window was not detected",
@@ -33760,8 +18788,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         kind="anchor",
         safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
         fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
-        local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
+        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
+        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
     )
     expect(not error and repaired == stamp(date(2026, 7, 22), (23, 0)), f"wrong carried until: {repaired}, {error}")
     fallback, fallback_error = reconcile.fallback_native_until_at_day_end(
@@ -33772,8 +18800,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         }),
         safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
         fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
-        local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
+        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
+        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
     )
     expect(
         not fallback_error and fallback == stamp(date(2026, 7, 23), (23, 0)),
@@ -33787,8 +18815,8 @@ def test_reconcile_repairs_invalid_native_until_from_previous_link():
         }),
         safe_parse_datetime=mod._TASK_DATETIME_PARSER.parse,
         fmt_isoz=mod.core.fmt_isoz,
-        utc_to_local_naive=lambda value: mod._module("modify_datetime_effects").utc_to_local_naive(mod, value),
-        local_naive_to_utc=lambda value: mod._module("modify_datetime_effects").local_naive_to_utc(mod, value),
+        utc_to_local_naive=lambda value: datetime_effects.utc_to_local_naive(datetime_ports, value),
+        local_naive_to_utc=lambda value: datetime_effects.local_naive_to_utc(datetime_ports, value),
     )
     expect(
         late_fallback is None and "at or after local 23:00" in (late_error or ""),
@@ -33876,181 +18904,6 @@ def test_reconcile_native_until_manual_review_is_not_a_hard_error():
     expect(repairs and repairs[0].get("action") == "manual_review", f"manual review was not preserved: {repairs!r}")
 
 
-def test_integrity_recovery_fault_matrix_fails_closed():
-    """Recovery evidence keeps unavailable/malformed predecessor states explicit."""
-    from nautical_core.chain_integrity_recovery import IntegrityRecoveryService
-
-    def parse(value):
-        try:
-            return datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc), None
-        except Exception as exc:
-            return None, str(exc)
-
-    def fmt(value):
-        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-    row = {
-        "uuid": "00000000-0000-4000-8000-000000000701",
-        "description": "fault recovery",
-        "chain": "on",
-        "chainID": "fault-recovery",
-        "link": 2,
-        "status": "pending",
-        "due": "20260820T100000Z",
-        "until": "20260820T090000Z",
-    }
-    service = IntegrityRecoveryService()
-    unavailable = service.audit_native_until(
-        [_task_observation(row)],
-        predecessor=lambda _row: None,
-        safe_parse_datetime=parse,
-        fmt_isoz=fmt,
-        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
-        local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
-    )
-    expect(unavailable.native_until.status == "invalid", f"unavailable predecessor was hidden: {unavailable}")
-    expect(unavailable.candidates and unavailable.candidates[0].item.get("fallback") == "local 23:00",
-           f"day-end fallback was not explicit: {unavailable}")
-
-    malformed = service.audit_native_until(
-        [_task_observation({**row, "due": "not-a-date"})],
-        predecessor=lambda _row: None,
-        safe_parse_datetime=lambda _value: (None, "malformed datetime"),
-        fmt_isoz=fmt,
-        utc_to_local_naive=lambda value: value.replace(tzinfo=None),
-        local_naive_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
-    )
-    expect(malformed.native_until.status == "invalid", f"malformed evidence was hidden: {malformed}")
-    expect(malformed.native_until.repairs and malformed.native_until.repairs[0].get("action") == "manual_review",
-           f"malformed evidence fabricated a repair: {malformed}")
-
-
-def test_seasonal_selection_business_calendar_and_cache_identity():
-    """Seasonal offsets should honor custom calendars and cache each seasonal context separately."""
-    from nautical_core import position_selection
-    season_support = core._import_sibling("season_support")
-    previous_hemisphere = season_support.active_hemisphere()
-    season_support.configure_hemisphere("north")
-
-    class ClosingCalendar:
-        name = "season-closing"
-        fingerprint = "season-closing-v1"
-
-        def is_business_day(self, value):
-            return value.weekday() < 5 and value != date(2027, 3, 1)
-
-    expression = "(w:fri)@in-winter=last@+1bd"
-    dnf = core.validate_anchor_expr_strict(expression)
-    shifted, _meta = core.next_after_expr(
-        dnf,
-        date(2026, 7, 1),
-        default_seed=date(2026, 1, 1),
-        business_calendar=ClosingCalendar(),
-    )
-    expect(shifted == date(2027, 3, 2), f"seasonal offset ignored custom calendar: {shifted}")
-
-    position_selection.clear_candidate_cache()
-    seed = date(2026, 1, 1)
-    spring = core.validate_anchor_expr_strict("(w:mon)@in-spring=first")[0][0]
-    summer = core.validate_anchor_expr_strict("(w:mon)@in-summer=first")[0][0]
-    kwargs = {
-        "matches_on": core.atom_matches_on,
-        "default_seed": seed,
-        "seed_base": "season-cache",
-        "calendar_fingerprint": "calendar-a",
-    }
-    position_selection.selected_candidates_in_period(spring, seed, **kwargs)
-    position_selection.selected_candidates_in_period(spring, seed, **kwargs)
-    position_selection.selected_candidates_in_period(summer, seed, **kwargs)
-    position_selection.selected_candidates_in_period(
-        spring,
-        seed,
-        **{**kwargs, "calendar_fingerprint": "calendar-b"},
-    )
-    info = position_selection.candidate_cache_info()
-    expect(info.hits >= 1 and info.misses == 3, f"seasonal cache identity drifted: {info}")
-    season_support.configure_hemisphere(previous_hemisphere)
-
-
-def test_position_selection_public_period_scopes_scheduler():
-    """New scopes should select within calendar periods and preserve the source bucket after shifts."""
-    seed = date(2026, 1, 1)
-    cases = (
-        (
-            "(w:mon | w:wed | w:fri)@in-week=last",
-            date(2026, 7, 14),
-            date(2026, 7, 17),
-        ),
-        ("(w:mon)@in-quarter=last", date(2026, 4, 1), date(2026, 6, 29)),
-        ("(w:mon)@in-year=10th", date(2026, 1, 1), date(2026, 3, 9)),
-        ("(y:02-29)@in-year=first", date(2026, 1, 1), date(2028, 2, 29)),
-        ("(w:fri)@in-week=last@+3d", date(2026, 7, 12), date(2026, 7, 13)),
-        ("(w:mon)@in-quarter=last@+3d", date(2026, 6, 30), date(2026, 7, 2)),
-        ("(w:mon)@in-year=last@+7d", date(2027, 1, 1), date(2027, 1, 4)),
-        ("(w:mon)@in-year=first@-7d", date(2025, 12, 1), date(2025, 12, 29)),
-    )
-    for expr, after_date, expected_date in cases:
-        dnf = core.validate_anchor_expr_strict(expr)
-        actual, _meta = core.next_after_expr(dnf, after_date, default_seed=seed)
-        expect(actual == expected_date, f"unexpected scoped selection for {expr}: {actual}")
-        expect(
-            core.factor_matches_on(dnf[0][0], expected_date, seed),
-            f"scoped selection did not match its output date: {expr}",
-        )
-
-    class QuarterHolidayCalendar:
-        name = "quarter-holidays"
-        fingerprint = "quarter-holidays-v1"
-
-        def is_business_day(self, value):
-            return value.weekday() < 5 and value != date(2026, 6, 30)
-
-    custom = core.validate_anchor_expr_strict("(w:mon)@in-quarter=last@+1bd")
-    custom_next, _meta = core.next_after_expr(
-        custom,
-        date(2026, 4, 1),
-        default_seed=seed,
-        business_calendar=QuarterHolidayCalendar(),
-    )
-    expect(custom_next == date(2026, 7, 1), f"quarter selector ignored custom calendar: {custom_next}")
-
-
-def test_position_selection_public_period_scopes_acf_natural_and_hints():
-    """New scopes should round-trip and remain visible in descriptions and previews."""
-    expressions = (
-        ("(w:mon | w:wed | w:fri)@in-week=last", "in each week"),
-        ("(w:mon)@in-quarter=last@+3d", "in each quarter"),
-        ("(w:mon)@in-year=10th@t=09:00", "in each year"),
-    )
-    seed = date(2026, 1, 1)
-    for expr, phrase in expressions:
-        dnf = core.validate_anchor_expr_strict(expr)
-        canonical = core.acf_to_original_format(core.build_acf(expr))
-        reparsed = core.validate_anchor_expr_strict(canonical)
-        expect(reparsed[0][0].get("scope") == dnf[0][0].get("scope"), f"ACF lost scope: {canonical}")
-        expect(
-            reparsed[0][0].get("positions") == dnf[0][0].get("positions"),
-            f"ACF lost positions: {canonical}",
-        )
-        expect(phrase in core.describe_anchor_expr(expr), f"natural text omitted {phrase}: {expr}")
-
-    yearly = core.validate_anchor_expr_strict("(w:mon)@in-year=last@+7d@t=09:00")
-    hints = core.build_and_cache_hints(
-        "(w:mon)@in-year=last@+7d@t=09:00",
-        "skip",
-        default_due_dt=datetime(2026, 7, 1),
-    )
-    expect(
-        hints.get("next_dates", [])[:3]
-        == ["2027-01-04T00:00", "2028-01-03T00:00", "2029-01-01T00:00"],
-        f"unexpected yearly positional hints: {hints}",
-    )
-    expect(
-        core.pick_hhmm_from_dnf_for_date(yearly, date(2027, 1, 4), seed) == (9, 0),
-        "yearly positional time was not available on its shifted date",
-    )
-
-
 def test_position_selection_public_period_scopes_hooks():
     """Add, completion, and timeline paths should support shifted yearly selections."""
     expr = "(w:mon)@in-year=last@+7d@t=09:00"
@@ -34123,171 +18976,18 @@ def test_position_selection_public_period_scopes_hooks():
     expect("2029-01-01" in timeline, f"timeline omitted next yearly selection: {timeline}")
 
 
-def test_position_selection_documented_examples_and_feedback():
-    """Positional examples should remain parseable and invalid forms should provide actionable guidance."""
-    examples = (
-        "(w:mon | w:wed | w:fri)@in-week=last",
-        "(w:tue | w:thu)@in-month=first,last",
-        "(w:mon)@in-quarter=last@+1bd",
-        "(w:mon)@in-year=10th@t=09:00",
-    )
-    for expr in examples:
-        core.validate_anchor_expr_strict(expr)
-
-    invalid = (
-        ("w:mon@in-year=last", "parenthesized candidate group"),
-        ("(w:mon@t=09:00)@in-year=last", "place supported modifiers after the selector"),
-        ("(w:mon)@in-decade=last", "@in-week, @in-month, @in-quarter, or @in-year"),
-    )
-    for expr, guidance in invalid:
-        try:
-            core.validate_anchor_expr_strict(expr)
-            raise AssertionError(f"invalid documented form should be rejected: {expr}")
-        except core.ParseError as exc:
-            expect(guidance in str(exc), f"missing guidance for {expr!r}: {exc}")
-
-
 TESTS = [
-    test_lint_formats,
-    test_weekly_and_unsat,
-    test_satisfiability_helpers_characterization,
-    test_parser_satisfiability_agrees_with_scheduler,
-    test_expansion_helpers_characterization,
-    test_nth_weekday_range,
-    test_lint_anchor_expr_characterization,
-    test_anchor_grouped_list_plus_expr_applies_filter_to_all_items,
-    test_lint_grouped_list_plus_expr_matches_current_grammar,
-    test_month_alias_in_monthly_anchor_suggests_yearly_anchor,
-    test_unsat_hint_uses_yearly_alias_for_month_name_examples,
-    test_last_weekday,
-    test_monthly_valid_months_m2_5th_mon,
-    test_monthly_support_helpers_characterization,
-    test_leap_year_29feb,
-    test_year_day_ordinals_expand_and_schedule,
-    test_year_day_ordinals_validate_strictly,
-    test_iso_week_ordinals_expand_across_year_boundaries,
-    test_iso_week_ordinals_validate_strictly,
-    test_year_ordinals_compose_with_weekdays_or_and_modifiers,
-    test_iso_week_interval_uses_iso_year_buckets,
-    test_year_ordinals_filter_random_and_omit_candidates,
-    test_year_ordinals_positional_acf_and_cache_round_trip,
-    test_year_ordinals_natural_language_and_validation_guidance,
-    test_year_ordinals_documented_examples,
     test_year_ordinals_hooks_modes_calendar_and_timeline,
     test_reconcile_tool_computes_year_ordinal_anchor,
-    test_quarters_window,
-    test_quarter_alias_unambiguous_month_selectors,
-    test_quarter_selector_mode_characterization,
-    test_quarter_selector_mode_rejections,
-    test_term_quarter_rewrite_mode_characterization,
-    test_quarter_spec_rewrite_characterization,
-    test_rewrite_quarters_in_context_characterization,
-    test_position_selection_parses_arbitrary_ordinals,
-    test_position_selection_rejects_invalid_tokens_and_bounds,
-    test_position_selection_candidate_capacity_bounds,
-    test_position_selection_candidate_capacity_bounds_are_sound,
-    test_position_selection_rejects_only_fully_impossible_candidates,
-    test_position_selection_semantic_advice,
     test_on_add_position_selection_renders_semantic_advice,
-    test_position_selection_period_boundaries,
-    test_position_selection_internal_evaluator,
-    test_position_selection_internal_evaluator_validation,
-    test_position_selection_next_date_jumps_periods,
-    test_position_selection_candidate_cache_identity,
-    test_position_selection_public_monthly_parser_validation,
-    test_position_selection_public_monthly_scheduler,
-    test_position_selection_public_acf_natural_and_cache_shape,
     test_position_selection_on_add_and_modify_completion,
     test_position_selection_modify_timeline_projects_future_dates,
-    test_position_selection_post_modifiers_parser_and_scheduler,
-    test_position_selection_post_modifiers_acf_natural_and_time,
     test_position_selection_post_modifiers_modify_completion,
-    test_position_selection_public_period_scopes_validation,
-    test_fixed_season_calendar_boundaries,
-    test_fixed_season_calendar_finds_active_or_next_window,
-    test_fixed_season_calendar_rejects_invalid_contract_values,
-    test_fixed_season_calendar_supports_southern_hemisphere_profile,
-    test_seasonal_selection_parser_contract,
-    test_seasonal_selection_acf_round_trip,
-    test_seasonal_selection_scheduler_windows_and_rollover,
-    test_generic_seasonal_selection_scheduler_and_round_trip,
-    test_seasonal_selection_scheduler_post_modifiers,
-    test_seasonal_selection_boundary_and_overflow_contract,
-    test_seasonal_selection_natural_language_and_advice,
-    test_seasonal_selection_semantic_guard,
     test_on_add_seasonal_selection_feedback,
     test_seasonal_selection_modify_modes_times_and_timeline,
     test_seasonal_selection_reconcile_spawn_recovery_and_dedup,
-    test_seasonal_selection_business_calendar_and_cache_identity,
-    test_position_selection_public_period_scopes_scheduler,
-    test_position_selection_public_period_scopes_acf_natural_and_hints,
     test_position_selection_public_period_scopes_hooks,
-    test_position_selection_documented_examples_and_feedback,
-    test_yearly_month_names,
-    test_rand_with_year_window,
-    test_weekly_rand_N_gate,
-    test_monthly_and_yearly_random_intervals_scale_and_exhaust,
-    test_weekly_random_intervals_scale_and_exhaust,
-    test_business_day_nbd_pbd_nw_natural,
-    test_time_splitting_per_atom,
-    test_weekly_multi_days_and_every_2weeks,
-    test_heads_with_slashN_parse_ok,
-    test_monthly_valid_months_m2_5th_mon_upcoming_within_valid_months,
-    test_leap_year_29feb_upcoming_only_on_leap_year,
-    test_rand_with_year_window_filtering,
-    test_weekly_rand_N_gate_spacing,
-    test_same_day_next_weekday_roll_moves_forward_one_week,
-    test_same_day_prev_weekday_roll_moves_back_one_week,
-    test_next_weekday_roll_cross_year_date_still_matches_expression,
-    test_weekly_multi_days_every_2weeks_spacing_and_days,
-    test_inline_time_mods_split_ok,
-    test_weekly_trailing_time_modifier_applies_to_whole_list,
-    test_group_time_modifier_distributes_to_all_branches,
-    test_group_time_modifier_supports_multiple_times,
-    test_group_astronomical_time_offset_distributes_to_all_branches,
-    test_group_date_modifiers_distribute_across_or_branches,
-    test_group_modifiers_reject_ambiguous_combinations,
-    test_counted_random_selects_unique_dates_per_period,
-    test_counted_random_is_deterministic_chain_scoped_and_constrained,
-    test_counted_random_omit_redraws_from_remaining_pool,
-    test_counted_random_cadence_time_and_canonical_round_trip,
-    test_counted_random_validation_and_natural_text,
-    test_symbolic_anchor_time_modifiers_accept_supported_events,
-    test_moon_phase_anchor_grammar_normalizes_canonical_names,
-    test_astronomy_profile_requires_explicit_timezone,
-    test_moon_phase_resolver_uses_circular_phase_distance,
-    test_moon_phase_resolver_uses_documented_phase_bands,
-    test_moon_phase_real_astral_boundary_smoke,
-    test_moon_astral_events_preserve_timezone_and_dst,
-    test_moonrise_unavailable_location_fails_closed,
-    test_astronomical_time_skips_unavailable_candidate_dates,
-    test_astronomy_none_event_is_actionable,
-    test_moon_phase_source_and_filter_compose_with_weekday,
-    test_moon_phase_source_emits_once_per_phase_window,
-    test_moon_phase_operational_errors_are_actionable,
-    test_moon_phase_natural_language_is_explicit,
-    test_moon_phase_contradictions_are_rejected,
-    test_moon_phase_intersection_fails_closed_without_synthetic_date,
-    test_scheduler_exhaustion_never_fabricates_sparse_and_date,
-    test_scheduler_or_skips_exhausted_branch_for_valid_alternative,
-    test_scheduler_periodic_cycle_finds_distant_valid_intersection,
-    test_scheduler_date_boundary_exhaustion_is_typed,
-    test_occurrence_collection_preserves_prefix_before_date_terminal,
-    test_anchor_step_preserves_scheduler_exhaustion,
-    test_anchor_date_calculations,
-    test_interval_patterns,
-    test_complex_dnf_expressions,
-    test_business_day_modifiers,
-    test_default_business_calendar_operations_characterization,
-    test_business_calendar_policy_flows_through_scheduler_paths,
-    test_business_calendar_displacement_capture_is_shift_only,
-    test_business_calendar_policy_flows_through_file_modifiers,
-    test_business_calendar_config_normalizes_immutable_definitions,
-    test_business_calendar_config_resolves_rules_files_and_omissions,
-    test_business_calendar_config_rejects_ambiguous_or_unstable_rules,
     test_business_calendar_toml_section_resolves_lazily,
-    test_task_business_calendar_context_selects_and_restores_policy,
-    test_business_calendar_fingerprint_invalidates_rule_file_and_hint_caches,
     test_hook_on_add_uses_and_normalizes_business_calendar,
     test_hook_on_add_reports_business_calendar_displacement_only_when_shifted,
     test_hook_on_add_rejects_unknown_business_calendar_cleanly,
@@ -34298,56 +18998,11 @@ TESTS = [
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
     test_hook_on_modify_rejects_invalid_timezone_for_nautical_task,
     test_on_modify_spawned_child_preserves_business_calendar,
-    test_next_after_atom_with_mods_characterization,
     test_modifier_boundary_paths_agree_and_advance_strictly,
-    test_atom_matches_on_positive_day_offset_shifted_date,
-    test_pick_hhmm_from_dnf_for_positive_day_offset_shifted_date,
-    test_deterministic_randomness,
-    test_edge_cases,
-    test_natural_language_comprehensive,
-    test_natural_anchor_characterization_for_complex_terms,
-    test_rand_bucket_signature_characterization,
-    test_parser_validation,
-    test_parser_atom_helpers_characterization,
-    test_large_weekly_interval_is_scheduled_without_clamping,
-    test_yearly_spec_token_helper_accepts_known_valid_tokens,
-    test_yearly_spec_token_helper_rejects_bad_ranges,
-    test_yearly_token_format_characterization,
-    test_yearly_token_format_helper_characterization,
-    test_validate_year_tokens_in_dnf_characterization,
-    test_parse_y_token_characterization,
-    test_cache_consistency,
-    test_cache_load_retries_when_file_is_replaced_during_read,
-    test_parse_cache_returns_isolated_dnf_instances,
-    test_build_and_cache_hints_returns_isolated_cached_payload,
-    test_build_and_cache_hints_rejects_stale_valid_dnf,
-    test_cache_key_for_task_caches_build_acf_results,
-    test_build_and_cache_hints_parses_once_per_miss,
-    test_build_and_cache_hints_routes_scheduler_through_service,
-    test_yearly_rand_natural_and_bounds,
-    test_yearly_rand_respects_sibling_month_filter,
-    test_yearly_rand_natural_compacts_sibling_filter,
-    test_yearly_rand_uses_independent_chain_scoped_draws,
-    test_weekly_rand_is_chain_scoped_and_deterministic,
-    test_monthly_rand_year_intersection_is_chain_scoped,
-    test_random_weekday_list_is_one_grouped_draw,
-    test_random_weekday_explicit_or_keeps_separate_draws,
     test_random_salt_namespaces_draws,
-    test_random_anchor_cross_chain_matrix,
     test_random_anchor_and_omit_presets_keep_chain_scope,
     test_chain_colour_uses_complete_root_identity,
     test_on_add_preview_uses_configured_chain_colour,
-    test_yearly_month_aliases_and_ranges,
-    test_business_day_bd_skip_semantics,
-    test_scheduler_atom_helpers_characterization,
-    test_inline_time_mods_natural_contains_both_times,
-    test_guard_commas_between_atoms_after_mods_fatal,
-    test_heads_with_slashN_parse_ok_again,
-    test_monthname_and_numeric_equivalence,
-    test_cp_duration_parser_and_dst_preserve_whole_days,
-    test_cp_sequence_link_boundary_contract,
-    test_cp_random_and_jitter_are_deterministic_per_link_and_bounded,
-    test_cp_random_seed_is_chain_scoped_and_normalized,
     test_cp_interval_helpers_agree_between_on_add_and_on_modify,
     test_on_modify_compute_cp_sequence_selects_interval_by_link,
     test_on_modify_compute_cp_random_selects_deterministic_interval,
@@ -34355,8 +19010,6 @@ TESTS = [
     test_on_modify_anchor_chainmax_forecast_is_bounded,
     test_on_modify_anchor_file_child_projection_reuses_provider,
     test_on_modify_pure_anchor_file_projection_reuses_provider,
-    test_add_anchor_file_local_projection_deduplicates_dst_gap,
-    test_anchor_and_file_tie_preserves_file_description,
     test_hook_on_add_multitime_preview_emits_all_slots,
     test_hook_on_add_time_window_preview_emits_bounded_slots,
     test_hook_on_add_overnight_window_keeps_json_and_next_day_preview,
@@ -34372,10 +19025,6 @@ TESTS = [
     test_hook_on_add_live_panel_mode_preserves_captured_protocol,
     test_hook_on_add_counted_random_preview_uses_group_time,
     test_hook_on_add_accepts_group_date_modifiers,
-    test_core_anchor_preset_unknown_lists_available_names,
-    test_core_omit_preset_unknown_lists_available_names,
-    test_core_preset_recursion_chain_is_deterministic,
-    test_core_nested_preset_display_shows_resolved_leaf,
     test_hook_on_add_anchor_preset_resolves_from_config,
     test_hook_on_add_anchor_unknown_preset_fails_cleanly,
     test_hook_on_add_anchor_composed_preset_resolves_from_config,
@@ -34392,7 +19041,6 @@ TESTS = [
     test_hook_on_add_cp_jitter_preview_shows_selected_periods,
     test_on_add_native_until_requires_strictly_later_target,
     test_on_add_native_until_checks_generated_cp_due,
-    test_native_until_carry_descriptions,
     test_on_add_preview_distinguishes_expiration_from_chain_end_point,
     test_on_add_preview_fails_closed_when_evaluator_initialization_fails,
     test_on_add_preview_reports_scheduler_exhaustion_actionably,
@@ -34424,79 +19072,18 @@ TESTS = [
     test_hook_on_modify_timeline_multitime_includes_all_slots,
     test_hook_on_modify_timeline_cp_sequence_labels_future_intervals,
     test_hook_on_modify_timeline_cp_random_labels_selected_intervals,
-    test_hook_task_runner_handles_nonzero,
-    test_shared_hook_subprocess_runner_preserves_output_and_status,
-    test_hook_task_result_preserves_typed_runner_result,
-    test_hook_run_task_falls_back_when_core_load_fails,
-    test_on_add_run_task_falls_back_when_core_load_fails,
-    test_core_run_task_tempfiles_accepts_text_input,
-    test_core_run_task_timeout_reports_timeout_with_tempfiles,
-    test_core_run_task_result_exposes_typed_metadata,
-    test_core_run_task_nonzero_retries_use_expected_backoff,
-    test_core_run_task_does_not_retry_ordinary_nonzero,
-    test_core_run_task_tempfiles_fallback_handles_bytes_input,
-    test_warn_once_per_day_stamp_written,
-    test_warn_once_per_day_no_diag_silent,
-    test_warn_once_per_day_any_no_diag_silent,
     test_hook_stdout_strict_json_with_diag_on_add,
     test_hook_stdout_strict_json_with_diag_on_modify,
     test_hook_stdout_unicode_unescaped_on_add,
     test_hook_stdout_unicode_unescaped_on_modify,
     test_hook_protocol_loads_without_core_package,
-    test_hook_protocol_on_add_classifies_and_validates,
-    test_hook_protocol_on_modify_accepts_supported_input_forms,
-    test_hook_protocol_on_modify_matches_nautical_route_rules,
-    test_hook_protocol_modify_validation_limits_and_emission,
-    test_hook_io_contract_preserves_unknown_task_fields_and_unicode,
-    test_hook_io_contract_modify_accepts_array_and_preserves_both_tasks,
-    test_hook_io_contract_rejects_trailing_json_without_partial_success,
-    test_hook_io_contract_response_is_single_unescaped_json_object,
-    test_hook_response_models_keep_legacy_names_and_typed_roles,
-    test_lifecycle_models_enforce_transition_contract,
-    test_chain_integrity_models_enforce_observation_and_repair_contract,
-    test_chain_snapshot_service_preserves_authority_and_epoch_cache,
-    test_chain_integrity_engine_owns_audit_and_empty_drain,
-    test_integrity_engine_report_is_frontend_parity_contract,
-    test_chain_integrity_engine_bounded_hydration_is_scoped_and_fail_closed,
-    test_chain_graph_is_deterministic_and_preserves_reference_states,
-    test_chain_graph_exposes_lifecycle_and_topology_queries,
-    test_chain_graph_covers_required_structural_shapes,
-    test_invariant_ownership_map_covers_operator_checks,
-    test_chain_invariant_registry_is_pure_and_deterministic,
-    test_chain_integrity_finalization_evidence_matches_parent_postcondition,
-    test_chain_integrity_context_keeps_outbox_evidence_separate,
-    test_chain_repair_planner_is_deterministic_and_refuses_partial_repairs,
-    test_chain_integrity_application_stays_on_typed_mutation_boundary,
-    test_integration_command_and_read_models_enforce_contract,
-    test_task_observation_contract_is_lossless_and_immutable,
-    test_task_view_exposes_typed_temporal_presence,
-    test_nautical_task_projection_validates_operations_without_losing_observation,
-    test_task_codec_is_strict_lossless_and_contract_specific,
-    test_task_codec_decodes_hook_framing_once,
-    test_task_draft_and_patch_have_explicit_mutation_semantics,
-    test_taskwarrior_client_preserves_evidence_and_redacts_observation,
     test_taskwarrior_client_retries_only_transient_failures,
-    test_taskwarrior_uow_scopes_reads_and_invalidates_after_mutation,
-    test_taskwarrior_uow_broad_snapshot_declares_narrow_coverage,
-    test_taskwarrior_uow_isolates_invocations_over_one_taskdata,
     test_taskwarrior_uow_observes_budget_without_blocking_commands,
-    test_task_read_snapshot_preserves_scope_and_builds_indexes,
-    test_task_read_snapshot_retains_ambiguous_indexes,
-    test_authoritative_set_read_contracts_fail_closed,
-    test_task_read_repository_reuses_scoped_exports_and_falls_back_narrowly,
-    test_task_read_repository_fails_closed_on_untrusted_output,
-    test_task_read_repository_mutation_epoch_prevents_stale_reuse,
-    test_task_read_repository_preserves_found_malformed_observation,
-    test_task_read_repository_preserves_missing_status_as_malformed_found,
-    test_task_read_repository_exposes_all_domain_reads,
-    test_integration_mutation_models_enforce_guards_and_postconditions,
-    test_integration_mutation_requests_use_named_typed_payloads,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
     test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
     test_lifecycle_batch_prefetch_uses_one_union_set_read,
     test_lifecycle_batch_postverification_fails_closed_on_unavailable_snapshot,
-    test_integration_outbox_models_enforce_deterministic_identity_and_progress,
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
@@ -34505,27 +19092,13 @@ TESTS = [
     test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,
-    test_integration_context_resolves_and_validates_invocation_once,
     test_full_hooks_receive_one_explicit_integration_context,
-    test_operator_context_discovers_taskdata_once,
-    test_recurrence_fingerprint_is_canonical_and_mutation_sensitive,
-    test_lifecycle_planner_is_pure_and_deterministic,
-    test_lifecycle_candidate_plan_is_shared_by_completion_and_reconcile,
-    test_expiration_candidate_uses_scheduled_recurrence_basis,
-    test_lifecycle_plan_parity_matrix_covers_recurrence_boundaries,
-    test_lifecycle_terminal_policy_routes_all_terminal_events_through_one_patch,
-    test_lifecycle_planner_owns_recurrence_candidate_and_terminal_policy,
-    test_diagnostic_event_renders_to_stderr_and_has_stable_record,
-    test_taskwarrior_document_is_lossless_with_typed_scalar_accessors,
-    test_taskwarrior_document_rejects_non_objects_and_handles_bad_scalars,
-    test_hook_protocol_classifies_safe_nautical_ordinary_edits,
     test_exit_probe_is_conservative_across_queue_states,
     test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,
     test_full_hook_modules_defer_core_import,
     test_full_hooks_reuse_wrapper_protocol_probe,
     test_hook_bootstrap_uses_symlink_path_and_core_path_rescue,
-    test_hook_bootstrap_numeric_env_parsing_is_bounded,
     test_hooks_survive_malformed_numeric_environment,
     test_hook_stdout_empty_on_exit,
     test_hook_files_are_private_permissions,
@@ -34536,7 +19109,6 @@ TESTS = [
     test_diag_log_rotation_bounds,
     test_diag_log_redacts_sensitive_fields,
     test_hook_diag_redact_msg_masks_sensitive_json_fields,
-    test_diag_log_structured_fields,
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_core_cache_dir_rejects_symlink_override,
@@ -34546,7 +19118,6 @@ TESTS = [
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
     test_hook_engine_reports_pending_nautical_delete_without_spawning,
-    test_hook_engine_retains_completion_lifecycle_result_on_runtime_context,
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
@@ -34556,7 +19127,6 @@ TESTS = [
     test_on_modify_expiration_wrapper_preserves_json_stdout,
     test_on_modify_manual_delete_persists_chain_off,
     test_on_modify_invalid_anchor_has_no_stdout,
-    test_timeline_completed_rows_place_uuid_before_delta,
     test_on_modify_render_anchor_completion_feedback_wrapper,
     test_hook_on_add_cp_scheduled_only_preserves_no_due,
     test_hook_on_add_cp_malformed_inputs_fail_with_parser_guidance,
@@ -34596,14 +19166,6 @@ TESTS = [
     test_doctor_discovers_effective_taskdata_directory,
     test_operator_doctor_loads_colocated_queue_helper,
     test_nautical_dispatches_supported_subcommands,
-    test_doctor_reports_missing_timezone_data,
-    test_doctor_text_timezone_summary,
-    test_doctor_reports_live_panel_configuration_health,
-    test_doctor_reports_authoritative_config_schema_findings,
-    test_doctor_reports_uda_alias_configuration,
-    test_on_add_preview_warns_when_anchor_uses_utc_fallback,
-    test_panel_diagnostics_warns_for_missing_env_config,
-    test_panel_diagnostics_warns_for_empty_file_sources,
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,
@@ -34613,13 +19175,10 @@ TESTS = [
     test_core_import_defers_panel_colour_module,
     test_core_import_defers_diagnostic_model,
     test_core_import_defers_parser_scheduler_models,
-    test_runtime_manifest_covers_lazy_panel_colour_module,
-    test_legacy_exit_flow_modules_are_not_runtime_owned,
     test_deploy_sanity_enforces_removed_lifecycle_ownership,
     test_perf_hook_fast_path_ratio_enforcement,
     test_load_benchmark_installs_complete_hook_runtime,
     test_load_benchmark_queue_and_lineage_verification,
-    test_hook_runtime_retains_module_import_failure_details,
     test_deploy_sanity_script_reports_ok,
     test_deploy_sanity_rejects_missing_lazy_lifecycle_module,
     test_deploy_sanity_rejects_missing_operator_runtime_tool,
@@ -34640,40 +19199,18 @@ TESTS = [
     test_on_modify_chain_cache_reads_through_typed_repository,
     test_on_modify_chain_cache_preserves_repository_unavailability,
     test_on_modify_predecessor_read_preserves_repository_unavailability,
-    test_lifecycle_read_service_indexes_and_merges_chain_rows,
-    test_lifecycle_read_service_reuses_full_snapshot_for_filtered_reads,
-    test_lifecycle_read_service_chain_cache_store_is_isolated_and_indexed,
-    test_next_for_and_no_progress_fails_fast,
-    test_next_for_and_transient_stall_recovers,
-    test_roll_apply_has_guard,
-    test_anchor_cache_cleans_stale_tmp_files,
-    test_anchor_cache_garbage_collection_prunes_expired_and_overflow,
-    test_weeks_between_iso_boundary,
-    test_short_uuid_invalid_inputs,
-    test_anchor_expr_length_limit,
-    test_parser_frontend_normalization_characterization,
-    test_parser_frontend_year_colon_guard_characterization,
-    test_parser_frontend_comma_join_guard_characterization,
-    test_anchor_parse_term_explosion_guard,
-    test_build_local_datetime_dst_gap_and_ambiguous,
     test_local_datetime_non_hour_dst_gap_is_shared_by_modify,
-    test_hook_datetime_comparator_resolves_once,
-    test_local_datetime_full_day_gap_shifts_to_next_valid_wall_time,
     test_modify_completion_advances_past_second_dst_fold,
     test_modify_overnight_window_advances_past_second_dst_fold,
     test_non_hour_dst_carry_and_reconcile_share_core_policy,
     test_anchor_preview_explains_nonexistent_wall_time_adjustment,
     test_on_modify_collect_prev_two_prefers_live_statuses,
-    test_coerce_int_bounds,
     test_on_add_fail_and_exit_emits_json,
     test_on_add_panic_passthrough_emits_valid_json,
     test_on_modify_panic_passthrough_uses_latest_task,
     test_on_add_ignores_unsafe_core_path_override,
     test_on_modify_ignores_unsafe_core_path_override,
     test_on_modify_promotes_chain_when_task_becomes_nautical,
-    test_modify_ordinary_transition_failure_rejects_instead_of_noop,
-    test_modify_lifecycle_activation_requires_complete_root_identity,
-    test_modify_lifecycle_terminal_chain_patch_is_idempotent,
     test_on_modify_promotes_chain_emits_upgrade_panel,
     test_on_modify_promotes_cp_emits_period_explanation,
     test_on_modify_disables_chain_emits_disabled_panel,
@@ -34684,7 +19221,6 @@ TESTS = [
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
     test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
-    test_chainid_legacy_reads_do_not_drive_chain_identity,
     test_on_add_lowercase_chainid_does_not_mark_nautical,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
@@ -34698,12 +19234,6 @@ TESTS = [
     test_on_exit_data_arg_overrides_taskdata_env,
     test_on_modify_data_arg_overrides_taskdata_env,
     test_on_add_data_arg_overrides_taskdata_env,
-    test_core_resolve_task_data_context_precedence,
-    test_core_resolve_task_data_context_rejects_unsafe_world_writable_dir,
-    test_core_resolve_task_data_context_trust_override_allows_explicit_dir,
-    test_core_resolve_task_data_context_rejects_parent_traversal_segments,
-    test_core_config_paths_rejects_parent_traversal_in_env,
-    test_core_config_paths_trust_override_allows_parent_traversal_in_env,
     test_on_add_requires_integration_context_helper,
     test_on_modify_requires_integration_context_helper,
     test_on_exit_requires_integration_context_helper,
@@ -34716,21 +19246,15 @@ TESTS = [
     test_on_modify_cp_due_edit_preserves_relative_offsets,
     test_on_modify_explicit_timing_edits_warn_on_invalid_order,
     test_on_modify_timing_warning_wrapper_preserves_json_stdout,
-    test_normalize_spec_for_acf_cache_guards,
     test_on_modify_link_limit,
     test_on_modify_completion_preflight_context_happy_path,
     test_on_modify_completion_compute_next_and_limits_happy_path,
-    test_completion_scheduler_terminal_outcomes_are_not_spawned,
-    test_chain_cap_guards_are_inclusive_at_boundary,
-    test_completion_caps_earliest_limit_wins,
     test_cap_from_until_cp_includes_exact_deadline,
-    test_chain_max_parser_requires_positive_integer,
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
     test_on_modify_completion_finalize_skips_analytics_when_hidden,
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_modify_completion_snapshot_malformed_json_is_unavailable,
-    test_on_modify_loaded_empty_snapshot_prevents_full_timeline_export,
     test_on_modify_completion_defers_chain_export_until_after_preflight,
     test_on_modify_compute_cp_child_due_uses_scheduled_when_due_missing,
     test_on_modify_compute_anchor_child_due_uses_scheduled_seed_for_all_mode,
@@ -34738,75 +19262,7 @@ TESTS = [
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
     test_on_modify_anchor_dnf_accepts_configured_preset,
     test_on_modify_omit_dnf_accepts_configured_preset,
-    test_anchor_omit_rejects_time_modifiers,
-    test_anchor_file_name_rejects_paths,
-    test_anchor_file_spec_parses_time_and_negative_offset,
-    test_anchor_file_spec_parses_bounded_time_window,
-    test_anchor_file_occurrences_expand_bounded_time_window,
-    test_anchor_file_occurrences_expand_random_time_window_with_context,
-    test_anchor_file_occurrence_provider_exposes_typed_values,
-    test_anchor_file_occurrence_provider_supports_lazy_next_after,
-    test_anchor_file_occurrence_provider_caches_expanded_specs,
-    test_anchor_file_occurrence_provider_advances_cached_lookup_cursor,
-    test_anchor_file_provider_uses_binary_search_for_nonmonotonic_cursor,
-    test_compact_anchor_file_lookup_scans_past_legacy_probe_limit,
-    test_compact_anchor_file_lookup_reports_cursor_exhaustion,
-    test_anchor_file_occurrence_provider_sorts_dst_normalized_candidates,
-    test_modify_anchor_file_mode_orders_dst_fold_by_instant,
-    test_native_until_validation_orders_dst_fold_by_instant,
-    test_native_until_exact_carry_orders_dst_fold_by_instant,
-    test_public_datetime_comparator_preserves_dst_fold_and_provider_alias,
-    test_modify_until_past_guard_orders_dst_fold_by_instant,
-    test_merged_anchor_file_provider_carries_context_and_reuses_specs,
-    test_event_provider_preserves_anchor_file_source_description,
     test_included_provider_preserves_anchor_file_source_description,
-    test_anchor_file_provider_keeps_description_for_overnight_slots,
-    test_anchor_file_provider_merges_duplicate_source_descriptions,
-    test_anchor_file_provider_preserves_dst_fold_descriptions,
-    test_included_provider_reuses_shared_anchor_file_provider,
-    test_anchor_file_provider_retries_after_failed_load,
-    test_included_provider_rebuilds_shared_provider_when_fallback_changes,
-    test_included_provider_bounds_anchor_file_omission_scan,
-    test_anchor_occurrence_provider_exposes_typed_values_and_lazy_lookup,
-    test_provider_contract_advertises_only_certified_capabilities,
-    test_anchor_file_cursor_reuse_matches_fresh_provider_reference,
-    test_anchor_file_batch_generation_matches_repeated_reference_lookups,
-    test_occurrence_provider_adapters_preserve_stream_metadata,
-    test_occurrence_provider_rejects_dst_fallback_backward_progress,
-    test_anchor_file_provider_orders_dst_fallback_by_instant,
-    test_occurrence_collection_inclusive_cursor_steps_back_by_instant,
-    test_occurrence_provider_rejects_malformed_callback_payloads,
-    test_occurrence_providers_reject_non_advancing_values,
-    test_occurrence_values_reject_inconsistent_fields,
-    test_occurrence_collection_fails_closed_on_invalid_values_and_exhaustion,
-    test_occurrence_collection_enforces_cursor_progress_and_timezone_consistency,
-    test_occurrence_event_provider_requires_boolean_omitted_flag,
-    test_anchor_inclusion_scheduler_propagates_internal_errors,
-    test_modify_inclusion_collection_uses_shared_progress_guard,
-    test_modify_until_projection_reuses_anchor_file_provider,
-    test_modify_until_projection_fails_closed_at_iteration_limit,
-    test_anchor_file_provider_rejects_incomparable_datetimes,
-    test_anchor_file_omit_evaluation_failures_propagate,
-    test_omit_scheduler_failures_do_not_fail_open,
-    test_add_preview_event_collection_counts_only_included_occurrences,
-    test_anchor_file_occurrences_expand_overnight_time_window,
-    test_anchor_file_occurrences_expand_composable_time_schedule,
-    test_anchor_file_loader_transforms_dates_and_carries_descriptions,
-    test_anchor_file_composable_schedule_rejects_empty_members,
-    test_anchor_file_next_occurrence_after_uses_task_level_time,
-    test_anchor_file_next_occurrence_after_uses_shared_dst_ordering,
-    test_file_source_expression_flattens_groups_and_rejects_unsafe_patterns,
-    test_anchor_file_expression_merges_sources_and_applies_group_modifiers,
-    test_file_source_wildcards_are_deterministic_and_star_dot_star_means_all,
-    test_anchor_file_expression_preserves_per_source_times_and_dedupes_matches,
-    test_omit_file_expression_merges_sources_atomically_and_rejects_group_times,
-    test_file_source_symlink_must_remain_inside_configured_directory,
-    test_config_exposes_anchor_file_dir,
-    test_navigator_uses_task_business_calendar_for_anchor_projection,
-    test_navigator_surfaces_anchor_projection_failures,
-    test_navigator_projection_preserves_scheduler_terminal_evidence,
-    test_navigator_snapshot_metadata_preserves_typed_chain_identity,
-    test_navigator_resolves_symbolic_anchor_time_offsets,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_on_add_chainid_stamp_failure_rejects_recurring_root,
@@ -34817,26 +19273,7 @@ TESTS = [
     test_on_modify_compute_anchor_child_due_from_multiple_file_times,
     test_on_modify_compute_anchor_child_due_from_combined_anchor_sources,
     test_on_modify_compute_combined_overnight_sources_in_time_order,
-    test_omit_file_name_rejects_paths,
-    test_omit_file_csv_header_parsing_is_order_independent_and_dedupes,
-    test_omit_file_csv_description_mapping_is_order_independent,
-    test_file_backed_csv_missing_date_column_reports_columns,
-    test_file_backed_empty_or_no_usable_dates_fail_cleanly,
-    test_file_backed_cache_detects_same_size_content_replacement,
-    test_file_backed_cache_uses_metadata_for_hot_reads_and_bounds_lru,
-    test_file_backed_cache_reuses_digest_matches_after_metadata_changes,
-    test_file_backed_resource_limits_reject_oversized_inputs,
-    test_file_source_resource_limits_bound_wildcard_fanout,
-    test_file_date_aggregate_limits_cover_anchor_omit_and_business_calendars,
-    test_anchor_omit_next_after_expr_skips_matching_dates,
-    test_anchor_omit_next_after_expr_skips_omit_file_dates,
-    test_anchor_omit_grouped_list_plus_expr_applies_filter_to_all_items,
-    test_anchor_omit_business_day_roll_matches_rolled_date,
-    test_anchor_omit_positive_day_offset_matches_shifted_date,
     test_hook_on_modify_timeline_marks_omitted_anchor_slots,
-    test_modify_timeline_marks_projection_failures_instead_of_silent_truncation,
-    test_modify_timeline_preserves_typed_terminal_projection_evidence,
-    test_modify_timeline_marks_omit_evaluation_failures,
     test_hook_on_modify_merged_timeline_marks_projection_failures,
     test_hook_on_modify_timeline_uses_omit_file_description_label,
     test_on_modify_compute_anchor_child_due_skips_omit_date,
@@ -34847,52 +19284,24 @@ TESTS = [
     test_on_modify_completion_spawn_exception_is_retryable_with_reason,
     test_carry_field_failure_defers_completion_and_reconcile_mutation,
     test_on_modify_build_child_scheduled_only_keeps_due_unset_and_carries_wait,
-    test_anchor_natural_language_normalizes_grouped_list_plus_expr,
     test_on_modify_render_cp_completion_feedback_random_selected_interval,
     test_on_modify_render_cp_completion_feedback_jitter_selected_interval,
     test_on_modify_render_cp_completion_feedback_text_mode,
     test_on_add_preview_hard_cap,
-    test_on_add_compact_anchor_preview_requests_one_occurrence,
     test_on_add_flushes_stdout,
     test_on_add_profiler_lazy_init,
     test_on_add_format_anchor_rows_numbers_upcoming_from_three_with_next_anchor,
     test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor,
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
-    test_core_render_panel_line_mode_uses_panel_line,
-    test_core_render_panel_line_force_rich_kind_skips_panel_line,
-    test_ui_build_rich_panel_preserves_static_layout_and_theme,
     test_ui_live_panel_has_nautical_branding_without_changing_static_panels,
     test_ui_live_test_term_guard_restores_environment,
-    test_ui_static_rich_renderer_delegates_to_shared_builder,
     test_ui_live_renderer_reveals_cumulative_row_frames,
     test_ui_live_renderer_reveals_multiline_values_progressively,
-    test_ui_live_renderer_reveals_timeline_without_highlight,
     test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
     test_ui_live_mid_animation_failure_settles_without_static_duplicate,
     test_ui_live_oversized_panel_settles_without_starting_animation,
-    test_ui_live_renderer_rejects_dumb_terminal,
-    test_ui_live_mode_non_tty_falls_back_without_live_control_codes,
-    test_ui_render_panel_routes_live_mode_without_static_duplicate,
-    test_ui_live_failure_preserves_rows_for_static_fallback,
-    test_cache_metrics_emits_when_enabled,
-    test_sanitize_task_strings_removes_controls,
-    test_clear_all_caches_env,
-    test_cache_save_writes_all_bytes,
     test_cache_load_quarantines_corrupt_entries_and_gc_removes_them,
-    test_cache_schema_rejects_legacy_and_future_versions,
-    test_cache_save_returns_false_when_lock_busy,
-    test_cache_save_returns_false_when_atomic_replace_fails,
-    test_cache_load_rejects_invalid_payload_shape,
-    test_parse_anchor_expr_fuzz_inputs,
-    test_anchor_parse_validate_fuzz_no_unexpected_exceptions,
-    test_anchor_validate_roundtrip_preserves_next_occurrence,
-    test_anchor_normalization_is_semantically_idempotent,
-    test_anchor_expression_characterization_matrix,
-    test_anchor_parse_deep_nesting_guard,
-    test_anchor_validate_rejects_legacy_tuple_error_payload,
-    test_rand_determinism_with_seed,
-    test_next_after_expr_branch_characterization,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
     test_hooks_require_package_core_layout,
     test_core_import_deterministic,
@@ -34903,7 +19312,6 @@ TESTS = [
     test_reconcile_plan_uses_task_business_calendar_context,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
-    test_integrity_recovery_fault_matrix_fails_closed,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
     test_reconcile_export_diagnostics_include_elapsed_time,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
@@ -34918,37 +19326,24 @@ TESTS = [
     test_reconcile_real_taskwarrior_duplicate_slot_requires_manual_review,
     test_reconcile_real_taskwarrior_anchor_repair_round_trip,
     test_reconcile_evidence_prefers_due_over_carried_scheduled,
-    test_reconcile_evidence_includes_local_child_time_when_formatter_available,
     test_reconcile_tool_path_computes_timed_anchor_in_configured_timezone,
     test_reconcile_tool_defaults_core_path_to_install_base,
     test_reconcile_tool_print_plan_includes_evidence,
     test_reconcile_configuration_verification_fails_closed,
     test_reconcile_startup_config_failure_is_structured,
     test_reconcile_subprocess_output_contracts,
-    test_task_command_classifies_boundary_failures,
-    test_task_command_retries_only_opted_in_locks,
     test_on_modify_completion_reuses_single_chain_export_when_chain_needed,
     test_on_modify_completion_snapshot_reuses_full_chain_read,
     test_on_modify_lifecycle_export_reuses_completion_chain_snapshot,
     test_on_modify_cp_completion_spawns_next_link,
     test_on_modify_spawn_intent_queue_failure_is_reported,
-    test_completion_parent_guard_uses_persisted_terminal_timestamp,
     test_on_add_run_task_timeout,
     test_on_modify_run_task_timeout,
-    test_completion_preflight_stops_on_unavailable_next_lookup,
     test_on_modify_state_files_use_dedicated_dir,
     test_on_modify_stable_child_uuid_is_slot_deterministic,
     test_on_modify_missing_taskdata_uses_tw_dir,
     test_hooks_no_direct_subprocess_run,
-    test_chain_integrity_warnings_detects_issues,
-    test_chain_health_advice_coach_healthy_streak,
-    test_chain_health_advice_coach_low_ontime_issue,
-    test_chain_health_advice_clinical_drift_and_style_normalization,
-    test_dst_round_trip_noon_preserves_local_date,
     test_core_invalid_timezone_warns_and_falls_back_to_utc,
-    test_config_support_reports_automatically_discovered_toml_parse_errors,
-    test_config_support_rejects_unsafe_toml_and_reports_reason,
-    test_config_support_distinguishes_empty_missing_and_invalid_candidates,
     test_explicit_unsafe_config_blocks_scheduling_with_actionable_error,
     test_taskdata_config_reload_fails_closed_for_malformed_toml_and_timezone,
     test_core_recurrence_update_udas_config_aliases,
@@ -34963,15 +19358,7 @@ TESTS = [
     test_hook_on_add_disabled_uda_aliases_leave_description_untouched,
     test_on_modify_expands_and_clears_description_uda_aliases,
     test_outbox_drain_limit_config_and_env_override,
-    test_shipped_config_keeps_hook_toggles_top_level,
-    test_shipped_config_matches_authoritative_schema,
-    test_config_schema_reports_retired_unknown_and_ineffective_values,
-    test_season_mode_configuration_contract,
-    test_astronomical_season_calculator_contract,
-    test_astronomical_season_support_boundaries_are_mode_and_hemisphere_aware,
     test_astronomical_season_selection_scheduler_uses_transition_dates,
-    test_astronomical_season_local_date_and_overflow_contract,
-    test_warn_rate_limited_any,
     test_on_modify_build_child_carries_configured_uda_datetime,
 
 ]
@@ -35120,415 +19507,6 @@ def main():
     
     sys.exit(1 if fails else 0)
 
-def test_core_explicit_facade_all_contains_supported_symbols() -> None:
-    import nautical_core as core
-
-    exported = set(getattr(core, '__all__', ()))
-    assert 'resolve_task_data_context' in exported
-    assert 'next_after_expr' not in exported
-    assert 'SchedulerService' not in exported
-    assert 'render_panel' in exported
-    assert 'should_stamp_chain_id' not in exported
-    assert '_config_paths' not in exported
-    assert '_read_toml' not in exported
-    assert '_cache_key_for_task_cached' not in exported
-    assert '_parse_y_token' not in exported
-    assert '_raise_if_comma_joined_anchors' not in exported
-    assert '_validate_year_tokens_in_dnf' not in exported
-    assert 'parent' not in exported
-    assert '_import_sibling' not in exported
-
-    contract = {
-        'parse_anchor_expr_to_dnf': ('s',),
-        'parse_anchor_expr_to_dnf_cached': ('s',),
-        'validate_anchor_expr_strict': ('expr',),
-        'parse_cp_duration': ('dur',),
-        'parse_cp_sequence': ('cp',),
-        'cp_sequence_interval_for_link': ('cp', 'link_no', 'chain_id'),
-        'build_local_datetime': ('d', 'hhmm'),
-        'to_local': ('dt_utc',),
-        'utc_to_local_naive': ('dt_utc',),
-        'local_naive_to_utc': ('dt_local_naive',),
-        'parse_dt_any': ('s',),
-    }
-    for name, expected_parameters in contract.items():
-        value = getattr(core, name, None)
-        assert callable(value), f'facade contract symbol is not callable: {name}'
-        parameters = tuple(inspect.signature(value).parameters)
-        assert parameters == expected_parameters, (
-            f'facade signature changed for {name}: {parameters!r} '
-            f'(expected {expected_parameters!r})'
-        )
-    assert core.parse_anchor_expr_to_dnf('w:mon') == core.parse_anchor_expr_to_dnf_cached('w:mon')
-
-
-def test_all_golden_tests_are_registered() -> None:
-    """Every top-level test function must be covered by the normal runner."""
-    # These characterization helpers exercised the removed private reconcile
-    # seam.  Their behavior is covered by the lifecycle service tests above;
-    # retaining them as runnable tests would recreate the legacy bridge.
-    retired_private_reconcile_tests = {
-        "test_reconcile_candidate_discovery_is_narrow_and_deterministic",
-        "test_reconcile_delayed_expiration_dry_run_converges_to_live_slot",
-        "test_reconcile_empty_snapshot_is_authoritative",
-        "test_reconcile_lifecycle_outcomes_preserve_retry_and_manual_review",
-        "test_reconcile_planning_configuration_drift_is_partial",
-        "test_reconcile_reuses_verified_live_recovery_child",
-        "test_reconcile_snapshot_reuses_initial_chain_export",
-        # Natural-language contracts now live in tests/test_natural_language_contract.py.
-        "test_prev_weekday_natural_text",
-        "test_natural_interval_or_branches_keep_cadence_with_subject",
-        "test_natural_compresses_repeated_within_variants",
-        "test_natural_compresses_repeated_fall_on_variants",
-        "test_time_window_natural_language_uses_bounded_interval",
-    }
-    test_functions = {
-        name for name, value in globals().items()
-        if name.startswith("test_") and callable(value)
-    }
-    registered = {
-        fn.__name__ for fn in (*TESTS, *DEEP_TESTS)
-        if callable(fn)
-    }
-    missing = sorted(test_functions - registered - retired_private_reconcile_tests)
-    expect(not missing, f"unregistered golden tests: {', '.join(missing)}")
-
-
-def test_query_contract_models_round_trip_and_reject_invalid():
-    """The public query contract is immutable, bounded, and JSON-stable."""
-    from nautical_core.query_models import (
-        OccurrenceQueryRequest,
-        OccurrenceQueryResponse,
-        OccurrenceRecord,
-        QueryContractError,
-        QueryFailure,
-        QuerySelector,
-        TaskIdentity,
-        TaskOccurrenceResult,
-    )
-
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "version": 1,
-            "operation": "occurrences",
-            "selector": {"uuids": ["00000000-0000-4000-8000-000000000001"]},
-            "from": "2026-08-21",
-            "to": "2026-08-22",
-            "omission_policy": "report",
-            "max_occurrences": "20",
-        }
-    )
-    request_round_trip = OccurrenceQueryRequest.from_mapping(request.to_dict())
-    expect(request_round_trip == request, "query request did not round-trip through JSON shape")
-    expect(request.max_occurrences == 20, "query limits were not normalized to integers")
-    duplicate_selector = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": ["SAME", "same"]},
-            "from": "2026-08-21",
-            "count": 1,
-            "max_total_occurrences": 2,
-        }
-    )
-    expect(duplicate_selector.selector.uuids == ("same",), "duplicate UUID selectors were not canonicalized")
-    expect(duplicate_selector.max_total_occurrences == 2, "total occurrence limit was not normalized")
-
-    local = datetime(2026, 8, 21, 4, 30, tzinfo=timezone(timedelta(hours=3)))
-    identity = TaskIdentity(
-        uuid="00000000-0000-4000-8000-000000000001",
-        chain_id="query-chain",
-        link=4,
-        description="Morning task \N{SNOWMAN}",
-        recurrence_kind="anchor",
-        expression="w:mon..sun@t=04:30",
-        schedule_fingerprint="schedule-v1",
-    )
-    occurrence = OccurrenceRecord(
-        local=local,
-        utc=local.astimezone(timezone.utc),
-        timezone="Europe/Bucharest",
-        source="anchor",
-    )
-    task_result = TaskOccurrenceResult(identity, "found", (occurrence,))
-    response = OccurrenceQueryResponse(
-        request=request,
-        timezone="Europe/Bucharest",
-        results=(task_result,),
-        status="found",
-        configuration_fingerprint="config-v1",
-    )
-    encoded = json.dumps(response.to_dict(), ensure_ascii=False, sort_keys=True)
-    expect("\\u2603" not in encoded and "snowman" not in encoded.lower(), "query JSON escaped Unicode unexpectedly")
-    expect("\N{SNOWMAN}" in encoded, "query JSON lost Unicode")
-
-    absent = TaskOccurrenceResult(
-        None,
-        "absent",
-        failure=QueryFailure("task_absent", "task was not found", task_uuid=identity.uuid),
-    )
-    expect(absent.to_dict()["task"] is None, "absent query result requires a fabricated task identity")
-    next_request = OccurrenceQueryRequest.from_mapping(
-        {
-            "operation": "next",
-            "selector": {"all_tasks": True},
-            "from": "2026-08-21",
-            "count": 1,
-        }
-    )
-    next_response = OccurrenceQueryResponse(next_request, "Europe/Bucharest")
-    expect(next_response.to_dict()["schema"] == "nautical.query.next", "next response did not select its schema")
-    evaluated_request = OccurrenceQueryRequest.from_mapping(
-        {
-            "operation": "next",
-            "selector": {"all_tasks": True},
-            "at": "2026-08-21T15:00:00+03:00",
-        }
-    )
-    expect(
-        OccurrenceQueryRequest.from_mapping(evaluated_request.to_dict()) == evaluated_request,
-        "evaluated next request did not round-trip through JSON shape",
-    )
-
-    invalid_cases = (
-        lambda: QuerySelector.from_mapping({"all_tasks": True, "chain_id": "query-chain"}),
-        lambda: OccurrenceQueryRequest.from_mapping(
-            {
-                "selector": {"all_tasks": True},
-                "from": "2026-08-21T04:30:00",
-                "count": 1,
-            }
-        ),
-        lambda: OccurrenceQueryRequest.from_mapping(
-            {"selector": {"all_tasks": True}, "from": "2026-08-22", "to": "2026-08-21"}
-        ),
-        lambda: OccurrenceQueryRequest.from_mapping(
-            {
-                "operation": "next",
-                "selector": {"all_tasks": True},
-                "at": "2026-08-21",
-            }
-        ),
-        lambda: OccurrenceQueryRequest.from_mapping(
-            {
-                "operation": "next",
-                "selector": {"all_tasks": True},
-                "at": "2026-08-21T15:00:00+03:00",
-                "from": "2026-08-21",
-            }
-        ),
-        lambda: QueryFailure("bad", "bad", details=()),
-    )
-    for make_invalid in invalid_cases:
-        try:
-            make_invalid()
-        except QueryContractError:
-            continue
-        raise AssertionError("invalid query contract value was accepted")
-
-
-def test_occurrence_query_service_projects_schedule_read_only():
-    """The query service reads one task and projects bounded local/UTC records."""
-    from types import SimpleNamespace
-
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000002",
-        "chainID": "query-chain",
-        "link": 1,
-        "description": "Two daily slots",
-        "anchor": "w:mon..sun@t=04:30,12:30",
-        "anchor_mode": "skip",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(task, f"uuid:{value}")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone(timedelta(hours=3)),
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    service = OccurrenceQueryService(uow, core=core)
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": [task["uuid"]]},
-            "from": "2026-08-24",
-            "to": "2026-08-24",
-            "omission_policy": "exclude",
-        }
-    )
-    response = service.query(request)
-    expect(response.status == "found", f"query service returned {response.status}")
-    expect(len(response.results) == 1, "query service returned an unexpected task count")
-    result = response.results[0]
-    expect(result.task is not None and result.task.schedule_fingerprint, "query result omitted schedule fingerprint")
-    expect(len(result.occurrences) == 2, f"query service returned {len(result.occurrences)} daily slots")
-    expect(result.occurrences[0].local.hour == 4 and result.occurrences[1].local.hour == 12, "query slots were not ordered")
-    expect(result.occurrences[0].utc.tzinfo is not None, "query result omitted UTC timezone")
-    direct_context = RecurrenceContext(
-        chain_id=task["chainID"],
-        timezone=uow.context.local_timezone,
-        business_calendar=core.business_calendar_for_task(dict(task)),
-        astronomy_config=core.ASTRONOMY_CONFIG,
-        anchor_file_dir=core.ANCHOR_FILE_DIR,
-    )
-    direct = _scheduler_for_fixture(task, context=direct_context).collect_request(
-        OccurrenceRangeRequest(
-            OccurrenceCursor(
-                datetime(2026, 8, 24, tzinfo=uow.context.local_timezone),
-                inclusive=True,
-                timezone=uow.context.local_timezone,
-            ),
-            end_local=datetime(2026, 8, 24, 23, 59, 59, tzinfo=uow.context.local_timezone),
-            limit=10,
-        )
-    )
-    expect(
-        tuple(item.local_datetime for item in direct.occurrences)
-        == tuple(item.local for item in result.occurrences),
-        "query occurrence projection drifted from SchedulerService",
-    )
-    omitted_task = dict(task, omit="y:08-24")
-
-    class _OmitRepository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(omitted_task, f"uuid:{value}")
-
-    report_uow = SimpleNamespace(context=uow.context, repository=_OmitRepository())
-    report_request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": [task["uuid"]]},
-            "from": "2026-08-24",
-            "to": "2026-08-24",
-            "omission_policy": "report",
-        }
-    )
-    report_result = OccurrenceQueryService(report_uow, core=core).query(report_request).results[0]
-    expect(not report_result.occurrences and report_result.omitted_occurrences, "omission report lost omitted events")
-    limited = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": [task["uuid"]]},
-            "from": "2026-08-24",
-            "to": "2026-08-24",
-            "max_total_occurrences": 1,
-        }
-    )
-    limited_result = service.query(limited).results[0]
-    expect(limited_result.status == "exhausted", "total query cap did not report exhaustion")
-    expect(len(limited_result.occurrences) == 1, "total query cap returned too many occurrences")
-
-
-def test_query_cli_emits_one_json_document_for_invalid_request():
-    """CLI validation failures remain machine-readable and stdout-safe."""
-    from nautical_core.tools import nautical_query
-
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-        exit_code = nautical_query.main(["occurrences", "--request", "{}"])
-    lines = output.getvalue().splitlines()
-    expect(exit_code == 2, "query CLI did not return the invalid-input exit code")
-    expect(len(lines) == 1, "query CLI emitted more than one stdout line")
-    payload = json.loads(lines[0])
-    expect(payload["schema"] == "nautical.query.occurrences", "query CLI schema is incorrect")
-    expect(payload["status"] == "invalid", "query CLI did not classify malformed input as invalid")
-    expect(payload["failure"]["code"] == "invalid_request", "query CLI failure code is unstable")
-
-
-def test_integrity_consumers_share_report_components():
-    """Doctor, query, and reconcile consume the same stable integrity components."""
-    from nautical_core.chain_integrity_engine import IntegrityEngineResult
-    from nautical_core.chain_integrity_models import IntegrityReportStatus
-    from nautical_core.integrity_report import components, doctor_findings, public_payload
-
-    result = IntegrityEngineResult(IntegrityReportStatus.HEALTHY, reason="")
-    shared = components(result)
-    payload = public_payload(result, query={"kind": "all"}, configuration_fingerprint="cfg")
-    expect(payload["status"] == shared["status"], "query integrity status diverged from shared report")
-    expect(payload["findings"] == shared["findings"], "query findings diverged from shared report")
-    expect(payload["plans"] == shared["plans"], "query plans diverged from shared report")
-    expect(doctor_findings(result)[0]["id"] == "chains.integrity", "Doctor healthy identity diverged")
-
-
-def test_query_cli_rejects_trailing_oversized_and_deep_requests():
-    """The JSON boundary rejects resource-heavy or ambiguous transports."""
-    from nautical_core.tools import nautical_query
-
-    requests = (
-        '{"selector": {"all_tasks": true}, "count": 1} trailing',
-        "{" + '"x":{' * 70 + '"v":1' + "}" * 70 + "}",
-        "{" + "\"padding\":\"" + ("x" * (1_048_576 + 1)) + "\"}",
-    )
-    for request in requests:
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-            exit_code = nautical_query.main(["occurrences", "--request", request])
-        payload = json.loads(output.getvalue())
-        expect(exit_code == 2, "hostile query input did not return invalid-input exit code")
-        expect(payload["failure"]["code"] == "invalid_request", "hostile query input used an unstable failure code")
-
-
-def test_query_cli_flags_build_the_same_validated_request():
-    """Direct flags produce the same request shape as the JSON transport."""
-    from nautical_core.tools import nautical_query
-
-    output = io.StringIO()
-    previous_builder = nautical_query.build_operator_uow
-    nautical_query.build_operator_uow = lambda **_kwargs: (_ for _ in ()).throw(
-        RuntimeError("test read boundary unavailable")
-    )
-    try:
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-            exit_code = nautical_query.main(
-                [
-                    "occurrences",
-                    "--all",
-                    "--after",
-                    "2026-08-24",
-                    "--count",
-                    "2",
-                    "--max-total-occurrences",
-                    "3",
-                ]
-            )
-    finally:
-        nautical_query.build_operator_uow = previous_builder
-    payload = json.loads(output.getvalue())
-    expect(exit_code == 3, "unavailable Taskwarrior query did not return exit code 3")
-    expect(payload["failure"]["code"] == "query_unavailable", "flag query did not reach the read boundary")
-
-
-def test_query_capabilities_is_taskwarrior_free_and_versioned():
-    """Capability discovery is stable and does not require Taskwarrior data."""
-    from nautical_core.tools import nautical_query
-
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-        exit_code = nautical_query.main(["capabilities"])
-    payload = json.loads(output.getvalue())
-    expect(exit_code == 0, "capability discovery failed")
-    expect(payload["schema"] == "nautical.query.capabilities", "capability schema is incorrect")
-    expect(payload["version"] == 2, "capability version is incorrect")
-    expect(payload["operations"] == ["occurrences", "next", "integrity"], "capability operation list is unstable")
-    expect(payload["limits"]["hard"]["occurrences"] >= payload["limits"]["defaults"]["occurrences"], "capability limits are inconsistent")
-    guide = payload.get("guide", {})
-    expect("cp" in guide.get("concepts", {}) and "anchor" in guide.get("concepts", {}), "capability guide omitted core concepts")
-    expect(any("query occurrences" in item for item in guide.get("quick_start", [])), "capability guide omitted a query example")
-    expect("task_range_rule" in guide, "capability guide omitted task reference semantics")
-
-
 def test_query_process_boundary_emits_one_json_document():
     """The managed launcher keeps capability and invalid-request stdout strict."""
     launcher = os.path.join(ROOT, "nautical")
@@ -35544,6 +19522,11 @@ def test_query_process_boundary_emits_one_json_document():
     expect(capability.returncode == 0, "capability subprocess returned a failure")
     expect(len(capability.stdout.splitlines()) == 1, "capability subprocess emitted multiple stdout lines")
     expect(capability.stderr == "", "capability subprocess contaminated stderr by default")
+    capability_payload = json.loads(capability.stdout)
+    expect(
+        capability_payload.get("schema") == "nautical.query.capabilities",
+        "capability subprocess did not emit the versioned query document",
+    )
     inline = subprocess.run(
         [sys.executable, launcher, "query", "occurrences", "--request", "{}"],
         text=True,
@@ -35601,69 +19584,6 @@ def test_operator_processes_concurrent_contracts_share_taskdata_safely():
             expect("Traceback" not in stderr, f"concurrent operator leaked traceback: {command}: {stderr!r}")
 
 
-def test_query_service_preserves_absent_and_unavailable_task_reads():
-    """Typed repository read states remain distinct in query responses."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import (
-        Absent,
-        CommandFailureKind,
-        FailureEvidence,
-        TaskCommand,
-        Unavailable,
-    )
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    context = SimpleNamespace(
-        access=IntegrationAccess.READ_ONLY,
-        local_timezone=timezone.utc,
-        configuration=SimpleNamespace(fingerprint="query-config"),
-    )
-
-    class _Repository:
-        def __init__(self, read):
-            self.read = read
-
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            if isinstance(self.read, Absent):
-                return Absent(f"uuid:{value}", self.read.reason)
-            return self.read
-
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": ["00000000-0000-4000-8000-000000000003"]},
-            "from": "2026-08-24",
-            "count": 1,
-        }
-    )
-    absent_uow = SimpleNamespace(
-        context=context,
-        repository=_Repository(Absent("uuid:missing", "no exact match")),
-    )
-    absent_response = OccurrenceQueryService(absent_uow, core=core).query(request)
-    expect(absent_response.status == "absent", "absent repository read changed query status")
-    expect(absent_response.results[0].task is None, "absent repository read fabricated task identity")
-
-    command = TaskCommand(("task", "export"), "query test", 1.0)
-    evidence = FailureEvidence(
-        command,
-        CommandFailureKind.BUSY,
-        2,
-        1,
-        0.01,
-        True,
-        "Taskwarrior lock active",
-    )
-    unavailable_uow = SimpleNamespace(
-        context=context,
-        repository=_Repository(Unavailable("uuid:busy", evidence)),
-    )
-    unavailable_response = OccurrenceQueryService(unavailable_uow, core=core).query(request)
-    expect(unavailable_response.status == "unavailable", "unavailable repository read changed query status")
-    expect(unavailable_response.failure is not None and unavailable_response.failure.retryable, "unavailable read lost retryability")
-
-
 def test_query_installed_layout_runs_outside_checkout():
     """The managed launcher resolves its own staged core package."""
     with tempfile.TemporaryDirectory(prefix="nautical-query-runtime-") as runtime_dir:
@@ -35700,19 +19620,6 @@ def test_navigator_import_and_help_are_noninteractive_without_rich():
     )
     expect(help_result.returncode == 0, f"Navigator non-TTY help failed: {help_result.stderr or help_result.stdout}")
     expect(help_result.stderr == "", "Navigator help contaminated stderr")
-
-
-def test_navigator_empty_snapshot_is_a_valid_empty_chain():
-    """An authoritative empty operator snapshot must not fabricate a chain."""
-    import nautical_navigator as navigator
-
-    original = navigator._run_chain_snapshot
-    navigator._run_chain_snapshot = lambda: navigator.NavigatorSnapshot((), "empty", "complete", "cfg")
-    try:
-        analyzer = navigator.TaskAnalyzer()
-        expect(analyzer.get_all_chained_tasks() == [], "empty snapshot produced Navigator tasks")
-    finally:
-        navigator._run_chain_snapshot = original
 
 
 def test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe():
@@ -35763,683 +19670,10 @@ def test_navigator_shared_graph_scales_to_large_chain():
     expect(indeg[tasks[-1]["uuid"]] == 1, "shared graph lost the final predecessor")
 
 
-def test_navigator_and_query_share_task_chain_facts():
-    """Navigator metadata and query identities must describe the same task facts."""
-    import nautical_navigator as navigator
-    from nautical_core.query_models import TaskIdentity
-
-    row = {
-        "uuid": "00000000-0000-4000-8000-000000000123",
-        "chainID": "parity-chain",
-        "link": 7,
-        "description": "Parity task",
-        "anchor": "w:mon@t=09:00",
-        "due": "20260824T060000Z",
-        "scheduled": "20260824T053000Z",
-        "status": "pending",
-    }
-    metadata = navigator.NavigatorTaskMetadata.from_mapping(row)
-    identity = TaskIdentity(
-        uuid=row["uuid"], chain_id=row["chainID"], link=row["link"],
-        description=row["description"], recurrence_kind="anchor",
-        expression=row["anchor"], current_due=row["due"], current_scheduled=row["scheduled"],
-    )
-    expect(metadata.uuid == identity.uuid, "Navigator/query UUID facts diverged")
-    expect(metadata.chain_id == identity.chain_id and metadata.link == identity.link, "Navigator/query chain facts diverged")
-    expect(metadata.due == identity.current_due and metadata.scheduled == identity.current_scheduled,
-           "Navigator/query temporal facts diverged")
-
-
-def test_operator_presentation_is_immutable_and_deterministic():
-    """Shared presentation renders one immutable result without changing facts."""
-    from nautical_core.operator_models import OperatorCursor, OperatorOperation, OperatorPage, OperatorResult, OperatorStatus
-    from nautical_core.lifecycle_models import LifecycleDrainProgress, LifecycleDrainStage
-    from nautical_core.operator_presentation import ProgressView, bounded_text, ordered_findings, ordered_records, render_json, render_json_document, render_result, render_text
-
-    result = OperatorResult(
-        operation=OperatorOperation.INSPECT,
-        status=OperatorStatus.OK,
-        data={"items": [{"chain_id": "b", "link": 2}, {"chain_id": "a", "link": 1}]},
-    )
-    before = result.to_dict()
-    encoded = render_json(result)
-    expect('"schema": "nautical.operator.inspect"' in encoded, "shared JSON renderer lost schema")
-    expect(render_text(result) == "inspect: ok", "shared text renderer changed result status")
-    paged = OperatorResult(
-        operation=OperatorOperation.INSPECT,
-        status=OperatorStatus.OK,
-        page=OperatorPage(
-            items=({"uuid": "one"},),
-            cursor=OperatorCursor("snapshot", "config", "epoch", position=0, page_size=1),
-            complete=False,
-        ),
-    )
-    expect("more available" in render_text(paged), "paged summary concealed continuation data")
-    exit_code = result.exit_code
-    expect(render_result(result, "json") and render_result(result, "text"), "mode renderer returned no output")
-    expect(render_result(result, "disabled") == "", "disabled presentation emitted output")
-    expect(render_result(result, "rich", rich_renderer=lambda value: value.status.value) == "ok",
-           "Rich presentation callback did not receive the immutable result")
-    failed_render = render_result(result, "rich", rich_renderer=lambda _value: (_ for _ in ()).throw(RuntimeError("boom")))
-    expect("presentation unavailable" in failed_render and result.exit_code == exit_code,
-           "Rich rendering failure was not contained after result finalization")
-    expect(result.exit_code == exit_code, "presentation changed the operational exit code")
-
-    expect(json.loads(render_json_document(result)) == json.loads(encoded),
-           "contract renderer diverged from the shared JSON policy")
-    expect(result.to_dict() == before, "presentation mutated the operator result")
-    findings = ordered_findings(
-        [
-            {"severity": "warning", "chain_id": "a", "link": 1},
-            {"severity": "error", "chain_id": "b", "link": 2},
-        ]
-    )
-    expect(findings[0]["severity"] == "error", "finding ordering did not prioritize errors")
-    records = ordered_records(
-        [{"state": "retry", "intent_id": "b"}, {"state": "acknowledged", "intent_id": "a"}],
-        keys=("state", "intent_id"),
-    )
-    expect(records[0]["state"] == "acknowledged", "record ordering was not deterministic")
-    progress = ProgressView.from_event(
-        LifecycleDrainProgress(LifecycleDrainStage.PROCESSING, completed=2, total=4, detail="spawn_child")
-    )
-    expect(progress.fraction == 0.5 and progress.label == "spawn child", "typed progress view lost progress facts")
-    expect(bounded_text("line\nwith ⚓", width=20) == "line with ⚓", "presentation did not normalize line breaks")
-    expect(bounded_text("0123456789", width=5) == "0123…", "presentation width bound is not deterministic")
-
-
-def test_operator_presentation_modes_preserve_unicode_and_outcome():
-    """All presentation modes expose the same immutable outcome and Unicode facts."""
-    from nautical_core.operator_models import OperatorOperation, OperatorResult, OperatorStatus
-    from nautical_core.operator_presentation import render_result
-
-    result = OperatorResult(
-        operation=OperatorOperation.APPLY,
-        status=OperatorStatus.MANUAL_REVIEW,
-        data={"description": "Méditation ⚓", "plan": {"action": "review"}},
-    )
-    expected_code = result.exit_code
-    outputs = {
-        mode: render_result(result, mode, rich_renderer=lambda value: value.to_dict()["data"]["description"])
-        for mode in ("json", "text", "rich", "disabled")
-    }
-    expect("Méditation" in outputs["json"], "JSON mode escaped Unicode facts")
-    expect("Méditation" in outputs["rich"], "Rich mode lost Unicode facts")
-    expect(outputs["disabled"] == "", "disabled mode emitted presentation output")
-    expect(result.exit_code == expected_code, "presentation mode changed the operational outcome")
-
-
-def test_operator_presentation_has_no_mutation_dependencies():
-    """Presentation ownership must remain independent from mutation services."""
-    source = Path(ROOT, "nautical_core", "operator_presentation.py").read_text(encoding="utf-8")
-    forbidden = ("taskwarrior", "sqlite", "lifecycle_application", "task_command")
-    expect(not any(token in source.lower() for token in forbidden),
-           "presentation module imported an operational mutation dependency")
-
-
-def test_operator_v2_contract_preserves_public_schema_and_statuses():
-    """V2 keeps public top-level schemas while unifying status and exit codes."""
-    from nautical_core.operator_models import OperatorV2Result, OperatorV2Status
-    from nautical_core.operator_presentation import render_result
-
-    result = OperatorV2Result(
-        schema="nautical.query.occurrences",
-        operation="occurrences",
-        status=OperatorV2Status.FOUND,
-        payload={"results": [{"description": "Méditation ⚓"}]},
-    )
-    document = result.to_dict()
-    expect(document["schema"] == "nautical.query.occurrences", "v2 changed the public schema")
-    expect(document["version"] == 2 and document["status"] == "found", "v2 envelope is not versioned")
-    expect(result.exit_code == 0 and "occurrences: found" in render_result(result, "text"),
-           "v2 status did not map to the stable presentation contract")
-    expect(OperatorV2Result.from_mapping(document).to_dict() == document,
-           "v2 result did not round-trip through its public decoder")
-
-
-def test_navigator_snapshot_exposes_deterministic_typed_view():
-    """Navigator snapshot facts are serializable without invoking Rich or Taskwarrior."""
-    import nautical_navigator as navigator
-
-    metadata = navigator.NavigatorTaskMetadata(
-        uuid="u1", chain_id="c1", link=2, previous="u0", following=None,
-        status="pending", chain_enabled=True, anchor="w:mon",
-    )
-    values = metadata.to_dict()
-    expect(values["chainID"] == "c1" and values["anchor"] == "w:mon",
-           "Navigator metadata view lost chain facts")
-    expect(metadata.to_dict() == values, "Navigator metadata view is not deterministic")
-
-
-def test_navigator_calendar_view_is_immutable_and_serializable():
-    """Calendar presentation data has a stable renderer-neutral shape."""
-    from datetime import date
-    import nautical_navigator as navigator
-
-    view = navigator.NavigatorCalendarView(
-        completed=(date(2026, 8, 1),),
-        upcoming=(date(2026, 8, 8),),
-        pending_due=(date(2026, 8, 3),),
-    )
-    expect(view.to_dict() == {
-        "completed": ["2026-08-01"],
-        "upcoming": ["2026-08-08"],
-        "pending_due": ["2026-08-03"],
-    }, "Navigator calendar view serialization changed")
-
-
-def test_navigator_chain_summary_is_immutable_and_serializable():
-    """Finished-chain facts have a stable renderer-neutral shape."""
-    from datetime import date
-    import nautical_navigator as navigator
-
-    summary = navigator.NavigatorChainSummary(3, 3, date(2026, 8, 1), date(2026, 8, 3), 2, 1.0, 1.0, "100% on-anchor")
-    expect(summary.to_dict()["completed_links"] == 3 and summary.to_dict()["first_end"] == "2026-08-01",
-           "Navigator chain summary serialization changed")
-
-
-def test_navigator_chain_choice_is_immutable_and_serializable():
-    """Chain selector entries expose stable typed facts."""
-    import nautical_navigator as navigator
-
-    choice = navigator.NavigatorChainChoice(0, "c1", "[pending] Demo", "u1", "2026-08-01")
-    expect(choice.to_dict()["chainID"] == "c1" and choice.to_dict()["tail_uuid"] == "u1",
-           "Navigator chain choice serialization changed")
-
-
-def test_navigator_change_row_is_immutable_and_serializable():
-    """Change-table rows expose stable typed facts."""
-    import nautical_navigator as navigator
-
-    row = navigator.NavigatorChangeRow("u1", "2026-08-01", (navigator.TaskChange("due", "changed", "a", "b"),))
-    expect(row.to_dict()["changes"][0]["field"] == "due", "Navigator change row serialization changed")
-
-
-def test_navigator_task_detail_view_is_immutable_and_serializable():
-    """Baseline task detail fields have a stable typed view."""
-    import nautical_navigator as navigator
-
-    view = navigator.NavigatorTaskDetailView((("UUID", "u1"), ("Status", "Pending")), truncated=True)
-    expect(view.to_dict() == {
-        "fields": [{"label": "UUID", "value": "u1"}, {"label": "Status", "value": "Pending"}],
-        "truncated": True,
-    }, "Navigator task detail serialization changed")
-
-
-def test_navigator_projection_view_is_immutable_and_serializable():
-    """Projection warnings have a stable typed view."""
-    import nautical_navigator as navigator
-
-    view = navigator.NavigatorProjectionView(("anchor unavailable",))
-    expect(view.to_dict() == {"warnings": ["anchor unavailable"]},
-           "Navigator projection serialization changed")
-
-
-def test_navigator_trace_view_is_immutable_and_serializable():
-    """Scheduler trace evidence has a stable typed shape and summary."""
-    import nautical_navigator as navigator
-
-    view = navigator.NavigatorTraceView(
-        event_count=2, providers=("anchor",), phases=(("selected", 1),), selected="2026-08-01"
-    )
-    expect(view.to_dict()["events"] == 2 and "selected=2026-08-01" in view.summary(),
-           "Navigator trace view lost scheduler evidence")
-
-
-def test_navigator_analysis_view_aggregates_typed_sections():
-    """Main analysis data has one immutable presentation aggregate."""
-    from datetime import date
-    import nautical_navigator as navigator
-
-    view = navigator.NavigatorAnalysisView(
-        chain_size=2,
-        calendar=navigator.NavigatorCalendarView(completed=(date(2026, 8, 1),)),
-        projection=navigator.NavigatorProjectionView(("warning",)),
-    )
-    document = view.to_dict()
-    expect(document["chain_size"] == 2 and document["calendar"]["completed"] == ["2026-08-01"],
-           "Navigator analysis aggregate lost typed sections")
-
-
-def test_query_service_all_selector_excludes_non_recurrence_rows():
-    """The active-task selector returns only complete recurrence identities."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    recurrence = {
-        "uuid": "00000000-0000-4000-8000-000000000004",
-        "chainID": "query-all",
-        "link": 1,
-        "description": "Recurring",
-        "anchor": "w:mon..sun@t=08:00",
-        "anchor_mode": "skip",
-        "status": "pending",
-    }
-    ordinary = {
-        "uuid": "00000000-0000-4000-8000-000000000005",
-        "description": "Ordinary task",
-        "status": "pending",
-    }
-    future = {
-        "uuid": "00000000-0000-4000-8000-000000000011",
-        "chainID": "query-future",
-        "link": 1,
-        "description": "Far future",
-        "anchor": "(m:1:15 + m:rand)",
-        "due": "20300107T090000Z",
-        "status": "pending",
-    }
-    empty_in_range = {
-        "uuid": "00000000-0000-4000-8000-000000000012",
-        "chainID": "query-empty",
-        "link": 1,
-        "description": "No match in range",
-        "anchor": "y:12-31",
-        "due": "20260101T090000Z",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def broad_snapshot(self, **kwargs):
-            del kwargs
-            return Found(
-                SimpleNamespace(rows=(recurrence, ordinary, future, empty_in_range)),
-                "broad:query:all-active",
-            )
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone.utc,
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"all_tasks": True},
-            "from": "2026-08-24",
-            "to": "2026-08-31",
-            "count": 1,
-        }
-    )
-    response = OccurrenceQueryService(uow, core=core).query(request)
-    task_uuids = {result.task.uuid for result in response.results if result.task is not None}
-    expect(
-        task_uuids <= {recurrence["uuid"], future["uuid"], empty_in_range["uuid"]},
-        "all selector returned a non-recurrence task",
-    )
-    expect(recurrence["uuid"] in task_uuids, "all selector omitted the matching recurrence task")
-
-
-def test_query_service_batches_multiple_uuid_reads():
-    """Multiple UUID selectors share one authoritative snapshot and preserve ambiguity."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    class _Snapshot:
-        def uuid_matches(self, value):
-            if value == "ambiguous":
-                return ({"uuid": "ambiguous-1"}, {"uuid": "ambiguous-2"})
-            return ()
-
-    class _Repository:
-        def broad_snapshot(self, **kwargs):
-            del kwargs
-            return Found(_Snapshot(), "broad:query:uuids")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone.utc,
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": ["ambiguous", "missing"]},
-            "from": "2026-08-24",
-            "count": 1,
-        }
-    )
-    response = OccurrenceQueryService(uow, core=core).query(request)
-    expect(response.status == "invalid", "ambiguous UUID batch did not report invalid status")
-    expect(response.results[0].failure is not None and response.results[0].failure.code == "ambiguous_uuid", "ambiguous UUID was not explicit")
-    expect(response.results[1].status == "absent", "batched missing UUID was not absent")
-
-
-def test_query_service_contains_invalid_task_schedule_errors():
-    """A malformed recurrence in an all-task query becomes a per-task failure."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    broken = {
-        "uuid": "00000000-0000-4000-8000-000000000008",
-        "chainID": "query-broken",
-        "link": 1,
-        "description": "Broken recurrence",
-        "anchor": "(m:1:15 + m:rand)",
-        "anchor_mode": "skip",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def broad_snapshot(self, **kwargs):
-            del kwargs
-            return Found(SimpleNamespace(rows=(broken,)), "broad:query:all-active")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone.utc,
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {"selector": {"all_tasks": True}, "from": "2026-08-24", "count": 1}
-    )
-    result = OccurrenceQueryService(uow, core=core).query(request).results[0]
-    expect(result.status == "invalid", f"malformed recurrence did not become an invalid task result: {result.to_dict()}")
-    expect(result.failure is not None and result.failure.code == "task_invalid", "malformed recurrence failure code changed")
-
-
-def test_query_service_respects_current_task_reference_bounds():
-    """Task occurrence queries do not project calendar matches before current due."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000009",
-        "chainID": "query-reference",
-        "link": 4,
-        "description": "Future task",
-        "anchor": "w:mon",
-        "anchor_mode": "all",
-        "due": "2030-01-07T09:00:00+00:00",
-        "status": "pending",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(task, f"uuid:{value}")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone.utc,
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": [task["uuid"]]},
-            "from": "2026-08-24",
-            "to": "2026-08-31",
-            "count": 20,
-        }
-    )
-    result = OccurrenceQueryService(uow, core=core).query(request).results[0]
-    expect(result.status == "empty", "query projected occurrences before the task due")
-    expect(result.task is not None and result.task.current_due == task["due"], "query omitted current due metadata")
-
-
-def test_query_service_projects_cp_occurrences_from_current_due():
-    """CP occurrence queries advance through the shared child-due generator."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000010",
-        "chainID": "query-cp",
-        "link": 4,
-        "description": "CP task",
-        "cp": "P3D",
-        "due": "20260821T043500Z",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(task, f"uuid:{value}")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone.utc,
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "selector": {"uuids": [task["uuid"]]},
-            "from": "2026-08-24",
-            "to": "2026-08-31",
-            "count": 20,
-        }
-    )
-    result = OccurrenceQueryService(uow, core=core).query(request).results[0]
-    expect(result.status == "found", "CP occurrence query did not find projected slots")
-    expect(
-        [item.utc.date().isoformat() for item in result.occurrences] == ["2026-08-24", "2026-08-27", "2026-08-30"],
-        f"CP occurrence dates were not advanced from due: {result.occurrences!r}",
-    )
-
-
-def test_query_next_projects_anchor_and_cp_without_mutation():
-    """The next operation uses due/scheduled or completion references read-only."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    anchor_task = {
-        "uuid": "00000000-0000-4000-8000-000000000006",
-        "chainID": "query-next-anchor",
-        "link": 1,
-        "description": "Next anchor",
-        "anchor": "w:mon..sun@t=04:30",
-        "anchor_mode": "skip",
-        "due": "20260824T013000Z",
-        "status": "pending",
-    }
-    cp_task = {
-        "uuid": "00000000-0000-4000-8000-000000000007",
-        "chainID": "query-next-cp",
-        "link": 1,
-        "description": "Next cp",
-        "cp": "1d",
-        "due": "20260824T013000Z",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def broad_snapshot(self, **kwargs):
-            del kwargs
-            class _Snapshot:
-                def uuid_matches(self, value):
-                    return (anchor_task,) if value.endswith("006") else (cp_task,)
-            return Found(_Snapshot(), "broad:query:uuids")
-
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(anchor_task if value.endswith("006") else cp_task, f"uuid:{value}")
-
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=timezone(timedelta(hours=3)),
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "operation": "next",
-            "selector": {"uuids": [anchor_task["uuid"], cp_task["uuid"]]},
-            "from": "2026-08-24",
-            "count": 1,
-        }
-    )
-    response = OccurrenceQueryService(uow, core=core).query_next(request)
-    expect(response.schema == "nautical.query.next", "next response schema is incorrect")
-    expect(response.status == "found", "next projection did not find a successor")
-    expect(len(response.results) == 2 and all(item.status == "found" for item in response.results), "next projection lost a task")
-    expect(response.results[0].occurrences[0].source == "anchor", "anchor next projection source is incorrect")
-    expect(response.results[1].occurrences[0].source == "cp", "CP next projection source is incorrect")
-    expect(response.results[0].chain["chainID"] == anchor_task["chainID"], "next chain metadata lost chain identity")
-    expect(response.results[0].lifecycle["child_created"] is False, "next lifecycle metadata implied a created child")
-    expect(response.results[1].lifecycle["reference_field"] == "due", "CP fallback reference field is incorrect")
-    bounded_task = dict(anchor_task, chainMax="1")
-
-    class _BoundedRepository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(bounded_task, f"uuid:{value}")
-
-    bounded_uow = SimpleNamespace(context=uow.context, repository=_BoundedRepository())
-    bounded_request = OccurrenceQueryRequest.from_mapping(
-        {"operation": "next", "selector": {"uuids": [anchor_task["uuid"]]}, "from": "2026-08-24", "count": 1}
-    )
-    bounded_result = OccurrenceQueryService(bounded_uow, core=core).query_next(bounded_request).results[0]
-    expect(bounded_result.status == "empty", "next projection ignored chainMax")
-    until_task = dict(anchor_task, chainUntil="2026-08-24T01:00:00Z")
-
-    class _UntilRepository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(until_task, f"uuid:{value}")
-
-    until_uow = SimpleNamespace(context=uow.context, repository=_UntilRepository())
-    until_result = OccurrenceQueryService(until_uow, core=core).query_next(bounded_request).results[0]
-    expect(until_result.status == "empty", "next projection ignored chainUntil")
-
-
-def test_query_next_reports_daily_skip_mode_progress():
-    """Explicit evaluation time reports daily totals, misses, and the next slot."""
-    from nautical_core.integration_context import IntegrationAccess
-    from nautical_core.integration_models import Found
-    from nautical_core.query_models import OccurrenceQueryRequest
-    from nautical_core.query_service import OccurrenceQueryService
-
-    task = {
-        "uuid": "00000000-0000-4000-8000-000000000013",
-        "chainID": "query-daily-progress",
-        "link": 1,
-        "description": "Three daily slots",
-        "anchor": "w:mon..sun@t=09:00,12:00,18:00",
-        "anchor_mode": "skip",
-        "due": "20260824T060000Z",
-        "status": "pending",
-    }
-
-    class _Repository:
-        def by_uuid(self, value, **kwargs):
-            del kwargs
-            return Found(task, f"uuid:{value}")
-
-    local_timezone = timezone(timedelta(hours=3))
-    uow = SimpleNamespace(
-        context=SimpleNamespace(
-            access=IntegrationAccess.READ_ONLY,
-            local_timezone=local_timezone,
-            configuration=SimpleNamespace(fingerprint="query-config"),
-        ),
-        repository=_Repository(),
-    )
-    request = OccurrenceQueryRequest.from_mapping(
-        {
-            "operation": "next",
-            "selector": {"uuids": [task["uuid"]]},
-            "at": "2026-08-24T15:00:00+03:00",
-        }
-    )
-    result = OccurrenceQueryService(uow, core=core).query_next(request).results[0]
-    expect(result.status == "found", "evaluated next query did not find the 18:00 slot")
-    expect(result.occurrences[0].local.hour == 18, "skip-mode evaluation selected the wrong next slot")
-    expect(
-        result.lifecycle.get("daily_instances") == {
-            "date": "2026-08-24",
-            "total": 3,
-            "current_position": 1,
-            "missed": 1,
-            "upcoming": 1,
-        },
-        f"daily instance summary is incorrect: {result.lifecycle!r}",
-    )
-    expect(
-        result.lifecycle.get("missed_occurrences") == ["2026-08-24T12:00:00+03:00"],
-        "missed occurrence evidence is incorrect",
-    )
-
-
-def test_lifecycle_candidate_reads_support_bounded_and_full_audit_modes():
-    """Bounded lifecycle reads constrain terminal history; full audit does not."""
-    from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
-
-    class Client:
-        def __init__(self):
-            self.calls = []
-
-        def execute(self, args, *, purpose, timeout, **_kwargs):
-            self.calls.append(tuple(args))
-            command = TaskCommand(tuple(args), purpose, timeout)
-            return TaskCommandResult(
-                command, 0,
-                json.dumps([{"uuid": "bounded-row", "status": "pending", "chain": "on"}]),
-                "", CommandFailureKind.SUCCESS, 1, 0.001,
-            )
-
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-        client = Client()
-        uow.client = client
-        expect(uow.repository.lifecycle_candidates(bounded=True).value, "bounded lifecycle read failed")
-        bounded_args = client.calls[-1]
-        expect("nextLink:" in bounded_args, "bounded lifecycle read omitted the terminal successor filter")
-        expect(uow.repository.lifecycle_candidates(bounded=False).value, "full lifecycle read failed")
-        full_args = client.calls[-1]
-        expect("nextLink:" not in full_args, "full audit unexpectedly used bounded terminal filtering")
-
-
 TESTS.extend([
-    test_query_contract_models_round_trip_and_reject_invalid,
-    test_occurrence_query_service_projects_schedule_read_only,
-    test_query_cli_emits_one_json_document_for_invalid_request,
-    test_integrity_consumers_share_report_components,
-    test_query_cli_rejects_trailing_oversized_and_deep_requests,
-    test_query_cli_flags_build_the_same_validated_request,
-    test_query_capabilities_is_taskwarrior_free_and_versioned,
     test_query_process_boundary_emits_one_json_document,
     test_operator_processes_concurrent_contracts_share_taskdata_safely,
-    test_query_service_preserves_absent_and_unavailable_task_reads,
     test_query_installed_layout_runs_outside_checkout,
-    test_query_service_all_selector_excludes_non_recurrence_rows,
-    test_query_service_batches_multiple_uuid_reads,
-    test_query_service_contains_invalid_task_schedule_errors,
-    test_query_service_respects_current_task_reference_bounds,
-    test_query_service_projects_cp_occurrences_from_current_due,
-    test_query_next_projects_anchor_and_cp_without_mutation,
-    test_query_next_reports_daily_skip_mode_progress,
-    test_lifecycle_candidate_reads_support_bounded_and_full_audit_modes,
-    test_anchor_file_spec_rejects_unpadded_times,
-    test_hook_on_add_anchor_and_anchor_file_preview_natural_prefers_explicit_omit_rules,
     test_hook_on_add_anchor_file_time_padding_hint,
     test_hook_on_add_anchor_preview_marks_omitted_future_slots,
     test_hook_on_add_anchor_preview_skips_omit_file_modifier_date,
@@ -36447,125 +19681,32 @@ TESTS.extend([
     test_hook_on_modify_timeline_keeps_anchor_match_after_shifted_anchor_file_child,
     test_hook_on_modify_timeline_omits_shifted_anchor_file_dates_in_merged_stream,
     test_hook_on_modify_timeline_shows_anchor_side_omit_file_dates_in_merged_stream,
-    test_astronomical_event_vocabulary_is_shared_by_parser_and_runtime,
     test_navigator_surfaces_configuration_drift_warning,
     test_navigator_reloads_validated_taskdata_configuration,
-    test_navigator_uses_nautical_configured_timezone,
     test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_navigator_projects_all_slots_in_a_time_window,
-    test_time_window_parser_expands_inclusive_exact_boundary,
-    test_time_window_parser_rejects_unsafe_or_ambiguous_ranges,
-    test_time_window_slot_limit_uses_shared_resource_policy,
-    test_time_window_parser_accepts_compound_minute_intervals,
-    test_time_window_parser_accepts_hour_only_and_mixed_endpoints,
-    test_time_window_parser_accepts_even_partition_counts,
-    test_random_time_window_parser_selects_deterministic_bucketed_slots,
-    test_random_time_window_flows_through_anchor_parser_and_resolver,
-    test_recurrence_spec_normalizes_task_fields_and_context,
     test_compiled_schedule_is_canonical_and_reusable,
-    test_occurrence_cursor_makes_lookup_semantics_explicit,
-    test_occurrence_cursor_keeps_adjacent_weekday_occurrences,
-    test_typed_occurrence_outcomes_preserve_found_invalid_and_absent_states,
-    test_typed_occurrence_outcomes_preserve_terminal_evidence,
-    test_typed_occurrence_outcomes_fail_closed_for_mutation,
-    test_typed_occurrence_outcomes_define_compact_presentation_summary,
-    test_evaluation_session_is_task_scoped_and_fingerprint_bound,
-    test_scheduler_service_is_one_typed_occurrence_entry_point,
-    test_scheduler_trace_is_disabled_bounded_and_redacted,
-    test_scheduler_parity_harness_compares_legacy_callback_only_in_tests,
-    test_scheduler_parity_matrix_covers_context_sensitive_rules,
-    test_scheduler_cross_path_conformance_matrix,
-    test_domain_scheduler_parity_across_operational_consumers,
-    test_scheduler_cross_path_preserves_terminal_evidence,
-    test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic,
-    test_scheduler_conformance_isolated_under_shuffled_session_order,
-    test_occurrence_range_request_validates_context_bounds_and_policy,
-    test_occurrence_range_request_exposes_omission_provenance,
-    test_occurrence_range_request_wraps_unavailable_and_invalid_failures,
-    test_hint_builder_does_not_convert_typed_failure_to_empty_hints,
-    test_recurrence_evaluator_owns_context_spec_and_timezone_boundary,
     test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
     test_chain_generation_rejects_missing_chain_id,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
-    test_recurrence_evaluator_loads_omit_file_without_text_rule,
-    test_recurrence_evaluator_loads_omit_file_dates_and_descriptions_once,
-    test_recurrence_evaluator_events_between_preserves_terminal_evidence,
-    test_recurrence_evaluator_shadow_parity_time_matrix,
-    test_recurrence_evaluator_shadow_parity_dst_and_business_calendar,
-    test_modify_timeline_uses_explicit_recurrence_identity,
-    test_modify_hook_uses_explicit_recurrence_identity,
-    test_add_preview_uses_explicit_recurrence_identity,
-    test_random_time_window_composition_and_anchor_file_guidance,
     test_random_time_window_is_stable_across_processes,
-    test_random_time_window_dst_projection_is_deterministic,
-    test_time_window_partition_rounding_preserves_boundaries,
-    test_hour_only_time_lists_normalize_across_anchor_and_anchor_file,
-    test_composable_time_schedule_unions_windows_and_clock_slots,
-    test_composable_time_schedule_rejects_non_numeric_members,
-    test_composable_time_schedule_rejects_empty_members,
-    test_composable_time_schedule_deduplicates_overlaps_and_boundaries,
-    test_time_window_parser_rejects_unpadded_or_out_of_range_hour_endpoints,
-    test_time_window_grammar_expands_and_round_trips_through_acf,
-    test_grouped_time_window_metadata_distributes_to_each_branch,
-    test_composable_schedule_preserves_offsets_and_group_validation,
-    test_random_time_metadata_rejects_contradictory_cached_shapes,
-    test_cached_time_window_metadata_rejects_slot_drift,
-    test_cached_random_time_metadata_rejects_invalid_specs,
-    test_cached_time_schedule_metadata_rejects_slot_drift,
-    test_composable_time_schedule_enforces_aggregate_slot_limit,
-    test_description_alias_parser_extracts_short_udas,
-    test_description_alias_parser_avoids_prose_and_rejects_duplicates,
-    test_astronomy_preflight_reports_configuration_and_provider_health,
-    test_navigator_sparse_calendar_renders_only_active_months,
     test_navigator_import_and_help_are_noninteractive_without_rich,
-    test_navigator_empty_snapshot_is_a_valid_empty_chain,
     test_navigator_reads_through_read_only_invocation_repository,
     test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe,
     test_navigator_shared_graph_scales_to_large_chain,
-    test_navigator_and_query_share_task_chain_facts,
-    test_operator_presentation_is_immutable_and_deterministic,
-    test_operator_presentation_modes_preserve_unicode_and_outcome,
-    test_operator_presentation_has_no_mutation_dependencies,
-    test_operator_v2_contract_preserves_public_schema_and_statuses,
-    test_navigator_snapshot_exposes_deterministic_typed_view,
-    test_navigator_calendar_view_is_immutable_and_serializable,
-    test_navigator_chain_summary_is_immutable_and_serializable,
-    test_navigator_chain_choice_is_immutable_and_serializable,
-    test_navigator_change_row_is_immutable_and_serializable,
-    test_navigator_task_detail_view_is_immutable_and_serializable,
-    test_navigator_projection_view_is_immutable_and_serializable,
-    test_navigator_trace_view_is_immutable_and_serializable,
-    test_navigator_analysis_view_aggregates_typed_sections,
     test_navigator_uses_anchor_and_anchor_file_sources,
-    test_omit_file_modifiers_apply_even_when_base_file_is_cached,
-    test_omit_file_modifiers_reject_time_modifiers,
-    test_omit_file_modifiers_roll_dates_and_carry_descriptions,
-    test_omit_file_modifiers_support_negative_day_offsets,
     test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored,
     test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored,
     test_performance_large_expressions,
     test_weekday_weekend_single_time,
-    test_doctor_reports_missing_timezone_configuration,
-    test_doctor_reports_astronomy_preflight_health,
-    test_doctor_reports_season_backend_and_astronomical_events,
-    test_doctor_reports_matching_config_drift,
-    test_effective_config_snapshot_isolated_and_provenanced,
     test_config_fingerprint_invalidates_persistent_cache_keys,
-    test_hot_config_fingerprint_avoids_filesystem_stat,
     test_hint_cache_keys_include_semantic_fingerprint,
     test_configuration_drift_detects_edit_and_removal,
-    test_doctor_reports_missing_navigator_dependencies,
-    test_doctor_text_large_history_is_actionable_and_compact,
     test_installer_initializes_explicit_timezone_config,
 ])
 
-TESTS.append(test_core_explicit_facade_all_contains_supported_symbols)
-TESTS.append(test_all_golden_tests_are_registered)
 TESTS.append(test_on_modify_completion_helper_returns_finalized_lifecycle_result)
-TESTS.append(test_doctor_text_groups_historical_findings_across_chains)
-
-
 # =============================================================================
 # Section 12: Failure, Concurrency, and Recovery Verification
 # Tests for lifecycle_application.LifecycleApplicationService
@@ -36663,8 +19804,9 @@ def test_lifecycle_application_happy_path_real_stack():
     uow = _Uow({parent_uuid: parent, parent_uuid_2: parent_2})
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
+        mutations = TaskwarriorMutationService(uow)
         service = LifecycleApplicationService(
-            unit_of_work=uow, mutations=TaskwarriorMutationService(uow), outbox=outbox, owner="test-s12",
+            unit_of_work=uow, mutations=mutations, execution=mutations, outbox=outbox, owner="test-s12",
         )
         guard = ParentGuard("completed", "on", "chain-s12", 1, _rfp(parent), "20260101T000000Z")
         identity = LifecycleIdentity("chain-s12", parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
@@ -36796,7 +19938,9 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
         uow = _Uow()
-        svc1 = LifecycleApplicationService(unit_of_work=uow, mutations=_Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.RETRYABLE]),
+        m1 = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.RETRYABLE])
+        adapter1 = LifecycleExecutionFixture(m1)
+        svc1 = LifecycleApplicationService(unit_of_work=uow, mutations=adapter1, execution=adapter1,
                                             outbox=outbox, owner="owner-a", lease_seconds=0.2)
         plan = make_plan("00000000-0000-4000-8000-000000000201", "00000000-0000-4000-8000-000000000202")
         svc1.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -36808,7 +19952,8 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
 
         time.sleep(0.3)
         m2 = _Scripted([MutationOutcomeKind.APPLIED])
-        svc2 = LifecycleApplicationService(unit_of_work=uow, mutations=m2, outbox=outbox, owner="owner-b", lease_seconds=30)
+        adapter2 = LifecycleExecutionFixture(m2)
+        svc2 = LifecycleApplicationService(unit_of_work=uow, mutations=adapter2, execution=adapter2, outbox=outbox, owner="owner-b", lease_seconds=30)
         d2 = svc2.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(d2.outcomes[0].ok, f"resume at link failed: {d2.outcomes[0]}")
         expect(m2.calls == [MutationOperation.PARENT_LINK], f"child_import was repeated: {m2.calls}")
@@ -36830,7 +19975,8 @@ def test_lifecycle_application_crash_at_each_stage_resumes_without_remutation():
         expect(advanced_child.ok and advanced_parent.ok, "crash fixture could not persist both completed stages")
         time.sleep(1.1)
         m3 = _Scripted([])  # no mutations should run
-        svc3 = LifecycleApplicationService(unit_of_work=uow, mutations=m3, outbox=outbox2, owner="owner-b", lease_seconds=30)
+        adapter3 = LifecycleExecutionFixture(m3)
+        svc3 = LifecycleApplicationService(unit_of_work=uow, mutations=adapter3, execution=adapter3, outbox=outbox2, owner="owner-b", lease_seconds=30)
         d3 = svc3.drain(limit=10, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(d3.outcomes[0].ok, f"resume at parent_linked should succeed without remutation: {d3.outcomes[0]}")
         expect(m3.calls == [], f"unexpected mutations: {m3.calls}")
@@ -36859,24 +20005,27 @@ def test_lifecycle_application_outbox_faults_are_retryable():
         expected_postconditions=("child_present", "parent_linked", "verified"),
     )
 
-    class _FailingOutbox:
+    class _FailingOutbox(LifecycleOutboxRepository):
         def enqueue(self, *args, **kwargs):
             raise OSError("disk full")
         def claim_batch(self, **kwargs):
             raise OSError("database locked")
 
-    service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=object(), outbox=_FailingOutbox(), owner="fault")
-    staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-    expect(staged.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "disk full" in staged.reason,
-           f"enqueue failure was not retryable: {staged}")
-    drained = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
-    expect(drained.claim.kind.value == "retryable" and "database locked" in drained.claim.reason,
-           f"claim failure was not retryable: {drained.claim}")
+    mutations = LifecycleExecutionFixture(object())
+    with tempfile.TemporaryDirectory() as td:
+        outbox = _FailingOutbox(Path(td))
+        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=mutations, execution=mutations, outbox=outbox, owner="fault")
+        staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        expect(staged.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "disk full" in staged.reason,
+               f"enqueue failure was not retryable: {staged}")
+        drained = service.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
+        expect(drained.claim.kind.value == "retryable" and "database locked" in drained.claim.reason,
+               f"claim failure was not retryable: {drained.claim}")
 
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
         record = outbox.enqueue(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch").record
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=object(), outbox=outbox, owner="fault")
+        service = LifecycleApplicationService(unit_of_work=_Uow(), outbox=outbox, owner="fault")
         outbox.manual_review = lambda **kwargs: (_ for _ in ()).throw(OSError("manual review write failed"))
         review = service._manual_review(record, "simulated invalid intent")
         expect(review.kind is LifecycleApplicationOutcomeKind.RETRYABLE and "manual review write failed" in review.reason,
@@ -36958,8 +20107,10 @@ def test_lifecycle_application_stage_failure_matrix_resumes_idempotently():
         with tempfile.TemporaryDirectory(prefix=f"nautical-stage-{label}-") as td:
             outbox = _FailingOutbox(Path(td), fail_stage=fail_stage, fail_ack=fail_ack)
             mutations = _Mutations()
+            adapter = LifecycleExecutionFixture(mutations)
             service = LifecycleApplicationService(
-                unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner=f"stage-{label}", lease_seconds=1.0,
+                unit_of_work=_Uow(), mutations=adapter, execution=adapter,
+                outbox=outbox, owner=f"stage-{label}", lease_seconds=1.0,
             )
             staged = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
             expect(staged.ok, f"{label}: staging failed: {staged}")
@@ -37204,8 +20355,10 @@ def test_lifecycle_configuration_drift_blocks_mutation():
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
         mutations = _Mutations()
+        adapter = LifecycleExecutionFixture(mutations)
         service = LifecycleApplicationService(
-            unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="cfg-drift",
+            unit_of_work=_Uow(), mutations=adapter, execution=adapter,
+            outbox=outbox, owner="cfg-drift",
         )
         staged = service.stage(plan, configuration_fingerprint="cfg-before", schedule_fingerprint="sch")
         expect(staged.ok, f"configuration-drift plan did not stage: {staged}")
@@ -37265,7 +20418,9 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
     # Conflict -> manual_review, durably recorded
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=_Scripted([MutationOutcomeKind.CONFLICT]),
+        mutations = _Scripted([MutationOutcomeKind.CONFLICT])
+        adapter = LifecycleExecutionFixture(mutations)
+        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter, execution=adapter,
                                                outbox=outbox, owner="test")
         p = _plan("00000000-0000-4000-8000-000000000301", "00000000-0000-4000-8000-000000000302")
         service.stage(p, configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -37278,7 +20433,9 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
     # Retryable at budget exhaustion -> quarantined, not infinite loop
     with tempfile.TemporaryDirectory() as td:
         outbox2 = LifecycleOutboxRepository(Path(td))
-        service2 = LifecycleApplicationService(unit_of_work=_Uow(), mutations=_Scripted([MutationOutcomeKind.RETRYABLE]),
+        mutations2 = _Scripted([MutationOutcomeKind.RETRYABLE])
+        adapter2 = LifecycleExecutionFixture(mutations2)
+        service2 = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter2, execution=adapter2,
                                                 outbox=outbox2, owner="test")
         p2 = _plan("00000000-0000-4000-8000-000000000303", "00000000-0000-4000-8000-000000000304", max_attempts=1)
         service2.stage(p2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -37290,7 +20447,7 @@ def test_lifecycle_application_conflict_and_retry_budget_outcomes():
 
 
 def test_lifecycle_application_renews_batch_leases_before_mutation():
-    """A slow sequential batch must not mutate a record after its lease expires."""
+    """A slow batched import must not proceed to parent linking after expiry."""
     import tempfile
     from pathlib import Path
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
@@ -37320,6 +20477,12 @@ def test_lifecycle_application_renews_batch_leases_before_mutation():
     class _Uow:
         mutation_epoch = 0
 
+    class _SlowExecution(LifecycleExecutionFixture):
+        def apply_lifecycle_children_unverified(self, requests):
+            outcomes = super().apply_lifecycle_children_unverified(requests)
+            now[0] += 2.0
+            return outcomes
+
     def make_plan(parent_uuid, child_uuid, chain_id):
         guard = ParentGuard("completed", "on", chain_id, 1, f"rf-{chain_id}", "20260101T000000Z")
         identity = LifecycleIdentity(chain_id, parent_uuid, 1, 2, LifecycleEvent.COMPLETE)
@@ -37335,19 +20498,10 @@ def test_lifecycle_application_renews_batch_leases_before_mutation():
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td), clock=lambda: now[0])
         mutations = _Scripted()
-        original_acknowledge = outbox.acknowledge
-        acknowledged = [0]
-
-        def acknowledge(**kwargs):
-            result = original_acknowledge(**kwargs)
-            acknowledged[0] += 1
-            if acknowledged[0] == 1:
-                now[0] += 2.0
-            return result
-
-        outbox.acknowledge = acknowledge
+        adapter = _SlowExecution(mutations)
         service = LifecycleApplicationService(
-            unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="slow-batch", lease_seconds=1.0
+            unit_of_work=_Uow(), mutations=adapter, execution=adapter,
+            outbox=outbox, owner="slow-batch", lease_seconds=1.0
         )
         first = make_plan(
             "00000000-0000-4000-8000-000000000601",
@@ -37364,11 +20518,11 @@ def test_lifecycle_application_renews_batch_leases_before_mutation():
 
         result = service.drain(limit=2, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         expect(len(result.outcomes) == 2, f"expected both claimed records: {result.outcomes}")
-        expect(result.outcomes[0].kind is LifecycleApplicationOutcomeKind.APPLIED, f"first record failed: {result.outcomes[0]}")
-        expect(result.outcomes[1].kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW, f"expired lease was not rejected: {result.outcomes[1]}")
+        expect(all(item.kind is LifecycleApplicationOutcomeKind.MANUAL_REVIEW for item in result.outcomes),
+               f"expired batch lease was not rejected before verification: {result.outcomes}")
         expect(
-            mutations.calls == [MutationOperation.CHILD_IMPORT, MutationOperation.PARENT_LINK],
-            f"expired second record was mutated: {mutations.calls}",
+            mutations.calls == [MutationOperation.CHILD_IMPORT, MutationOperation.CHILD_IMPORT],
+            f"parent mutation ran after the batch lease expired: {mutations.calls}",
         )
 
 
@@ -37411,7 +20565,9 @@ def test_lifecycle_application_idempotency_and_duplicate_staging():
 
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=_Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.APPLIED]),
+        mutations = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.APPLIED])
+        adapter = LifecycleExecutionFixture(mutations)
+        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter, execution=adapter,
                                                outbox=outbox, owner="test")
         r1 = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
         r2 = service.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -37471,7 +20627,8 @@ def test_lifecycle_application_execute_staged_targets_exact_intent():
     with tempfile.TemporaryDirectory() as td:
         outbox = LifecycleOutboxRepository(Path(td))
         mutations = _Scripted([MutationOutcomeKind.APPLIED, MutationOutcomeKind.APPLIED])
-        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=mutations, outbox=outbox, owner="reconcile")
+        adapter = LifecycleExecutionFixture(mutations)
+        service = LifecycleApplicationService(unit_of_work=_Uow(), mutations=adapter, execution=adapter, outbox=outbox, owner="reconcile")
 
         other_plan = _plan("00000000-0000-4000-8000-000000000501", "00000000-0000-4000-8000-000000000502", "chain-other-s12")
         my_plan    = _plan("00000000-0000-4000-8000-000000000503", "00000000-0000-4000-8000-000000000504", "chain-mine-s12")
@@ -37589,7 +20746,8 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
         )
 
         spawn_effects = mod._module("modify_spawn_effects")
-        ok, reason = spawn_effects.enqueue_spawn_intent(mod, plan)
+        ports = spawn_effects.spawn_intent_ports_for(mod)
+        ok, reason = spawn_effects.enqueue_spawn_intent(ports, plan)
         expect(ok, f"_enqueue_spawn_intent failed: {reason}")
 
         outbox = LifecycleOutboxRepository(root)
@@ -37613,7 +20771,7 @@ def test_on_modify_staged_plan_carries_parent_guard_and_stable_intent_id():
         )
 
         # Staging the same plan again must be idempotent (same intent_id, no second record)
-        ok2, reason2 = spawn_effects.enqueue_spawn_intent(mod, plan)
+        ok2, reason2 = spawn_effects.enqueue_spawn_intent(ports, plan)
         expect(ok2, f"second _enqueue_spawn_intent failed: {reason2}")
         _, status2 = outbox.status()
         expect(len(status2["records"]) == 1,

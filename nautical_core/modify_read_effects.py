@@ -47,6 +47,18 @@ class PreviousChainPorts:
     panel_chain_snapshot_loaded: Any
 
 
+@dataclass(frozen=True, slots=True)
+class TwGetPorts:
+    service: Any
+    cache_get: Any
+    cache_set: Any
+    count: Any
+    diagnostic: Any
+    run_task: Any
+    command_prefix: Any
+    environment: Any
+
+
 def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
     if not hasattr(task, "get") or not isinstance(token, str) or not token:
         return False
@@ -70,45 +82,6 @@ def _token_match(coerce_int: Any, task: Any, token: str) -> bool:
 
 def parse_extra_tokens(port: ExtraTokenPort, extra: str | None) -> list[str] | None:
     return port.parse(extra)
-
-
-def lifecycle_read_service(host: Any):
-    state = host._modify_runtime_state()
-    existing = getattr(state, "lifecycle_read_service", None)
-    if existing is not None:
-        return existing
-    module = host._module("lifecycle_read_service")
-    if getattr(state, "chain_cache_store", None) is None:
-        state.chain_cache_store = module.ChainCacheStore()
-    capabilities = LifecycleReadCapabilities(
-        coerce_int=host.core.coerce_int,
-        parse_extra_tokens=lambda extra: parse_extra_tokens(
-            ExtraTokenPort(host._module("hook_support", required=False).parse_extra_tokens), extra
-        ),
-        token_matcher=lambda task, token: _token_match(host.core.coerce_int, task, token),
-        read_query_get=host._read_query_get,
-        read_query_missing=host._READ_QUERY_MISSING,
-        max_chain_walk=host._MAX_CHAIN_WALK,
-        diag=host._diag,
-        record_stat=host._record_chain_snapshot_stat,
-        cache_store=state.chain_cache_store,
-        repository=getattr(state, "task_repository", None),
-    )
-    service = module.LifecycleReadService(
-        coerce_int=capabilities.coerce_int,
-        parse_extra_tokens=capabilities.parse_extra_tokens,
-        token_matcher=capabilities.token_matcher,
-        read_query_get=capabilities.read_query_get,
-        chain_cache_get=lambda _chain_id: None,
-        repository=capabilities.repository,
-        max_chain_walk=capabilities.max_chain_walk,
-        diag=capabilities.diag,
-        record_stat=capabilities.record_stat,
-        cache_store=capabilities.cache_store,
-        read_query_missing=capabilities.read_query_missing,
-    )
-    state.lifecycle_read_service = service
-    return service
 
 
 def seed_runtime_lookup_task(ports: SeedLookupPorts, payload: dict | None, *, lookup_short: str | None = None):
@@ -165,37 +138,51 @@ def export_chain_required(port: ChainExportPort, seed_payload: dict, env=None):
     return rows
 
 
-def tw_get_cached(host: Any, ref: str) -> str:
+def tw_get_ports_for(host: Any) -> TwGetPorts:
+    command = host._module("modify_command_effects")
+    composition = host._module("modify_composition")
+    return TwGetPorts(
+        service=composition.lifecycle_read_service_for(host),
+        cache_get=host._query_ctx_get,
+        cache_set=host._query_ctx_set,
+        count=host._diag_count,
+        diagnostic=host._diag,
+        run_task=lambda argv, **kwargs: command.run_task_result(
+            command.command_ports_for(host), argv, **kwargs
+        ),
+        command_prefix=host._task_cmd_prefix,
+        environment=lambda: host.os.environ.copy(),
+    )
+
+
+def tw_get_cached(ports: TwGetPorts, ref: str) -> str:
     """Return one cached Taskwarrior ``_get`` value for the current hook."""
     try:
-        service = lifecycle_read_service(host)
         if ref.endswith(".entry"):
             short = ref[:-6].strip()
-            cached, cache_chain_id = service.lookup_short(short) if short else (None, "")
+            cached, cache_chain_id = ports.service.lookup_short(short) if short else (None, "")
             if short and isinstance(cached, Mapping):
-                host._diag_count("tw_get_cache_hits")
+                ports.count("tw_get_cache_hits")
                 return (str(cached.get("entry") or "")).strip()
             if short and cache_chain_id:
-                host._diag_count("unexpected_cache_misses")
-                host._diag(f"cache miss: _get {ref} (chainID={cache_chain_id})")
-        cached = host._query_ctx_get("tw_get", ref)
+                ports.count("unexpected_cache_misses")
+                ports.diagnostic(f"cache miss: _get {ref} (chainID={cache_chain_id})")
+        cached = ports.cache_get("tw_get", ref)
         if isinstance(cached, str):
-            host._diag_count("tw_get_cache_hits")
+            ports.count("tw_get_cache_hits")
             return cached
-        host._diag_count("tw_get_cache_misses")
-        command = host._module("modify_command_effects")
-        result = command.run_task_result(
-            command.command_ports_for(host),
-            host._task_cmd_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
-            env=host.os.environ.copy(),
+        ports.count("tw_get_cache_misses")
+        result = ports.run_task(
+            ports.command_prefix() + ["rc.hooks=off", "rc.verbose=nothing", "_get", ref],
+            env=ports.environment(),
             timeout=3.0,
             retries=2,
         )
         out = (result.stdout or "").strip() if result.ok else ""
-        host._query_ctx_set("tw_get", ref, out or "")
+        ports.cache_set("tw_get", ref, out or "")
         return out
     except Exception:
         return ""
 
 
-__all__ = ("parse_extra_tokens", "lifecycle_read_service", "SeedLookupPorts", "PreviousChainPorts", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "tw_get_cached")
+__all__ = ("parse_extra_tokens", "SeedLookupPorts", "PreviousChainPorts", "seed_runtime_lookup_task", "seed_runtime_lookup_tasks", "collect_prev_two", "ChainExportPort", "export_chain_required", "TwGetPorts", "tw_get_ports_for", "tw_get_cached")

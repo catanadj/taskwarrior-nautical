@@ -7,7 +7,7 @@ import re
 import sys
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, Callable
 from .api_bindings import ApiBinding, core_namespace
 
 from .core_context import CoreContext, ParserDependencies
@@ -17,18 +17,18 @@ from .core_context import CoreContext, ParserDependencies
 class ParserOwnerDependencies:
     """Explicit collaborators required by the pure DNF parser owner."""
 
-    normalize_input: Any
-    raise_bad_year_colons: Any
-    parse_atom: Any
-    parse_mods: Any
-    skip_ws: Any
-    rewrite_quarters: Any
-    rewrite_year_month: Any
-    validate_year_tokens: Any
-    validate_satisfiable: Any
+    normalize_input: Callable[..., Any]
+    raise_bad_year_colons: Callable[..., Any]
+    parse_atom: Callable[..., Any]
+    parse_mods: Callable[..., Any]
+    skip_ws: Callable[..., Any]
+    rewrite_quarters: Callable[..., Any]
+    rewrite_year_month: Callable[..., Any]
+    validate_year_tokens: Callable[..., Any]
+    validate_satisfiable: Callable[..., Any]
     max_terms: int
     parse_error: type[Exception]
-    today: Any
+    today: Callable[[], date]
 
 
 def _core_module():

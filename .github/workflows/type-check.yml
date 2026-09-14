@@ -24,12 +24,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y taskwarrior
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install -r requirements.txt -c requirements-constraints.txt
 
       - name: Install mypy
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install mypy
+
+      - name: Install test tooling
+        run: python3 -m pip install -r requirements-test.txt
 
       - name: Run mypy
         run: python3 -m mypy --config-file mypy.ini
@@ -60,6 +63,23 @@ jobs:
           nautical_core/occurrence_provider.py
           nautical_core/scheduler_trace.py
           nautical_core/scheduler_service.py
+
+      - name: Run normal-import facade and query boundary mypy
+        run: >-
+          python3 -m mypy --config-file mypy.ini --follow-imports=normal
+          nautical_core/task_datetime.py
+          nautical_core/api_bindings.py
+          nautical_core/compat_api.py
+          nautical_core/architecture_contract.py
+          nautical_core/integration_context.py
+          nautical_core/query_service.py
+          nautical_core/parser_api.py
+          nautical_core/scheduler_api.py
+          nautical_core/cache_api.py
+          nautical_core/core_context.py
+          nautical_core/recurrence_context.py
+          nautical_core/hook_bootstrap.py
+          nautical_core/occurrence_provider.py
 
       - name: Run full strict package mypy
         run: >-
@@ -99,11 +119,28 @@ jobs:
           nautical_core/queue_status_service.py
           nautical_core/reconcile_report.py
 
-      - name: Run full unit discovery
+      - name: Run unit suite with branch-coverage floor
+        env:
+          COVERAGE_FILE: /tmp/nautical-coverage-data
         run: >-
           PYTHONPATH=.
           PYTHONPYCACHEPREFIX=/tmp/nautical-readiness-pycache
-          python3 -m unittest discover -s tests -q
+          python3 -m coverage run -m unittest discover -s tests -q
+
+      - name: Enforce branch-coverage floor and write XML report
+        env:
+          COVERAGE_FILE: /tmp/nautical-coverage-data
+        run: |
+          python3 -m coverage report --fail-under=44 --show-missing
+          python3 -m coverage xml -o coverage.xml
+
+      - name: Upload branch-coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nautical-branch-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
 
       - name: Run deployment sanity checks
         run: python3 dev_tools/nautical_deploy_sanity.py --json

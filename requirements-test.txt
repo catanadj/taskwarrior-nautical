@@ -1,0 +1,2 @@
+# Development and CI-only test tooling; not a runtime dependency.
+coverage>=6.5,<8

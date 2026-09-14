@@ -126,25 +126,52 @@ class DrainResult:
     outcomes: tuple[LifecycleApplicationOutcome, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class LifecycleExecutionCapabilities:
-    """Mutation, verification, and outbox operations resolved at composition."""
+class LifecycleExecutionPort(Protocol):
+    """Explicit batch execution and verification operations for lifecycle drains."""
 
-    apply_unverified: Callable[..., Any] | None
-    apply_children_unverified: Callable[..., Any] | None
-    verify_children: Callable[..., Any] | None
-    verify_parents: Callable[..., Any] | None
-    preflight: Callable[..., Any] | None
+    def apply_lifecycle_unverified(self, request: MutationRequest) -> MutationOutcome: ...
 
-    @classmethod
-    def from_dependencies(cls, mutations: Any | None) -> "LifecycleExecutionCapabilities":
-        return cls(
-            apply_unverified=getattr(mutations, "apply_lifecycle_unverified", None),
-            apply_children_unverified=getattr(mutations, "apply_lifecycle_children_unverified", None),
-            verify_children=getattr(mutations, "verify_lifecycle_children", None),
-            verify_parents=getattr(mutations, "verify_lifecycle_parents", None),
-            preflight=getattr(mutations, "preflight_lifecycle_batch", None),
-        )
+    def apply_lifecycle_children_unverified(
+        self, requests: Sequence[MutationRequest]
+    ) -> dict[str, MutationOutcome]: ...
+
+    def verify_lifecycle_children(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]: ...
+
+    def verify_lifecycle_parents(self, requests: Sequence[MutationRequest]) -> dict[str, MutationOutcome]: ...
+
+    def preflight_lifecycle_batch(
+        self,
+        payloads: Sequence[ChildImportPayload],
+        *,
+        parent_expectations: Sequence[tuple[str, str]] = (),
+    ) -> None: ...
+
+
+_EXECUTION_CAPABILITIES = (
+    "apply_lifecycle_unverified",
+    "apply_lifecycle_children_unverified",
+    "verify_lifecycle_children",
+    "verify_lifecycle_parents",
+    "preflight_lifecycle_batch",
+)
+# The service calls these directly outside the batch execution port.
+_MUTATION_CAPABILITIES = ("apply", "compensate_imported_child")
+_OUTBOX_EXECUTION_CAPABILITIES = (
+    "acknowledge",
+    "acknowledge_many",
+    "advance_stage",
+    "advance_stages",
+    "claim_batch",
+    "claim_intent",
+    "claim_intents",
+    "enqueue",
+    "enqueue_many",
+    "manual_review",
+    "release_retry",
+    "renew_lease",
+    "renew_leases",
+    "session",
+)
 
 
 @dataclass(slots=True)
@@ -371,13 +398,14 @@ class LifecycleApplicationService:
     on-exit and reconcile are both expected to call this service rather than
     maintaining their own copies of this orchestration.
 
-    ``unit_of_work`` and ``mutations`` are optional because staging has a
+    ``unit_of_work``, ``mutations``, and ``execution`` are optional because staging has a
     legitimate caller that must not have them: on-modify builds and stages
     plans while Taskwarrior still holds its datastore lock for the task
     being modified, and deliberately avoids constructing a command-capable
     unit of work to reduce the risk of re-entering Taskwarrior from inside
     the hook. A service constructed without them can still call ``stage()``;
-    calling ``drain()`` or ``apply_immediate()`` without them raises.
+    calling execution methods without them raises before a session is opened
+    or an intent is claimed.
     """
 
     def __init__(
@@ -385,6 +413,7 @@ class LifecycleApplicationService:
         *,
         unit_of_work: _UnitOfWork | None = None,
         mutations: TaskwarriorMutationPort | None = None,
+        execution: LifecycleExecutionPort | None = None,
         outbox: LifecycleOutboxRepository,
         owner: str = "",
         lease_seconds: float = 30.0,
@@ -396,14 +425,40 @@ class LifecycleApplicationService:
         self._owner = str(owner or "").strip() or f"pid-{os.getpid()}"
         self._lease_seconds = max(1.0, float(lease_seconds))
         self._budget = budget
-        self._execution = LifecycleExecutionCapabilities.from_dependencies(mutations)
+        if mutations is not None:
+            missing = sorted(
+                name for name in _MUTATION_CAPABILITIES if not callable(getattr(mutations, name, None))
+            )
+            if missing:
+                raise LifecycleApplicationError(
+                    "lifecycle mutation gateway is incomplete; missing: " + ", ".join(missing)
+                )
+        if execution is not None:
+            missing = sorted(
+                name for name in _EXECUTION_CAPABILITIES if not callable(getattr(execution, name, None))
+            )
+            if missing:
+                raise LifecycleApplicationError(
+                    "lifecycle execution capability is incomplete; missing: " + ", ".join(missing)
+                )
+        required_outbox_capabilities = (
+            _OUTBOX_EXECUTION_CAPABILITIES
+            if unit_of_work is not None and mutations is not None and execution is not None
+            else ("enqueue",)
+        )
+        missing = sorted(
+            name for name in required_outbox_capabilities
+            if not callable(getattr(outbox, name, None))
+        )
+        if missing:
+            raise LifecycleApplicationError(
+                "lifecycle outbox capability is incomplete; missing: " + ", ".join(missing)
+            )
+        self._execution = execution
 
     def _require_execution_deps(self) -> None:
-        if self._uow is None or self._mutations is None:
-            raise LifecycleApplicationError(
-                "executing lifecycle intents requires a unit_of_work and a mutation gateway; "
-                "this service was constructed for staging only"
-            )
+        if self._uow is None or self._mutations is None or self._execution is None:
+            raise LifecycleApplicationError("lifecycle execution capability is unavailable")
 
     # -- staging: SPAWN_CHILD plans only -------------------------------
 
@@ -464,19 +519,9 @@ class LifecycleApplicationService:
         progress: LifecycleDrainProgressCallback | None = None,
     ) -> DrainResult:
         """Drain one bounded batch inside one invocation-scoped outbox session."""
-        session = getattr(self._outbox, "session", None)
-        if not callable(session):
-            # Test doubles and explicitly staging-only adapters may expose
-            # only the repository operations; preserve their original error
-            # contract while production repositories use the session path.
-            return self._drain_open(
-                limit=limit,
-                configuration_fingerprint=configuration_fingerprint,
-                schedule_fingerprint=schedule_fingerprint,
-                progress=progress,
-            )
+        self._require_execution_deps()
         try:
-            with session():
+            with self._outbox.session():
                 return self._drain_open(
                     limit=limit,
                     configuration_fingerprint=configuration_fingerprint,
@@ -508,39 +553,22 @@ class LifecycleApplicationService:
         only runs the shared batched lifecycle phases for those records.
         """
         self._require_execution_deps()
+        assert self._execution is not None
         claimed = tuple(records)
         if not claimed:
             return DrainResult(claim=OutboxResult(OutboxResultKind.APPLIED), outcomes=())
         if any(not isinstance(record, LifecycleOutboxRecord) for record in claimed):
             raise LifecycleApplicationError("claimed lifecycle drain requires typed outbox records")
-        batch_apply = self._execution.apply_unverified
-        batch_children_apply = self._execution.apply_children_unverified
-        batch_children = self._execution.verify_children
-        batch_parents = self._execution.verify_parents
-        if not all(callable(item) for item in (batch_apply, batch_children_apply, batch_children, batch_parents)):
-            raise LifecycleApplicationError("claimed lifecycle drain requires batched mutation operations")
-        session = getattr(self._outbox, "session", None)
-        if not callable(session):
-            return self._drain_batched(
-                OutboxResult(OutboxResultKind.APPLIED), claimed,
-                configuration_fingerprint=configuration_fingerprint,
-                schedule_fingerprint=schedule_fingerprint,
-                apply_unverified=batch_apply,
-                apply_children=batch_children_apply,
-                verify_children=batch_children,
-                verify_parents=batch_parents,
-                progress=progress,
-            )
         try:
-            with session():
+            with self._outbox.session():
                 return self._drain_batched(
                     OutboxResult(OutboxResultKind.APPLIED), claimed,
                     configuration_fingerprint=configuration_fingerprint,
                     schedule_fingerprint=schedule_fingerprint,
-                    apply_unverified=batch_apply,
-                    apply_children=batch_children_apply,
-                    verify_children=batch_children,
-                    verify_parents=batch_parents,
+                    apply_unverified=self._execution.apply_lifecycle_unverified,
+                    apply_children=self._execution.apply_lifecycle_children_unverified,
+                    verify_children=self._execution.verify_lifecycle_children,
+                    verify_parents=self._execution.verify_lifecycle_parents,
                     progress=progress,
                 )
         except LifecycleOutboxError as exc:
@@ -567,11 +595,12 @@ class LifecycleApplicationService:
         leaves the unclaimed staged plans durable for the normal recovery
         path; no absence or success is fabricated for them.
         """
+        self._require_execution_deps()
         validated = tuple(plans)
         if any(not isinstance(plan, LifecyclePlan) for plan in validated):
             raise LifecycleApplicationError("lifecycle wave requires validated plans")
-        preflight = self._execution.preflight
-        if callable(preflight) and validated:
+        assert self._execution is not None
+        if validated:
             payloads = tuple(
                 payload
                 for plan in validated
@@ -587,7 +616,7 @@ class LifecycleApplicationService:
                 if str(plan.parent_patch_dict().get("nextLink") or "").strip()
             )
             try:
-                preflight(payloads, parent_expectations=parent_expectations)
+                self._execution.preflight_lifecycle_batch(payloads, parent_expectations=parent_expectations)
             except Exception:
                 # Preflight is an optimization. The guarded mutation methods
                 # retain the authoritative read fallback when it is unavailable.
@@ -614,9 +643,8 @@ class LifecycleApplicationService:
                 claim=OutboxResult(OutboxResultKind.REJECTED, reason="wave staging failed"),
                 outcomes=tuple(staged_outcomes),
             )
-        enqueue_many = getattr(self._outbox, "enqueue_many", None)
-        if callable(enqueue_many) and spawn_plans:
-            overall, persisted = enqueue_many(
+        if spawn_plans:
+            overall, persisted = self._outbox.enqueue_many(
                 spawn_plans,
                 configuration_fingerprint=configuration_fingerprint,
                 schedule_fingerprint=schedule_fingerprint,
@@ -635,18 +663,9 @@ class LifecycleApplicationService:
                 if outcome.kind is not LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
                     if not outcome.ok or not outcome.intent_id:
                         return DrainResult(claim=result, outcomes=tuple(staged_outcomes))
-        else:
-            for plan in spawn_plans:
-                staged = self.stage(plan, configuration_fingerprint=configuration_fingerprint, schedule_fingerprint=schedule_fingerprint)
-                staged_outcomes.append(staged)
-                if not staged.ok or staged.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
-                    if not staged.ok:
-                        return DrainResult(claim=OutboxResult(OutboxResultKind.REJECTED, reason=staged.reason or "wave staging failed"), outcomes=tuple(staged_outcomes))
-                    continue
         claim_ids = [outcome.intent_id for outcome in staged_outcomes if outcome.intent_id and outcome.kind is not LifecycleApplicationOutcomeKind.ALREADY_APPLIED]
-        claim_many = getattr(self._outbox, "claim_intents", None)
-        if callable(claim_many) and claim_ids:
-            claim, claimed_results = claim_many(intent_ids=claim_ids, owner=self._owner, lease_seconds=self._lease_seconds)
+        if claim_ids:
+            claim, claimed_results = self._outbox.claim_intents(intent_ids=claim_ids, owner=self._owner, lease_seconds=self._lease_seconds)
             if not claim.ok:
                 return DrainResult(claim=claim, outcomes=tuple(staged_outcomes))
             for intent_id in claim_ids:
@@ -654,14 +673,6 @@ class LifecycleApplicationService:
                 if result is None or not result.ok or result.record is None:
                     return DrainResult(claim=result or OutboxResult(OutboxResultKind.REJECTED, reason="bulk claim omitted an intent"), outcomes=tuple(staged_outcomes))
                 staged_records.append(result.record)
-        else:
-            for outcome in staged_outcomes:
-                if not outcome.intent_id or outcome.kind is LifecycleApplicationOutcomeKind.ALREADY_APPLIED:
-                    continue
-                claimed = self._outbox.claim_intent(owner=self._owner, lease_seconds=self._lease_seconds, intent_id=outcome.intent_id)
-                if not claimed.ok or claimed.record is None:
-                    return DrainResult(claim=claimed, outcomes=tuple(staged_outcomes))
-                staged_records.append(claimed.record)
         already_applied = tuple(
             outcome
             for outcome in staged_outcomes
@@ -698,6 +709,7 @@ class LifecycleApplicationService:
         durable and eligible for the next drain.
         """
         self._require_execution_deps()
+        assert self._execution is not None
         try:
             claim, records = self._outbox.claim_batch(
                 owner=self._owner, lease_seconds=self._lease_seconds, limit=max(1, int(limit))
@@ -722,41 +734,35 @@ class LifecycleApplicationService:
         )
         config = str(configuration_fingerprint or "").strip()
         schedule = str(schedule_fingerprint or "").strip()
-        preflight = self._execution.preflight
-        if callable(preflight):
-            payloads = tuple(
-                payload
-                for record in records
-                if _SPAWN_STAGE_ORDER[record.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]
-                for payload in (_child_import_payload(record.plan),)
-                if payload is not None
-            )
-            parent_expectations = tuple(
-                (record.plan.identity.parent_uuid, str(record.plan.parent_patch_dict().get("nextLink") or "").strip())
-                for record in records
-                if _SPAWN_STAGE_ORDER[record.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]
-                and str(record.plan.parent_patch_dict().get("nextLink") or "").strip()
-            )
-            try:
-                preflight(payloads, parent_expectations=parent_expectations)
-            except Exception:
-                # Prefetch is an optimization only; normal authoritative
-                # UUID reads remain the correctness fallback.
-                pass
-        batch_apply = self._execution.apply_unverified
-        batch_children_apply = self._execution.apply_children_unverified
-        batch_children = self._execution.verify_children
-        batch_parents = self._execution.verify_parents
-        if len(records) > 1 and all(callable(item) for item in (batch_apply, batch_children_apply, batch_children, batch_parents)):
+        payloads = tuple(
+            payload
+            for record in records
+            if _SPAWN_STAGE_ORDER[record.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.CHILD_PRESENT]
+            for payload in (_child_import_payload(record.plan),)
+            if payload is not None
+        )
+        parent_expectations = tuple(
+            (record.plan.identity.parent_uuid, str(record.plan.parent_patch_dict().get("nextLink") or "").strip())
+            for record in records
+            if _SPAWN_STAGE_ORDER[record.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.PARENT_LINKED]
+            and str(record.plan.parent_patch_dict().get("nextLink") or "").strip()
+        )
+        try:
+            self._execution.preflight_lifecycle_batch(payloads, parent_expectations=parent_expectations)
+        except Exception:
+            # Prefetch is an optimization only; normal authoritative
+            # UUID reads remain the correctness fallback.
+            pass
+        if len(records) > 1:
             return self._drain_batched(
                 claim,
                 records,
                 configuration_fingerprint=config,
                 schedule_fingerprint=schedule,
-                apply_unverified=batch_apply,
-                apply_children=batch_children_apply,
-                verify_children=batch_children,
-                verify_parents=batch_parents,
+                apply_unverified=self._execution.apply_lifecycle_unverified,
+                apply_children=self._execution.apply_lifecycle_children_unverified,
+                verify_children=self._execution.verify_lifecycle_children,
+                verify_parents=self._execution.verify_lifecycle_parents,
                 progress=progress,
             )
         outcomes: list[LifecycleApplicationOutcome] = []
@@ -896,50 +902,35 @@ class LifecycleApplicationService:
                 if state.terminal is None
                 and _SPAWN_STAGE_ORDER[state.stage] < _SPAWN_STAGE_ORDER[ExecutionStage.VERIFIED]
             )
-            bulk = getattr(self._outbox, "renew_leases", None)
-            if callable(bulk) and eligible:
-                overall, rows = bulk(
+            if eligible:
+                overall, rows = self._outbox.renew_leases(
                     intent_ids=tuple(state.record.intent_id for state in eligible),
                     owner=self._owner,
                     lease_seconds=self._lease_seconds,
                 )
-                if overall.ok:
-                    for state in eligible:
-                        result = rows.get(state.record.intent_id)
-                        if result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
-                            state.terminal = self._retry_or_review(
-                                state.record,
-                                result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk lease result missing"),
-                                f"could not renew lifecycle lease before {step}",
-                                tuple(state.mutations),
-                            )
-                    return
-            for state in eligible:
-                state.terminal = self._renew_before_step(state.record, step, tuple(state.mutations))
+                for state in eligible:
+                    result = rows.get(state.record.intent_id)
+                    if not overall.ok or result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
+                        state.terminal = self._retry_or_review(
+                            state.record,
+                            overall if not overall.ok else result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk lease result missing"),
+                            f"could not renew lifecycle lease before {step}",
+                            tuple(state.mutations),
+                        )
 
         def advance_batch(candidates: Sequence[_BatchState], target: ExecutionStage, detail: str) -> None:
             eligible = tuple(state for state in candidates if state.terminal is None)
             if not eligible:
                 return
-            bulk = getattr(self._outbox, "advance_stages", None)
-            if callable(bulk):
-                overall, rows = bulk(
-                    stages={state.record.intent_id: target for state in eligible}, owner=self._owner
-                )
-            else:
-                overall = OutboxResult(OutboxResultKind.APPLIED)
-                rows = {
-                    state.record.intent_id: self._outbox.advance_stage(
-                        intent_id=state.record.intent_id, owner=self._owner, stage=target
-                    )
-                    for state in eligible
-                }
+            overall, rows = self._outbox.advance_stages(
+                stages={state.record.intent_id: target for state in eligible}, owner=self._owner
+            )
             for state in eligible:
                 result = rows.get(state.record.intent_id)
                 if not overall.ok or result is None or result.kind not in {OutboxResultKind.APPLIED, OutboxResultKind.ALREADY_APPLIED}:
                     state.terminal = self._retry_or_review(
                         state.record,
-                        result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk stage result missing"),
+                        overall if not overall.ok else result or OutboxResult(OutboxResultKind.CONFLICT, reason="bulk stage result missing"),
                         detail,
                         tuple(state.mutations),
                     )
@@ -1079,19 +1070,10 @@ class LifecycleApplicationService:
 
         renew_batch(states, "verification")
         ready_for_stage = [state for state in states if state.terminal is None]
-        bulk_advance = getattr(self._outbox, "advance_stages", None)
-        if callable(bulk_advance) and ready_for_stage:
-            _advance_status, advance_rows = bulk_advance(
-                stages={state.record.intent_id: ExecutionStage.VERIFIED for state in ready_for_stage},
-                owner=self._owner,
-            )
-        else:
-            advance_rows = {
-                state.record.intent_id: self._outbox.advance_stage(
-                    intent_id=state.record.intent_id, owner=self._owner, stage=ExecutionStage.VERIFIED
-                )
-                for state in ready_for_stage
-            }
+        advance_status, advance_rows = self._outbox.advance_stages(
+            stages={state.record.intent_id: ExecutionStage.VERIFIED for state in ready_for_stage},
+            owner=self._owner,
+        ) if ready_for_stage else (OutboxResult(OutboxResultKind.APPLIED), {})
         advanced: list[_BatchState] = []
         for state in states:
             if state.terminal is not None:
@@ -1109,8 +1091,10 @@ class LifecycleApplicationService:
                 state.record.intent_id,
                 OutboxResult(OutboxResultKind.CONFLICT, reason="bulk stage result missing"),
             )
+            if not advance_status.ok:
+                advance = advance_status
             report_action(state, "intent verified")
-            if not advance.ok:
+            if not advance_status.ok or not advance.ok:
                 outcome = self._retry_or_review(state.record, advance, "could not persist verified lifecycle stage", tuple(state.mutations))
                 outcomes.append(outcome)
                 report_outcome(state.record, outcome, state)
@@ -1119,18 +1103,9 @@ class LifecycleApplicationService:
 
         renew_batch(advanced, "acknowledgement")
         ack_candidates = [state for state in advanced if state.terminal is None]
-        bulk_ack = getattr(self._outbox, "acknowledge_many", None)
-        if callable(bulk_ack) and ack_candidates:
-            _ack_status, ack_rows = bulk_ack(
+        ack_status, ack_rows = self._outbox.acknowledge_many(
                 intent_ids=tuple(state.record.intent_id for state in ack_candidates), owner=self._owner
-            )
-        else:
-            ack_rows = {
-                state.record.intent_id: self._outbox.acknowledge(
-                    intent_id=state.record.intent_id, owner=self._owner
-                )
-                for state in ack_candidates
-            }
+            ) if ack_candidates else (OutboxResult(OutboxResultKind.APPLIED), {})
         for state in advanced:
             if state.terminal is not None:
                 outcome = LifecycleApplicationOutcome(
@@ -1144,8 +1119,10 @@ class LifecycleApplicationService:
                 state.record.intent_id,
                 OutboxResult(OutboxResultKind.CONFLICT, reason="bulk acknowledgement result missing"),
             )
+            if not ack_status.ok:
+                ack = ack_status
             report_action(state, "intent acknowledged")
-            if not ack.ok:
+            if not ack_status.ok or not ack.ok:
                 outcome = self._retry_or_review(state.record, ack, "could not acknowledge finalized lifecycle intent", tuple(state.mutations))
                 outcomes.append(outcome)
                 report_outcome(state.record, outcome, state)
@@ -1443,15 +1420,11 @@ class LifecycleApplicationService:
             settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
             assert settled is not None
             return settled
-        compensation_method = getattr(self._mutations, "compensate_imported_child", None)
         compensation: MutationOutcome | None = None
-        if not callable(compensation_method):
-            settled = self._settle_step(record, outcome, ExecutionStage.PARENT_LINKED)
-            assert settled is not None
-            return settled
         request = self._request_for(MutationOperation.CHILD_IMPORT, plan, child_payload)
         if request is not None:
-            compensation = compensation_method(request)
+            assert self._mutations is not None
+            compensation = self._mutations.compensate_imported_child(request)
             mutations.append(compensation)
         parent_reason = outcome.reason or outcome.kind.value
         if compensation is None:
@@ -1620,5 +1593,6 @@ __all__ = (
     "LifecycleApplicationError",
     "LifecycleApplicationOutcome",
     "LifecycleApplicationOutcomeKind",
+    "LifecycleExecutionPort",
     "LifecycleApplicationService",
 )

@@ -35,6 +35,7 @@ from .timeutil import build_local_datetime as _build_local_datetime
 from .timeutil import local_naive_to_utc as _local_naive_to_utc
 from .timeutil import to_local as _to_local
 from .timeutil import utc_to_local_naive as _utc_to_local_naive
+from .task_datetime import TaskDatetimeParser, parser_for_core
 
 
 class _FrozenList(list):
@@ -146,6 +147,10 @@ class RecurrenceEvaluator:
 
     spec: RecurrenceSpec
     _cache: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _datetime_parser: TaskDatetimeParser = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_datetime_parser", parser_for_core(self._core_module()))
 
     @classmethod
     def from_spec(cls, spec: RecurrenceSpec) -> "RecurrenceEvaluator":
@@ -307,10 +312,8 @@ class RecurrenceEvaluator:
 
     def _parse_limits(self) -> RecurrenceLimits:
         if self.spec.chain_until:
-            from . import parse_dt_any
-
-            chain_until = parse_dt_any(self.spec.chain_until)
-            if chain_until is None:
+            chain_until, error = self._datetime_parser.parse(self.spec.chain_until)
+            if error or chain_until is None:
                 raise ValueError(
                     f"Unrecognized chainUntil datetime format '{self.spec.chain_until}'."
                 )
@@ -756,12 +759,12 @@ class RecurrenceEvaluator:
 
     def collect_after(
         self,
-        after_local: datetime,
+        after_local: datetime | OccurrenceCursor,
         *,
         limit: int,
         fallback_hhmm: tuple[int, int] = (9, 0),
         default_seed_date: date | None = None,
-        inclusive: bool = False,
+        inclusive: bool | None = None,
         pick_occurrence_local: PickOccurrenceCallback | None = None,
         anchor_file_provider: Any | None = None,
         max_iterations: int = 512,
@@ -808,12 +811,11 @@ class RecurrenceEvaluator:
             if str(expected) != str(actual):
                 raise ValueError("Occurrence cursor timezone does not match evaluator context.")
         values = self.collect_after(
-            cursor.local_datetime,
+            cursor,
             limit=limit,
-            inclusive=cursor.inclusive,
             **kwargs,
         )
-        return OccurrenceBatch(values)
+        return OccurrenceBatch(values, terminal=getattr(values, "terminal", None))
 
     @staticmethod
     def _core_module() -> Any:

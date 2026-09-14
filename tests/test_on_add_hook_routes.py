@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tests.test_hook_input_contract import HookSubprocessFixture
+from tests.support.hook_process import HookSubprocessFixture
 
 
 class OnAddHookRouteTests(HookSubprocessFixture):
@@ -20,9 +20,11 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.taskdata.mkdir()
         self.anchor_files = root / "anchors"
         self.anchor_files.mkdir()
+        self.omit_files = root / "omit"
+        self.omit_files.mkdir()
         self.config = root / "config-nautical.toml"
         self.config.write_text(
-            f'tz = "UTC"\nanchor_file_dir = "{self.anchor_files}"\npanel_mode = "rich"\n',
+            f'tz = "UTC"\nanchor_file_dir = "{self.anchor_files}"\nomit_file_dir = "{self.omit_files}"\npanel_mode = "rich"\n',
             encoding="utf-8",
         )
         (self.anchor_files / "dates.csv").write_text(
@@ -169,6 +171,49 @@ class OnAddHookRouteTests(HookSubprocessFixture):
         self.assertEqual(result["description"], "întâlnire café")
         self.assertEqual(result["anchor_file"], "dates.csv@t=12:00")
         self.assertEqual(result["due"], "2099-01-05T12:00:00+00:00")
+
+    def test_anchor_preview_explains_explicit_omit_rules_without_contaminating_json(self) -> None:
+        (self.anchor_files / "2026.csv").write_text(
+            "date\n2026-05-01\n2026-05-06\n", encoding="utf-8"
+        )
+        (self.omit_files / "2026.csv").write_text("date\n2026-05-05\n", encoding="utf-8")
+        task = self._task(
+            entry="20260413T000000Z",
+            anchor="w:tue,fri | y:05-05",
+            anchor_file="2026.csv@-1d@t=12:00,18:00",
+            omit="w:sun",
+            omit_file="2026.csv",
+            anchor_mode="skip",
+        )
+
+        process = self._run(task)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["anchor_file"], "2026.csv@-1d@t=12:00,18:00")
+        self.assertIn("either Tuesdays, Fridays, or May 5 each year; omit", process.stderr)
+        self.assertIn("Sundays and Dates from 2026.csv", process.stderr)
+        self.assertNotIn("skip missed anchors and Dates from 2026.csv", process.stderr)
+        self.assertNotIn("Preview", process.stdout)
+
+    def test_large_weekly_interval_hook_route_is_not_clamped(self) -> None:
+        task = self._task(
+            entry="20260809T090000Z",
+            anchor="w/500:mon + y:01-01",
+        )
+        result = self._assert_valid(task)
+        self.assertEqual(result["anchor"], "w/500:mon + y:01-01")
+        self.assertEqual(result["chain"], "on")
+        self.assertGreater(str(result["due"]), "2026-01-01")
+
+    def test_large_interval_with_unreachable_chain_until_fails_actionably(self) -> None:
+        task = self._task(
+            entry="20260809T090000Z",
+            anchor="w/500:mon + y:01-01",
+            chain="on",
+            chainID="00000901",
+            chainUntil="20270101T000000Z",
+        )
+        self._assert_invalid(task, ("Chain end point is earlier",))
 
     def test_invalid_routes_fail_without_json_or_tracebacks(self) -> None:
         cases = (

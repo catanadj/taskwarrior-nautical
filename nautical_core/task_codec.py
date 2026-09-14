@@ -8,7 +8,8 @@ import math
 import os
 import re
 import sys
-from typing import Any, Mapping, MutableMapping, Sequence
+from collections.abc import MutableMapping
+from typing import Any, Mapping, Sequence
 
 try:
     from .task_models import TaskDraft, TaskObservation
@@ -74,7 +75,7 @@ class TaskCodec:
     @staticmethod
     def sanitize_task_mapping(task: MutableMapping[str, Any], max_len: int = 1024) -> None:
         """Sanitize string fields at the Taskwarrior output boundary."""
-        if not isinstance(task, dict):
+        if not isinstance(task, MutableMapping):
             return
         for key, value in list(task.items()):
             if not isinstance(value, str):

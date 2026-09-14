@@ -49,13 +49,49 @@ tools, mypy, and desloppify.
   scan or blind review confirms the result.
 - Avoid unrelated cleanup. Every changed line must support a checklist item.
 
+## Reconciliation — 2026-09-13
+
+This reconciliation does not begin Work Package 17. It distinguishes completed
+implementation from scan-dependent acceptance evidence.
+
+- Active branch: `desloppify/review-remediation`; HEAD at reconciliation:
+  `1c7b9ef`; Python `3.11.2`; shared checkout is dirty and is not a linked
+  worktree. Existing edits are preserved.
+- Standard discovery after the current batch: `712` tests passed with `47%`
+  branch coverage against the `44%` CI floor.
+- Current focused golden slices: natural-language name filter `0` remaining;
+  scheduler `27/27`; on-add `44/44`. Direct natural-language, cache,
+  precompute, scheduler-exhaustion, and chain-graph/planner tests also pass in
+  the full suite.
+- Branch coverage: original measured baseline `44%` with branch measurement;
+  current suite measures `47%`. CI floor remains `44%` until a higher batch is
+  merged, as required by the ratchet policy.
+- Current cached desloppify summary is overall `85.6/100`, strict `85.2/100`
+  (target `85.0`), with the
+  scan dated `2026-09-13 14:16 UTC`; it predates these checklist/test changes
+  and is not fresh acceptance evidence.
+- Packages 1, 2, and 6 have implementation-complete status; their unresolved
+  fresh-scan items remain open for a later evidence pass. Package 3's direct
+  test slices are implemented and the current unittest gate passes; scan-based
+  finding reduction remains open. Package 4 was mislabeled complete: only its
+  registry-integrity slice was complete, and domain migration remains active.
+  Package 5's measured branch-coverage gate is now implemented. Package 10 is
+  complete by the recorded cutover evidence and current no-primary-lookup scan.
+- The attempted rescan was rejected because the backlog was not drained; forcing
+  it would regenerate issue IDs and disrupt triage. Current status still shows
+  four live subjective queue items, 149 test-health findings, and seven open
+  review issues. `desloppify next` was inspected instead; no forced reset or
+  finding resolution was used. The last scan remains the 14:16 UTC snapshot.
+- Packages 11–16 are already complete. Package 17 remains untouched.
+
 ---
 
 ## Audit Baseline and Score Constraints
 
-- [ ] Record the branch, revision, Python version, worktree state, and current
-  desloppify scores before implementation.
-- [ ] Preserve the audit baseline in the implementation notes:
+- [x] Record the branch, revision, Python version, checkout state, and last
+  recorded desloppify score in the reconciliation note above. The score is
+  explicitly labeled stale rather than represented as a fresh measurement.
+- [x] Preserve the historical audit baseline in the implementation notes:
   - Overall: `84.7/100`
   - Objective: `91.1/100`
   - Strict: `84.3/100`
@@ -74,20 +110,20 @@ tools, mypy, and desloppify.
   - Direct/transitive coverage findings: `149` (`25` Tier 2, `124` Tier 3)
   - Standard unittest discovery baseline: `518` passing tests
   - Golden registry inventory: `995` registered tests in a `37,646`-line file
-- [ ] Record that the three requested subjective dimensions have weight `1`
+- [x] Record that the three requested subjective dimensions have weight `1`
   each in a subjective pool whose total configured weight is `123`.
-- [ ] Do not promise that these three dimensions alone can reach strict `85.0`:
+- [x] Do not promise that these three dimensions alone can reach strict `85.0`:
   raising all three to `100` has a theoretical maximum overall gain of about
   `0.49` points.
-- [ ] Use direct-test remediation to improve Test health as well as Test
+- [x] Use direct-test remediation to improve Test health as well as Test
   strategy. Desloppify estimates that resolving all 149 coverage findings is
   worth about `1.2` overall points.
-- [ ] Treat the following as theoretical prioritization ceilings, not promised
+- [x] Treat the following as theoretical prioritization ceilings, not promised
   score gains: Mid-level elegance about `2.95` overall points, high-level
   elegance `2.15`, low-level elegance `1.72`, contract coherence `1.24`,
   abstraction fitness `1.07`, package organization `0.61`, and error
   consistency `0.40` if each dimension independently reached `100`.
-- [ ] Record that most of these subjective assessments are stale after the
+- [x] Record that most of these subjective assessments are stale after the
   current remediation work. Do not infer remaining defects from a stale score;
   require current code evidence or a fresh blind review.
 
@@ -104,14 +140,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest discover -s tests -q
 
 ### Findings already implemented or stale
 
-- [ ] Do not reimplement the retired `holiday_region`, deferred configuration
+- [x] Do not reimplement the retired `holiday_region`, deferred configuration
   loading, optional Astral, structured outbox failure, panel diagnostics,
   canonical `OmitState`, normalization naming, or lifecycle drain-limit work
   unless a current focused regression demonstrates a defect.
-- [ ] Keep those findings visible in audit notes until a fresh blind review
+- [x] Keep those findings visible in audit notes until a fresh blind review
   replaces the stale assessment; distinguish stale review state from missing
   production behavior.
-- [ ] Preserve focused evidence for already-implemented adjacent-dimension
+- [x] Preserve focused evidence for already-implemented adjacent-dimension
   fixes: explicit `_in_place` business-calendar normalization, canonical
   `OmitState`, deferred configuration loading, optional Astral installation,
   retired `holiday_region` cache removal, and structured maintenance and panel
@@ -119,26 +155,26 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest discover -s tests -q
 
 ### Adjacent-dimension regression evidence
 
-- [ ] Verify `normalize_task_business_calendar_in_place(...)` both returns the
+- [x] Verify `normalize_task_business_calendar_in_place(...)` both returns the
   selected calendar and canonicalizes a present `bc` value, while the legacy
   `normalize_task_business_calendar` alias has identical compatibility
   behavior.
-- [ ] Verify `combine_omit_state(...)` returns `OmitState | None` for every
+- [x] Verify `combine_omit_state(...)` returns `OmitState | None` for every
   primary caller and legacy raw/dictionary decoding occurs only in the named
   compatibility split boundary.
-- [ ] Verify importing `nautical_core` with `NAUTICAL_CONFIG` set performs no
+- [x] Verify importing `nautical_core` with `NAUTICAL_CONFIG` set performs no
   configuration-file read; first supported configuration access performs the
   read and surfaces validation failure through the documented diagnostic path.
-- [ ] Verify the base requirements omit Astral, the astronomy requirements pin
+- [x] Verify the base requirements omit Astral, the astronomy requirements pin
   it, the offline kit includes both install modes, and astronomy-disabled
   operation never imports Astral.
-- [ ] Verify changing retired `holiday_region` cannot change the scheduler or
+- [x] Verify changing retired `holiday_region` cannot change the scheduler or
   cache fingerprint while deprecated-key recognition remains available at the
   configuration boundary.
-- [ ] Verify outbox permission/setup failures retain the stable
+- [x] Verify outbox permission/setup failures retain the stable
   `filesystem_security_failure` classification and always close an opened
   connection.
-- [ ] Verify missing optional panel sources remain non-fatal, while permission,
+- [x] Verify missing optional panel sources remain non-fatal, while permission,
   parsing, and unexpected loader failures are surfaced with source context and
   never silently converted into an empty warning list.
 
@@ -153,9 +189,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest tests.test_structured
 
 ## Work Package 1 — Direct Natural-Language Contract Tests
 
-**Status: IMPLEMENTATION COMPLETE.** Direct behavioral coverage and the
-natural-language migration are complete. Fresh desloppify confirmation remains
-an audit gate, not an implementation task.
+**Status: IMPLEMENTATION COMPLETE; FRESH SCAN GATE OPEN.** Direct behavioral
+coverage and the natural-language migration are complete. The named natural
+golden slice is empty. The finding stays unresolved until a fresh desloppify
+scan can safely reassess it after the queue is drained.
 
 **Files:**
 
@@ -193,9 +230,9 @@ cases = {
   rolls, multiple times, and bounded time windows.
 - [x] Assert the direct implementation and the public facade return identical
   text for each supported case.
-- [ ] Run the focused test and confirm it fails for missing direct coverage or
+- [x] Run the focused test and confirm it fails for missing direct coverage or
   any behavioral mismatch before changing production code.
-- [ ] Remove only the migrated golden registry entries after the direct tests
+- [x] Remove only the migrated golden registry entries after the direct tests
   pass in normal and shuffled order.
 - [ ] Resolve
   `review::.::holistic::test_strategy::natural_language_formatter_untested`
@@ -214,8 +251,9 @@ branches.
 
 ## Work Package 2 — Executable On-Add Route Matrix
 
-**Status: IMPLEMENTATION COMPLETE.** The route matrix, strict JSON isolation,
-failure cases, and golden migration are complete. Fresh desloppify confirmation
+**Status: IMPLEMENTATION COMPLETE; FRESH SCAN GATE OPEN.** The route matrix,
+strict JSON isolation, failure cases, and golden migration are complete. The
+full hook-on-add golden slice passes `44/44`; fresh desloppify confirmation
 remains an audit gate.
 
 **Files:**
@@ -272,10 +310,13 @@ failure case, and strict JSON/diagnostic isolation assertions.
 
 ## Work Package 3 — Risk-Ordered Direct Test Migration
 
-**Status: IMPLEMENTATION SLICES COMPLETE; WAVE GATE PENDING.** Cache, parser,
+**Status: DIRECT-TEST SLICES COMPLETE; SCAN GATE PENDING.** Cache, parser,
 scheduler, calendar, add/preview, chain recovery, configuration/time, operator,
-deployment, and stress slices have been migrated and verified. The aggregate
-wave gate and fresh scan remain outstanding.
+deployment, stress, and parser-owner adapter contracts are directly tested.
+Direct graph construction and repair planning contracts now cover deterministic
+ordering, reference ambiguity/out-of-coverage, topology, guarded reciprocal and
+missing-link plans, and refusal under partial coverage. Fresh finding-reduction
+evidence remains outstanding.
 
 **Files:** Create focused `tests/test_<owner>.py` modules and migrate matching
 tests from `dev_tools/nautical_golden_tests.py`.
@@ -289,7 +330,7 @@ tests from `dev_tools/nautical_golden_tests.py`.
 
 ### Wave A — Pure and deterministic owners
 
-- [ ] Add direct tests for `natural_language_api.py`, `quarter_api.py`,
+- [x] Add direct tests for `natural_language_api.py`, `quarter_api.py`,
   `acf_api.py`, `expansion_api.py`, and `business_calendar_api.py`.
 - [x] Add direct tests for `parsing/parser_support_api.py` and
   `parsing/parser_frontend.py`.
@@ -297,59 +338,170 @@ tests from `dev_tools/nautical_golden_tests.py`.
 - [x] Add direct cache contract tests for `cache_api.py`: miss/hit, corrupt
   payload, quarantine, lock refusal, Unicode, configuration fingerprint, and
   isolated per-instance state.
-- [ ] Add deterministic boundary matrices rather than import-only assertions.
+- [x] Add deterministic boundary matrices rather than import-only assertions.
   Every test module must call at least one behavior owned by its production
   module.
 
 ### Wave B — Application and composition owners
 
-- [ ] Add direct tests for `add_anchor_compute.py`, `add_anchor_preview.py`,
+- [x] Add direct tests for `add_anchor_compute.py`, `add_anchor_preview.py`,
   `add_preview_composition.py`, and `chain_generation.py`.
-- [ ] Cover valid result, malformed input, exhausted provider, omitted
+- [x] Cover valid result, malformed input, exhausted provider, omitted
   occurrence, date limit, and injected dependency failure for applicable
   services.
-- [ ] Add direct tests for `business_calendar_config.py`, `timeutil.py`, and
+- [x] Add direct tests for `business_calendar_config.py`, `timeutil.py`, and
   `chain_integrity_recovery.py` using temporary files and immutable fixtures.
 
 ### Wave C — Operator and operational entry points
 
-- [ ] Add direct command-contract tests for
+- [x] Add direct command-contract tests for
   `nautical_core/tools/nautical_query.py`, `nautical_doctor.py`, and
   `nautical_reconcile.py` using temporary Taskdata and injected/stubbed process
   boundaries where available.
-- [ ] Test `dev_tools/nautical_deploy_sanity.py` as a callable report producer,
+- [x] Test `dev_tools/nautical_deploy_sanity.py` as a callable report producer,
   including one passing inventory and one deliberately broken temporary
   inventory.
-- [ ] Test `dev_tools/nautical_reliability_smoke.py` argument validation and
+- [x] Test `dev_tools/nautical_reliability_smoke.py` argument validation and
   result classification without operating on live Taskdata.
-- [ ] Test the stress campaign's profile selection, validation, JSON envelope,
+- [x] Test the stress campaign's profile selection, validation, JSON envelope,
   and non-zero enforcement result without running a long campaign.
 
 ### Wave gates
 
-- [ ] After each wave, run unittest discovery and the relevant golden slice.
+- [x] After each wave, run unittest discovery and the relevant golden slice.
 - [ ] Run desloppify after the complete wave, not after every file; record the
   exact reduction in Tier-2 and Tier-3 coverage findings.
-- [ ] Do not mark the wave complete if the direct-test count improved but the
+- [x] Do not mark the wave complete if the direct-test count improved but the
   exercised branches did not include failures and edge conditions.
 
 **Done when:** All 25 Tier-2 coverage findings are either closed by direct
 behavioral tests or documented with evidence that the detector cannot represent
 the executable/shell boundary; no item is closed with an import-only test.
 
+Current evidence: unittest discovery passes `712` tests at `47%` branch coverage.
+A fresh coverage review and exact issue-count reconciliation remain
+open; the last recorded scan predates these direct tests.
+
 ---
 
 ## Work Package 4 — Decompose the Golden Test Monolith
 
-**Status: COMPLETE.** Package discovery, registry integrity coverage, inventory
-documentation, and the retained golden boundary are implemented. The known
-full-suite recurrence-terminal failure is pre-existing and tracked separately.
+**Status: INCOMPLETE — MIGRATION CLASSIFICATION AND DOMAIN INVENTORY REMAIN.**
+Registry integrity and inventory are maintained. Three hundred twenty-eight golden
+functions across recurrence, cache, hook, chain-integrity, lifecycle, operator,
+query, Navigator-view, CP scheduling, astronomy, yearly-ordinal, file-backed,
+seasonal calendar/selector, business-calendar, occurrence-provider, time-window,
+parser/scheduler expression, core-utility, diagnostic-warning, add-validation,
+config-path security, scheduler runtime, 24 individually reviewed
+anchor-file/provider/inclusion/consumer-parity cases, and 17 positional-selection
+owner contracts now run under standard unittest discovery,
+with duplicate golden registrations removed. Parser fuzz,
+normalization, characterization, and direct modified-atom scheduling contracts
+also run under direct discovery. After the cross-path parity batch, complete
+gates passed at 996 unit tests and 637/637 normal and shuffled golden tests.
+After the recurrence-identity migration, complete gates passed: unittest
+discovery 999/999 in 67.423 seconds; normal golden 634/634 and seeded shuffled
+golden 634/634 (seed `20260811`). The current registry is 644 top-level / 632
+registered / 12 explicitly retired / 239 newly migrated in this WP4 cycle / 0
+duplicates. Focused direct time-window, parser, file-backed, and registry suites
+pass. Latest complete gates pass: unittest discovery 1002/1002 in 67.185
+seconds; normal golden 632/632 and seeded shuffled golden 632/632
+(seed `20260811`). The positional-selection migration then moved eleven pure
+owner cases and six public parser/scheduler cases; focused direct and registry
+checks pass 21/21. Combined gates pass: unittest discovery 1016/1016, normal
+golden 615/615, and seeded shuffled golden 615/615 (seed `20260811`). A further
+six omission contracts and one file-source parser contract now have direct
+tests; focused suites pass 25/25. Consolidated gates pass: unittest discovery
+1023/1023, normal golden 608/608, and seeded shuffled golden 608/608 (seed
+`20260811`). Current registry: 620 top-level / 608 registered / 12 retired /
+263 WP4 migrations. Three native-until owner contracts have since moved into
+direct tests; focused native-until and registry checks pass 7/7. Current
+registry is 617 top-level / 605 registered / 12 retired / 266 WP4 migrations;
+three shared-time contracts have since moved into `tests/test_config_time_contract.py`.
+Focused time, native-until, and registry tests pass 14/14. Current registry:
+614 top-level / 602 registered / 12 retired / 269 WP4 migrations. Consolidated
+gates at that checkpoint passed: unittest discovery 1029/1029, normal golden
+602/602, and seeded shuffled golden 602/602 (seed `20260811`). Three lifecycle/
+configuration contracts have since moved into direct suites; focused checks
+pass 25/25. Current registry is 611 top-level / 599 registered / 12 retired /
+272 WP4 migrations. Two more direct tests now cover recurrence-spec and
+hook-bootstrap helper contracts; focused suites pass 21/21. Current registry
+is 609 top-level / 597 registered / 12 retired / 274 WP4 migrations; full gates
+pass: unittest discovery 1034/1034, normal golden 597/597, and seeded shuffled
+golden 597/597 (seed `20260811`). These gates do not establish that every
+remaining golden scenario is acceptance-only. Since that gate, the deterministic
+last-Friday scheduler check and missing-explicit-config diagnostic moved into
+direct tests; focused owner/registry tests pass 20/20. Current registry is 607
+top-level / 595 registered / 12 retired / 276 WP4 migrations. Full gates pass:
+unittest discovery 1036/1036, normal golden 595/595, and seeded shuffled golden
+595/595 (seed `20260811`). Two runtime-manifest ownership contracts have since
+moved into `tests/test_architecture_contract.py`; focused architecture/registry
+checks pass 17/17. Current registry is 605 top-level / 593 registered / 12
+retired / 278 WP4 migrations. Full gates pass: unittest discovery 1038/1038,
+normal golden 593/593, and seeded shuffled golden 593/593 (seed `20260811`).
+Two more direct tests now cover preview timezone-fallback and panel file-source
+diagnostic policies; focused preview/failure-boundary/registry checks pass
+29/29. Current registry is 603 top-level / 591 registered / 12 retired / 280
+WP4 migrations. Full gates pass: unittest discovery 1040/1040, normal golden
+591/591, and seeded shuffled golden 591/591 (seed `20260811`). The latest full
+gates before the current batch passed at unittest discovery 1,051/1,051 in
+75.070s and golden 579/579 in normal and seeded-shuffled order (seed
+`20260811`). Since then, direct suites gained thirteen contracts: operator-context
+discovery and configuration failure-stage coverage, an architecture guard on
+presentation imports, bounded/full lifecycle query selection, four
+completion-analytics cases, facade export/signature behavior, query error and
+serialization contracts, integrity report parity, and TaskCommand failure/retry
+wrappers. Sixteen more owner-level contracts moved into direct suites: four
+omit-file modifier cases, TaskCodec sanitization, Navigator's authoritative-
+empty snapshot behavior, runtime command metadata/input/timeout/retry behavior,
+roll convergence, cached-hint isolation, moon-phase parser contradictions,
+shared config exposure, compact-preview occurrence limits, and hook command
+runner/result contracts. Two stale "fallback when core load fails" cases were
+retired after inspection showed they never induced that failure or called the
+hook runner. Shipped-config schema/layout, scheduler no-progress, ACF input
+bounds, panel line routing, hook import failure detail, season-mode choices,
+authoritative-empty lifecycle reads, completion fail-closed preflight, and live
+render routing also moved to direct suites. Three real Astral provider checks
+now run from the astronomy owner suite; they skip explicitly only where Astral
+is optional, and fail when the astronomy CI requirement flag is set. The latest
+registry is 479 top-level / 467 registered / 12 explicitly retired
+characterization helpers, plus 2 removed ineffective test definitions / 402
+WP4 migrations / 0 duplicates; cumulative direct migrations are 515. The
+latest batches moved TaskCommand observation privacy, recurrence activation
+identity/failure handling, moon-window/filter scheduling, occurrence-prefix
+terminal evidence, omission timeline warnings, anchor-file tie metadata,
+DST-fold until validation, live-render generator fallback, completion terminal
+exhaustion, exact/over-limit guards, captured-stderr/dumb-terminal UI behavior,
+cache-clear environment semantics, canonical chain identity, add-side exhaustion
+identity, Navigator projection failure evidence, dumb-terminal rendering, and
+reconcile's child-local-time evidence formatting, Navigator terminal projection
+metadata, astronomy-provider failure handling, random scheduling behavior,
+completion-cap selection, diagnostic stdout/stderr, timeline warning/terminal
+rows, preview included-event limits, static panel layout/theme, and typed
+anchor-file omission scans and static Rich delegation to the shared builder
+into direct owner suites. Another 16 direct contracts now cover seasonal
+calculation and rollover, Navigator business-calendar and symbolic-time
+projection, repeated-hour ordering, hook lifecycle-result retention, modify
+schedule progress/cap/provider reuse, recovery fail-closed evidence, and typed
+anchor-file metadata/context/cache behavior. Focused migrated and adjacent
+suite checks pass 87/87. Full unittest discovery passes 1156 tests (3 optional
+skips); the acceptance runner passes 467/467 in both normal and seeded-shuffle
+order (`20260811`).
+Shared subprocess/Taskdata,
+recurrence-file, and lifecycle execution fixtures live under `tests/support/`.
+The 467 registered golden
+scenarios still need evidence-backed direct-contract
+versus acceptance classification and per-domain count/runtime inventory. The
+earlier textual marker counts are stale and overlapping; recompute them before
+using them as a current inventory. They are triage signals, not case-level
+verdicts.
 
 **Files:**
 
 - Modify: `dev_tools/nautical_golden_tests.py`
-- Create packages under: `tests/recurrence/`, `tests/hooks/`,
-  `tests/lifecycle/`, `tests/operators/`, and `tests/cache/`
+- Extend nested packages only where a domain suite is actually organized as a
+  nested directory; top-level hook/lifecycle/operator modules remain deliberate
+  single-file suites.
 - Create shared test-only support under: `tests/support/`
 
 **Interfaces:**
@@ -358,23 +510,119 @@ full-suite recurrence-terminal failure is pre-existing and tracked separately.
 - Produces: normally discoverable domain tests plus a smaller acceptance-only
   golden runner.
 
-- [x] Add `__init__.py` files so standard unittest discovery descends into each
-  test package.
-- [ ] Move reusable builders—not assertions or production behavior—into focused
-  test-only support modules for Taskdata, tasks, clocks, recurrence files,
-  subprocesses, and lifecycle outboxes.
-- [ ] Migrate one domain at a time in this order: parser/natural language,
-  scheduler/occurrences, cache, add hook, modify hook, lifecycle/outbox,
-  operators/reconcile, installation/backup/restore.
-- [ ] Preserve each test's deterministic input and expected outcome. Replace
+- [x] Add `tests/recurrence/__init__.py` so standard unittest discovery descends
+  into the migrated recurrence package.
+- [x] Add initializers for `tests/cache/` as the cache-domain migration begins.
+- [x] Keep existing top-level hook/lifecycle/operator suites as ordinary test
+  modules; only nested recurrence/cache/support suites need package initializers.
+- [x] Move genuinely shared test fixtures—not assertions or production
+  behavior—into test-only support modules: Taskdata/subprocess execution,
+  recurrence files, and lifecycle execution.
+- [x] Keep task builders and clocks local where the fixtures have distinct
+  contracts; do not force unrelated shapes into a generic shared helper.
+- [ ] Classify the remaining golden scenarios by direct-contract versus
+  acceptance need. Nineteen provider, evaluator, and cross-consumer
+  contracts have been moved to direct owner suites, with one duplicated broad
+  characterization retired; see
+  `docs/design/GOLDEN_REGISTRY_INVENTORY.md` for individual evidence. The
+  remaining scenarios still require case-level decisions. Existing parser validation/front-end/atom,
+  scheduler/occurrence, cache, on-add route, lifecycle/operator, and
+  backup/restore suites are evidence sources, not automatic domain completion.
+- [x] Preserve migrated tests' deterministic inputs and expected outcomes. Replace
   the custom `expect(...)` helper with the corresponding `unittest.TestCase`
   assertion.
-- [ ] Remove migrated functions from `TESTS`/`DEEP_TESTS` immediately so CI does
+- [x] Remove migrated functions from `TESTS`/`DEEP_TESTS` immediately so CI does
   not execute duplicate tests.
-- [ ] Keep only end-to-end acceptance, installed-layout, cross-process race,
-  and long-running compatibility scenarios in the golden runner.
-- [ ] Preserve normal and seeded shuffled execution until no shared mutable
+- [ ] Keep only scenarios with an evidence-backed process, installed-layout,
+  cross-process, Taskwarrior, or long-running compatibility boundary in the
+  golden runner; classify every remaining case before the acceptance-only
+  cutover.
+- [x] Preserve normal and seeded shuffled execution until no shared mutable
   state remains in the migrated domains.
+- [x] Move the hook-protocol and TaskDocument pure contracts into
+  `tests/test_hook_protocol.py` and `tests/test_taskwarrior_io.py`; retain
+  isolated-load, executable, output, and permission acceptance coverage in the
+  golden runner.
+- [x] Move the lifecycle planner's recurrence-candidate policy, shared
+  completion/reconcile plan, scheduled-expiration basis, recurrence boundary
+  matrix, and idempotent terminal patch contracts into
+  `tests/test_lifecycle_terminal_plans.py` with explicit child-field and
+  identity assertions.
+- [x] Move lifecycle read-service index/merge behavior, safe full-snapshot
+  filtering, and request-cache isolation into
+  `tests/test_lifecycle_read_service.py`.
+- [x] Move chain-integrity model validation, authoritative snapshot/cache
+  fail-closed contracts, pure engine/report parity, bounded hydration, invariant
+  behavior, outbox/graph provenance, acknowledged postconditions, and safe
+  application-boundary decisions into direct chain-integrity unittest modules.
+- [x] Move typed Taskwarrior read outcomes, TaskObservation/NauticalTask/TaskView,
+  task codec framing/serialization, and TaskDraft/TaskPatch semantics into
+  `tests/test_task_domain_models.py`.
+- [x] Move authoritative read snapshot/index/ambiguity and bounded UUID/slot
+  set-read fail-closed contracts into `tests/test_task_read_repository_contracts.py`.
+- [x] Move scripted repository cache/fallback, malformed-output, mutation-epoch,
+  and typed domain-read contracts into `tests/test_task_read_repository_contracts.py`;
+  retain real Taskwarrior process acceptance separately.
+- [x] Move in-memory Taskwarrior unit-of-work cache scope, broad coverage, and
+  invocation-isolation contracts into `tests/test_taskwarrior_uow_contracts.py`;
+  retain process/retry/budget diagnostics in golden acceptance.
+- [x] Move Navigator metadata/query identity parity and renderer-neutral view
+  serialization into `tests/test_navigator_view_models.py`; retain rendering,
+  import/layout, repository integration, and scale cases pending case-level
+  classification.
+- [x] Move CP duration/sequence parsing, link-boundary selection,
+  deterministic random/jitter bounds and scope, and DST-safe whole-day stepping
+  into `tests/recurrence/test_cp_sequence_contracts.py`; retain on-add/on-modify
+  cross-path agreement in the golden runner.
+- [x] Move deterministic moon-phase grammar/configuration/math contracts to
+  `tests/test_astronomy_contracts.py`, and year-day/ISO-week validation,
+  expansion, scheduling, omission, and round-trip contracts to
+  `tests/recurrence/test_yearly_token_migration.py`.
+- [x] Move file-name safety, omit-file CSV header/deduplication/description,
+  anchor-file parsing/expansion, and deterministic file-provider contracts into
+  `tests/test_file_backed_contracts.py`; move typed-provider values, metadata,
+  progress, DST cursor, and bounded-collection guarantees into
+  `tests/test_occurrence_provider_contracts.py`. Retain hook, cross-provider,
+  installed-layout, and Taskwarrior-facing acceptance coverage in golden.
+- [x] Re-run complete unittest, normal golden, seeded-shuffle golden, and
+  compilation gates after the latest file/provider migration batches. Whole-tree
+  `git diff --check` remains blocked by trailing whitespace in unrelated
+  pre-existing hunks of the already-dirty golden file.
+- [x] Migrate the evaluator-versus-chain-generation time-form parity matrix to
+  `tests/recurrence/test_scheduler_cross_path_conformance.py`; initialize the
+  lazy timezone configuration before capturing the evaluator context.
+- [x] Split evaluator shadow-parity characterization for DST gaps and
+  business-calendar policy into two explicit direct cross-path tests.
+- [x] Move modify-schedule, modify-timeline, and add-preview recurrence
+  identity contracts into `tests/test_recurrence_identity_contracts.py`.
+- [x] Move deterministic random-window DST projection, random-time composition
+  rejection, and anchor-file random-window canonicalization into direct owner
+  suites; retain cross-process random-seed stability in golden acceptance.
+- [x] Move eleven pure positional-selection parser/evaluator/cache contracts
+  and six public parser/scheduler cases into
+  `tests/recurrence/test_position_selection_contracts.py`; retain hook,
+  completion, and timeline behavior in golden acceptance.
+- [x] Move date-only omission parsing, expression and loaded-date-state
+  scheduling, grouped evaluation, and modifier behavior into
+  `tests/recurrence/test_omit_contracts.py`; move file-source grouping and
+  safety parsing into `tests/test_file_backed_contracts.py`.
+- [x] Move pure native-until presentation, fold-aware validation, and exact
+  carry/fail-closed converter contracts into
+  `tests/test_native_until_contracts.py`; retain hook preview and modify-flow
+  policy scenarios in golden acceptance.
+- [x] Move shared consumer comparator identity, DST-fold comparison, and
+  date-line-gap timezone resolution into `tests/test_config_time_contract.py`.
+- [x] Move recurrence-fingerprint stability, effective-config snapshot
+  isolation/provenance, and warm config-fingerprint no-stat behavior to direct
+  lifecycle/configuration owner tests.
+- [x] Move recurrence-spec normalization/context-identity and bounded
+  hook-bootstrap numeric parsing to the owning recurrence-runtime and bootstrap
+  test modules; keep malformed-environment subprocess behavior in golden tests.
+- [x] Split the last-Friday example's owner-level scheduling assertion from its
+  already-direct phrase assertion; migrate missing explicit-config diagnostics
+  to structured failure boundary tests.
+- [x] Move lazy panel-colour manifest inclusion and removed legacy exit-flow
+  ownership checks into direct architecture contracts.
 - [x] Add a registry-integrity check proving every function left in the golden
   file is registered exactly once.
 - [ ] Record per-domain unit count, golden count, runtime, and any intentionally
@@ -394,6 +642,11 @@ cross-process harness.
 
 ## Work Package 5 — Coverage and Test-Quality Ratchets
 
+**Status: IMPLEMENTED AT THE MEASURED BASELINE.** `coverage.py` is isolated in
+`requirements-test.txt`; the initial branch result was `44%`, which is the CI
+floor. The latest measured suite was `47%`, but the floor is intentionally not
+raised until the change is merged.
+
 **Files:**
 
 - Create: `.coveragerc`
@@ -407,21 +660,21 @@ cross-process harness.
 - Produces: branch-coverage evidence, a non-decreasing coverage floor, and
   architecture regression enforcement.
 
-- [ ] Add `coverage.py` only as a development/CI dependency; do not add it to
+- [x] Add `coverage.py` only as a development/CI dependency; do not add it to
   Nautical's runtime installation requirements.
-- [ ] Configure branch coverage for `nautical_core`, excluding generated,
+- [x] Configure branch coverage for `nautical_core`, excluding generated,
   archived, and test-only compatibility material already outside production
   scope.
-- [ ] Capture the actual initial branch-coverage result and set the CI floor to
+- [x] Capture the actual initial branch-coverage result and set the CI floor to
   that measured integer value. Do not invent a target above the baseline.
-- [ ] Fail CI when total branch coverage falls below the recorded floor and
+- [x] Fail CI when total branch coverage falls below the recorded floor and
   upload the text/XML report for diagnosis.
-- [ ] Increase the floor only after a merged batch produces a stable higher
+- [x] Increase the floor only after a merged batch produces a stable higher
   baseline.
-- [ ] Add deterministic parser/scheduler invariants using the standard library:
+- [x] Add deterministic parser/scheduler invariants using the standard library:
   canonical round-trip, strictly advancing occurrences, stable seeded random
   selection, and no result beyond an explicit date limit.
-- [ ] Keep stress and soak tests outside the fast unit gate; retain their
+- [x] Keep stress and soak tests outside the fast unit gate; retain their
   existing enforced CI/nightly roles.
 
 ```bash
@@ -463,9 +716,9 @@ result boundary; focused process, presentation, and reconcile evidence passed.
   result. Use immutable replacement for extensions rather than dictionary
   merging into a result object.
 - [x] Keep `.to_dict()` and JSON encoding solely in presentation code.
-- [ ] If an external mapping compatibility path is proven necessary, expose it
-  as `to_operator_document(...)`; do not overload `to_operator_result` with two
-  return shapes.
+- [x] No external mapping compatibility caller exists in the repository, so
+  none was added; `to_operator_result` has one typed return shape and mapping
+  serialization remains in presentation code.
 - [x] Add success, invalid, unavailable, Unicode, and budget-extension tests
   for query, Doctor, and reconcile envelopes.
 - [x] Run process-level JSON schema tests for all three operators.
@@ -631,39 +884,39 @@ optional future hardening, not part of this migration gate.
 
 ### Parser migration
 
-- [ ] Characterize every parser facade entry point and preset/configuration
+- [x] Characterize every parser facade entry point and preset/configuration
   dependency before changing construction.
-- [ ] Define a frozen parser dependency object containing only parser-owned
+- [x] Define a frozen parser dependency object containing only parser-owned
   collaborators, presets, and configuration values.
-- [ ] Direct-import pure parser owners from `nautical_core.parsing`; remove
+- [x] Direct-import pure parser owners from `nautical_core.parsing`; remove
   string-keyed `core[...]` lookups from the primary parser implementation.
-- [ ] Make the compatibility factory translate a legacy `CoreContext` into
+- [x] Make the compatibility factory translate a legacy `CoreContext` into
   `ParserDependencies` once at the boundary.
 
 ### Scheduler migration
 
-- [ ] Define frozen scheduler configuration and dependency objects for clock,
+- [x] Define frozen scheduler configuration and dependency objects for clock,
   calendar, randomness, limits, tracing, and occurrence owners.
-- [ ] Replace facade lookups and `_with_business_calendar` callback wrapping
+- [x] Replace facade lookups and `_with_business_calendar` callback wrapping
   with explicit service construction.
-- [ ] Preserve deterministic random namespaces, terminal evidence, date limits,
+- [x] Preserve deterministic random namespaces, terminal evidence, date limits,
   and business-calendar displacement behavior in direct tests.
 
 ### Cache migration
 
-- [ ] Define immutable cache configuration separately from mutable `CacheState`.
-- [ ] Move cache directory selection, memory entries, and lock state out of the
+- [x] Define immutable cache configuration separately from mutable `CacheState`.
+- [x] Move cache directory selection, memory entries, and lock state out of the
   facade namespace; no cache function may write `core["_CACHE_DIR"]`.
-- [ ] Inject filesystem, clock, randomness, locking, serialization, and
+- [x] Inject filesystem, clock, randomness, locking, serialization, and
   diagnostics explicitly.
-- [ ] Preserve atomic replacement, quarantine, bounded allocation, lock
+- [x] Preserve atomic replacement, quarantine, bounded allocation, lock
   behavior, semantic fingerprints, and per-loader isolation.
 
 ### Cutover gates
 
-- [ ] After each subsystem, confirm direct tests, facade compatibility tests,
+- [x] After each subsystem, confirm direct tests, facade compatibility tests,
   installed-layout checks, and the architecture validator pass.
-- [ ] Confirm `rg -n 'core\[|core\.get\('` reports no primary dependency lookup
+- [x] Confirm `rg -n 'core\[|core\.get\('` reports no primary dependency lookup
   in the migrated subsystem; any remaining occurrence must be documented as a
   compatibility adapter.
 
@@ -674,18 +927,30 @@ without a mutable root-facade dictionary.
 
 ## Work Package 11 — Remove Hook-Host Reach-Through
 
-**Status: IN PROGRESS.** Added an isolation characterization test proving
-`modify_read_effects` imports without bootstrapping `hooks.modify_impl` and
-that the composition capability set remains an explicit frozen boundary.
-Lifecycle-read repository rebinding is removed, and `ModifyRuntimeServices` no
-longer stores a live hook host. Route functions still have legacy `host`
-parameters and require staged capability migration.
+**Status: COMPLETE.** Route and renderer operations no longer accept or reach
+through `_HookHost`. Hook-aware assembly is centralized in the composition
+adapter and composition root; effect modules retain only explicitly named
+`*_port_for`, `*_ports_for`, and `*_services_for` constructors at that seam.
+`LifecycleReadService` is built once at the composition root, the former
+`modify_effects.py` route wrapper was removed, and presentation effects now
+consume typed ports. `ModifyRuntimeServices` retains no live hook host.
+
+Verification: the full on-modify golden slice passes 143/143; the focused
+architecture/hook/lifecycle unit slice passes 34/34; deployment sanity passes;
+compilation and `git diff --check` pass. A hardening pass removed the generic
+hook-module loader from `TimelineServices`, replacing it with typed omission
+callbacks and a regression test. Full unittest discovery now passes 653/653;
+the cursor-terminal evidence failure was fixed by preserving cursor metadata
+and terminal evidence through the evaluator collection boundary.
 
 **Files:**
 
 - Modify: `nautical_core/modify_composition.py`
-- Modify: `nautical_core/modify_effects.py`
+- Add: `nautical_core/modify_composition_adapters.py`
+- Remove: `nautical_core/modify_effects.py` (route adapters consolidated)
 - Modify: `nautical_core/modify_read_effects.py`
+- Modify: `nautical_core/modify_timeline.py` and its focused architecture test.
+- Modify: `nautical_core/runtime_manifest.py` and the hook module loader map.
 - Modify affected validation, presentation, completion, and expiration adapters.
 - Keep executable bootstrap ownership in `nautical_core/hooks/modify_impl.py`.
 
@@ -703,21 +968,25 @@ parameters and require staged capability migration.
   `_modify_runtime_state()` from `modify_read_effects.py`.
 - [x] Replace the 22-module `Any` capability bag with narrow typed capabilities
   grouped by one operation, not by the entire hook.
-- [x] Remove `host` from `ModifyRuntimeServices` and the migrated route helpers;
-  remaining host adapters are tracked for staged extraction.
-- [ ] Replace `host._module(...)`, `host.core...`, `_read_query_get`, and
-  `_READ_QUERY_MISSING` reads in effects with explicit ports.
-- [ ] Keep the hook module responsible only for input protocol, composition,
-  response emission, and process exit.
-- [ ] Retain `_HookHost` only at an explicitly named compatibility/test adapter
-  if an installed-layout test proves it is still required; production effects
-  must never receive it.
-- [ ] Run ordinary edit, recurrence activation, completion, deletion,
+- [x] Remove `host` from `ModifyRuntimeServices` and all route/presentation
+  operations; place hook-dependent route assembly in the named composition
+  adapter. Only explicit port/service constructor factories adapt the host.
+- [x] Ensure effect operations use their supplied ports and contain no
+  operational `host._module(...)`, `host.core...`, `_read_query_get`, or
+  `_READ_QUERY_MISSING` reach-through; timeline services use explicit omission
+  callbacks rather than retaining the generic hook module loader.
+- [x] Keep the hook module responsible for input protocol, composition,
+  response emission, diagnostics, and process exit. `_HookHost` remains only as
+  the composition-root view needed by the import-by-file hook layout; production
+  effect operations never receive it.
+- [x] Run ordinary edit, recurrence activation, completion, deletion,
   expiration, lifecycle failure, malformed input, and strict JSON tests after
-  each route migration.
+  each route migration; final on-modify golden gate passes 143/143.
 
-**Done when:** Extracted modify modules are executable and testable without hook
-globals, dynamic module lookup, or shared runtime-state mutation.
+**Done when:** Extracted modify operations are executable and testable without
+hook globals, dynamic module lookup, or shared runtime-state mutation. The only
+host-aware functions are explicitly named constructors at the composition
+seam; effect operations themselves receive frozen ports/services.
 
 ---
 
@@ -764,30 +1033,50 @@ class LifecycleExecutionPort(Protocol):
     ) -> None: ...
 ```
 
+- Composition also validates the direct mutation gateway operations used by
+  the service outside the batch port (`apply` and
+  `compensate_imported_child`), so neither sequential mutation nor guarded
+  compensation can fail from a missing method after an intent is claimed.
+
+- An execution-capable service requires the complete outbox surface it calls:
+  single-intent `enqueue`; session handling; atomic wave APIs (`enqueue_many`,
+  `claim_intents`, `renew_leases`, `advance_stages`, and `acknowledge_many`);
+  and the single-item claim, transition, retry, and review operations used by
+  bounded one-record drains and recovery. Stage-only services need only the
+  single-intent enqueue path. Bulk transaction failures must remain failures;
+  do not silently downgrade to per-record storage operations.
+
 - A stage-only service may omit the execution port, but calling `drain()`,
   `drain_claimed()`, or an immediate mutation without it must raise
   `LifecycleApplicationError("lifecycle execution capability is unavailable")`
   before claiming work.
 
-- [ ] Add failing construction and execution tests for a complete provider, an
+- [x] Add failing construction and execution tests for a complete provider, an
   incomplete provider, and the supported stage-only service shape. Reject an
   incomplete provider with `LifecycleApplicationError` listing its missing
   capability names in sorted order.
-- [ ] Add a production-shape integration test proving
+- [x] Add a production-shape integration test proving
   `LifecycleOperatorOwner.apply()` supplies `limit=1` and uses the same
   configuration and schedule fingerprints for stage and drain.
-- [ ] Replace `LifecycleExecutionCapabilities.from_dependencies()` and its
+- [x] Replace `LifecycleExecutionCapabilities.from_dependencies()` and its
   optional `getattr(...)` discovery with the explicit `LifecycleExecutionPort`.
-- [ ] Pass the concrete execution port from each production composition root;
+- [x] Pass the concrete execution port from each production execution root;
+  on-modify intentionally remains stage-only while Taskwarrior holds its lock;
   validate it once, before a lifecycle intent is claimed or mutated.
-- [ ] Replace partial golden-test mutation doubles with a dedicated fixture
+- [x] Validate the direct mutation gateway methods (`apply` and
+  `compensate_imported_child`) at composition as well; these remain used by
+  sequential mutation and compensation paths outside the batch port.
+- [x] Validate every outbox method used by execution at composition, remove
+  runtime session/bulk capability fallbacks, and preserve batch-level storage
+  failures without falling back to per-intent writes.
+- [x] Replace partial golden-test mutation doubles with a dedicated fixture
   implementing the complete port. Keep deliberately incomplete doubles only in
   the contract rejection test.
-- [ ] If an installed-layout compatibility caller genuinely supplies a legacy
+- [x] If an installed-layout compatibility caller genuinely supplies a legacy
   object, isolate dynamic discovery in a named
-  `LegacyLifecycleExecutionAdapter`; primary lifecycle processing must not
-  probe for methods dynamically.
-- [ ] Preserve guarded mutation ordering, batched verification, retryability,
+  `LegacyLifecycleExecutionAdapter`; repository caller audit found no such
+  caller, so no dynamic compatibility adapter was added.
+- [x] Preserve guarded mutation ordering, batched verification, retryability,
   crash recovery, drain limits, and authoritative postconditions.
 
 ```bash
@@ -796,9 +1085,11 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest tests.test_lifecycle_
 PYTHONDONTWRITEBYTECODE=1 python3 dev_tools/nautical_golden_tests.py --only lifecycle
 ```
 
-**Done when:** Lifecycle execution never discovers collaborators during a drain;
-composition either supplies the complete mutation/verification capability or
-fails deterministically before external state changes.
+**Done when:** Lifecycle mutation/verification collaborators are validated at
+composition and are never discovered dynamically during a drain; an incomplete
+mutation gateway, execution port, or execution outbox fails deterministically
+before external state changes. Atomic bulk-storage failures remain visible and
+do not trigger per-record downgrade behavior.
 
 ---
 
@@ -809,7 +1100,9 @@ fails deterministically before external state changes.
 - Modify: `nautical_core/add_anchor_preview.py`
 - Modify: `nautical_core/add_preview_composition.py`
 - Modify: `nautical_core/modify_timeline.py`
-- Modify: `nautical_core/modify_presentation_effects.py`
+- Modify: `nautical_core/modify_composition_adapters.py`
+- Review: `nautical_core/modify_presentation_effects.py` (keep its existing
+  focused chain-style port; no timeline-context factory belongs there)
 - Modify only affected entry points in `nautical_core/modify_feedback.py`.
 - Test: renderer and hook composition contract tests.
 
@@ -826,37 +1119,41 @@ fails deterministically before external state changes.
 - Keep concrete callbacks at the composition root. Do not replace one wide bag
   with a hierarchy of pass-through wrappers.
 
-- [ ] Add a usage-matrix test that constructs anchor-expression preview,
+- [x] Add a usage-matrix test that constructs anchor-expression preview,
   anchor-file preview, CP timeline, and anchor timeline independently with
   sentinels that fail if an unrelated dependency is accessed.
-- [ ] Preserve exact renderer output with contract cases for normal preview,
+- [x] Preserve exact renderer output with contract cases for normal preview,
   malformed expression, omitted occurrence, exhausted provider, timezone
   fallback, compact output, and Unicode text.
-- [ ] Replace `AnchorPreviewServices` with
+- [x] Replace `AnchorPreviewServices` with
   `AnchorExpressionPreviewServices`; keep `AnchorFilePreviewServices` separate
   so anchor-file callers do not construct expression-only validators or
   expiration rendering dependencies.
-- [ ] Split `TimelineServices` into focused projection and formatting
+- [x] Split `TimelineServices` into focused projection and formatting
   collaborators; inject configured evaluator/scheduler ports directly and
   remove `core` and `module_loader` from the timeline boundary.
-- [ ] Replace the callback construction in `add_preview_composition.py` and
-  `modify_presentation_effects.py` with the focused contexts. Construct each
+- [x] Replace callback construction in `add_preview_composition.py` and
+  `modify_composition_adapters.py` with focused contexts. Keep
+  `modify_presentation_effects.py` limited to chain-style ports. Construct each
   context once per hook invocation.
-- [ ] Remove old wide service bags immediately after their callers and tests
+- [x] Remove old wide service bags immediately after their callers and tests
   migrate; retain a compatibility adapter only when an installed-layout test
   identifies a real external caller.
-- [ ] Confirm presentation continues to be side-effect free except for its
+- [x] Confirm presentation continues to be side-effect free except for its
   explicit renderer sink and that hook stdout remains strict JSON.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest tests.test_chain_summary_renderer_contract -v
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest tests.test_presentation_context_contract -v
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest tests.test_effect_boundary -v
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 -m unittest tests.test_hook_input_contract -v
 ```
 
 **Done when:** Preview and timeline operations can be tested with only their
 actual collaborators, and no presentation context acts as a hook-shaped
-service locator.
+service locator. Verified: the focused usage matrix passes independently for
+both preview contexts and both timeline kinds; all listed renderer edge cases
+remain covered by unit/golden contracts.
 
 ---
 
@@ -869,30 +1166,81 @@ service locator.
 - Inspect test-only findings in `dev_tools/nautical_golden_tests.py` separately.
 - Modify production code only for a reproduced security weakness.
 
-- [ ] Export the complete security finding list without the display noise
+- [x] Export the complete security finding list without the display noise
   budget and classify each production finding as genuine, false positive,
   exaggerated, or not worth changing, with file-and-line evidence.
-- [ ] Record that `import_child(request, verify=False)` and
+- [x] Record that `import_child(request, verify=False)` and
   `link_parent(request, verify=False)` disable immediate Taskwarrior
   postcondition reads for later batch verification; they do not disable TLS.
   Treat the current `weak_crypto_tls` reports on those calls as false positives
   unless code evidence shows an actual network/TLS path.
-- [ ] Review insecure-random findings by purpose. Deterministic recurrence and
+- [x] Review insecure-random findings by purpose. Deterministic recurrence and
   randomized test order are not cryptographic contexts; identity, nonce,
   credential, or untrusted-token generation must use a cryptographically
   suitable source.
-- [ ] Replace hard-coded shared temporary paths only where concurrent or
+- [x] Replace hard-coded shared temporary paths only where concurrent or
   untrusted users could race, replace, or read the artifact. Keep deterministic
   fixture paths scoped inside a securely created temporary directory.
-- [ ] Manually verify the real trust boundaries: Taskwarrior subprocess
+- [x] Manually verify the real trust boundaries: Taskwarrior subprocess
   argument construction, JSON import/export, configured file paths, cache and
   outbox permissions, symlink handling, SQLite state, and diagnostic
   redaction.
-- [ ] Do not apply broad suppressions or semantic changes to make the 504 raw
+- [x] Do not apply broad suppressions or semantic changes to make the 504 raw
   signals disappear. Suppress or document only the exact reviewed instance,
   and retain the evidence for the next scan.
-- [ ] Run the strict JSON, structured-failure, mutation, offline-kit, and
+- [x] Run the strict JSON, structured-failure, mutation, offline-kit, and
   deployment tests after any genuine security fix.
+
+**Audit record — 2026-09-13**
+
+- Complete open-finding export: `/tmp/nautical-security-findings-20260913.json`
+  (504 signals across 61 files; 179 in `nautical_core/` and
+  `nautical_navigator.py`, 325 in development/test tooling). The golden runner
+  accounts for 240 tooling signals. The export retains each finding's ID,
+  detector, file, line, and code context.
+- Production verdicts by detector: `weak_crypto_tls` 2 — false positives at
+  `nautical_core/taskwarrior_mutations.py:685,687`; `B603` 5 — exaggerated
+  signals because calls use argument vectors without a shell and binaries are
+  resolved or explicitly supplied at the integration boundary
+  (`nautical_core/taskwarrior_client.py:117`,
+  `nautical_core/integration_context.py:171-183`); `B404` 4 — false positives
+  on importing `subprocess`; `B101` 23 and `B112` 8 — exaggerated signals on
+  internal invariants or fail-closed best-effort iteration; `B110` 137 — not
+  security defects by themselves, covering optional diagnostics, cache
+  fallback/cleanup, and optimization-only preflight. The export provides the
+  file-and-line evidence for every member of these groups.
+- The two unverified lifecycle methods retain per-intent guards and mutation
+  commands; lifecycle execution performs later authoritative batch verification
+  in `nautical_core/taskwarrior_mutations.py:676-688,773-835`. No TLS/network
+  client is involved.
+- Test/tooling-only verdicts: `B311` uses pseudorandomness only for load/stress
+  task generation; `B607` occurs in the performance harness's Taskwarrior
+  invocations; `B108` mostly identifies inert path-resolution/rendering fixtures
+  or retired golden cases. The active `_test_operator_uow()` helper now allocates
+  isolated temporary Taskdata instead of the shared
+  `/tmp/nautical-test-taskdata` path.
+- Genuine issue reproduced and fixed: outbox initialization followed symlinks
+  for `.nautical-state`, the SQLite database, and WAL/SHM files; permission
+  hardening could affect external targets. It now rejects symlinks and
+  non-regular files, verifies opened-file identity, creates the database
+  privately, enforces directory/file modes, and closes the SQLite connection
+  if connection setup fails in `nautical_core/lifecycle_outbox.py:320-427`.
+  WAL/SHM sidecars remain protected by the mode-0700 state directory rather
+  than being chmodded while concurrent SQLite users may hold them. Regression
+  cases are in `tests/test_structured_failure_boundaries.py:21-94`.
+- Trust-boundary review found argv-based subprocess use without shell execution,
+  shape validation around Taskwarrior JSON, traversal/ownership checks for
+  configured directories, private cache/outbox directories and state files,
+  symlink-rejecting backup verification, and opt-in/content-redacted diagnostics.
+  No broad suppressions were added.
+- Final gates: 671 unit tests passed, all 984 registered golden tests passed,
+  deployment sanity returned `status: ok`, and `git diff --check` passed. The
+  cross-owner queue/reconcile claim test also passed five consecutive isolated
+  runs after avoiding concurrent sidecar chmod operations.
+- Revalidation on 2026-09-13: structured failure-boundary tests passed 9/9,
+  operator process contracts passed 26/26, deployment sanity returned
+  `status: ok`, and `git diff --check` passed. No product code changed during
+  this revalidation.
 
 ```bash
 /home/pooK/venv/test_1/bin/desloppify show security --status open --top 1000 --no-budget
@@ -921,17 +1269,48 @@ false positives have not weakened recurrence or postcondition verification.
 - Internal production code imports typed owners and never depends on lazy alias
   registration order.
 
-- [ ] Inventory every internal `from nautical_core import ...` and
+- [x] Inventory every internal `from nautical_core import ...` and
   `import nautical_core as ...` occurrence.
-- [ ] Convert internal imports to explicit relative owner modules, one domain at
+- [x] Convert internal imports to explicit relative owner modules, one domain at
   a time, with direct tests before each conversion.
-- [ ] Move legacy aliases, lazy resolution, and deprecation behavior behind
+- [x] Move legacy aliases, lazy resolution, and deprecation behavior behind
   `compat_api.py`; do not let primary modules import that compatibility owner.
-- [ ] Remove facade write-back of resolved functions after typed subsystem
+- [x] Remove facade write-back of resolved functions after typed subsystem
   factories no longer require it.
-- [ ] Preserve documented public names and installed hooks through a public API
+- [x] Preserve documented public names and installed hooks through a public API
   snapshot and deployment sanity test.
-- [ ] Enforce the resulting direction with the architecture contract.
+- [x] Enforce the resulting direction with the architecture contract.
+
+**Progress record — 2026-09-13**
+
+- Inventory found facade imports in the operator query, doctor, and reconcile
+  command roots; these are now confined to tool composition boundaries. Module
+  owners use their explicit modules, including reconcile's lock owner and the
+  Doctor cache-maintenance owner, rather than importing individual root aliases.
+- `compat_api.py` now owns lazy sibling/API binding, public model resolution,
+  export enumeration support, and the legacy business-calendar alias mapping.
+  The root package delegates those compatibility mechanics while retaining
+  its documented names and lazy behavior.
+- The architecture contract now rejects direct imports of
+  `nautical_core.compat_api` from primary production layers; the synthetic
+  violation test and full architecture tests pass. The deployment sanity
+  check passes with the stable 130-name public API snapshot.
+- Query and integrity-query services now receive immutable runtime ports instead
+  of a live root-facade module. Integration startup and operator UOW construction
+  likewise receive an explicit `IntegrationRuntime`; the facade adapter is kept
+  at the CLI composition edge. A typed-parser migration regression exposed that
+  decoded temporal values are `datetime` instances, so query parsing now uses
+  the observation's original wire value.
+- Lazy facade alias resolution no longer writes bound functions back over the
+  registered wrappers. A contract test proves aliases remain stable while still
+  resolving and invoking the typed binding. Wrappers retain their documented
+  public signatures and expose lazy cache controls, preserving introspection,
+  cache metrics, and invalidation without facade namespace replacement.
+- Verification: unit discovery passed (675 tests), complete golden suite passed
+  (984/984), focused operator process contracts passed (26), architecture and
+  typed API tests passed, and deployment sanity reported `status: ok`. The
+  remaining `nautical_core` imports are confined to the CLI composition roots;
+  domain and primary application owners do not depend on the root facade.
 
 **Done when:** The root facade can be replaced or deprecated independently of
 parser, scheduler, cache, lifecycle, and modify implementations.
@@ -946,17 +1325,34 @@ parser, scheduler, cache, lifecycle, and modify implementations.
 - Modify: `.github/workflows/type-check.yml`
 - Annotate only the new or migrated boundary modules.
 
-- [ ] Require complete definitions and relevant strict error codes for the new
+- [x] Require complete definitions and relevant strict error codes for the new
   datetime, API binding, architecture, parser/scheduler/cache dependency, and
   modify, lifecycle execution, and presentation service modules.
-- [ ] Remove `Any` from dependency object fields where a protocol or concrete
+- [x] Remove `Any` from dependency object fields where a protocol or concrete
   type is known.
-- [ ] Test a normal-import configuration with `follow_imports=normal` for the
+- [x] Test a normal-import configuration with `follow_imports=normal` for the
   migrated modules before changing the whole repository default.
-- [ ] Expand normal import following domain by domain; do not silence new errors
+- [x] Expand normal import following domain by domain; do not silence new errors
   with blanket ignores.
-- [ ] Keep heterogeneous Taskwarrior payload values appropriately open rather
+- [x] Keep heterogeneous Taskwarrior payload values appropriately open rather
   than forcing false precision into arbitrary UDA mappings.
+
+**Progress record — 2026-09-13**
+
+- Strict complete-definition and error-code checks now cover the migrated
+  datetime parser, API binding and compatibility boundary, architecture
+  contract, integration/runtime context, recurrence context, and occurrence
+  query service. Existing modify, lifecycle, scheduler, and presentation
+  boundaries remain under their targeted strict CI groups; the full package
+  strict error-code gate remains enabled.
+- Typed dependency records now use callable contracts where they carry
+  callbacks; recurrence timezone/calendar and cache-memory state use concrete
+  types. Heterogeneous namespace/configuration and Taskwarrior UDA mappings
+  remain open where their runtime shape is intentionally dynamic.
+- A dedicated `follow_imports=normal` CI pass covers 13 migrated and adjacent
+  dependency modules. Initial findings in the followed modules were corrected
+  directly. The normal-import pass and full strict package check now both pass;
+  no blanket type ignores were added.
 
 ```bash
 python3 -m mypy --config-file mypy.ini nautical_core/task_datetime.py

@@ -116,7 +116,6 @@ def cache_key(
     anchor_year_fmt: str,
     wrand_salt: str,
     local_tz_name: str,
-    holiday_region: str,
 ) -> str:
     payload = "|".join(
         [
@@ -125,7 +124,6 @@ def cache_key(
             anchor_year_fmt,
             wrand_salt,
             local_tz_name,
-            holiday_region,
             business_calendar_fingerprint,
             "nautical-cache|v1",
         ]

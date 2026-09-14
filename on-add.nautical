@@ -40,13 +40,13 @@ def _load_bootstrap():
     raw_core_path = (os.environ.get("NAUTICAL_CORE_PATH") or "").strip()
     if raw_core_path:
         try:
-            core_path = Path(raw_core_path).expanduser()
-            candidates.extend(
-                (
-                    core_path / "hook_bootstrap.py",
-                    core_path / "nautical_core" / "hook_bootstrap.py",
-                )
-            )
+            core_path = Path(raw_core_path).expanduser().resolve()
+            trusted = (os.environ.get("NAUTICAL_TRUST_CORE_PATH") or "").strip().lower() in ("1", "true", "yes", "on")
+            if not trusted:
+                st = os.stat(core_path)
+                trusted = st.st_uid == os.getuid() and (st.st_mode & 0o002) == 0
+            if trusted:
+                candidates.extend((core_path / "hook_bootstrap.py", core_path / "nautical_core" / "hook_bootstrap.py"))
         except Exception:
             pass
 

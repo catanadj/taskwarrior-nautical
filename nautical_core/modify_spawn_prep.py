@@ -90,12 +90,12 @@ def child_uuid_for_spawn(
     env: dict,
     *,
     stable_child_uuid,
-    reserve_child_uuid,
+    generate_child_uuid_candidate,
 ) -> str:
     stable = stable_child_uuid(parent_task, child_task)
     if stable:
         return stable
-    return reserve_child_uuid(env)
+    return generate_child_uuid_candidate(env)
 
 
 def prepare_spawn_child_payload(

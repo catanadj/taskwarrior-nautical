@@ -47,11 +47,15 @@ from nautical_core.operator_presentation import finding_display, finding_status,
 from nautical_core.operator_context import OperatorInvocationBudget  # noqa: E402
 from nautical_core.operator_models import OperatorLimits  # noqa: E402
 from nautical_core.operator_findings import OperatorFinding, doctor_finding  # noqa: E402
-from nautical_core import astronomy, configuration_drift, config_schema, description_aliases, effective_config_snapshot, install_runtime  # noqa: E402
+import nautical_core.astronomy as astronomy  # noqa: E402
+import nautical_core.cache_api as cache_api  # noqa: E402
+import nautical_core.core_config as core_config  # noqa: E402
+import nautical_core.install_runtime as install_runtime  # noqa: E402
 from nautical_core.doctor_report import format_task, historical_summaries, render_finding, timezone_summary, to_operator_result  # noqa: E402
 from nautical_core.integration_context import (  # noqa: E402
     IntegrationAccess,
     IntegrationContext,
+    IntegrationRuntime,
     SilentDiagnostics,
     SystemClock,
     ValidatedNauticalConfiguration,
@@ -299,7 +303,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
             {}, effective={}, config_dir=taskdata, timezone_factory=ZONEINFO_FACTORY,
             seasonal_events=seasonal_events_utc,
             astronomy_preflight=astronomy_preflight, source_path="defaults",
-            drift_loader=configuration_drift, dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
+            drift_loader=core_config.configuration_drift, dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
             python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
         ))
         findings.extend(item.to_doctor_dict() for item in report.findings)
@@ -317,7 +321,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
         )
         return
     _finding(findings, "config.loaded", "ok", f"Nautical config is valid: {config}")
-    snapshot = effective_config_snapshot()
+    snapshot = core_config.effective_config_snapshot()
     effective_value = snapshot.get("values")
     effective = effective_value if isinstance(effective_value, dict) else {}
     from nautical_core.astronomical_seasons import seasonal_events_utc
@@ -325,7 +329,7 @@ def _check_config(findings: list[dict[str, Any]], taskdata: Path) -> None:
     report = OperatorHealthService.diagnose_configuration(ConfigurationDiagnosisRequest(
         data, effective=effective, config_dir=config.parent, timezone_factory=ZONEINFO_FACTORY,
         seasonal_events=seasonal_events_utc, astronomy_preflight=astronomy_preflight,
-        source_path=str(config), drift_loader=configuration_drift,
+        source_path=str(config), drift_loader=core_config.configuration_drift,
         dependency_available=lambda name: RICH_SPEC_FACTORY(name) is not None,
         python_executable=sys.executable, rich_factory=RICH_SPEC_FACTORY,
     ))
@@ -560,7 +564,7 @@ def main() -> int:
     unit_of_work = None
     try:
         unit_of_work = build_operator_uow(
-            core=nautical_core_package,
+            runtime=IntegrationRuntime.from_compatibility_facade(nautical_core_package),
             task_binary=args.task_bin,
             taskdata=args.taskdata,
             env=env,
@@ -667,7 +671,7 @@ def main() -> int:
             runtime_state, Path(backup_root).expanduser() if backup_root else None,
         ))
     if args.clean_cache:
-        gc_result = nautical_core_package.cache_gc()
+        gc_result = cache_api.for_core(module=nautical_core_package).cache_gc()
         gc_errors = int(gc_result.get("errors", 0) or 0)
         _finding(
             findings,

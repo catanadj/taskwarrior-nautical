@@ -122,7 +122,7 @@ def __getattr__(name: str):
     if name == "_timeline_lines":
         host = _hook_host()
         def _timeline_lines(kind, task, child_due_utc, child_short, dnf, **kwargs):
-            return _module("modify_presentation_effects").timeline_lines(
+            return _module("modify_composition_adapters").timeline_lines_for(
                 host, kind, task, child_due_utc, child_short, dnf, **kwargs
             )
         return _timeline_lines
@@ -246,10 +246,11 @@ def _anchor_file_provider_for(
 
 def _anchor_file_fallback_hhmm(task: dict, default_local: datetime) -> tuple[int, int]:
     """Keep provider fallback time stable across completion projection stages."""
+    parser = _TASK_DATETIME_PARSER
+    if parser is None:
+        return default_local.hour, default_local.minute
     for field in ("due", "scheduled"):
-        parsed, error = _module("modify_datetime_effects").parse_datetime(
-            _TASK_DATETIME_PARSER, task.get(field)
-        )
+        parsed, error = parser.parse(task.get(field))
         if not error and parsed is not None:
             local = _to_local_cached(parsed)
             return local.hour, local.minute
@@ -797,11 +798,11 @@ _MODULE_SPECS = {
         "modify_composition.py",
         "nautical_core.modify_composition",
     ),
-    "modify_effects": (
-        "_MODIFY_EFFECTS",
-        "_MODIFY_EFFECTS_LOAD_FAILED",
-        "modify_effects.py",
-        "nautical_core.modify_effects",
+    "modify_composition_adapters": (
+        "_MODIFY_COMPOSITION_ADAPTERS",
+        "_MODIFY_COMPOSITION_ADAPTERS_LOAD_FAILED",
+        "modify_composition_adapters.py",
+        "nautical_core.modify_composition_adapters",
     ),
     "modify_completion_effects": (
         "_MODIFY_COMPLETION_EFFECTS",
@@ -1067,11 +1068,6 @@ def _apply_core_config() -> None:
 # Small cached helpers for speed + consistency
 # ------------------------------------------------------------------------------
 @lru_cache(maxsize=512)
-def _parse_dt_any_cached(s: str):
-    return core.parse_dt_any(s)
-
-
-@lru_cache(maxsize=512)
 def _fmt_dt_local_cached(dt):
     return core.fmt_dt_local(dt)
 
@@ -1109,10 +1105,6 @@ def _load_omit_file_dates(name: str):
 def _load_anchor_file_dates(name: str):
     anchor_files = core._import_sibling("anchor_files")
     return anchor_files.load_anchor_file_dates(name, getattr(core, "ANCHOR_FILE_DIR", ""))
-
-
-def _dtparse(s):
-    return _parse_dt_any_cached(s)
 
 
 def _fmtlocal(dt):
@@ -1275,7 +1267,8 @@ def _panic_passthrough() -> None:
 
 def _print_task(task):
     host = _hook_host()
-    return _module("modify_ui_effects").print_task(host, task)
+    ui = _module("modify_ui_effects")
+    return ui.print_task(ui.ui_ports_for(host), task)
 
 
 
@@ -1289,8 +1282,9 @@ def _panel(
     label_style: str | None = None,
 ):
     host = _hook_host()
-    return _module("modify_ui_effects").panel(
-        host, title, rows, kind=kind, border_style=border_style,
+    ui = _module("modify_ui_effects")
+    return ui.panel(
+        ui.ui_ports_for(host), title, rows, kind=kind, border_style=border_style,
         title_style=title_style, label_style=label_style,
     )
 

@@ -188,12 +188,7 @@ class ChainNode:
                 fields[name] = state.raw_value()
         fields.update(observation.to_mapping())
         raw_link = value("link")
-        if isinstance(raw_link, int) and not isinstance(raw_link, bool):
-            link: int | None = raw_link
-        elif raw_link in (None, ""):
-            link = None
-        else:
-            link = None
+        link: int | None = raw_link if isinstance(raw_link, int) and not isinstance(raw_link, bool) else None
         return cls(
             str(value("uuid") or ""),
             str(value("chainID") or ""),

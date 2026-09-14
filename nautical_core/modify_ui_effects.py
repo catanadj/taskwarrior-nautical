@@ -19,24 +19,24 @@ class UIEffectsPorts:
     stderr_write: Callable[[str], Any]
 
 
-def _test_override(host: Any, name: str):
+def ui_ports_for(host: Any) -> UIEffectsPorts:
+    """Adapt the hook host once at the composition boundary."""
     values = getattr(host, "_values", None)
     if values is None and hasattr(host, "__dict__"):
         values = vars(host)
     values_map = values if isinstance(values, dict) else {}
-    override = values_map.get(name)
-    is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
-        getattr(getattr(override, "__code__", None), "co_filename", "") == values_map.get("__file__")
-    )
-    return override if callable(override) and not is_root_delegate else None
 
+    def test_override(name: str):
+        override = values_map.get(name)
+        is_root_delegate = callable(override) and getattr(override, "__name__", "") == name and (
+            getattr(getattr(override, "__code__", None), "co_filename", "") == values_map.get("__file__")
+        )
+        return override if callable(override) and not is_root_delegate else None
 
-def ui_ports_for(host: Any) -> UIEffectsPorts:
-    """Adapt the hook host once at the composition boundary."""
     return UIEffectsPorts(
         core=lambda: host.core,
         load_core=host._load_core,
-        override=lambda name: _test_override(host, name),
+        override=test_override,
         emit_passthrough_json=lambda task: host._module("hook_results").emit_passthrough_json(task),
         emit_task_json=lambda task, **kwargs: host._module("hook_results").emit_task_json(task, **kwargs),
         stderr_write=sys.stderr.write,

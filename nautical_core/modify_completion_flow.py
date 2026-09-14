@@ -10,6 +10,8 @@ from nautical_core.modify_models import (
     CompletionComputeResult,
     CompletionFinalizeServices,
     CompletionPreflightContext,
+    AnchorCompletionFeedbackModel,
+    CpCompletionFeedbackModel,
     TaskView,
 )
 from nautical_core.task_changes import TaskTransition
@@ -152,17 +154,17 @@ def finalize_completion_modify(
     base_no = ctx.base_no
     next_no = ctx.next_no
     kind = ctx.kind
-    spawn_args = {
-        "child_due": computed.child_due,
-        "child_field": "scheduled" if isinstance(computed.meta, dict) and computed.meta.get("target_field") == "scheduled" else "due",
-        "next_no": next_no,
-        "parent_short": parent_short,
-        "kind": kind,
-        "cpmax": computed.cpmax,
-        "until_dt": computed.until_dt,
-        "lifecycle_plan": getattr(computed, "lifecycle_plan", None),
-    }
-    spawned = services.build_and_spawn_child(new, **spawn_args)
+    spawned = services.build_and_spawn_child(
+        new,
+        child_due=computed.child_due,
+        child_field="scheduled" if isinstance(computed.meta, dict) and computed.meta.get("target_field") == "scheduled" else "due",
+        next_no=next_no,
+        parent_short=parent_short,
+        kind=kind,
+        cpmax=computed.cpmax,
+        until_dt=computed.until_dt,
+        lifecycle_plan=getattr(computed, "lifecycle_plan", None),
+    )
     if spawned is None:
         lifecycle_result = CompletionLifecycleResult(
             state="retryable",
@@ -281,49 +283,30 @@ def finalize_completion_modify(
 
     if kind in {"anchor", "anchor_file"}:
         services.render_anchor_completion_feedback(
-            new=new_view,
-            child=child_view,
-            child_due=computed.child_due,
-            child_short=child_short,
-            next_no=next_no,
-            parent_short=parent_short,
-            cap_no=computed.cap_no,
-            finals=computed.finals,
-            now_utc=now_utc,
-            until_dt=computed.until_dt,
-            until_cap_no=computed.until_cap_no,
-            dnf=computed.dnf,
-            meta=computed.meta,
-            stripped_attrs=stripped_attrs,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-            lifecycle_result=lifecycle_result,
-            chain_by_short=presentation_chain_by_short,
-            analytics_advice=analytics_advice,
-            integrity_warnings=integrity_warnings,
-            base_no=base_no,
+            request=AnchorCompletionFeedbackModel(
+                new=new_view, child=child_view, child_due=computed.child_due,
+                child_short=child_short, next_no=next_no, parent_short=parent_short,
+                cap_no=computed.cap_no, finals=computed.finals, now_utc=now_utc,
+                until_dt=computed.until_dt, until_cap_no=computed.until_cap_no,
+                dnf=computed.dnf, meta=computed.meta, stripped_attrs=stripped_attrs,
+                deferred_spawn=deferred_spawn, spawn_intent_id=spawn_intent_id,
+                lifecycle_result=lifecycle_result, chain_by_short=presentation_chain_by_short,
+                analytics_advice=analytics_advice, integrity_warnings=integrity_warnings,
+                base_no=base_no,
+            )
         )
     else:
         services.render_cp_completion_feedback(
-            new=new_view,
-            child=child_view,
-            child_due=computed.child_due,
-            child_short=child_short,
-            next_no=next_no,
-            parent_short=parent_short,
-            cap_no=computed.cap_no,
-            finals=computed.finals,
-            now_utc=now_utc,
-            until_dt=computed.until_dt,
-            until_cap_no=computed.until_cap_no,
-            meta=computed.meta,
-            deferred_spawn=deferred_spawn,
-            spawn_intent_id=spawn_intent_id,
-            lifecycle_result=lifecycle_result,
-            chain_by_short=presentation_chain_by_short,
-            analytics_advice=analytics_advice,
-            integrity_warnings=integrity_warnings,
-            base_no=base_no,
+            request=CpCompletionFeedbackModel(
+                new=new_view, child=child_view, child_due=computed.child_due,
+                child_short=child_short, next_no=next_no, parent_short=parent_short,
+                cap_no=computed.cap_no, finals=computed.finals, now_utc=now_utc,
+                until_dt=computed.until_dt, until_cap_no=computed.until_cap_no,
+                meta=computed.meta, deferred_spawn=deferred_spawn,
+                spawn_intent_id=spawn_intent_id, lifecycle_result=lifecycle_result,
+                chain_by_short=presentation_chain_by_short, analytics_advice=analytics_advice,
+                integrity_warnings=integrity_warnings, base_no=base_no,
+            )
         )
 
     services.print_task(new)

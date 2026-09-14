@@ -7,6 +7,7 @@ from datetime import timedelta
 from dataclasses import dataclass
 from typing import Any
 from .task_datetime import datetime_value, parser_for_host
+from .timeutil import compare_datetimes
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +88,28 @@ class NativeUntilSlotPorts:
     abort: Any
 
 
+@dataclass(frozen=True, slots=True)
+class AnchorValidationPorts:
+    lint: Any
+    validate_strict: Any
+    panel: Any
+    is_astronomy_error: Any
+    astronomy_error_message: Any
+    fail: Any
+
+
+@dataclass(frozen=True, slots=True)
+class OmitValidationPorts:
+    pipeline: Any
+    parse_anchor: Any
+    validate_anchor: Any
+    validate_omit: Any
+    validate_files: Any
+    load_anchor_file: Any
+    load_omit_file: Any
+    fail: Any
+
+
 def anchor_error_message(anchor_expr: str, default_msg: str) -> str:
     if re.search(r"(?:^|[^A-Za-z])(w|m|y)(?:/\d+)?:", anchor_expr, re.IGNORECASE):
         return default_msg
@@ -107,53 +130,72 @@ def anchor_mode(ports: AnchorModePorts, old: Any, new: Any) -> str:
     return normalized.upper()
 
 
-def validate_anchor(host: Any, old: Any, new: Any, anchor_expr: str) -> None:
+def validate_anchor(ports: AnchorValidationPorts, old: Any, new: Any, anchor_expr: str) -> None:
     try:
-        _, warns = host.core.lint_anchor_expr(anchor_expr)
+        _, warns = ports.lint(anchor_expr)
         if warns:
-            host._module("modify_ui_effects").panel(
-                host, "ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note"
-            )
-        anchor_mode(
-            AnchorModePorts(lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs)),
-            old, new,
-        )
+            ports.panel("ℹ️  Lint", [("Hint", warning) for warning in warns], kind="note")
+        anchor_mode(AnchorModePorts(ports.panel), old, new)
         # Validation must remain decision-only. Hint persistence has no
         # synchronous consumer and would repeat scheduler work on every edit.
-        host.core.validate_anchor_expr_strict(anchor_expr)
+        ports.validate_strict(anchor_expr)
     except TypeError:
-        host.core.validate_anchor_expr_strict(anchor_expr)
+        ports.validate_strict(anchor_expr)
     except Exception as exc:
-        astronomy = host.core._import_sibling("astronomy")
-        if astronomy.is_astronomy_error(exc):
-            host._fail_and_exit("Invalid anchor", astronomy.scheduling_error_message(exc))
-        host._fail_and_exit("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
+        if ports.is_astronomy_error(exc):
+            ports.fail("Invalid anchor", ports.astronomy_error_message(exc))
+        ports.fail("Invalid anchor", anchor_error_message(anchor_expr, str(exc)))
 
 
-def validate_omit(host: Any, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
+def validate_omit(ports: OmitValidationPorts, anchor_expr: str, anchor_file_expr: str, omit_expr: str, omit_file: str) -> None:
     try:
         validate_shared_omit(
             SharedValidationPorts(
-                host.core._import_sibling("hook_validation_pipeline"),
-                host.core.parse_anchor_expr_to_dnf,
-                host._validate_anchor_expr_cached,
-                host._validate_omit_expr_cached,
+                ports.pipeline, ports.parse_anchor, ports.validate_anchor, ports.validate_omit,
             ), omit_expr,
         )
-        findings = host.core._import_sibling("hook_validation_pipeline").validate_recurrence_files(
+        findings = ports.validate_files(
             anchor_expr,
             anchor_file_expr,
             omit_expr,
             omit_file,
-            load_anchor_file=host._load_anchor_file_dates,
-            load_omit_file=host._load_omit_file_dates,
+            load_anchor_file=ports.load_anchor_file,
+            load_omit_file=ports.load_omit_file,
         )
     except Exception as exc:
-        host._fail_and_exit("Invalid omit", str(exc))
+        ports.fail("Invalid omit", str(exc))
         return
     if findings:
         finding = findings[0]
-        host._fail_and_exit(f"Invalid {finding.field}", finding.reason)
+        ports.fail(f"Invalid {finding.field}", finding.reason)
+
+
+def anchor_validation_ports_for(host: Any) -> AnchorValidationPorts:
+    astronomy = host.core._import_sibling("astronomy")
+    ui = host._module("modify_ui_effects")
+    ui_ports = ui.ui_ports_for(host)
+    return AnchorValidationPorts(
+        lint=host.core.lint_anchor_expr,
+        validate_strict=host.core.validate_anchor_expr_strict,
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
+        is_astronomy_error=astronomy.is_astronomy_error,
+        astronomy_error_message=astronomy.scheduling_error_message,
+        fail=host._fail_and_exit,
+    )
+
+
+def omit_validation_ports_for(host: Any) -> OmitValidationPorts:
+    pipeline = host.core._import_sibling("hook_validation_pipeline")
+    return OmitValidationPorts(
+        pipeline=pipeline,
+        parse_anchor=host.core.parse_anchor_expr_to_dnf,
+        validate_anchor=host._validate_anchor_expr_cached,
+        validate_omit=host._validate_omit_expr_cached,
+        validate_files=pipeline.validate_recurrence_files,
+        load_anchor_file=host._load_anchor_file_dates,
+        load_omit_file=host._load_omit_file_dates,
+        fail=host._fail_and_exit,
+    )
 
 
 def validate_shared_anchor(ports: SharedValidationPorts, expr: str) -> None:
@@ -217,7 +259,7 @@ def chain_limit_ports_for(host: Any) -> ChainLimitPorts:
         parse_chain_max=add_validation.parse_chain_max,
         parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
         validate_until_not_past=lambda until_dt, now: until_not_past(
-            UntilPorts(lambda _now: timedelta(minutes=1), host._module("timeutil").compare_datetimes, host.core.humanize_delta), until_dt, now
+            UntilPorts(lambda _now: timedelta(minutes=1), compare_datetimes, host.core.humanize_delta), until_dt, now
         ),
         now_utc=host.core.now_utc,
         fail=host._fail_and_exit,
@@ -239,13 +281,15 @@ def validate_native_until(ports: NativeUntilPorts, task: dict) -> None:
 
 def native_until_ports_for(host: Any) -> NativeUntilPorts:
     add_validation = host.core._import_sibling("add_validation")
+    ui = host._module("modify_ui_effects")
+    ui_ports = ui.ui_ports_for(host)
     return NativeUntilPorts(
         validate=host._module("modify_validation").validate_native_until_after_target_or_fail,
         validate_anchor_mode=add_validation.validate_native_until_anchor_mode,
         parse_datetime=host._TASK_DATETIME_PARSER.parse,
         validate_after_target=add_validation.validate_native_until_after_target,
         format_local=host.core.fmt_dt_local,
-        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
         fail=host._fail_and_exit,
         abort=host.sys.exit,
     )
@@ -275,6 +319,8 @@ def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
     astronomy = host.core._import_sibling("astronomy")
     native_until = host.core._import_sibling("native_until")
     recurrence_context = host.core._import_sibling("recurrence_context").RecurrenceContext
+    ui = host._module("modify_ui_effects")
+    ui_ports = ui.ui_ports_for(host)
     return NativeUntilSlotPorts(
         validate=host._module("modify_validation").validate_native_until_anchor_slots_or_fail,
         parse_datetime=host._TASK_DATETIME_PARSER.parse,
@@ -290,7 +336,7 @@ def native_until_slot_ports_for(host: Any) -> NativeUntilSlotPorts:
         format_local=host.core.fmt_dt_local,
         astronomy_is_error=astronomy.is_astronomy_error,
         astronomy_error_message=astronomy.scheduling_error_message,
-        panel=lambda title, rows, **kwargs: host._module("modify_ui_effects").panel(host, title, rows, **kwargs),
+        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
         abort=host.sys.exit,
     )
 
@@ -320,7 +366,8 @@ def semantic_diff_value(old_text: str, new_text: str) -> str:
 
 
 __all__ = (
-    "validate_anchor", "validate_omit", "validate_shared_anchor",
+    "AnchorValidationPorts", "OmitValidationPorts", "anchor_validation_ports_for",
+    "omit_validation_ports_for", "validate_anchor", "validate_omit", "validate_shared_anchor",
     "validate_shared_omit", "validate_cp", "validate_chain_limits",
     "validate_native_until", "validate_native_until_slots", "native_until_slot_ports_for", "until_not_past",
     "chain_duration_reasonable", "semantic_diff_value",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, KeysView, Mapping
 
 
 def core_namespace(
@@ -54,7 +54,7 @@ class ApiBinding:
     def __dir__(self) -> list[str]:
         return sorted(set(super().__dir__()) | set(self._members))
 
-    def keys(self):
+    def keys(self) -> KeysView[str]:
         """Return the immutable binding member names for introspection."""
         return self._members.keys()
 

@@ -40,7 +40,7 @@ def file_source_warnings(core: Any, task: TaskView) -> list[str]:
                 warnings.append(f"anchor_file pattern '{pattern}' matched no files.")
             if not dates and not unmatched:
                 warnings.append(f"anchor_file '{_file_label(anchor_file)}' has no usable dates.")
-        except Exception:
+        except (FileNotFoundError, ImportError):
             pass
     if omit_file:
         try:
@@ -54,7 +54,7 @@ def file_source_warnings(core: Any, task: TaskView) -> list[str]:
                 warnings.append(f"omit_file pattern '{pattern}' matched no files.")
             if not dates and not unmatched:
                 warnings.append(f"omit_file '{_file_label(omit_file)}' has no usable dates.")
-        except Exception:
+        except (FileNotFoundError, ImportError):
             pass
     return warnings
 

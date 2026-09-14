@@ -104,7 +104,7 @@ def initialize_integration_context(
     context_module = module_access.module("integration_context")
     try:
         context = context_module.build_integration_context(
-            core=core,
+            runtime=context_module.IntegrationRuntime.from_compatibility_facade(core),
             argv=argv,
             env=os.environ,
             tw_dir=tw_dir,

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 import importlib
 import types
 from types import MappingProxyType
-from .core_context import CoreContext
+from . import compat_api as _compat_api
 fcntl: Any
 try:
     import fcntl  # POSIX advisory lock
@@ -45,20 +45,11 @@ _PKG_PROXY.__path__ = [_PKG_DIR]
 
 
 
-_PUBLIC_MODEL_NAMES = (
-    "AnchorMods", "AnchorAtom", "AnchorTerm", "AnchorDNF", "AnchorValidationResult",
-    "ParseError", "YearTokenFormatError", "AndTermUnsatisfiable", "OccurrenceSearchExhausted",
-)
+_PUBLIC_MODEL_NAMES = _compat_api.PUBLIC_MODEL_NAMES
 
 
 def _ensure_public_models() -> None:
-    if "ParseError" in globals():
-        return
-    parser_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.parsing.parser_models")
-    scheduler_models = importlib.import_module(f"{_PKG_IMPORT_ROOT}.scheduler_models")
-    for name in _PUBLIC_MODEL_NAMES[:-1]:
-        globals()[name] = getattr(parser_models, name)
-    globals()["OccurrenceSearchExhausted"] = scheduler_models.OccurrenceSearchExhausted
+    _compat_api.ensure_public_models(globals(), _PKG_IMPORT_ROOT)
 
 
 def _import_sibling(module_name: str):
@@ -66,117 +57,37 @@ def _import_sibling(module_name: str):
     return importlib.import_module(f"{_PKG_IMPORT_ROOT}.{module_name}")
 
 
-class _LazySibling:
-    """Resolve a focused sibling module only when one of its APIs is used."""
-
-    __slots__ = ("_name", "_module")
-
-    def __init__(self, module_name: str):
-        self._name = module_name
-        self._module = None
-
-    def _resolve(self):
-        if self._module is None:
-            self._module = _import_sibling(self._name)
-        return self._module
-
-    def __getattr__(self, name: str):
-        return getattr(self._resolve(), name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name in self.__slots__:
-            object.__setattr__(self, name, value)
-            return
-        setattr(self._resolve(), name, value)
+def _LazySibling(module_name: str):
+    return _compat_api._LazySibling(module_name, _import_sibling)
 
 
-class _LazyPublicExports:
-    """Tuple-like ``__all__`` that defers the compatibility export module."""
+def _LazyApiBundle(
+    module_name: str,
+    aliases: tuple[str | tuple[str, str], ...],
+    *,
+    core: Any,
+):
+    def prepare() -> None:
+        ensure_tokens = globals().get("_ensure_tokenutil_constants")
+        if callable(ensure_tokens):
+            ensure_tokens()
+        _ensure_public_models()
+        refresh_config = globals().get("_refresh_facade_config_exports")
+        if callable(refresh_config) and not globals().get("_FACADE_CONFIG_SYNCED", False):
+            refresh_config()
 
-    __slots__ = ("_source",)
-
-    def __init__(self, source: _LazySibling):
-        self._source = source
-
-    def _values(self):
-        return self._source.PUBLIC_EXPORTS
-
-    def __iter__(self):
-        return iter(self._values())
-
-    def __len__(self):
-        return len(self._values())
-
-    def __getitem__(self, index):
-        return self._values()[index]
-
-
-class _LazyApiBundle:
-    """Resolve one core-bound API bundle on its first facade call.
-
-    API modules are intentionally imported only when their public aliases are
-    used.  The aliases remain ordinary callables after resolution, preserving
-    the existing facade namespace and monkeypatch points.
-    """
-
-    __slots__ = ("_module_name", "_module", "_core", "_namespace", "_aliases", "_bindings", "_context")
-
-    def __init__(
-        self,
-        module_name: str,
-        aliases: tuple[str | tuple[str, str], ...],
-        *,
-        core: Any,
-        namespace: dict[str, Any],
-    ):
-        self._module_name = module_name
-        self._module = None
-        self._core = core
-        self._namespace = namespace
-        self._aliases = aliases
-        self._bindings = None
-        self._context = CoreContext(
-            namespace,
-            namespace.get("_import_sibling", _import_sibling),
-            getattr(core, "__file__", None),
-        )
-
-    def _resolve(self):
-        if self._bindings is None:
-            ensure_tokens = globals().get("_ensure_tokenutil_constants")
-            if callable(ensure_tokens):
-                ensure_tokens()
-            _ensure_public_models()
-            refresh_config = globals().get("_refresh_facade_config_exports")
-            if callable(refresh_config) and not globals().get("_FACADE_CONFIG_SYNCED", False):
-                refresh_config()
-            module = _import_sibling(self._module_name)
-            self._module = module
-            self._bindings = module.for_core(context=self._context)
-            for spec in self._aliases:
-                alias, source = spec if isinstance(spec, tuple) else (spec, spec)
-                self._namespace[alias] = getattr(self._bindings, source)
-        return self._bindings
-
-    def alias(self, name: str, source_name: str | None = None):
-        source_name = source_name or name
-
-        def call(*args, **kwargs):
-            return getattr(self._resolve(), source_name)(*args, **kwargs)
-
-        call.__name__ = name
-        call.__qualname__ = name
-        return call
-
-    def __getattr__(self, name: str):
-        return getattr(self._resolve(), name)
+    return _compat_api._LazyApiBundle(
+        module_name,
+        aliases,
+        core=core,
+        namespace=globals(),
+        import_sibling=_import_sibling,
+        prepare=prepare,
+    )
 
 
-def _bind_lazy_api_aliases(bundle: _LazyApiBundle) -> None:
-    """Install facade aliases while preserving alias/source pairs."""
-    for spec in bundle._aliases:
-        alias_name, source_name = spec if isinstance(spec, tuple) else (spec, spec)
-        globals()[alias_name] = bundle.alias(alias_name, source_name)
+def _bind_lazy_api_aliases(bundle: Any) -> None:
+    _compat_api._bind_lazy_api_aliases(bundle, globals())
 
 
 if TYPE_CHECKING:
@@ -859,7 +770,6 @@ _token_api = _LazyApiBundle(
         "_normalize_weekday",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_token_api)
 
@@ -1027,7 +937,6 @@ _quarter_api = _LazyApiBundle(
         "_rewrite_quarters_in_context",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_quarter_api)
 
@@ -1051,7 +960,6 @@ _acf_api = _LazyApiBundle(
         "acf_to_original_format",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_acf_api)
 
@@ -1070,7 +978,6 @@ _expansion_api = _LazyApiBundle(
         "_intersect_monthly_atoms_allowed",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_expansion_api)
 
@@ -1096,7 +1003,6 @@ _parser_support_api = _LazyApiBundle(
         "_rewrite_weekly_multi_time_atoms",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_parser_support_api)
 
@@ -1144,7 +1050,6 @@ _parser_api = _LazyApiBundle(
         ("_validate_anchor_dnf_atoms_strict", "validate_anchor_dnf_atoms_strict"),
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_parser_api)
 
@@ -1161,13 +1066,15 @@ _business_calendar_api = _LazyApiBundle(
         "get_configured_business_calendar",
         "business_calendar_for_task",
         "normalize_task_business_calendar_in_place",
-        "normalize_task_business_calendar",
+        (
+            "normalize_task_business_calendar",
+            _compat_api.LEGACY_COMPATIBILITY_ALIASES["normalize_task_business_calendar"][1],
+        ),
         "business_calendar_fingerprint",
         "use_business_calendar",
         "use_task_business_calendar",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_business_calendar_api)
 
@@ -1187,7 +1094,6 @@ _linting_api = _LazyApiBundle(
         "lint_anchor_expr",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_linting_api)
 
@@ -1252,7 +1158,6 @@ _scheduler_api = _LazyApiBundle(
         "_moon_phase_matches_date",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_scheduler_api)
 
@@ -1279,7 +1184,6 @@ _time_api = _LazyApiBundle(
         "build_local_datetime",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_time_api)
 
@@ -1324,7 +1228,6 @@ _natural_language_api = _LazyApiBundle(
         "describe_anchor_dnf",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_natural_language_api)
 
@@ -1370,7 +1273,6 @@ _cache_api = _LazyApiBundle(
         "_dnf_cache_save",
     ),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_cache_api)
 
@@ -1378,12 +1280,10 @@ _hint_builder_api = _LazyApiBundle(
     "hint_builder_api",
     ("build_and_cache_hints",),
     core=sys.modules[__name__],
-    namespace=globals(),
 )
 _bind_lazy_api_aliases(_hint_builder_api)
 
-_compat_api = _LazySibling("compat_api")
-__all__ = cast(Any, _LazyPublicExports(_compat_api))
+__all__ = _compat_api.PUBLIC_EXPORTS
 
 
 def __getattr__(name: str):

@@ -122,14 +122,24 @@ class SchedulerService:
         cursor: OccurrenceCursor,
         *,
         limit: int,
+        omission_policy: str = "exclude",
+        count_omitted: bool | None = None,
         **kwargs: Any,
     ) -> OccurrenceCollectionResult:
+        if omission_policy not in {"exclude", "include", "report"}:
+            raise ValueError("Occurrence omission policy must be exclude, include, or report.")
+        if count_omitted is not None:
+            if not isinstance(count_omitted, bool):
+                raise TypeError("count_omitted must be boolean when provided.")
+            omission_policy = "report" if count_omitted else "exclude"
         try:
             # A caller requesting omission-aware evidence needs the event stream;
             # ordinary collection remains on the included-only path.
             with self._trace_scope():
-                if "count_omitted" in kwargs:
-                    batch = self.session.collect_events_after_cursor(cursor, limit=limit, **kwargs)
+                if omission_policy in {"include", "report"}:
+                    batch = self.session.collect_events_after_cursor(
+                        cursor, limit=limit, count_omitted=True, **kwargs
+                    )
                 else:
                     batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
             if not isinstance(batch, OccurrenceBatch):

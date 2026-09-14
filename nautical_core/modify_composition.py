@@ -33,7 +33,7 @@ class ModifyHookCapabilities:
     """
 
     modify_ordinary: Any
-    modify_effects: Any
+    modify_composition_adapters: Any
     hook_results: Any
     hook_context: Any
     hook_engine: Any
@@ -60,7 +60,7 @@ class ModifyHookCapabilities:
         load = host._module
         return cls(
             modify_ordinary=load("modify_ordinary"),
-            modify_effects=load("modify_effects"),
+            modify_composition_adapters=load("modify_composition_adapters"),
             hook_results=load("hook_results"),
             hook_context=load("hook_context"),
             hook_engine=load("hook_engine"),
@@ -91,6 +91,7 @@ class NonCompletionRouteCapabilities:
     modify_ordinary: Any
     modify_lifecycle: Any
     modify_presentation_effects: Any
+    modify_diagnostics_effects: Any
     modify_validation_effects: Any
     modify_ui_effects: Any
     modify_task_fields: Any
@@ -122,7 +123,7 @@ def _cp_carry_ports(host: Any, capabilities: ModifyHookCapabilities) -> Any:
     return transition_effects.CPCarryPorts(
         carry=host._module("modify_carry").preserve_cp_relative_offsets_on_due_change,
         field_changed=capabilities.modify_task_fields.field_changed,
-        parse_datetime=host._TASK_DATETIME_PARSER.parse,
+        parse_datetime=lambda value: datetime_value(host._TASK_DATETIME_PARSER, value),
         utc_to_local_naive=host.core.utc_to_local_naive,
         local_naive_to_utc=host.core.local_naive_to_utc,
         format_datetime=host.core.fmt_isoz,
@@ -141,7 +142,7 @@ def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> A
         carry=host._module("modify_carry").preserve_native_until_on_target_change,
         field_changed=task_fields.field_changed,
         anchor_field=task_fields.recurrence_anchor_field,
-        parse_datetime=host._TASK_DATETIME_PARSER.parse,
+        parse_datetime=lambda value: datetime_value(host._TASK_DATETIME_PARSER, value),
         native_until=host.core._import_sibling("native_until"),
         generation_service=lambda: generation.chain_generation_service(
             generation.generation_ports_for(host)
@@ -149,7 +150,7 @@ def _native_preserve_ports(host: Any, capabilities: ModifyHookCapabilities) -> A
         reject_carry=lambda *args: transition_effects.reject_native_until_carry(
             transition_effects.NativeCarryPorts(
                 describe_carry=host.core._import_sibling("add_validation").describe_native_until_carry,
-                parse_datetime=host._TASK_DATETIME_PARSER.parse,
+                parse_datetime=lambda value: datetime_value(host._TASK_DATETIME_PARSER, value),
                 to_local=host.core.to_local,
                 format_local=host.core.fmt_dt_local,
                 anchor_field=task_fields.recurrence_anchor_field,
@@ -189,7 +190,7 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
         strip_quotes=capabilities.modify_task_fields.strip_quotes,
         reject_conflicting_types=pipeline.reject_recurrence_kind_conflict,
         validate_omit=lambda anchor, anchor_file, omit, omit_file: validation_effects.validate_omit(
-            host, anchor, anchor_file, omit, omit_file
+            validation_effects.omit_validation_ports_for(host), anchor, anchor_file, omit, omit_file
         ),
         validate_chain_limits=lambda task: validation_effects.validate_chain_limits(
             validation_effects.chain_limit_ports_for(host), task
@@ -247,11 +248,13 @@ class ModifyRuntimeServices:
         cp_carry_ports = _cp_carry_ports(host, capabilities)
         native_preserve_ports = _native_preserve_ports(host, capabilities)
         completion_validation_ports = _completion_validation_ports(host, capabilities)
+        completion_compute_ports = capabilities.modify_completion_effects.completion_compute_ports_for(host)
         return cls(
             non_completion=NonCompletionRouteCapabilities(
                 modify_ordinary=capabilities.modify_ordinary,
                 modify_lifecycle=capabilities.modify_lifecycle,
                 modify_presentation_effects=capabilities.modify_presentation_effects,
+                modify_diagnostics_effects=capabilities.modify_diagnostics_effects,
                 modify_validation_effects=capabilities.modify_validation_effects,
                 modify_ui_effects=capabilities.modify_ui_effects,
                 modify_task_fields=capabilities.modify_task_fields,
@@ -278,20 +281,20 @@ class ModifyRuntimeServices:
             analytics_style=host._ANALYTICS_STYLE,
             seed_runtime_lookup_tasks=lambda *tasks: capabilities.modify_read_effects.seed_runtime_lookup_tasks(
                 capabilities.modify_read_effects.SeedLookupPorts(
-                    service=capabilities.modify_read_effects.lifecycle_read_service(host),
+                    service=lifecycle_read_service_for(host),
                     decode_row=capabilities.task_codec.DEFAULT_TASK_CODEC.decode_row,
                     cache_set=host._query_ctx_set,
                 ), *tasks
             ),
-            lifecycle_read_service=lambda: capabilities.modify_read_effects.lifecycle_read_service(host),
+            lifecycle_read_service=lambda: lifecycle_read_service_for(host),
             chain_health_advice=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_health_advice(
                 capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs
             ),
             chain_integrity_warnings=lambda *args, **kwargs: capabilities.modify_diagnostics_effects.chain_integrity_warnings(
                 capabilities.modify_diagnostics_effects.analytics_ports_for(host), *args, **kwargs
             ),
-            render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_anchor_completion_feedback(host, **kwargs),
-            render_cp_completion_feedback=lambda **kwargs: capabilities.modify_presentation_effects.render_cp_completion_feedback(host, **kwargs),
+            render_anchor_completion_feedback=lambda **kwargs: capabilities.modify_composition_adapters.render_anchor_completion_feedback_for(host, **kwargs),
+            render_cp_completion_feedback=lambda **kwargs: capabilities.modify_composition_adapters.render_cp_completion_feedback_for(host, **kwargs),
             render_lifecycle_result=lambda result, task: capabilities.modify_presentation_effects.render_lifecycle_result(
                 capabilities.modify_presentation_effects.lifecycle_result_port_for(host), result, task
             ),
@@ -314,7 +317,9 @@ class ModifyRuntimeServices:
                 capabilities.modify_validation_effects.native_until_slot_ports_for(host), task
             ),
             now_utc=host.core.now_utc,
-            compute_next_and_limits=lambda *args, **kwargs: capabilities.modify_completion_effects.compute_next_and_limits(host, *args, **kwargs),
+            compute_next_and_limits=lambda *args, **kwargs: capabilities.modify_completion_effects.compute_next_and_limits(
+                completion_compute_ports, *args, **kwargs
+            ),
         )
 
 
@@ -342,6 +347,47 @@ def capabilities_for(host: Any) -> ModifyHookCapabilities:
     return cached
 
 
+def lifecycle_read_service_for(host: Any):
+    """Construct and retain the invocation's lifecycle read service."""
+    state = host._modify_runtime_state()
+    existing = getattr(state, "lifecycle_read_service", None)
+    if existing is not None:
+        return existing
+    module = host._module("lifecycle_read_service")
+    read_effects = host._module("modify_read_effects")
+    if getattr(state, "chain_cache_store", None) is None:
+        state.chain_cache_store = module.ChainCacheStore()
+    capabilities = read_effects.LifecycleReadCapabilities(
+        coerce_int=host.core.coerce_int,
+        parse_extra_tokens=lambda extra: read_effects.parse_extra_tokens(
+            read_effects.ExtraTokenPort(host._module("hook_support", required=False).parse_extra_tokens), extra
+        ),
+        token_matcher=lambda task, token: read_effects._token_match(host.core.coerce_int, task, token),
+        read_query_get=host._read_query_get,
+        read_query_missing=host._READ_QUERY_MISSING,
+        max_chain_walk=host._MAX_CHAIN_WALK,
+        diag=host._diag,
+        record_stat=host._record_chain_snapshot_stat,
+        cache_store=state.chain_cache_store,
+        repository=getattr(state, "task_repository", None),
+    )
+    service = module.LifecycleReadService(
+        coerce_int=capabilities.coerce_int,
+        parse_extra_tokens=capabilities.parse_extra_tokens,
+        token_matcher=capabilities.token_matcher,
+        read_query_get=capabilities.read_query_get,
+        chain_cache_get=lambda _chain_id: None,
+        repository=capabilities.repository,
+        max_chain_walk=capabilities.max_chain_walk,
+        diag=capabilities.diag,
+        record_stat=capabilities.record_stat,
+        cache_store=capabilities.cache_store,
+        read_query_missing=capabilities.read_query_missing,
+    )
+    state.lifecycle_read_service = service
+    return service
+
+
 class ModifyCompositionServices:
     """Bind on-modify effects to the hook's validated composition root."""
 
@@ -367,13 +413,13 @@ class ModifyCompositionServices:
         self._host._fail_and_exit(title, message)
 
     def handle_non_completion(self, old, new, unit_of_work, transition=None):
-        self._capabilities.modify_effects.handle_non_completion(
+        self._capabilities.modify_composition_adapters.handle_non_completion(
             self._host, old, new, unit_of_work, transition=transition,
             runtime=self._runtime,
         )
 
     def handle_completion(self, old, new, unit_of_work, transition=None):
-        return self._capabilities.modify_effects.handle_completion(
+        return self._capabilities.modify_composition_adapters.handle_completion(
             self._host, old, new, unit_of_work, transition=transition,
             runtime=self._runtime,
         )
@@ -381,7 +427,7 @@ class ModifyCompositionServices:
     def handle_deleted(
         self, old, new, unit_of_work, transition=None, terminal_decision=None
     ):
-        return self._capabilities.modify_effects.handle_deleted(
+        return self._capabilities.modify_composition_adapters.handle_deleted(
             self._host,
             old,
             new,
@@ -470,7 +516,7 @@ def run_on_modify(host: Any) -> None:
     request_t0 = host._ptime.perf_counter()
     capabilities.modify_read_effects.seed_runtime_lookup_tasks(
         capabilities.modify_read_effects.SeedLookupPorts(
-            service=capabilities.modify_read_effects.lifecycle_read_service(host),
+            service=lifecycle_read_service_for(host),
             decode_row=capabilities.task_codec.DEFAULT_TASK_CODEC.decode_row,
             cache_set=host._query_ctx_set,
         ), old, new

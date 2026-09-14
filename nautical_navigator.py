@@ -182,12 +182,13 @@ def _find_nautical_core() -> Optional[Any]:
 core = _find_nautical_core()
 try:
     from nautical_core.integration_models import Absent, Found, Unavailable
-    from nautical_core.integration_context import IntegrationAccess
+    from nautical_core.integration_context import IntegrationAccess, IntegrationRuntime
     from nautical_core.taskwarrior_uow import build_operator_uow
     from nautical_core.modify_models import TaskView
 except Exception:
     Absent = Found = Unavailable = None
     IntegrationAccess = None
+    IntegrationRuntime = None
     build_operator_uow = None
     TaskView = None
 
@@ -515,6 +516,30 @@ class NavigatorAnalysisView:
             "changes": [row.to_dict() for row in self.change_rows],
         }
 
+
+def analyze_navigator_snapshot(
+    snapshot: NavigatorSnapshot,
+    *,
+    rows: tuple[TaskView, ...] | None = None,
+    calendar: NavigatorCalendarView,
+    projection: NavigatorProjectionView,
+    change_rows: tuple[NavigatorChangeRow, ...] = (),
+    trace: NavigatorTraceView | None = None,
+) -> NavigatorAnalysisView:
+    """Build an immutable analysis view from an explicit read-only snapshot.
+
+    This is intentionally presentation-free: it performs no terminal I/O,
+    formatting, prompting, or process control.  Renderers can consume the
+    returned view in any UI (Rich, JSON, or tests).
+    """
+    return NavigatorAnalysisView(
+        chain_size=len(snapshot.ordered_rows() if rows is None else rows),
+        calendar=calendar,
+        projection=projection,
+        trace=trace,
+        change_rows=change_rows,
+    )
+
 _UNIT_OF_WORK = None
 
 # Resolve the display timezone only after Nautical core has loaded.  The core
@@ -591,7 +616,7 @@ def _reload_navigator_configuration() -> None:
         raise RuntimeError("Nautical integration context support is unavailable")
     try:
         unit_of_work = build_operator_uow(
-            core=core,
+            runtime=IntegrationRuntime.from_compatibility_facade(core),
             task_binary=shutil.which("task") or "task",
             env=os.environ,
             access=IntegrationAccess.READ_ONLY,
@@ -1087,6 +1112,7 @@ class TaskAnalyzer:
         self._meaningful_changes: Dict[str, List[TaskChange]] = {}
         self._projection_warnings: List[str] = []
         self._last_analysis_view: NavigatorAnalysisView | None = None
+        self._snapshot: NavigatorSnapshot | None = None
         _ACTIVE_ANALYZERS.add(self)
 
     def _record_projection_warning(self, message: str) -> None:
@@ -1118,6 +1144,7 @@ class TaskAnalyzer:
                 # excludes completed/disabled history because Nautical
                 # intentionally turns chain off at those lifecycle points.
                 snapshot = _run_chain_snapshot()
+                self._snapshot = snapshot
                 self._operator_graph = snapshot.graph
                 tasks = list(snapshot.ordered_rows())
 
@@ -3288,8 +3315,17 @@ class TaskAnalyzer:
         # Chain analysis does not request an explain trace; keep the view
         # explicitly empty rather than reaching for an undefined local.
         trace_view = None
-        analysis_view = NavigatorAnalysisView(
-            chain_size=len(full_chain),
+        snapshot = self._snapshot
+        if snapshot is None:
+            snapshot = NavigatorSnapshot(
+                rows=tuple(TaskView.from_mapping(item) for item in full_chain),
+                snapshot_id="analysis",
+                coverage="chain",
+                configuration_fingerprint="",
+            )
+        analysis_view = analyze_navigator_snapshot(
+            snapshot,
+            rows=tuple(TaskView.from_mapping(item) for item in full_chain),
             calendar=calendar_view,
             projection=NavigatorProjectionView(tuple(self._projection_warnings)),
             trace=trace_view,

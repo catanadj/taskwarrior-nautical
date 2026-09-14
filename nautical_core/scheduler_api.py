@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable
 from .api_bindings import ApiBinding, core_namespace
 
 from .core_context import CoreContext, SchedulerDependencies
@@ -15,41 +15,41 @@ from .core_context import CoreContext, SchedulerDependencies
 class SchedulerAtomDependencies:
     """Explicit collaborators required by the scheduler-atom owner."""
 
-    expand_weekly: Any
-    split_csv: Any
-    expand_monthly: Any
-    expand_yearly: Any
-    weekly_random: Any
-    week_monday: Any
-    resolve_moon: Any
+    expand_weekly: Callable[..., Any]
+    split_csv: Callable[..., Any]
+    expand_monthly: Callable[..., Any]
+    expand_yearly: Callable[..., Any]
+    weekly_random: Callable[..., Any]
+    week_monday: Callable[..., Any]
+    resolve_moon: Callable[..., Any]
 
 
 @dataclass(frozen=True, slots=True)
 class SchedulerIntervalDependencies:
     """Explicit collaborators required by interval admission logic."""
 
-    weeks_between: Any
-    year_index: Any
+    weeks_between: Callable[..., Any]
+    year_index: Callable[..., Any]
 
 
 @dataclass(frozen=True, slots=True)
 class SchedulerModifierDependencies:
     """Calendar-bound collaborators for scheduler modifier evaluation."""
 
-    active_mod_keys: Any
-    base_next: Any
-    interval_allowed: Any
-    advance_probe: Any
-    monthly_align: Any
-    roll_apply: Any
-    day_offset: Any
-    accept_roll: Any
-    is_business_day: Any
+    active_mod_keys: Callable[..., Any]
+    base_next: Callable[..., Any]
+    interval_allowed: Callable[..., Any]
+    advance_probe: Callable[..., Any]
+    monthly_align: Callable[..., Any]
+    roll_apply: Callable[..., Any]
+    day_offset: Callable[..., Any]
+    accept_roll: Callable[..., Any]
+    is_business_day: Callable[..., Any]
     max_anchor_iter: int
-    warn_once: Any
+    warn_once: Callable[..., Any]
     os_mod: Any
-    resolve_moon: Any
-    moon_matches: Any
+    resolve_moon: Callable[..., Any]
+    moon_matches: Callable[..., Any]
 
 
 def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):

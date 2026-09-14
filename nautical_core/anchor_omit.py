@@ -62,13 +62,16 @@ def freeze_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None)
 
 
 def combine_omit_state(*, omit_dnf=None, omit_dates=None, omit_descriptions=None):
-    dates = frozenset(omit_dates or [])
-    descriptions = dict(omit_descriptions or {})
-    if not omit_dnf and not dates and not descriptions:
-        return None
-    if not dates and not descriptions:
-        return omit_dnf
-    return {"dnf": omit_dnf, "dates": dates, "descriptions": descriptions}
+    """Build the canonical evaluator-owned omission state.
+
+    ``OmitState`` is the sole boundary shape; legacy dictionary inputs remain
+    accepted by ``_split_omit_state`` for compatibility with older callers.
+    """
+    return freeze_omit_state(
+        omit_dnf=omit_dnf,
+        omit_dates=omit_dates,
+        omit_descriptions=omit_descriptions,
+    )
 
 
 def _split_omit_state(omit_state):

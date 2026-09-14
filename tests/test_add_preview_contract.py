@@ -35,6 +35,33 @@ class _Host:
 
 
 class AddPreviewCompositionTests(unittest.TestCase):
+    def test_compact_anchor_preview_requests_only_its_first_occurrence(self):
+        self.assertEqual(add_anchor_preview._initial_occurrence_limit(200, True), 1)
+        self.assertEqual(add_anchor_preview._initial_occurrence_limit(3, False), 19)
+
+    def test_timezone_fallback_warning_requires_a_timed_or_recurrence_source(self):
+        core = SimpleNamespace(_LOCAL_TZ=None)
+        self.assertTrue(
+            add_anchor_preview._timezone_fallback_warning_needed(
+                core, "w:mon@t=09:00", ""
+            )
+        )
+        self.assertTrue(
+            add_anchor_preview._timezone_fallback_warning_needed(
+                core, "", "calendar.csv@t=09:00"
+            )
+        )
+        self.assertTrue(
+            add_anchor_preview._timezone_fallback_warning_needed(core, "w:mon", "")
+        )
+        self.assertFalse(add_anchor_preview._timezone_fallback_warning_needed(core, "", ""))
+        core._LOCAL_TZ = object()
+        self.assertFalse(
+            add_anchor_preview._timezone_fallback_warning_needed(
+                core, "w:mon@t=09:00", ""
+            )
+        )
+
     def test_daily_period_preserves_local_clock_and_sequence_preview(self):
         host = _Host()
         start = datetime(2026, 1, 1, 9, 30, tzinfo=UTC)
@@ -78,6 +105,35 @@ class AddPreviewCompositionTests(unittest.TestCase):
 
 
 class AddAnchorComputeTests(unittest.TestCase):
+    def test_anchor_step_preserves_scheduler_exhaustion_identity(self) -> None:
+        expected = OccurrenceSearchExhausted(
+            "test adapter", reference=date(2026, 1, 1), limit=1
+        )
+
+        class FakeOmit:
+            @staticmethod
+            def next_after_expr_with_omit(*_args, **_kwargs):
+                raise expected
+
+        class FakeCore:
+            MAX_ANCHOR_ITER = 1
+
+            @staticmethod
+            def _import_sibling(_name):
+                return FakeOmit
+
+        with self.assertRaises(OccurrenceSearchExhausted) as raised:
+            add_anchor_compute.anchor_step_once_with_omit(
+                [],
+                date(2026, 1, 1),
+                date(2026, 1, 1),
+                "test",
+                omit_dnf=None,
+                core=FakeCore(),
+            )
+
+        self.assertIs(raised.exception, expected)
+
     def test_anchor_build_preview_formats_events_and_respects_until(self):
         first = datetime(2026, 1, 1, 9, tzinfo=UTC)
         events = OccurrenceBatch([
@@ -152,34 +208,43 @@ class AddAnchorComputeTests(unittest.TestCase):
         self.assertIs(ctx.exception, failure)
 
     def test_anchor_preview_filters_omitted_events_but_preserves_them_in_provider_stream(self):
-        included = Occurrence(
-            date(2026, 1, 2), 9, 0,
-            local_datetime=datetime(2026, 1, 2, 9, tzinfo=UTC),
-        )
-        omitted = Occurrence(
-            date(2026, 1, 3), 9, 0,
-            local_datetime=datetime(2026, 1, 3, 9, tzinfo=UTC), omitted=True,
-        )
-        batch = OccurrenceBatch([included, omitted])
+        occurrences = [
+            Occurrence(
+                date(2026, 1, day),
+                9,
+                0,
+                local_datetime=datetime(2026, 1, day, 9, tzinfo=UTC),
+                omitted=day in {1, 2, 3},
+            )
+            for day in range(1, 6)
+        ]
+        batch = OccurrenceBatch(occurrences)
         scheduler_result = SimpleNamespace(occurrences=batch, terminal=None)
         scheduler_service = SimpleNamespace(
             session=SimpleNamespace(evaluator=SimpleNamespace(context=SimpleNamespace(timezone=UTC))),
             collect=lambda *_args, **_kwargs: scheduler_result,
         )
         kwargs = dict(
-            dnf=[], anchor_file_str="", after_local_dt=datetime(2026, 1, 1, tzinfo=UTC),
-            inclusive=False, limit_included=1, fallback_hhmm=(9, 0),
-            default_seed_date=date(2026, 1, 1), seed_base="chain", omit_dnf=None,
-            core=SimpleNamespace(), next_occurrence_after_local_dt=lambda *_args, **_kwargs: None,
+            after_local_dt=datetime(2026, 1, 1, tzinfo=UTC),
+            inclusive=False, limit_included=2, fallback_hhmm=(9, 0),
+            default_seed_date=date(2026, 1, 1),
             scheduler_service=scheduler_service,
         )
         stream = add_anchor_preview._collect_events_with_provider(**kwargs, return_occurrences=True)
-        self.assertEqual(stream, [included, omitted])
-        included_kwargs = dict(kwargs)
-        included_kwargs.pop("limit_included")
-        included_kwargs["limit"] = 1
+        self.assertEqual(stream, occurrences)
+        included_kwargs = {
+            "after_local_dt": kwargs["after_local_dt"],
+            "inclusive": kwargs["inclusive"],
+            "limit": 2,
+            "fallback_hhmm": kwargs["fallback_hhmm"],
+            "default_seed_date": kwargs["default_seed_date"],
+            "scheduler_service": scheduler_service,
+        }
         included_only = add_anchor_preview._collect_included_with_provider(**included_kwargs)
-        self.assertEqual(included_only, [included.local_datetime])
+        self.assertEqual(
+            included_only,
+            [occurrences[3].local_datetime, occurrences[4].local_datetime],
+        )
 
 
 class AddAnchorPreviewTests(unittest.TestCase):

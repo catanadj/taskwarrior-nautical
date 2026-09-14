@@ -34,6 +34,9 @@ def _signatures(service: SchedulerService, *, limit: int) -> tuple[str, ...]:
             max_iterations=max(512, limit * 3),
         )
     )
+    assert all(item.local_datetime <= end for item in result.occurrences), (
+        "scheduler returned an occurrence after the explicit end date"
+    )
     values = tuple(item.local_datetime.astimezone(timezone.utc).isoformat() for item in result.occurrences)
     assert all(left < right for left, right in zip(values, values[1:]))
     return values

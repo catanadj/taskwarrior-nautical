@@ -1,0 +1,6 @@
+[run]
+branch = True
+source = nautical_core
+
+[report]
+show_missing = True

@@ -90,7 +90,7 @@ class ArchitectureViolation:
             "rule": self.rule,
             "line": self.line,
             "message": (
-                f"{self.importing_file}:{self.line} ({self.layer}) imports "
+                f"{self.importing_file}:{self.line} ({self.layer}) depends on "
                 f"forbidden dependency {self.dependency}: {self.rule}"
             ),
         }
@@ -149,6 +149,33 @@ def _is_forbidden(module: str, forbidden: tuple[str, ...]) -> bool:
     )
 
 
+def _is_modify_composition_adapter(name: str) -> bool:
+    return name.endswith(("_port_for", "_ports_for", "_services_for"))
+
+
+def _hook_host_parameters(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[ast.arg, ...]:
+    arguments = (
+        *node.args.posonlyargs,
+        *node.args.args,
+        *node.args.kwonlyargs,
+    )
+    return tuple(argument for argument in arguments if argument.arg == "host")
+
+
+def _dynamic_hook_host_access(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> ast.Attribute | None:
+    for candidate in ast.walk(node):
+        if (
+            isinstance(candidate, ast.Attribute)
+            and isinstance(candidate.value, ast.Name)
+            and candidate.value.id == "host"
+            and candidate.attr in {"_module", "_read_query_get", "_READ_QUERY_MISSING", "core"}
+        ):
+            return candidate
+    return None
+
+
 def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
     """Validate imports in ``root`` without importing any source module."""
     layers = module_layer_map(root)
@@ -166,6 +193,35 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (OSError, SyntaxError):
             continue
+        if path.name.startswith("modify_") and path.name.endswith("_effects.py"):
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                host_parameters = _hook_host_parameters(node)
+                if host_parameters and not _is_modify_composition_adapter(node.name):
+                    violations.append(ArchitectureViolation(
+                        relative,
+                        "hook-host",
+                        layer,
+                        (
+                            f"modify effect operation {node.name} must consume explicit ports; "
+                            "only named composition adapters may receive the hook host"
+                        ),
+                        host_parameters[0].lineno,
+                    ))
+                elif not _is_modify_composition_adapter(node.name):
+                    dynamic_access = _dynamic_hook_host_access(node)
+                    if dynamic_access is not None:
+                        violations.append(ArchitectureViolation(
+                            relative,
+                            "hook-host",
+                            layer,
+                            (
+                                f"modify effect operation {node.name} must not perform "
+                                "dynamic hook-host lookup"
+                            ),
+                            dynamic_access.lineno,
+                        ))
         for reference in _imports(tree):
             module = reference.module
             if layer in {DOMAIN, RECURRENCE} and _is_forbidden(module, forbidden_pure):
@@ -180,6 +236,12 @@ def validate(root: Path) -> tuple[ArchitectureViolation, ...]:
                     "internal production modules may not import the root facade",
                     reference.line,
                 ))
+            if module == "nautical_core.compat_api" and layer not in facade_allowed:
+                violations.append(ArchitectureViolation(
+                    relative, module, layer,
+                    "primary production modules may not depend on the compatibility implementation",
+                    reference.line,
+                ))
     return tuple(sorted(violations, key=lambda item: (item.importing_file, item.line, item.dependency)))
 
 
@@ -190,7 +252,7 @@ def check(root: Path) -> list[dict[str, object]]:
         "kind": "architecture",
         "name": "dependency-direction",
         "ok": not violations,
-        "message": "ok" if not violations else "; ".join(v.as_dict()["message"] for v in violations),
+        "message": "ok" if not violations else "; ".join(str(v.as_dict()["message"]) for v in violations),
         "layer_map": module_layer_map(root),
         "violations": [v.as_dict() for v in violations],
     }]

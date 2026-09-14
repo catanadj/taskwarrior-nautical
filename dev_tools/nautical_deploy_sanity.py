@@ -492,6 +492,9 @@ def _check_domain_model_boundaries(root: Path) -> list[dict]:
         "nautical_core/task_codec.py",
         "nautical_core/runtime.py",
         "nautical_core/hooks/add_impl.py",
+        # Hook entrypoints also decode JSON diagnostic envelopes for redaction;
+        # Taskwarrior task payloads remain decoded through TaskCodec.
+        "nautical_core/hooks/modify_impl.py",
         "nautical_core/add_composition.py",
         "nautical_core/add_workflow.py",
         "nautical_core/hooks/exit_impl.py",

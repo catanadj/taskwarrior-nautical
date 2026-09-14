@@ -1,40 +1,70 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, NoReturn
 
-from .add_anchor_compute import anchor_next_occurrence_after_local_dt
-from . import calendar_feedback, panel_diagnostics
-from .occurrence_provider import Occurrence, OccurrenceBatch, _cursor_before, _sort_datetimes
-from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
-from .recurrence_protocols import NextOccurrenceCallback, PickOccurrenceCallback
+from . import panel_diagnostics
+from .occurrence_provider import Occurrence, OccurrenceBatch
+from .scheduler_models import occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskPayload
 
 
-def _next_occurrence_callback(
-    dnf: Any,
-    after_local_dt: datetime,
-    *,
-    default_seed_date: Any,
-    seed_base: str,
-    omit_dnf: Any = None,
-    fallback_hhmm: tuple[int, int] | None = None,
-) -> datetime | None:
-    """Adapt the legacy anchor helper to the provider callback protocol."""
-    return anchor_next_occurrence_after_local_dt(
-        dnf,
-        after_local_dt,
-        default_seed_date=default_seed_date,
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        fallback_hhmm=fallback_hhmm,
-    )
+@dataclass(frozen=True, slots=True)
+class AnchorExpressionPreviewServices:
+    """Composition-root dependencies for the anchor preview renderer."""
+
+    panel_mode: str
+    panel_warnings: Callable[[TaskPayload], list[str]]
+    prepare_anchor_dnf: Callable[..., tuple[Any, str]]
+    describe_anchor_natural: Callable[[TaskPayload, Any, str], str]
+    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
+    scheduler_service_for_task: Callable[[TaskPayload], Any]
+    to_local: Callable[[datetime], datetime]
+    fmt_dt_local: Callable[[Any], str]
+    coerce_int: Callable[..., Any]
+    expr_has_m_or_y: Callable[[Any], bool]
+    append_dst_adjustment: Callable[[list[tuple[str, str]], Any, datetime], None]
+    render_business_calendar_displacement: Callable[..., Any]
+    lint_and_validate: Callable[..., None]
+    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
+    root_uuid_from: Callable[[TaskPayload], str | None]
+    short: Callable[[Any], str]
+    validate_anchor_mode: Callable[..., Any]
+    validate_chain_duration_reasonable: Callable[..., Any]
+    append_wait_sched_rows: Callable[..., Any]
+    anchor_until_summary: Callable[..., Any]
+    to_local_cached: Callable[..., Any]
+    fmt_local_for_task: Callable[..., Any]
+    format_anchor_rows: Callable[..., Any]
+    panel: Callable[..., Any]
+    human_delta: Callable[..., Any]
+    error_and_exit: Callable[..., Any]
+    validate_native_until_after_target: Callable[..., Any]
+    validate_native_until_anchor_slots: Callable[..., Any]
+    append_first_expiration_row: Callable[..., Any]
 
 
-def _build_slot_datetime(day: Any, hhmm: Any) -> datetime:
-    return datetime.combine(day, datetime.min.time().replace(hour=int(hhmm[0]), minute=int(hhmm[1])))
+@dataclass(frozen=True, slots=True)
+class AnchorFilePreviewServices:
+    panel_mode: str
+    timezone_fallback_warning: Callable[[str], bool]
+    prepare_omit_dnf: Callable[[TaskPayload, list[tuple[str, str]]], Any]
+    scheduler_service_for_task: Callable[[TaskPayload], Any]
+    to_local: Callable[[datetime], datetime]
+    fmt_dt_local: Callable[[Any], str]
+    coerce_int: Callable[..., Any]
+    render_business_calendar_displacement: Callable[..., Any]
+    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None]
+    append_wait_sched_rows: Callable[..., Any]
+    validate_chain_duration_reasonable: Callable[..., Any]
+    format_anchor_rows: Callable[..., Any]
+    panel: Callable[..., Any]
+    fmt_local_for_task: Callable[..., Any]
+    human_delta: Callable[..., Any]
+    error_and_exit: Callable[..., Any]
 
 
 def _event_datetime(event: Any) -> datetime | None:
@@ -229,23 +259,19 @@ def anchor_preview_first_due(
     recurrence_field: str,
     due_hhmm: tuple[int, int],
     interval_seed: Any,
-    seed_base: str,
     rows: list[tuple[str, str]],
     prof: Any,
-    core: Any,
+    fmt_dt_local: Callable[[Any], str],
     to_local_cached: Callable[[datetime], datetime],
-    evaluator: Any,
     scheduler_service: Any,
     error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
     fmt_local_for_task: Callable[[datetime], str],
 ) -> tuple[Any, datetime, datetime, Any, tuple[int, int]]:
     def _fmt(dt: Any) -> str:
-        return core.fmt_dt_local(dt)
+        return fmt_dt_local(dt)
 
     fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
     t_first = time.perf_counter()
-    from .occurrence_provider import AnchorOccurrenceProvider, collect_after
-
     inclusive = not user_provided_due
     reference_local = to_local_cached(due_dt) if user_provided_due else now_local
     from .occurrence_outcomes import FoundOccurrence
@@ -351,12 +377,12 @@ def anchor_preview_limit_rows(
     exact_until_count: int | None,
     final_until_dt: datetime | None,
     now_utc: datetime,
-    core: Any,
+    fmt_dt_local: Callable[[Any], str],
     human_delta: Callable[[Any, Any, bool], str],
     final_max_dt: datetime | None = None,
 ) -> None:
     def _fmt(dt: Any) -> str:
-        return core.fmt_dt_local(dt)
+        return fmt_dt_local(dt)
 
     future_counts = []
     if cpmax and cpmax > 0:
@@ -379,43 +405,17 @@ def anchor_preview_limit_rows(
         rows.append(("Future links", f"[white]{min(future_counts)}[/]"))
 
 
-def _anchor_file_occurrences_local(
-    anchor_file_str: str,
+def _preview_omit_label(
+    task: TaskPayload,
+    item_local: datetime,
     *,
-    core: Any,
-    fallback_hhmm: tuple[int, int],
-    seed_base: str = "",
-) -> list[datetime]:
-    anchor_files = core._import_sibling("anchor_files")
-    context = core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base) if seed_base else None
-    out = [
-        core.to_local(core.build_local_datetime(value.day, value.hhmm))
-        for value in anchor_files.AnchorFileOccurrenceProvider(
-            anchor_file_str,
-            getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm,
-            context=context,
-        ).occurrences()
-    ]
-    ordered = _sort_datetimes(out)
-    deduplicated: list[datetime] = []
-    for item in ordered:
-        if not deduplicated or compare_datetimes(item, deduplicated[-1]) != 0:
-            deduplicated.append(item)
-    return deduplicated
-
-
-def _preview_omit_label(task: TaskPayload, item_local: datetime, *, core: Any) -> str:
+    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None],
+) -> str:
     omit_file = str(task.get("omit_file") or "").strip()
     if not omit_file:
         return "omitted"
     try:
-        omit_files = core._import_sibling("omit_files")
-        _dates, descriptions = omit_files.load_omit_file_data(
-            omit_file,
-            getattr(core, "OMIT_FILE_DIR", ""),
-        )
-        text = str(descriptions.get(item_local.date()) or "").strip()
+        text = str(omit_description_for_task_date(task, item_local.date()) or "").strip()
     except Exception:
         text = ""
     if not text:
@@ -428,7 +428,8 @@ def _preview_occurrence_lines(
     *,
     first_due_local_dt: datetime,
     preview_limit: int,
-    core: Any,
+    fmt_dt_local: Callable[[Any], str],
+    omit_description_for_task_date: Callable[[TaskPayload, Any], str | None],
     task: TaskPayload,
 ) -> list[str]:
     colors = ["bright_cyan", "cyan", "bright_blue", "blue", "bright_black"]
@@ -447,358 +448,83 @@ def _preview_occurrence_lines(
                 included_idx = 1
             continue
         if is_omitted:
-            label = _preview_omit_label(task, item_local, core=core).replace('[', '(').replace(']', ')')
-            out.append(f"[dim red]·· ×  {core.fmt_dt_local(item_local.astimezone(timezone.utc))} [italic]({label})[/][/]")
+            label = _preview_omit_label(
+                task, item_local, omit_description_for_task_date=omit_description_for_task_date
+            ).replace('[', '(').replace(']', ')')
+            out.append(f"[dim red]·· ×  {fmt_dt_local(item_local.astimezone(timezone.utc))} [italic]({label})[/][/]")
             continue
         included_idx += 1
         if included_idx > preview_limit + 1:
             break
         color = colors[min(included_idx - 2, len(colors) - 1)]
-        out.append(f"[{color}]{included_idx} ▸ {core.fmt_dt_local(item_local.astimezone(timezone.utc))}[/]")
-    return out
-
-
-def _anchor_file_is_omitted(omit_dnf: Any, item_local: datetime, *, core: Any, seed_base: str) -> bool:
-    if not omit_dnf:
-        return False
-    try:
-        anchor_omit = core._import_sibling("anchor_omit")
-        return bool(
-            anchor_omit.omit_expr_fires_on_date(
-                omit_dnf,
-                item_local.date(),
-                item_local.date(),
-                seed_base,
-                core=core,
-            )
-        )
-    except Exception as exc:
-        raise ValueError(
-            f"Unable to evaluate omit rule for {item_local.date().isoformat()}: {exc}"
-        ) from exc
-
-
-def _anchor_file_preview_occurrences(
-    anchor_file_str: str,
-    *,
-    core: Any,
-    fallback_hhmm: tuple[int, int],
-    omit_dnf: Any,
-    seed_base: str,
-    after_local_dt: datetime | None = None,
-    inclusive: bool = True,
-    limit: int | None = None,
-) -> list[datetime]:
-    if limit == 1 and after_local_dt is not None:
-        anchor_files = core._import_sibling("anchor_files")
-        provider = anchor_files.AnchorFileOccurrenceProvider(
-            anchor_file_str,
-            getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm,
-            context=(
-                core._import_sibling("recurrence_context").RecurrenceContext(chain_id=seed_base)
-                if seed_base
-                else None
-            ),
-        )
-        probe = _cursor_before(after_local_dt) if inclusive else after_local_dt
-        skipped = 0
-        while True:
-            selected = provider.next_after(
-                probe,
-                build_local_datetime=core.build_local_datetime,
-                to_local=core.to_local,
-            )
-            if selected is None or selected.local_datetime is None:
-                if skipped:
-                    raise anchor_files.AnchorFileOccurrenceExhausted(anchor_file_str, skipped)
-                return []
-            item_local = selected.local_datetime
-            if not _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):
-                return [item_local]
-            skipped += 1
-            probe = item_local
-    out: list[datetime] = []
-    for item_local in _anchor_file_occurrences_local(anchor_file_str, core=core, fallback_hhmm=fallback_hhmm, seed_base=seed_base):
-        if after_local_dt is not None:
-            comparison = compare_datetimes(item_local, after_local_dt)
-            if comparison < 0 or (comparison == 0 and not inclusive):
-                continue
-        if _anchor_file_is_omitted(omit_dnf, item_local, core=core, seed_base=seed_base):
-            continue
-        out.append(item_local)
-        if limit is not None and len(out) >= max(0, limit):
-            break
+        out.append(f"[{color}]{included_idx} ▸ {fmt_dt_local(item_local.astimezone(timezone.utc))}[/]")
     return out
 
 
 def _collect_included_with_provider(
     *,
-    dnf: Any,
-    anchor_file_str: str,
     after_local_dt: datetime,
     inclusive: bool,
     limit: int,
     fallback_hhmm: tuple[int, int],
     default_seed_date: Any,
-    seed_base: str,
-    omit_dnf: Any,
-    core: Any,
-    next_occurrence_after_local_dt: NextOccurrenceCallback,
-    pick_occurrence_local: PickOccurrenceCallback | None = None,
-    anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
-    anchor_file_provider: Any | None = None,
-    evaluator: Any | None = None,
-    scheduler_service: Any | None = None,
+    scheduler_service: Any,
 ) -> list[datetime] | list[Occurrence]:
     """Collect included occurrences through the typed provider boundary."""
-    if scheduler_service is not None:
-        from .scheduler_cursor import OccurrenceCursor
-
-        result = scheduler_service.collect(
-            OccurrenceCursor(
-                after_local_dt,
-                inclusive=inclusive,
-                timezone=scheduler_service.session.evaluator.context.timezone,
-            ),
-            limit=limit,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            max_iterations=max_iterations,
-            max_file_skips=max_iterations,
-        )
-        collected = list(result.occurrences)
-        if return_occurrences:
-            return collected
-        return OccurrenceBatch(
-            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
-            terminal=result.terminal,
-        )
-    if evaluator is not None:
-        collected = evaluator.collect_after(
-            after_local_dt,
-            limit=limit,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            inclusive=inclusive,
-            pick_occurrence_local=pick_occurrence_local,
-            anchor_file_provider=anchor_file_provider,
-            max_iterations=max_iterations,
-            max_file_skips=max_iterations,
-        )
-        if return_occurrences:
-            return collected
-        return OccurrenceBatch(
-            [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
-            terminal=getattr(collected, "terminal", None),
-        )
-
-    from .anchor_inclusion import next_included_occurrence
-    from . import anchor_inclusion
-    from .occurrence_provider import AnchorOccurrenceProvider, Occurrence, collect_after
-
-    if (
-        anchor_file_provider is not None
-        and (
-            getattr(anchor_file_provider, "name", None) != anchor_file_str
-            or getattr(anchor_file_provider, "anchor_file_dir", None) != anchor_file_dir
-            or getattr(anchor_file_provider, "fallback_hhmm", None) != fallback_hhmm
-        )
-    ):
-        anchor_file_provider = None
-    if anchor_file_provider is None:
-        anchor_file_provider = (
-            anchor_inclusion._build_anchor_file_provider(
-                anchor_file_str,
-                anchor_file_dir=anchor_file_dir,
-                fallback_hhmm=fallback_hhmm,
-                seed_base=seed_base,
-                core=core,
-            )
-            if anchor_file_str
-            else None
-        )
-    provider = AnchorOccurrenceProvider(
-        lambda value: next_included_occurrence(
-            dnf=dnf,
-            anchor_file_str=anchor_file_str,
-            after_local_dt=value,
-            inclusive=False,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
-            pick_occurrence_local=pick_occurrence_local,
-            anchor_file_dir=anchor_file_dir,
-            anchor_file_provider=anchor_file_provider,
-            max_file_skips=max_iterations,
-        ),
-    )
-    collected = collect_after(
-        provider,
-        after_local_dt,
-        limit=limit,
+    stream = _collect_events_with_provider(
+        after_local_dt=after_local_dt,
         inclusive=inclusive,
+        limit_included=limit,
+        fallback_hhmm=fallback_hhmm,
+        default_seed_date=default_seed_date,
         max_iterations=max_iterations,
-        build_local_datetime=_build_slot_datetime,
-        to_local=lambda value: value,
+        return_occurrences=True,
+        scheduler_service=scheduler_service,
     )
+    included = [item for item in stream if not getattr(item, "omitted", False)]
+    selected = included[:limit]
     if return_occurrences:
-        return collected
+        return OccurrenceBatch(selected, terminal=getattr(stream, "terminal", None))
     return OccurrenceBatch(
-        [occurrence.local_datetime for occurrence in collected if occurrence.local_datetime is not None],
-        terminal=getattr(collected, "terminal", None),
+        [item.local_datetime for item in selected if item.local_datetime is not None],
+        terminal=getattr(stream, "terminal", None),
     )
 
 
 def _collect_events_with_provider(
     *,
-    dnf: Any,
-    anchor_file_str: str,
     after_local_dt: datetime,
     inclusive: bool,
     limit_included: int,
     fallback_hhmm: tuple[int, int],
     default_seed_date: Any,
-    seed_base: str,
-    omit_dnf: Any,
-    core: Any,
-    next_occurrence_after_local_dt: NextOccurrenceCallback,
-    pick_occurrence_local: PickOccurrenceCallback | None = None,
-    anchor_file_dir: str = "",
     max_iterations: int = 512,
     return_occurrences: bool = False,
-    anchor_file_provider: Any | None = None,
-    evaluator: Any | None = None,
-    scheduler_service: Any | None = None,
+    scheduler_service: Any,
     ) -> list[Any]:
-    if scheduler_service is not None:
-        from .scheduler_cursor import OccurrenceCursor
+    from .scheduler_cursor import OccurrenceCursor
 
-        result = scheduler_service.collect(
-            OccurrenceCursor(
-                after_local_dt,
-                inclusive=inclusive,
-                timezone=scheduler_service.session.evaluator.context.timezone,
-            ),
-            limit=limit_included,
-            count_omitted=False,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            max_iterations=max_iterations,
-            max_file_skips=max_iterations,
-        )
-        collected = list(result.occurrences)
-        if return_occurrences:
-            return collected
-        return OccurrenceBatch(
-            [
-                (occurrence.local_datetime, occurrence.omitted)
-                for occurrence in collected
-                if occurrence.local_datetime is not None
-            ],
-            terminal=result.terminal,
-        )
-    from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
-
-    if evaluator is not None:
-        provider = AnchorEventOccurrenceProvider(
-            lambda value: evaluator.next_event_after(
-                value,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed_date,
-                inclusive=False,
-                anchor_file_provider=anchor_file_provider,
-                include_omitted=True,
-                max_file_skips=max_iterations,
-            ),
-            source="anchor+anchor_file" if anchor_file_str and dnf else "anchor",
-        )
-        collected = collect_after(
-            provider,
+    result = scheduler_service.collect(
+        OccurrenceCursor(
             after_local_dt,
-            limit=limit_included,
             inclusive=inclusive,
-            max_iterations=max_iterations,
-            build_local_datetime=_build_slot_datetime,
-            to_local=lambda value: value,
-        )
-        if return_occurrences:
-            return collected
-        return OccurrenceBatch(
-            [
-                (occurrence.local_datetime, occurrence.omitted)
-                for occurrence in collected
-                if occurrence.local_datetime is not None
-            ],
-            terminal=getattr(collected, "terminal", None),
-        )
-
-    from .anchor_inclusion import next_occurrence_event_local
-    from . import anchor_inclusion
-    from .occurrence_provider import AnchorEventOccurrenceProvider, collect_after
-
-    if (
-        anchor_file_provider is not None
-        and (
-            getattr(anchor_file_provider, "name", None) != anchor_file_str
-            or getattr(anchor_file_provider, "anchor_file_dir", None) != anchor_file_dir
-            or getattr(anchor_file_provider, "fallback_hhmm", None) != fallback_hhmm
-        )
-    ):
-        anchor_file_provider = None
-    if anchor_file_provider is None:
-        anchor_file_provider = (
-            anchor_inclusion._build_anchor_file_provider(
-                anchor_file_str,
-                anchor_file_dir=anchor_file_dir,
-                fallback_hhmm=fallback_hhmm,
-                seed_base=seed_base,
-                core=core,
-            )
-            if anchor_file_str
-            else None
-        )
-    provider = AnchorEventOccurrenceProvider(
-        lambda value: next_occurrence_event_local(
-            dnf=dnf,
-            anchor_file_str=anchor_file_str,
-            after_local_dt=value,
-            inclusive=False,
-            fallback_hhmm=fallback_hhmm,
-            default_seed_date=default_seed_date,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
-            pick_occurrence_local=pick_occurrence_local,
-            anchor_file_dir=anchor_file_dir,
-            anchor_file_provider=anchor_file_provider,
+            timezone=scheduler_service.session.evaluator.context.timezone,
         ),
-        source="anchor+anchor_file" if anchor_file_str and dnf else ("anchor_file" if anchor_file_str else "anchor"),
-    )
-    collected = collect_after(
-        provider,
-        after_local_dt,
         limit=limit_included,
-        inclusive=inclusive,
+        count_omitted=False,
+        fallback_hhmm=fallback_hhmm,
+        default_seed_date=default_seed_date,
         max_iterations=max_iterations,
-        build_local_datetime=_build_slot_datetime,
-        to_local=lambda value: value,
+        max_file_skips=max_iterations,
     )
+    collected = list(result.occurrences)
     if return_occurrences:
         return collected
     return OccurrenceBatch(
-        [
-            (occurrence.local_datetime, occurrence.omitted)
-            for occurrence in collected
-            if occurrence.local_datetime is not None
-        ],
-        terminal=getattr(collected, "terminal", None),
+        [(occurrence.local_datetime, occurrence.omitted) for occurrence in collected if occurrence.local_datetime is not None],
+        terminal=result.terminal,
     )
 
 
@@ -819,63 +545,32 @@ def handle_anchor_file_preview_on_add(
     anchor_warn: bool,
     upcoming_preview: int,
     preview_hard_cap: int,
-    core: Any,
-    append_wait_sched_rows: Callable[..., None],
-    validate_chain_duration_reasonable: Callable[[Any, datetime, Any, str], tuple[bool, str | None]],
-    validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
-    panel: Callable[..., None],
-    fmt_local_for_task: Callable[[datetime], str],
-    human_delta: Callable[[Any, Any, bool], str],
-    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
+    services: AnchorFilePreviewServices,
 ) -> None:
+    append_wait_sched_rows = services.append_wait_sched_rows
+    validate_chain_duration_reasonable = services.validate_chain_duration_reasonable
+    format_anchor_rows = services.format_anchor_rows
+    panel = services.panel
+    fmt_local_for_task = services.fmt_local_for_task
+    human_delta = services.human_delta
+    error_and_exit = services.error_and_exit
     rows: list[tuple[str, str]] = []
-    panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    panel_mode = services.panel_mode.strip().lower()
     compact_presentation = panel_mode in {"quiet", "minimal", "line", "text"}
-    if _timezone_fallback_warning_needed(core, "", anchor_file_str):
+    if services.timezone_fallback_warning(anchor_file_str):
         rows.append(("Warning", "[yellow]Timezone data unavailable; using UTC fallback. Run nautical doctor.[/]"))
     rows.append(("Anchor file", f"[white]{anchor_file_str}[/]  [bold bright_cyan]SKIP[/]"))
     if not compact_presentation:
         rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
-    omit_dnf = anchor_preview_prepare_omit_dnf(
-        task,
-        rows,
-        core=core,
-        validate_omit_syntax_strict=validate_omit_syntax_strict,
-        error_and_exit=error_and_exit,
-    )
+    omit_dnf = services.prepare_omit_dnf(task, rows)
     t_occ = time.perf_counter()
-    seed_base = _preview_seed_base(task, "preview")
-    from .recurrence_context import RecurrenceContext
-    from .scheduler_service import SchedulerService
-
-    from .task_codec import DEFAULT_TASK_CODEC
-    from .task_models import NauticalTask
-
-    scheduler_service = SchedulerService.from_task(
-        NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview")),
-        context=RecurrenceContext(
-            chain_id=str(task.get("chainID") or seed_base),
-            timezone=getattr(core, "_LOCAL_TZ", None),
-            business_calendar=core.business_calendar_for_task(task),
-            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        ),
-    )
+    scheduler_service = services.scheduler_service_for_task(task)
     all_occurrences = _collect_included_with_provider(
-        dnf=None,
-        anchor_file_str=anchor_file_str,
-        after_local_dt=(core.to_local(due_dt) if user_provided_due else now_local),
+        after_local_dt=(services.to_local(due_dt) if user_provided_due else now_local),
         inclusive=False if user_provided_due else True,
         limit=_initial_occurrence_limit(preview_hard_cap, compact_presentation),
         fallback_hhmm=(due_hhmm if user_provided_due else (9, 0)),
-        default_seed_date=(core.to_local(due_dt).date() if user_provided_due else now_local.date()),
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
-        next_occurrence_after_local_dt=_next_occurrence_callback,
-        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        evaluator=scheduler_service.session.evaluator,
+        default_seed_date=(services.to_local(due_dt).date() if user_provided_due else now_local.date()),
         scheduler_service=scheduler_service,
     )
     prof.add_ms("anchor_file:occurrences", (time.perf_counter() - t_occ) * 1000.0)
@@ -892,7 +587,7 @@ def handle_anchor_file_preview_on_add(
         error_and_exit([("anchor_file", "Anchor-file occurrences did not contain valid local timestamps.")])
         raise RuntimeError("anchor-file preview terminated")
 
-    due_local_dt = core.to_local(due_dt)
+    due_local_dt = services.to_local(due_dt)
     first_due_local_dt: datetime | None
     if compact_presentation:
         first_due_local_dt = occurrence_datetimes[0]
@@ -911,19 +606,13 @@ def handle_anchor_file_preview_on_add(
     display_first_due_utc = due_dt if user_provided_due else first_due_utc
     if user_provided_due:
         first_label = "First scheduled" if recurrence_field == "scheduled" else "First due"
-        rows.append((first_label, f"[bold bright_green]{core.fmt_dt_local(display_first_due_utc)}[/]"))
-        rows.append(("Next anchor", f"[white]{core.fmt_dt_local(first_due_utc)}[/]"))
+        rows.append((first_label, f"[bold bright_green]{services.fmt_dt_local(display_first_due_utc)}[/]"))
+        rows.append(("Next anchor", f"[white]{services.fmt_dt_local(first_due_utc)}[/]"))
     else:
-        rows.append(("First due", f"[bold bright_green]{core.fmt_dt_local(first_due_utc)}[/]"))
+        rows.append(("First due", f"[bold bright_green]{services.fmt_dt_local(first_due_utc)}[/]"))
         task["due"] = fmt_local_for_task(first_due_utc)
         rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
-
-    calendar_feedback.render_business_calendar_displacement(
-        task,
-        first_due_local_dt,
-        core=core,
-        panel=panel,
-    )
+    services.render_business_calendar_displacement(task, first_due_local_dt, panel=panel)
     append_wait_sched_rows(
         rows,
         task,
@@ -948,8 +637,8 @@ def handle_anchor_file_preview_on_add(
             error_and_exit(
                 [
                     ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
-                    ("First due", core.fmt_dt_local(first_due_utc)),
-                    ("Chain end point", core.fmt_dt_local(until_dt)),
+                    ("First due", services.fmt_dt_local(first_due_utc)),
+                    ("Chain end point", services.fmt_dt_local(until_dt)),
                     ("Required", "Set chainUntil on or after the first anchor occurrence, or adjust the anchor."),
                 ]
             )
@@ -957,11 +646,11 @@ def handle_anchor_file_preview_on_add(
         if not is_reasonable and warn_msg:
             rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
 
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
+    cpmax = services.coerce_int(task.get("chainMax"), 0)
     exact_until_count = None
     final_until_dt = None
     if not compact_presentation and until_dt:
-        until_local = core.to_local(until_dt)
+        until_local = services.to_local(until_dt)
         limited = [dt for dt in occurrence_datetimes if compare_datetimes(dt, until_local) <= 0]
         exact_until_count = max(0, len(limited) - 1)
         if limited:
@@ -974,23 +663,16 @@ def handle_anchor_file_preview_on_add(
         preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
         event_limit = max(1, preview_limit + 1)
         events = _collect_events_with_provider(
-        dnf=None,
-        anchor_file_str=anchor_file_str,
         after_local_dt=first_due_local_dt,
         inclusive=True,
         limit_included=event_limit,
         fallback_hhmm=(due_hhmm if user_provided_due else (9, 0)),
-        default_seed_date=first_due_local_dt.date(),
-        seed_base=seed_base,
-        omit_dnf=omit_dnf,
-        core=core,
-        next_occurrence_after_local_dt=_next_occurrence_callback,
-        anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        return_occurrences=True,
+            default_seed_date=first_due_local_dt.date(),
+            return_occurrences=True,
         scheduler_service=scheduler_service,
         )
         if until_dt:
-            until_local = core.to_local(until_dt)
+            until_local = services.to_local(until_dt)
             events = [
                 event
                 for event in events
@@ -1000,7 +682,8 @@ def handle_anchor_file_preview_on_add(
             events,
             first_due_local_dt=first_due_local_dt,
             preview_limit=preview_limit,
-            core=core,
+            fmt_dt_local=services.fmt_dt_local,
+            omit_description_for_task_date=services.omit_description_for_task_date,
             task=task,
         )
         rows.append(("Upcoming", "\n".join(preview_rows) if preview_rows else "[dim]–[/]"))
@@ -1012,7 +695,7 @@ def handle_anchor_file_preview_on_add(
             exact_until_count=exact_until_count,
             final_until_dt=final_until_dt,
             now_utc=now_utc,
-            core=core,
+            fmt_dt_local=services.fmt_dt_local,
             human_delta=human_delta,
         )
     rows.append(("Chain", "[bold green]enabled[/]" if ch == "on" else "[bold red]disabled[/]"))
@@ -1095,46 +778,31 @@ def handle_anchor_preview_on_add(
     upcoming_preview: int,
     preview_hard_cap: int,
     max_summary_links: int,
-    core: Any,
-    root_uuid_from: Callable[[TaskPayload], str | None],
-    short: Callable[[Any], str],
-    validate_anchor_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    validate_omit_syntax_strict: Callable[[str | list[list[dict[str, Any]]]], tuple[list[list[dict[str, Any]]] | None, str | None]],
-    validate_anchor_mode: Callable[[Any], tuple[str, str | None]],
-    validate_chain_duration_reasonable: Callable[[Any, datetime, Any, str], tuple[bool, str | None]],
-    append_wait_sched_rows: Callable[..., None],
-    anchor_until_summary: Callable[..., tuple[int | None, datetime | None]],
-    anchor_build_preview: Callable[..., list[str]],
-    to_local_cached: Callable[[datetime], datetime],
-    fmt_local_for_task: Callable[[datetime], str],
-    format_anchor_rows: Callable[[list[tuple[str, str]]], list[tuple[str | None, str]]],
-    panel: Callable[..., None],
-    human_delta: Callable[[Any, Any, bool], str],
-    error_and_exit: Callable[[list[tuple[str, str]]], NoReturn],
-    validate_native_until_after_target: Callable[[TaskPayload, datetime, str], None],
-    validate_native_until_anchor_slots: Callable[[TaskPayload, datetime, Any, str, tuple[int, int]], None],
-    append_first_expiration_row: Callable[[list[tuple[str, str]], TaskPayload, datetime, str], None],
+    services: AnchorExpressionPreviewServices,
 ) -> None:
+    root_uuid_from = services.root_uuid_from
+    short = services.short
+    validate_anchor_mode = services.validate_anchor_mode
+    validate_chain_duration_reasonable = services.validate_chain_duration_reasonable
+    append_wait_sched_rows = services.append_wait_sched_rows
+    anchor_until_summary = services.anchor_until_summary
+    to_local_cached = services.to_local_cached
+    fmt_local_for_task = services.fmt_local_for_task
+    format_anchor_rows = services.format_anchor_rows
+    panel = services.panel
+    human_delta = services.human_delta
+    error_and_exit = services.error_and_exit
+    validate_native_until_after_target = services.validate_native_until_after_target
+    validate_native_until_anchor_slots = services.validate_native_until_anchor_slots
+    append_first_expiration_row = services.append_first_expiration_row
     rows: list[tuple[str, str]] = []
-    panel_mode = str(getattr(core, "PANEL_MODE", "rich") or "rich").strip().lower()
+    panel_mode = services.panel_mode.strip().lower()
     compact_presentation = panel_mode in {"quiet", "minimal", "line", "text"}
-    from .modify_models import TaskView
-
-    for warning in panel_diagnostics.panel_warnings(core, TaskView.from_mapping(task)):
+    for warning in services.panel_warnings(task):
         rows.append(("Warning", f"[yellow]{warning}[/]"))
     dnf = None
     if anchor_str:
-        dnf, _ = anchor_preview_prepare_dnf(
-            task,
-            anchor_str,
-            due_dt,
-            rows,
-            prof,
-            core=core,
-            validate_anchor_syntax_strict=validate_anchor_syntax_strict,
-            validate_anchor_mode=validate_anchor_mode,
-            error_and_exit=error_and_exit,
-        )
+        dnf, _ = services.prepare_anchor_dnf(task, anchor_str, due_dt, rows, prof)
     else:
         mode, warn_msg = validate_anchor_mode(task.get("anchor_mode"))
         task["anchor_mode"] = mode
@@ -1146,20 +814,14 @@ def handle_anchor_preview_on_add(
             rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
             for idx, (label, value) in enumerate(rows):
                 if label == "Natural":
-                    rows[idx] = ("Natural", f"[white]{_anchor_preview_natural_text(task, dnf, anchor_file_str, core=core)}[/]")
+                    rows[idx] = ("Natural", f"[white]{services.describe_anchor_natural(task, dnf, anchor_file_str)}[/]")
                     break
         else:
             rows.append(("Anchor file", f"[white]{anchor_file_str}[/]"))
             rows.append(("Natural", f"[white]{_anchor_file_natural_text(anchor_file_str)}[/]"))
 
-    omit_dnf = anchor_preview_prepare_omit_dnf(
-        task,
-        rows,
-        core=core,
-        validate_omit_syntax_strict=validate_omit_syntax_strict,
-        error_and_exit=error_and_exit,
-    )
-    base_local_date, interval_seed, seed_base = anchor_preview_seed_context(
+    omit_dnf = services.prepare_omit_dnf(task, rows)
+    _base_local_date, interval_seed, seed_base = anchor_preview_seed_context(
         task,
         due_day,
         now_local,
@@ -1169,36 +831,8 @@ def handle_anchor_preview_on_add(
 
     merged = bool(dnf and anchor_file_str)
     fallback_hhmm = due_hhmm if user_provided_due else (9, 0)
-    shared_anchor_file_provider = None
-    if anchor_file_str:
-        from . import anchor_inclusion as _anchor_inclusion
-
-        shared_anchor_file_provider = _anchor_inclusion._build_anchor_file_provider(
-            anchor_file_str,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm=fallback_hhmm,
-            seed_base=seed_base,
-            core=core,
-        )
-
     try:
-        from .recurrence_context import RecurrenceContext
-        from .scheduler_service import SchedulerService
-
-        context = RecurrenceContext(
-            chain_id=str(task.get("chainID") or seed_base or "preview"),
-            timezone=getattr(core, "_LOCAL_TZ", None),
-            business_calendar=core.business_calendar_for_task(task),
-            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-        )
-        from .task_codec import DEFAULT_TASK_CODEC
-        from .task_models import NauticalTask
-
-        scheduler_service = SchedulerService.from_task(
-            NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(task, source_query="add anchor preview")),
-            context=context,
-        )
+        scheduler_service = services.scheduler_service_for_task(task)
         recurrence_evaluator = scheduler_service.session.evaluator
     except Exception as exc:
         error_and_exit(
@@ -1218,20 +852,11 @@ def handle_anchor_preview_on_add(
 
     if not dnf:
         occurrences = _collect_included_with_provider(
-            dnf=None,
-            anchor_file_str=anchor_file_str,
             after_local_dt=(to_local_cached(due_dt) if user_provided_due else now_local),
             inclusive=not user_provided_due,
             limit=_initial_occurrence_limit(preview_hard_cap, compact_presentation),
             fallback_hhmm=fallback_hhmm,
             default_seed_date=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-                next_occurrence_after_local_dt=_next_occurrence_callback,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            anchor_file_provider=shared_anchor_file_provider,
-            evaluator=recurrence_evaluator,
             scheduler_service=scheduler_service,
         )
         if not occurrences:
@@ -1247,10 +872,10 @@ def handle_anchor_preview_on_add(
         first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)
         if user_provided_due:
             first_label = "First scheduled" if recurrence_field == "scheduled" else "First due"
-            rows.append((first_label, f"[bold bright_green]{core.fmt_dt_local(display_first_due_utc)}[/]"))
-            rows.append(("Next anchor", f"[white]{core.fmt_dt_local(first_due_utc)}[/]"))
+            rows.append((first_label, f"[bold bright_green]{services.fmt_dt_local(display_first_due_utc)}[/]"))
+            rows.append(("Next anchor", f"[white]{services.fmt_dt_local(first_due_utc)}[/]"))
         else:
-            rows.append(("First due", f"[bold bright_green]{core.fmt_dt_local(first_due_utc)}[/]"))
+            rows.append(("First due", f"[bold bright_green]{services.fmt_dt_local(first_due_utc)}[/]"))
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
     elif not merged:
@@ -1270,32 +895,21 @@ def handle_anchor_preview_on_add(
             recurrence_field=recurrence_field,
             due_hhmm=due_hhmm,
             interval_seed=interval_seed,
-            seed_base=seed_base,
             rows=rows,
             prof=prof,
-            core=core,
+            fmt_dt_local=services.fmt_dt_local,
             to_local_cached=to_local_cached,
-            evaluator=recurrence_evaluator,
             scheduler_service=scheduler_service,
             error_and_exit=error_and_exit,
             fmt_local_for_task=fmt_local_for_task,
         )
     else:
         occurrences = _collect_included_with_provider(
-            dnf=dnf,
-            anchor_file_str=anchor_file_str,
             after_local_dt=(to_local_cached(due_dt) if user_provided_due else now_local),
             inclusive=not user_provided_due,
             limit=_initial_occurrence_limit(preview_hard_cap, compact_presentation),
             fallback_hhmm=fallback_hhmm,
             default_seed_date=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-                next_occurrence_after_local_dt=_next_occurrence_callback,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            anchor_file_provider=shared_anchor_file_provider,
-            evaluator=recurrence_evaluator,
             scheduler_service=scheduler_service,
         )
         if not occurrences:
@@ -1311,23 +925,14 @@ def handle_anchor_preview_on_add(
         first_hhmm = (first_due_local_dt.hour, first_due_local_dt.minute)
         if user_provided_due:
             first_label = "First scheduled" if recurrence_field == "scheduled" else "First due"
-            rows.append((first_label, f"[bold bright_green]{core.fmt_dt_local(display_first_due_utc)}[/]"))
-            rows.append(("Next anchor", f"[white]{core.fmt_dt_local(first_due_utc)}[/]"))
+            rows.append((first_label, f"[bold bright_green]{services.fmt_dt_local(display_first_due_utc)}[/]"))
+            rows.append(("Next anchor", f"[white]{services.fmt_dt_local(first_due_utc)}[/]"))
         else:
-            rows.append(("First due", f"[bold bright_green]{core.fmt_dt_local(first_due_utc)}[/]"))
+            rows.append(("First due", f"[bold bright_green]{services.fmt_dt_local(first_due_utc)}[/]"))
             task["due"] = fmt_local_for_task(first_due_utc)
             rows.append(("[auto-due]", "Due date was not explicitly set; assigned to first anchor match."))
 
-    _append_dst_adjustment_row(rows, dnf, first_due_local_dt, core=core)
-
-    if anchor_file_str and first_hhmm != fallback_hhmm:
-        shared_anchor_file_provider = _anchor_inclusion._build_anchor_file_provider(
-            anchor_file_str,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            fallback_hhmm=first_hhmm,
-            seed_base=seed_base,
-            core=core,
-        )
+    services.append_dst_adjustment(rows, dnf, first_due_local_dt)
 
     validate_native_until_after_target(task, display_first_due_utc, recurrence_field)
     validate_native_until_anchor_slots(
@@ -1338,12 +943,7 @@ def handle_anchor_preview_on_add(
         fallback_hhmm,
     )
     append_first_expiration_row(rows, task, display_first_due_utc, recurrence_field)
-    calendar_feedback.render_business_calendar_displacement(
-        task,
-        first_due_local_dt,
-        core=core,
-        panel=panel,
-    )
+    services.render_business_calendar_displacement(task, first_due_local_dt, panel=panel)
     append_wait_sched_rows(
         rows,
         task,
@@ -1371,8 +971,8 @@ def handle_anchor_preview_on_add(
             error_and_exit(
                 [
                     ("Invalid chainUntil", "Chain end point is earlier than the first matching anchor occurrence."),
-                    ("First due", core.fmt_dt_local(first_due_utc)),
-                    ("Chain end point", core.fmt_dt_local(until_dt)),
+                    ("First due", services.fmt_dt_local(first_due_utc)),
+                    ("Chain end point", services.fmt_dt_local(until_dt)),
                     ("Required", "Set chainUntil on or after the first anchor occurrence, or adjust the anchor."),
                 ]
             )
@@ -1385,7 +985,7 @@ def handle_anchor_preview_on_add(
         if not is_reasonable and warn_msg:
             rows.append(("Warning", f"[yellow]{warn_msg}[/]"))
 
-    cpmax = core.coerce_int(task.get("chainMax"), 0)
+    cpmax = services.coerce_int(task.get("chainMax"), 0)
     preview: list[str]
     presentation_terminal = None
     exact_until_count = None
@@ -1407,34 +1007,19 @@ def handle_anchor_preview_on_add(
         )
         allow_by_max = (cpmax - 1) if (cpmax and cpmax > 0) else 10**9
         allow_by_until = exact_until_count if exact_until_count is not None else 10**9
-        anchor_preview_lint_and_validate(anchor_str, prof, core=core, panel=panel)
+        services.lint_and_validate(anchor_str, prof, panel=panel)
         preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
         _t_prev = time.perf_counter()
-        try:
-            preview = anchor_build_preview(
-                dnf,
-                first_due_local_dt,
-                preview_limit,
-                until_dt,
-                first_hhmm,
-                interval_seed,
-                seed_base,
-                omit_dnf=omit_dnf,
-                evaluator=recurrence_evaluator,
-            )
-        except OccurrenceSearchExhausted as exc:
-            preview = []
-            if exc.is_date_limit:
-                rows.append(
-                    (
-                        "Note",
-                        f"[yellow]{occurrence_exhaustion_message(exc)}; "
-                        "the first occurrence remains valid.[/]",
-                    )
-                )
-            else:
-                raise
-        preview_terminal = getattr(preview, "terminal", None)
+        events = _collect_events_with_provider(
+            after_local_dt=first_due_local_dt,
+            inclusive=True,
+            limit_included=max(1, preview_limit + 1),
+            fallback_hhmm=first_hhmm,
+            default_seed_date=interval_seed,
+            return_occurrences=True,
+            scheduler_service=scheduler_service,
+        )
+        preview_terminal = getattr(events, "terminal", None)
         if preview_terminal is not None and preview_terminal.is_date_limit:
             rows.append(
                 (
@@ -1443,28 +1028,27 @@ def handle_anchor_preview_on_add(
                     "the occurrences shown above are the final representable matches.[/]",
                 )
             )
+        preview = _preview_occurrence_lines(
+            events,
+            first_due_local_dt=first_due_local_dt,
+            preview_limit=preview_limit,
+            fmt_dt_local=services.fmt_dt_local,
+            omit_description_for_task_date=services.omit_description_for_task_date,
+            task=task,
+        )
         prof.add_ms("anchor:preview_occurrences", (time.perf_counter() - _t_prev) * 1000.0)
     elif not compact_presentation:
         all_occurrences = _collect_included_with_provider(
-            dnf=dnf,
-            anchor_file_str=anchor_file_str,
             after_local_dt=first_due_local_dt,
             inclusive=True,
             limit=preview_hard_cap + 24,
             fallback_hhmm=first_hhmm,
             default_seed_date=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-                next_occurrence_after_local_dt=_next_occurrence_callback,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            anchor_file_provider=shared_anchor_file_provider,
-            evaluator=recurrence_evaluator,
             scheduler_service=scheduler_service,
         )
         presentation_terminal = getattr(all_occurrences, "terminal", None)
         if until_dt:
-            until_local = core.to_local(until_dt)
+            until_local = services.to_local(until_dt)
             limited: list[datetime] = []
             for event in all_occurrences:
                 event_dt = _event_datetime(event)
@@ -1478,28 +1062,19 @@ def handle_anchor_preview_on_add(
         preview_limit = max(0, min(upcoming_preview, allow_by_max, allow_by_until, preview_hard_cap))
         event_limit = max(1, preview_limit + 1)
         events = _collect_events_with_provider(
-            dnf=dnf,
-            anchor_file_str=anchor_file_str,
             after_local_dt=first_due_local_dt,
             inclusive=True,
             limit_included=event_limit,
             fallback_hhmm=first_hhmm,
             default_seed_date=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-                next_occurrence_after_local_dt=_next_occurrence_callback,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
             return_occurrences=True,
-            anchor_file_provider=shared_anchor_file_provider,
-            evaluator=recurrence_evaluator,
             scheduler_service=scheduler_service,
         )
         event_terminal = getattr(events, "terminal", None)
         if event_terminal is not None:
             presentation_terminal = event_terminal
         if until_dt:
-            until_local = core.to_local(until_dt)
+            until_local = services.to_local(until_dt)
             events = [
                 event
                 for event in events
@@ -1509,7 +1084,8 @@ def handle_anchor_preview_on_add(
             events,
             first_due_local_dt=first_due_local_dt,
             preview_limit=preview_limit,
-            core=core,
+            fmt_dt_local=services.fmt_dt_local,
+            omit_description_for_task_date=services.omit_description_for_task_date,
             task=task,
         )
         if presentation_terminal is not None and presentation_terminal.is_date_limit:
@@ -1521,11 +1097,11 @@ def handle_anchor_preview_on_add(
                 )
             )
         if anchor_str:
-            anchor_preview_lint_and_validate(anchor_str, prof, core=core, panel=panel)
+            services.lint_and_validate(anchor_str, prof, panel=panel)
 
     if not compact_presentation:
         rows.append(("Upcoming", "\n".join(preview) if preview else "[dim]–[/]"))
-        rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, bool(dnf and core.expr_has_m_or_y(dnf)))}[/]"))
+        rows.append(("Delta", f"[bright_yellow]{human_delta(now_utc, display_first_due_utc, bool(dnf and services.expr_has_m_or_y(dnf)))}[/]"))
 
     final_max_dt = None
     future_needed = max(0, cpmax - 1)
@@ -1533,20 +1109,11 @@ def handle_anchor_preview_on_add(
         final_max_dt = display_first_due_utc
     elif not compact_presentation and future_needed and future_needed <= max_summary_links:
         future_for_max = _collect_included_with_provider(
-            dnf=dnf,
-            anchor_file_str=anchor_file_str,
             after_local_dt=first_due_local_dt,
             inclusive=user_provided_due,
             limit=future_needed,
             fallback_hhmm=first_hhmm,
             default_seed_date=interval_seed,
-            seed_base=seed_base,
-            omit_dnf=omit_dnf,
-            core=core,
-                next_occurrence_after_local_dt=_next_occurrence_callback,
-            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            anchor_file_provider=shared_anchor_file_provider,
-            evaluator=recurrence_evaluator,
             scheduler_service=scheduler_service,
         )
         if len(future_for_max) == future_needed:
@@ -1562,7 +1129,7 @@ def handle_anchor_preview_on_add(
             exact_until_count=exact_until_count,
             final_until_dt=final_until_dt,
             now_utc=now_utc,
-            core=core,
+            fmt_dt_local=services.fmt_dt_local,
             human_delta=human_delta,
             final_max_dt=final_max_dt,
         )

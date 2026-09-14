@@ -8,6 +8,7 @@ from typing import Any
 
 from .task_models import TaskPayload
 from .task_datetime import datetime_value, parser_for_host
+from .timeutil import compare_datetimes
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,26 +81,92 @@ class DurationWarningPorts:
     panel: Any
 
 
-def _feedback_ports(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
-    return CompletionFeedbackPorts(
-        compute=compute,
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-        end_chain_summary=(
-            lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(
-                host, task, reason, now, current_task
-            )
-            if summarize else (lambda *args, **kwargs: None)
-        ),
+@dataclass(frozen=True, slots=True)
+class CompletionLifecyclePlanPorts:
+    generation: Any
+    scheduler_fingerprint: Any
+    compare_datetimes: Any
+    invalid_relative_carry_reason: Any
+    lifecycle_planner: Any
+    lifecycle_models: Any
+    modify_models: Any
+    end_chain_summary: Any
+    ensure_terminal_chain_off: Any
+    panel: Any
+    print_task: Any
+    diagnostic: Any
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionComputePorts:
+    compute: Any
+    services_type: Any
+    compute_child_due: Any
+    until_or_fail: Any
+    until_guard_or_stop: Any
+    require_child_due_or_fail: Any
+    warn_unreasonable_duration: Any
+    caps: Any
+    cap_guard_or_stop: Any
+    lifecycle_result_type: Any
+    lifecycle_plan: CompletionLifecyclePlanPorts
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionPreflightContextPorts:
+    preflight: Any
+    models: Any
+    task_observation: Any
+    snapshot_mode: Any
+    coerce_int: Any
+    max_link_number: int
+    short_uuid: Any
+    panel: Any
+    print_task: Any
+    end_chain_summary: Any
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionSpawnPorts:
+    spawn: Any
+    services_type: Any
+    build_child_draft: Any
+    spawn_child_atomic: Any
+    panel: Any
+    print_task: Any
+    diagnostic: Any
+
+
+def _ui_ports_for(host: Any):
+    ui = host._module("modify_ui_effects")
+    return ui, ui.ui_ports_for(host)
+
+
+def _print_task_port_for(host: Any):
+    ui, ports = _ui_ports_for(host)
+    return lambda task: ui.print_task(ports, task)
+
+
+def _end_summary_port_for(host: Any):
+    diagnostics = host._module("modify_diagnostics_effects")
+    ports = diagnostics.end_chain_summary_ports_for(host)
+    return lambda task, reason, now, current_task=None: diagnostics.end_chain_summary(
+        ports, task, reason, now, current_task
     )
 
 
-def _panel(host: Any, title, rows, **kwargs):
-    return host._module("modify_ui_effects").panel(host, title, rows, **kwargs)
+def _feedback_ports_for(host: Any, compute: Any, *, summarize: bool = True) -> CompletionFeedbackPorts:
+    return CompletionFeedbackPorts(
+        compute=compute,
+        panel=_panel_port_for(host),
+        print_task=_print_task_port_for(host),
+        end_chain_summary=_end_summary_port_for(host) if summarize else (lambda *args, **kwargs: None),
+    )
 
 
-def _panel_callback(host: Any):
-    return lambda title, rows, **kwargs: _panel(host, title, rows, **kwargs)
+def _panel_port_for(host: Any):
+    ui, ports = _ui_ports_for(host)
+    return lambda title, rows, **kwargs: ui.panel(ports, title, rows, **kwargs)
 
 
 def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
@@ -110,13 +177,13 @@ def link_numbers_or_fail(ports: CompletionPreflightPorts, new: TaskPayload):
     )
 
 
-def kind_or_stop(host: Any, new: TaskPayload, now_utc: datetime):
-    return host._module("modify_completion_preflight").completion_kind_or_stop(
+def kind_or_stop(ports: CompletionPreflightPorts, new: TaskPayload, now_utc: datetime):
+    return ports.preflight.completion_kind_or_stop(
         new,
         now_utc,
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
+        panel=ports.panel,
+        print_task=ports.print_task,
+        end_chain_summary=ports.end_chain_summary,
     )
 
 
@@ -138,13 +205,6 @@ def existing_next_or_fail(ports: CompletionPreflightPorts, new: TaskPayload, nex
 
 def _snapshot_mode(ports: SnapshotPorts) -> str:
     return ports.mode()
-
-
-def _snapshot_mode_for_host(host: Any) -> str:
-    if host._SHOW_ANALYTICS or host._CHECK_CHAIN_INTEGRITY:
-        return "full"
-    mode = str(getattr(host.core, "PANEL_MODE", "rich") or "rich").strip().lower()
-    return "next" if mode in {"line", "minimal", "quiet", "text"} else "recent"
 
 
 def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: int):
@@ -178,29 +238,57 @@ def chain_snapshot(ports: SnapshotPorts, chain_id: str, base_no: int, next_no: i
     )
 
 
-def preflight_context(host: Any, new: TaskPayload, now_utc: datetime, repository):
+def completion_preflight_context_ports_for(host: Any) -> CompletionPreflightContextPorts:
     preflight = host._module("modify_completion_preflight")
     models = host._module("modify_models")
-    snapshot_ports = SnapshotPorts(
-        repository=repository,
-        mode=lambda: _snapshot_mode_for_host(host),
+    return CompletionPreflightContextPorts(
+        preflight=preflight,
         models=models,
         task_observation=host._module("task_models").TaskObservation,
-    )
-    preflight_ports = CompletionPreflightPorts(
-        preflight=preflight,
+        snapshot_mode=lambda: (
+            "full" if host._SHOW_ANALYTICS or host._CHECK_CHAIN_INTEGRITY else
+            "next" if str(getattr(host.core, "PANEL_MODE", "rich") or "rich").strip().lower()
+            in {"line", "minimal", "quiet", "text"} else "recent"
+        ),
         coerce_int=host.core.coerce_int,
         max_link_number=host.core.MAX_LINK_NUMBER,
         short_uuid=host.core.short_uuid,
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
+        panel=_panel_port_for(host),
+        print_task=_print_task_port_for(host),
+        end_chain_summary=_end_summary_port_for(host),
+    )
+
+
+def preflight_context(
+    ports: CompletionPreflightContextPorts,
+    new: TaskPayload,
+    now_utc: datetime,
+    repository,
+):
+    preflight = ports.preflight
+    models = ports.models
+    snapshot_ports = SnapshotPorts(
+        repository=repository,
+        mode=ports.snapshot_mode,
+        models=models,
+        task_observation=ports.task_observation,
+    )
+    preflight_ports = CompletionPreflightPorts(
+        preflight=preflight,
+        coerce_int=ports.coerce_int,
+        max_link_number=ports.max_link_number,
+        short_uuid=ports.short_uuid,
+        panel=ports.panel,
+        print_task=ports.print_task,
+        end_chain_summary=ports.end_chain_summary,
         existing_next_lookup=lambda task, link: repository.exact_child_slot(str(task.get("chainID") or ""), link),
     )
     services = models.CompletionPreflightServices(
-        short=host.core.short_uuid,
+        short=ports.short_uuid,
         completion_link_numbers_or_fail=lambda task: link_numbers_or_fail(preflight_ports, task),
-        completion_kind_or_stop=lambda task, clock: preflight.completion_kind_or_stop(task, clock, panel=preflight_ports.panel, print_task=preflight_ports.print_task, end_chain_summary=preflight_ports.end_chain_summary),
+        completion_kind_or_stop=lambda task, clock: kind_or_stop(
+            preflight_ports, task, clock
+        ),
         completion_chain_id_or_fail=lambda task: chain_id_or_fail(preflight_ports, task),
         completion_chain_snapshot=lambda chain_id, base_no, next_no: chain_snapshot(snapshot_ports, chain_id, base_no, next_no),
         completion_existing_next_or_fail=lambda task, next_no, snapshot: existing_next_or_fail(preflight_ports, task, next_no, snapshot),
@@ -287,97 +375,178 @@ def cap_guard_or_stop(ports: CompletionFeedbackPorts, new: TaskPayload, next_no:
     )
 
 
-def compute_next_and_limits(host: Any, new: TaskPayload, kind: str, next_no: int, now_utc: datetime, *, preflight=None):
+def completion_compute_ports_for(host: Any) -> CompletionComputePorts:
     compute = host._module("modify_completion_compute")
     models = host._module("modify_models")
-    services = models.CompletionComputeServices(
-        completion_compute_child_due=lambda value, value_kind: compute_child_due(
-            ChildDuePorts(
-                compute=compute,
-                generation=host._module("modify_generation_effects").chain_generation_service(
-                    host._module("modify_generation_effects").generation_ports_for(host)
-                ),
-                decode_task=host._module("task_codec").DEFAULT_TASK_CODEC.decode_row,
-                task_model=host._module("task_models"),
-                exhaustion_message=host.core._import_sibling("scheduler_models").occurrence_exhaustion_message,
-                ensure_terminal=lambda task, event=None: host._module("modify_presentation_effects").ensure_terminal_chain_off(host, task, event),
-                end_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
-                now_utc=host._workflow_now_utc,
-                panel=_panel_callback(host),
-                print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-                diag=host._diag,
-            ), value, value_kind
-        ),
-        completion_until_or_fail=lambda value, clock: until_or_fail(
-            UntilCompletionPorts(
-                compute=compute,
-                parse_datetime=host._TASK_DATETIME_PARSER.parse,
-                validate_until_not_past=lambda until_dt, now: host._module("modify_validation_effects").until_not_past(
-                    host._module("modify_validation_effects").UntilPorts(
-                        lambda _now: host.timedelta(minutes=1),
-                        host._module("timeutil").compare_datetimes,
-                        host.core.humanize_delta,
-                    ), until_dt, now,
-                ),
-                panel=_panel_callback(host),
-                print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-            ), value, clock
-        ),
-        completion_until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(_feedback_ports(host, compute), value, due, until, clock),
-        completion_require_child_due_or_fail=lambda value, due: require_child_due_or_fail(_feedback_ports(host, compute, summarize=False), value, due),
-        completion_warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(
-            DurationWarningPorts(
-                compute=compute,
-                validate_duration=lambda child_due, until_dt, now: host._module("modify_validation_effects").chain_duration_reasonable(
-                    host._module("modify_validation_effects").DurationPorts(host._MIN_FUTURE_WARN, host.core.fmt_dt_local), child_due, until_dt, now
-                ),
-                panel=_panel_callback(host),
-            ), value, due, until, clock
-        ),
-        completion_caps=lambda value_kind, value, due, dnf: caps(
-            CompletionCapsPorts(
-                compute=compute,
-                coerce_int=host.core.coerce_int,
-                parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-                estimate_cp=lambda task, due: host._module("modify_schedule_effects").estimate_cp_final_by_max(host, task, due),
-                estimate_anchor=lambda task, due, expression: host._module("modify_schedule_effects").estimate_anchor_final_by_max(host, task, due, expression),
-                cap_cp=lambda task, due: host._module("modify_schedule_effects").cap_from_until_cp(host, task, due),
-                cap_anchor=lambda task, due, expression: host._module("modify_schedule_effects").cap_from_until_anchor(host, task, due, expression),
-            ), value_kind, value, due, dnf
-        ),
-        completion_cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(_feedback_ports(host, compute), value, number, cap, clock),
+    schedule = host._module("modify_schedule_effects")
+    validation = host._module("modify_validation_effects")
+    generation_module = host._module("modify_generation_effects")
+    generation = generation_module.chain_generation_service(
+        generation_module.generation_ports_for(host)
     )
-    computed = compute.completion_compute_next_and_limits(new, kind, next_no, now_utc, services=services)
+    cp_schedule_ports = schedule.cp_completion_ports_for(host)
+    anchor_schedule_ports = schedule.anchor_completion_ports_for(host)
+    feedback = _feedback_ports_for(host, compute)
+    feedback_without_summary = _feedback_ports_for(host, compute, summarize=False)
+    child_due_ports = ChildDuePorts(
+        compute=compute,
+        generation=generation,
+        decode_task=host._module("task_codec").DEFAULT_TASK_CODEC.decode_row,
+        task_model=host._module("task_models"),
+        exhaustion_message=host.core._import_sibling("scheduler_models").occurrence_exhaustion_message,
+        ensure_terminal=lambda task, event=None: host._module(
+            "modify_composition_adapters"
+        ).ensure_terminal_chain_off_for(host, task, event),
+        end_summary=_end_summary_port_for(host),
+        now_utc=host._workflow_now_utc,
+        panel=_panel_port_for(host),
+        print_task=_print_task_port_for(host),
+        diag=host._diag,
+    )
+    until_ports = UntilCompletionPorts(
+        compute=compute,
+        parse_datetime=host._TASK_DATETIME_PARSER.parse,
+        validate_until_not_past=lambda until_dt, now: validation.until_not_past(
+            validation.UntilPorts(
+                lambda _now: host.timedelta(minutes=1),
+                compare_datetimes,
+                host.core.humanize_delta,
+            ),
+            until_dt,
+            now,
+        ),
+        panel=_panel_port_for(host),
+        print_task=_print_task_port_for(host),
+    )
+    duration_ports = DurationWarningPorts(
+        compute=compute,
+        validate_duration=lambda child_due, until_dt, now: validation.chain_duration_reasonable(
+            validation.DurationPorts(host._MIN_FUTURE_WARN, host.core.fmt_dt_local),
+            child_due,
+            until_dt,
+            now,
+        ),
+        panel=_panel_port_for(host),
+    )
+    caps_ports = CompletionCapsPorts(
+        compute=compute,
+        coerce_int=host.core.coerce_int,
+        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
+        estimate_cp=lambda task, due: schedule.estimate_cp_final_by_max(
+            cp_schedule_ports, task, due
+        ),
+        estimate_anchor=lambda task, due, expression: schedule.estimate_anchor_final_by_max(
+            anchor_schedule_ports, task, due, expression
+        ),
+        cap_cp=lambda task, due: schedule.cap_from_until_cp(cp_schedule_ports, task, due),
+        cap_anchor=lambda task, due, expression: schedule.cap_from_until_anchor(
+            anchor_schedule_ports, task, due, expression
+        ),
+    )
+    fingerprint = getattr(host.core, "scheduler_config_fingerprint", None)
+    plan_ports = CompletionLifecyclePlanPorts(
+        generation=generation,
+        scheduler_fingerprint=fingerprint if callable(fingerprint) else (lambda: ""),
+        compare_datetimes=lambda left, right: host._module(
+            "modify_value_effects"
+        ).compare_datetimes(
+            host._module("modify_value_effects").DatetimePorts(
+                compare_datetimes
+            ),
+            left,
+            right,
+        ),
+        invalid_relative_carry_reason=host._module(
+            "chain_integrity_lifecycle"
+        ).invalid_relative_carry_reason,
+        lifecycle_planner=host._module("lifecycle_planner"),
+        lifecycle_models=host._module("lifecycle_models"),
+        modify_models=models,
+        end_chain_summary=_end_summary_port_for(host),
+        ensure_terminal_chain_off=lambda task, event=None: host._module(
+            "modify_composition_adapters"
+        ).ensure_terminal_chain_off_for(host, task, event),
+        panel=_panel_port_for(host),
+        print_task=_print_task_port_for(host),
+        diagnostic=host._diag,
+    )
+    return CompletionComputePorts(
+        compute=compute,
+        services_type=models.CompletionComputeServices,
+        compute_child_due=lambda value, value_kind: compute_child_due(
+            child_due_ports, value, value_kind
+        ),
+        until_or_fail=lambda value, clock: until_or_fail(until_ports, value, clock),
+        until_guard_or_stop=lambda value, due, until, clock: until_guard_or_stop(
+            feedback, value, due, until, clock
+        ),
+        require_child_due_or_fail=lambda value, due: require_child_due_or_fail(
+            feedback_without_summary, value, due
+        ),
+        warn_unreasonable_duration=lambda value, due, until, clock: warn_unreasonable_duration(
+            duration_ports, value, due, until, clock
+        ),
+        caps=lambda value_kind, value, due, dnf: caps(
+            caps_ports, value_kind, value, due, dnf
+        ),
+        cap_guard_or_stop=lambda value, number, cap, clock: cap_guard_or_stop(
+            feedback, value, number, cap, clock
+        ),
+        lifecycle_result_type=models.CompletionLifecycleResult,
+        lifecycle_plan=plan_ports,
+    )
+
+
+def compute_next_and_limits(
+    ports: CompletionComputePorts,
+    new: TaskPayload,
+    kind: str,
+    next_no: int,
+    now_utc: datetime,
+    *,
+    preflight=None,
+):
+    services = ports.services_type(
+        completion_compute_child_due=ports.compute_child_due,
+        completion_until_or_fail=ports.until_or_fail,
+        completion_until_guard_or_stop=ports.until_guard_or_stop,
+        completion_require_child_due_or_fail=ports.require_child_due_or_fail,
+        completion_warn_unreasonable_duration=ports.warn_unreasonable_duration,
+        completion_caps=ports.caps,
+        completion_cap_guard_or_stop=ports.cap_guard_or_stop,
+    )
+    computed = ports.compute.completion_compute_next_and_limits(
+        new, kind, next_no, now_utc, services=services
+    )
     if computed is None:
         return None
-    if isinstance(computed, host._module("modify_models").CompletionLifecycleResult):
+    if isinstance(computed, ports.lifecycle_result_type):
         return computed
     if not str(new.get("uuid") or "").strip() or not str(new.get("chainID") or "").strip():
         return computed
-    fingerprint_fn = getattr(host.core, "scheduler_config_fingerprint", None)
-    return compute.attach_lifecycle_plan(
-        new, computed, next_no, now_utc,
+    plan = ports.lifecycle_plan
+    return ports.compute.attach_lifecycle_plan(
+        new,
+        computed,
+        next_no,
+        now_utc,
         preflight=preflight,
-        generation=host._module("modify_generation_effects").chain_generation_service(
-            host._module("modify_generation_effects").generation_ports_for(host)
-        ),
-        scheduler_fingerprint=fingerprint_fn() if callable(fingerprint_fn) else "",
-        compare_datetimes=lambda left, right: host._module("modify_value_effects").compare_datetimes(
-            host._module("modify_value_effects").DatetimePorts(host._module("timeutil").compare_datetimes), left, right
-        ),
-        invalid_relative_carry_reason=host._module("chain_integrity_lifecycle").invalid_relative_carry_reason,
-        lifecycle_planner=host._module("lifecycle_planner"),
-        lifecycle_models=host._module("lifecycle_models"),
-        modify_models=host._module("modify_models"),
-        end_chain_summary=lambda task, reason, now, current_task=None: host._module("modify_diagnostics_effects").end_chain_summary(host, task, reason, now, current_task),
-        ensure_terminal_chain_off=lambda task, event=None: host._module("modify_presentation_effects").ensure_terminal_chain_off(host, task, event),
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-        diag=host._diag,
+        generation=plan.generation,
+        scheduler_fingerprint=plan.scheduler_fingerprint(),
+        compare_datetimes=plan.compare_datetimes,
+        invalid_relative_carry_reason=plan.invalid_relative_carry_reason,
+        lifecycle_planner=plan.lifecycle_planner,
+        lifecycle_models=plan.lifecycle_models,
+        modify_models=plan.modify_models,
+        end_chain_summary=plan.end_chain_summary,
+        ensure_terminal_chain_off=plan.ensure_terminal_chain_off,
+        panel=plan.panel,
+        print_task=plan.print_task,
+        diag=plan.diagnostic,
     )
 
 
-def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
+def completion_spawn_ports_for(host: Any) -> CompletionSpawnPorts:
     spawn = host._module("modify_completion_spawn")
     generation_module = host._module("modify_generation_effects")
     generation = generation_module.chain_generation_service(generation_module.generation_ports_for(host))
@@ -392,19 +561,36 @@ def build_and_spawn_child(host: Any, new: TaskPayload, **kwargs):
         return generation.build_child_draft(typed_task, *args, **inner_kwargs)
 
     spawn_effects = host._module("modify_spawn_effects")
-    services = models.CompletionSpawnServices(
+    spawn_ports = spawn_effects.spawn_child_ports_for(host)
+    return CompletionSpawnPorts(
+        spawn=spawn,
+        services_type=models.CompletionSpawnServices,
         build_child_draft=build_child_draft,
         spawn_child_atomic=lambda child, parent, *, lifecycle_plan=None: spawn_effects.spawn_child_atomic(
-            host, child, parent, lifecycle_plan=lifecycle_plan
+            spawn_ports, child, parent, lifecycle_plan=lifecycle_plan
         ),
-        panel=_panel_callback(host),
-        print_task=lambda task: host._module("modify_ui_effects").print_task(host, task),
-        diag=host._diag,
+        panel=_panel_port_for(host),
+        print_task=_print_task_port_for(host),
+        diagnostic=host._diag,
     )
-    return spawn.completion_build_and_spawn_child(new, services=services, **kwargs)
+
+
+def build_and_spawn_child(ports: CompletionSpawnPorts, new: TaskPayload, **kwargs):
+    services = ports.services_type(
+        build_child_draft=ports.build_child_draft,
+        spawn_child_atomic=ports.spawn_child_atomic,
+        panel=ports.panel,
+        print_task=ports.print_task,
+        diag=ports.diagnostic,
+    )
+    return ports.spawn.completion_build_and_spawn_child(new, services=services, **kwargs)
 
 
 __all__ = (
+    "CompletionComputePorts", "CompletionLifecyclePlanPorts",
+    "CompletionPreflightContextPorts", "CompletionSpawnPorts",
+    "completion_compute_ports_for", "completion_preflight_context_ports_for",
+    "completion_spawn_ports_for",
     "link_numbers_or_fail", "kind_or_stop", "chain_id_or_fail", "existing_next_or_fail", "chain_snapshot", "preflight_context",
     "compute_child_due", "until_or_fail", "until_guard_or_stop", "require_child_due_or_fail",
     "warn_unreasonable_duration", "caps", "cap_guard_or_stop",

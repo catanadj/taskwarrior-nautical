@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import tzinfo
 from typing import Any, Mapping
 
+from .business_calendar import BusinessCalendar
 from .task_models import FieldPresence, TaskObservation
 
 
@@ -18,8 +20,8 @@ class RecurrenceContext:
     """
 
     chain_id: str
-    timezone: Any | None = None
-    business_calendar: Any | None = None
+    timezone: tzinfo | None = None
+    business_calendar: BusinessCalendar | None = None
     astronomy_config: Mapping[str, Any] | None = None
     anchor_file_dir: str = ""
     namespace: str = "nautical"

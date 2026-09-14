@@ -112,6 +112,7 @@ class TaskwarriorClient:
         stderr = ""
         returncode = 126
         kind = CommandFailureKind.EXECUTION_FAILURE
+        process_group_id: int | None = None
         try:
             proc = subprocess.Popen(
                 list(command.argv),
@@ -122,6 +123,10 @@ class TaskwarriorClient:
                 close_fds=True,
                 start_new_session=True,
             )
+            # Capture this while the leader is definitely alive.  A leader
+            # that exits after SIGTERM must not prevent escalation to the
+            # rest of its process group.
+            process_group_id = os.getpgid(proc.pid)
             try:
                 out_bytes, err_bytes = proc.communicate(
                     input=command.input_text.encode("utf-8") if command.input_text is not None else None,
@@ -132,12 +137,12 @@ class TaskwarriorClient:
                 kind = self._classify(returncode, stdout, stderr)
             except subprocess.TimeoutExpired as exc:
                 cleanup_deadline = time.monotonic() + 0.4
-                self._terminate(proc)
+                self._terminate(proc, process_group_id)
                 try:
                     remaining = max(0.0, cleanup_deadline - time.monotonic())
                     out_bytes, err_bytes = proc.communicate(timeout=remaining)
                 except subprocess.TimeoutExpired as final_exc:
-                    self._kill_group(proc)
+                    self._kill_group(proc, process_group_id)
                     try:
                         remaining = max(0.0, cleanup_deadline - time.monotonic())
                         proc.wait(timeout=remaining)
@@ -222,26 +227,39 @@ class TaskwarriorClient:
         return CommandFailureKind.REJECTED
 
     @staticmethod
-    def _terminate(proc: subprocess.Popen[bytes]) -> None:
+    def _terminate(proc: subprocess.Popen[bytes], process_group_id: int | None = None) -> None:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            os.killpg(
+                process_group_id if process_group_id is not None else os.getpgid(proc.pid),
+                signal.SIGTERM,
+            )
             proc.wait(timeout=0.2)
         except (OSError, subprocess.TimeoutExpired):
             try:
                 proc.terminate()
                 proc.wait(timeout=0.2)
             except (OSError, subprocess.TimeoutExpired):
-                TaskwarriorClient._kill_group(proc)
+                TaskwarriorClient._kill_group(proc, process_group_id)
 
     @staticmethod
-    def _kill_group(proc: subprocess.Popen[bytes]) -> None:
+    def _kill_group(proc: subprocess.Popen[bytes], process_group_id: int | None = None) -> None:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(
+                process_group_id if process_group_id is not None else os.getpgid(proc.pid),
+                signal.SIGKILL,
+            )
         except (OSError, ProcessLookupError):
             try:
                 proc.kill()
             except OSError:
                 pass
+        # Reap the leader before returning.  This makes the process boundary
+        # deterministic for callers and prevents a just-killed leader from
+        # being observed as alive by subsequent safety checks.
+        try:
+            proc.wait(timeout=0.2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 __all__ = (

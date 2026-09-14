@@ -36,6 +36,7 @@ from dev_tools.nautical_golden_tests import (
     test_lifecycle_application_stage_failure_matrix_resumes_idempotently,
     test_lifecycle_application_idempotency_and_duplicate_staging,
 )
+from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
@@ -159,10 +160,10 @@ repo = LifecycleOutboxRepository(Path(sys.argv[1]))
 ids = tuple(json.loads(sys.argv[3]))
 if sys.argv[2] == "batch":
     overall, records = repo.claim_batch(owner=sys.argv[4], lease_seconds=30, limit=len(ids))
-    payload = {"overall": overall.kind.value, "claimed": [record.intent_id for record in records]}
+    payload = {"overall": overall.kind.value, "reason": overall.reason, "claimed": [record.intent_id for record in records]}
 else:
     overall, results = repo.claim_intents(intent_ids=ids, owner=sys.argv[4], lease_seconds=30)
-    payload = {"overall": overall.kind.value, "claimed": [key for key, result in results.items() if result.kind.value == "applied"]}
+    payload = {"overall": overall.kind.value, "reason": overall.reason, "claimed": [key for key, result in results.items() if result.kind.value == "applied"]}
 print(json.dumps(payload, sort_keys=True))
 """
         env = os.environ.copy()
@@ -196,10 +197,29 @@ print(json.dumps(payload, sort_keys=True))
             second_out, second_err = second.communicate(timeout=15)
             self.assertEqual(first.returncode, 0, first_err)
             self.assertEqual(second.returncode, 0, second_err)
-            first_claimed = set(json.loads(first_out)["claimed"])
-            second_claimed = set(json.loads(second_out)["claimed"])
-            self.assertEqual(first_claimed | second_claimed, set(intent_ids))
+            first_result = json.loads(first_out)
+            second_result = json.loads(second_out)
+            self.assertIn(first_result["overall"], {"applied", "retryable"}, first_out)
+            self.assertIn(second_result["overall"], {"applied", "retryable"}, second_out)
+            first_claimed = set(first_result["claimed"])
+            second_claimed = set(second_result["claimed"])
             self.assertEqual(first_claimed & second_claimed, set())
+            unclaimed = set(intent_ids) - (first_claimed | second_claimed)
+            if unclaimed:
+                # WAL can reject both simultaneous openers with SQLITE_PROTOCOL;
+                # that is a retryable result, and a later drain must recover
+                # every still-ready intent without claiming an existing lease.
+                result, recovered = outbox.claim_intents(
+                    intent_ids=tuple(sorted(unclaimed)), owner="process-owner-retry", lease_seconds=30,
+                )
+                self.assertEqual(result.kind.value, "applied", result.reason)
+                recovered_claimed = {
+                    intent_id for intent_id, outcome in recovered.items()
+                    if outcome.kind.value == "applied"
+                }
+            else:
+                recovered_claimed = set()
+            self.assertEqual(first_claimed | second_claimed | recovered_claimed, set(intent_ids))
 
     def test_queue_and_reconcile_process_races_have_one_owner(self) -> None:
         for _ in range(3):
@@ -486,7 +506,19 @@ print(json.dumps(payload, sort_keys=True))
             from nautical_core.lifecycle_application import DrainResult
             from nautical_core.lifecycle_outbox import OutboxResult, OutboxResultKind
 
-            service = WaveService(outbox=outbox, owner="wave-owner")
+            class MutationGateway:
+                def apply(self, _request):
+                    raise AssertionError("the overridden wave drain must not mutate")
+
+            gateway = MutationGateway()
+            gateway_adapter = LifecycleExecutionFixture(gateway)
+            service = WaveService(
+                unit_of_work=type("UnitOfWork", (), {"mutation_epoch": 0})(),
+                mutations=gateway_adapter,
+                execution=gateway_adapter,
+                outbox=outbox,
+                owner="wave-owner",
+            )
             result = service.execute_wave(plans, configuration_fingerprint="cfg", schedule_fingerprint="sch")
             self.assertEqual(result.claim.kind.value, "applied")
             claimed_ids: set[str] = {record.intent_id for record in service.claimed_records}
@@ -552,8 +584,9 @@ print(json.dumps(payload, sort_keys=True))
         with TemporaryDirectory() as td:
             outbox = LifecycleOutboxRepository(Path(td))
             first_gateway = Gateway()
+            first_adapter = LifecycleExecutionFixture(first_gateway)
             first = LifecycleApplicationService(
-                unit_of_work=Uow(), mutations=first_gateway, outbox=outbox,
+                unit_of_work=Uow(), mutations=first_adapter, execution=first_adapter, outbox=outbox,
                 budget=OperatorInvocationBudget(OperatorLimits(taskwarrior_calls=1)), owner="budget-a",
             )
             first.stage(plan, configuration_fingerprint="cfg", schedule_fingerprint="sch")
@@ -565,8 +598,10 @@ print(json.dumps(payload, sort_keys=True))
             time.sleep(1.1)
 
             second_gateway = Gateway()
+            second_adapter = LifecycleExecutionFixture(second_gateway)
             second = LifecycleApplicationService(
-                unit_of_work=Uow(), mutations=second_gateway, outbox=outbox, owner="budget-b",
+                unit_of_work=Uow(), mutations=second_adapter, execution=second_adapter,
+                outbox=outbox, owner="budget-b",
             )
             resumed = second.drain(limit=1, configuration_fingerprint="cfg", schedule_fingerprint="sch")
             self.assertTrue(resumed.outcomes[0].ok)

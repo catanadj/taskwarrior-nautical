@@ -9,8 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
-from types import ModuleType
-from typing import Mapping, Protocol, TypeAlias
+from typing import Any, Callable, Mapping, Protocol, TypeAlias
 import uuid
 
 
@@ -27,6 +26,55 @@ class IntegrationContextError(RuntimeError):
 class IntegrationAccess(str, Enum):
     READ_ONLY = "read_only"
     MUTATION = "mutation"
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationRuntime:
+    """Explicit configuration and Taskdata ports required at integration startup."""
+
+    resolve_task_data_context: Callable[..., tuple[str, bool, str]]
+    reload_taskdata_config: Callable[[str | os.PathLike[str]], Mapping[str, object]]
+    effective_config_snapshot: Callable[[], Mapping[str, object]]
+    scheduling_configuration_error: Callable[[], str]
+    _timezone_state: Callable[[], tuple[tzinfo | None, str]]
+
+    def __post_init__(self) -> None:
+        required = (
+            "resolve_task_data_context",
+            "reload_taskdata_config",
+            "effective_config_snapshot",
+            "scheduling_configuration_error",
+            "_timezone_state",
+        )
+        if any(not callable(getattr(self, name)) for name in required):
+            raise TypeError("integration runtime requires all configuration and Taskdata ports")
+
+    def current_timezone(self) -> tuple[tzinfo | None, str]:
+        """Read timezone state after configuration reload has completed."""
+        return self._timezone_state()
+
+    @classmethod
+    def from_compatibility_facade(cls, facade: object) -> "IntegrationRuntime":
+        """Adapt the hook's documented facade at the outer integration boundary."""
+        required = {
+            "resolve_task_data_context": "taskdata",
+            "reload_taskdata_config": "configuration",
+            "effective_config_snapshot": "configuration",
+            "scheduling_configuration_error": "configuration",
+        }
+        ports: dict[str, Any] = {}
+        for name, stage in required.items():
+            value = getattr(facade, name, None)
+            if not callable(value):
+                raise IntegrationContextError(stage, f"required runtime port is unavailable: {name}")
+            ports[name] = value
+
+        def timezone_state() -> tuple[tzinfo | None, str]:
+            local_timezone = getattr(facade, "_LOCAL_TZ", None)
+            timezone_name = str(getattr(facade, "LOCAL_TZ_NAME", "") or "").strip()
+            return local_timezone if isinstance(local_timezone, tzinfo) else None, timezone_name
+
+        return cls(**ports, _timezone_state=timezone_state)
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +247,7 @@ def _validated_taskdata(path_value: str, *, mutation: bool) -> Path:
 
 def build_integration_context(
     *,
-    core: ModuleType,
+    runtime: IntegrationRuntime,
     argv: tuple[str, ...] = (),
     env: Mapping[str, str] | None = None,
     tw_dir: str = "~/.task",
@@ -246,11 +294,8 @@ def build_integration_context(
             raise IntegrationContextError("taskdata", "Taskwarrior data location is empty")
         discovered_taskdata = True
 
-    resolver = getattr(core, "resolve_task_data_context", None)
-    if not callable(resolver):
-        raise IntegrationContextError("taskdata", "core resolver is unavailable")
     try:
-        raw_taskdata, use_rc_data_location, source = resolver(
+        raw_taskdata, use_rc_data_location, source = runtime.resolve_task_data_context(
             argv=list(argv),
             env=env_map,
             tw_dir=resolved_tw_dir,
@@ -263,17 +308,12 @@ def build_integration_context(
     if bool(use_rc_data_location):
         command_prefix += (f"rc.data.location={taskdata}",)
 
-    reload_config = getattr(core, "reload_taskdata_config", None)
-    snapshot_fn = getattr(core, "effective_config_snapshot", None)
-    scheduling_error_fn = getattr(core, "scheduling_configuration_error", None)
-    if not callable(reload_config) or not callable(snapshot_fn) or not callable(scheduling_error_fn):
-        raise IntegrationContextError("configuration", "validated core configuration API is unavailable")
     try:
-        reload_result = reload_config(taskdata)
-        scheduling_error = str(scheduling_error_fn() or "").strip()
+        reload_result = runtime.reload_taskdata_config(taskdata)
+        scheduling_error = str(runtime.scheduling_configuration_error() or "").strip()
         if scheduling_error:
             raise RuntimeError(scheduling_error)
-        snapshot = snapshot_fn()
+        snapshot = runtime.effective_config_snapshot()
     except Exception as exc:
         raise IntegrationContextError(
             "configuration",
@@ -285,8 +325,7 @@ def build_integration_context(
     if not isinstance(snapshot, Mapping):
         raise IntegrationContextError("configuration", "validated snapshot is unavailable", taskdata=taskdata)
 
-    local_timezone = getattr(core, "_LOCAL_TZ", None)
-    timezone_name = str(getattr(core, "LOCAL_TZ_NAME", "") or "").strip()
+    local_timezone, timezone_name = runtime.current_timezone()
     if not isinstance(local_timezone, tzinfo):
         raise IntegrationContextError(
             "timezone",
@@ -329,7 +368,7 @@ def build_integration_context(
 
 def build_operator_context(
     *,
-    core: ModuleType,
+    runtime: IntegrationRuntime,
     task_binary: str,
     taskdata: str | None = None,
     env: Mapping[str, str] | None = None,
@@ -339,7 +378,7 @@ def build_operator_context(
     """Build one validated context for a Taskwarrior-facing operator command."""
     argv = (f"data:{taskdata}",) if str(taskdata or "").strip() else ()
     return build_integration_context(
-        core=core,
+        runtime=runtime,
         argv=argv,
         env=env,
         tw_dir=str(taskdata or "~/.task"),
@@ -357,6 +396,7 @@ __all__ = (
     "IntegrationAccess",
     "IntegrationContext",
     "IntegrationContextError",
+    "IntegrationRuntime",
     "SilentDiagnostics",
     "StderrDiagnostics",
     "SystemClock",

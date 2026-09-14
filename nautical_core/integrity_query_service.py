@@ -9,7 +9,7 @@ from .chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from .chain_integrity_models import IntegrityReportStatus
 from .chain_snapshot import IntegritySnapshotRequest
 from .integrity_report import public_payload
-from .integration_context import IntegrationAccess
+from .integration_context import IntegrationAccess, IntegrationRuntime
 from .lifecycle_outbox import LifecycleOutboxRepository
 from .operator_context import OperatorInvocationContext
 from .operator_models import (
@@ -28,7 +28,7 @@ from .taskwarrior_uow import build_operator_uow
 class IntegrityQueryService:
     """Own the complete read-only integrity query pipeline for one runtime."""
 
-    core: Any
+    runtime: IntegrationRuntime
     task_binary: str
     env: Mapping[str, str]
     uow_builder: Callable[..., Any] = build_operator_uow
@@ -56,7 +56,7 @@ class IntegrityQueryService:
             raise TypeError("integrity query requires an IntegritySnapshotRequest")
 
         unit_of_work = self.uow_builder(
-            core=self.core,
+            runtime=self.runtime,
             task_binary=self.task_binary,
             env=self.env,
             access=IntegrationAccess.READ_ONLY,

@@ -374,8 +374,7 @@ def load_config(
     *,
     defaults: dict,
     config_paths,
-    read_toml,
-    read_toml_result=None,
+    read_toml_result,
     normalize_keys,
 ):
     cfg = dict(defaults)
@@ -383,17 +382,12 @@ def load_config(
 
     paths = config_paths()
     for path in paths:
-        if callable(read_toml_result):
-            result = read_toml_result(path)
-            if result.is_absent:
-                continue
-            if result.is_invalid:
-                break
-            data = result.data
-        else:
-            data = read_toml(path)
-            if not data:
-                continue
+        result = read_toml_result(path)
+        if result.is_absent:
+            continue
+        if result.is_invalid:
+            break
+        data = result.data
         cfg.update(normalize_keys(data))
         chosen = path
         break

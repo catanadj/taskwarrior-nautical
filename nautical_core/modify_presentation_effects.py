@@ -1,4 +1,4 @@
-"""Presentation and terminal effects used by the typed on-modify routes."""
+"""Port-driven presentation effects used by the typed on-modify routes."""
 
 from __future__ import annotations
 
@@ -6,12 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from .task_models import TaskPayload
-from .task_datetime import datetime_value, parser_for_host
-
-
-def _ui_ports_for(host: Any):
-    ui = host._module("modify_ui_effects")
-    return ui, ui.ui_ports_for(host)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,9 +29,9 @@ def chain_style_ports_for(host: Any) -> ChainStylePorts:
 
 
 def lifecycle_result_port_for(host: Any) -> LifecycleResultPort:
-    ui, ui_ports = _ui_ports_for(host)
+    ui = host._module("modify_ui_effects")
     return LifecycleResultPort(
-        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs)
+        panel=lambda title, rows, **kwargs: ui.panel(ui.ui_ports_for(host), title, rows, **kwargs)
     )
 
 
@@ -51,149 +45,6 @@ def future_style_for_chain(ports: ChainStylePorts, task: TaskPayload, kind: str)
     if not ports.per_chain:
         return "dark_orange" if kind == "cp" else "cyan"
     return chain_colour_for_task(ports, task, kind)
-
-
-def render_recurrence_updated_panel(host: Any, changes: list[tuple[str, str, str]], new: TaskPayload) -> None:
-    feedback = host._module("modify_feedback")
-    models = host._module("modify_models")
-    add_validation = host.core._import_sibling("add_validation")
-    ui, ui_ports = _ui_ports_for(host)
-    feedback.render_recurrence_updated_panel(
-        changes,
-        models.TaskView.from_mapping(new),
-        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-        format_local=host._fmtlocal,
-        describe_native_until_carry=add_validation.describe_native_until_carry,
-        to_local=host.core.to_local,
-        coerce_int=host.core.coerce_int,
-        describe_anchor=host.core.describe_anchor_expr,
-        resolve_omit_presets=host.core.resolve_omit_presets,
-        first_recurrence_target=lambda task, source: first_recurrence_target(host, task, source),
-        panel_mode=getattr(host.core, "PANEL_MODE", "rich"),
-        strip_markup=host.core.strip_rich_markup,
-        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
-    )
-
-
-def first_recurrence_target(host: Any, new: TaskPayload, source: str) -> Any:
-    task_view = host._module("modify_models").TaskView.from_mapping(new)
-    return host._module("modify_completion_compute").first_recurrence_target(
-        task_view,
-        source,
-        parse_datetime=lambda value: datetime_value(parser_for_host(host), value),
-        format_datetime=host.core.fmt_isoz,
-        generation_service=lambda: host._module("modify_generation_effects").chain_generation_service(
-            host._module("modify_generation_effects").generation_ports_for(host)
-        ),
-    )
-
-
-def recurrence_enabled_rows(host: Any, new: TaskPayload, source: str) -> list[tuple[str, str]]:
-    task_view = host._module("modify_models").TaskView.from_mapping(new)
-    return host._module("modify_feedback").recurrence_enabled_rows(
-        task_view,
-        source,
-        describe_anchor=host.core.describe_anchor_expr,
-        parse_cp_sequence_tokens=host.core.parse_cp_sequence_tokens,
-        first_recurrence_target=lambda task, value: first_recurrence_target(host, task, value),
-        format_local=host._fmtlocal,
-    )
-
-
-def render_cp_schedule_adjusted_panel(host: Any, adjustment: Any) -> None:
-    ui, ui_ports = _ui_ports_for(host)
-    host._module("modify_feedback").render_cp_schedule_adjusted_panel(
-        adjustment,
-        format_local=host._fmtlocal,
-        semantic_diff_value=host._module("modify_validation_effects").semantic_diff_value,
-        format_offset=host._module("modify_value_effects").format_delta,
-        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
-    )
-
-
-def render_explicit_timing_order_warning(host: Any, new: TaskPayload, changed_fields: tuple[str, ...]) -> None:
-    task = host._module("modify_models").TaskView.from_mapping(new)
-    ui, ui_ports = _ui_ports_for(host)
-    host._module("modify_feedback").render_explicit_timing_order_warning(
-        task,
-        changed_fields,
-        format_offset=host._module("modify_value_effects").format_delta,
-        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
-    )
-
-
-def render_disabled_chain_summary(host: Any, old: TaskPayload, new: TaskPayload, decision: Any) -> None:
-    reason = str(getattr(decision, "reason", decision))
-    if not (old.get("chainID") or new.get("chainID")):
-        return
-    models = host._module("modify_models")
-    old_view = models.TaskView.from_mapping(old)
-    new_view = models.TaskView.from_mapping(new)
-    now_utc = host._workflow_now_utc()
-    try:
-        host._module("modify_diagnostics_effects").end_chain_summary(
-            host, old_view, reason, now_utc, current_task=new_view
-        )
-    except Exception as exc:
-        host._diag(f"removed recurrence chain summary failed: {exc}")
-        ui, ui_ports = _ui_ports_for(host)
-        ui.panel(
-            ui_ports,
-            "⛔ Nautical chain stopped",
-            [
-                ("Reason", reason),
-                ("Root", host._module("modify_queries").cached_format_root_and_age(
-                    host._module("modify_queries").query_ports_for(host), old_view, now_utc
-                )),
-                ("Task", host.core.short_uuid(old_view.get("uuid")) or "–"),
-            ],
-            kind="summary",
-        )
-
-
-def ensure_terminal_chain_off(host: Any, task: TaskPayload, event: str | None = None) -> bool:
-    """Validate and apply one idempotent terminal patch for hook-side stops."""
-    if event:
-        lifecycle_models = host._module("lifecycle_models")
-        lifecycle_planner = host._module("lifecycle_planner")
-        task_codec = host._module("task_codec")
-        lifecycle_planner.terminal_plan_for_snapshot(
-            lifecycle_models.TaskSnapshot.from_observation(
-                task_codec.DEFAULT_TASK_CODEC.decode_row(task, source_query="on-modify terminal")
-            ),
-            lifecycle_models.LifecycleEvent(event),
-        )
-    return host._module("modify_lifecycle").ensure_terminal_chain_off(task)
-
-
-def render_anchor_completion_feedback(host: Any, *, request: Any) -> None:
-    calendar_feedback = host.importlib.import_module("nautical_core.calendar_feedback")
-    feedback = host._module("modify_feedback")
-    models = host._module("modify_models")
-    ui, ui_ports = _ui_ports_for(host)
-    feedback.orchestrate_anchor_completion_feedback(
-        request=request,
-        core=host.core,
-        panel=lambda title, rows, **options: ui.panel(ui_ports, title, rows, **options),
-        calendar_feedback=calendar_feedback,
-        panel_diagnostics=host._module("panel_diagnostics"),
-        modify_models=models,
-        modify_runtime=host._module("modify_runtime"),
-        build_runtime_services=lambda: runtime_services_for(host),
-    )
-
-
-def render_cp_completion_feedback(host: Any, *, request: Any) -> None:
-    feedback = host._module("modify_feedback")
-    models = host._module("modify_models")
-    feedback.orchestrate_cp_completion_feedback(
-        request=request,
-        core=host.core,
-        panel_diagnostics=host._module("panel_diagnostics"),
-        modify_models=models,
-        modify_runtime=host._module("modify_runtime"),
-        build_runtime_services=lambda: runtime_services_for(host),
-    )
 
 
 def render_lifecycle_result(ports: LifecycleResultPort, result: Any, task: Any) -> None:
@@ -213,89 +64,8 @@ def render_lifecycle_result(ports: LifecycleResultPort, result: Any, task: Any) 
     ports.panel(title, rows, kind="warning" if state == "manual_review" else "error")
 
 
-def timeline_lines(host: Any, kind: str, task: Any, child_due_utc: Any, child_short: str, dnf: Any, **kwargs: Any) -> list[str]:
-    if not host._require_core():
-        return []
-    schedule = host._module("modify_schedule_effects")
-    evaluator_callback, service_callback = schedule.scheduler_callbacks(schedule.scheduler_ports_for(host))
-    collector_override = kwargs.pop("_collect_prev_two_override", None)
-    collect_prev_two = collector_override if callable(collector_override) else (
-        lambda task, chain_by_link=None: host._module("modify_read_effects").collect_prev_two(
-            host._module("modify_read_effects").PreviousChainPorts(
-                service=host._module("modify_read_effects").lifecycle_read_service(host),
-                panel_chain_by_link=host._modify_runtime_state().panel_chain_by_link,
-                panel_chain_snapshot_loaded=host._modify_runtime_state().panel_chain_snapshot_loaded,
-            ), task, chain_by_link
-        )
-    )
-    timeline = host._module("modify_timeline")
-    chain_style_ports = chain_style_ports_for(host)
-    services = timeline.TimelineServices(
-        core=host.core,
-        max_iterations=host._MAX_ITERATIONS,
-        future_style_for_chain=lambda value, value_kind: future_style_for_chain(chain_style_ports, value, value_kind),
-        collect_prev_two=collect_prev_two,
-        dtparse=lambda value: datetime_value(parser_for_host(host), value),
-        fmt_on_time_delta=lambda due, end, tol=60: host._module("modify_format_effects").on_time_delta(
-            host._module("modify_format_effects").HumanDeltaPort(host.core.humanize_delta), due, end, tol
-        ),
-        fmtlocal=host._fmtlocal,
-        short=host.core.short_uuid,
-        tolocal=host._tolocal,
-        next_occurrence_after_local_dt=lambda *args, **options: host._module("modify_schedule_effects").next_occurrence_after_local_dt(
-            host._module("modify_schedule_effects").OccurrencePorts(
-                host._module("add_anchor_compute").anchor_next_occurrence_after_local_dt
-            ), *args, **options
-        ),
-        to_local_cached=host._to_local_cached,
-        safe_parse_datetime=host._TASK_DATETIME_PARSER.parse,
-        format_gap=timeline.format_gap,
-        module_loader=host._module,
-        omit_dnf_from_parent=lambda value: host._module("modify_anchor_effects").omit_dnf_from_parent(
-            host._module("modify_anchor_effects").omit_ports_for(host), value
-        ),
-        recurrence_evaluator_for_task=evaluator_callback,
-        scheduler_service_for_task=service_callback,
-    )
-    return timeline.timeline_lines_for_task(kind, task, child_due_utc, child_short, dnf, **kwargs, services=services)
-
-
-def runtime_services_for(host: Any) -> Any:
-    runtime = host._module("modify_runtime")
-    ui, ui_ports = _ui_ports_for(host)
-    chain_style_ports = chain_style_ports_for(host)
-    return runtime.ModifyRuntimeServices(
-        state=host._modify_runtime_state(), core=host.core,
-        debug_wait_sched=host._DEBUG_WAIT_SCHED,
-        last_wait_sched_debug=host._LAST_WAIT_SCHED_DEBUG,
-        diag_enabled=host.os.environ.get("NAUTICAL_DIAG") == "1",
-        format_root_and_age=lambda task, now: host._module("modify_queries").cached_format_root_and_age(
-            host._module("modify_queries").query_ports_for(host), task, now
-        ),
-        append_next_wait_sched_rows=host._append_next_wait_sched_rows,
-        timeline_lines=getattr(host, "_timeline_lines", lambda *args, **kwargs: timeline_lines(host, *args, **kwargs)),
-        show_timeline_gaps=host._SHOW_TIMELINE_GAPS,
-        root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload), short=host.core.short_uuid,
-        format_next_anchor_rows=host._module("modify_feedback").format_next_anchor_rows,
-        format_next_cp_rows=host._module("modify_feedback").format_next_cp_rows,
-        format_line_preview=lambda *args, **kwargs: host._module("modify_format_effects").line_preview(host, *args, **kwargs),
-        panel_line=lambda title, line, **kwargs: ui.panel_line(ui_ports, title, line, **kwargs),
-        text_line=lambda line, **kwargs: ui.text_line(ui_ports, line, **kwargs),
-        panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
-        print_task=lambda task: ui.print_task(ui_ports, task), diag=host._diag,
-        chain_color_per_chain=host._CHAIN_COLOR_PER_CHAIN,
-        chain_colour_for_task=lambda task, kind: chain_colour_for_task(chain_style_ports, task, kind),
-        strip_quotes=host._module("modify_task_fields").strip_quotes,
-        human_delta=lambda start, end, prefer=True: host._module("modify_format_effects").human_delta(host, start, end, prefer),
-    )
-
-
 __all__ = (
-    "render_recurrence_updated_panel", "first_recurrence_target", "recurrence_enabled_rows",
-    "render_cp_schedule_adjusted_panel", "render_explicit_timing_order_warning",
-    "render_disabled_chain_summary", "ensure_terminal_chain_off",
-    "render_anchor_completion_feedback", "render_cp_completion_feedback", "render_lifecycle_result",
-    "LifecycleResultPort", "lifecycle_result_port_for",
-    "timeline_lines", "runtime_services_for",
-    "ChainStylePorts", "chain_style_ports_for",
+    "LifecycleResultPort", "ChainStylePorts", "chain_style_ports_for",
+    "lifecycle_result_port_for", "chain_colour_for_task", "future_style_for_chain",
+    "render_lifecycle_result",
 )

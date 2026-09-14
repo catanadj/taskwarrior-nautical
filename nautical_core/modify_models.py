@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Iterator, Protocol, TypeAlias, Mapping
+from typing import Any, Iterator, Literal, Protocol, TypeAlias, Mapping
 from types import MappingProxyType
 
 from .task_models import (
@@ -21,6 +21,7 @@ from .task_models import (
     TemporalState,
     TaskPayload,
 )
+from .lifecycle_models import LifecyclePlan
 
 
 # Hook implementations are intentionally assembled at runtime, but the
@@ -342,22 +343,22 @@ CompletionExistingNextCallback: TypeAlias = Callable[
     [TaskRow, int, "CompletionChainSnapshot | None"], bool
 ]
 CompletionChildDueCallback: TypeAlias = Callable[
-    [TaskRow, str], tuple[Any, Any, Any] | None
+    [TaskRow, str], tuple[datetime | None, dict[str, Any] | None, Any] | None
 ]
 CompletionUntilCallback: TypeAlias = Callable[
-    [TaskRow, datetime], datetime | None | bool
+    [TaskRow, datetime], datetime | None | Literal[False]
 ]
-CompletionUntilGuardCallback: TypeAlias = Callable[[TaskRow, Any, Any, datetime], bool]
-CompletionChildRequiredCallback: TypeAlias = Callable[[TaskRow, Any], bool]
-CompletionDurationWarningCallback: TypeAlias = Callable[[TaskRow, Any, Any, datetime], None]
+CompletionUntilGuardCallback: TypeAlias = Callable[[TaskRow, datetime | None, datetime | None, datetime], bool]
+CompletionChildRequiredCallback: TypeAlias = Callable[[TaskRow, datetime | None], bool]
+CompletionDurationWarningCallback: TypeAlias = Callable[[TaskRow, datetime | None, datetime | None, datetime], None]
 CompletionCapsCallback: TypeAlias = Callable[
-    [str, TaskRow, Any, Any], tuple[Any, Any, Any, Any, Any]
+    [str, TaskRow, datetime | None, Any], tuple[int, datetime | None, int | None, list[tuple[str, Any]], int | None]
 ]
 CompletionCapGuardCallback: TypeAlias = Callable[
     [TaskRow, int, int | None, datetime], bool
 ]
 BuildChildDraftCallback: TypeAlias = Callable[
-    [TaskRow, Any, str, int, str, str, int, Any], Any
+    [TaskRow, datetime | None, str, int, str, str, int, datetime | None], TaskDraft
 ]
 class SpawnChildCallback(Protocol):
     def __call__(
@@ -365,8 +366,8 @@ class SpawnChildCallback(Protocol):
         child: TaskDraft | TaskRow,
         parent: TaskRow,
         *,
-        lifecycle_plan: Any = None,
-    ) -> tuple[str, Any, bool, bool, str | None, str | None]:
+            lifecycle_plan: "LifecyclePlan | None" = None,
+    ) -> tuple[str, list[str], bool, bool, str | None, str | None]:
         ...
 ModifyChainStateCallback: TypeAlias = Callable[[], Any]
 SeedLookupCallback: TypeAlias = Callable[[TaskRow, TaskRow], None]
@@ -380,15 +381,15 @@ class BuildAndSpawnCallback(Protocol):
         self,
         new: TaskRow,
         *,
-        child_due: Any,
+        child_due: datetime | None,
         child_field: str,
         next_no: int,
         parent_short: str,
         kind: str,
         cpmax: int,
-        until_dt: Any,
+        until_dt: datetime | None,
         planned_child: TaskRow | None = None,
-        lifecycle_plan: Any = None,
+        lifecycle_plan: "LifecyclePlan | None" = None,
     ) -> "CompletionSpawnResult | None":
         ...
 
@@ -424,27 +425,7 @@ class AnchorCompletionRenderCallback(Protocol):
     def __call__(
         self,
         *,
-        new: TaskView,
-        child: TaskView,
-        child_due: Any,
-        child_short: str,
-        next_no: int,
-        parent_short: str,
-        cap_no: int | None,
-        finals: list[tuple[str, Any]],
-        now_utc: Any,
-        until_dt: Any,
-        until_cap_no: int | None,
-        dnf: Any,
-        meta: dict[str, Any],
-        stripped_attrs: list[str],
-        deferred_spawn: bool,
-        spawn_intent_id: str | None,
-        lifecycle_result: "CompletionLifecycleResult",
-        chain_by_short: dict[str, TaskView] | None,
-        analytics_advice: str | None,
-        integrity_warnings: list[str] | None,
-        base_no: int,
+        request: "AnchorCompletionFeedbackModel",
     ) -> None:
         ...
 
@@ -455,25 +436,7 @@ class CpCompletionRenderCallback(Protocol):
     def __call__(
         self,
         *,
-        new: TaskView,
-        child: TaskView,
-        child_due: Any,
-        child_short: str,
-        next_no: int,
-        parent_short: str,
-        cap_no: int | None,
-        finals: list[tuple[str, Any]],
-        now_utc: Any,
-        until_dt: Any,
-        until_cap_no: int | None,
-        meta: dict[str, Any],
-        deferred_spawn: bool,
-        spawn_intent_id: str | None,
-        lifecycle_result: "CompletionLifecycleResult",
-        chain_by_short: dict[str, TaskView] | None,
-        analytics_advice: str | None,
-        integrity_warnings: list[str] | None,
-        base_no: int,
+        request: "CpCompletionFeedbackModel",
     ) -> None:
         ...
 
@@ -522,15 +485,15 @@ class CompletionPreflightContext:
 
 @dataclass(slots=True)
 class CompletionComputeResult:
-    child_due: Any
+    child_due: datetime | None
     meta: Any
     dnf: Any
-    until_dt: Any
+    until_dt: datetime | None
     cpmax: int
     cap_no: int | None
     finals: list[tuple[str, Any]]
     until_cap_no: int | None
-    lifecycle_plan: Any = None
+    lifecycle_plan: "LifecyclePlan | None" = None
 
 
 
@@ -558,16 +521,16 @@ class CompletionComputeServices:
 
 @dataclass(slots=True)
 class CpCompletionFeedbackModel:
-    new: dict[str, Any]
-    child: dict[str, Any]
-    child_due: Any
+    new: TaskView
+    child: TaskView
+    child_due: datetime | None
     child_short: str
     next_no: int
     parent_short: str
     cap_no: int | None
     finals: list[tuple[str, Any]]
-    now_utc: Any
-    until_dt: Any
+    now_utc: datetime
+    until_dt: datetime | None
     until_cap_no: int | None
     meta: dict[str, Any]
     deferred_spawn: bool
@@ -581,16 +544,16 @@ class CpCompletionFeedbackModel:
 
 @dataclass(slots=True)
 class AnchorCompletionFeedbackModel:
-    new: dict[str, Any]
-    child: dict[str, Any]
-    child_due: Any
+    new: TaskView
+    child: TaskView
+    child_due: datetime | None
     child_short: str
     next_no: int
     parent_short: str
     cap_no: int | None
     finals: list[tuple[str, Any]]
-    now_utc: Any
-    until_dt: Any
+    now_utc: datetime
+    until_dt: datetime | None
     until_cap_no: int | None
     dnf: Any
     meta: dict[str, Any]
@@ -610,7 +573,7 @@ class AnchorCompletionFeedbackModel:
 class CompletionSpawnResult:
     child: TaskPayload
     child_short: str
-    stripped_attrs: Any
+    stripped_attrs: list[str]
     verified: bool
     deferred_spawn: bool
     spawn_intent_id: str | None

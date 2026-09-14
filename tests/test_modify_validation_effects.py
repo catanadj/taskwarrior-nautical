@@ -1,46 +1,118 @@
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 
-from nautical_core.modify_validation_effects import validate_anchor
+from nautical_core import modify_lifecycle, modify_ordinary
+
+from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
 
 
 class ModifyValidationEffectsTests(unittest.TestCase):
+    def test_transition_failure_is_rejected_without_mutating_candidate(self) -> None:
+        services = modify_ordinary.OrdinaryModifyServices(
+            field_changed=lambda old, new, field: old.get(field) != new.get(field),
+            strip_quotes=lambda value: value,
+            validate_anchor=lambda *_args: None,
+            validate_omit=lambda *_args: None,
+            reject_conflicting_types=lambda *_args: None,
+            validate_chain_limits=lambda *_args: None,
+            preserve_cp_offsets=lambda *_args: None,
+            task_has_recurrence=lambda task: bool(str(task.get("anchor") or "").strip()),
+            preserve_native_until=lambda *_args: False,
+            validate_native_until=lambda *_args: None,
+            validate_native_until_slots=lambda *_args: None,
+            render_cp_adjustment=lambda *_args: None,
+            render_timing_warning=lambda *_args: None,
+            apply_transition=lambda *_args: (_ for _ in ()).throw(
+                ValueError("chain identity unavailable")
+            ),
+            short_uuid=lambda value: str(value or "")[:8],
+            recurrence_enabled_rows=lambda *_args: [],
+            panel=lambda *_args, **_kwargs: None,
+            render_disabled_summary=lambda *_args: None,
+            semantic_diff_value=lambda old, new: f"{old} -> {new}",
+            first_recurrence_target=lambda *_args: None,
+            fmtlocal=lambda value: str(value),
+            render_recurrence_updated=lambda *_args: None,
+            print_task=lambda *_args: None,
+        )
+        candidate = {"uuid": "plain", "status": "pending", "anchor": "w:mon"}
+
+        with self.assertRaisesRegex(modify_ordinary.RecurrenceActivationError, "chain identity unavailable"):
+            modify_ordinary.handle_non_completion_modify(
+                {"uuid": "plain", "status": "pending"},
+                candidate,
+                services=services,
+                lifecycle=SimpleNamespace(
+                    recurrence_setting_changes=lambda *_args: []
+                ),
+            )
+
+        self.assertNotIn("chain", candidate)
+        self.assertNotIn("chainID", candidate)
+
+    def test_lifecycle_activation_requires_a_complete_unlinked_root_identity(self) -> None:
+        short_uuid = lambda value: str(value or "").split("-")[0]
+        invalid = (
+            ({"anchor": "w:mon"}, "UUID is missing"),
+            (
+                {
+                    "uuid": "11111111-0000-0000-0000-000000000001",
+                    "anchor": "w:mon",
+                    "prevLink": "aaaaaaaa",
+                },
+                "unlinked root",
+            ),
+            (
+                {
+                    "uuid": "11111111-0000-0000-0000-000000000001",
+                    "anchor": "w:mon",
+                    "link": 2,
+                },
+                "root link 1",
+            ),
+        )
+        for fields, expected in invalid:
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(ValueError, expected):
+                    modify_lifecycle.apply_nautical_transition(
+                        {"status": "pending"},
+                        {"status": "pending", **fields},
+                        short_uuid=short_uuid,
+                    )
+
+        valid = {
+            "uuid": "11111111-0000-0000-0000-000000000001",
+            "status": "pending",
+            "anchor": "w:mon",
+        }
+        transition = modify_lifecycle.apply_nautical_transition(
+            {"status": "pending"}, valid, short_uuid=short_uuid
+        )
+        self.assertEqual(transition.state, "enabled")
+        self.assertEqual(valid.get("chainID"), "11111111")
+        self.assertEqual(valid.get("link"), 1)
+
     def test_datetime_parser_callback_has_stable_value_error_shape(self) -> None:
-        from nautical_core.modify_datetime_effects import parse_datetime
         from nautical_core.task_datetime import ConfiguredTaskDatetimeParser
 
         parser = ConfiguredTaskDatetimeParser(lambda value: None if value == "bad" else value)
-        self.assertEqual(parse_datetime(parser, ""), (None, None))
-        parsed, error = parse_datetime(parser, "bad")
+        self.assertEqual(parser.parse(""), (None, None))
+        parsed, error = parser.parse("bad")
         self.assertIsNone(parsed)
         self.assertIn("Unrecognized datetime", error)
 
     def test_anchor_validation_does_not_persist_unused_hints(self) -> None:
         calls = []
 
-        class Core:
-            ENABLE_ANCHOR_CACHE = True
-
-            @staticmethod
-            def lint_anchor_expr(_expr):
-                return (), ()
-
-            @staticmethod
-            def validate_anchor_expr_strict(expr):
-                calls.append(("validate", expr))
-                return object()
-
-            @staticmethod
-            def build_and_cache_hints(*_args, **_kwargs):
-                calls.append(("hints",))
-                raise AssertionError("hint persistence must not run during validation")
-
-        host = SimpleNamespace(
-            core=Core(),
-            _module=lambda _name: SimpleNamespace(panel=lambda *_args, **_kwargs: None),
-            _fail_and_exit=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected failure")),
+        ports = AnchorValidationPorts(
+            lint=lambda _expr: ((), ()),
+            validate_strict=lambda expr: calls.append(("validate", expr)),
+            panel=lambda *_args, **_kwargs: None,
+            is_astronomy_error=lambda _exc: False,
+            astronomy_error_message=str,
+            fail=lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected failure")),
         )
-        validate_anchor(host, {}, {}, "w:mon")
+        validate_anchor(ports, {}, {}, "w:mon")
         self.assertEqual(calls, [("validate", "w:mon")])
 
 

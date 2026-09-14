@@ -3,6 +3,8 @@ import re
 import unittest
 from types import SimpleNamespace
 
+import nautical_core as core
+from nautical_core import parser_api
 from nautical_core.parsing import parser_frontend
 from nautical_core.parsing import parser_support_api
 
@@ -44,6 +46,18 @@ class ParserFrontendContractTests(unittest.TestCase):
             "(m:1,2) + y:rand-06 + (w:mon@t=09:00 | w:fri@t=15:00)",
         )
 
+    def test_normalize_quoted_month_random_alias(self):
+        self.assertEqual(
+            parser_frontend.normalize_anchor_expr_input(
+                '"07-rand"',
+                unwrap_quotes=lambda value: value.strip()[1:-1],
+                rewrite_weekly_multi_time_atoms=lambda value: value,
+                re_mod=re,
+                parse_error_cls=ParseError,
+            ),
+            "rand-07",
+        )
+
     def test_normalize_anchor_input_rejects_oversized_expression(self):
         with self.assertRaisesRegex(ParseError, "max 1024"):
             parser_frontend.normalize_anchor_expr_input(
@@ -78,6 +92,7 @@ class ParserFrontendContractTests(unittest.TestCase):
 
         for value, message in (
             ("y:01:02", "uses ':' between numbers"),
+            ("y:05:15", "uses ':' between numbers"),
             ("y:q1:q2", "must use '..'"),
         ):
             with self.subTest(value=value):
@@ -88,9 +103,22 @@ class ParserFrontendContractTests(unittest.TestCase):
                         fatal_bad_colon_in_year_tail=fatal,
                         parse_error_cls=ParseError,
                     )
+        self.assertIn(
+            "uses ':' between numbers",
+            parser_frontend.fatal_bad_colon_in_year_tail(
+                "05:15",
+                split_csv_tokens=split_csv,
+                re_mod=re,
+                yearfmt=lambda: "MD",
+            ),
+        )
         with self.assertRaisesRegex(ParseError, "must be joined"):
             parser_frontend.raise_if_comma_joined_anchors(
                 "m:31,w:sun", re_mod=re, parse_error_cls=ParseError
+            )
+        with self.assertRaisesRegex(ParseError, "It looks like you used a comma"):
+            parser_frontend.raise_if_comma_joined_anchors(
+                "31@t=14:00, w:sun", re_mod=re, parse_error_cls=ParseError
             )
 
 
@@ -125,6 +153,55 @@ class ParserSupportContractTests(unittest.TestCase):
     def test_for_core_context_namespace_is_authoritative(self):
         binding = self._binding(context=True)
         self.assertEqual(binding._skip_ws_pos("  x", 0, 3), 2)
+
+
+class ParserPresetContractTests(unittest.TestCase):
+    def _binding(self, *, anchors=None, omits=None):
+        namespace = {
+            **vars(core),
+            "ParseError": core.ParseError,
+            "ANCHOR_PRESETS": anchors or {},
+            "OMIT_PRESETS": omits or {},
+        }
+        return parser_api.for_core(module=core, namespace=namespace)
+
+    def test_unknown_presets_list_available_aliases_and_config_table(self):
+        binding = self._binding(
+            anchors={"payday": "m:15", "workout": "w:mon,wed,fri"},
+            omits={"april": "y:apr", "weekends": "w:sat,sun"},
+        )
+        with self.assertRaisesRegex(
+            core.ParseError,
+            r"Unknown anchor preset '@missing'.*Available anchor presets: @payday, @workout.*\[anchor_presets\]",
+        ):
+            binding.resolve_anchor_presets("@missing")
+        with self.assertRaisesRegex(
+            core.ParseError,
+            r"Unknown omit preset '@missing'.*Available omit presets: @april, @weekends.*\[omit_presets\]",
+        ):
+            binding.resolve_omit_presets("@missing")
+
+    def test_recursive_preset_diagnostic_preserves_reference_chain(self):
+        binding = self._binding(anchors={"a": "@b", "b": "@c", "c": "@a"})
+        with self.assertRaisesRegex(
+            core.ParseError,
+            r"Recursive anchor preset reference detected: @a -> @b -> @c -> @a",
+        ):
+            binding.resolve_anchor_presets("@a")
+
+    def test_nested_preset_display_shows_resolved_leaf(self):
+        binding = self._binding(
+            anchors={"payday": "m:15,-1bd", "salary": "@payday"},
+            omits={"april": "y:apr", "spring": "@april"},
+        )
+        self.assertEqual(
+            binding.anchor_preset_display("@salary"),
+            ("Preset", "@salary → m:15,-1bd"),
+        )
+        self.assertEqual(
+            binding.omit_preset_display("@spring"),
+            ("Omit preset", "@spring → y:apr"),
+        )
 
 
 if __name__ == "__main__":

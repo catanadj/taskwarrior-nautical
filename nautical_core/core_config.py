@@ -177,7 +177,6 @@ def _load_config(taskdata: str | None = None) -> dict:
     return _load_support_module("config_support").load_config(
         defaults=_DEFAULTS,
         config_paths=lambda: _config_paths(taskdata),
-        read_toml=_read_toml,
         read_toml_result=_read_toml_result,
         normalize_keys=_normalize_keys,
     )
@@ -316,7 +315,6 @@ _SCHEDULER_CONFIG_KEYS = (
     "tz",
     "season_hemisphere",
     "season_mode",
-    "holiday_region",
     "anchor_file_dir",
     "omit_file_dir",
     "anchor_presets",
@@ -652,7 +650,5 @@ def ttl_lru_cache(maxsize: int = 128, ttl: float | None = None):
     return _decorator
 
 
-# Explicit configuration is an opt-in contract and must be validated during
-# import; automatic Taskdata discovery remains deferred until first use.
-if str(os.environ.get("NAUTICAL_CONFIG") or "").strip():
-    ensure_loaded()
+# Configuration loading is intentionally deferred until an explicit runtime
+# access.  Importing the library must not perform configuration file I/O.

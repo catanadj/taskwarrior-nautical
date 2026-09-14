@@ -1,6 +1,20 @@
 from __future__ import annotations
 
 from .task_models import TaskPayload
+from .task_datetime import datetime_value, parser_for_host
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class QueryPorts:
+    root_uuid: Any
+    tw_get_cached: Any
+    dtparse: Any
+    tolocal: Any
+    cache_get: Any
+    cache_set: Any
+    diag_count: Any
 
 
 def chain_root_and_age(
@@ -38,48 +52,62 @@ def format_root_and_age(task: TaskPayload, now_utc, *, chain_root_and_age) -> st
     return root_short
 
 
-def cached_chain_root_and_age(host, task: TaskPayload, now_utc) -> tuple[str, int | None]:
+def cached_chain_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc) -> tuple[str, int | None]:
     """Resolve and cache chain root age within the current modify invocation."""
     try:
-        cache_key = (host._module("modify_task_fields").root_uuid(task), str(host._tolocal(now_utc).date()))
+        cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
     except Exception:
         cache_key = None
     if cache_key is not None:
-        cached = host._query_ctx_get("chain_root_age", cache_key)
+        cached = ports.cache_get("chain_root_age", cache_key)
         if isinstance(cached, tuple) and len(cached) == 2:
-            host._diag_count("chain_root_age_cache_hits")
+            ports.diag_count("chain_root_age_cache_hits")
             return cached
-        host._diag_count("chain_root_age_cache_misses")
+        ports.diag_count("chain_root_age_cache_misses")
     result = chain_root_and_age(
         task,
         now_utc,
-        root_uuid_from=lambda payload: host._module("modify_task_fields").root_uuid(payload),
-        tw_get_cached=lambda ref: host._module("modify_read_effects").tw_get_cached(host, ref),
-        dtparse=host._dtparse,
-        tolocal=host._tolocal,
+        root_uuid_from=ports.root_uuid,
+        tw_get_cached=ports.tw_get_cached,
+        dtparse=ports.dtparse,
+        tolocal=ports.tolocal,
     )
     if cache_key is not None:
-        host._query_ctx_set("chain_root_age", cache_key, result)
+        ports.cache_set("chain_root_age", cache_key, result)
     return result
 
 
-def cached_format_root_and_age(host, task: TaskPayload, now_utc) -> str:
+def cached_format_root_and_age(ports: QueryPorts, task: TaskPayload, now_utc) -> str:
     """Format a cached chain root/age value for presentation consumers."""
     try:
-        cache_key = (host._module("modify_task_fields").root_uuid(task), str(host._tolocal(now_utc).date()))
+        cache_key = (ports.root_uuid(task), str(ports.tolocal(now_utc).date()))
     except Exception:
         cache_key = None
     if cache_key is not None:
-        cached = host._query_ctx_get("format_root_age", cache_key)
+        cached = ports.cache_get("format_root_age", cache_key)
         if isinstance(cached, str):
-            host._diag_count("format_root_age_cache_hits")
+            ports.diag_count("format_root_age_cache_hits")
             return cached
-        host._diag_count("format_root_age_cache_misses")
+        ports.diag_count("format_root_age_cache_misses")
     result = format_root_and_age(
         task,
         now_utc,
-        chain_root_and_age=lambda value, at: cached_chain_root_and_age(host, value, at),
+        chain_root_and_age=lambda value, at: cached_chain_root_and_age(ports, value, at),
     )
     if cache_key is not None:
-        host._query_ctx_set("format_root_age", cache_key, result)
+        ports.cache_set("format_root_age", cache_key, result)
     return result
+
+
+def query_ports_for(host: Any) -> QueryPorts:
+    return QueryPorts(
+        root_uuid=host._module("modify_task_fields").root_uuid,
+        tw_get_cached=lambda ref: host._module("modify_read_effects").tw_get_cached(
+            host._module("modify_read_effects").tw_get_ports_for(host), ref
+        ),
+        dtparse=lambda value: datetime_value(parser_for_host(host), value),
+        tolocal=host._tolocal,
+        cache_get=host._query_ctx_get,
+        cache_set=host._query_ctx_set,
+        diag_count=host._diag_count,
+    )

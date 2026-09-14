@@ -1370,27 +1370,7 @@ def render_cp_completion_feedback(
 
 def orchestrate_anchor_completion_feedback(
     *,
-    new: TaskPayload,
-    child: TaskPayload,
-    child_due: Any,
-    child_short: str,
-    next_no: int,
-    parent_short: str,
-    cap_no: int | None,
-    finals: list[tuple[str, object]],
-    now_utc: Any,
-    until_dt: Any,
-    until_cap_no: int | None,
-    dnf: Any,
-    meta: dict[str, Any],
-    stripped_attrs: list[str],
-    deferred_spawn: bool,
-    spawn_intent_id: str | None,
-    lifecycle_result: CompletionLifecycleResult | None = None,
-    chain_by_short: dict[str, TaskView] | None,
-    analytics_advice: str | None,
-    integrity_warnings: list[str] | None,
-    base_no: int,
+    request: Any,
     core: Any,
     panel: Any,
     calendar_feedback: Any,
@@ -1400,6 +1380,27 @@ def orchestrate_anchor_completion_feedback(
     build_runtime_services: Callable[[], Any],
 ) -> None:
     """Assemble anchor feedback state and hand it to the feedback renderer."""
+    new = request.new
+    child = request.child
+    child_due = request.child_due
+    child_short = request.child_short
+    next_no = request.next_no
+    parent_short = request.parent_short
+    cap_no = request.cap_no
+    finals = request.finals
+    now_utc = request.now_utc
+    until_dt = request.until_dt
+    until_cap_no = request.until_cap_no
+    dnf = request.dnf
+    meta = request.meta
+    stripped_attrs = request.stripped_attrs
+    deferred_spawn = request.deferred_spawn
+    spawn_intent_id = request.spawn_intent_id
+    lifecycle_result = request.lifecycle_result
+    chain_by_short = request.chain_by_short
+    analytics_advice = request.analytics_advice
+    integrity_warnings = request.integrity_warnings
+    base_no = request.base_no
     if lifecycle_result is None:
         lifecycle_result = modify_models.CompletionLifecycleResult(
             state="queued" if deferred_spawn else "applied",
@@ -1446,25 +1447,7 @@ def orchestrate_anchor_completion_feedback(
 
 def orchestrate_cp_completion_feedback(
     *,
-    new: TaskPayload,
-    child: TaskPayload,
-    child_due: Any,
-    child_short: str,
-    next_no: int,
-    parent_short: str,
-    cap_no: int | None,
-    finals: list[tuple[str, object]],
-    now_utc: Any,
-    until_dt: Any,
-    until_cap_no: int | None,
-    meta: dict[str, Any],
-    deferred_spawn: bool,
-    spawn_intent_id: str | None,
-    lifecycle_result: CompletionLifecycleResult | None = None,
-    chain_by_short: dict[str, TaskView] | None,
-    analytics_advice: str | None,
-    integrity_warnings: list[str] | None,
-    base_no: int,
+    request: Any,
     core: Any,
     panel_diagnostics: Any,
     modify_models: Any,
@@ -1472,6 +1455,25 @@ def orchestrate_cp_completion_feedback(
     build_runtime_services: Callable[[], Any],
 ) -> None:
     """Assemble CP feedback state and hand it to the feedback renderer."""
+    new = request.new
+    child = request.child
+    child_due = request.child_due
+    child_short = request.child_short
+    next_no = request.next_no
+    parent_short = request.parent_short
+    cap_no = request.cap_no
+    finals = request.finals
+    now_utc = request.now_utc
+    until_dt = request.until_dt
+    until_cap_no = request.until_cap_no
+    meta = request.meta
+    deferred_spawn = request.deferred_spawn
+    spawn_intent_id = request.spawn_intent_id
+    lifecycle_result = request.lifecycle_result
+    chain_by_short = request.chain_by_short
+    analytics_advice = request.analytics_advice
+    integrity_warnings = request.integrity_warnings
+    base_no = request.base_no
     if lifecycle_result is None:
         lifecycle_result = modify_models.CompletionLifecycleResult(
             state="queued" if deferred_spawn else "applied",

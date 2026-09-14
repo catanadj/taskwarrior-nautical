@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +63,7 @@ class CacheDependencies:
 class CacheState:
     """Mutable per-binding cache entries kept separate from configuration."""
 
-    memory: Any
+    memory: OrderedDict[str, tuple[tuple[int, int, int, int], dict[str, Any], float]]
     max_entries: int
     ttl: float
 
@@ -76,7 +77,7 @@ class CoreContext:
     """
 
     namespace: dict[str, Any]
-    import_sibling: Any
+    import_sibling: Callable[[str], Any]
     source_file: str | None = None
 
     @classmethod

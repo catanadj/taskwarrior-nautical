@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, cast
 
@@ -21,8 +22,8 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import nautical_core as core  # noqa: E402
-from nautical_core.operator_presentation import render_result  # noqa: E402
-from nautical_core.integration_context import IntegrationAccess  # noqa: E402
+from nautical_core.operator_presentation import render_contract_json  # noqa: E402
+from nautical_core.integration_context import IntegrationAccess, IntegrationRuntime  # noqa: E402
 from nautical_core.operator_models import OperatorScope, OperatorScopeKind, OperatorV2Result  # noqa: E402
 from nautical_core.query_report import error_payload, to_operator_result  # noqa: E402
 from nautical_core.query_models import (  # noqa: E402
@@ -42,7 +43,7 @@ from nautical_core.query_models import (  # noqa: E402
     OccurrenceQueryRequest,
     QueryContractError,
 )
-from nautical_core.query_service import OccurrenceQueryService  # noqa: E402
+from nautical_core.query_service import OccurrenceQueryRuntime, OccurrenceQueryService  # noqa: E402
 from nautical_core.integrity_query_service import IntegrityQueryService  # noqa: E402
 from nautical_core.taskwarrior_uow import build_operator_uow  # noqa: E402
 
@@ -137,7 +138,14 @@ def _emit(result: OperatorV2Result, *, exit_code: int = 0, budget: object | None
     if not isinstance(result, OperatorV2Result):
         raise TypeError("query transport requires an OperatorV2Result")
     try:
-        sys.stdout.write(render_result(result, "json", budget=budget) + "\n")
+        if budget is not None:
+            report = getattr(budget, "report", None)
+            if not callable(report):
+                raise TypeError("query presentation budget must provide report()")
+            extensions = dict(result.extensions)
+            extensions["budget"] = report()
+            result = replace(result, extensions=extensions)
+        sys.stdout.write(render_contract_json(result) + "\n")
     except BrokenPipeError:
         return 0
     return exit_code
@@ -151,7 +159,7 @@ def _diagnostic(message: str) -> None:
 def _integrity_payload(args: argparse.Namespace) -> tuple[OperatorV2Result, int]:
     """Validate the selector and delegate the audit to the shared service."""
     service = IntegrityQueryService(
-        core=core,
+        runtime=IntegrationRuntime.from_compatibility_facade(core),
         task_binary=shutil.which("task") or "task",
         env=os.environ,
         uow_builder=build_operator_uow,
@@ -312,12 +320,15 @@ def main(argv: list[str] | None = None) -> int:
         mapping.setdefault("operation", args.operation)
         request = OccurrenceQueryRequest.from_mapping(mapping)
         unit_of_work = build_operator_uow(
-            core=core,
+            runtime=IntegrationRuntime.from_compatibility_facade(core),
             task_binary=shutil.which("task") or "task",
             env=os.environ,
             access=IntegrationAccess.READ_ONLY,
         )
-        service = OccurrenceQueryService(unit_of_work, core=core)
+        service = OccurrenceQueryService(
+            unit_of_work,
+            runtime=OccurrenceQueryRuntime.from_compatibility_facade(core),
+        )
         response = service.query_next(request) if request.operation == NEXT_OPERATION else service.query(request)
         exit_code = 3 if response.status == "unavailable" else 2 if response.status == "invalid" else 0
         return _emit(cast(Any, response).to_operator_v2(), exit_code=exit_code, budget=service.budget)

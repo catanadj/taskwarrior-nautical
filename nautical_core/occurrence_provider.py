@@ -220,12 +220,14 @@ def collect_after(
     if isinstance(after_local, OccurrenceCursor):
         cursor_value = after_local.local_datetime
         cursor_inclusive = after_local.inclusive
+        date_limit = after_local.date_limit
         if inclusive is not None and inclusive != cursor_inclusive:
             raise ValueError("Occurrence cursor inclusivity conflicts with collection options.")
         inclusive = cursor_inclusive
     else:
         cursor_value = after_local
         inclusive = False if inclusive is None else inclusive
+        date_limit = None
     if not isinstance(cursor_value, datetime):
         raise TypeError("Occurrence collection requires a datetime cursor.")
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
@@ -254,6 +256,12 @@ def collect_after(
             )
         except OccurrenceSearchExhausted:
             raise
+        except LookupError as exc:
+            # Anchor-file exhaustion carries actionable cursor metadata and is
+            # part of the provider contract, not a dependency outage.
+            if type(exc).__name__ == "AnchorFileOccurrenceExhausted":
+                raise
+            raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
         except (LookupError, OSError) as exc:
             raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
         except (TypeError, ValueError) as exc:
@@ -262,19 +270,27 @@ def collect_after(
             raise TypeError("Batch occurrence provider returned an invalid result.")
         previous = _cursor_before(cursor_value) if inclusive else cursor_value
         included_count = 0
+        bounded: list[Occurrence] = []
+        terminal: OccurrenceSearchExhausted | None = batch.terminal
         for occurrence in batch:
             if not isinstance(occurrence, Occurrence) or occurrence.local_datetime is None:
                 raise TypeError("Batch occurrence provider returned an invalid occurrence.")
             _require_forward_progress(previous, occurrence.local_datetime)
             previous = occurrence.local_datetime
+            if date_limit is not None and occurrence.day > date_limit:
+                terminal = OccurrenceSearchExhausted(
+                    "cursor date limit", reference=occurrence.day, kind=OccurrenceSearchExhausted.DATE_LIMIT
+                )
+                break
+            bounded.append(occurrence)
             if count_omitted or not occurrence.omitted:
                 included_count += 1
         if included_count > limit:
             raise ValueError("Batch occurrence provider exceeded its requested limit.")
-        return batch
+        return OccurrenceBatch(bounded, terminal=terminal)
     cursor = _cursor_before(cursor_value) if inclusive else cursor_value
     out: list[Occurrence] = []
-    terminal: OccurrenceSearchExhausted | None = None
+    terminal_result: OccurrenceSearchExhausted | None = None
     included_count = 0
     iterations = 0
     while included_count < limit and iterations < max_iterations:
@@ -290,8 +306,12 @@ def collect_after(
             # Preserve that useful prefix; an empty result remains an error so
             # first-occurrence failures stay actionable at the caller boundary.
             if exc.is_date_limit and out:
-                terminal = exc
+                terminal_result = exc
                 break
+        except LookupError as exc:
+            if type(exc).__name__ == "AnchorFileOccurrenceExhausted":
+                raise
+            raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
             raise
         except (LookupError, OSError) as exc:
             raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
@@ -303,6 +323,11 @@ def collect_after(
             raise TypeError("Occurrence provider returned an invalid value.")
         if occurrence.local_datetime is None:
             raise ValueError("Lazy occurrence provider returned no local datetime.")
+        if date_limit is not None and occurrence.day > date_limit:
+            terminal_result = OccurrenceSearchExhausted(
+                "cursor date limit", reference=occurrence.day, kind=OccurrenceSearchExhausted.DATE_LIMIT
+            )
+            break
         if isinstance(contract, ProviderContract):
             if contract.lower_date is not None and occurrence.day < contract.lower_date:
                 raise ValueError("Occurrence provider returned a date before its declared bound.")
@@ -315,7 +340,7 @@ def collect_after(
             included_count += 1
     if included_count < limit and iterations >= max_iterations:
         raise ValueError("Occurrence provider exceeded its collection iteration limit.")
-    return OccurrenceBatch(out, terminal=terminal)
+    return OccurrenceBatch(out, terminal=terminal_result)
 
 
 def _require_forward_progress(after_local: datetime, value: datetime) -> None:

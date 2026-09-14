@@ -12,7 +12,7 @@ from nautical_core.operator_models import (CoverageKind, CoverageRequirement, Op
     OperatorPage, OperatorResult, OperatorScope, OperatorScopeKind, OperatorOperation, OperatorRequest, OperatorStatus, OperatorV2Result, OperatorV2Status,
     OperatorExitCode, OperatorContractError, OperatorPhase, OperatorPhaseResult, exit_code_for_v2_status)
 from nautical_core.operator_findings import FindingActionability, FindingSeverity, OperatorFinding
-from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json
+from nautical_core.operator_presentation import ordered_findings, ordered_records, render_contract_json, render_result
 from nautical_core.operator_snapshot import OperatorSnapshot
 from nautical_core.operator_snapshot import ChainSnapshotReader, SnapshotReadRequest
 from nautical_core.integration_context import (
@@ -378,6 +378,22 @@ class OperatorConformanceTests(unittest.TestCase):
         encoded = render_contract_json(result)
         decoded = OperatorV2Result.from_mapping(json.loads(encoded))
         self.assertEqual(decoded, result)
+
+    def test_v2_result_preserves_public_schema_and_text_status_presentation(self) -> None:
+        result = OperatorV2Result(
+            schema="nautical.query.occurrences",
+            operation="occurrences",
+            status=OperatorV2Status.FOUND,
+            payload={"results": [{"description": "Méditation ⚓"}]},
+        )
+
+        document = result.to_dict()
+        self.assertEqual(document["schema"], "nautical.query.occurrences")
+        self.assertEqual(document["version"], 2)
+        self.assertEqual(document["status"], "found")
+        self.assertEqual(result.exit_code, OperatorExitCode.SUCCESS)
+        self.assertIn("occurrences: found", render_result(result, "text"))
+        self.assertEqual(OperatorV2Result.from_mapping(document).to_dict(), document)
 
     def test_public_result_serializes_supported_nested_values(self) -> None:
         """The public encoder keeps all supported evidence JSON-native and Unicode-safe."""

@@ -9,6 +9,13 @@ from pathlib import Path
 
 
 class OfflineKitTests(unittest.TestCase):
+    def test_astronomy_dependency_is_optional_and_pinned(self):
+        root = Path(__file__).parents[1]
+        base = (root / "requirements.txt").read_text(encoding="utf-8")
+        astronomy = (root / "requirements-astronomy.txt").read_text(encoding="utf-8")
+        self.assertNotIn("astral", base)
+        self.assertIn("astral==3.2", astronomy)
+
     def test_build_and_verify_is_self_contained(self):
         script = Path(__file__).parents[1] / "dev_tools" / "nautical_offline_kit.py"
         with tempfile.TemporaryDirectory(prefix="nautical-kit-test-") as td:
@@ -23,6 +30,8 @@ class OfflineKitTests(unittest.TestCase):
             self.assertTrue(manifest["inventory"]["platform"])
             self.assertTrue(manifest["inventory"]["architecture"])
             paths = [item["path"] for item in manifest["files"]]
+            self.assertIn("requirements-constraints.txt", paths)
+            self.assertIn("requirements-astronomy.txt", paths)
             self.assertFalse(any(".nautical-cache" in path or "__pycache__" in path or path.endswith(".pyc") for path in paths))
 
     def test_verify_rejects_changed_runtime(self):

@@ -290,6 +290,50 @@ class IntegrityRecoveryContractTests(unittest.TestCase):
         self.assertEqual(item["action"], "repair_error")
         self.assertEqual(item["repair_error"], "persistence unavailable")
 
+    def test_native_until_audit_keeps_missing_and_malformed_predecessors_explicit(self):
+        service = IntegrityRecoveryService()
+
+        def parse(value):
+            try:
+                parsed = datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+                return parsed, None
+            except (TypeError, ValueError) as exc:
+                return None, str(exc)
+
+        row = {
+            "uuid": "00000000-0000-4000-8000-000000000701",
+            "description": "fault recovery",
+            "chain": "on",
+            "chainID": "fault-recovery",
+            "link": 2,
+            "status": "pending",
+            "due": "20260820T100000Z",
+            "until": "20260820T090000Z",
+        }
+        unavailable = service.audit_native_until(
+            (_observation(**row),),
+            predecessor=lambda _row: None,
+            safe_parse_datetime=parse,
+            fmt_isoz=fmt_isoz,
+            utc_to_local_naive=_Core.utc_to_local_naive,
+            local_naive_to_utc=_Core.local_naive_to_utc,
+        )
+        self.assertEqual(unavailable.native_until.status, "invalid")
+        self.assertEqual(unavailable.candidates[0].item.get("fallback"), "local 23:00")
+
+        malformed = service.audit_native_until(
+            (_observation(**{**row, "due": "not-a-date"}),),
+            predecessor=lambda _row: None,
+            safe_parse_datetime=lambda _value: (None, "malformed datetime"),
+            fmt_isoz=fmt_isoz,
+            utc_to_local_naive=_Core.utc_to_local_naive,
+            local_naive_to_utc=_Core.local_naive_to_utc,
+        )
+        self.assertEqual(malformed.native_until.status, "invalid")
+        self.assertEqual(malformed.native_until.repairs[0].get("action"), "manual_review")
+
 
 if __name__ == "__main__":
     unittest.main()

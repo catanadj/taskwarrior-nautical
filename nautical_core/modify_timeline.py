@@ -1,11 +1,37 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .scheduler_models import OccurrenceSearchExhausted, occurrence_exhaustion_message
 from .timeutil import compare_datetimes
 from .task_models import TaskObservation, TaskPayload
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineProjectionServices:
+    max_iterations: int
+    collect_prev_two: Callable[..., Any]
+    dtparse: Callable[..., Any]
+    to_local_cached: Callable[..., Any]
+    safe_parse_datetime: Callable[..., Any]
+    omit_dnf_from_parent: Callable[..., Any]
+    omit_description_for_date: Callable[[Any, Any], str | None] | None
+    recurrence_evaluator_for_task: Callable[..., Any]
+    scheduler_service_for_task: Callable[..., Any]
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineFormattingServices:
+    future_style_for_chain: Callable[..., Any]
+    coerce_int: Callable[..., Any]
+    fmt_on_time_delta: Callable[..., Any]
+    fmtlocal: Callable[..., Any]
+    fmt_dt_local: Callable[..., Any]
+    short: Callable[..., Any]
+    format_gap: Callable[..., Any]
+
 
 TimelineItem = tuple[object, Any, TaskPayload, str]
 
@@ -108,7 +134,7 @@ def _timeline_initial_items(
     child_due_utc: Any,
     child_short: str,
     *,
-    core: Any,
+    coerce_int: Callable[..., Any],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
     dtparse: Callable[[Any], Any],
 ) -> list[TimelineItem]:
@@ -117,7 +143,7 @@ def _timeline_initial_items(
     prev_count = len(prevs)
     for idx, observation in enumerate(prevs):
         obj = observation.to_mapping()
-        no = core.coerce_int(obj.get("link"), None) or (cur_no - (prev_count - idx))
+        no = coerce_int(obj.get("link"), None) or (cur_no - (prev_count - idx))
         end_dt = dtparse(obj.get("end"))
         items.append((no, end_dt, obj, "prev"))
     cur_end = dtparse(task.get("end"))
@@ -133,29 +159,10 @@ def _timeline_future_cp_items(
     start_no: int,
     allowed_future: int,
     cap_no: int | None,
-    core: Any,
-    tolocal: Callable[[datetime], datetime],
     max_iterations: int,
-    evaluator: Any | None = None,
+    evaluator: Any,
 ) -> list[tuple[int, datetime, dict[str, Any], str]]:
     cp_str = str(task.get("cp") or "")
-    if evaluator is None:
-        from .scheduler_service import SchedulerService
-        from .recurrence_context import RecurrenceContext
-        from .task_codec import DEFAULT_TASK_CODEC
-        from .task_models import NauticalTask
-
-        observation = DEFAULT_TASK_CODEC.decode_row(task, source_query="modify timeline")
-        domain_task = NauticalTask.from_observation(observation)
-        evaluator = SchedulerService.from_task(
-            domain_task,
-            context=RecurrenceContext.from_observation(
-                observation,
-                timezone=getattr(core, "_LOCAL_TZ", None),
-                astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
-                anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
-            ),
-        ).session.evaluator
     tokens = evaluator.cp_tokens
     if not tokens:
         return []
@@ -199,10 +206,8 @@ def _timeline_future_anchor_items(
     cap_no: int | None,
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
-    next_occurrence_after_local_dt: Callable[..., Any],
-    scheduler_service: Any | None = None,
+    scheduler_service: Any,
     omit_dnf: Any,
-    omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
 ) -> list[tuple[object, Any, dict[str, Any], str]]:
@@ -214,20 +219,6 @@ def _timeline_future_anchor_items(
     due0, _ = safe_parse_datetime(task.get("due"))
     sched0, _ = safe_parse_datetime(task.get("scheduled"))
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
-    provider = None
-    if scheduler_service is None:
-        from .occurrence_provider import AnchorOccurrenceProvider
-
-        provider = AnchorOccurrenceProvider(
-            lambda value: next_occurrence_after_local_dt(
-                dnf,
-                value,
-                default_seed_date=default_seed,
-                seed_base=seed_base,
-                omit_dnf=None,
-                fallback_hhmm=fallback_hhmm,
-            ),
-        )
     after_local = nxt_local
     iterations = 0
     actual_future = 0
@@ -238,34 +229,29 @@ def _timeline_future_anchor_items(
             break
         iterations += 1
         try:
-            if scheduler_service is not None:
-                from .occurrence_outcomes import ExhaustedOccurrence, FoundOccurrence
-                from .scheduler_cursor import OccurrenceCursor
+            from .scheduler_cursor import OccurrenceCursor
 
-                outcome = scheduler_service.next(
-                    OccurrenceCursor.strict_after(
-                        after_local,
-                        timezone=scheduler_service.session.evaluator.context.timezone,
-                    ),
-                    fallback_hhmm=fallback_hhmm,
-                    default_seed_date=default_seed,
-                )
-                if isinstance(outcome, FoundOccurrence):
-                    next_local = outcome.local_datetime
-                elif isinstance(outcome, ExhaustedOccurrence):
-                    raise outcome.error
-                elif getattr(outcome, "status", "") in {"unavailable", "invalid"}:
-                    raise RuntimeError(getattr(outcome, "reason", "scheduler lookup failed"))
-                else:
-                    next_local = None
-            else:
-                assert provider is not None
-                occurrence = provider.next_after(
+            outcome = scheduler_service.collect(
+                OccurrenceCursor.strict_after(
                     after_local,
-                    build_local_datetime=_build_slot_datetime,
-                    to_local=lambda value: value,
-                )
-                next_local = occurrence.local_datetime if occurrence is not None else None
+                    timezone=scheduler_service.session.evaluator.context.timezone,
+                ),
+                limit=1,
+                count_omitted=True,
+                fallback_hhmm=fallback_hhmm,
+                default_seed_date=default_seed,
+                max_iterations=max_iterations,
+                max_file_skips=max_iterations,
+            )
+            if outcome.failure is not None:
+                raise RuntimeError(outcome.failure.reason or "scheduler lookup failed")
+            if outcome.occurrences:
+                occurrence = outcome.occurrences[0]
+                next_local = occurrence.local_datetime
+            elif outcome.terminal is not None:
+                raise outcome.terminal
+            else:
+                next_local = None
         except OccurrenceSearchExhausted as exc:
             if exc.is_date_limit:
                 items.append(
@@ -287,33 +273,23 @@ def _timeline_future_anchor_items(
             break
         fut_dt = next_local.astimezone(timezone.utc)
         after_local = next_local
-        if omit_dnf and omit_expr_fires_on_date is not None:
-            try:
-                if omit_expr_fires_on_date(
-                    omit_dnf,
-                    next_local.date(),
-                    default_seed,
-                    seed_base,
-                ):
-                    items.append(
-                        (
-                            "··",
-                            fut_dt,
-                            {
-                                "is_omit": True,
-                                "omit_label": _timeline_omit_label(
-                                    omit_dnf,
-                                    next_local.date(),
-                                    omit_description_for_date=omit_description_for_date,
-                                ),
-                            },
-                            "omitted",
-                        )
-                    )
-                    continue
-            except Exception as exc:
-                items.append(_timeline_warning(f"Omit evaluation unavailable: {type(exc).__name__}: {exc}"))
-                break
+        if occurrence.omitted:
+            items.append(
+                (
+                    "··",
+                    fut_dt,
+                    {
+                        "is_omit": True,
+                        "omit_label": _timeline_omit_label(
+                            omit_dnf,
+                            next_local.date(),
+                            omit_description_for_date=omit_description_for_date,
+                        ),
+                    },
+                    "omitted",
+                )
+            )
+            continue
         fut_no += 1
         if cap_no is not None and fut_no > cap_no:
             break
@@ -332,14 +308,12 @@ def _timeline_omitted_before_next_anchor_items(
     dtparse: Callable[[Any], Any],
     to_local_cached: Callable[[datetime], datetime],
     safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
-    next_occurrence_after_local_dt: Callable[..., Any],
-    scheduler_service: Any | None = None,
+    scheduler_service: Any,
     omit_dnf: Any,
-    omit_expr_fires_on_date: Callable[..., bool] | None,
     omit_description_for_date: Callable[[Any, Any], str | None] | None,
     max_iterations: int,
 ) -> list[tuple[object, Any, dict[str, Any], str]]:
-    if not omit_dnf or omit_expr_fires_on_date is None:
+    if not omit_dnf:
         return []
     cur_end = dtparse(task.get("end"))
     if not cur_end:
@@ -353,101 +327,26 @@ def _timeline_omitted_before_next_anchor_items(
     due0, _ = safe_parse_datetime(task.get("due"))
     sched0, _ = safe_parse_datetime(task.get("scheduled"))
     default_seed = to_local_cached(due0 or sched0 or child_due_utc).date()
-    if scheduler_service is not None:
-        try:
-            from .scheduler_cursor import OccurrenceCursor
+    try:
+        from .scheduler_cursor import OccurrenceCursor
 
-            result = scheduler_service.collect(
-                OccurrenceCursor.strict_after(
-                    after_local,
-                    timezone=scheduler_service.session.evaluator.context.timezone,
-                ),
-                limit=max_iterations,
-                count_omitted=True,
-                fallback_hhmm=fallback_hhmm,
-                default_seed_date=default_seed,
-                max_iterations=max_iterations,
-                max_file_skips=max_iterations,
-            )
-            for occurrence in result.occurrences:
-                next_local = occurrence.local_datetime
-                if next_local is None or compare_datetimes(next_local, child_local) >= 0:
-                    break
-                if occurrence.omitted:
-                    items.append(
-                        (
-                            "··",
-                            next_local.astimezone(timezone.utc),
-                            {
-                                "is_omit": True,
-                                "omit_label": _timeline_omit_label(
-                                    omit_dnf,
-                                    next_local.date(),
-                                    omit_description_for_date=omit_description_for_date,
-                                ),
-                            },
-                            "omitted",
-                        )
-                    )
-            if result.terminal is not None and not result.occurrences:
-                items.append(_timeline_warning(f"Projection ended: {occurrence_exhaustion_message(result.terminal)}"))
-            return items
-        except Exception as exc:
-            return [_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}")]
-    from .occurrence_provider import AnchorOccurrenceProvider
-
-    provider = AnchorOccurrenceProvider(
-        lambda value: next_occurrence_after_local_dt(
-            dnf,
-            value,
-            default_seed_date=default_seed,
-            seed_base=seed_base,
-            omit_dnf=None,
-            fallback_hhmm=fallback_hhmm,
-        ),
-    )
-    assert provider is not None
-    iterations = 0
-    iteration_limit_reached = False
-    while True:
-        if iterations >= max_iterations:
-            iteration_limit_reached = True
-            break
-        iterations += 1
-        try:
-            occurrence = provider.next_after(
+        result = scheduler_service.collect(
+            OccurrenceCursor.strict_after(
                 after_local,
-                    build_local_datetime=_build_slot_datetime,
-                to_local=lambda value: value,
-            )
-            next_local = occurrence.local_datetime if occurrence is not None else None
-        except OccurrenceSearchExhausted as exc:
-            if exc.is_date_limit:
-                items.append(
-                    _timeline_warning(
-                        f"Projection ended: {occurrence_exhaustion_message(exc)}"
-                    )
-                )
-            else:
-                items.append(
-                    _timeline_warning(
-                        f"Projection unavailable: {occurrence_exhaustion_message(exc)}"
-                    )
-                )
-            break
-        except Exception as exc:
-            items.append(_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}"))
-            break
-        if not next_local or compare_datetimes(next_local, child_local) >= 0:
-            break
-        after_local = next_local
-        try:
-            if omit_expr_fires_on_date(
-                omit_dnf,
-                next_local.date(),
-                default_seed,
-                seed_base,
-            ):
+                timezone=scheduler_service.session.evaluator.context.timezone,
+            ),
+            limit=max_iterations,
+            count_omitted=True,
+            fallback_hhmm=fallback_hhmm,
+            default_seed_date=default_seed,
+            max_iterations=max_iterations,
+            max_file_skips=max_iterations,
+        )
+        for occurrence in result.occurrences:
+            next_local = occurrence.local_datetime
+            if next_local is None or compare_datetimes(next_local, child_local) >= 0:
+                break
+            if occurrence.omitted:
                 items.append(
                     (
                         "··",
@@ -463,12 +362,11 @@ def _timeline_omitted_before_next_anchor_items(
                         "omitted",
                     )
                 )
-        except Exception as exc:
-            items.append(_timeline_warning(f"Omit evaluation unavailable: {type(exc).__name__}: {exc}"))
-            break
-    if iteration_limit_reached and (not items or items[-1][3] != "warning"):
-        items.append(_timeline_warning("Projection incomplete: iteration limit reached."))
-    return items
+        if result.terminal is not None and not result.occurrences:
+            items.append(_timeline_warning(f"Projection ended: {occurrence_exhaustion_message(result.terminal)}"))
+        return items
+    except Exception as exc:
+        return [_timeline_warning(f"Projection unavailable: {type(exc).__name__}: {exc}")]
 
 
 def _timeline_no_text(no: object) -> str:
@@ -487,7 +385,7 @@ def _timeline_base_line(
     cur_style: str,
     next_style: str,
     future_style: str,
-    core: Any,
+    fmt_dt_local: Callable[[Any], str],
     dtparse: Callable[[Any], Any],
     fmt_on_time_delta: Callable[[Any, Any], str],
     fmtlocal: Callable[[Any], str],
@@ -511,7 +409,7 @@ def _timeline_base_line(
 
     if item_type == "next":
         is_last = cap_no is not None and no == cap_no
-        next_text = f"{no_text} {'►':<2}{core.fmt_dt_local(dt)} {short(obj.get('uuid'))}"
+        next_text = f"{no_text} {'►':<2}{fmt_dt_local(dt)} {short(obj.get('uuid'))}"
         if is_last:
             return f"[{next_style}]{next_text} [bold red](last link)[/][/]"
         return f"[{next_style}]{next_text}[/]"
@@ -522,7 +420,7 @@ def _timeline_base_line(
             omit_label = omit_label.replace("[", "(").replace("]", ")")
         else:
             omit_label = "omitted"
-        return f"[dim red]{no_text} {'×':<2}{core.fmt_dt_local(dt)} [italic]({omit_label})[/][/]"
+        return f"[dim red]{no_text} {'×':<2}{fmt_dt_local(dt)} [italic]({omit_label})[/][/]"
 
     if item_type == "warning":
         message = str(obj.get("message") or "Timeline projection unavailable")
@@ -530,7 +428,7 @@ def _timeline_base_line(
         return f"[bright_yellow]{no_text} {'⚠':<2}{message}[/]"
 
     is_last = cap_no is not None and no == cap_no
-    future_text = f"{no_text} {'»':<2}{core.fmt_dt_local(dt)}"
+    future_text = f"{no_text} {'»':<2}{fmt_dt_local(dt)}"
     cp_interval = str(obj.get("cp_interval") or "").strip()
     if cp_interval:
         future_text = f"{future_text} [dim]({cp_interval})[/]"
@@ -571,7 +469,8 @@ def anchor_file_timeline_lines(
     cur_no: int | None,
     show_gaps: bool,
     round_anchor_gaps: bool,
-    core: Any,
+    coerce_int: Callable[..., Any],
+    fmt_dt_local: Callable[[Any], str],
     max_iterations: int,
     future_style_for_chain: Callable[[TaskPayload, str], str],
     collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
@@ -580,11 +479,11 @@ def anchor_file_timeline_lines(
     fmtlocal: Callable[[Any], str],
     short: Callable[[Any], str],
     to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
     scheduler_service: Any,
     evaluator: Any,
     omit_dnf: Any,
-    anchor_omit: Any | None,
+    omit_description_for_date: Callable[[Any, Any], str | None] | None,
+    format_gap: Callable[[Any, Any, str, bool], str],
 ) -> list[str]:
     """Project anchor-file events and render their timeline rows."""
     child_local = to_local_cached(child_due_utc)
@@ -601,7 +500,7 @@ def anchor_file_timeline_lines(
                 timezone=evaluator.context.timezone,
             ),
             limit=max(8, next_count + 6),
-            count_omitted=False,
+            count_omitted=True,
             fallback_hhmm=fallback_hhmm,
             default_seed_date=default_seed,
             max_iterations=max_iterations,
@@ -614,7 +513,7 @@ def anchor_file_timeline_lines(
             f"Projection unavailable: {type(exc).__name__}: {exc}"
         )
 
-    cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
+    cur_no = coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
     allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
     prev_style, cur_style, next_style, future_style = _timeline_styles(
@@ -628,7 +527,7 @@ def anchor_file_timeline_lines(
         nxt_no,
         child_due_utc,
         child_short,
-        core=core,
+        coerce_int=coerce_int,
         collect_prev_two=collect_prev_two,
         dtparse=dtparse,
     )
@@ -654,11 +553,7 @@ def anchor_file_timeline_lines(
                             _timeline_omit_label(
                                 omit_dnf,
                                 item_local.date(),
-                                omit_description_for_date=(
-                                    anchor_omit.omit_description_for_date
-                                    if anchor_omit is not None
-                                    else None
-                                ),
+                                omit_description_for_date=omit_description_for_date,
                             )
                             if omit_dnf
                             else None
@@ -689,7 +584,7 @@ def anchor_file_timeline_lines(
             cur_style=cur_style,
             next_style=next_style,
             future_style=future_style,
-            core=core,
+            fmt_dt_local=fmt_dt_local,
             dtparse=dtparse,
             fmt_on_time_delta=fmt_on_time_delta,
             fmtlocal=fmtlocal,
@@ -721,32 +616,19 @@ def timeline_lines(
     cur_no: int | None = None,
     show_gaps: bool = True,
     round_anchor_gaps: bool = True,
-    core: Any,
-    max_iterations: int,
-    future_style_for_chain: Callable[[TaskPayload, str], str],
-    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
-    dtparse: Callable[[Any], Any],
-    fmt_on_time_delta: Callable[[Any, Any], str],
-    fmtlocal: Callable[[Any], str],
-    short: Callable[[Any], str],
-    tolocal: Callable[[datetime], datetime],
-    next_occurrence_after_local_dt: Callable[..., Any],
-    scheduler_service: Any | None = None,
-    to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
-    format_gap: Callable[[Any, Any, str, bool], str],
-    omit_dnf: Any = None,
-    omit_expr_fires_on_date: Callable[..., bool] | None = None,
-    omit_description_for_date: Callable[[Any, Any], str | None] | None = None,
-    evaluator: Any | None = None,
+    projection: TimelineProjectionServices,
+    formatting: TimelineFormattingServices,
+    scheduler_service: Any | None,
+    omit_dnf: Any,
+    evaluator: Any | None,
 ) -> list[str]:
-    cur_no = core.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
+    cur_no = formatting.coerce_int(task.get("link") if cur_no is None else cur_no, 1)
     nxt_no = cur_no + 1
     allowed_future = next_count if cap_no is None else max(0, min(next_count, cap_no - nxt_no))
     prev_style, cur_style, next_style, future_style = _timeline_styles(
         task,
         kind,
-        future_style_for_chain=future_style_for_chain,
+        future_style_for_chain=formatting.future_style_for_chain,
     )
     items: list[TimelineItem] = _timeline_initial_items(
         task,
@@ -754,24 +636,22 @@ def timeline_lines(
         nxt_no,
         child_due_utc,
         child_short,
-        core=core,
-        collect_prev_two=collect_prev_two,
-        dtparse=dtparse,
+        coerce_int=formatting.coerce_int,
+        collect_prev_two=projection.collect_prev_two,
+        dtparse=projection.dtparse,
     )
     if kind == "anchor":
         omitted_before_next = _timeline_omitted_before_next_anchor_items(
             task,
             dnf,
             child_due_utc,
-            dtparse=dtparse,
-            to_local_cached=to_local_cached,
-            safe_parse_datetime=safe_parse_datetime,
-            next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+            dtparse=projection.dtparse,
+            to_local_cached=projection.to_local_cached,
+            safe_parse_datetime=projection.safe_parse_datetime,
             scheduler_service=scheduler_service,
             omit_dnf=omit_dnf,
-            omit_expr_fires_on_date=omit_expr_fires_on_date,
-            omit_description_for_date=omit_description_for_date,
-            max_iterations=max_iterations,
+            omit_description_for_date=projection.omit_description_for_date,
+            max_iterations=projection.max_iterations,
         )
         if omitted_before_next:
             items = items[:-1] + omitted_before_next + items[-1:]
@@ -784,9 +664,7 @@ def timeline_lines(
                     start_no=nxt_no,
                     allowed_future=allowed_future,
                     cap_no=cap_no,
-                    core=core,
-                    tolocal=tolocal,
-                    max_iterations=max_iterations,
+                    max_iterations=projection.max_iterations,
                     evaluator=evaluator,
                 )
             )
@@ -799,14 +677,12 @@ def timeline_lines(
                     start_no=nxt_no,
                     allowed_future=allowed_future,
                     cap_no=cap_no,
-                    to_local_cached=to_local_cached,
-                    safe_parse_datetime=safe_parse_datetime,
-                    next_occurrence_after_local_dt=next_occurrence_after_local_dt,
+                    to_local_cached=projection.to_local_cached,
+                    safe_parse_datetime=projection.safe_parse_datetime,
                     scheduler_service=scheduler_service,
                     omit_dnf=omit_dnf,
-                    omit_expr_fires_on_date=omit_expr_fires_on_date,
-                    omit_description_for_date=omit_description_for_date,
-                    max_iterations=max_iterations,
+                    omit_description_for_date=projection.omit_description_for_date,
+                    max_iterations=projection.max_iterations,
                 )
             )
 
@@ -823,11 +699,11 @@ def timeline_lines(
             cur_style=cur_style,
             next_style=next_style,
             future_style=future_style,
-            core=core,
-            dtparse=dtparse,
-            fmt_on_time_delta=fmt_on_time_delta,
-            fmtlocal=fmtlocal,
-            short=short,
+            fmt_dt_local=formatting.fmt_dt_local,
+            dtparse=projection.dtparse,
+            fmt_on_time_delta=formatting.fmt_on_time_delta,
+            fmtlocal=formatting.fmtlocal,
+            short=formatting.short,
         )
         lines.append(
             _timeline_with_gap(
@@ -837,7 +713,7 @@ def timeline_lines(
                 show_gaps=show_gaps,
                 kind=kind,
                 round_anchor_gaps=round_anchor_gaps,
-                format_gap=format_gap,
+                format_gap=formatting.format_gap,
             )
         )
     return lines
@@ -855,29 +731,14 @@ def timeline_lines_for_task(
     cur_no: int | None = None,
     show_gaps: bool = True,
     round_anchor_gaps: bool = True,
-    core: Any,
-    max_iterations: int,
-    future_style_for_chain: Callable[[TaskPayload, str], str],
-    collect_prev_two: Callable[[TaskPayload], list[TaskObservation]],
-    dtparse: Callable[[Any], Any],
-    fmt_on_time_delta: Callable[[Any, Any], str],
-    fmtlocal: Callable[[Any], str],
-    short: Callable[[Any], str],
-    tolocal: Callable[[datetime], datetime],
-    next_occurrence_after_local_dt: Callable[..., Any],
-    to_local_cached: Callable[[datetime], datetime],
-    safe_parse_datetime: Callable[[Any], tuple[Any, Any]],
-    format_gap: Callable[[Any, Any, str, bool], str],
-    module_loader: Callable[[str], Any],
-    omit_dnf_from_parent: Callable[[TaskPayload], tuple[str, Any]],
-    recurrence_evaluator_for_task: Callable[[TaskPayload], Any],
-    scheduler_service_for_task: Callable[[TaskPayload], Any],
+    projection: TimelineProjectionServices,
+    formatting: TimelineFormattingServices,
 ) -> list[str]:
-    """Resolve task-scoped context and render the appropriate timeline."""
+    """Resolve recurrence projection independently from rendering services."""
     if kind == "anchor_file" or (kind == "anchor" and (task.get("anchor_file") or "").strip()):
-        _omit_expr, omit_dnf = omit_dnf_from_parent(task)
-        anchor_omit = module_loader("anchor_omit") if omit_dnf else None
-        evaluator = recurrence_evaluator_for_task(task)
+        _omit_expr, omit_dnf = projection.omit_dnf_from_parent(task)
+        scheduler_service = projection.scheduler_service_for_task(task)
+        evaluator = scheduler_service.session.evaluator
         return anchor_file_timeline_lines(
             task,
             child_due_utc,
@@ -887,33 +748,30 @@ def timeline_lines_for_task(
             cur_no=cur_no,
             show_gaps=show_gaps,
             round_anchor_gaps=round_anchor_gaps,
-            core=core,
-            max_iterations=max_iterations,
-            future_style_for_chain=future_style_for_chain,
-            collect_prev_two=collect_prev_two,
-            dtparse=dtparse,
-            fmt_on_time_delta=fmt_on_time_delta,
-            fmtlocal=fmtlocal,
-            short=short,
-            to_local_cached=to_local_cached,
-            safe_parse_datetime=safe_parse_datetime,
-            scheduler_service=scheduler_service_for_task(task),
+            coerce_int=formatting.coerce_int,
+            fmt_dt_local=formatting.fmt_dt_local,
+            max_iterations=projection.max_iterations,
+            future_style_for_chain=formatting.future_style_for_chain,
+            collect_prev_two=projection.collect_prev_two,
+            dtparse=projection.dtparse,
+            fmt_on_time_delta=formatting.fmt_on_time_delta,
+            fmtlocal=formatting.fmtlocal,
+            short=formatting.short,
+            to_local_cached=projection.to_local_cached,
+            scheduler_service=scheduler_service,
             evaluator=evaluator,
             omit_dnf=omit_dnf,
-            anchor_omit=anchor_omit,
+            omit_description_for_date=projection.omit_description_for_date if omit_dnf else None,
+            format_gap=formatting.format_gap,
         )
 
-    _omit_expr, omit_dnf = omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
-    anchor_omit = module_loader("anchor_omit") if kind == "anchor" else None
-    scheduler_service = scheduler_service_for_task(task) if kind == "anchor" else None
+    _omit_expr, omit_dnf = projection.omit_dnf_from_parent(task) if kind == "anchor" else ("", None)
+    scheduler_service = projection.scheduler_service_for_task(task) if kind == "anchor" else None
     evaluator = (
         scheduler_service.session.evaluator
         if scheduler_service is not None
-        else (recurrence_evaluator_for_task(task) if kind == "cp" else None)
+        else (projection.recurrence_evaluator_for_task(task) if kind == "cp" else None)
     )
-    timeline_scheduler = next_occurrence_after_local_dt
-    if evaluator is not None and kind == "anchor":
-        timeline_scheduler = evaluator._default_next_occurrence_after_local_dt
     return timeline_lines(
         kind,
         task,
@@ -925,28 +783,9 @@ def timeline_lines_for_task(
         cur_no=cur_no,
         show_gaps=show_gaps,
         round_anchor_gaps=round_anchor_gaps,
-        core=core,
-        max_iterations=max_iterations,
-        future_style_for_chain=future_style_for_chain,
-        collect_prev_two=collect_prev_two,
-        dtparse=dtparse,
-        fmt_on_time_delta=fmt_on_time_delta,
-        fmtlocal=fmtlocal,
-        short=short,
-        tolocal=tolocal,
-        next_occurrence_after_local_dt=timeline_scheduler,
+        projection=projection,
+        formatting=formatting,
         scheduler_service=scheduler_service,
-        to_local_cached=to_local_cached,
-        safe_parse_datetime=safe_parse_datetime,
-        format_gap=format_gap,
         omit_dnf=omit_dnf,
-        omit_expr_fires_on_date=(
-            (lambda dnf_, d, default_seed, seed_base: anchor_omit.omit_expr_fires_on_date(
-                dnf_, d, default_seed, seed_base, core=core
-            ))
-            if anchor_omit is not None
-            else None
-        ),
-        omit_description_for_date=(anchor_omit.omit_description_for_date if anchor_omit is not None else None),
         evaluator=evaluator,
     )

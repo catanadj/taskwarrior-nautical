@@ -299,7 +299,7 @@ class AuthoritativeSetReadService:
                 chain_id = _row_text(row, "chainID").lower()
                 try:
                     link = int(float(_row_text(row, "link")))
-                except ValueError:
+                except (ValueError, OverflowError):
                     link = 0
                 slot = ChainSlot(chain_id, link) if chain_id and link > 0 else None
                 if slot is None or slot not in chunk:

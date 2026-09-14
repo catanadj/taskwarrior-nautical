@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .lifecycle_application import LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
+from .lifecycle_application import DrainResult, LifecycleApplicationOutcome, LifecycleApplicationOutcomeKind
 from .lifecycle_models import LifecycleAction, LifecyclePlan
 from .operator_domain_plans import DomainApplicationAuthorization, require_domain_effect_plan
 from .operator_models import OperatorFailure, OperatorOperation, OperatorResult, OperatorStatus
@@ -12,7 +12,7 @@ from .operator_models import OperatorFailure, OperatorOperation, OperatorResult,
 
 class LifecycleApplicationPort(Protocol):
     def stage(self, plan: LifecyclePlan, *, configuration_fingerprint: str, schedule_fingerprint: str) -> LifecycleApplicationOutcome: ...
-    def drain(self, *, limit: int, configuration_fingerprint: str, schedule_fingerprint: str): ...
+    def drain(self, *, limit: int, configuration_fingerprint: str, schedule_fingerprint: str) -> DrainResult: ...
     def apply_immediate(self, plan: LifecyclePlan) -> LifecycleApplicationOutcome: ...
 
 
@@ -39,8 +39,15 @@ class LifecycleOperatorOwner:
                 configuration_fingerprint=authorization.configuration_fingerprint,
                 schedule_fingerprint=authorization.schedule_fingerprint,
             )
-            outcomes = tuple(getattr(drained, "outcomes", ()))
-            final = outcomes[-1] if outcomes else staged
+            if not drained.outcomes:
+                final = LifecycleApplicationOutcome(
+                    LifecycleApplicationOutcomeKind.RETRYABLE,
+                    plan.identity,
+                    reason="lifecycle drain returned no outcome",
+                    intent_id=staged.intent_id,
+                )
+            else:
+                final = drained.outcomes[-1]
             return self._result(final.kind, final.reason, final.intent_id)
         outcome = self._service.apply_immediate(plan)
         return self._result(outcome.kind, outcome.reason, outcome.intent_id)

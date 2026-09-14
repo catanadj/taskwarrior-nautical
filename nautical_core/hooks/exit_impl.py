@@ -314,6 +314,17 @@ def _initialize_integration_context() -> None:
     _USE_RC_DATA_LOCATION = len(context.command_prefix) > 1
 
 
+def _reset_integration_context() -> None:
+    """Discard invocation-derived context while retaining import caches."""
+    global _INTEGRATION_CONTEXT, _TASKDATA_RAW, _USE_RC_DATA_LOCATION, TW_DATA_DIR
+    global _CORE_READY
+    _INTEGRATION_CONTEXT = None
+    _TASKDATA_RAW = ""
+    _USE_RC_DATA_LOCATION = False
+    TW_DATA_DIR = Path(TW_DIR).expanduser()
+    _CORE_READY = False
+
+
 
 
 
@@ -393,6 +404,37 @@ _OUTBOX_LEASE_SECONDS = _env_float(
     min_value=0.0,
     max_value=7 * 86400.0,
 )
+
+
+def _refresh_exit_policy() -> None:
+    """Resolve invocation policy from the current environment.
+
+    The implementation module can be reused by tests and embedded callers;
+    avoid allowing the first import to freeze operational safety limits.
+    """
+    global _EXIT_STRICT, _OUTBOX_BATCH_MAX_ITEMS, _OUTBOX_DIAG_MAX_ITEMS
+    global _OUTBOX_RETRY_MAX, _TASK_TIMEOUT_EXPORT, _TASK_TIMEOUT_IMPORT
+    global _TASK_TIMEOUT_MODIFY, _TASK_RETRIES_EXPORT, _TASK_RETRIES_MODIFY
+    global _TASK_RETRY_DELAY, _PARENT_LOCK_RETRIES, _PARENT_LOCK_SLEEP_BASE
+    global _PARENT_LOCK_STALE_AFTER, _LOCK_STORM_THRESHOLD, _LOCK_BACKOFF_BASE
+    global _LOCK_BACKOFF_MAX, _OUTBOX_LEASE_SECONDS
+    _EXIT_STRICT = (os.environ.get("NAUTICAL_EXIT_STRICT") or "").strip().lower() in ("1", "true", "yes", "on")
+    _OUTBOX_BATCH_MAX_ITEMS = _env_int("NAUTICAL_OUTBOX_DRAIN_MAX_ITEMS", 200, min_value=1, max_value=100000)
+    _OUTBOX_DIAG_MAX_ITEMS = _env_int("NAUTICAL_OUTBOX_DIAG_MAX_ITEMS", 32, min_value=0, max_value=1000)
+    _OUTBOX_RETRY_MAX = _env_int("NAUTICAL_OUTBOX_RETRY_MAX", 6, min_value=0, max_value=100)
+    _TASK_TIMEOUT_EXPORT = _env_float("NAUTICAL_TASK_TIMEOUT_EXPORT", 3.0, min_value=0.1, max_value=300.0)
+    _TASK_TIMEOUT_IMPORT = _env_float("NAUTICAL_TASK_TIMEOUT_IMPORT", 8.0, min_value=0.1, max_value=300.0)
+    _TASK_TIMEOUT_MODIFY = _env_float("NAUTICAL_TASK_TIMEOUT_MODIFY", 4.0, min_value=0.1, max_value=300.0)
+    _TASK_RETRIES_EXPORT = _env_int("NAUTICAL_TASK_RETRIES_EXPORT", 2, min_value=0, max_value=20)
+    _TASK_RETRIES_MODIFY = _env_int("NAUTICAL_TASK_RETRIES_MODIFY", 2, min_value=0, max_value=20)
+    _TASK_RETRY_DELAY = _env_float("NAUTICAL_TASK_RETRY_DELAY", 0.2, min_value=0.0, max_value=10.0)
+    _PARENT_LOCK_RETRIES = _env_int("NAUTICAL_PARENT_LOCK_RETRIES", 6, min_value=0, max_value=100)
+    _PARENT_LOCK_SLEEP_BASE = _env_float("NAUTICAL_PARENT_LOCK_SLEEP_BASE", 0.03, min_value=0.0, max_value=10.0)
+    _PARENT_LOCK_STALE_AFTER = _env_float("NAUTICAL_PARENT_LOCK_STALE_AFTER", 30.0, min_value=0.0, max_value=86400.0)
+    _LOCK_STORM_THRESHOLD = _env_int("NAUTICAL_LOCK_STORM_THRESHOLD", 8, min_value=0, max_value=1000)
+    _LOCK_BACKOFF_BASE = _env_float("NAUTICAL_LOCK_BACKOFF_BASE", 0.05, min_value=0.0, max_value=60.0)
+    _LOCK_BACKOFF_MAX = _env_float("NAUTICAL_LOCK_BACKOFF_MAX", 1.0, min_value=0.0, max_value=300.0)
+    _OUTBOX_LEASE_SECONDS = _env_float("NAUTICAL_OUTBOX_LEASE_SECONDS", 300.0, min_value=0.0, max_value=7 * 86400.0)
 
 _EXIT_RUNTIME_STATE = None
 _EXIT_PRELOAD_CHUNK_SIZE = 32
@@ -519,6 +561,7 @@ def _drain_outbox_result(runtime):
     service = lifecycle_application.LifecycleApplicationService(
         unit_of_work=unit_of_work,
         mutations=mutations,
+        execution=mutations,
         outbox=outbox,
         owner=owner,
         lease_seconds=_OUTBOX_LEASE_SECONDS,
@@ -612,6 +655,8 @@ def _command_purpose_stat_key(purpose: object) -> str:
 
 
 def main() -> int:
+    _refresh_exit_policy()
+    _reset_integration_context()
     # Queue draining and diagnostics use the configured core/UI services;
     # defer that package import until the lifecycle is actually entered.
     _load_core()

@@ -7,7 +7,12 @@ Nautical requires:
 - Taskwarrior 3.4.2 or newer (CI verifies 3.4.2 and 3.5.0);
 - Python 3.11 or newer;
 - Git and `curl` for the bootstrap installer;
-- the Python packages in `requirements.txt`.
+- the Python packages in `requirements.txt`, constrained by the tested set in
+  `requirements-constraints.txt`.
+
+Astronomy support is optional. Install `requirements-astronomy.txt` as well
+when the active configuration defines astronomy locations; the bootstrap does
+this automatically.
 
 The installer detects ordinary Linux and Termux layouts. It installs a managed
 runtime under Taskwarrior's data directory, registers Nautical's UDAs, installs

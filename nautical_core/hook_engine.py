@@ -86,12 +86,6 @@ def handle_on_add(
             now_local = core.to_local(now_utc)
 
     observation = getattr(request, "observation", None)
-    planned_add = False
-    workflow_plan = None
-    if observation is not None:
-        workflow_plan = services.workflow_application().prepare(task, observation)
-        planned_add = True
-
     application = services.workflow_application()
     ctx = application.build_context(
         task,
@@ -103,18 +97,11 @@ def handle_on_add(
     if not ctx.kind:
         return services.result(task, sanitize=True, prof=prof)
 
-    if not planned_add:
-        application.stamp_chain_id(task)
+    application.stamp_chain_id(task)
     if ctx.kind in {'anchor', 'anchor_file'}:
         application.render_anchor_preview(ctx, prof=prof)
     else:
         application.render_cp_preview(ctx, prof=prof)
-    if workflow_plan is not None:
-        workflow_plan = application.record_schedule(workflow_plan, task, ctx.recurrence_field)
-        workflow_plan = application.record_limits(workflow_plan, task, ctx)
-        workflow_plan = application.record_preview(workflow_plan)
-    if workflow_plan is not None:
-        request.workflow_plan = workflow_plan
     # The composition root emits this result once.  Keeping response creation
     # here makes every full add route converge on the same strict JSON boundary.
     return services.result(task, sanitize=True, prof=prof)

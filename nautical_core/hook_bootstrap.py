@@ -6,7 +6,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 def env_int(
@@ -61,11 +61,13 @@ def ensure_utf8_stdio() -> None:
             pass
 
 
-def trusted_core_base(default_base: Path, *, env: dict[str, str] | None = None, diag_enabled: bool = False) -> Path:
+def trusted_core_base(default_base: Path, *, env: Mapping[str, str] | None = None, diag_enabled: bool = False) -> Path:
     env_map = os.environ if env is None else env
     raw = (env_map.get("NAUTICAL_CORE_PATH") or "").strip()
     if not raw:
         return default_base
+
+
     try:
         cand = Path(raw).expanduser().resolve()
     except Exception:
@@ -87,6 +89,33 @@ def trusted_core_base(default_base: Path, *, env: dict[str, str] | None = None, 
             except Exception:
                 pass
         return default_base
+
+
+def bootstrap_candidates(
+    hook_dir: Path,
+    tw_dir: Path,
+    *,
+    env: Mapping[str, str] | None = None,
+    diag_enabled: bool = False,
+) -> tuple[Path, ...]:
+    """Return bootstrap paths after validating any configured override."""
+    env_map = os.environ if env is None else env
+    candidates: list[Path] = [
+        hook_dir / "nautical_core" / "hook_bootstrap.py",
+        tw_dir / "nautical_core" / "hook_bootstrap.py",
+    ]
+    raw = (env_map.get("NAUTICAL_CORE_PATH") or "").strip()
+    if not raw:
+        return tuple(candidates)
+    try:
+        requested = Path(raw).expanduser().resolve()
+        trusted = trusted_core_base(hook_dir, env=env_map, diag_enabled=diag_enabled)
+        if trusted.resolve() != requested:
+            return tuple(candidates)
+        candidates.extend((requested / "hook_bootstrap.py", requested / "nautical_core" / "hook_bootstrap.py"))
+    except Exception:
+        return tuple(candidates)
+    return tuple(candidates)
 
 
 def core_target_from_base(base: Path) -> Path | None:

@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from .task_datetime import datetime_value, parser_for_host
+from . import calendar_feedback, panel_diagnostics
+from .recurrence_context import RecurrenceContext
+from .scheduler_service import SchedulerService
+from .task_codec import DEFAULT_TASK_CODEC
+from .task_models import NauticalTask
 
 
 def _compare_datetimes(host: Any, left: datetime, right: datetime) -> int:
@@ -194,7 +200,7 @@ def render_cp(host: Any, task, cp_str: str, ch: str, now_utc, user_provided_due:
         return core.fmt_dt_local(value)
 
     def parse(value):
-        return core.parse_dt_any(value)
+        return datetime_value(parser_for_host(host), value)
 
     tokens = core.parse_cp_sequence_tokens(cp_str)
     if not tokens:
@@ -276,6 +282,48 @@ def render_anchor(host: Any, *, task, anchor_str, anchor_file_str, ch, now_utc, 
                   until_dt, past_due_warning, prof) -> None:
     core = host.core
     preview = host._module("add_anchor_preview")
+    modify_models = host._module("modify_models")
+    omit_files = core._import_sibling("omit_files")
+
+    def scheduler_service_for_task(value):
+        recurrence_context = RecurrenceContext(
+            chain_id=str(value.get("chainID") or host._root_uuid_from(value) or "preview"),
+            timezone=getattr(core, "_LOCAL_TZ", None),
+            business_calendar=core.business_calendar_for_task(value),
+            astronomy_config=getattr(core, "ASTRONOMY_CONFIG", None),
+            anchor_file_dir=getattr(core, "ANCHOR_FILE_DIR", ""),
+        )
+        typed_task = NauticalTask.from_observation(
+            DEFAULT_TASK_CODEC.decode_row(value, source_query="add anchor preview")
+        )
+        return SchedulerService.from_task(
+            typed_task, context=recurrence_context
+        )
+
+    def omit_description_for_task_date(value, day):
+        omit_file = str(value.get("omit_file") or "").strip()
+        if not omit_file:
+            return None
+        _dates, descriptions = omit_files.load_omit_file_data(
+            omit_file, getattr(core, "OMIT_FILE_DIR", "")
+        )
+        return descriptions.get(day)
+
+    def prepare_anchor_dnf(value, expr, due, rows, profile):
+        return preview.anchor_preview_prepare_dnf(
+            value, expr, due, rows, profile, core=core,
+            validate_anchor_syntax_strict=host._validate_anchor_syntax_strict,
+            validate_anchor_mode=host._validate_anchor_mode,
+            error_and_exit=host._error_and_exit,
+        )
+
+    def prepare_omit_dnf(value, rows):
+        return preview.anchor_preview_prepare_omit_dnf(
+            value, rows, core=core,
+            validate_omit_syntax_strict=host._validate_omit_syntax_strict,
+            error_and_exit=host._error_and_exit,
+        )
+
     try:
         preview.handle_anchor_preview_on_add(
             task=task, anchor_str=anchor_str, anchor_file_str=anchor_file_str, ch=ch,
@@ -284,22 +332,47 @@ def render_anchor(host: Any, *, task, anchor_str, anchor_file_str, ch, now_utc, 
             due_hhmm=due_hhmm, until_dt=until_dt, past_due_warning=past_due_warning,
             prof=prof, anchor_warn=host.ANCHOR_WARN, upcoming_preview=host.UPCOMING_PREVIEW,
             preview_hard_cap=host._PREVIEW_HARD_CAP, max_summary_links=host._MAX_PREVIEW_ITERATIONS,
-            core=core, root_uuid_from=host._root_uuid_from, short=host._short,
-            validate_anchor_syntax_strict=host._validate_anchor_syntax_strict,
-            validate_omit_syntax_strict=host._validate_omit_syntax_strict,
-            validate_anchor_mode=host._validate_anchor_mode,
-            validate_chain_duration_reasonable=host._validate_chain_duration_reasonable,
-            append_wait_sched_rows=host._append_wait_sched_rows,
-            anchor_until_summary=host._anchor_until_summary,
-            anchor_build_preview=host._anchor_build_preview,
-            to_local_cached=host._to_local_cached,
-            fmt_local_for_task=host._fmt_local_for_task,
-            format_anchor_rows=host._format_anchor_rows,
-            panel=host._panel, human_delta=host._human_delta,
-            error_and_exit=host._error_and_exit,
-            validate_native_until_after_target=host._validate_native_until_after_target_or_fail,
-            validate_native_until_anchor_slots=host._validate_native_until_anchor_slots_or_fail,
-            append_first_expiration_row=host._append_first_expiration_row,
+            services=preview.AnchorExpressionPreviewServices(
+                panel_mode=str(getattr(core, "PANEL_MODE", "rich") or "rich"),
+                panel_warnings=lambda value: panel_diagnostics.panel_warnings(
+                    core, modify_models.TaskView.from_mapping(value)
+                ),
+                prepare_anchor_dnf=prepare_anchor_dnf,
+                describe_anchor_natural=lambda value, dnf, file_expr: preview._anchor_preview_natural_text(
+                    value, dnf, file_expr, core=core
+                ),
+                prepare_omit_dnf=prepare_omit_dnf,
+                scheduler_service_for_task=scheduler_service_for_task,
+                to_local=core.to_local,
+                fmt_dt_local=core.fmt_dt_local,
+                coerce_int=core.coerce_int,
+                expr_has_m_or_y=core.expr_has_m_or_y,
+                append_dst_adjustment=lambda rows, dnf, value: preview._append_dst_adjustment_row(
+                    rows, dnf, value, core=core
+                ),
+                render_business_calendar_displacement=lambda value, due, **kwargs: calendar_feedback.render_business_calendar_displacement(
+                    value, due, core=core, **kwargs
+                ),
+                lint_and_validate=lambda expr, profile, **kwargs: preview.anchor_preview_lint_and_validate(
+                    expr, profile, core=core, **kwargs
+                ),
+                omit_description_for_task_date=omit_description_for_task_date,
+                root_uuid_from=host._root_uuid_from,
+                short=host._short,
+                validate_anchor_mode=host._validate_anchor_mode,
+                validate_chain_duration_reasonable=host._validate_chain_duration_reasonable,
+                append_wait_sched_rows=host._append_wait_sched_rows,
+                anchor_until_summary=host._anchor_until_summary,
+                to_local_cached=host._to_local_cached,
+                fmt_local_for_task=host._fmt_local_for_task,
+                format_anchor_rows=host._format_anchor_rows,
+                panel=host._panel,
+                human_delta=host._human_delta,
+                error_and_exit=host._error_and_exit,
+                validate_native_until_after_target=host._validate_native_until_after_target_or_fail,
+                validate_native_until_anchor_slots=host._validate_native_until_anchor_slots_or_fail,
+                append_first_expiration_row=host._append_first_expiration_row,
+            ),
         )
     except Exception as exc:
         exhausted = getattr(core, "OccurrenceSearchExhausted", None)

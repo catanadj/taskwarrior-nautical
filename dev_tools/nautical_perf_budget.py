@@ -952,19 +952,40 @@ def _perf_cache_context():
     saved_override = str(getattr(core, "ANCHOR_CACHE_DIR_OVERRIDE", "") or "")
     saved_cache_dir = getattr(core, "_CACHE_DIR", None)
     saved_ttl = int(getattr(core, "ANCHOR_CACHE_TTL", 0) or 0)
+    # API bindings snapshot configuration at first resolution.  Rebind the
+    # cache and hint owners after installing the temporary override so the
+    # benchmark never writes to the checkout (which is read-only in CI).
+    cache_bundle = getattr(core, "_cache_api", None)
+    hint_bundle = getattr(core, "_hint_builder_api", None)
+    saved_cache_binding = getattr(cache_bundle, "_bindings", None)
+    saved_hint_binding = getattr(hint_bundle, "_bindings", None)
     with tempfile.TemporaryDirectory(prefix="nautical-perf-cache-") as td:
         try:
             core.ENABLE_ANCHOR_CACHE = True
             core.ANCHOR_CACHE_DIR_OVERRIDE = td
             core.ANCHOR_CACHE_TTL = 0
             core._CACHE_DIR = None
-            _clear_caches()
+            if cache_bundle is not None:
+                cache_bundle._bindings = None
+            if hint_bundle is not None:
+                hint_bundle._bindings = None
+            # Avoid the public cache aliases here: resolving them reloads the
+            # lazy configuration and would overwrite this temporary path.
+            try:
+                core._CACHE_LOAD_MEM.clear()
+            except Exception:
+                pass
             yield td
         finally:
+            _clear_caches()
             core.ENABLE_ANCHOR_CACHE = saved_enable
             core.ANCHOR_CACHE_DIR_OVERRIDE = saved_override
             core.ANCHOR_CACHE_TTL = saved_ttl
             core._CACHE_DIR = saved_cache_dir
+            if cache_bundle is not None:
+                cache_bundle._bindings = saved_cache_binding
+            if hint_bundle is not None:
+                hint_bundle._bindings = saved_hint_binding
             _clear_caches()
 
 

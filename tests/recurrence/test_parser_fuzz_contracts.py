@@ -96,8 +96,10 @@ class ParserFuzzContractTests(unittest.TestCase):
             "y:rand + w:sat", "w:mon@t=09:00,fri@t=15:00", "y:07-rand",
             "m:15@+2d | m:last-fri@nbd", "@workout + y:apr",
         )
-        previous_presets = core.ANCHOR_PRESETS
-        core.ANCHOR_PRESETS = {**previous_presets, "workout": "w:mon,wed,fri"}
+        # Preserve mapping identity: parser bindings may hold the configured
+        # preset table from an earlier test in the same process.
+        previous_presets = dict(core.ANCHOR_PRESETS)
+        core.ANCHOR_PRESETS["workout"] = "w:mon,wed,fri"
         try:
             start = date(2026, 1, 1)
             for expression in expressions:
@@ -145,7 +147,8 @@ class ParserFuzzContractTests(unittest.TestCase):
                 "Mondays, Wednesdays, or Fridays in Apr each year",
             )
         finally:
-            core.ANCHOR_PRESETS = previous_presets
+            core.ANCHOR_PRESETS.clear()
+            core.ANCHOR_PRESETS.update(previous_presets)
 
     def test_expression_characterization_matrix(self) -> None:
         cases = (

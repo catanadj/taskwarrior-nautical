@@ -54,8 +54,6 @@ def anchor_step_once_with_omit(dnf, prev_local_date, interval_seed, seed_base, *
         return nxt_date
     except OccurrenceSearchExhausted:
         raise
-    except Exception:
-        return None
 
 
 def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
@@ -64,8 +62,6 @@ def anchor_term_fires_on_date(term, d, interval_seed, seed_base, *, core: Any):
         return all(engine.factor_matches_on(atom, d, interval_seed, seed_base=seed_base) for atom in term)
     except OccurrenceSearchExhausted:
         raise
-    except Exception:
-        return False
 
 
 def anchor_expr_fires_on_date(dnf, d, interval_seed, seed_base, *, core: Any):
@@ -111,8 +107,6 @@ def anchor_expr_fires_on_date_with_omit(dnf, d, interval_seed, seed_base, *, omi
         return any(anchor_term_fires_on_date(term, d, interval_seed, seed_base, core=core) for term in dnf)
     except OccurrenceSearchExhausted:
         raise
-    except Exception:
-        return False
 
 
 def anchor_times_for_date(
@@ -152,8 +146,6 @@ def anchor_times_for_date(
                 )[0] == d
             except OccurrenceSearchExhausted:
                 raise
-            except Exception:
-                term_matches = False
         if term_matches:
             for atom in term:
                 mods = atom.get("mods") or {}

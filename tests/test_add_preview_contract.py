@@ -134,6 +134,81 @@ class AddAnchorComputeTests(unittest.TestCase):
 
         self.assertIs(raised.exception, expected)
 
+    def test_anchor_step_propagates_unexpected_failures(self) -> None:
+        class FailingOmit:
+            @staticmethod
+            def next_after_expr_with_omit(*_args, **_kwargs):
+                raise RuntimeError("scheduler configuration failed")
+
+        class FakeCore:
+            MAX_ANCHOR_ITER = 1
+
+            @staticmethod
+            def _import_sibling(_name):
+                return FailingOmit
+
+        with self.assertRaisesRegex(RuntimeError, "scheduler configuration failed"):
+            add_anchor_compute.anchor_step_once_with_omit(
+                [], date(2026, 1, 1), date(2026, 1, 1), "test",
+                omit_dnf=None, core=FakeCore(),
+            )
+
+    def test_anchor_term_propagates_unexpected_failures(self) -> None:
+        class FailingEngine:
+            @staticmethod
+            def factor_matches_on(*_args, **_kwargs):
+                raise RuntimeError("factor evaluation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "factor evaluation failed"):
+            add_anchor_compute.anchor_term_fires_on_date(
+                [{}], date(2026, 1, 1), date(2026, 1, 1), "test",
+                core=SimpleNamespace(_scheduler_api=FailingEngine()),
+            )
+
+    def test_anchor_expression_propagates_unexpected_failures(self) -> None:
+        class FailingEngine:
+            @staticmethod
+            def dnf_has_counted_random(*_args, **_kwargs):
+                raise RuntimeError("parser state failed")
+
+        with self.assertRaisesRegex(RuntimeError, "parser state failed"):
+            add_anchor_compute.anchor_expr_fires_on_date_with_omit(
+                [], date(2026, 1, 1), date(2026, 1, 1), "test",
+                omit_dnf=None,
+                core=SimpleNamespace(
+                    _scheduler_api=FailingEngine(),
+                    _import_sibling=lambda _name: SimpleNamespace(
+                        omit_expr_fires_on_date=lambda *_args, **_kwargs: False
+                    ),
+                ),
+            )
+
+    def test_anchor_counted_random_fallback_propagates_unexpected_failures(self) -> None:
+        class FailingEngine:
+            @staticmethod
+            def factor_matches_on(*_args, **_kwargs):
+                return False
+
+            @staticmethod
+            def dnf_has_counted_random(*_args, **_kwargs):
+                return True
+
+            @staticmethod
+            def next_after_expr(*_args, **_kwargs):
+                raise RuntimeError("counted random evaluation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "counted random evaluation failed"):
+            add_anchor_compute.anchor_times_for_date(
+                [[{}]], date(2026, 1, 1), date(2026, 1, 1), "test",
+                core=SimpleNamespace(
+                    _scheduler_api=FailingEngine(),
+                    _import_sibling=lambda _name: SimpleNamespace(
+                        omit_expr_fires_on_date=lambda *_args, **_kwargs: False
+                    ),
+                ),
+                norm_t_mod=lambda _mods: [],
+            )
+
     def test_anchor_build_preview_formats_events_and_respects_until(self):
         first = datetime(2026, 1, 1, 9, tzinfo=UTC)
         events = OccurrenceBatch([

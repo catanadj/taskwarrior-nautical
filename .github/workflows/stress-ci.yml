@@ -22,7 +22,7 @@ jobs:
       - name: Install Python deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt -c requirements-constraints.txt asciichartpy
+          python3 -m pip install -r requirements.txt asciichartpy
 
       - name: Install Taskwarrior
         run: |

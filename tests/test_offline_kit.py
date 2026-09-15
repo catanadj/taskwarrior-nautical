@@ -30,7 +30,6 @@ class OfflineKitTests(unittest.TestCase):
             self.assertTrue(manifest["inventory"]["platform"])
             self.assertTrue(manifest["inventory"]["architecture"])
             paths = [item["path"] for item in manifest["files"]]
-            self.assertIn("requirements-constraints.txt", paths)
             self.assertIn("requirements-astronomy.txt", paths)
             self.assertFalse(any(".nautical-cache" in path or "__pycache__" in path or path.endswith(".pyc") for path in paths))
 

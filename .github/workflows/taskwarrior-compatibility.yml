@@ -34,7 +34,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libgnutls28-dev uuid-dev libncurses-dev libreadline-dev
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt -c requirements-constraints.txt asciichartpy
+          python3 -m pip install -r requirements.txt asciichartpy
 
       - name: Install Taskwarrior ${{ matrix.taskwarrior.version }}
         run: |

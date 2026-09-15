@@ -21,13 +21,12 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.txt
-            requirements-constraints.txt
 
       - name: Install benchmark dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y taskwarrior
-          python3 -m pip install -r requirements.txt -c requirements-constraints.txt
+          python3 -m pip install -r requirements.txt
 
       - name: Verify benchmark runtime
         run: |
@@ -132,13 +131,12 @@ jobs:
           cache: pip
           cache-dependency-path: |
             requirements.txt
-            requirements-constraints.txt
 
       - name: Install benchmark dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y taskwarrior
-          python3 -m pip install -r requirements.txt -c requirements-constraints.txt
+          python3 -m pip install -r requirements.txt
 
       - name: Capture slow-device trend profile
         run: >-

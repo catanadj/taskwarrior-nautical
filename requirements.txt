@@ -1,4 +1,5 @@
 # Navigator and formatted panel runtime dependencies.
-rich>=13
-prompt_toolkit>=3
-python-dateutil>=2.8
+# Versions are pinned to the compatibility-tested runtime set.
+rich==13.3.1
+prompt-toolkit==3.0.36
+python-dateutil==2.8.2

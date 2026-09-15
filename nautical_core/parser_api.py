@@ -29,6 +29,8 @@ class ParserOwnerDependencies:
     max_terms: int
     parse_error: type[Exception]
     today: Callable[[], date]
+    parser_dnf: Any | None = None
+    resolve_presets: Callable[[str], str] | None = None
 
 
 def _core_module():
@@ -38,8 +40,13 @@ def _core_module():
 
 def _parse_anchor_expr_to_dnf_impl(module: Any, s: str, deps: ParserOwnerDependencies | None = None):
     """Run the parser pipeline against one isolated deps facade."""
-    s = module.resolve_anchor_presets(s)
-    parser_dnf = module.import_sibling("parsing.parser_dnf") if isinstance(module, CoreContext) else module._parser_dnf
+    if deps is not None and deps.parser_dnf is not None and deps.resolve_presets is not None:
+        parser_dnf = deps.parser_dnf
+        resolve_presets = deps.resolve_presets
+    else:
+        resolve_presets = module.resolve_anchor_presets
+        parser_dnf = module.import_sibling("parsing.parser_dnf") if isinstance(module, CoreContext) else module._parser_dnf
+    s = resolve_presets(s)
     deps = deps or ParserOwnerDependencies(
         normalize_input=module._normalize_anchor_expr_input,
         raise_bad_year_colons=module._raise_on_bad_colon_year_tokens,
@@ -436,6 +443,8 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             max_terms=deps["MAX_ANCHOR_DNF_TERMS"],
             parse_error=deps["ParseError"],
             today=date.today,
+            parser_dnf=parser_dnf,
+            resolve_presets=resolve_anchor_presets,
         )
         return _parse_anchor_expr_to_dnf_impl(module, s, owner_deps)
 

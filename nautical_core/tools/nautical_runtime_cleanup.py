@@ -35,6 +35,7 @@ def main() -> int:
         )
     except Exception as exc:
         result = {"status": "error", "error": str(exc)}
+    errors = result.get("errors") or ([result["error"]] if result.get("error") else [])
     if args.json:
         print(render_json_document(result))
     else:
@@ -46,11 +47,11 @@ def main() -> int:
             "Abandoned paths to remove": len(result.get("remove_abandoned") or []),
         }
         print("\n".join(key_value_lines(summary)))
-        if result.get("errors"):
+        if errors:
             print("Errors:")
-            for error in result["errors"]:
+            for error in errors:
                 print(f"  {error}")
-    return 2 if result.get("status") == "error" or result.get("errors") else 0
+    return 2 if result.get("status") == "error" or errors else 0
 
 
 if __name__ == "__main__":

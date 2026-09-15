@@ -272,14 +272,16 @@ class RecurrenceEvaluator:
     def _parse_anchor(self) -> list[Any]:
         from . import parser_api
 
-        parser = parser_api.for_core(module=self._core_module())
+        core = self._core_module()
+        parser = getattr(core, "_parser_api", None) or parser_api.for_core()
         return _freeze_evaluator_value(parser.parse_anchor_expr_to_dnf_cached(self.spec.anchor))
 
     def _parse_omit(self) -> Any:
         from . import parser_api
         from .anchor_omit import validate_omit_expr_strict
 
-        parser = parser_api.for_core(module=self._core_module())
+        core = self._core_module()
+        parser = getattr(core, "_parser_api", None) or parser_api.for_core()
         omit_dnf = None
         if self.spec.omit:
             omit_dnf = validate_omit_expr_strict(
@@ -290,7 +292,6 @@ class RecurrenceEvaluator:
         omit_dates: frozenset[date] = frozenset()
         omit_descriptions: dict[date, str] = {}
         if self.spec.omit_file:
-            core = self._core_module()
             omit_files = core._import_sibling("omit_files")
             omit_dates, omit_descriptions = omit_files.load_omit_file_data(
                 self.spec.omit_file,

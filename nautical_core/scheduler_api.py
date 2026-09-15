@@ -254,15 +254,39 @@ def _next_after_atom_with_mods_impl(
     deps: SchedulerModifierDependencies | None = None,
     *,
     scheduler_atom: Any | None = None,
+    business_calendar_api: Any | None = None,
+    with_business_calendar: Callable[..., Any] | None = None,
+    base_next_after_atom: Callable[..., Any] | None = None,
+    monthly_align_base_for_interval: Callable[..., Any] | None = None,
+    roll_apply: Callable[..., Any] | None = None,
+    apply_day_offset: Callable[..., Any] | None = None,
+    active_mod_keys: Callable[..., Any] | None = None,
+    max_anchor_iter: int | None = None,
+    warn_once_per_day: Callable[..., Any] | None = None,
+    os_mod: Any | None = None,
+    resolve_moon_phase_date: Callable[..., Any] | None = None,
+    moon_phase_matches_date: Callable[..., Any] | None = None,
 ):
     scheduler_atom = scheduler_atom or module._scheduler_atom
-    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
-    base_next = module._with_business_calendar(module.base_next_after_atom, business_calendar)
-    monthly_align = module._with_business_calendar(module._monthly_align_base_for_interval, business_calendar)
-    roll = module._with_business_calendar(module.roll_apply, business_calendar)
-    day_offset = module._with_business_calendar(module.apply_day_offset, business_calendar)
+    business_calendar_api = business_calendar_api or module._business_calendar
+    with_business_calendar = with_business_calendar or module._with_business_calendar
+    base_next_after_atom = base_next_after_atom or module.base_next_after_atom
+    monthly_align_base_for_interval = monthly_align_base_for_interval or module._monthly_align_base_for_interval
+    roll_apply = roll_apply or module.roll_apply
+    apply_day_offset = apply_day_offset or module.apply_day_offset
+    active_mod_keys = active_mod_keys or module._active_mod_keys
+    max_anchor_iter = max_anchor_iter if max_anchor_iter is not None else module.MAX_ANCHOR_ITER
+    warn_once_per_day = warn_once_per_day or module._warn_once_per_day
+    os_mod = os_mod or module.os
+    resolve_moon_phase_date = resolve_moon_phase_date or module._resolve_moon_phase_date
+    moon_phase_matches_date = moon_phase_matches_date or module._moon_phase_matches_date
+    business_calendar = business_calendar_api.effective_business_calendar(business_calendar)
+    base_next = with_business_calendar(base_next_after_atom, business_calendar)
+    monthly_align = with_business_calendar(monthly_align_base_for_interval, business_calendar)
+    roll = with_business_calendar(roll_apply, business_calendar)
+    day_offset = with_business_calendar(apply_day_offset, business_calendar)
     deps = deps or SchedulerModifierDependencies(
-        active_mod_keys=module._active_mod_keys,
+        active_mod_keys=active_mod_keys,
         base_next=base_next,
         interval_allowed=lambda *args, **kwargs: _interval_allowed_for_atom(module, *args, **kwargs),
         advance_probe=lambda *args, **kwargs: _advance_probe_for_interval_bucket(module, *args, **kwargs),
@@ -273,11 +297,11 @@ def _next_after_atom_with_mods_impl(
             module, *args, scheduler_atom=scheduler_atom, **kwargs
         ),
         is_business_day=business_calendar.is_business_day,
-        max_anchor_iter=module.MAX_ANCHOR_ITER,
-        warn_once=module._warn_once_per_day,
-        os_mod=module.os,
-        resolve_moon=module._resolve_moon_phase_date,
-        moon_matches=module._moon_phase_matches_date,
+        max_anchor_iter=max_anchor_iter,
+        warn_once=warn_once_per_day,
+        os_mod=os_mod,
+        resolve_moon=resolve_moon_phase_date,
+        moon_matches=moon_phase_matches_date,
     )
     return scheduler_atom.next_after_atom_with_mods(
         atom,
@@ -785,6 +809,18 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             seed_base=seed_base,
             business_calendar=business_calendar,
             scheduler_atom=deps["_scheduler_atom"],
+            business_calendar_api=deps["_business_calendar"],
+            with_business_calendar=deps["_with_business_calendar"],
+            base_next_after_atom=base_next_after_atom,
+            monthly_align_base_for_interval=monthly_align_base_for_interval,
+            roll_apply=roll_apply_impl,
+            apply_day_offset=apply_day_offset,
+            active_mod_keys=deps["_active_mod_keys"],
+            max_anchor_iter=deps["MAX_ANCHOR_ITER"],
+            warn_once_per_day=deps["_warn_once_per_day"],
+            os_mod=deps["os"],
+            resolve_moon_phase_date=resolve_moon_phase_date,
+            moon_phase_matches_date=moon_phase_matches_date,
         )
 
     def base_next_after_atom(atom, ref_d, seed_base=None, business_calendar=None):

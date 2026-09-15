@@ -270,20 +270,22 @@ class RecurrenceEvaluator:
         return self._cache[key]
 
     def _parse_anchor(self) -> list[Any]:
-        from . import parse_anchor_expr_to_dnf_cached
+        from . import parser_api
 
-        return _freeze_evaluator_value(parse_anchor_expr_to_dnf_cached(self.spec.anchor))
+        parser = parser_api.for_core(module=self._core_module())
+        return _freeze_evaluator_value(parser.parse_anchor_expr_to_dnf_cached(self.spec.anchor))
 
     def _parse_omit(self) -> Any:
-        from . import parse_anchor_expr_to_dnf_cached, resolve_omit_presets
+        from . import parser_api
         from .anchor_omit import validate_omit_expr_strict
 
+        parser = parser_api.for_core(module=self._core_module())
         omit_dnf = None
         if self.spec.omit:
             omit_dnf = validate_omit_expr_strict(
                 self.spec.omit,
-                validate_anchor_expr_cached=parse_anchor_expr_to_dnf_cached,
-                resolve_omit_presets=resolve_omit_presets,
+                validate_anchor_expr_cached=parser.parse_anchor_expr_to_dnf_cached,
+                resolve_omit_presets=parser.resolve_omit_presets,
             )
         omit_dates: frozenset[date] = frozenset()
         omit_descriptions: dict[date, str] = {}

@@ -42,7 +42,6 @@ _DEFAULTS = {
     "tz": config_schema.spec_default("tz"),
     "season_hemisphere": config_schema.spec_default("season_hemisphere"),
     "season_mode": config_schema.spec_default("season_mode"),
-    "holiday_region": "",
     "anchor_file_dir": config_schema.spec_default("anchor_file_dir"),
     "omit_file_dir": config_schema.spec_default("omit_file_dir"),
     "anchor_presets": config_schema.spec_default("anchor_presets"),
@@ -469,7 +468,6 @@ WRAND_SALT = _CONF["wrand_salt"]
 LOCAL_TZ_NAME = _CONF["tz"]
 SEASON_HEMISPHERE = config_schema.normalized_choice("season_hemisphere", _CONF["season_hemisphere"])
 SEASON_MODE = config_schema.normalized_choice("season_mode", _CONF["season_mode"])
-HOLIDAY_REGION = _CONF["holiday_region"]
 ANCHOR_FILE_DIR = _CONF["anchor_file_dir"]
 OMIT_FILE_DIR = _CONF["omit_file_dir"]
 ANCHOR_PRESETS = _CONF["anchor_presets"]
@@ -520,7 +518,6 @@ def _refresh_config_exports() -> None:
             "LOCAL_TZ_NAME": _CONF["tz"],
             "SEASON_HEMISPHERE": config_schema.normalized_choice("season_hemisphere", _CONF["season_hemisphere"]),
             "SEASON_MODE": config_schema.normalized_choice("season_mode", _CONF["season_mode"]),
-            "HOLIDAY_REGION": _CONF["holiday_region"],
             "ANCHOR_FILE_DIR": _CONF["anchor_file_dir"],
             "OMIT_FILE_DIR": _CONF["omit_file_dir"],
             "ANCHOR_PRESETS": _CONF["anchor_presets"],

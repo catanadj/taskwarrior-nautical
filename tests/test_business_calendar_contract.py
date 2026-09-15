@@ -136,6 +136,25 @@ class BusinessCalendarHelperContractTests(unittest.TestCase):
             self.assertIsInstance(events, list)
         self.assertIsNone(business_calendar._ACTIVE_DISPLACEMENTS.get())
 
+    def test_calendar_helpers_follow_active_context_when_not_explicitly_overridden(self):
+        class ContextCalendar:
+            name = "context"
+
+            def is_business_day(self, value):
+                return value == date(2026, 9, 12)
+
+        calendar = ContextCalendar()
+        with business_calendar.use_business_calendar(calendar):
+            self.assertTrue(business_calendar.is_business_day(date(2026, 9, 12)))
+            self.assertEqual(
+                business_calendar.find_business_day(date(2026, 9, 11), 1),
+                date(2026, 9, 12),
+            )
+            self.assertEqual(
+                business_calendar.business_days_in_month(2026, 9),
+                [date(2026, 9, 12)],
+            )
+
 
 class BusinessCalendarConfigContractTests(unittest.TestCase):
     def test_definition_normalization_and_invalid_shapes(self):

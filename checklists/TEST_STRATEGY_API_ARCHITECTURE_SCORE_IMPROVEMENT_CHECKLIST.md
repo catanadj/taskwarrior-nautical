@@ -1384,26 +1384,35 @@ lookups.
 
 ## Work Package 17 — Final Reliability, Compatibility, and Score Gate
 
-- [ ] Stop implementation and review the full diff for unnecessary changes,
+- [x] Stop implementation and review the full diff for unnecessary changes,
   compatibility loss, unbounded work, or weakened error handling.
-- [ ] Run Python compilation, full unittest discovery, complete and shuffled
+- [x] Run Python compilation, full unittest discovery, complete and shuffled
   golden suites, mypy, deployment sanity, and black-box integration.
-- [ ] Run the enforced CI stress profile and a short disposable soak. Use only
+- [x] Run the enforced CI stress profile and a short disposable soak. Use only
   temporary Taskdata and state.
-- [ ] Confirm hook stdout remains one Unicode-preserving JSON document for valid
+- [x] Confirm hook stdout remains one Unicode-preserving JSON document for valid
   input and empty for rejected malformed input.
-- [ ] Confirm lifecycle mutations remain guarded, idempotent, postcondition
+- [x] Confirm lifecycle mutations remain guarded, idempotent, postcondition
   verified, and recoverable after interruption.
-- [ ] Re-run focused regression evidence for adjacent dimensions already fixed:
+- [x] Re-run focused regression evidence for adjacent dimensions already fixed:
   explicit mutator naming, canonical omission state, deferred configuration,
   optional Astral, retired holiday cache identity, structured outbox failures,
   and panel source failure propagation.
-- [ ] Confirm the security adjudication contains no unresolved genuine
+- [x] Confirm the security adjudication contains no unresolved genuine
   production finding and that false-positive classification is supported by
   file-and-line evidence rather than score pressure.
-- [ ] Run `git diff --check` and inspect `git status --short`; do not include
+- [x] Run `git diff --check` and inspect `git status --short`; do not include
   `.desloppify/`, temporary audit reports, caches, backups, or unrelated local
   files in product commits.
+
+Verification record (2026-09-15): compilation passed; 1,219 unit tests passed
+(3 skipped); complete and shuffled golden suites each passed 404/404; mypy
+reported no issues in 246 files; deployment sanity and black-box integration
+returned `ok`; enforced CI stress passed 8 cycles; disposable 30-second soak
+passed 5 cycles with zero failures and zero queue/dead-letter residue. Focused
+adjacent regressions passed 52 tests. Product-code changes are committed;
+this checklist update is the only tracked working-tree change. Untracked local
+audit artifacts remain intentionally excluded.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile nautical_core/*.py nautical_core/hooks/*.py nautical_core/tools/*.py
@@ -1433,6 +1442,13 @@ git status --short
   or skipping it.
 - [ ] Do not alter review evidence to hit `85.0`; accept the blind score and
   continue only when a concrete finding remains.
+
+Evidence note: the prior scan still has 20 queued items, so a mid-cycle fresh
+scan would invalidate issue IDs. The attempted blind review batches all failed
+before producing evidence: first due to the read-only runtime, then due to
+Codex runner authentication. Resume with `codex login`, drain the queue with
+`desloppify next`, and run the documented fresh scan/review commands before
+claiming this evidence gate complete.
 
 ```bash
 /home/pooK/venv/test_1/bin/desloppify scan --path .

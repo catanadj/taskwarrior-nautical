@@ -146,18 +146,19 @@ def business_calendar_displacement_for_date(
 
 def is_business_day(
     value: date,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> bool:
-    return business_calendar.is_business_day(value)
+    return effective_business_calendar(business_calendar).is_business_day(value)
 
 
 def find_business_day(
     value: date,
     direction: int,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
     *,
     max_scan_days: int = 8,
 ) -> date:
+    business_calendar = effective_business_calendar(business_calendar)
     if direction not in {-1, 1}:
         raise ValueError("business-day search direction must be -1 or 1")
     current = value
@@ -170,10 +171,11 @@ def find_business_day(
 
 def nearest_business_day(
     value: date,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
     *,
     max_scan_days: int = 8,
 ) -> date:
+    business_calendar = effective_business_calendar(business_calendar)
     previous = find_business_day(
         value,
         -1,
@@ -192,10 +194,11 @@ def nearest_business_day(
 def shift_business_days(
     value: date,
     offset: int,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
     *,
     max_scan_days_per_step: int = 3660,
 ) -> date:
+    business_calendar = effective_business_calendar(business_calendar)
     if not offset:
         return value
     direction = 1 if offset > 0 else -1
@@ -214,8 +217,9 @@ def shift_business_days(
 def business_days_in_month(
     year: int,
     month: int,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> list[date]:
+    business_calendar = effective_business_calendar(business_calendar)
     current = date(year, month, 1)
     out: list[date] = []
     while current.month == month:
@@ -229,10 +233,11 @@ def nth_business_day_of_month(
     year: int,
     month: int,
     ordinal: int,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> date | None:
     if ordinal == 0:
         return None
+    business_calendar = effective_business_calendar(business_calendar)
     days = business_days_in_month(year, month, business_calendar)
     index = ordinal - 1 if ordinal > 0 else ordinal
     try:
@@ -244,8 +249,9 @@ def nth_business_day_of_month(
 def business_day_offsets_for_iso_week(
     iso_year: int,
     iso_week: int,
-    business_calendar: BusinessCalendar = DEFAULT_BUSINESS_CALENDAR,
+    business_calendar: BusinessCalendar | None = None,
 ) -> list[int]:
+    business_calendar = effective_business_calendar(business_calendar)
     monday = date.fromisocalendar(iso_year, iso_week, 1)
     return [
         offset

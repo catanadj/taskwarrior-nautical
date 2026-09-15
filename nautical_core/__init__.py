@@ -319,7 +319,6 @@ LOCAL_TZ_NAME = "UTC"
 CONFIG_ERROR = ""
 SEASON_HEMISPHERE = "north"
 SEASON_MODE = "fixed"
-HOLIDAY_REGION = ""
 ANCHOR_FILE_DIR = OMIT_FILE_DIR = ""
 ANCHOR_PRESETS: dict[str, Any] = {}
 OMIT_PRESETS: dict[str, Any] = {}
@@ -555,7 +554,6 @@ def reload_taskdata_config(taskdata: str | os.PathLike[str]) -> ConfigReloadResu
         "LOCAL_TZ_NAME",
         "SEASON_HEMISPHERE",
         "SEASON_MODE",
-        "HOLIDAY_REGION",
         "ANCHOR_FILE_DIR",
         "OMIT_FILE_DIR",
         "ANCHOR_PRESETS",
@@ -613,7 +611,7 @@ def _refresh_facade_config_exports() -> None:
         and _season_support.active_hemisphere() != configured_hemisphere
     )
     names = (
-        "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "SEASON_MODE", "HOLIDAY_REGION",
+        "WRAND_SALT", "LOCAL_TZ_NAME", "SEASON_HEMISPHERE", "SEASON_MODE",
         "ANCHOR_FILE_DIR", "OMIT_FILE_DIR", "ANCHOR_PRESETS", "OMIT_PRESETS",
         "BUSINESS_CALENDAR_CONFIG", "ASTRONOMY_CONFIG", "ENABLE_ANCHOR_CACHE",
         "ENABLE_UDA_ALIASES", "ANCHOR_CACHE_DIR_OVERRIDE", "ANCHOR_CACHE_TTL",

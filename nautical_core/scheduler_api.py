@@ -203,14 +203,29 @@ def _interval_allowed_for_atom(
     )
 
 
-def _advance_probe_for_interval_bucket(module: Any, typ, ival, seed, cand, spec=""):
-    return module._scheduler_atom.advance_probe_for_interval_bucket(
+def _advance_probe_for_interval_bucket(
+    module: Any,
+    typ,
+    ival,
+    seed,
+    cand,
+    spec="",
+    *,
+    owner_deps: SchedulerDependencies | None = None,
+):
+    scheduler_atom = owner_deps["_scheduler_atom"] if owner_deps is not None else module._scheduler_atom
+    if owner_deps is not None:
+        weeks_between = lambda d1, d2: _weeks_between(module, d1, d2)
+    else:
+        weeks_between = module._weeks_between
+    year_index = owner_deps["_year_index"] if owner_deps is not None else module._year_index
+    return scheduler_atom.advance_probe_for_interval_bucket(
         typ,
         ival,
         seed,
         cand,
-        weeks_between=module._weeks_between,
-        year_index=module._year_index,
+        weeks_between=weeks_between,
+        year_index=year_index,
         date_cls=date,
         spec=spec,
     )
@@ -760,7 +775,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return _interval_allowed_for_atom(module, typ, ival, seed, cand, spec=spec, owner_deps=deps)
 
     def advance_probe_for_interval_bucket(typ, ival, seed, cand, spec=""):
-        return _advance_probe_for_interval_bucket(module, typ, ival, seed, cand, spec=spec)
+        return _advance_probe_for_interval_bucket(module, typ, ival, seed, cand, spec=spec, owner_deps=deps)
 
     def accept_roll_candidate(ref_d, base, cand, roll_kind):
         return _accept_roll_candidate(module, ref_d, base, cand, roll_kind)

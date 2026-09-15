@@ -2,6 +2,8 @@
 import argparse, json, subprocess, sys
 from collections import defaultdict
 
+from nautical_core.common import short_uuid
+
 # ---------- Task helpers ------------------------------------------------------
 def run_task(args, expect_json=False, timeout=60):
     """
@@ -106,10 +108,6 @@ def modify_uuid(full_uuid, kv):
     return run_task(["rc.confirmation=off", f"uuid:{full_uuid}", "modify"] + parts)
 
 # ---------- Chain helpers -----------------------------------------------------
-def short_uuid(u):
-    u = (u or "").strip().lower()
-    return u.split("-")[0] if u else ""
-
 def index_tasks(rows):
     by_full, by_short = {}, defaultdict(list)
     for t in rows:

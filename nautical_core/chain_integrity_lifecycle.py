@@ -5,6 +5,7 @@ import importlib
 from typing import Any
 
 from . import astronomy, native_until
+from .common import short_uuid
 from nautical_core.chain_generation import ChainGenerationService
 from nautical_core.timeutil import compare_datetimes
 from nautical_core.scheduler_service import SchedulerService
@@ -148,11 +149,6 @@ def _generation_service(hook: Any = None) -> ChainGenerationService:
 def scheduling_error_message(exc: BaseException) -> str:
     """Keep astronomy failures actionable in dry-run and apply plans."""
     return astronomy.scheduling_error_message(exc)
-
-
-def short_uuid(value: object) -> str:
-    raw = str(value or "").strip()
-    return raw[:8] if raw else ""
 
 
 def int_or_default(value: object, default: int = 0) -> int:

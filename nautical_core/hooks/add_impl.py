@@ -423,7 +423,7 @@ def _validate_omit_expr_cached(expr: str) -> list[list[dict]]:
     return anchor_omit.validate_omit_expr_strict(
         expr,
         validate_anchor_expr_cached=_validate_anchor_expr_cached,
-        resolve_omit_presets=core.resolve_omit_presets,
+        resolve_omit_presets=core._parser_api.resolve_omit_presets,
     )
 
 def _task_has_nautical_fields(task: dict) -> bool:

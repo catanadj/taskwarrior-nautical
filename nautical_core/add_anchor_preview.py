@@ -93,7 +93,7 @@ def _anchor_omit_natural_text(task: TaskPayload, *, core: Any) -> str:
     if omit_raw:
         try:
             anchor_omit = core._import_sibling('anchor_omit')
-            omit_expr = core.resolve_omit_presets(omit_raw)
+            omit_expr = core._parser_api.resolve_omit_presets(omit_raw)
             omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
         except Exception:
             omit_norm = omit_raw
@@ -199,7 +199,7 @@ def anchor_preview_prepare_omit_dnf(
             rows.append(("Omit", f"[white]{omit_str}[/]"))
         try:
             anchor_omit = core._import_sibling("anchor_omit")
-            omit_expr = core.resolve_omit_presets(omit_str)
+            omit_expr = core._parser_api.resolve_omit_presets(omit_str)
             omit_norm = anchor_omit.normalize_omit_expr(omit_expr)
         except Exception:
             omit_norm = omit_str
@@ -365,7 +365,7 @@ def anchor_preview_lint_and_validate(
         panel("ℹ️  Lint", [("Hint", w) for w in warns], kind="note")
 
     t_val = time.perf_counter()
-    core.validate_anchor_expr_strict(anchor_str)
+    core._parser_api.validate_anchor_expr_strict(anchor_str)
     prof.add_ms("anchor:validate_strict", (time.perf_counter() - t_val) * 1000.0)
 
 

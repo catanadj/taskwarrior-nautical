@@ -224,6 +224,43 @@ class SchedulerApiDelegationTests(unittest.TestCase):
         self.assertIs(seen["is_business_day"], calendar.is_business_day)
         self.assertEqual(seen["max_anchor_iter"], 12)
 
+    def test_modified_atom_prefers_explicit_scheduler_owner(self):
+        seen = {}
+        explicit_atom = SimpleNamespace(
+            next_after_atom_with_mods=lambda *args, **kwargs: (seen.__setitem__("owner", True) or date(2026, 2, 2)),
+        )
+        poisoned_atom = SimpleNamespace(
+            next_after_atom_with_mods=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("facade atom used")),
+        )
+        calendar = SimpleNamespace(is_business_day=lambda day: True)
+        module = SimpleNamespace(
+            _business_calendar=SimpleNamespace(effective_business_calendar=lambda value: calendar),
+            _with_business_calendar=lambda fn, cal: fn,
+            base_next_after_atom="base",
+            _monthly_align_base_for_interval="monthly",
+            roll_apply="roll",
+            apply_day_offset="offset",
+            _scheduler_atom=poisoned_atom,
+            _active_mod_keys="active",
+            MAX_ANCHOR_ITER=12,
+            _warn_once_per_day="warn",
+            os="os",
+            _resolve_moon_phase_date="moon",
+            _moon_phase_matches_date="phase",
+        )
+        self.assertEqual(
+            scheduler_api._next_after_atom_with_mods_impl(
+                module,
+                {"typ": "w"},
+                date(2026, 1, 1),
+                date(2026, 1, 1),
+                business_calendar="custom",
+                scheduler_atom=explicit_atom,
+            ),
+            date(2026, 2, 2),
+        )
+        self.assertTrue(seen["owner"])
+
     def test_interval_wrapper_preserves_typed_exhaustion(self):
         failure = OccurrenceSearchExhausted("test", reference=date(2026, 1, 1), limit=2, kind=OccurrenceSearchExhausted.DATE_LIMIT)
         module = SimpleNamespace(

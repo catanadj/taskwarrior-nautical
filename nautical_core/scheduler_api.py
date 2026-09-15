@@ -231,11 +231,31 @@ def _advance_probe_for_interval_bucket(
     )
 
 
-def _accept_roll_candidate(module: Any, ref_d, base, cand, roll_kind):
-    return module._scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
+def _accept_roll_candidate(
+    module: Any,
+    ref_d,
+    base,
+    cand,
+    roll_kind,
+    *,
+    scheduler_atom: Any | None = None,
+):
+    scheduler_atom = scheduler_atom or module._scheduler_atom
+    return scheduler_atom.accept_roll_candidate(ref_d, base, cand, roll_kind)
 
 
-def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed_base=None, business_calendar=None, deps: SchedulerModifierDependencies | None = None):
+def _next_after_atom_with_mods_impl(
+    module: Any,
+    atom,
+    ref_d,
+    default_seed,
+    seed_base=None,
+    business_calendar=None,
+    deps: SchedulerModifierDependencies | None = None,
+    *,
+    scheduler_atom: Any | None = None,
+):
+    scheduler_atom = scheduler_atom or module._scheduler_atom
     business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
     base_next = module._with_business_calendar(module.base_next_after_atom, business_calendar)
     monthly_align = module._with_business_calendar(module._monthly_align_base_for_interval, business_calendar)
@@ -249,7 +269,9 @@ def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed
         monthly_align=monthly_align,
         roll_apply=roll,
         day_offset=day_offset,
-        accept_roll=lambda *args, **kwargs: _accept_roll_candidate(module, *args, **kwargs),
+        accept_roll=lambda *args, **kwargs: _accept_roll_candidate(
+            module, *args, scheduler_atom=scheduler_atom, **kwargs
+        ),
         is_business_day=business_calendar.is_business_day,
         max_anchor_iter=module.MAX_ANCHOR_ITER,
         warn_once=module._warn_once_per_day,
@@ -257,7 +279,7 @@ def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed
         resolve_moon=module._resolve_moon_phase_date,
         moon_matches=module._moon_phase_matches_date,
     )
-    return module._scheduler_atom.next_after_atom_with_mods(
+    return scheduler_atom.next_after_atom_with_mods(
         atom,
         ref_d,
         default_seed,
@@ -279,18 +301,31 @@ def _next_after_atom_with_mods_impl(module: Any, atom, ref_d, default_seed, seed
     )
 
 
-def _atom_matches_on_impl(module: Any, atom, day, default_seed, seed_base=None, business_calendar=None):
-    next_atom = module._with_business_calendar(
-        module.next_after_atom_with_mods,
-        business_calendar,
-    )
-    return module._scheduler_atom.atom_matches_on(
+def _atom_matches_on_impl(
+    module: Any,
+    atom,
+    day,
+    default_seed,
+    seed_base=None,
+    business_calendar=None,
+    *,
+    scheduler_atom: Any | None = None,
+    with_business_calendar: Callable[..., Any] | None = None,
+    next_after_atom_with_mods: Callable[..., Any] | None = None,
+    moon_phase_matches_date: Callable[..., Any] | None = None,
+):
+    scheduler_atom = scheduler_atom or module._scheduler_atom
+    with_business_calendar = with_business_calendar or module._with_business_calendar
+    next_after_atom_with_mods = next_after_atom_with_mods or module.next_after_atom_with_mods
+    moon_phase_matches_date = moon_phase_matches_date or module._moon_phase_matches_date
+    next_atom = with_business_calendar(next_after_atom_with_mods, business_calendar)
+    return scheduler_atom.atom_matches_on(
         atom,
         day,
         default_seed,
         seed_base=seed_base,
         next_after_atom_with_mods=next_atom,
-        moon_phase_matches_date=module._moon_phase_matches_date,
+        moon_phase_matches_date=moon_phase_matches_date,
     )
 
 
@@ -749,6 +784,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             default_seed,
             seed_base=seed_base,
             business_calendar=business_calendar,
+            scheduler_atom=deps["_scheduler_atom"],
         )
 
     def base_next_after_atom(atom, ref_d, seed_base=None, business_calendar=None):
@@ -778,7 +814,9 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return _advance_probe_for_interval_bucket(module, typ, ival, seed, cand, spec=spec, owner_deps=deps)
 
     def accept_roll_candidate(ref_d, base, cand, roll_kind):
-        return _accept_roll_candidate(module, ref_d, base, cand, roll_kind)
+        return _accept_roll_candidate(
+            module, ref_d, base, cand, roll_kind, scheduler_atom=deps["_scheduler_atom"]
+        )
 
     def atom_matches_on(atom, d, default_seed, seed_base=None, business_calendar=None):
         return _atom_matches_on_impl(
@@ -788,6 +826,10 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             default_seed,
             seed_base=seed_base,
             business_calendar=business_calendar,
+            scheduler_atom=deps["_scheduler_atom"],
+            with_business_calendar=deps["_with_business_calendar"],
+            next_after_atom_with_mods=next_after_atom_with_mods,
+            moon_phase_matches_date=moon_phase_matches_date,
         )
 
     def next_after_factor(factor, ref_d, default_seed, seed_base=None, business_calendar=None):

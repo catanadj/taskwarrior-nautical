@@ -411,7 +411,7 @@ def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
     if cached is not None:
         return cached
 
-    dnf = core.validate_anchor_expr_strict(expr)
+    dnf = core._parser_api.validate_anchor_expr_strict(expr)
     core._dnf_cache_save(expr, dnf)
     return dnf
 
@@ -830,7 +830,7 @@ def _validate_anchor_syntax_strict(expr: str | list[list[dict]]) -> tuple[list[l
         dnf = _validate_anchor_expr_cached(str(expr))
         pipeline.validate_anchor_expression(
             expr,
-            parse_anchor_expr=core.parse_anchor_expr_to_dnf,
+            parse_anchor_expr=core._parser_api.parse_anchor_expr_to_dnf,
             validate_anchor_expr=_validate_anchor_expr_cached,
         )
         return dnf, None

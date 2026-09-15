@@ -1084,7 +1084,7 @@ def _to_local_cached(dt):
 
 @lru_cache(maxsize=256)
 def _validate_anchor_expr_cached(expr: str) -> list[list[dict]]:
-    return core.validate_anchor_expr_strict(expr)
+    return core._parser_api.validate_anchor_expr_strict(expr)
 
 
 @lru_cache(maxsize=256)

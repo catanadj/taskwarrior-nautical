@@ -32,6 +32,8 @@ jobs:
           python3 -m pip install -r requirements.txt asciichartpy
           if [ "${{ matrix.astral-version }}" = "3.2" ]; then
             python3 -m pip install --force-reinstall "astral==3.2"
+          else
+            python3 -m pip install --force-reinstall astral
           fi
 
       - name: Show astronomy versions

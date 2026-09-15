@@ -152,7 +152,7 @@ class IntegrityRecoveryService:
             link = lifecycle.int_or_default(_observation_value(row, "link"), 0)
             previous = by_chain_link.get((chain_id, link - 1)) or predecessor(row)
             item: dict[str, Any] = {
-                "task": lifecycle.short_uuid(_observation_value(row, "uuid")),
+                "task": lifecycle.short_uuid(str(_observation_value(row, "uuid") or "")),
                 "chainID": chain_id,
                 "link": link,
                 "target": _observation_value(row, "due") or _observation_value(row, "scheduled"),

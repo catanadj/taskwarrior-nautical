@@ -4,21 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import importlib
 import math
 import os
 import re
 import sys
 from collections.abc import MutableMapping
-from typing import Any, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from .task_models import TaskDraft, TaskObservation
 
 try:
-    from .task_models import TaskDraft, TaskObservation
+    from . import task_models as _task_models
 except ImportError:  # standalone hook helper loading
-    from task_models import TaskDraft as _StandaloneTaskDraft, TaskObservation as _StandaloneTaskObservation
-    # The standalone hook loader has no package-relative type identity; cast
-    # the runtime aliases explicitly instead of suppressing the assignment.
-    TaskDraft = cast(Any, _StandaloneTaskDraft)
-    TaskObservation = cast(Any, _StandaloneTaskObservation)
+    _task_models = importlib.import_module("task_models")
+
+_RuntimeTaskDraft = _task_models.TaskDraft
+_RuntimeTaskObservation = _task_models.TaskObservation
 
 
 TASK_CODEC_VERSION = 1
@@ -106,7 +109,7 @@ class TaskCodec:
         if not isinstance(row, Mapping):
             raise TaskCodecError("Taskwarrior row must be a JSON object")
         try:
-            return TaskObservation.from_mapping(
+            return _RuntimeTaskObservation.from_mapping(
                 row,
                 source_query=source_query,
                 snapshot_id=snapshot_id,
@@ -208,9 +211,9 @@ class TaskCodec:
 
     def encode_task_import(self, value: TaskObservation | TaskDraft) -> str:
         """Encode a lossless observation or complete child draft."""
-        if isinstance(value, TaskObservation):
+        if isinstance(value, _RuntimeTaskObservation):
             return _encode(value.to_mapping())
-        if isinstance(value, TaskDraft):
+        if isinstance(value, _RuntimeTaskDraft):
             return _encode(value.to_mapping())
         raise TaskCodecError("task import requires a TaskObservation or TaskDraft")
 
@@ -267,7 +270,7 @@ class TaskCodec:
 
     def encode_diagnostic(self, observation: TaskObservation) -> str:
         """Encode inspectable observation evidence in a separate versioned schema."""
-        if not isinstance(observation, TaskObservation):
+        if not isinstance(observation, _RuntimeTaskObservation):
             raise TaskCodecError("diagnostic evidence requires a TaskObservation")
         payload = {
             "schema": TASK_OBSERVATION_SCHEMA,

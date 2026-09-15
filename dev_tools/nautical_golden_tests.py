@@ -1504,6 +1504,7 @@ def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
             self.repository = Repo()
             self.client = Client(self.repository)
             self.mutation_epoch = 0
+            self.context = type("Context", (), {"mutation_capable": True})()
 
         def record_mutation(self, *, uncertain=False):
             del uncertain
@@ -1797,6 +1798,7 @@ def test_child_import_rejects_incomplete_existing_rows():
         def __init__(self, rows):
             self.repository = Repo(rows)
             self.mutation_epoch = 0
+            self.context = type("Context", (), {"mutation_capable": True})()
 
         def record_mutation(self, *, uncertain=False):
             del uncertain

@@ -176,7 +176,7 @@ def anchor_validation_ports_for(host: Any) -> AnchorValidationPorts:
     ui_ports = ui.ui_ports_for(host)
     return AnchorValidationPorts(
         lint=host.core.lint_anchor_expr,
-        validate_strict=host.core.validate_anchor_expr_strict,
+        validate_strict=host.core._parser_api.validate_anchor_expr_strict,
         panel=lambda title, rows, **kwargs: ui.panel(ui_ports, title, rows, **kwargs),
         is_astronomy_error=astronomy.is_astronomy_error,
         astronomy_error_message=astronomy.scheduling_error_message,
@@ -188,7 +188,7 @@ def omit_validation_ports_for(host: Any) -> OmitValidationPorts:
     pipeline = host.core._import_sibling("hook_validation_pipeline")
     return OmitValidationPorts(
         pipeline=pipeline,
-        parse_anchor=host.core.parse_anchor_expr_to_dnf,
+        parse_anchor=host.core._parser_api.parse_anchor_expr_to_dnf,
         validate_anchor=host._validate_anchor_expr_cached,
         validate_omit=host._validate_omit_expr_cached,
         validate_files=pipeline.validate_recurrence_files,

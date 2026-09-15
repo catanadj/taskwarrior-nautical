@@ -173,7 +173,7 @@ def _completion_validation_ports(host: Any, capabilities: ModifyHookCapabilities
     add_validation = host.core._import_sibling("add_validation")
     shared_ports = validation_effects.SharedValidationPorts(
         pipeline,
-        host.core.parse_anchor_expr_to_dnf,
+        host.core._parser_api.parse_anchor_expr_to_dnf,
         host._validate_anchor_expr_cached,
         host._validate_omit_expr_cached,
     )

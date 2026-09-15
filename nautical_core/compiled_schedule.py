@@ -154,12 +154,13 @@ def _compile_normalized_parts(spec: RecurrenceSpec) -> dict[str, Any]:
         )
 
     from .anchor_omit import validate_omit_expr_strict
-    from .parser_api import (
-        parse_anchor_expr_to_dnf_cached,
-        resolve_anchor_presets,
-        resolve_omit_presets,
-        validate_anchor_expr_strict,
-    )
+    from . import parser_api
+
+    parser = parser_api.for_core()
+    parse_anchor_expr_to_dnf_cached = parser.parse_anchor_expr_to_dnf_cached
+    resolve_anchor_presets = parser.resolve_anchor_presets
+    resolve_omit_presets = parser.resolve_omit_presets
+    validate_anchor_expr_strict = parser.validate_anchor_expr_strict
 
     anchor_dnf = validate_anchor_expr_strict(spec.anchor) if spec.anchor else None
     if not spec.cp and not anchor_dnf and not spec.anchor_file:

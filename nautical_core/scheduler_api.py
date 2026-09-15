@@ -115,17 +115,45 @@ def _moon_phase_matches_date(
     )
 
 
-def _base_next_after_atom_impl(module: Any, atom, ref_d, seed_base=None, business_calendar=None, deps: SchedulerAtomDependencies | None = None):
-    scheduler_atom = module.import_sibling("scheduler_atom") if isinstance(module, CoreContext) else module._scheduler_atom
-    deps = deps or SchedulerAtomDependencies(
-        expand_weekly=module.expand_weekly_cached_mods,
-        split_csv=module._split_csv_tokens,
-        expand_monthly=module._with_business_calendar(module.expand_monthly_cached, business_calendar),
-        expand_yearly=module.expand_yearly_cached,
-        weekly_random=module._with_business_calendar(module._weekly_rand_pick, business_calendar),
-        week_monday=module._week_monday,
-        resolve_moon=module._resolve_moon_phase_date,
-    )
+def _base_next_after_atom_impl(
+    module: Any,
+    atom,
+    ref_d,
+    seed_base=None,
+    business_calendar=None,
+    deps: SchedulerAtomDependencies | None = None,
+    *,
+    owner_deps: SchedulerDependencies | None = None,
+):
+    if owner_deps is not None:
+        scheduler_atom = owner_deps["_scheduler_atom"]
+        resolve_moon = lambda phase, reference_day: _resolve_moon_phase_date(
+            module,
+            phase,
+            reference_day,
+            astronomy=owner_deps["_astronomy"],
+            astronomy_config=owner_deps["ASTRONOMY_CONFIG"],
+        )
+        deps = deps or SchedulerAtomDependencies(
+            expand_weekly=owner_deps["expand_weekly_cached_mods"],
+            split_csv=owner_deps["_split_csv_tokens"],
+            expand_monthly=owner_deps["_with_business_calendar"](owner_deps["expand_monthly_cached"], business_calendar),
+            expand_yearly=owner_deps["expand_yearly_cached"],
+            weekly_random=owner_deps["_with_business_calendar"](owner_deps["_weekly_rand_pick"], business_calendar),
+            week_monday=owner_deps["_week_monday"],
+            resolve_moon=resolve_moon,
+        )
+    else:
+        scheduler_atom = module.import_sibling("scheduler_atom") if isinstance(module, CoreContext) else module._scheduler_atom
+        deps = deps or SchedulerAtomDependencies(
+            expand_weekly=module.expand_weekly_cached_mods,
+            split_csv=module._split_csv_tokens,
+            expand_monthly=module._with_business_calendar(module.expand_monthly_cached, business_calendar),
+            expand_yearly=module.expand_yearly_cached,
+            weekly_random=module._with_business_calendar(module._weekly_rand_pick, business_calendar),
+            week_monday=module._week_monday,
+            resolve_moon=module._resolve_moon_phase_date,
+        )
     return scheduler_atom.base_next_after_atom(
         atom,
         ref_d,
@@ -696,6 +724,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             atom,
             ref_d,
             seed_base=seed_base,
+            owner_deps=deps,
             business_calendar=business_calendar,
         )
 

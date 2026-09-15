@@ -169,12 +169,30 @@ def _base_next_after_atom_impl(
     )
 
 
-def _interval_allowed_for_atom(module: Any, typ, ival, seed, cand, spec="", deps: SchedulerIntervalDependencies | None = None):
-    deps = deps or SchedulerIntervalDependencies(
-        weeks_between=lambda d1, d2: _weeks_between(module, d1, d2),
-        year_index=module._year_index,
-    )
-    return module._scheduler_atom.interval_allowed_for_atom(
+def _interval_allowed_for_atom(
+    module: Any,
+    typ,
+    ival,
+    seed,
+    cand,
+    spec="",
+    deps: SchedulerIntervalDependencies | None = None,
+    *,
+    owner_deps: SchedulerDependencies | None = None,
+):
+    if owner_deps is not None:
+        deps = deps or SchedulerIntervalDependencies(
+            weeks_between=lambda d1, d2: _weeks_between(module, d1, d2),
+            year_index=owner_deps["_year_index"],
+        )
+        scheduler_atom = owner_deps["_scheduler_atom"]
+    else:
+        deps = deps or SchedulerIntervalDependencies(
+            weeks_between=lambda d1, d2: _weeks_between(module, d1, d2),
+            year_index=module._year_index,
+        )
+        scheduler_atom = module._scheduler_atom
+    return scheduler_atom.interval_allowed_for_atom(
         typ,
         ival,
         seed,
@@ -739,7 +757,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def interval_allowed_for_atom(typ, ival, seed, cand, spec=""):
-        return _interval_allowed_for_atom(module, typ, ival, seed, cand, spec=spec)
+        return _interval_allowed_for_atom(module, typ, ival, seed, cand, spec=spec, owner_deps=deps)
 
     def advance_probe_for_interval_bucket(typ, ival, seed, cand, spec=""):
         return _advance_probe_for_interval_bucket(module, typ, ival, seed, cand, spec=spec)

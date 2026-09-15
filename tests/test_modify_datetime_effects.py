@@ -7,6 +7,7 @@ from nautical_core.modify_datetime_effects import (
     safe_dt,
     utc_to_local_naive,
 )
+import nautical_core.modify_composition_adapters as composition_adapters
 
 
 class ModifyDatetimeEffectsTests(unittest.TestCase):
@@ -37,6 +38,25 @@ class ModifyDatetimeEffectsTests(unittest.TestCase):
             utc_to_local_naive(self.ports, "not a datetime")  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
             local_naive_to_utc(self.ports, "not a datetime")  # type: ignore[arg-type]
+
+    def test_modify_composition_adapter_capability_boundary_is_explicit(self) -> None:
+        capabilities = object()
+
+        class Module:
+            @staticmethod
+            def capabilities_for(_host):
+                return capabilities
+
+        class Host:
+            def _module(self, name: str):
+                self.requested = name
+                return Module()
+
+        host = Host()
+        self.assertIs(composition_adapters._capabilities(host), capabilities)
+        self.assertEqual(host.requested, "modify_composition")
+        runtime = object()
+        self.assertIs(composition_adapters._runtime(host, runtime), runtime)
 
 
 if __name__ == "__main__":

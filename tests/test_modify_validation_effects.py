@@ -1,12 +1,30 @@
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from nautical_core import modify_lifecycle, modify_ordinary
 
 from nautical_core.modify_validation_effects import AnchorValidationPorts, validate_anchor
+from nautical_core.modify_datetime_effects import (
+    DatetimeEffectPorts,
+    local_naive_to_utc,
+    safe_dt,
+    utc_to_local_naive,
+)
 
 
 class ModifyValidationEffectsTests(unittest.TestCase):
+    def test_datetime_effects_handle_invalid_values_and_truncate_microseconds(self) -> None:
+        ports = DatetimeEffectPorts(
+            parse_datetime=lambda value: None if value == "bad" else datetime(2026, 1, 1, 9, 0),
+            utc_to_local=lambda value: value.replace(tzinfo=None),
+            local_to_utc=lambda value: value.replace(tzinfo=timezone.utc),
+        )
+        self.assertIsNone(safe_dt(ports, "bad"))
+        expected = datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(local_naive_to_utc(ports, datetime(2026, 1, 1, 9, 0, 0, 123456)), expected)
+        self.assertEqual(utc_to_local_naive(ports, expected), datetime(2026, 1, 1, 9, 0))
+
     def test_transition_failure_is_rejected_without_mutating_candidate(self) -> None:
         services = modify_ordinary.OrdinaryModifyServices(
             field_changed=lambda old, new, field: old.get(field) != new.get(field),

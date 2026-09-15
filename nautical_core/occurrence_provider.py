@@ -312,8 +312,7 @@ def collect_after(
             if type(exc).__name__ == "AnchorFileOccurrenceExhausted":
                 raise
             raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
-            raise
-        except (LookupError, OSError) as exc:
+        except OSError as exc:
             raise OccurrenceProviderUnavailable(str(exc) or type(exc).__name__) from exc
         except (TypeError, ValueError) as exc:
             raise OccurrenceProviderInvalid(str(exc) or type(exc).__name__) from exc

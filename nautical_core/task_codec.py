@@ -9,14 +9,16 @@ import os
 import re
 import sys
 from collections.abc import MutableMapping
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 try:
     from .task_models import TaskDraft, TaskObservation
 except ImportError:  # standalone hook helper loading
     from task_models import TaskDraft as _StandaloneTaskDraft, TaskObservation as _StandaloneTaskObservation
-    TaskDraft = _StandaloneTaskDraft  # type: ignore[misc]
-    TaskObservation = _StandaloneTaskObservation  # type: ignore[misc]
+    # The standalone hook loader has no package-relative type identity; cast
+    # the runtime aliases explicitly instead of suppressing the assignment.
+    TaskDraft = cast(Any, _StandaloneTaskDraft)
+    TaskObservation = cast(Any, _StandaloneTaskObservation)
 
 
 TASK_CODEC_VERSION = 1

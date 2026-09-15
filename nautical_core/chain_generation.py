@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from collections import OrderedDict
 import json
 import uuid
-from typing import Any, Mapping, MutableMapping
+from typing import Any, MutableMapping
 
 from .scheduler_service import SchedulerService
 from .recurrence_context import RecurrenceContext

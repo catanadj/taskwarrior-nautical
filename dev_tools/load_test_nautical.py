@@ -18,9 +18,7 @@ import random
 import re
 import shutil
 import sqlite3
-import statistics
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -253,7 +251,6 @@ def main() -> int:
 
     random.seed(args.seed)
     tasks_total = max(1, int(args.tasks))
-    done_total = int(round(tasks_total * max(0.0, min(1.0, args.done_rate))))
 
     anchor_rate = max(0.0, min(1.0, args.anchor_rate))
     cp_rate = max(0.0, min(1.0, args.cp_rate))

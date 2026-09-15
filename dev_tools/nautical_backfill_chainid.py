@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, json, os, subprocess, sys
+import argparse, json, subprocess, sys
 from collections import defaultdict
 
 # ---------- Task helpers ------------------------------------------------------
@@ -495,4 +495,3 @@ if __name__ == "__main__":
     #   uda.chainID.type=string
     #   uda.chainID.label=ChainID
     main()
-

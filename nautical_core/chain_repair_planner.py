@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 
-from .chain_graph import ChainGraph
 from .chain_integrity_context import IntegrityContext
 from .chain_integrity_models import (
     FindingStatus,

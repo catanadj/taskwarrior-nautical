@@ -16,7 +16,7 @@ calendar boundaries and recurrence dates, not precision ephemeris work.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from math import radians, sin
 from typing import Final

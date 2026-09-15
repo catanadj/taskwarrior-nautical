@@ -14,7 +14,6 @@ from .occurrence_provider import OccurrenceBatch
 from .scheduler_cursor import OccurrenceCursor
 from .time_projection import ProjectionResult, TimeProjectionService
 from .task_models import NauticalTask, TaskObservation
-from .task_codec import DEFAULT_TASK_CODEC
 
 
 @dataclass(slots=True)

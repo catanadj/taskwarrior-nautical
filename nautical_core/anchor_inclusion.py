@@ -289,7 +289,6 @@ def next_occurrence_event_local(
 ) -> Occurrence | None:
     scheduler_omit = omit_dnf if scheduler_omit_dnf is ... else scheduler_omit_dnf
     expr_local = None
-    expr_omit_dnf = omit_dnf if dnf and _scheduler_engine(core).dnf_has_counted_random(dnf) else None
     if dnf:
         if inclusive and pick_occurrence_local is not None:
             expr_local = pick_occurrence_local(

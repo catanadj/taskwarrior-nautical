@@ -7,7 +7,7 @@ from functools import lru_cache
 import math
 from typing import Any
 
-from .moon_phase import PHASES, canonical_phase
+from .moon_phase import canonical_phase
 
 EVENT_NAMES = frozenset({"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"})
 ASTRONOMICAL_TIMES = EVENT_NAMES

@@ -325,10 +325,6 @@ def anchor_pick_occurrence_local(
             return core.to_local(_build_slot_datetime(candidate, tlist[0], core=core))
     except OccurrenceSearchExhausted:
         raise
-    except Exception:
-        if unavailable is not None:
-            raise unavailable
-        return None
     if unavailable is not None:
         raise unavailable
     return None

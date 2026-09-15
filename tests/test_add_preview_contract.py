@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from nautical_core import add_anchor_compute, add_anchor_preview, add_preview_composition
+from nautical_core import add_anchor_compute, add_anchor_preview, add_preview_composition, anchor_omit
 from nautical_core.occurrence_provider import Occurrence, OccurrenceBatch
 from nautical_core.scheduler_models import OccurrenceSearchExhausted
 
@@ -208,6 +208,19 @@ class AddAnchorComputeTests(unittest.TestCase):
                 ),
                 norm_t_mod=lambda _mods: [],
             )
+
+    def test_omit_calendar_loader_propagates_unexpected_failures(self) -> None:
+        class FailingCalendar:
+            @staticmethod
+            def active_business_calendar():
+                raise RuntimeError("calendar configuration failed")
+
+        core = SimpleNamespace(
+            _scheduler_api=SimpleNamespace(),
+            _import_sibling=lambda _name: FailingCalendar,
+        )
+        with self.assertRaisesRegex(RuntimeError, "calendar configuration failed"):
+            anchor_omit._scheduler_business_calendar(core)
 
     def test_anchor_build_preview_formats_events_and_respects_until(self):
         first = datetime(2026, 1, 1, 9, tzinfo=UTC)

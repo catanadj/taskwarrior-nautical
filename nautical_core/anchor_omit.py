@@ -22,10 +22,7 @@ def _scheduler_business_calendar(core: Any) -> Any:
     configured = getattr(core, "business_calendar", None)
     if configured is not None:
         return configured
-    try:
-        return core._import_sibling("business_calendar").active_business_calendar()
-    except Exception:
-        return None
+    return core._import_sibling("business_calendar").active_business_calendar()
 
 
 def _freeze_omit_value(value: Any) -> Any:

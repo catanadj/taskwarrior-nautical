@@ -35,9 +35,7 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
     else:
         import_sibling = deps.get("_import_sibling")
         if not callable(import_sibling):
-            import_sibling = getattr(module, "_import_sibling", None)
-        if not callable(import_sibling):
-            raise TypeError("cache_api.for_core requires a callable sibling-module loader")
+            raise TypeError("cache_api.for_core requires _import_sibling in its dependency snapshot")
     cache_dir_state: list[str | None] = [None]
     cache_state = CacheState(
         memory=deps["_CACHE_LOAD_MEM"],

@@ -403,17 +403,28 @@ def _next_after_term_impl(
     default_seed,
     seed_base=None,
     business_calendar=None,
+    *,
+    scheduler_expr: Any | None = None,
+    with_business_calendar: Callable[..., Any] | None = None,
+    next_after_factor: Callable[..., Any] | None = None,
+    factor_matches_on: Callable[..., Any] | None = None,
+    intersection_guard_steps: int | None = None,
 ):
-    next_atom = module._with_business_calendar(module.next_after_factor, business_calendar)
-    matches = module._with_business_calendar(module.factor_matches_on, business_calendar)
-    return module._scheduler_expr.next_after_term(
+    scheduler_expr = scheduler_expr or module._scheduler_expr
+    with_business_calendar = with_business_calendar or module._with_business_calendar
+    next_after_factor = next_after_factor or module.next_after_factor
+    factor_matches_on = factor_matches_on or module.factor_matches_on
+    intersection_guard_steps = intersection_guard_steps if intersection_guard_steps is not None else module.INTERSECTION_GUARD_STEPS
+    next_atom = with_business_calendar(next_after_factor, business_calendar)
+    matches = with_business_calendar(factor_matches_on, business_calendar)
+    return scheduler_expr.next_after_term(
         term,
         ref_d,
         default_seed,
         seed_base=seed_base,
         next_after_atom_with_mods=next_atom,
         atom_matches_on=matches,
-        intersection_guard_steps=module.INTERSECTION_GUARD_STEPS,
+        intersection_guard_steps=intersection_guard_steps,
     )
 
 
@@ -896,6 +907,11 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             default_seed,
             seed_base=seed_base,
             business_calendar=business_calendar,
+            scheduler_expr=scheduler_expr,
+            with_business_calendar=deps["_with_business_calendar"],
+            next_after_factor=next_after_factor,
+            factor_matches_on=factor_matches_on,
+            intersection_guard_steps=deps["INTERSECTION_GUARD_STEPS"],
         )
 
     def next_after_expr(

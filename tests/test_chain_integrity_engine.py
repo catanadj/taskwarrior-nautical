@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from nautical_core.chain_integrity_engine import ChainIntegrityEngine
+from nautical_core.chain_integrity_engine import ChainIntegrityEngine, IntegrityEngineResult
 from nautical_core.chain_integrity_application import IntegrityApplicationResult, IntegrityApplicationService
 from nautical_core.chain_integrity_context import (
     IntegrityContext,
@@ -478,3 +478,48 @@ class ChainIntegrityEngineTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             ChainIntegrityEngine(provider, configuration_fingerprint="cfg-hydrate", max_hydrated_chains=0)
+
+    def test_engine_apply_surfaces_durable_outbox_failure_before_mutation(self) -> None:
+        operation = IntegrityOperation(
+            "engine-outbox-op", RepairOperationKind.METADATA_REPAIR, "engine-outbox-chain",
+            "aaaaaaaa-0000-0000-0000-000000000950", (("snapshot_id", "engine-outbox-snapshot"),),
+            ("target remains present",), ("link is 2",), (("link", 2),),
+        )
+        second = IntegrityOperation(
+            "engine-outbox-op-2", RepairOperationKind.METADATA_REPAIR, "engine-outbox-chain",
+            "bbbbbbbb-0000-0000-0000-000000000951", (("snapshot_id", "engine-outbox-snapshot"),),
+            ("target remains present",), ("link is 3",), (("link", 3),),
+        )
+        plan = IntegrityRepairPlan(
+            "engine-outbox-plan", "engine-outbox-snapshot", "engine-outbox-chain", RepairSafety.SAFE,
+            "structural_batch", "durable failure", (operation, second), "cfg-engine-outbox",
+        )
+
+        class FailingRepository:
+            def enqueue_integrity(self, _envelope):
+                return type("Result", (), {"ok": False, "reason": "disk full"})()
+
+            def claim_integrity_batch(self, **_kwargs):
+                raise AssertionError("drain must not run after persistence failure")
+
+        class ForbiddenExecutor:
+            def repair_metadata(self, _request):
+                raise AssertionError("mutation must not run before durable persistence")
+
+        engine = ChainIntegrityEngine.lifecycle_only(configuration_fingerprint="cfg-engine-outbox")
+        result = engine.apply(
+            IntegrityEngineResult(
+                IntegrityReportStatus.REPAIRABLE,
+                snapshot=ChainSnapshot("engine-outbox-snapshot", SnapshotCoverage.CHAIN, "test", ()),
+                plans=(plan,),
+            ),
+            executor=ForbiddenExecutor(),
+            request_factory=lambda _operation: None,
+            outbox_repository=FailingRepository(),
+            owner="engine-test",
+            drain=False,
+        )
+        self.assertEqual(result.status, IntegrityReportStatus.MANUAL_REVIEW)
+        self.assertEqual(len(result.applications), 2)
+        self.assertTrue(all(item.kind is MutationOutcomeKind.MANUAL_REVIEW for item in result.applications))
+        self.assertTrue(all("disk full" in item.reason for item in result.applications))

@@ -52,9 +52,19 @@ class SchedulerModifierDependencies:
     moon_matches: Callable[..., Any]
 
 
-def _apply_day_offset_impl(module: Any, day, mods, business_calendar=None):
-    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
-    return module._schedule_utils.apply_day_offset(
+def _apply_day_offset_impl(
+    module: Any,
+    day,
+    mods,
+    business_calendar=None,
+    *,
+    calendar_api: Any | None = None,
+    schedule_utils: Any | None = None,
+):
+    calendar_api = calendar_api or module._business_calendar
+    schedule_utils = schedule_utils or module._schedule_utils
+    business_calendar = calendar_api.effective_business_calendar(business_calendar)
+    return schedule_utils.apply_day_offset(
         day,
         mods,
         business_calendar=business_calendar,
@@ -69,19 +79,39 @@ def _weeks_between(module: Any, d1, d2) -> int:
     return weeks_between(d1, d2)
 
 
-def _resolve_moon_phase_date(module: Any, phase: str, reference_day):
-    return module._astronomy.resolve_phase_date(
+def _resolve_moon_phase_date(
+    module: Any,
+    phase: str,
+    reference_day,
+    *,
+    astronomy: Any | None = None,
+    astronomy_config: Any | None = None,
+):
+    astronomy = astronomy or module._astronomy
+    if astronomy_config is None:
+        astronomy_config = module.ASTRONOMY_CONFIG
+    return astronomy.resolve_phase_date(
         phase,
         reference_day,
-        config=module.ASTRONOMY_CONFIG,
+        config=astronomy_config,
     )
 
 
-def _moon_phase_matches_date(module: Any, phase: str, day) -> bool:
-    return module._astronomy.phase_matches_date(
+def _moon_phase_matches_date(
+    module: Any,
+    phase: str,
+    day,
+    *,
+    astronomy: Any | None = None,
+    astronomy_config: Any | None = None,
+) -> bool:
+    astronomy = astronomy or module._astronomy
+    if astronomy_config is None:
+        astronomy_config = module.ASTRONOMY_CONFIG
+    return astronomy.phase_matches_date(
         phase,
         day,
-        config=module.ASTRONOMY_CONFIG,
+        config=astronomy_config,
     )
 
 
@@ -670,7 +700,14 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         )
 
     def apply_day_offset(day, mods, business_calendar=None):
-        return _apply_day_offset_impl(module, day, mods, business_calendar=business_calendar)
+        return _apply_day_offset_impl(
+            module,
+            day,
+            mods,
+            business_calendar=business_calendar,
+            calendar_api=deps["_business_calendar"],
+            schedule_utils=deps["_schedule_utils"],
+        )
 
     def interval_allowed_for_atom(typ, ival, seed, cand, spec=""):
         return _interval_allowed_for_atom(module, typ, ival, seed, cand, spec=spec)
@@ -743,10 +780,22 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
         return _weeks_between(module, d1, d2)
 
     def resolve_moon_phase_date(phase: str, reference_day):
-        return _resolve_moon_phase_date(module, phase, reference_day)
+        return _resolve_moon_phase_date(
+            module,
+            phase,
+            reference_day,
+            astronomy=deps["_astronomy"],
+            astronomy_config=deps["ASTRONOMY_CONFIG"],
+        )
 
     def moon_phase_matches_date(phase: str, day) -> bool:
-        return _moon_phase_matches_date(module, phase, day)
+        return _moon_phase_matches_date(
+            module,
+            phase,
+            day,
+            astronomy=deps["_astronomy"],
+            astronomy_config=deps["ASTRONOMY_CONFIG"],
+        )
 
     return ApiBinding.from_kwargs(
         _expand_weekly_cached_impl=expand_weekly_cached_impl,

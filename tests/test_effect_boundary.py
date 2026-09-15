@@ -13,10 +13,12 @@ from unittest.mock import patch
 from nautical_core.integration_models import (
     GuardTimestamp,
     GuardTimestampField,
+    ChainDisablePayload,
     MutationGuard,
     MutationOperation,
     MutationOutcome,
     MutationOutcomeKind,
+    MutationRequest,
     MutationPostcondition,
     IntegrationContractError,
 )
@@ -52,6 +54,40 @@ FORBIDDEN_IMPORTS = {
 
 
 class EffectBoundaryTests(unittest.TestCase):
+    def test_read_only_mutation_gateway_rejects_before_dispatch(self) -> None:
+        task_uuid = "11111111-1111-4111-8111-111111111111"
+        guard = MutationGuard(
+            task_uuid=task_uuid,
+            status="pending",
+            chain_id="chain",
+            link=1,
+            recurrence_identity="identity",
+            timestamps=(GuardTimestamp(GuardTimestampField.MODIFIED, "20260825T120000Z"),),
+            expected_mutation_epoch=0,
+        )
+        request = MutationRequest(
+            MutationOperation.CHAIN_DISABLE,
+            guard,
+            ChainDisablePayload(task_uuid),
+        )
+
+        class Client:
+            def execute(self, *_args, **_kwargs):
+                raise AssertionError("read-only mutation must not dispatch")
+
+        service = TaskwarriorMutationService(
+            SimpleNamespace(
+                context=SimpleNamespace(mutation_capable=False),
+                repository=SimpleNamespace(),
+                client=Client(),
+                mutation_epoch=0,
+                record_mutation=lambda **_kwargs: 0,
+            )
+        )
+        outcome = service.apply(request)
+        self.assertIs(outcome.kind, MutationOutcomeKind.REJECTED)
+        self.assertIn("mutation-capable", outcome.reason)
+
     def test_natural_language_anchor_descriptions_are_stable(self) -> None:
         import nautical_core as core
 

@@ -66,6 +66,7 @@ class _TaskClient(Protocol):
 
 
 class _UnitOfWork(Protocol):
+    context: Any
     repository: TaskReadRepository
     client: TaskwarriorClient
     mutation_epoch: int
@@ -482,6 +483,12 @@ class TaskwarriorMutationService(TaskwarriorMutationPort):
     def apply(self, request: MutationRequest) -> MutationOutcome:
         if not isinstance(request, MutationRequest):
             raise TypeError("mutation service requires a MutationRequest")
+        if not self._uow.context.mutation_capable:
+            return self._outcome(
+                request,
+                MutationOutcomeKind.REJECTED,
+                reason="mutation gateway requires a mutation-capable unit of work",
+            )
         handlers: dict[MutationOperation, Callable[[MutationRequest], MutationOutcome]] = {
             MutationOperation.CHILD_IMPORT: self.import_child,
             MutationOperation.CHILD_COMPENSATION: self.compensate_child,

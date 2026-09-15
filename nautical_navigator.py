@@ -702,10 +702,7 @@ def _reset_navigator_runtime_state() -> None:
 
 def _show_config_drift_warning() -> bool:
     """Warn before forecasts when the loaded config no longer matches disk."""
-    try:
-        drift = core.configuration_drift()
-    except Exception:
-        return False
+    drift = core.configuration_drift()
     if not drift.get("changed"):
         return False
     _reset_navigator_runtime_state()

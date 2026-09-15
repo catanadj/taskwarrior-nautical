@@ -58,6 +58,12 @@ class NavigatorAnalysisTests(unittest.TestCase):
 
         self.assertEqual(tasks, [])
 
+    def test_configuration_drift_failures_are_not_silently_ignored(self) -> None:
+        failure = RuntimeError("configuration probe failed")
+        with patch.object(navigator.core, "configuration_drift", side_effect=failure):
+            with self.assertRaisesRegex(RuntimeError, "configuration probe failed"):
+                navigator._show_config_drift_warning()
+
 
 if __name__ == "__main__":
     unittest.main()

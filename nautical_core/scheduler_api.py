@@ -436,39 +436,55 @@ def _next_after_expr_impl(
     seed_base=None,
     date_is_excluded=None,
     business_calendar=None,
+    *,
+    scheduler_expr: Any | None = None,
+    business_calendar_api: Any | None = None,
+    with_business_calendar: Callable[..., Any] | None = None,
+    next_for_and: Callable[..., Any] | None = None,
+    term_candidates_in_month: Callable[..., Any] | None = None,
+    factor_matches_on: Callable[..., Any] | None = None,
+    next_after_term: Callable[..., Any] | None = None,
+    active_mod_keys: Callable[..., Any] | None = None,
+    expand_weekly_cached: Callable[..., Any] | None = None,
+    term_rand_info: Callable[..., Any] | None = None,
+    atype: Callable[..., Any] | None = None,
+    months_since: Callable[..., Any] | None = None,
+    random_identity: Callable[..., Any] | None = None,
+    random_pick_indices: Callable[..., Any] | None = None,
 ):
-    business_calendar = module._business_calendar.effective_business_calendar(business_calendar)
-    next_for_and_fn = module._with_business_calendar(module._next_for_and, business_calendar)
-    term_candidates = module._with_business_calendar(
-        module._term_candidates_in_month,
-        business_calendar,
-    )
-    matches = module._with_business_calendar(module.factor_matches_on, business_calendar)
-    next_term = module._with_business_calendar(
-        lambda term, ref_d, default, seed_base=None, business_calendar=None: _next_after_term_impl(
-            module,
-            term,
-            ref_d,
-            default,
-            seed_base=seed_base,
-            business_calendar=business_calendar,
-        ),
-        business_calendar,
-    )
-    return module._scheduler_expr.next_after_expr(
+    scheduler_expr = scheduler_expr or module._scheduler_expr
+    business_calendar_api = business_calendar_api or module._business_calendar
+    with_business_calendar = with_business_calendar or module._with_business_calendar
+    next_for_and = next_for_and or module._next_for_and
+    term_candidates_in_month = term_candidates_in_month or module._term_candidates_in_month
+    factor_matches_on = factor_matches_on or module.factor_matches_on
+    next_after_term = next_after_term or module.next_after_term
+    active_mod_keys = active_mod_keys or module._active_mod_keys
+    expand_weekly_cached = expand_weekly_cached or module.expand_weekly_cached
+    term_rand_info = term_rand_info or module._term_rand_info
+    atype = atype or module._atype
+    months_since = months_since or module._months_since
+    random_identity = random_identity or module._random_identity
+    random_pick_indices = random_pick_indices or module._random_pick_indices
+    business_calendar = business_calendar_api.effective_business_calendar(business_calendar)
+    next_for_and_fn = with_business_calendar(next_for_and, business_calendar)
+    term_candidates = with_business_calendar(term_candidates_in_month, business_calendar)
+    matches = with_business_calendar(factor_matches_on, business_calendar)
+    next_term = with_business_calendar(next_after_term, business_calendar)
+    return scheduler_expr.next_after_expr(
         dnf,
         after_date,
         default_seed=default_seed,
         seed_base=seed_base,
-        active_mod_keys=module._active_mod_keys,
-        expand_weekly_cached=module.expand_weekly_cached,
-        term_rand_info=module._term_rand_info,
-        atype=module._atype,
+        active_mod_keys=active_mod_keys,
+        expand_weekly_cached=expand_weekly_cached,
+        term_rand_info=term_rand_info,
+        atype=atype,
         next_for_and=next_for_and_fn,
-        months_since=module._months_since,
+        months_since=months_since,
         term_candidates_in_month=term_candidates,
-        random_identity=module._random_identity,
-        random_pick_indices=module._random_pick_indices,
+        random_identity=random_identity,
+        random_pick_indices=random_pick_indices,
         atom_matches_on=matches,
         next_after_term=next_term,
         date_is_excluded=date_is_excluded,
@@ -930,6 +946,20 @@ def for_core(module: Any = None, *, namespace: dict[str, Any] | None = None, con
             seed_base=seed_base,
             date_is_excluded=date_is_excluded,
             business_calendar=business_calendar,
+            scheduler_expr=scheduler_expr,
+            business_calendar_api=deps["_business_calendar"],
+            with_business_calendar=deps["_with_business_calendar"],
+            next_for_and=next_for_and,
+            term_candidates_in_month=term_candidates_in_month,
+            factor_matches_on=factor_matches_on,
+            next_after_term=next_after_term,
+            active_mod_keys=deps["_active_mod_keys"],
+            expand_weekly_cached=expand_weekly_cached_impl,
+            term_rand_info=term_rand_info,
+            atype=deps["_atype"],
+            months_since=deps["_months_since"],
+            random_identity=random_identity,
+            random_pick_indices=random_pick_indices,
         )
 
     def weeks_between(d1, d2) -> int:

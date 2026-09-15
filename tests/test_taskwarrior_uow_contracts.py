@@ -27,6 +27,29 @@ def make_uow(taskdata: str | Path, *, access: IntegrationAccess, budget: int = 8
 
 
 class TaskwarriorUnitOfWorkContractTests(unittest.TestCase):
+    def test_command_budget_is_advisory_and_reported_once(self) -> None:
+        events = []
+
+        class Diagnostics:
+            def emit(self, event) -> None:
+                events.append(event)
+
+        with TemporaryDirectory() as directory:
+            context = IntegrationContext(
+                Path(directory), "test", (sys.executable,),
+                ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
+                timezone.utc, Diagnostics(), SystemClock(), "uow-budget-test", 1,
+                IntegrationAccess.READ_ONLY,
+            )
+            uow = TaskwarriorUnitOfWork.create(context)
+            first = uow.client.execute(("-c", "print('one')"), purpose="read one", timeout=1.0)
+            second = uow.client.execute(("-c", "print('two')"), purpose="read two", timeout=1.0)
+
+        self.assertTrue(first.ok and second.ok)
+        self.assertEqual((uow.commands.calls, uow.commands.attempts), (2, 2))
+        self.assertTrue(uow.commands.budget_exceeded)
+        self.assertEqual([event.stage for event in events], ["command_budget"])
+
     def test_reads_are_scoped_and_invalidated_by_mutation_epoch(self) -> None:
         with TemporaryDirectory() as directory:
             uow = make_uow(directory, access=IntegrationAccess.MUTATION, budget=3)

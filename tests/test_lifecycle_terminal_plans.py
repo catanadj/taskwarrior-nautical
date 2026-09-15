@@ -598,6 +598,80 @@ class LifecycleTerminalPlanTests(unittest.TestCase):
              "00000000", "2026-08-17T09:00:00Z"),
         )
 
+    def test_reconcile_planning_uses_and_releases_task_business_calendar(self) -> None:
+        from contextlib import contextmanager
+        from nautical_core.chain_integrity_lifecycle import plan_recovery_decision
+        from nautical_core.chain_generation import ChainGenerationService
+
+        class CalendarCore:
+            active = False
+            entered = []
+
+            @classmethod
+            def use_task_business_calendar(cls, task):
+                if task.get("bc") == "missing":
+                    raise ValueError("Unknown business calendar 'missing'")
+
+                @contextmanager
+                def context():
+                    cls.entered.append(task.get("bc", "default"))
+                    cls.active = True
+                    try:
+                        yield
+                    finally:
+                        cls.active = False
+
+                return context()
+
+            @staticmethod
+            def coerce_int(value, default=0):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+        class Generation(ChainGenerationService):
+            def __init__(self):
+                super().__init__(CalendarCore)
+
+            def parse_datetime(self, _value):
+                return None, None
+
+            def compute_cp_child_due(self, _parent):
+                if not CalendarCore.active:
+                    raise AssertionError("reconcile computed outside the task calendar")
+                return "20260102T090000Z", {"target_field": "due"}
+
+            def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, _kind, _cpmax, _until):
+                values = parent.observation.to_mapping()
+                return task_draft({
+                    "uuid": "22222222-0000-4000-8000-000000000002",
+                    "description": "calendar child", "status": "pending", "chain": "on",
+                    "chainID": values["chainID"], "link": next_link, "prevLink": parent_short,
+                    "cp": "1d", child_field: child_due,
+                })
+
+        parent = task_snapshot({
+            "uuid": "11111111-0000-4000-8000-000000000001", "status": "completed",
+            "chain": "on", "chainID": "11111111", "link": 1, "cp": "1d", "bc": "work",
+        })
+        generation = Generation()
+        plan = plan_recovery_decision(
+            parent.observation, existing_children=(), hook=None, generation=generation
+        )
+        self.assertIsInstance(plan, RecoveryPlanResult)
+        self.assertEqual(CalendarCore.entered, ["work"])
+        self.assertFalse(CalendarCore.active)
+
+        invalid = plan_recovery_decision(
+            task_snapshot({**parent.observation.to_mapping(), "bc": "missing"}).observation,
+            existing_children=(), hook=None, generation=generation,
+        )
+        self.assertIsInstance(invalid, RecoveryRefusal)
+        assert isinstance(invalid, RecoveryRefusal)
+        self.assertIn("invalid business calendar", invalid.reason)
+        self.assertIn("missing", invalid.reason)
+
     def test_expiration_candidate_uses_scheduled_recurrence_basis(self) -> None:
         from datetime import datetime, timezone
 

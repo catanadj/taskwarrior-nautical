@@ -65,6 +65,33 @@ class OperatorProcessContractTests(unittest.TestCase):
         )
         self.assertTrue(evidence.retryable)
 
+    def test_taskwarrior_client_retries_only_transient_failures(self) -> None:
+        sleeps = []
+        busy = TaskwarriorClient((sys.executable,), sleeper=sleeps.append).execute(
+            ("-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(1)"),
+            purpose="busy export", timeout=2.0, attempts=3, retry_delay=0.01,
+        )
+        self.assertEqual(busy.kind, CommandFailureKind.BUSY)
+        self.assertEqual(busy.attempt, 3)
+        self.assertEqual(sleeps, [0.01, 0.02])
+
+        sleeps.clear()
+        rejected = TaskwarriorClient((sys.executable,), sleeper=sleeps.append).execute(
+            ("-c", "import sys; print('invalid filter', file=sys.stderr); sys.exit(2)"),
+            purpose="rejected export", timeout=2.0, attempts=3, retry_delay=0.01,
+        )
+        self.assertEqual(rejected.kind, CommandFailureKind.REJECTED)
+        self.assertEqual(rejected.attempt, 1)
+        self.assertEqual(sleeps, [])
+
+        timed_out = TaskwarriorClient((sys.executable,)).execute(
+            ("-c", "import time; time.sleep(2)"),
+            purpose="bounded export", timeout=0.02, attempts=1,
+        )
+        self.assertEqual(timed_out.kind, CommandFailureKind.TIMEOUT)
+        self.assertEqual(timed_out.returncode, 124)
+        self.assertLess(timed_out.duration, 1.0)
+
     def test_timeout_terminates_descendant_process_group_within_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             ready = Path(directory) / "ready"

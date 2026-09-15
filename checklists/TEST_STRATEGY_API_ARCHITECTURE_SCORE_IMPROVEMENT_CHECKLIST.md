@@ -386,7 +386,18 @@ open; the last recorded scan predates these direct tests.
 
 ## Work Package 4 — Decompose the Golden Test Monolith
 
-**Status: INCOMPLETE — MIGRATION CLASSIFICATION AND DOMAIN INVENTORY REMAIN.**
+**Status: COMPLETE.** Direct-contract migrations, retained-acceptance
+classification, exclusive domain inventory, and verification gates are complete.
+The current registry integrity contract asserts 416 top-level golden definitions,
+404 registered cases, 12 explicitly retired helpers, 464 migrated direct-contract
+names, three removed ineffective definitions, and no duplicate registrations.
+Fresh gates on 2026-09-14 passed standard unittest discovery (1,219 tests, 3
+optional skips) and the golden runner in normal and seeded-shuffle order (404/404
+each, seed `20260811`). These passing gates prove the current suites execute; they
+are paired with the exclusive, digest-pinned case classification and measured
+per-domain inventory in `docs/design/GOLDEN_REGISTRY_INVENTORY.md`. Historical
+checkpoints below are not current measurements.
+
 Registry integrity and inventory are maintained. Three hundred twenty-eight golden
 functions across recurrence, cache, hook, chain-integrity, lifecycle, operator,
 query, Navigator-view, CP scheduling, astronomy, yearly-ordinal, file-backed,
@@ -484,17 +495,11 @@ calculation and rollover, Navigator business-calendar and symbolic-time
 projection, repeated-hour ordering, hook lifecycle-result retention, modify
 schedule progress/cap/provider reuse, recovery fail-closed evidence, and typed
 anchor-file metadata/context/cache behavior. Focused migrated and adjacent
-suite checks pass 87/87. Full unittest discovery passes 1156 tests (3 optional
-skips); the acceptance runner passes 467/467 in both normal and seeded-shuffle
-order (`20260811`).
-Shared subprocess/Taskdata,
-recurrence-file, and lifecycle execution fixtures live under `tests/support/`.
-The 467 registered golden
-scenarios still need evidence-backed direct-contract
-versus acceptance classification and per-domain count/runtime inventory. The
-earlier textual marker counts are stale and overlapping; recompute them before
-using them as a current inventory. They are triage signals, not case-level
-verdicts.
+suite checks passed 87/87 at that historical checkpoint. Shared
+subprocess/Taskdata, recurrence-file, and lifecycle execution fixtures live
+under `tests/support/`. This migration recap records an earlier checkpoint;
+the final 1,219/404 gates and completed domain inventory are recorded at the
+start of this section and in the golden inventory.
 
 **Files:**
 
@@ -520,20 +525,17 @@ verdicts.
   recurrence files, and lifecycle execution.
 - [x] Keep task builders and clocks local where the fixtures have distinct
   contracts; do not force unrelated shapes into a generic shared helper.
-- [ ] Classify the remaining golden scenarios by direct-contract versus
-  acceptance need. Nineteen provider, evaluator, and cross-consumer
-  contracts have been moved to direct owner suites, with one duplicated broad
-  characterization retired; see
-  `docs/design/GOLDEN_REGISTRY_INVENTORY.md` for individual evidence. The
-  remaining scenarios still require case-level decisions. Existing parser validation/front-end/atom,
-  scheduler/occurrence, cache, on-add route, lifecycle/operator, and
-  backup/restore suites are evidence sources, not automatic domain completion.
+- [x] Classify the remaining golden scenarios by direct-contract versus
+  acceptance need. Every retained case is assigned exactly once to one of
+  eight acceptance domains, with counts and case-name digests enforced by
+  `tests/test_golden_registry_integrity.py`. Direct contracts and retired
+  characterizations remain separately allowlisted.
 - [x] Preserve migrated tests' deterministic inputs and expected outcomes. Replace
   the custom `expect(...)` helper with the corresponding `unittest.TestCase`
   assertion.
 - [x] Remove migrated functions from `TESTS`/`DEEP_TESTS` immediately so CI does
   not execute duplicate tests.
-- [ ] Keep only scenarios with an evidence-backed process, installed-layout,
+- [x] Keep only scenarios with an evidence-backed process, installed-layout,
   cross-process, Taskwarrior, or long-running compatibility boundary in the
   golden runner; classify every remaining case before the acceptance-only
   cutover.
@@ -585,9 +587,8 @@ verdicts.
   `tests/test_occurrence_provider_contracts.py`. Retain hook, cross-provider,
   installed-layout, and Taskwarrior-facing acceptance coverage in golden.
 - [x] Re-run complete unittest, normal golden, seeded-shuffle golden, and
-  compilation gates after the latest file/provider migration batches. Whole-tree
-  `git diff --check` remains blocked by trailing whitespace in unrelated
-  pre-existing hunks of the already-dirty golden file.
+  compilation gates after the latest file/provider migration batches. Current
+  full unittest and both golden gates pass; `git diff --check` is clean.
 - [x] Migrate the evaluator-versus-chain-generation time-form parity matrix to
   `tests/recurrence/test_scheduler_cross_path_conformance.py`; initialize the
   lazy timezone configuration before capturing the evaluator context.
@@ -623,9 +624,22 @@ verdicts.
   to structured failure boundary tests.
 - [x] Move lazy panel-colour manifest inclusion and removed legacy exit-flow
   ownership checks into direct architecture contracts.
+- [x] Move the final owner-level candidates from this pass into direct suites:
+  UOW command-budget behavior, hook deletion routing, Navigator terminal/scale
+  projections, cache location selection, Taskwarrior retry classification,
+  renderer layout/fallback policy, completion-finalize analytics, outbox
+  connection/session cleanup, repository timing summaries, modify lifecycle
+  promotion, performance-manifest coverage, chain-generation adapters and
+  identity guards, CSV anchor-source metadata, exit-probe conservatism, and
+  scoped business-calendar policy. Remove their golden copies and record them
+  in the migration allowlist.
 - [x] Add a registry-integrity check proving every function left in the golden
   file is registered exactly once.
-- [ ] Record per-domain unit count, golden count, runtime, and any intentionally
+- [x] Re-run complete unittest, normal golden, and seeded-shuffle gates after
+  the latest migrations: 1,219 unittest tests (3 optional skips), golden
+  404/404 in normal and seeded order (seed `20260811`). `git diff --check`
+  passes.
+- [x] Record per-domain unit count, golden count, runtime, and intentionally
   retained golden scenarios.
 
 ```bash

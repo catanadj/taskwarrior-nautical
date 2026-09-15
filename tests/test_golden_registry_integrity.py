@@ -1,14 +1,67 @@
 """Integrity checks for the developer golden-test registry.
 
-These checks verify the remaining runner registry and the explicit allowlist
-for direct-contract tests migrated out of the golden runner.
+These checks verify golden registration, migration allowlists, and the reviewed
+exclusive acceptance-domain inventory.
 """
 
+import hashlib
 import importlib
 import unittest
 
 
 GOLDEN_MODULE = "dev_tools.nautical_golden_tests"
+GOLDEN_ACCEPTANCE_DOMAIN_MARKERS = (
+    (
+        "lifecycle and durable mutation",
+        ("lifecycle", "outbox", "mutation_service", "child_import", "integration_contract", "staged_plan", "carry_field"),
+    ),
+    ("reconcile and recovery", ("reconcile", "backfill")),
+    (
+        "install and deployment",
+        ("installer", "runtime_cleanup", "retained_release", "deploy", "ops_templates", "layout", "package_core"),
+    ),
+    ("operator/query/Doctor/Navigator", ("operator", "doctor", "query", "queue", "health_check", "navigator")),
+    ("performance and soak", ("perf", "benchmark", "soak", "replay", "mixed_recurrence_loop", "load_benchmark")),
+    ("configuration and bootstrap", ("config", "taskdata", "core_import", "protocol", "unsafe", "business_calendar_toml")),
+    (
+        "storage and filesystem safety",
+        ("backup", "restore", "safe_lock", "diag_log", "cache_dir"),
+    ),
+)
+EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS = {
+    "configuration and bootstrap": (
+        37,
+        "3c1bb1e0bc2694892e513013cf545adc5e64017fc8659a6b2444e768398b3d4d",
+    ),
+    "install and deployment": (
+        15,
+        "a50c35653dfee14b2039017f576824e9f9bc24103d475290190f6fef7ff0b08e",
+    ),
+    "lifecycle and durable mutation": (
+        37,
+        "e1857568f2b893c5b16595baf8b474f360fbeb73de098cf7f052435c5c5c248e",
+    ),
+    "operator/query/Doctor/Navigator": (
+        30,
+        "ba0503eb0c690f2aad010ead902f8db1e7c680aeb9a83567992b4cf13542751e",
+    ),
+    "performance and soak": (
+        7,
+        "076670216dd821c97bb2513b9a81f837a7b86b485ebd296a7b4adbc314b3ed56",
+    ),
+    "reconcile and recovery": (
+        26,
+        "cb19880068ed0fe952886429d5e47c53516d9cffa740e4a1bbc6456c23af5568",
+    ),
+    "recurrence and hook integration": (
+        242,
+        "0c85656d7efb510d04bb3dac7e7928cd9479bf67cca7c3ee5872fb359fda854f",
+    ),
+    "storage and filesystem safety": (
+        10,
+        "dbd3c770ebd209c562a7acddbfedf4812b3705836f72c862045052b4f676653a",
+    ),
+}
 RETIRED_CHARACTERIZATION_TESTS = frozenset(
     {
         "test_reconcile_candidate_discovery_is_narrow_and_deterministic",
@@ -29,6 +82,7 @@ REMOVED_INEFFECTIVE_TESTS = frozenset(
     {
         "test_hook_run_task_falls_back_when_core_load_fails",
         "test_on_add_run_task_falls_back_when_core_load_fails",
+        "test_performance_large_expressions",
     }
 )
 MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
@@ -44,6 +98,16 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_moon_phase_intersection_fails_closed_without_synthetic_date",
         "test_omit_scheduler_failures_do_not_fail_open",
         "test_ui_live_renderer_reveals_timeline_without_highlight",
+        "test_ui_live_renderer_reveals_cumulative_row_frames",
+        "test_ui_live_renderer_reveals_multiline_values_progressively",
+        "test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels",
+        "test_ui_live_mid_animation_failure_settles_without_static_duplicate",
+        "test_ui_live_oversized_panel_settles_without_starting_animation",
+        "test_cache_load_quarantines_corrupt_entries_and_gc_removes_them",
+        "test_compiled_schedule_is_canonical_and_reusable",
+        "test_weekday_weekend_single_time",
+        "test_hint_cache_keys_include_semantic_fingerprint",
+        "test_core_domain_configuration_validation_fails_closed",
         "test_completion_parent_guard_uses_persisted_terminal_timestamp",
         "test_taskwarrior_client_preserves_evidence_and_redacts_observation",
         "test_modify_lifecycle_activation_requires_complete_root_identity",
@@ -470,6 +534,23 @@ MIGRATED_DIRECT_CONTRACT_TESTS = frozenset(
         "test_scheduler_generated_recurrence_matrix_is_monotonic_and_deterministic",
         "test_scheduler_parity_harness_compares_legacy_callback_only_in_tests",
         "test_scheduler_parity_matrix_covers_context_sensitive_rules",
+        "test_taskwarrior_uow_observes_budget_without_blocking_commands",
+        "test_taskwarrior_client_retries_only_transient_failures",
+        "test_cache_location_selection_covers_install_layouts",
+        "test_ui_live_panel_has_nautical_branding_without_changing_static_panels",
+        "test_on_modify_completion_finalize_skips_analytics_when_hidden",
+        "test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary",
+        "test_reconcile_export_diagnostics_include_elapsed_time",
+        "test_modify_lifecycle_routes_and_promotes_new_nautical_tasks",
+        "test_chain_generation_hook_adapter_does_not_capture_modify_helpers",
+        "test_perf_budget_config_covers_cache_io_checks",
+        "test_included_provider_preserves_anchor_file_source_description",
+        "test_exit_probe_is_conservative_across_queue_states",
+        "test_reconcile_plan_uses_task_business_calendar_context",
+        "test_chain_generation_rejects_missing_chain_id",
+        "test_hook_engine_reports_pending_nautical_delete_without_spawning",
+        "test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe",
+        "test_navigator_shared_graph_scales_to_large_chain",
     }
 )
 
@@ -526,6 +607,7 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
         }
         self.assertFalse(REMOVED_INEFFECTIVE_TESTS & registered)
         self.assertFalse(REMOVED_INEFFECTIVE_TESTS & top_level)
+        self.assertEqual(len(REMOVED_INEFFECTIVE_TESTS), 3)
 
     def test_registry_inventory_counts_match_documented_snapshot(self):
         registered = [*self.golden.TESTS, *self.golden.DEEP_TESTS]
@@ -534,10 +616,35 @@ class GoldenRegistryIntegrityTests(unittest.TestCase):
             for name, value in vars(self.golden).items()
             if name.startswith("test_") and callable(value)
         ]
-        self.assertEqual(len(top_level), 444)
-        self.assertEqual(len(registered), 432)
+        self.assertEqual(len(top_level), 416)
+        self.assertEqual(len(registered), 404)
         self.assertEqual(len(RETIRED_CHARACTERIZATION_TESTS), 12)
-        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 437)
+        self.assertEqual(len(MIGRATED_DIRECT_CONTRACT_TESTS), 464)
+
+    def test_retained_cases_have_a_stable_exclusive_acceptance_inventory(self):
+        registered = [fn.__name__ for fn in (*self.golden.TESTS, *self.golden.DEEP_TESTS)]
+        domains = {name: [] for name in EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS}
+        for name in registered:
+            lowered = name.lower()
+            for domain, markers in GOLDEN_ACCEPTANCE_DOMAIN_MARKERS:
+                if any(marker in lowered for marker in markers):
+                    domains[domain].append(name)
+                    break
+            else:
+                domains["recurrence and hook integration"].append(name)
+
+        self.assertEqual(
+            set(domains), set(EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS),
+            "acceptance domain definitions and expected inventory diverged",
+        )
+        actual = {
+            domain: (
+                len(names),
+                hashlib.sha256("\n".join(sorted(names)).encode("utf-8")).hexdigest(),
+            )
+            for domain, names in domains.items()
+        }
+        self.assertEqual(actual, EXPECTED_GOLDEN_ACCEPTANCE_DOMAINS)
 
 
 if __name__ == "__main__":

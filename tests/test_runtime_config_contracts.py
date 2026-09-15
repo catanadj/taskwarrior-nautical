@@ -1,12 +1,44 @@
 """Direct contracts for effective runtime configuration snapshots."""
 
 import unittest
+from unittest.mock import patch
 
 import nautical_core as core
 from nautical_core import core_config
 
 
 class RuntimeConfigContracts(unittest.TestCase):
+    def test_domain_validation_fails_closed_for_astronomy_presets_and_calendars(self) -> None:
+        with patch.object(
+            core._astronomy,
+            "validate_configuration",
+            side_effect=ValueError("latitude must be within range"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "latitude"):
+                core.validate_scheduling_configuration()
+
+        with (
+            patch.object(core, "ANCHOR_PRESETS", {"broken": "w:not-a-day"}),
+            patch.object(core._astronomy, "validate_configuration", return_value=None),
+            patch.object(core, "resolve_anchor_presets", return_value="w:not-a-day"),
+            patch.object(core, "configured_business_calendars", return_value={}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "weekly"):
+                core.validate_scheduling_configuration()
+
+        with (
+            patch.object(core, "ANCHOR_PRESETS", {}),
+            patch.object(core, "OMIT_PRESETS", {}),
+            patch.object(core._astronomy, "validate_configuration", return_value=None),
+            patch.object(
+                core,
+                "configured_business_calendars",
+                side_effect=ValueError("business_calendar.work.anchor is invalid"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "business_calendar.work.anchor"):
+                core.validate_scheduling_configuration()
+
     def test_effective_snapshot_is_provenanced_and_isolated(self) -> None:
         snapshot = core.effective_config_snapshot()
         values = snapshot.get("values")

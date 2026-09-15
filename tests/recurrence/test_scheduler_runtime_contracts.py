@@ -40,6 +40,52 @@ def _evaluator_for_task(values: dict[str, str], *, zone=timezone.utc, astronomy_
 
 
 class SchedulerRuntimeContractTests(unittest.TestCase):
+    def test_weekday_and_weekend_time_alternatives_stay_on_their_matching_days(self) -> None:
+        zone = timezone.utc
+        observation = DEFAULT_TASK_CODEC.decode_row(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000511",
+                "status": "pending",
+                "chainID": "weekday-weekend",
+                "link": 1,
+                "anchor": "w:wd@t=09:00 | w:we@t=11:00",
+            },
+            source_query="test:weekday-weekend",
+        )
+        service = SchedulerService.from_observation(
+            observation,
+            context=RecurrenceContext(chain_id="weekday-weekend", timezone=zone),
+        )
+        result = service.collect_request(
+            OccurrenceRangeRequest(
+                OccurrenceCursor.strict_after(
+                    datetime(2026, 1, 4, 23, 59, 59, 999999, tzinfo=zone),
+                    timezone=zone,
+                ),
+                end_local=datetime(2026, 1, 12, 23, 59, 59, 999999, tzinfo=zone),
+                limit=32,
+            )
+        )
+
+        projected = [
+            (item.local_datetime.date().isoformat(), item.local_datetime.hour, item.local_datetime.minute)
+            for item in result.occurrences
+        ]
+        self.assertEqual(
+            projected,
+            [
+                ("2026-01-05", 9, 0),
+                ("2026-01-06", 9, 0),
+                ("2026-01-07", 9, 0),
+                ("2026-01-08", 9, 0),
+                ("2026-01-09", 9, 0),
+                ("2026-01-10", 11, 0),
+                ("2026-01-11", 11, 0),
+                ("2026-01-12", 9, 0),
+            ],
+        )
+        self.assertIsNone(result.terminal)
+
     def test_last_weekday_selector_advances_through_friday_occurrences(self) -> None:
         dnf = core.validate_anchor_expr_strict("m:last-fri")
         cursor = date(2026, 1, 1)

@@ -121,6 +121,19 @@ class ChainGenerationContractTests(unittest.TestCase):
         self.assertEqual(due2, datetime(2026, 1, 4, 9, tzinfo=timezone.utc))
         self.assertEqual(metadata2["cp_sequence_step"], 2)
 
+    def test_hook_adapter_uses_shared_generation_service_without_legacy_helpers(self) -> None:
+        class Hook:
+            core = _Core()
+
+            @staticmethod
+            def legacy_compute_cp_child_due(_parent):
+                raise AssertionError("modify helper must not be captured")
+
+        service = ChainGenerationService.from_hook(Hook())
+        due, metadata = service.compute_cp_child_due(_task(status="pending"))
+        self.assertEqual(due, datetime(2026, 1, 3, 9, tzinfo=timezone.utc))
+        self.assertEqual(metadata["basis"], "end+cp (preserve clock)")
+
     def test_cp_generation_rejects_malformed_sequence_and_missing_identity(self):
         with self.assertRaisesRegex(ValueError, "cp field"):
             self.service.compute_cp_child_due(_task(cp="not-a-duration"))
@@ -139,6 +152,9 @@ class ChainGenerationContractTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "chainID is required"):
             self.service._require_chain_id(task)
+        with self.assertRaisesRegex(TypeError, "validated NauticalTask"):
+            self.service._require_chain_id({"uuid": UUID, "link": 1})
+        self.assertFalse(hasattr(self.service, "build_child_from_parent"))
 
     def test_anchor_omission_terminal_and_date_limit_evidence_are_not_invented(self):
         parent = _task(anchor="w:mon", cp=None, due="2026-01-02T09:00:00Z")

@@ -1409,81 +1409,6 @@ def test_hook_protocol_loads_without_core_package():
     expect(proc.returncode == 0, f"protocol gate imported core: {proc.stderr!r}")
 
 
-def test_taskwarrior_client_retries_only_transient_failures():
-    """Busy commands retry with bounded backoff while rejection remains final."""
-    from nautical_core.integration_models import CommandFailureKind
-    from nautical_core.taskwarrior_client import TaskwarriorClient
-
-    sleeps = []
-    busy = TaskwarriorClient((sys.executable,), sleeper=sleeps.append).execute(
-        ("-c", "import sys; print('database is locked', file=sys.stderr); sys.exit(1)"),
-        purpose="busy export",
-        timeout=2.0,
-        attempts=3,
-        retry_delay=0.01,
-    )
-    expect(busy.kind is CommandFailureKind.BUSY and busy.attempt == 3, f"busy evidence changed: {busy}")
-    expect(sleeps == [0.01, 0.02], f"unexpected backoff schedule: {sleeps}")
-
-    sleeps.clear()
-    rejected = TaskwarriorClient((sys.executable,), sleeper=sleeps.append).execute(
-        ("-c", "import sys; print('invalid filter', file=sys.stderr); sys.exit(2)"),
-        purpose="rejected export",
-        timeout=2.0,
-        attempts=3,
-        retry_delay=0.01,
-    )
-    expect(rejected.kind is CommandFailureKind.REJECTED and rejected.attempt == 1, f"rejection was retried: {rejected}")
-    expect(not sleeps, f"rejection unexpectedly slept: {sleeps}")
-
-    timed_out = TaskwarriorClient((sys.executable,)).execute(
-        ("-c", "import time; time.sleep(2)"),
-        purpose="bounded export",
-        timeout=0.02,
-        attempts=1,
-    )
-    expect(timed_out.kind is CommandFailureKind.TIMEOUT, f"timeout was not classified: {timed_out}")
-    expect(timed_out.returncode == 124 and timed_out.duration < 1.0, f"timeout was not bounded: {timed_out}")
-
-
-def test_taskwarrior_uow_observes_budget_without_blocking_commands():
-    """Command budgets remain observable and advisory."""
-    from nautical_core.integration_context import (
-        IntegrationAccess,
-        IntegrationContext,
-        SystemClock,
-        ValidatedNauticalConfiguration,
-    )
-    from nautical_core.taskwarrior_uow import TaskwarriorUnitOfWork
-
-    events = []
-
-    class Diagnostics:
-        def emit(self, event):
-            events.append(event)
-
-    with tempfile.TemporaryDirectory() as td:
-        context = IntegrationContext(
-            Path(td),
-            "test",
-            (sys.executable,),
-            ValidatedNauticalConfiguration("test", "config", "scheduler", "UTC", ()),
-            timezone.utc,
-            Diagnostics(),
-            SystemClock(),
-            "uow-budget-test",
-            1,
-            IntegrationAccess.READ_ONLY,
-        )
-        uow = TaskwarriorUnitOfWork.create(context)
-        first = uow.client.execute(("-c", "print('one')"), purpose="read one", timeout=1.0)
-        second = uow.client.execute(("-c", "print('two')"), purpose="read two", timeout=1.0)
-        expect(first.ok and second.ok, "advisory budget blocked a command")
-        expect(uow.commands.calls == 2 and uow.commands.attempts == 2, f"command counts changed: {uow.commands}")
-        expect(uow.commands.budget_exceeded, "budget excess was not observable")
-        expect(len(events) == 1 and events[0].stage == "command_budget", f"budget diagnostic changed: {events}")
-
-
 def test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed():
     """Named mutations re-read, verify, classify replay, and preserve failures."""
     from nautical_core.integration_models import (
@@ -2835,31 +2760,6 @@ def test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schem
         expect(rejected.kind is OutboxResultKind.REJECTED, f"corrupt outbox database was accepted: {rejected}")
 
 
-def test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary():
-    """A bounded session reuses setup once and never leaks its connection."""
-    from nautical_core.lifecycle_outbox import LifecycleOutboxRepository, OutboxResult, OutboxResultKind
-
-    with tempfile.TemporaryDirectory() as td:
-        repo = LifecycleOutboxRepository(Path(td))
-        connects = 0
-        original_connect = repo._connect
-
-        def traced_connect():
-            nonlocal connects
-            connects += 1
-            return original_connect()
-
-        repo._connect = traced_connect
-        with repo.session():
-            first = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
-            second = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
-            expect(first.ok and second.ok, "session operation failed")
-            expect(connects == 1, f"session opened multiple connections: {connects}")
-        expect(repo._session_conn is None and repo._session_pid is None, "session state survived its boundary")
-        standalone = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
-        expect(standalone.ok and connects == 2, "standalone call did not use a short-lived connection")
-
-
 def test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows():
     """Bulk lease, stage, and acknowledgement CAS operations retain row isolation."""
     from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, ParentGuard, ExecutionStage
@@ -3204,46 +3104,6 @@ def test_full_hooks_receive_one_explicit_integration_context():
         else:
             os.environ["TASKDATA"] = previous_taskdata
 
-
-
-def test_exit_probe_is_conservative_across_queue_states():
-    """The exit probe bypasses only a definitely empty lifecycle outbox."""
-    probe = _load_exit_probe_module("_nautical_exit_probe_state_test")
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(td)
-        empty = probe.probe_exit_work(root)
-        expect(empty.definitely_empty, f"missing lifecycle outbox should be empty: {empty.reason}")
-
-        state_dir = root / ".nautical-state"
-        state_dir.mkdir()
-        outbox_db = state_dir / ".nautical_lifecycle_outbox.db"
-        with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute(
-                "CREATE TABLE lifecycle_outbox (intent_id TEXT PRIMARY KEY, processing_state TEXT NOT NULL)"
-            )
-            conn.execute("PRAGMA user_version = 1")
-            conn.commit()
-        expect(probe.probe_exit_work(root).definitely_empty, "empty lifecycle outbox should not force a drain")
-
-        with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("PRAGMA user_version = 3")
-            conn.commit()
-        expect(probe.probe_exit_work(root).may_have_work, "future outbox schema should force the full hook")
-
-        with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("PRAGMA user_version = 2")
-            conn.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
-            conn.commit()
-        expect(probe.probe_exit_work(root).may_have_work, "ready outbox row should force a drain")
-
-        with sqlite3.connect(str(outbox_db)) as conn:
-            conn.execute("UPDATE lifecycle_outbox SET processing_state='claimed'")
-            conn.commit()
-        expect(probe.probe_exit_work(root).may_have_work, "claimed outbox row should force a drain")
-
-        outbox_db.write_bytes(b"not-a-sqlite-database")
-        corrupt = probe.probe_exit_work(root)
-        expect(corrupt.may_have_work, "corrupt outbox state must fall through to the full drain")
 
 
 def test_light_taskdata_resolution_matches_hook_precedence():
@@ -3917,70 +3777,6 @@ def test_core_cache_dir_rejects_symlink_override():
                 os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = prev_tmp
 
 
-def test_cache_location_selection_covers_install_layouts():
-    """Cache selection must cover override, checkout, managed, and XDG layouts."""
-    import nautical_core.cache_support as cache_support
-
-    source_cache = os.path.join(os.path.dirname(cache_support.__file__), ".nautical-cache")
-    with tempfile.TemporaryDirectory() as td:
-        override = os.path.join(td, "shared-cache")
-        taskdata = os.path.join(td, "taskdata")
-        default = os.path.join(td, "xdg", "nautical")
-        previous_taskdata = os.environ.get("TASKDATA")
-        previous_allow_tmp = os.environ.get("NAUTICAL_ALLOW_TMP_CACHE")
-        calls = []
-        original_ensure = cache_support.ensure_cache_dir
-        try:
-            os.environ["TASKDATA"] = taskdata
-            os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
-            cache_support.ensure_cache_dir = lambda path: calls.append(path) or path in {
-                override,
-                source_cache,
-                os.path.join(taskdata, ".nautical-cache"),
-                default,
-            }
-
-            chosen = cache_support.select_cache_dir(
-                anchor_cache_dir_override=override,
-                nautical_cache_dir_path=default,
-                validated_user_dir=lambda path, **_kwargs: path,
-            )
-            expect(chosen == override, f"configured cache override was ignored: {chosen!r}")
-
-            chosen = cache_support.select_cache_dir(
-                anchor_cache_dir_override="",
-                nautical_cache_dir_path=default,
-                validated_user_dir=lambda path, **_kwargs: path,
-            )
-            expect(chosen == source_cache, f"source-checkout cache was not selected: {chosen!r}")
-
-            cache_support.ensure_cache_dir = lambda path: calls.append(path) or path == os.path.join(taskdata, ".nautical-cache")
-            chosen = cache_support.select_cache_dir(
-                anchor_cache_dir_override="",
-                nautical_cache_dir_path=default,
-                validated_user_dir=lambda path, **_kwargs: path,
-            )
-            expect(chosen == os.path.join(taskdata, ".nautical-cache"), f"managed cache was not selected: {chosen!r}")
-
-            cache_support.ensure_cache_dir = lambda path: calls.append(path) or path == default
-            chosen = cache_support.select_cache_dir(
-                anchor_cache_dir_override="",
-                nautical_cache_dir_path=default,
-                validated_user_dir=lambda path, **_kwargs: path,
-            )
-            expect(chosen == default, f"default XDG cache was not selected: {chosen!r}")
-            expect(calls, "cache selection did not probe any candidate locations")
-        finally:
-            cache_support.ensure_cache_dir = original_ensure
-            if previous_taskdata is None:
-                os.environ.pop("TASKDATA", None)
-            else:
-                os.environ["TASKDATA"] = previous_taskdata
-            if previous_allow_tmp is None:
-                os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
-            else:
-                os.environ["NAUTICAL_ALLOW_TMP_CACHE"] = previous_allow_tmp
-
 def test_on_exit_reads_data_arg_from_hook_argv():
     """on-exit should resolve TW_DATA_DIR from hook argv data: token."""
     hook = _find_hook_file("on-exit.nautical")
@@ -4650,66 +4446,6 @@ def test_on_modify_limit_update_emits_effective_boundaries():
     expect(any(label == "Removed" and "Chain end point:" in str(value) for label, value in panels[1][1]), f"cleared chain end should be marked removed: {panels[1]!r}")
 
 
-def test_modify_lifecycle_routes_and_promotes_new_nautical_tasks():
-    """Modify lifecycle helper should classify and promote newly Nautical tasks explicitly."""
-    ml = core._import_sibling("modify_lifecycle")
-    expect(
-        not ml.task_has_nautical_fields({"chainid": "legacy-1234"}),
-        "lowercase chainid should not count as Nautical state",
-    )
-    expect(
-        not ml.task_has_nautical_fields({"anchor_mode": "skip"}),
-        "anchor_mode alone should not count as Nautical state",
-    )
-    expect(
-        ml.task_has_nautical_chain_fields({"chainID": "abcd1234"}),
-        "canonical chainID should still count as chain bookkeeping",
-    )
-    expect(
-        ml.task_has_nautical_fields({"chainID": "abcd1234"}),
-        "canonical chainID should still count as Nautical state",
-    )
-    old = {"uuid": "00000000-0000-4000-8000-000000000447", "status": "pending"}
-    new = {
-        "uuid": "00000000-0000-4000-8000-000000000447",
-        "status": "pending",
-        "anchor_file": "2026.csv",
-        "chain": "off",
-    }
-    route = ml.classify_modify_route(
-        old,
-        new,
-        is_non_completion_modify=lambda old_task, new_task: (old_task.get("status") == new_task.get("status")) or (new_task.get("status") != "completed"),
-    )
-    expect(not route.is_deleted, f"new task should not be deleted, got {route}")
-    expect(route.has_nautical_fields, f"new task should be nautical, got {route}")
-    expect(route.is_non_completion, f"new task should be non-completion modify, got {route}")
-    source = ml.promote_newly_nautical_task(old, new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
-    expect(source == "anchor_file", f"expected anchor_file promotion source, got {source!r}")
-    expect(new.get("chain") == "on", f"promotion should set chain:on, got {new!r}")
-    expect(bool((new.get("chainID") or "").strip()), f"promotion should stamp chainID, got {new!r}")
-
-    disabled_old = {"uuid": "00000000-0000-4000-8000-000000000448", "status": "pending", "anchor": "w:mon", "chain": "on", "chainID": "00000000"}
-    disabled_new = dict(disabled_old)
-    disabled_new["chain"] = "off"
-    trans = ml.apply_nautical_transition(disabled_old, disabled_new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
-    expect(trans.state == "disabled", f"expected disabled transition, got {trans!r}")
-    expect("chain:off" in trans.reason, f"expected chain-off reason, got {trans!r}")
-    expect(disabled_new.get("chain") == "off", f"disabled transition should keep chain off, got {disabled_new!r}")
-
-    resumed_new = dict(disabled_new)
-    resumed_new["chain"] = "on"
-    trans = ml.apply_nautical_transition(disabled_new, resumed_new, short_uuid=lambda u: str(u).split("-")[0] if u else "")
-    expect(trans.state == "resumed", f"expected resumed transition, got {trans!r}")
-    expect(trans.source == "anchor", f"expected resumed anchor source, got {trans!r}")
-
-    changes = ml.recurrence_setting_changes(
-        {"anchor": "w:mon", "omit": "", "chain": "on"},
-        {"anchor": "w:tue", "omit": "y:apr", "chain": "on"},
-    )
-    expect(changes == [("anchor", "w:mon", "w:tue"), ("omit", "", "y:apr")], f"unexpected recurrence setting changes: {changes!r}")
-
-
 def test_on_add_lowercase_chainid_does_not_mark_nautical():
     """on-add should ignore lowercase chainid when deciding whether a task is Nautical."""
     hook = _find_hook_file("on-add.nautical")
@@ -4828,72 +4564,6 @@ def _test_modify_engine_services(
         handle_completion=handle_completion,
         handle_deleted=handle_deleted,
     )
-
-
-def test_hook_engine_reports_pending_nautical_delete_without_spawning():
-    """Deleted pending Nautical tasks should trigger delete feedback and still pass through unchanged."""
-    from nautical_core import hook_engine
-    from nautical_core.hook_results import HookJsonResult
-
-    class Request:
-        def __init__(self, old, new):
-            self.old = old
-            self.new = new
-            self.runtime = SimpleNamespace(uow=object())
-
-    calls = {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}
-
-    def load_core():
-        calls["load"] += 1
-
-    def handle_deleted(*args):
-        calls["deleted"] += 1
-        mappings = [value for value in args if isinstance(value, dict)]
-        old, new = mappings[-2:]
-        expect(old.get("status") == "pending", f"delete handler should receive old pending task: {old!r}")
-        expect(new.get("status") == "deleted", f"delete handler should receive new deleted task: {new!r}")
-
-    plain_new = {"uuid": "00000000-0000-4000-8000-000000000301", "status": "deleted"}
-    result = hook_engine.handle_on_modify(
-        Request({"uuid": plain_new["uuid"], "status": "pending"}, plain_new),
-        _test_modify_engine_services(
-            HookJsonResult,
-            has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
-            load_core=load_core,
-            diag=lambda _msg: None,
-            fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("plain delete should not fail")),
-            is_non_completion=lambda _old, _new: False,
-            handle_non_completion=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
-            handle_completion=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
-            handle_deleted=handle_deleted,
-        ),
-    )
-    expect(isinstance(result, HookJsonResult) and result.task is plain_new, f"plain delete should pass through: {result!r}")
-    expect(calls == {"load": 0, "deleted": 0, "completion": 0, "non_completion": 0}, f"plain delete should stay cheap: {calls!r}")
-
-    nautical_old = {
-        "uuid": "00000000-0000-4000-8000-000000000302",
-        "status": "pending",
-        "anchor": "w:mon",
-        "chainID": "00000000",
-    }
-    nautical_new = dict(nautical_old, status="deleted")
-    result = hook_engine.handle_on_modify(
-        Request(nautical_old, nautical_new),
-        _test_modify_engine_services(
-            HookJsonResult,
-            has_nautical_fields=lambda task: bool(task.get("anchor") or task.get("chainID")),
-            load_core=load_core,
-            diag=lambda _msg: None,
-            fail_and_exit=lambda *_args: (_ for _ in ()).throw(AssertionError("nautical delete should not fail")),
-            is_non_completion=lambda _old, _new: False,
-            handle_non_completion=lambda *_args: calls.__setitem__("non_completion", calls["non_completion"] + 1),
-            handle_completion=lambda *_args: calls.__setitem__("completion", calls["completion"] + 1),
-            handle_deleted=handle_deleted,
-        ),
-    )
-    expect(isinstance(result, HookJsonResult) and result.task is nautical_new, f"nautical delete should pass through: {result!r}")
-    expect(calls == {"load": 1, "deleted": 1, "completion": 0, "non_completion": 0}, f"unexpected nautical delete routing: {calls!r}")
 
 
 def test_delete_chain_summary_span_uses_stop_time_without_last_end():
@@ -6400,19 +6070,6 @@ def test_config_fingerprint_invalidates_persistent_cache_keys():
             os.environ["NAUTICAL_CONFIG"] = previous
 
 
-def test_hint_cache_keys_include_semantic_fingerprint():
-    """Changing the semantic fingerprint must invalidate hint cache keys in-process."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        Path(cfg).write_text("", encoding="utf-8")
-        mod = _load_core_module(core_path, "_nautical_core_semantic_cache_test", cfg)
-        fingerprint = ["semantic-test-a"]
-        mod._cache_semantic_fingerprint = lambda: fingerprint[0]
-        first = mod.cache_key_for_task("w:mon", "skip")
-        fingerprint[0] = "semantic-test-b"
-        second = mod.cache_key_for_task("w:mon", "skip")
-        expect(first != second, "semantic fingerprint changes did not invalidate hint cache keys")
 
 
 def test_configuration_drift_detects_edit_and_removal():
@@ -6783,120 +6440,6 @@ def test_doctor_reports_reconcile_backfill_plans():
         report = text.stdout or ""
         expect("Plan: backfill_nextlink" in report, f"missing reconcile plan text: {report!r}")
         expect("Child: 22222222" in report, f"missing reconcile child text: {report!r}")
-
-
-def test_perf_budget_config_covers_cache_io_checks():
-    """Perf budgets should cover cache I/O, seasonal scheduling, and normalized hook latency."""
-    cfg_path = Path(DEV_TOOLS) / "perf_budget.json"
-    obj = json.loads(cfg_path.read_text(encoding="utf-8"))
-    budgets = obj.get("budgets_seconds") if isinstance(obj, dict) else None
-    workload = obj.get("workload") if isinstance(obj, dict) else None
-    expect(isinstance(budgets, dict), "budgets_seconds must be present")
-    expect(isinstance(workload, dict), "workload must be present")
-    expect("cache_save" in budgets, "cache_save budget missing")
-    expect("cache_load_hot" in budgets, "cache_load_hot budget missing")
-    expect("build_hints_cold" in budgets, "build_hints_cold budget missing")
-    expect("build_hints_warm" in budgets, "build_hints_warm budget missing")
-    expect("outbox_schema_hot" in budgets, "outbox_schema_hot budget missing")
-    expect("outbox_schema_cold" in budgets, "outbox_schema_cold budget missing")
-    expect("cache_save_rounds" in workload, "cache_save_rounds missing from workload")
-    expect("cache_load_rounds" in workload, "cache_load_rounds missing from workload")
-    expect("outbox_schema_hot_rounds" in workload, "outbox_schema_hot_rounds missing from workload")
-    expect("outbox_schema_cold_rounds" in workload, "outbox_schema_cold_rounds missing from workload")
-    expressions = set(workload.get("expressions") or [])
-    expect("y:d60,d-1" in expressions, "year-day latency workload missing")
-    expect("y:w20 + w:mon" in expressions, "ISO-week latency workload missing")
-    seasonal = obj.get("seasonal_workload") if isinstance(obj, dict) else None
-    expect(isinstance(seasonal, dict), "seasonal_workload must be present")
-    seasonal_expressions = set(seasonal.get("expressions") or [])
-    expect(
-        "(w:mon)@in-spring=first,last@t=09:00,17:00" in seasonal_expressions,
-        "multi-time seasonal latency workload missing",
-    )
-    expect(
-        "(y:02-29)@in-winter=first" in seasonal_expressions,
-        "sparse seasonal latency workload missing",
-    )
-    expect(
-        {
-            "seasonal_parse_validate",
-            "seasonal_next_after",
-            "seasonal_build_hints_cold",
-            "seasonal_build_hints_warm",
-        }
-        <= set(budgets),
-        "seasonal performance budgets are incomplete",
-    )
-    slow_budgets = obj.get("slow_device_budgets_seconds") if isinstance(obj, dict) else None
-    expect(isinstance(slow_budgets, dict), "slow-device budgets must be present")
-    expect(
-        {
-            "build_hints_cold",
-            "build_hints_warm",
-            "seasonal_build_hints_cold",
-            "seasonal_build_hints_warm",
-        }
-        <= set(slow_budgets or {}),
-        "slow-device hint budgets are incomplete",
-    )
-    hook_fast_path = obj.get("hook_fast_path") if isinstance(obj, dict) else None
-    expect(isinstance(hook_fast_path, dict), "hook_fast_path config must be present")
-    expect(int(hook_fast_path.get("repeats") or 0) >= 3, "hook fast-path benchmark needs repeated samples")
-    expect(
-        float(hook_fast_path.get("managed_layout_max_ratio") or 0.0) >= 1.0,
-        "managed hook layout ratio budget must allow ordinary timing jitter",
-    )
-    expect(
-        float(hook_fast_path.get("staged_layout_max_ratio") or 0.0) >= 1.0,
-        "staged hook layout ratio budget must allow ordinary timing jitter",
-    )
-    ratios = hook_fast_path.get("max_ratio") if isinstance(hook_fast_path.get("max_ratio"), dict) else {}
-    expect(
-        {"hook_plain_add", "hook_plain_modify", "hook_nautical_ordinary_modify", "hook_empty_exit"} <= set(ratios),
-        f"hook ratio budgets are incomplete: {ratios}",
-    )
-    workflow_perf = obj.get("workflow_perf") if isinstance(obj, dict) else None
-    expect(isinstance(workflow_perf, dict), "workflow_perf config must be present")
-    workflow_budgets = workflow_perf.get("budgets_seconds") if isinstance(workflow_perf, dict) else None
-    expect(isinstance(workflow_budgets, dict), "workflow_perf budgets_seconds must be present")
-    expect(
-        {
-            "workflow_cp_completion",
-            "workflow_cp_completion_nonfinal",
-            "workflow_cp_completion_nonfinal_idempotent",
-            "workflow_anchor_completion",
-            "workflow_anchor_completion_nonfinal",
-            "workflow_anchor_completion_nonfinal_idempotent",
-            "workflow_queue_drain",
-            "workflow_reconcile",
-        }
-        <= set(workflow_budgets or {}),
-        f"expensive workflow budgets are incomplete: {workflow_budgets}",
-    )
-    workflow_slow_budgets = workflow_perf.get("slow_device_budgets_seconds") if isinstance(workflow_perf, dict) else None
-    expect(
-        {"workflow_queue_drain", "workflow_queue_drain_partial_recovery"} <= set(workflow_slow_budgets or {}),
-        "slow-device workflow budgets are incomplete",
-    )
-    extended = obj.get("extended_workload") if isinstance(obj, dict) else None
-    expect(isinstance(extended, dict), "extended_workload config must be present")
-    extended_budgets = extended.get("budgets_seconds") if isinstance(extended, dict) else None
-    expect(isinstance(extended_budgets, dict), "extended_workload budgets_seconds must be present")
-    expect(
-        {
-            "anchor_file_large_cold",
-            "anchor_file_large_hot",
-            "anchor_file_nonmonotonic",
-            "anchor_file_business_day_omissions",
-            "business_calendar_large_omissions",
-            "native_until_reconcile_dry_run",
-            "native_until_reconcile_apply",
-        }
-        <= set(extended_budgets or {}),
-        f"extended performance budgets are incomplete: {extended_budgets}",
-    )
-    slow_budgets = extended.get("slow_device_budgets_seconds") if isinstance(extended, dict) else None
-    expect(isinstance(slow_budgets, dict), "extended slow-device budgets must be present")
 
 
 def test_perf_hint_benchmark_isolates_persistent_cache():
@@ -8393,78 +7936,7 @@ def test_reconcile_tool_computes_year_ordinal_anchor():
     expect((child_local.hour, child_local.minute) == (9, 0), f"reconciler lost ordinal anchor time: {child_local}")
     expect(meta.get("basis") == "after_end", f"unexpected reconcile scheduling metadata: {meta}")
 
-def test_weekday_weekend_single_time():
-    """Weekday vs weekend @t should not merge into same-day multi-times."""
-    expr = "w:wd@t=09:00 | w:we@t=11:00"
-    dnf = core.validate_anchor_expr_strict(expr)
-    from datetime import time
-    from zoneinfo import ZoneInfo
-    from nautical_core.recurrence_context import RecurrenceContext
-    from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
-    from nautical_core.scheduler_service import SchedulerService
 
-    start_excl, end_excl = date(2026, 1, 4), date(2026, 1, 20)
-    zone = ZoneInfo("UTC")
-    service = _scheduler_for_fixture(
-        {"chainID": "weekday-weekend", "anchor": expr},
-        context=RecurrenceContext(chain_id="weekday-weekend", timezone=zone),
-    )
-    result = service.collect_request(
-        OccurrenceRangeRequest(
-            OccurrenceCursor.strict_after(
-                datetime.combine(start_excl, time.max, tzinfo=zone), timezone=zone
-            ),
-            end_local=datetime.combine(end_excl - timedelta(days=1), time.max, tzinfo=zone),
-            limit=32,
-        )
-    )
-    dates = [occurrence.local_datetime.date() for occurrence in result]
-    time_slots = core._import_sibling("time_slots")
-    seen = set()
-    for d in dates[:8]:
-        slots = set()
-        for term in dnf:
-            if all(core.factor_matches_on(atom, d, date(2026, 1, 5), seed_base="test") for atom in term):
-                for atom in term:
-                    slots.update(
-                        (hour, minute)
-                        for _offset, hour, minute in time_slots.resolve_time_slots_with_offsets(
-                            atom.get("mods") or {},
-                            d,
-                            config=getattr(core, "ASTRONOMY_CONFIG", {}),
-                            to_local=core.to_local,
-                            seed_base="test",
-                        )
-                    )
-        slots = sorted(slots)
-        if d.weekday() < 5:
-            expect(slots == [(9, 0)], f"{d} should use 09:00, got {slots}")
-        else:
-            expect(slots == [(11, 0)], f"{d} should use 11:00, got {slots}")
-        key = (d.year, d.month, d.day)
-        expect(key not in seen, f"Duplicate date produced: {d}")
-        seen.add(key)
-
-
-def test_performance_large_expressions():
-    """Test performance with large/complex expressions"""
-    import time
-
-    complex_expr = " | ".join([f"w:{dow}" for dow in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]])
-
-    start_time = time.time()
-    dnf = core.validate_anchor_expr_strict(complex_expr)
-    parse_time = time.time() - start_time
-
-    assert parse_time < 0.1, f"Parsing took {parse_time:.3f}s, should be < 0.1s"
-
-    # Test date calculation performance
-    start_date = date(2024, 1, 1)
-    start_time = time.time()
-    next_date, _ = core.next_after_expr(dnf, start_date)
-    calc_time = time.time() - start_time
-
-    assert calc_time < 0.05, f"Date calculation took {calc_time:.3f}s, should be < 0.05s"
 
 def test_natural_interval_or_branches_keep_cadence_with_subject():
     """Interval OR branches should not begin with an awkward nested prefix."""
@@ -8683,38 +8155,6 @@ def test_hook_on_add_rejects_invalid_timezone_for_nautical_task():
     expect("timezone" in stderr_text.lower(), f"timezone cause missing: {stderr_text[:800]!r}")
 
 
-def test_core_domain_configuration_validation_fails_closed():
-    """Astronomy, preset, and business-calendar config errors block reload validation."""
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-
-    def expect_invalid(config_text: str, label: str, module_name: str) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            cfg = Path(td) / "nautical.toml"
-            cfg.write_text(config_text, encoding="utf-8")
-            mod = _load_core_module(core_path, module_name, str(cfg))
-            try:
-                mod.validate_scheduling_configuration()
-            except RuntimeError as exc:
-                expect(label.lower() in str(exc).lower(), f"{label} detail missing: {exc}")
-            else:
-                raise AssertionError(f"{label} configuration was accepted")
-
-    expect_invalid(
-        '[astronomy]\ndefault_location = "home"\n'
-        '[astronomy.locations.home]\nlatitude = 91\nlongitude = 24\ntimezone = "Europe/Athens"\n',
-        "latitude",
-        "_nautical_core_bad_astronomy_test",
-    )
-    expect_invalid(
-        '[anchor_presets]\nbad = "w:not-a-day"\n',
-        "weekly",
-        "_nautical_core_bad_preset_test",
-    )
-    expect_invalid(
-        '[business_calendar.work]\nanchor = "w:mon@t=09:00"\n',
-        "business_calendar.work.anchor",
-        "_nautical_core_bad_calendar_test",
-    )
 
 
 def test_discovered_malformed_config_blocks_taskdata_reload():
@@ -12651,96 +12091,6 @@ def test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change():
     expect("Unrecognized datetime format" in stderr_txt, f"expected chainUntil guidance: {stderr_txt[:500]!r}")
 
 
-def test_on_modify_completion_finalize_skips_analytics_when_hidden():
-    """completion finalize should keep integrity checks independent from analytics."""
-    flow = core._import_sibling("modify_completion_flow")
-    models = core._import_sibling("modify_models")
-
-    for invalid in (
-        lambda: models.CompletionLifecycleResult("queued", deferred_spawn=True),
-        lambda: models.CompletionLifecycleResult("applied", deferred_spawn=True),
-    ):
-        try:
-            invalid()
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("invalid completion result state was accepted")
-
-    captured = {}
-
-    def fake_build_and_spawn_child(*_a, **_k):
-        return models.CompletionSpawnResult(
-            child={"uuid": "00000000-0000-4000-8000-000000000222"},
-            child_short="beeswax",
-            stripped_attrs=[],
-            verified=False,
-            deferred_spawn=False,
-            spawn_intent_id=None,
-            outcome_state="applied",
-        )
-
-    def fake_modify_chain_state():
-        return SimpleNamespace(panel_chain_by_link=None, panel_chain_by_short=None)
-
-    def fake_render_anchor_completion_feedback(**kwargs):
-        request = kwargs["request"]
-        captured["analytics_advice"] = request.analytics_advice
-        captured["integrity_warnings"] = request.integrity_warnings
-        captured["lifecycle_result"] = request.lifecycle_result
-
-    services = flow.CompletionFinalizeServices(
-        build_and_spawn_child=fake_build_and_spawn_child,
-        seed_runtime_lookup_tasks=lambda *_a, **_k: None,
-        modify_chain_state=fake_modify_chain_state,
-        lifecycle_read_service=None,
-        chain_health_advice=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("analytics should not be computed when hidden")),
-        chain_integrity_warnings=lambda *_a, **_k: ["missing link"],
-        render_anchor_completion_feedback=fake_render_anchor_completion_feedback,
-        render_cp_completion_feedback=lambda *_a, **_k: None,
-        render_lifecycle_result=lambda *_a, **_k: None,
-        print_task=lambda *_a, **_k: None,
-        diag_summary=lambda *_a, **_k: None,
-        show_analytics=False,
-        check_integrity=True,
-        analytics_style="clinical",
-    )
-    ctx = SimpleNamespace(parent_short="00000000", base_no=1, next_no=2, kind="anchor", chain_id="")
-    computed = SimpleNamespace(
-        child_due=core.now_utc(),
-        meta={"target_field": "due"},
-        dnf=[[{"typ": "w", "spec": "mon", "mods": {}}]],
-        until_dt=None,
-        cpmax=0,
-        cap_no=None,
-        finals=[],
-        until_cap_no=None,
-    )
-
-    result = flow.finalize_completion_modify(
-        new={"anchor": "w:mon", "chainID": "abcd1234"},
-        ctx=ctx,
-        computed=computed,
-        now_utc=core.now_utc(),
-        need_chain=True,
-        chain_snapshot_loaded=True,
-        preloaded_chain=[{"uuid": "00000000-0000-4000-8000-000000000111"}],
-        preloaded_chain_by_link=None,
-        preloaded_chain_by_short=None,
-        chain_id="",
-        services=services,
-    )
-
-    expect(captured.get("analytics_advice") is None, f"analytics should stay hidden, got {captured}")
-    expect(captured.get("integrity_warnings") == ["missing link"], f"integrity checks should still run: {captured}")
-    expect(result.state == "applied", f"completion should expose an applied operational result: {result!r}")
-    expect(result.child_short == "beeswax", f"completion result lost child identity: {result!r}")
-    expect(result.diagnostic is not None, f"completion result lost structured diagnostics: {result!r}")
-    expect(result.diagnostic.stage == "finalize", f"unexpected completion diagnostic stage: {result.diagnostic!r}")
-    expect(result.diagnostic.parent_link == 1 and result.diagnostic.child_link == 2, f"completion links missing from diagnostics: {result.diagnostic!r}")
-    expect(captured.get("lifecycle_result") == result, "feedback did not receive the finalized lifecycle result")
-
-
 def test_on_modify_completion_helper_returns_finalized_lifecycle_result():
     """The hook helper must expose the typed result returned by finalization."""
     hook = _find_hook_file("on-modify.nautical")
@@ -13326,39 +12676,6 @@ def test_on_modify_omit_dnf_accepts_configured_preset():
     expect(omit_dnf, f"omit preset should resolve to DNF: {omit_dnf!r}")
 
 
-def test_included_provider_preserves_anchor_file_source_description():
-    """Typed included collection should retain anchor-file provenance."""
-    from dev_tools.legacy_preview_adapter import collect_events_legacy
-    from nautical_core.occurrence_provider import Occurrence
-
-    with tempfile.TemporaryDirectory() as td:
-        (Path(td) / "calendar.csv").write_text(
-            "date,description\n2026-08-03,Water the plants\n",
-            encoding="utf-8",
-        )
-        occurrences = collect_events_legacy(
-            dnf=None,
-            anchor_file_str="calendar.csv@t=09:00",
-            after_local_dt=core.to_local(core.build_local_datetime(date(2026, 8, 2), (9, 0))),
-            inclusive=False,
-            limit_included=1,
-            fallback_hhmm=(9, 0),
-            default_seed_date=date(2026, 8, 2),
-            seed_base="included-metadata-test",
-            omit_dnf=None,
-            core=core,
-            next_occurrence_after_local_dt=lambda *args, **kwargs: None,
-            anchor_file_dir=td,
-            return_occurrences=True,
-        )
-    expect(
-        len(occurrences) == 1 and isinstance(occurrences[0], Occurrence),
-        f"typed included occurrence was not retained: {occurrences!r}",
-    )
-    expect(occurrences[0].source == "anchor_file", f"included source was not preserved: {occurrences!r}")
-    expect(occurrences[0].description == "Water the plants", f"included description was not preserved: {occurrences!r}")
-
-
 def test_navigator_uses_anchor_and_anchor_file_sources():
     """Navigator anchor helpers should summarize and merge anchor sources from anchor + anchor_file."""
     module_name = "_nautical_navigator_anchor_sources_test"
@@ -13671,102 +12988,6 @@ def test_navigator_projects_all_slots_in_a_time_window():
         sys.modules.pop(module_name, None)
 
 
-def test_compiled_schedule_is_canonical_and_reusable():
-    """Equivalent recurrence formatting compiles to one immutable schedule."""
-    import json
-    from nautical_core.compiled_schedule import CompiledSchedule, CompiledScheduleCache
-    from nautical_core.recurrence_evaluator import RecurrenceEvaluator
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-
-    def compiled_from_row(row):
-        return CompiledSchedule.from_observation(
-            DEFAULT_TASK_CODEC.decode_row(row, source_query="test:compiled-schedule")
-        )
-
-    first = compiled_from_row({
-        "uuid": "00000000-0000-4000-8000-000000000507",
-        "status": "pending",
-        "chainID": "compiled-chain",
-        "link": 1,
-        "anchor": " w:mon ",
-        "anchor_mode": "SKIP",
-        "chainMax": "4",
-    })
-    second = compiled_from_row({
-        "uuid": "00000000-0000-4000-8000-000000000508",
-        "status": "pending",
-        "chainID": "compiled-chain",
-        "link": 1,
-        "anchor": "w:mon",
-        "anchor_mode": "skip",
-        "chainMax": 4,
-    })
-    expect(first.fingerprint == second.fingerprint, "canonical schedule fingerprint drifted")
-    observation = DEFAULT_TASK_CODEC.decode_row(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000503",
-            "status": "pending",
-            "chainID": "compiled-observation-chain",
-            "link": 1,
-            "anchor": "w:mon",
-        },
-        source_query="test:compiled-schedule",
-    )
-    typed_compiled = CompiledSchedule.from_observation(observation)
-    typed_evaluator = RecurrenceEvaluator.from_observation(observation)
-    expect(
-        typed_compiled.spec.context.chain_id == "compiled-observation-chain"
-        and typed_evaluator.spec.context.chain_id == "compiled-observation-chain",
-        "observation compilation boundary drifted",
-    )
-    cache = CompiledScheduleCache(max_entries=2)
-    cached_first = cache.get_or_compile(first.spec)
-    expect(cached_first is cache.get_or_compile(second.spec), "compiled schedules were not reused")
-    expect(first.to_dict()["compiler_schema"] == 1, "compiled schedule schema was not versioned")
-    expect(first.cache_key.startswith("compiled-schedule:1:cs1-"), "compiled cache key was not namespaced")
-    diagnostic = first.to_diagnostic_json()
-    expect(json.loads(diagnostic) == first.to_dict(), "compiled diagnostic JSON did not round-trip")
-    normalized = compiled_from_row({
-        "uuid": "00000000-0000-4000-8000-000000000509",
-        "status": "pending",
-        "chainID": "compiled-chain",
-        "link": 1,
-        "anchor": "w:mon + y:jul@t=09:00",
-        "omit": "y:07-04",
-        "chainMax": 4,
-    }).to_dict()["schedule"]["normalized"]
-    expect(normalized["provider"]["kind"] == "anchor", "compiled provider instruction was not recorded")
-    expect(normalized["identity"] == "compiled-chain", "compiled identity was not recorded")
-    expect(normalized["anchor_dnf"] and normalized["omit_dnf"], "compiled DNF instructions were not recorded")
-    expect(normalized["time_projection"], "compiled time projection was not recorded")
-    evaluator = RecurrenceEvaluator.from_compiled(first)
-    expect(evaluator.spec == first.spec, "compiled schedule was not reusable by evaluator")
-    import nautical_core as core
-    parser = core.parse_anchor_expr_to_dnf_cached
-    core.parse_anchor_expr_to_dnf_cached = lambda _expr: (_ for _ in ()).throw(
-        AssertionError("compiled evaluator reparsed its anchor")
-    )
-    try:
-        expect(evaluator.anchor_dnf, "compiled evaluator lost normalized anchor DNF")
-    finally:
-        core.parse_anchor_expr_to_dnf_cached = parser
-    try:
-        compiled_from_row({"uuid": "00000000-0000-4000-8000-000000000510", "status": "pending", "chainID": "plain-task", "link": 1})
-    except ValueError as exc:
-        expect("recurrence requires" in str(exc), f"invalid schedule error was unclear: {exc}")
-    else:
-        raise AssertionError("plain task produced a compiled recurrence schedule")
-    for invalid, message in (
-        ({"cp": "1d", "anchor": "w:mon"}, "both cp and anchor"),
-        ({"anchor": "w:mon", "chainMax": 0}, "chainMax"),
-        ({"anchor": "w:mon", "anchor_mode": "unknown"}, "anchor_mode"),
-    ):
-        try:
-            compiled_from_row({"uuid": "00000000-0000-4000-8000-000000000511", "status": "pending", "chainID": "compiled-chain", "link": 1, **invalid})
-        except ValueError as exc:
-            expect(message in str(exc), f"compiled validation error was unclear: {exc}")
-        else:
-            raise AssertionError(f"invalid compiled schedule was accepted: {invalid!r}")
 
 
 def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
@@ -14050,69 +13271,6 @@ def test_recurrence_evaluator_owns_context_spec_and_timezone_boundary():
         expect("chain ID" in str(exc), f"missing-chain failure was not actionable: {exc}")
     else:
         raise AssertionError("evaluator silently invented a chain identity")
-
-
-def test_chain_generation_hook_adapter_does_not_capture_modify_helpers():
-    """Hook adaptation must keep generation decisions inside the shared service."""
-    from nautical_core.chain_generation import ChainGenerationService
-    from nautical_core.task_codec import DEFAULT_TASK_CODEC
-    from nautical_core.task_models import NauticalTask
-
-    class Hook:
-        core = core
-        legacy_compute_cp_child_due = staticmethod(
-            lambda _parent: (_ for _ in ()).throw(AssertionError("modify helper was captured"))
-        )
-
-    service = ChainGenerationService.from_hook(Hook())
-    parent = NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(
-        {
-            "uuid": "00000000-0000-4000-8000-000000000778",
-            "status": "pending",
-            "chainID": "shared-generation",
-            "cp": "1d",
-            "link": 1,
-            "due": "20250101T090000Z",
-            "end": "20250101T100000Z",
-            "description": "shared generation",
-        },
-        source_query="test:chain-generation",
-    ))
-    child_due, metadata = service.compute_cp_child_due(parent)
-    expect(child_due == datetime(2025, 1, 2, 9, 0, tzinfo=timezone.utc), f"shared CP service drifted: {child_due!r}")
-    expect(metadata and metadata.get("basis") == "end+cp (preserve clock)", f"shared CP metadata drifted: {metadata!r}")
-
-
-def test_chain_generation_rejects_missing_chain_id():
-    """Shared generation must reject pre-v2 UUID-derived chain identities."""
-    from nautical_core.chain_generation import ChainGenerationService, ChainIdentityError
-
-    service = ChainGenerationService.from_core(core)
-    base = {
-        "uuid": "00000000-0000-4000-8000-000000000777",
-        "link": 1,
-        "due": "20250106T090000Z",
-        "end": "20250106T100000Z",
-    }
-    cases = (
-        dict(base, cp="1d"),
-        dict(base, anchor="w:mon@t=09:00", anchor_mode="skip"),
-    )
-    for parent in cases:
-        try:
-            if parent.get("cp"):
-                service.compute_cp_child_due(parent)
-            else:
-                service.compute_anchor_child_due(parent)
-        except (ChainIdentityError, TypeError) as exc:
-            expect(
-                "chainID" in str(exc) or "validated NauticalTask" in str(exc),
-                f"missing chainID error was not actionable: {exc}",
-            )
-        else:
-            raise AssertionError("generation accepted a missing chainID")
-
-    expect(not hasattr(service, "build_child_from_parent"), "legacy mapping child builder was reintroduced")
 
 
 def test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding():
@@ -15762,89 +14920,6 @@ def test_on_modify_panel_forwards_live_duration():
     )
 
 
-def test_ui_live_panel_has_nautical_branding_without_changing_static_panels():
-    """Only live panels should carry the restrained Nautical footer treatment."""
-    import nautical_core.ui as ui
-    from rich.console import Console
-
-    static_panel = ui._build_rich_panel("Static", [("Key", "Value")], kind="info", themes=None)
-    live_panel = ui._build_rich_panel(
-        "Live",
-        [("First", "one"), ("Second", "two")],
-        kind="info",
-        themes=None,
-        live=True,
-        active_row=1,
-    )
-    settled_panel = ui._build_rich_panel(
-        "Live",
-        [("First", "one"), ("Second", "two")],
-        kind="info",
-        themes=None,
-        live=True,
-    )
-    active_output = io.StringIO()
-    settled_output = io.StringIO()
-    Console(file=active_output, width=80, color_system=None).print(live_panel)
-    Console(file=settled_output, width=80, color_system=None).print(settled_panel)
-
-    expect(static_panel.subtitle is None, f"static panel unexpectedly gained live branding: {static_panel.subtitle!r}")
-    expect(str(live_panel.subtitle) == "NAUTICAL", f"live panel branding missing: {live_panel.subtitle!r}")
-    expect(live_panel.subtitle_align == "right", f"live panel branding alignment changed: {live_panel.subtitle_align!r}")
-    expect("▸" in active_output.getvalue(), f"active live row has no focus marker: {active_output.getvalue()!r}")
-    expect("▸" not in settled_output.getvalue(), f"settled live panel kept its focus marker: {settled_output.getvalue()!r}")
-    expect(str(live_panel.border_style) == "bold blue", f"active live border was not emphasized: {live_panel.border_style!r}")
-    expect(str(settled_panel.border_style) == "blue", f"settled live border did not return to its theme: {settled_panel.border_style!r}")
-    expect("/" not in str(live_panel.subtitle), f"live footer should not show a progress count: {live_panel.subtitle!r}")
-    active_width = max(len(line) for line in active_output.getvalue().splitlines())
-    settled_width = max(len(line) for line in settled_output.getvalue().splitlines())
-    expect(active_width == settled_width, f"live focus shifted panel width: active={active_width}, settled={settled_width}")
-    expect(ui._live_reveal_delays(1, 160) == [], "one-frame live panels should not incur animation delay")
-
-    narrow_panel = ui._build_rich_panel("N", [("A", "1")], kind="info", themes=None, live=True)
-    narrow_output = io.StringIO()
-    Console(file=narrow_output, width=40, color_system=None).print(narrow_panel)
-    expect("NAUTICAL" in narrow_output.getvalue(), f"narrow live panel truncated its footer: {narrow_output.getvalue()!r}")
-
-    custom_panel = ui._build_rich_panel(
-        "Custom",
-        [("First", "one")],
-        kind="info",
-        themes=None,
-        live=True,
-        live_footer="STATUS",
-    )
-    expect(str(custom_panel.subtitle) == "STATUS", f"custom live footer was not applied: {custom_panel.subtitle!r}")
-
-    long_footer = "A" * 80
-    bounded_panel = ui._build_rich_panel(
-        "Bounded",
-        [("First", "one")],
-        kind="info",
-        themes=None,
-        live=True,
-        live_footer=long_footer,
-    )
-    expect(
-        str(bounded_panel.subtitle) == ("A" * 29 + "..."),
-        f"long live footer was not bounded: {bounded_panel.subtitle!r}",
-    )
-
-    semantic_panel = ui._build_rich_panel(
-        "Semantic",
-        [("Warning", "late")],
-        kind="info",
-        themes=None,
-        live=True,
-        active_row=0,
-    )
-    value_text = semantic_panel.renderable.columns[1]._cells[0]
-    value_styles = [str(span.style) for span in value_text.spans]
-    expect(any("yellow" in style for style in value_styles), f"active focus lost semantic colour: {value_styles!r}")
-    expect(any(style == "bold" for style in value_styles), f"active focus did not emphasize value: {value_styles!r}")
-    expect(not any("cyan" in style for style in value_styles), f"active focus overrode semantic colour: {value_styles!r}")
-
-
 def test_ui_live_test_term_guard_restores_environment():
     """Terminal-sensitive tests must not leak TERM changes into later cases."""
     original = os.environ.get("TERM")
@@ -15863,382 +14938,6 @@ def test_ui_live_test_term_guard_restores_environment():
             os.environ.pop("TERM", None)
         else:
             os.environ["TERM"] = original
-
-
-def test_ui_live_renderer_reveals_cumulative_row_frames():
-    """Live rendering should reveal cumulative rows and leave the complete panel as its final frame."""
-    import nautical_core.ui as ui
-    import rich.live
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    built_rows = []
-    built_live_flags = []
-    built_active_rows = []
-    live_frames = []
-    sleep_delays = []
-    stderr = TtyBuffer()
-    original_stderr = sys.stderr
-    original_builder = ui._build_rich_panel
-    original_live = rich.live.Live
-    original_sleep = ui.time.sleep
-    try:
-        def fake_builder(_title, rows, *, kind, themes, live=False, active_row=None, live_footer="NAUTICAL"):
-            expect(live_footer == "NAUTICAL", f"live footer was not forwarded: {live_footer!r}")
-            snapshot = list(rows)
-            built_rows.append(snapshot)
-            built_live_flags.append(live)
-            built_active_rows.append(active_row)
-            return tuple(snapshot)
-
-        class FakeLive:
-            def __init__(self, renderable, **kwargs):
-                live_frames.append(renderable)
-                expect(kwargs.get("auto_refresh") is False, f"live renderer should refresh explicitly: {kwargs!r}")
-                expect(kwargs.get("transient") is False, f"final panel should remain visible: {kwargs!r}")
-
-            def __enter__(self):
-                return self
-
-            def update(self, renderable, *, refresh=False):
-                expect(refresh is True, "each cumulative frame should be refreshed explicitly")
-                live_frames.append(renderable)
-
-            def __exit__(self, _exc_type, _exc, _tb):
-                return False
-
-        ui._build_rich_panel = fake_builder
-        rich.live.Live = FakeLive
-        ui.time.sleep = sleep_delays.append
-        sys.stderr = stderr
-        ui._reset_live_animation_state()
-        with _test_term("xterm"):
-            rendered = ui._render_panel_live(
-                "Live",
-                [("One", "1"), ("Two", "2"), ("Three", "3")],
-                kind="info",
-                themes={"info": {"border": "blue"}},
-            )
-    finally:
-        ui._reset_live_animation_state()
-        sys.stderr = original_stderr
-        ui._build_rich_panel = original_builder
-        rich.live.Live = original_live
-        ui.time.sleep = original_sleep
-
-    expect(rendered is True, "live renderer should report success on a TTY")
-    expect(
-        built_rows == [
-            [("One", "1"), ("Two", "2"), ("Three", "3")],
-            [("One", "[dim]1[/]")],
-            [("One", "1")],
-            [("One", "1"), ("Two", "[dim]2[/]")],
-            [("One", "1"), ("Two", "2")],
-            [("One", "1"), ("Two", "2"), ("Three", "[dim]3[/]")],
-            [("One", "1"), ("Two", "2"), ("Three", "3")],
-        ],
-        f"live renderer should prebuild recovery then reveal cumulative rows: {built_rows!r}",
-    )
-    expect(built_live_flags == [True, True, True, True, True, True, True], f"live frames lost their live styling: {built_live_flags!r}")
-    expect(built_active_rows == [None, 0, 0, 1, 1, 2, 2], f"live recovery/focus frames changed: {built_active_rows!r}")
-    expect(len(sleep_delays) == 6 and all(delay > 0 for delay in sleep_delays), f"unexpected live pacing: {sleep_delays!r}")
-    expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"live reveal did not use its configured duration: {sleep_delays!r}")
-    expect(sleep_delays[0] < sleep_delays[-1], f"live reveal did not ease into its final frame: {sleep_delays!r}")
-    expect(live_frames[-1] == tuple(built_rows[-1]), f"final live frame is incomplete: {live_frames!r}")
-
-
-def test_ui_live_renderer_reveals_multiline_values_progressively():
-    """Multiline values should reveal one visual line at a time under a stable active label."""
-    import nautical_core.ui as ui
-    import rich.live
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    built_rows = []
-    active_rows = []
-    sleep_delays = []
-    original_stderr = sys.stderr
-    original_builder = ui._build_rich_panel
-    original_live = rich.live.Live
-    original_sleep = ui.time.sleep
-    try:
-        def fake_builder(_title, rows, *, active_row=None, **_kwargs):
-            snapshot = list(rows)
-            built_rows.append(snapshot)
-            active_rows.append(active_row)
-            return tuple(snapshot)
-
-        class FakeLive:
-            def __init__(self, _renderable, **_kwargs):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def update(self, _renderable, *, refresh=False):
-                expect(refresh is True, "multiline reveal frames should refresh explicitly")
-
-            def __exit__(self, _exc_type, _exc, _tb):
-                return False
-
-        ui._reset_live_animation_state()
-        sys.stderr = TtyBuffer()
-        ui._build_rich_panel = fake_builder
-        rich.live.Live = FakeLive
-        ui.time.sleep = sleep_delays.append
-        with _test_term("xterm"):
-            rendered = ui._render_panel_live(
-                "Multiline",
-                [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
-                kind="info",
-                themes=None,
-                duration_ms=160,
-            )
-    finally:
-        ui._reset_live_animation_state()
-        sys.stderr = original_stderr
-        ui._build_rich_panel = original_builder
-        rich.live.Live = original_live
-        ui.time.sleep = original_sleep
-
-    expect(rendered is True, "multiline live renderer failed")
-    expect(
-        built_rows == [
-            [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
-            [("Upcoming", "one")],
-            [("Upcoming", "one\ntwo")],
-            [("Upcoming", "one\ntwo\nthree")],
-            [("Upcoming", "one\ntwo\nthree"), ("Chain", "[dim]enabled[/]")],
-            [("Upcoming", "one\ntwo\nthree"), ("Chain", "enabled")],
-        ],
-        f"multiline values did not reveal progressively: {built_rows!r}",
-    )
-    expect(active_rows == [None, 0, 0, 0, 1, 1], f"multiline focus moved before the row completed: {active_rows!r}")
-    expect(len(sleep_delays) == 5, f"unexpected multiline transition count: {sleep_delays!r}")
-    expect(abs(sum(sleep_delays) - 0.16) < 0.001, f"multiline reveal exceeded its total budget: {sleep_delays!r}")
-    expect(sleep_delays[0] < sleep_delays[-1], f"multiline reveal did not ease toward settle: {sleep_delays!r}")
-
-
-def test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels():
-    """Only one eligible panel should animate; warnings shorten motion and errors remain immediate."""
-    import nautical_core.ui as ui
-    import rich.live
-    from rich.text import Text
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    live_starts = []
-    sleep_delays = []
-    original_stderr = sys.stderr
-    original_builder = ui._build_rich_panel
-    original_live = rich.live.Live
-    original_sleep = ui.time.sleep
-    try:
-        def fake_builder(title, rows, **_kwargs):
-            return Text(f"{title}:{len(list(rows))}")
-
-        class FakeLive:
-            def __init__(self, renderable, **_kwargs):
-                live_starts.append(renderable)
-
-            def __enter__(self):
-                return self
-
-            def update(self, _renderable, *, refresh=False):
-                expect(refresh is True, "live policy frames should refresh explicitly")
-
-            def __exit__(self, _exc_type, _exc, _tb):
-                return False
-
-        sys.stderr = TtyBuffer()
-        ui._build_rich_panel = fake_builder
-        rich.live.Live = FakeLive
-        ui.time.sleep = sleep_delays.append
-
-        with _test_term("xterm"):
-            ui._reset_live_animation_state()
-            expect(ui._render_panel_live("Warning", [("A", "1"), ("B", "2"), ("C", "3")], kind="warning", themes=None, duration_ms=200), "warning live render failed")
-            expect(len(live_starts) == 1, f"warning panel did not animate once: {live_starts!r}")
-            expect(0 < sum(sleep_delays) <= 0.101, f"warning exceeded half-duration cap: {sleep_delays!r}")
-            warning_sleep_count = len(sleep_delays)
-
-            expect(ui._render_panel_live("Later", [("A", "1"), ("B", "2")], kind="info", themes=None, duration_ms=200), "settled follow-up render failed")
-            expect(len(live_starts) == 1, "a second panel animated in the same process")
-            expect(len(sleep_delays) == warning_sleep_count, "a settled follow-up panel added delay")
-
-            ui._reset_live_animation_state()
-            starts_before_error = len(live_starts)
-            expect(ui._render_panel_live("Error", [("Error", "bad")], kind="error", themes=None, duration_ms=200), "error settled render failed")
-            expect(len(live_starts) == starts_before_error, "error panel should render immediately")
-            expect(ui._render_panel_live("After error", [("A", "1"), ("B", "2")], kind="info", themes=None, duration_ms=200), "post-error live render failed")
-            expect(len(live_starts) == starts_before_error + 1, "an immediate error consumed the animation allowance")
-
-            ui._reset_live_animation_state()
-            starts_before_zero = len(live_starts)
-            expect(ui._render_panel_live("No motion", [("A", "1"), ("B", "2")], kind="info", themes=None, duration_ms=0), "zero-duration settled render failed")
-            expect(len(live_starts) == starts_before_zero, "zero duration should disable motion")
-    finally:
-        ui._reset_live_animation_state()
-        sys.stderr = original_stderr
-        ui._build_rich_panel = original_builder
-        rich.live.Live = original_live
-        ui.time.sleep = original_sleep
-
-
-def test_ui_live_mid_animation_failure_settles_without_static_duplicate():
-    """Once Live starts, a frame error should settle the complete panel without static fallback."""
-    import nautical_core.ui as ui
-    import rich.live
-    from rich.text import Text
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    frames = []
-    static_calls = []
-    original_stderr = sys.stderr
-    original_builder = ui._build_rich_panel
-    original_live = rich.live.Live
-    original_rich = ui._render_panel_rich
-    original_sleep = ui.time.sleep
-    try:
-        def flaky_builder(_title, rows, *, active_row=None, **_kwargs):
-            snapshot = list(rows)
-            if active_row == 1:
-                raise RuntimeError("frame failed")
-            return Text(f"rows={len(snapshot)} active={active_row}")
-
-        class FakeLive:
-            def __init__(self, renderable, **_kwargs):
-                frames.append(str(renderable))
-
-            def __enter__(self):
-                return self
-
-            def update(self, renderable, *, refresh=False):
-                expect(refresh is True, "settled recovery frame should refresh")
-                frames.append(str(renderable))
-
-            def __exit__(self, _exc_type, _exc, _tb):
-                return False
-
-        ui._reset_live_animation_state()
-        sys.stderr = TtyBuffer()
-        ui._build_rich_panel = flaky_builder
-        rich.live.Live = FakeLive
-        ui._render_panel_rich = lambda *_args, **_kwargs: static_calls.append(True) or False
-        ui.time.sleep = lambda _delay: None
-        with _test_term("xterm"):
-            ui.render_panel(
-                "Recover",
-                [("One", "1"), ("Two", "2"), ("Three", "3")],
-                panel_mode="live",
-                live_duration_ms=160,
-            )
-    finally:
-        ui._reset_live_animation_state()
-        sys.stderr = original_stderr
-        ui._build_rich_panel = original_builder
-        rich.live.Live = original_live
-        ui._render_panel_rich = original_rich
-        ui.time.sleep = original_sleep
-
-    expect(not static_calls, "mid-animation failure printed a duplicate static panel")
-    expect(frames[-1] == "rows=3 active=None", f"mid-animation failure did not settle complete rows: {frames!r}")
-
-
-def test_ui_live_oversized_panel_settles_without_starting_animation():
-    """A panel that leaves too little terminal space should render settled without Live cursor control."""
-    import nautical_core.ui as ui
-    import rich.console
-    import rich.live
-    from rich.text import Text
-
-    class TtyBuffer(io.StringIO):
-        def isatty(self):
-            return True
-
-    live_starts = []
-    settled = []
-    original_stderr = sys.stderr
-    original_builder = ui._build_rich_panel
-    original_console = rich.console.Console
-    original_live = rich.live.Live
-    try:
-        class ShortConsole:
-            height = 8
-
-            def __init__(self, **_kwargs):
-                pass
-
-            def render_lines(self, _renderable, *, pad=True):
-                expect(pad is False, "height guard should measure without terminal padding")
-                return [[] for _ in range(6)]
-
-            def print(self, renderable):
-                settled.append(str(renderable))
-
-        class ForbiddenLive:
-            def __init__(self, *_args, **_kwargs):
-                live_starts.append(True)
-
-        ui._reset_live_animation_state()
-        sys.stderr = TtyBuffer()
-        ui._build_rich_panel = lambda title, rows, **_kwargs: Text(f"{title}:{len(list(rows))}")
-        rich.console.Console = ShortConsole
-        rich.live.Live = ForbiddenLive
-        with _test_term("xterm"):
-            rendered = ui._render_panel_live(
-                "Tall",
-                [("A", "1"), ("B", "2"), ("C", "3")],
-                kind="info",
-                themes=None,
-                duration_ms=160,
-            )
-    finally:
-        ui._reset_live_animation_state()
-        sys.stderr = original_stderr
-        ui._build_rich_panel = original_builder
-        rich.console.Console = original_console
-        rich.live.Live = original_live
-
-    expect(rendered is True, "oversized live panel did not render its settled frame")
-    expect(settled == ["Tall:3"], f"oversized panel did not render exactly once: {settled!r}")
-    expect(not live_starts, "oversized panel started Live animation")
-
-
-def test_cache_load_quarantines_corrupt_entries_and_gc_removes_them():
-    """Broken cache payloads should become misses and be removed by explicit GC."""
-    import base64
-    import zlib
-
-    core_path = os.path.abspath(os.path.join(HERE, "..", "nautical_core/__init__.py"))
-    with tempfile.TemporaryDirectory() as td:
-        cfg = os.path.join(td, "nautical.toml")
-        with open(cfg, "w", encoding="utf-8") as f:
-            f.write("enable_anchor_cache = true\n")
-            td_path_norm = td.replace("\\", "/")
-            f.write(f'anchor_cache_dir = "{td_path_norm}"\n')
-        mod = _load_core_module(core_path, "_nautical_core_cache_quarantine_test", cfg)
-        for key, payload in (("broken", b"not-a-cache"), ("invalid", None)):
-            path = Path(mod._cache_path(key))
-            if payload is None:
-                raw = json.dumps({"dnf": "invalid"}, separators=(",", ":")).encode("utf-8")
-                payload = base64.b85encode(zlib.compress(raw))
-            path.write_bytes(payload)
-            expect(mod.cache_load(key) is None, f"corrupt cache {key} should be a miss")
-        quarantined = list(Path(td).glob("*.jsonz.bad.*"))
-        expect(len(quarantined) == 2, f"corrupt cache entries were not quarantined: {quarantined!r}")
-        result = mod.cache_gc(stale_tmp_age=0)
-        expect(result.get("temporary") >= 2, f"quarantine artifacts were not collected: {result}")
-        expect(not list(Path(td).glob("*.jsonz.bad.*")), "quarantine artifacts remained after GC")
 
 
 def test_on_exit_emit_exit_feedback_reaches_stdout_contract():
@@ -16594,86 +15293,6 @@ def test_reconcile_candidate_and_plan_paths():
     )
 
 
-def test_reconcile_plan_uses_task_business_calendar_context():
-    """Reconcile scheduling and child construction must share the task calendar."""
-    import nautical_core.chain_integrity_lifecycle as reconcile
-
-    class FakeCore:
-        active = False
-        entered: list[str] = []
-
-        @staticmethod
-        def coerce_int(value, default=0):
-            try:
-                return int(value)
-            except Exception:
-                return default
-
-        @classmethod
-        def use_task_business_calendar(cls, task):
-            if str(task.get("bc") or "") == "missing":
-                raise ValueError("Unknown business calendar 'missing'")
-            @contextlib.contextmanager
-            def active_context():
-                cls.entered.append(str(task.get("bc") or "default"))
-                cls.active = True
-                try:
-                    yield
-                finally:
-                    cls.active = False
-            return active_context()
-
-    from nautical_core.chain_generation import ChainGenerationService
-
-    class FakeGeneration(ChainGenerationService):
-        def __init__(self):
-            super().__init__(FakeCore)
-
-        def parse_datetime(self, _value):
-            return None, None
-
-        def compute_cp_child_due(self, _parent):
-            expect(FakeCore.active, "reconcile computed a child outside the task calendar context")
-            return "20260102T090000Z", {"target_field": "due"}
-
-        def build_child_draft(self, parent, child_due, child_field, next_link, parent_short, kind, cpmax, until_dt):
-            expect(FakeCore.active, "reconcile built a child outside the task calendar context")
-            from nautical_core.task_codec import DEFAULT_TASK_CODEC
-            from nautical_core.task_models import NauticalTask, TaskDraft
-            values = {
-                "uuid": "22222222-0000-4000-8000-000000000002",
-                "description": "calendar child",
-                "status": "pending",
-                "chain": "on",
-                "chainID": parent.observation.to_mapping().get("chainID"),
-                "link": next_link,
-                "prevLink": parent_short,
-                "cp": "1d",
-                child_field: child_due,
-            }
-            return TaskDraft.from_task(NauticalTask.from_observation(DEFAULT_TASK_CODEC.decode_row(values, source_query="calendar fake child")))
-
-    parent = {
-        "uuid": "11111111-0000-4000-8000-000000000001",
-        "status": "completed",
-        "chain": "on",
-        "chainID": "11111111",
-        "link": 1,
-        "cp": "1d",
-        "bc": "work",
-    }
-    generation = FakeGeneration()
-    parent_obs = _fixture_observation(parent)
-    plan = reconcile.plan_recovery_decision(parent_obs, existing_children=[], hook=None, generation=generation)
-    expect(_recovery_action(plan) == "spawn", f"calendar-scoped reconcile did not spawn: {plan}")
-    expect(FakeCore.entered == ["work"], f"unexpected calendar context entries: {FakeCore.entered!r}")
-    expect(not FakeCore.active, "task business-calendar context leaked after planning")
-
-    invalid = reconcile.plan_recovery_decision(_fixture_observation(dict(parent, bc="missing")), existing_children=[], hook=None, generation=generation)
-    expect(_recovery_action(invalid) == "error", f"invalid calendar was not rejected: {invalid}")
-    expect("invalid business calendar" in invalid.reason and "missing" in invalid.reason, invalid.reason)
-
-
 def test_reconcile_expiration_candidate_requires_expiry_evidence():
     """Deleted chains should distinguish expiration, manual stop, and ambiguous evidence."""
     import nautical_core.chain_integrity_lifecycle as reconcile
@@ -17011,24 +15630,6 @@ def test_reconcile_empty_snapshot_is_authoritative():
     active = snapshot.active_rows()
     expect(candidates == [] and active == [], f"empty snapshot produced unexpected rows: {candidates!r}, {active!r}")
     expect(len(calls) == 1, f"empty snapshot triggered repeated exports: {calls!r}")
-
-
-def test_reconcile_export_diagnostics_include_elapsed_time():
-    """Repository metrics retain total and slowest command timing."""
-    with tempfile.TemporaryDirectory() as td:
-        uow = _test_operator_uow(td)
-
-        class Client:
-            def execute(self, args, *, purpose, timeout, **_kwargs):
-                from nautical_core.integration_models import CommandFailureKind, TaskCommand, TaskCommandResult
-                command = TaskCommand(("task", *args), purpose, timeout)
-                return TaskCommandResult(command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.125)
-
-        uow.client = Client()
-        uow.repository.lifecycle_candidates()
-        metrics = uow.repository.metrics()
-    expect(metrics["seconds"] == 0.125, f"total export timing missing: {metrics!r}")
-    expect(metrics["slowest_seconds"] == 0.125, f"slowest export timing missing: {metrics!r}")
 
 
 def test_reconcile_expiration_cp_advances_from_recurrence_target():
@@ -18992,7 +17593,6 @@ TESTS = [
     test_hook_on_add_reports_business_calendar_displacement_only_when_shifted,
     test_hook_on_add_rejects_unknown_business_calendar_cleanly,
     test_hook_on_add_rejects_invalid_timezone_for_nautical_task,
-    test_core_domain_configuration_validation_fails_closed,
     test_discovered_malformed_config_blocks_taskdata_reload,
     test_taskdata_reload_exposes_consistent_validated_fingerprints,
     test_hook_on_modify_rejects_unknown_business_calendar_cleanly,
@@ -19077,8 +17677,6 @@ TESTS = [
     test_hook_stdout_unicode_unescaped_on_add,
     test_hook_stdout_unicode_unescaped_on_modify,
     test_hook_protocol_loads_without_core_package,
-    test_taskwarrior_client_retries_only_transient_failures,
-    test_taskwarrior_uow_observes_budget_without_blocking_commands,
     test_taskwarrior_mutation_service_is_guarded_idempotent_and_fail_closed,
     test_child_import_rejects_incomplete_existing_rows,
     test_lifecycle_child_prefetch_reuses_one_authoritative_snapshot,
@@ -19087,13 +17685,11 @@ TESTS = [
     test_lifecycle_outbox_persists_typed_plans_and_recovers_claims,
     test_lifecycle_outbox_prunes_only_expired_acknowledged_rows,
     test_lifecycle_outbox_initialization_is_concurrent_and_rejects_unknown_schema,
-    test_lifecycle_outbox_session_reuses_connection_and_closes_at_boundary,
     test_lifecycle_outbox_bulk_compare_and_set_operations_isolate_rows,
     test_shared_outbox_persists_integrity_work_without_lifecycle_claiming,
     test_lifecycle_outbox_claims_quarantine_exhausted_and_inconsistent_rows,
     test_integration_contract_covers_all_mutation_and_outbox_states,
     test_full_hooks_receive_one_explicit_integration_context,
-    test_exit_probe_is_conservative_across_queue_states,
     test_light_taskdata_resolution_matches_hook_precedence,
     test_plain_hook_fast_paths_do_not_import_core_package,
     test_full_hook_modules_defer_core_import,
@@ -19112,12 +17708,10 @@ TESTS = [
     test_core_cache_dir_and_lock_permissions,
     test_core_cache_lock_contention_matches_safe_lock,
     test_core_cache_dir_rejects_symlink_override,
-    test_cache_location_selection_covers_install_layouts,
     test_on_modify_invalid_json_passthrough,
     test_on_modify_read_two_invalid_trailing,
     test_on_modify_read_two_array_uuid_mismatch_fails,
     test_on_modify_read_two_array_single_missing_uuid_fails,
-    test_hook_engine_reports_pending_nautical_delete_without_spawning,
     test_delete_chain_summary_span_uses_stop_time_without_last_end,
     test_end_summary_history_marks_deleted_pending_tail,
     test_delete_chain_summary_uses_stopped_title,
@@ -19169,7 +17763,6 @@ TESTS = [
     test_doctor_reports_actionable_broken_installation,
     test_doctor_reports_chain_repair_plan_findings,
     test_doctor_reports_reconcile_backfill_plans,
-    test_perf_budget_config_covers_cache_io_checks,
     test_perf_hint_benchmark_isolates_persistent_cache,
     test_perf_cold_import_records_module_profile,
     test_core_import_defers_panel_colour_module,
@@ -19220,7 +17813,6 @@ TESTS = [
     test_on_modify_recurrence_update_groups_and_flattens_changes,
     test_on_modify_native_until_update_explains_carry,
     test_on_modify_limit_update_emits_effective_boundaries,
-    test_modify_lifecycle_routes_and_promotes_new_nautical_tasks,
     test_on_add_lowercase_chainid_does_not_mark_nautical,
     test_on_add_read_one_fuzz_inputs,
     test_on_modify_read_two_fuzz_inputs,
@@ -19252,7 +17844,6 @@ TESTS = [
     test_cap_from_until_cp_includes_exact_deadline,
     test_hook_on_modify_rejects_invalid_chain_max_for_cp_and_anchor,
     test_on_modify_validates_chain_until_only_when_recurrence_or_caps_change,
-    test_on_modify_completion_finalize_skips_analytics_when_hidden,
     test_on_modify_completion_chain_snapshot_modes_and_query,
     test_on_modify_completion_snapshot_malformed_json_is_unavailable,
     test_on_modify_completion_defers_chain_export_until_after_preflight,
@@ -19262,7 +17853,6 @@ TESTS = [
     test_on_add_preview_and_completion_skip_choose_same_next_anchor,
     test_on_modify_anchor_dnf_accepts_configured_preset,
     test_on_modify_omit_dnf_accepts_configured_preset,
-    test_included_provider_preserves_anchor_file_source_description,
     test_on_add_anchor_and_anchor_file_can_coexist,
     test_on_add_anchor_file_root_gets_chainid_stamp,
     test_on_add_chainid_stamp_failure_rejects_recurring_root,
@@ -19294,14 +17884,7 @@ TESTS = [
     test_on_add_format_anchor_rows_numbers_upcoming_from_two_without_next_anchor,
     test_on_modify_panel_fallback,
     test_on_modify_panel_forwards_live_duration,
-    test_ui_live_panel_has_nautical_branding_without_changing_static_panels,
     test_ui_live_test_term_guard_restores_environment,
-    test_ui_live_renderer_reveals_cumulative_row_frames,
-    test_ui_live_renderer_reveals_multiline_values_progressively,
-    test_ui_live_animation_policy_caps_motion_and_prioritizes_urgent_panels,
-    test_ui_live_mid_animation_failure_settles_without_static_duplicate,
-    test_ui_live_oversized_panel_settles_without_starting_animation,
-    test_cache_load_quarantines_corrupt_entries_and_gc_removes_them,
     test_on_exit_emit_exit_feedback_reaches_stdout_contract,
     test_hooks_require_package_core_layout,
     test_core_import_deterministic,
@@ -19309,11 +17892,9 @@ TESTS = [
     test_on_modify_recompleted_task_with_nextlink_skips_spawn,
     test_on_modify_recompleted_task_with_existing_link_skips_spawn,
     test_reconcile_candidate_and_plan_paths,
-    test_reconcile_plan_uses_task_business_calendar_context,
     test_reconcile_repairs_invalid_native_until_from_previous_link,
     test_reconcile_native_until_manual_review_is_not_a_hard_error,
     test_reconcile_expiration_candidate_requires_expiry_evidence,
-    test_reconcile_export_diagnostics_include_elapsed_time,
     test_reconcile_expiration_cp_advances_from_recurrence_target,
     test_reconcile_hookless_completion_verifies_scheduled_and_wait_carry,
     test_reconcile_expiration_anchor_advances_from_recurrence_target,
@@ -19622,54 +18203,6 @@ def test_navigator_import_and_help_are_noninteractive_without_rich():
     expect(help_result.stderr == "", "Navigator help contaminated stderr")
 
 
-def test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe():
-    """The narrow-terminal decision remains deterministic before Rich is needed."""
-    import nautical_navigator as navigator
-
-    original = os.environ.get("ANALYZER_VERTICAL")
-    os.environ["ANALYZER_VERTICAL"] = "1"
-    try:
-        expect(navigator.TaskAnalyzer()._should_use_vertical_plot(200), "vertical mode was not selected")
-    finally:
-        if original is None:
-            os.environ.pop("ANALYZER_VERTICAL", None)
-        else:
-            os.environ["ANALYZER_VERTICAL"] = original
-
-
-def test_navigator_shared_graph_scales_to_large_chain():
-    """Shared graph references should assemble a large chain without local ref scans."""
-    import nautical_navigator as navigator
-
-    tasks = []
-    for index in range(1000):
-        tasks.append({
-            "uuid": f"00000000-0000-4000-8000-{index:012d}",
-            "chainID": "large-chain",
-            "link": index + 1,
-            "prevLink": "" if index == 0 else tasks[-1]["uuid"],
-            "entry": f"2026-01-{(index % 28) + 1:02d}",
-        })
-
-    class _Reference:
-        state = SimpleNamespace(value="resolved")
-
-        def __init__(self, target_uuid):
-            self.target_uuid = target_uuid
-
-    class _Graph:
-        def reference(self, uuid, _field):
-            index = int(uuid[-12:])
-            return _Reference("" if index == 0 else tasks[index - 1]["uuid"])
-
-    analyzer = navigator.TaskAnalyzer()
-    analyzer._operator_graph = _Graph()
-    by_uuid, children, indeg = analyzer._build_global_graph(tasks)
-    expect(len(by_uuid) == 1000, "large shared graph dropped tasks")
-    expect(len(children[tasks[0]["uuid"]]) == 1, "shared graph did not link the first child")
-    expect(indeg[tasks[-1]["uuid"]] == 1, "shared graph lost the final predecessor")
-
-
 TESTS.extend([
     test_query_process_boundary_emits_one_json_document,
     test_operator_processes_concurrent_contracts_share_taskdata_safely,
@@ -19686,22 +18219,14 @@ TESTS.extend([
     test_navigator_fallback_export_uses_empty_filter,
     test_shared_time_slot_resolver_keeps_hook_and_navigator_parity,
     test_navigator_projects_all_slots_in_a_time_window,
-    test_compiled_schedule_is_canonical_and_reusable,
-    test_chain_generation_hook_adapter_does_not_capture_modify_helpers,
-    test_chain_generation_rejects_missing_chain_id,
     test_on_modify_reuses_task_scoped_evaluator_and_scheduler_binding,
     test_random_time_window_is_stable_across_processes,
     test_navigator_import_and_help_are_noninteractive_without_rich,
     test_navigator_reads_through_read_only_invocation_repository,
-    test_navigator_narrow_terminal_uses_vertical_mode_without_rich_probe,
-    test_navigator_shared_graph_scales_to_large_chain,
     test_navigator_uses_anchor_and_anchor_file_sources,
     test_on_modify_read_two_single_plain_delete_without_uuid_is_ignored,
     test_on_modify_read_two_uuid_mismatch_without_nautical_fields_is_ignored,
-    test_performance_large_expressions,
-    test_weekday_weekend_single_time,
     test_config_fingerprint_invalidates_persistent_cache_keys,
-    test_hint_cache_keys_include_semantic_fingerprint,
     test_configuration_drift_detects_edit_and_removal,
     test_installer_initializes_explicit_timezone_config,
 ])

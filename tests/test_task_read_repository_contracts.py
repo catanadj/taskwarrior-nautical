@@ -58,6 +58,23 @@ def unit_of_work(taskdata: str | Path):
 
 
 class TaskReadSnapshotContractTests(unittest.TestCase):
+    def test_repository_metrics_report_total_and_slowest_command_duration(self) -> None:
+        class Client:
+            def execute(self, args, *, purpose, timeout, **_kwargs):
+                command = TaskCommand(("task", *args), purpose, timeout)
+                return TaskCommandResult(
+                    command, 0, "[]", "", CommandFailureKind.SUCCESS, 1, 0.125
+                )
+
+        with TemporaryDirectory() as directory:
+            uow = unit_of_work(directory)
+            uow.client = Client()
+            uow.repository.lifecycle_candidates()
+            metrics = uow.repository.metrics()
+
+        self.assertEqual(metrics["seconds"], 0.125)
+        self.assertEqual(metrics["slowest_seconds"], 0.125)
+
     def test_lifecycle_candidate_query_distinguishes_bounded_and_full_audit(self) -> None:
         class Client:
             def __init__(self) -> None:

@@ -24,7 +24,13 @@ from unittest.mock import patch
 from nautical_core.lifecycle_application import LifecycleApplicationService
 from nautical_core.lifecycle_models import ExecutionStage, LifecycleDrainProgress, LifecycleDrainStage
 from nautical_core.lifecycle_models import LifecycleAction, LifecycleEvent, LifecycleIdentity, LifecyclePlan, ParentGuard
-from nautical_core.lifecycle_outbox import LifecycleOutboxRecord, LifecycleOutboxRepository, OutboxFailure, OutboxResult
+from nautical_core.lifecycle_outbox import (
+    LifecycleOutboxRecord,
+    LifecycleOutboxRepository,
+    OutboxFailure,
+    OutboxResult,
+    OutboxResultKind,
+)
 from nautical_core.operator_context import OperatorInvocationBudget
 from nautical_core.operator_models import OperatorLimits
 from nautical_core.integration_models import MutationOperation, MutationOutcome, MutationOutcomeKind, MutationPostcondition
@@ -40,6 +46,30 @@ from tests.support.lifecycle_execution import LifecycleExecutionFixture
 
 
 class LifecycleFailureInjectionTests(unittest.TestCase):
+    def test_outbox_session_reuses_one_connection_and_closes_at_boundary(self) -> None:
+        with TemporaryDirectory() as directory:
+            repo = LifecycleOutboxRepository(Path(directory))
+            connects = 0
+            original_connect = repo._connect
+
+            def traced_connect():
+                nonlocal connects
+                connects += 1
+                return original_connect()
+
+            repo._connect = traced_connect
+            with repo.session():
+                first = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
+                second = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
+                self.assertTrue(first.ok and second.ok)
+                self.assertEqual(connects, 1)
+            self.assertIsNone(repo._session_conn)
+            self.assertIsNone(repo._session_pid)
+
+            standalone = repo._with_connection(lambda _conn: OutboxResult(OutboxResultKind.APPLIED))
+            self.assertTrue(standalone.ok)
+            self.assertEqual(connects, 2)
+
     def test_sqlite_busy_timeout_uses_configured_seconds_as_milliseconds(self) -> None:
         with TemporaryDirectory() as td:
             outbox = LifecycleOutboxRepository(Path(td), connect_timeout=0.1)

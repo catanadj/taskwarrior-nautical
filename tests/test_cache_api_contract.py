@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import nautical_core as core
 from nautical_core import cache_api
+from nautical_core import cache_support
 
 
 class _Clock:
@@ -43,6 +44,7 @@ class CacheApiContractTests(unittest.TestCase):
         config: list[str] | None = None,
         build_acf=None,
         atomic_replace=None,
+        semantic_fingerprint=None,
         ttl: int = 0,
         time_mod=None,
     ):
@@ -71,11 +73,52 @@ class CacheApiContractTests(unittest.TestCase):
             namespace["build_acf"] = build_acf
         if atomic_replace is not None:
             namespace["_cache_atomic_replace"] = atomic_replace
+        if semantic_fingerprint is not None:
+            namespace["_cache_semantic_fingerprint"] = semantic_fingerprint
         namespace["_import_sibling"] = core._import_sibling
         binding = cache_api.for_core(namespace=namespace, module=core)
         namespace["_cache_lock"] = binding._cache_lock
         self._namespaces.append(namespace)
         return binding
+
+    def test_cache_location_selection_prefers_safe_install_layouts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            override = str(root / "shared-cache")
+            taskdata = str(root / "taskdata")
+            default = str(root / "xdg" / "nautical")
+            checkout = str(Path(cache_support.__file__).resolve().parent / ".nautical-cache")
+
+            with patch.dict(os.environ, {"TASKDATA": taskdata}, clear=False):
+                os.environ.pop("NAUTICAL_ALLOW_TMP_CACHE", None)
+                with patch.object(cache_support, "ensure_cache_dir", side_effect=lambda path: path == override):
+                    self.assertEqual(cache_support.select_cache_dir(
+                        anchor_cache_dir_override=override,
+                        nautical_cache_dir_path=default,
+                        validated_user_dir=lambda path, **_kwargs: path,
+                    ), override)
+
+                with patch.object(cache_support, "ensure_cache_dir", side_effect=lambda path: path == checkout):
+                    self.assertEqual(cache_support.select_cache_dir(
+                        anchor_cache_dir_override="",
+                        nautical_cache_dir_path=default,
+                        validated_user_dir=lambda path, **_kwargs: path,
+                    ), checkout)
+
+                managed = str(root / "taskdata" / ".nautical-cache")
+                with patch.object(cache_support, "ensure_cache_dir", side_effect=lambda path: path == managed):
+                    self.assertEqual(cache_support.select_cache_dir(
+                        anchor_cache_dir_override="",
+                        nautical_cache_dir_path=default,
+                        validated_user_dir=lambda path, **_kwargs: path,
+                    ), managed)
+
+                with patch.object(cache_support, "ensure_cache_dir", side_effect=lambda path: path == default):
+                    self.assertEqual(cache_support.select_cache_dir(
+                        anchor_cache_dir_override="",
+                        nautical_cache_dir_path=default,
+                        validated_user_dir=lambda path, **_kwargs: path,
+                    ), default)
 
     def test_clear_cache_environment_toggle_invokes_global_clear(self) -> None:
         with (
@@ -114,6 +157,27 @@ class CacheApiContractTests(unittest.TestCase):
             self.assertEqual(len(quarantined), 1)
             self.assertEqual(quarantined[0].read_bytes(), b"not valid cache data")
             self.assertIsNone(binding.cache_load("broken"))
+
+    def test_explicit_gc_removes_quarantined_cache_payloads(self) -> None:
+        import base64
+        import zlib
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binding = self._binding(root)
+            malformed_shape = base64.b85encode(
+                zlib.compress(json.dumps({"dnf": "invalid"}).encode("utf-8"))
+            )
+            for key, payload in (("broken", b"not-a-cache"), ("invalid", malformed_shape)):
+                Path(binding._cache_path(key)).write_bytes(payload)
+                self.assertIsNone(binding.cache_load(key))
+
+            quarantined = list(root.glob("*.jsonz.bad.*"))
+            self.assertEqual(len(quarantined), 2)
+            result = binding.cache_gc(stale_tmp_age=0)
+
+            self.assertGreaterEqual(result["temporary"], 2)
+            self.assertEqual(list(root.glob("*.jsonz.bad.*")), [])
 
     def test_reader_retries_when_file_generation_changes_during_read(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -279,6 +343,19 @@ class CacheApiContractTests(unittest.TestCase):
             second = binding.cache_key_for_task("m:1", "next", "calendar-a")
             self.assertNotEqual(first, second)
             self.assertNotEqual(second, binding.cache_key_for_task("m:1", "next", "calendar-b"))
+
+    def test_semantic_fingerprint_changes_hint_cache_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            fingerprint = ["semantic-test-a"]
+            binding = self._binding(
+                Path(td), semantic_fingerprint=lambda: fingerprint[0]
+            )
+
+            first = binding.cache_key_for_task("w:mon", "skip")
+            fingerprint[0] = "semantic-test-b"
+            second = binding.cache_key_for_task("w:mon", "skip")
+
+            self.assertNotEqual(first, second)
 
     def test_task_key_memoizes_acf_work_until_its_binding_cache_is_cleared(self) -> None:
         with tempfile.TemporaryDirectory() as td:

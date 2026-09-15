@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 import ast
+import json
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -13,6 +15,55 @@ import nautical_core
 
 
 class PerformanceBudgetContractTests(unittest.TestCase):
+    def test_budget_manifest_covers_cache_seasonal_hook_and_workflow_paths(self) -> None:
+        manifest = json.loads((budget.ROOT / "dev_tools" / "perf_budget.json").read_text(encoding="utf-8"))
+        budgets = manifest["budgets_seconds"]
+        workload = manifest["workload"]
+        self.assertTrue({
+            "cache_save", "cache_load_hot", "build_hints_cold", "build_hints_warm",
+            "outbox_schema_hot", "outbox_schema_cold", "seasonal_parse_validate",
+            "seasonal_next_after", "seasonal_build_hints_cold", "seasonal_build_hints_warm",
+        } <= set(budgets))
+        self.assertTrue({
+            "cache_save_rounds", "cache_load_rounds", "outbox_schema_hot_rounds",
+            "outbox_schema_cold_rounds",
+        } <= set(workload))
+        self.assertTrue({"y:d60,d-1", "y:w20 + w:mon"} <= set(workload["expressions"]))
+        self.assertTrue({
+            "(w:mon)@in-spring=first,last@t=09:00,17:00",
+            "(y:02-29)@in-winter=first",
+        } <= set(manifest["seasonal_workload"]["expressions"]))
+
+        slow = manifest["slow_device_budgets_seconds"]
+        self.assertTrue({
+            "build_hints_cold", "build_hints_warm", "seasonal_build_hints_cold",
+            "seasonal_build_hints_warm",
+        } <= set(slow))
+        hook = manifest["hook_fast_path"]
+        self.assertGreaterEqual(hook["repeats"], 3)
+        self.assertGreaterEqual(hook["managed_layout_max_ratio"], 1.0)
+        self.assertGreaterEqual(hook["staged_layout_max_ratio"], 1.0)
+        self.assertTrue({
+            "hook_plain_add", "hook_plain_modify", "hook_nautical_ordinary_modify", "hook_empty_exit",
+        } <= set(hook["max_ratio"]))
+        workflow = manifest["workflow_perf"]
+        self.assertTrue({
+            "workflow_cp_completion", "workflow_cp_completion_nonfinal",
+            "workflow_cp_completion_nonfinal_idempotent", "workflow_anchor_completion",
+            "workflow_anchor_completion_nonfinal", "workflow_anchor_completion_nonfinal_idempotent",
+            "workflow_queue_drain", "workflow_reconcile",
+        } <= set(workflow["budgets_seconds"]))
+        self.assertTrue({
+            "workflow_queue_drain", "workflow_queue_drain_partial_recovery",
+        } <= set(workflow["slow_device_budgets_seconds"]))
+        extended = manifest["extended_workload"]
+        self.assertTrue({
+            "anchor_file_large_cold", "anchor_file_large_hot", "anchor_file_nonmonotonic",
+            "anchor_file_business_day_omissions", "business_calendar_large_omissions",
+            "native_until_reconcile_dry_run", "native_until_reconcile_apply",
+        } <= set(extended["budgets_seconds"]))
+        self.assertIsInstance(extended["slow_device_budgets_seconds"], dict)
+
     def test_thin_hook_wrappers_do_not_import_heavy_stacks(self) -> None:
         forbidden = {"astral", "rich", "nautical_core.scheduler_service", "nautical_core.recurrence_evaluator"}
         root = Path(__file__).parents[1]
@@ -160,6 +211,37 @@ class PerformanceBudgetContractTests(unittest.TestCase):
             result = probe_exit_work(missing)
             self.assertFalse(result.definitely_empty)
             self.assertIn("unavailable", result.reason)
+
+    def test_exit_probe_bypasses_only_known_empty_outboxes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertTrue(probe_exit_work(root).definitely_empty)
+
+            state_dir = root / ".nautical-state"
+            state_dir.mkdir()
+            database = state_dir / ".nautical_lifecycle_outbox.db"
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "CREATE TABLE lifecycle_outbox (intent_id TEXT PRIMARY KEY, processing_state TEXT NOT NULL)"
+                )
+                connection.execute("PRAGMA user_version = 1")
+            self.assertTrue(probe_exit_work(root).definitely_empty)
+
+            with sqlite3.connect(database) as connection:
+                connection.execute("PRAGMA user_version = 3")
+            self.assertTrue(probe_exit_work(root).may_have_work)
+
+            with sqlite3.connect(database) as connection:
+                connection.execute("PRAGMA user_version = 2")
+                connection.execute("INSERT INTO lifecycle_outbox VALUES ('intent-1', 'ready')")
+            self.assertTrue(probe_exit_work(root).may_have_work)
+
+            with sqlite3.connect(database) as connection:
+                connection.execute("UPDATE lifecycle_outbox SET processing_state='claimed'")
+            self.assertTrue(probe_exit_work(root).may_have_work)
+
+            database.write_bytes(b"not-a-sqlite-database")
+            self.assertTrue(probe_exit_work(root).may_have_work)
 
     def test_lazy_facade_defaults_do_not_share_configuration_tables(self) -> None:
         self.assertIsNot(nautical_core.ANCHOR_PRESETS, nautical_core.OMIT_PRESETS)

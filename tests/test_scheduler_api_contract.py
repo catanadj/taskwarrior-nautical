@@ -237,6 +237,15 @@ class SchedulerApiDelegationTests(unittest.TestCase):
 
 
 class SchedulerExpressionContractTests(unittest.TestCase):
+    def test_complex_weekday_union_projects_the_next_day(self) -> None:
+        expression = " | ".join(
+            f"w:{day}" for day in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        )
+        occurrence, _meta = core.next_after_expr(
+            core.validate_anchor_expr_strict(expression), date(2024, 1, 1)
+        )
+        self.assertEqual(occurrence, date(2024, 1, 2))
+
     def test_modified_atom_interval_roll_and_offset_characterization(self) -> None:
         cases = (
             ("m/2:31", date(2024, 1, 1), date(2024, 1, 1), date(2024, 1, 31)),

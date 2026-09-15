@@ -666,6 +666,19 @@ class FileBackedRecurrenceContractTests(unittest.TestCase):
             ],
         )
 
+    def test_anchor_file_occurrence_retains_csv_description(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "calendar.csv").write_text(
+                "date,description\n2026-08-03,Water the plants\n", encoding="utf-8"
+            )
+            occurrences = anchor_files.AnchorFileOccurrenceProvider(
+                "calendar.csv@t=09:00", directory, (9, 0)
+            ).occurrences()
+
+        self.assertEqual(len(occurrences), 1)
+        self.assertEqual(occurrences[0].source, "anchor_file")
+        self.assertEqual(occurrences[0].description, "Water the plants")
+
     def test_anchor_file_provider_projects_one_lazy_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "calendar.csv").write_text(

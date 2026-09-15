@@ -3,6 +3,7 @@
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -18,6 +19,39 @@ from nautical_core.query_models import TaskIdentity
 
 
 class NavigatorViewModelTests(unittest.TestCase):
+    def test_narrow_terminal_selects_vertical_plot_without_rich_probe(self) -> None:
+        with patch.dict(os.environ, {"ANALYZER_VERTICAL": "1"}):
+            self.assertTrue(navigator.TaskAnalyzer()._should_use_vertical_plot(200))
+
+    def test_shared_graph_assembles_large_chain_with_authoritative_references(self) -> None:
+        tasks = []
+        for index in range(1000):
+            tasks.append({
+                "uuid": f"00000000-0000-4000-8000-{index:012d}",
+                "chainID": "large-chain",
+                "link": index + 1,
+                "prevLink": "" if index == 0 else tasks[-1]["uuid"],
+                "entry": f"2026-01-{(index % 28) + 1:02d}",
+            })
+
+        class Reference:
+            state = SimpleNamespace(value="resolved")
+
+            def __init__(self, target_uuid):
+                self.target_uuid = target_uuid
+
+        class Graph:
+            def reference(self, uuid, _field):
+                index = int(uuid[-12:])
+                return Reference("" if index == 0 else tasks[index - 1]["uuid"])
+
+        analyzer = navigator.TaskAnalyzer()
+        analyzer._operator_graph = Graph()
+        by_uuid, children, indeg = analyzer._build_global_graph(tasks)
+        self.assertEqual(len(by_uuid), 1000)
+        self.assertEqual(len(children[tasks[0]["uuid"]]), 1)
+        self.assertEqual(indeg[tasks[-1]["uuid"]], 1)
+
     def test_symbolic_anchor_time_applies_event_offset_in_navigator_zone(self) -> None:
         zone = ZoneInfo("America/New_York")
         event = datetime(2026, 7, 6, 23, 5, tzinfo=timezone.utc)

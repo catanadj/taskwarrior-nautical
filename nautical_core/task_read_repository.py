@@ -19,7 +19,7 @@ from .integration_models import (
 )
 from .taskwarrior_uow import QueryScope, QueryScopeKind
 from .task_codec import DEFAULT_TASK_CODEC, TaskCodecError
-from .task_models import FieldPresence, TaskObservation, TaskStatus
+from .task_models import ACTIVE_TASK_STATUSES, ALL_TASK_STATUSES, FieldPresence, TaskObservation, TaskStatus
 from .task_set_reads import AuthoritativeSetReadService, ChainSlot, ChainSlotSetRequest, SetReadResult, SetReadStatus, UUIDSetRequest
 
 if TYPE_CHECKING:
@@ -30,8 +30,6 @@ if TYPE_CHECKING:
 # accepted only by TaskCodec, never retained by the authoritative repository.
 TaskRow: TypeAlias = TaskObservation
 TaskSlot: TypeAlias = tuple[str, int]
-ALL_TASK_STATUSES = ("completed", "deleted", "pending", "recurring", "waiting")
-ACTIVE_TASK_STATUSES = ("pending", "waiting")
 _RETRYABLE_READ_FAILURES = frozenset(
     {CommandFailureKind.TIMEOUT, CommandFailureKind.BUSY, CommandFailureKind.EXECUTION_FAILURE}
 )

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any
+
+from .query_models import OmissionPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +49,7 @@ class OccurrenceRangeRequest:
     cursor: OccurrenceCursor
     end_local: datetime | None = None
     limit: int = 1
-    omission_policy: Literal["exclude", "include", "report"] = "exclude"
+    omission_policy: OmissionPolicy = "exclude"
     max_iterations: int = 512
     max_file_skips: int = 512
 

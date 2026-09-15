@@ -23,6 +23,7 @@ from .time_projection import ProjectionResult
 from .scheduler_trace import SchedulerTrace, activate
 from .task_models import NauticalTask, TaskObservation
 from .operator_context import OperatorBudgetLedger
+from .query_models import OmissionPolicy
 
 
 @dataclass(slots=True)
@@ -122,7 +123,7 @@ class SchedulerService:
         cursor: OccurrenceCursor,
         *,
         limit: int,
-        omission_policy: str = "exclude",
+        omission_policy: OmissionPolicy = "exclude",
         count_omitted: bool | None = None,
         **kwargs: Any,
     ) -> OccurrenceCollectionResult:

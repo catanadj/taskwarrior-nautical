@@ -61,6 +61,12 @@ class TaskStatus(str, Enum):
     RECURRING = "recurring"
 
 
+# Serialized values are derived once from the domain enum for Taskwarrior
+# query boundaries; internal code should compare TaskStatus members.
+ALL_TASK_STATUSES = tuple(status.value for status in TaskStatus)
+ACTIVE_TASK_STATUSES = (TaskStatus.PENDING.value, TaskStatus.WAITING.value)
+
+
 @dataclass(frozen=True, slots=True)
 class _FrozenMapping:
     items: tuple[tuple[str, object], ...]
@@ -751,6 +757,8 @@ __all__ = (
     "RecurrenceState",
     "ShortUUIDRef",
     "TaskStatus",
+    "ALL_TASK_STATUSES",
+    "ACTIVE_TASK_STATUSES",
     "TaskLink",
     "TaskObservation",
     "TaskDraft",

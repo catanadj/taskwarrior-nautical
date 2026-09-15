@@ -14,9 +14,17 @@ from nautical_core.query_models import (
     TaskIdentity,
     TaskOccurrenceResult,
 )
+from nautical_core.scheduler_cursor import OccurrenceCursor, OccurrenceRangeRequest
 
 
 class QueryModelContractsTests(unittest.TestCase):
+    def test_scheduler_cursor_accepts_shared_omission_policy_values(self) -> None:
+        request = OccurrenceRangeRequest(
+            cursor=OccurrenceCursor.strict_after(datetime(2026, 1, 1)),
+            omission_policy="report",
+        )
+        self.assertEqual(request.omission_policy, "report")
+
     def test_public_models_round_trip_and_reject_invalid_shapes(self) -> None:
         request = OccurrenceQueryRequest.from_mapping(
             {

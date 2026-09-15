@@ -10,11 +10,11 @@ from typing import Mapping, Protocol, Sequence, cast
 from uuid import UUID
 
 from .integration_models import Absent, FailureEvidence, Found, TaskCommandResult, TaskRead, Unavailable
-from .task_models import FieldPresence, TaskObservation
+from .task_models import ALL_TASK_STATUSES, FieldPresence, TaskObservation
 
 
 _CHAIN_ID_RE = re.compile(r"^[0-9a-fA-F]{8,64}$")
-_DEFAULT_STATUSES = ("completed", "deleted", "pending", "recurring", "waiting")
+_DEFAULT_STATUSES = ALL_TASK_STATUSES
 
 
 class SetReadStatus(str, Enum):

@@ -678,12 +678,23 @@ class AnchorFileOccurrenceProvider:
                     if not aware or not aware[0]:
                         order_keys.append(value)
                         continue
-                    # Resolve from the wall-clock slot as well as the
-                    # provider's attached offset. This makes nonexistent DST
-                    # slots converge to one instant on every supported
-                    # Python/tzdata combination.
+                    wall = value.replace(tzinfo=None)
+                    # Preserve distinct fall-back folds, but resolve a
+                    # nonexistent spring-forward slot canonically. Calling
+                    # local_naive_to_utc unconditionally would collapse the
+                    # two legitimate fold instants.
+                    valid_folds = []
+                    for fold in (0, 1):
+                        folded = wall.replace(tzinfo=value.tzinfo, fold=fold)
+                        round_trip = folded.astimezone(timezone.utc).astimezone(value.tzinfo)
+                        if round_trip.replace(tzinfo=None) == wall:
+                            valid_folds.append(fold)
                     try:
-                        order_keys.append(local_naive_to_utc(value.replace(tzinfo=None), value.tzinfo))
+                        order_keys.append(
+                            local_naive_to_utc(wall, value.tzinfo)
+                            if not valid_folds
+                            else value.astimezone(timezone.utc)
+                        )
                     except (TypeError, ValueError):
                         order_keys.append(value.astimezone(timezone.utc))
                 ordered_pairs = sorted(

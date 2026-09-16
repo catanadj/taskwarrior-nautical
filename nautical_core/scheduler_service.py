@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from .evaluation_session import EvaluationSession
@@ -145,8 +145,21 @@ class SchedulerService:
                     batch = self.session.collect_after_cursor(cursor, limit=limit, **kwargs)
             if not isinstance(batch, OccurrenceBatch):
                 batch = OccurrenceBatch(batch)
+            # Providers normally deduplicate their own candidates, but keep
+            # the service result stable when a DST-normalized source exposes
+            # the same instant through two local representations.
+            unique = []
+            seen_instants = set()
+            for occurrence in batch:
+                instant = getattr(occurrence, "local_datetime", None)
+                if isinstance(instant, datetime) and instant.tzinfo is not None and instant.utcoffset() is not None:
+                    key = instant.astimezone(timezone.utc)
+                    if key in seen_instants:
+                        continue
+                    seen_instants.add(key)
+                unique.append(occurrence)
             result = OccurrenceCollectionResult(
-                occurrences=tuple(batch),
+                occurrences=tuple(unique),
                 cursor=cursor,
                 source=self.session.evaluator.kind or "scheduler",
                 terminal=batch.terminal,

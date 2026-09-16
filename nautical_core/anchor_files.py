@@ -658,7 +658,20 @@ class AnchorFileOccurrenceProvider:
             candidates: list[datetime] = []
             descriptions: list[str] = []
             for d0, hhmm, description in records:
-                raw_candidate = build_local_datetime(d0, hhmm)
+                # A recurrence context is the authoritative timezone for
+                # file slots. Resolve the wall time directly here so the
+                # spring-forward gap policy is independent of callback
+                # implementation or runner tzdata defaults. Context-free
+                # callers retain the injected conversion contract (including
+                # explicit fall-back fold tests).
+                context_zone = getattr(self.context, "timezone", None)
+                if context_zone is not None:
+                    raw_candidate = local_naive_to_utc(
+                        datetime(d0.year, d0.month, d0.day, hhmm[0], hhmm[1]),
+                        context_zone,
+                    )
+                else:
+                    raw_candidate = build_local_datetime(d0, hhmm)
                 if not isinstance(raw_candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime candidate.")
                 candidate = to_local(raw_candidate)

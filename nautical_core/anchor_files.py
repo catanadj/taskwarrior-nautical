@@ -670,11 +670,12 @@ class AnchorFileOccurrenceProvider:
                         datetime(d0.year, d0.month, d0.day, hhmm[0], hhmm[1]),
                         context_zone,
                     )
+                    candidate = raw_candidate.astimezone(context_zone)
                 else:
                     raw_candidate = build_local_datetime(d0, hhmm)
+                    candidate = to_local(raw_candidate)
                 if not isinstance(raw_candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime candidate.")
-                candidate = to_local(raw_candidate)
                 if not isinstance(candidate, datetime):
                     raise TypeError("Anchor-file provider returned a non-datetime local value.")
                 candidates.append(candidate)

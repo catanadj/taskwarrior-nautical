@@ -13,6 +13,10 @@ Nautical 7.5.1 is a focused reliability bug-fix release following 7.5.0.
 - Made interrupted on-exit drains user-friendly: Ctrl-C now produces a compact
   recovery panel instead of exposing a traceback, with guidance to run
   `nautical reconcile --apply`.
+- Added recurrence-update panels for direct `until`, `wait`, and `scheduled`
+  edits, while keeping `due` as the root for coordinated temporal shifts.
+- Fixed astronomy anchor offsets so hour and minute modifiers are accepted and
+  preserved in the natural-language recurrence description.
 
 ## Verification
 

@@ -352,6 +352,12 @@ def lifecycle_read_service_for(host: Any):
     state = host._modify_runtime_state()
     existing = getattr(state, "lifecycle_read_service", None)
     if existing is not None:
+        # Completion setup attaches the authoritative repository immediately
+        # before the first lifecycle read. Refresh a service that was eagerly
+        # created by the composition root before that attachment.
+        repository = getattr(state, "task_repository", None)
+        if repository is not None and getattr(existing, "_repository", None) is None:
+            existing._repository = repository
         return existing
     module = host._module("lifecycle_read_service")
     read_effects = host._module("modify_read_effects")

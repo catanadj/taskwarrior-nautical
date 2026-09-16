@@ -27,13 +27,15 @@ task add "Exact follow-up" cp:24h+1s
 
 ## Keep `scheduled` and `wait` offsets when due moves
 
-When you move the due date of an existing completion-period task, Nautical
-shifts its unchanged `scheduled` and `wait` values by the same local-time
-amount. For example, if `scheduled` is 10 minutes before `due` and `wait` is
-20 minutes before `due`, moving `due` from July 10, 2026, at 09:00 to July 15,
-2026, at 09:00 moves those fields to July 15 at 08:50 and 08:40. Nautical
-preserves each field independently, so a `scheduled` or `wait` value you edit
-yourself takes precedence while the other unchanged value still follows `due`.
+`due` is the root of the temporal relationship. When you move the due date of
+an existing completion-period task, Nautical shifts each unchanged `scheduled`,
+`wait`, and native `until` value by the same local-time amount. For example, if
+`scheduled` is 10 minutes before `due`, `wait` is 20 minutes before `due`, and
+`until` is one hour after `due`, moving `due` from July 10, 2026, at 09:00 to
+July 15, 2026, at 09:00 moves those fields to July 15 at 08:50, 08:40, and
+10:00. Editing `scheduled` or `wait` directly changes only that field; it does
+not move `due`, the other temporal fields, or `until`. Editing `until` directly
+also changes only `until`.
 
 Nautical applies the offset in its configured timezone. If the move crosses a
 daylight-saving transition, it preserves the local clock relationship; the

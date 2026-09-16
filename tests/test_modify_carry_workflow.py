@@ -20,7 +20,7 @@ from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
-    def test_wait_edit_carries_native_until_by_the_same_delta(self) -> None:
+    def test_wait_edit_does_not_carry_native_until(self) -> None:
         old = {
             "due": "2026-08-25T09:00:00Z",
             "wait": "2026-08-25T08:00:00Z",
@@ -47,8 +47,8 @@ class TemporalCarryWorkflowTests(unittest.TestCase):
             diagnostic=lambda message: self.fail(message),
         )
 
-        self.assertTrue(carried)
-        self.assertEqual(new["until"], "2026-08-26T01:00:00Z")
+        self.assertFalse(carried)
+        self.assertEqual(new["until"], old["until"])
 
     def test_temporal_edits_are_reported_as_recurrence_changes(self) -> None:
         changes = recurrence_setting_changes(

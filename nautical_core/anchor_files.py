@@ -686,7 +686,11 @@ class AnchorFileOccurrenceProvider:
             self._candidate_records = []
             self._candidate_keys = []
             for order_key, candidate, description in ordered_pairs:
-                if not self._candidate_records or compare_datetimes(candidate, self._candidate_records[-1][0]) != 0:
+                # Deduplicate by the normalized ordering key (UTC for aware
+                # values), not by local datetime wall-time/fold semantics.
+                # This makes DST-gap normalization stable across tzdata/Python
+                # versions when two source slots resolve to one instant.
+                if not self._candidate_records or compare_datetimes(order_key, self._candidate_keys[-1]) != 0:
                     self._candidate_records.append((candidate, description))
                     self._candidate_keys.append(order_key)
                 elif not self._candidate_records[-1][1] and description:

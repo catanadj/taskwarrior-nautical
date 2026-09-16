@@ -85,27 +85,23 @@ class SchedulerService:
     def _occurrence_instant_key(self, occurrence: Any) -> datetime | None:
         """Return a stable UTC key, including for providers omitting metadata."""
         instant = getattr(occurrence, "local_datetime", None)
-        if not isinstance(instant, datetime):
+        source = getattr(occurrence, "source", None)
+        if source == "anchor_file":
             # Anchor-file providers historically returned only day/hour/minute
-            # records. Reconstructing their configured local value keeps DST
-            # gap normalization deterministic across tzdata versions while
-            # avoiding assumptions for unrelated provider types.
-            if getattr(occurrence, "source", None) != "anchor_file":
-                return None
+            # records. Prefer reconstructing their configured local value so
+            # DST-gap normalization is deterministic across tzdata versions.
             context = getattr(self.session, "context", None)
             zone = getattr(context, "timezone", None)
             day = getattr(occurrence, "day", None)
             hour = getattr(occurrence, "hour", None)
             minute = getattr(occurrence, "minute", None)
-            if zone is None or not isinstance(day, date) or isinstance(day, datetime):
-                return None
-            if not isinstance(hour, int) or not isinstance(minute, int):
-                return None
-            try:
-                instant = datetime.combine(day, time(hour, minute), tzinfo=zone)
-            except (TypeError, ValueError):
-                return None
-        if instant.tzinfo is None or instant.utcoffset() is None:
+            if zone is not None and isinstance(day, date) and not isinstance(day, datetime):
+                if isinstance(hour, int) and isinstance(minute, int):
+                    try:
+                        instant = datetime.combine(day, time(hour, minute), tzinfo=zone)
+                    except (TypeError, ValueError):
+                        instant = None
+        if not isinstance(instant, datetime) or instant.tzinfo is None or instant.utcoffset() is None:
             return None
         return instant.astimezone(timezone.utc)
 

@@ -30,7 +30,9 @@ task add "Moon observation" anchor:"y:jul@t=moonrise"
 ```
 
 Supported symbolic times are `sunrise`, `sunset`, `dawn`, `dusk`, `moonrise`,
-and `moonset`. Time offsets are applied after the event is resolved.
+and `moonset`. Time offsets are applied after the event is resolved. Use `@-30m` or
+`@-1h` to schedule before the event (and `@+30m`/`@+1h` for after it); the
+natural-language description reports the resulting offset.
 
 Rise and set events can be unavailable on a particular date and location.
 When a broader date expression is used, Nautical continues searching eligible

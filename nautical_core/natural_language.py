@@ -453,6 +453,21 @@ def describe_term_business_day_offset(term) -> int:
     return total
 
 
+def describe_term_time_offset(term) -> str:
+    """Describe a time-of-day offset in compact, user-facing language."""
+    minutes = int(term_collect_mods(term).get("time_offset_minutes") or 0)
+    if not minutes:
+        return ""
+    direction = "later" if minutes > 0 else "earlier"
+    hours, remainder = divmod(abs(minutes), 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if remainder:
+        parts.append(f"{remainder} minute{'s' if remainder != 1 else ''}")
+    return f", {' '.join(parts)} {direction}"
+
+
 def describe_roll_suffix(roll: str) -> str:
     if roll == "pbd":
         return " if business day; otherwise the previous business day"
@@ -467,6 +482,7 @@ def describe_inject_schedule_suffixes(txt: str, term) -> str:
     roll = describe_term_roll_shift(term)
     day_offset = describe_term_day_offset(term)
     business_day_offset = describe_term_business_day_offset(term)
+    time_offset_suffix = describe_term_time_offset(term)
     if roll:
         suffix = describe_roll_suffix(roll)
     elif describe_term_bd_filter(term):
@@ -487,7 +503,7 @@ def describe_inject_schedule_suffixes(txt: str, term) -> str:
         count = abs(business_day_offset)
         offset_suffix += f", {count} business day{'s' if count != 1 else ''} earlier"
 
-    if not suffix and not offset_suffix:
+    if not suffix and not offset_suffix and not time_offset_suffix:
         return txt
 
     targets = [
@@ -500,12 +516,12 @@ def describe_inject_schedule_suffixes(txt: str, term) -> str:
     ]
     for target in targets:
         if target in txt:
-            return txt.replace(target, target + suffix + offset_suffix)
+            return txt.replace(target, target + suffix + offset_suffix) + time_offset_suffix
 
     if " at " in txt:
         head, _sep, tail = txt.partition(" at ")
-        return f"{head}{suffix}{offset_suffix} at {tail}"
-    return txt + suffix + offset_suffix
+        return f"{head}{suffix}{offset_suffix} at {tail}{time_offset_suffix}"
+    return txt + suffix + offset_suffix + time_offset_suffix
 
 
 def describe_anchor_term_collect(

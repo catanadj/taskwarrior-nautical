@@ -293,7 +293,10 @@ def mods_to_acf(mods: dict, *, hhmm_re) -> dict:
         if tval:
             if isinstance(tval, tuple):
                 out["t"] = f"{tval[0]:02d}:{tval[1]:02d}"
-            elif isinstance(tval, str) and hhmm_re.fullmatch(tval):
+            elif isinstance(tval, str) and (
+                hhmm_re.fullmatch(tval)
+                or tval in {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}
+            ):
                 out["t"] = tval
             elif isinstance(tval, list):
                 times = [

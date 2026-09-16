@@ -432,6 +432,12 @@ class ParserOwnerApiContractTests(unittest.TestCase):
         self.assertEqual(numeric[0][0]["mods"]["t"], (9, 0))
         offset = core.validate_anchor_expr_strict("w:mon@t=dawn@-45m")
         self.assertEqual(offset[0][0]["mods"]["time_offset_minutes"], -45)
+        hour_offset = core.validate_anchor_expr_strict("w:mon@t=sunrise@-1h")
+        self.assertEqual(hour_offset[0][0]["mods"]["time_offset_minutes"], -60)
+        self.assertIn(
+            "@t=sunrise@-60m",
+            core.acf_to_original_format(core.build_acf("w:mon@t=sunrise@-1h")),
+        )
 
     def test_parser_entry_point_rejects_oversized_expression(self) -> None:
         expression = "w:mon" + ("+w:mon" * 300)

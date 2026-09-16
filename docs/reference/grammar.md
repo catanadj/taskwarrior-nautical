@@ -78,7 +78,7 @@
 | `@t=06..12/2h,16..20/2h,22` | Composed fixed schedule |
 | `@t=rand(06..18)` | One deterministic random minute |
 | `@t=rand(06..18/3)` | One random minute from each of three buckets |
-| `@t=sunset@+45m` | Astronomy event plus offset |
+| `@t=sunset@+45m` | Astronomy event plus offset (minutes; hours such as `@-1h` are also accepted) |
 
 Fixed and random windows may cross midnight.
 

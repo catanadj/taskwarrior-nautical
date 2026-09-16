@@ -114,6 +114,16 @@ class NaturalLanguageContractTests(unittest.TestCase):
                 self.assertEqual(self.direct_description(expression), expected)
                 self.assertEqual(core.describe_anchor_expr(expression), expected)
 
+    def test_time_offsets_are_reflected_in_natural_language(self) -> None:
+        self.assertEqual(
+            self.direct_description("w:mon@t=sunrise@-30m"),
+            "Mondays at sunrise, 30 minutes earlier",
+        )
+        self.assertEqual(
+            self.direct_description("w:mon@t=sunrise@-1h"),
+            "Mondays at sunrise, 1 hour earlier",
+        )
+
     def test_direct_formatter_is_order_stable(self) -> None:
         expressions = ["w:mon", "m:1", "y:12-25", "w/2:mon", "malformed"]
         normal = [self.direct_description(expression) for expression in expressions]

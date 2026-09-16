@@ -159,11 +159,14 @@ def parse_atom_mods(
                 raise parse_error_cls("Unknown moon phase. Expected new, first-quarter, full, or last-quarter.")
             mods["moon"] = phase
             continue
-        match = re.fullmatch(r"([+-]\d+)m", tok)
+        match = re.fullmatch(r"([+-]\d+)([hm])", tok)
         if match:
             if mods["t"] is None:
                 raise parse_error_cls("Time offsets require an @t= value")
-            mods["time_offset_minutes"] = mods.get("time_offset_minutes", 0) + int(match.group(1))
+            amount = int(match.group(1))
+            if match.group(2) == "h":
+                amount *= 60
+            mods["time_offset_minutes"] = mods.get("time_offset_minutes", 0) + amount
             continue
         match = day_offset_re.match(tok)
         if match:

@@ -14,10 +14,55 @@ from nautical_core.modify_carry_workflow import (
     verify_native_until_task,
     verify_temporal_carry_task,
 )
+from nautical_core.modify_carry import preserve_native_until_on_target_change
+from nautical_core.modify_lifecycle import recurrence_setting_changes
 from nautical_core.task_models import TaskTimestamp
 
 
 class TemporalCarryWorkflowTests(unittest.TestCase):
+    def test_wait_edit_carries_native_until_by_the_same_delta(self) -> None:
+        old = {
+            "due": "2026-08-25T09:00:00Z",
+            "wait": "2026-08-25T08:00:00Z",
+            "until": "2026-08-25T23:00:00Z",
+        }
+        new = {**old, "wait": "2026-08-25T10:00:00Z"}
+
+        class NativeUntil:
+            class NativeUntilCarryError(Exception):
+                pass
+
+            CARRY_FAILED = "carry_failed"
+
+        carried = preserve_native_until_on_target_change(
+            old,
+            new,
+            "anchor",
+            field_changed=lambda before, after, field: before.get(field) != after.get(field),
+            recurrence_anchor_field=lambda _task: "due",
+            parse_datetime=lambda value: datetime.fromisoformat(str(value).replace("Z", "+00:00")),
+            native_until=NativeUntil,
+            generation_service=lambda: None,
+            reject_carry=lambda *args: self.fail(f"unexpected rejection: {args!r}"),
+            diagnostic=lambda message: self.fail(message),
+        )
+
+        self.assertTrue(carried)
+        self.assertEqual(new["until"], "2026-08-26T01:00:00Z")
+
+    def test_temporal_edits_are_reported_as_recurrence_changes(self) -> None:
+        changes = recurrence_setting_changes(
+            {"due": "2026-08-25T09:00:00Z", "wait": "2026-08-25T08:00:00Z"},
+            {"due": "2026-08-25T10:00:00Z", "wait": "2026-08-25T09:00:00Z"},
+        )
+        self.assertEqual(
+            changes,
+            [
+                ("due", "2026-08-25T09:00:00Z", "2026-08-25T10:00:00Z"),
+                ("wait", "2026-08-25T08:00:00Z", "2026-08-25T09:00:00Z"),
+            ],
+        )
+
     def test_adjustment_and_decision_are_immutable(self) -> None:
         old = TaskTimestamp(datetime(2026, 8, 25, 9, tzinfo=timezone.utc))
         new = TaskTimestamp(datetime(2026, 8, 26, 9, tzinfo=timezone.utc))

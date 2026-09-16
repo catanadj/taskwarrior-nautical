@@ -162,6 +162,9 @@ def _recurrence_update_label(field: str) -> str:
         "until": "Expiration",
         "chainMax": "Max links",
         "chainUntil": "Chain end point",
+        "due": "Due",
+        "scheduled": "Scheduled",
+        "wait": "Wait",
     }.get(field, field)
 
 
@@ -298,7 +301,10 @@ def render_recurrence_updated_panel(
         except Exception:
             pass
 
-    recurrence_fields = {"anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc"}
+    recurrence_fields = {
+        "anchor", "anchor_file", "cp", "anchor_mode", "omit", "omit_file", "bc",
+        "due", "scheduled", "wait",
+    }
     if any(field in recurrence_fields for field, _old, _new in changes):
         source = "anchor" if anchor_expr else "anchor_file" if str(new.get("anchor_file") or "").strip() else "cp"
         first = first_recurrence_target(new, source)

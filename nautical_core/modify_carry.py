@@ -69,6 +69,37 @@ def preserve_native_until_on_target_change(
         return False
     old_target_field = recurrence_anchor_field(old)
     new_target_field = recurrence_anchor_field(new)
+
+    # ``wait`` and ``scheduled`` are offsets around the recurrence target.
+    # When either is edited while ``due`` remains authoritative, carry an
+    # untouched native expiration by the same elapsed-time delta.  They are
+    # not scheduler targets, so routing them through recurrence generation
+    # would incorrectly recompute the occurrence itself.
+    for temporal_field in ("scheduled", "wait"):
+        if (
+            not field_changed(old, new, temporal_field)
+            or not old.get(temporal_field)
+            or not new.get(temporal_field)
+        ):
+            continue
+        try:
+            old_value = parse_datetime(old.get(temporal_field))
+            new_value = parse_datetime(new.get(temporal_field))
+            until_value = parse_datetime(old.get("until"))
+            if not (old_value and new_value and until_value):
+                raise ValueError(f"{temporal_field} timestamp is missing or invalid")
+            shifted_until = until_value + (new_value - old_value)
+            new["until"] = shifted_until.isoformat().replace("+00:00", "Z")
+            return True
+        except Exception as exc:
+            diagnostic(f"native until {temporal_field} carry failed: {exc}")
+            typed_error = native_until.NativeUntilCarryError(
+                native_until.CARRY_FAILED,
+                f"native until {temporal_field} carry failed: {type(exc).__name__}: {exc}",
+            )
+            reject_carry(old, new, None, old_target_field, typed_error)
+            return False
+
     target_changed = old_target_field != new_target_field or field_changed(old, new, old_target_field)
     if not target_changed:
         return False

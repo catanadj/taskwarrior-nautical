@@ -18,6 +18,11 @@ RECURRENCE_SETTING_FIELDS = (
     "until",
     "chainMax",
     "chainUntil",
+    # Temporal edits are part of recurrence feedback because they can carry
+    # the native expiration window and therefore change the effective series.
+    "due",
+    "scheduled",
+    "wait",
 )
 
 

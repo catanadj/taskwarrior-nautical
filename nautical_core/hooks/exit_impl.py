@@ -679,17 +679,22 @@ def main() -> int:
             "startup_total_ms": round((time.perf_counter() - startup_t0) * 1000.0, 3),
         }
         startup_stats = dict(_exit_runtime_state().startup_stats)
-        result = hook_engine.handle_on_exit(
-            request,
-            services=_module("exit_composition").ExitServices(
-                hook_results.ExitHookResponse,
-                redirect_stdout=_redirect_stdout_to_devnull,
-                drain_outbox=_drain_outbox_result,
-                strict_feedback=lambda stats: _module("exit_diagnostics").strict_feedback(
-                    stats, enabled=_EXIT_STRICT
+        try:
+            result = hook_engine.handle_on_exit(
+                request,
+                services=_module("exit_composition").ExitServices(
+                    hook_results.ExitHookResponse,
+                    redirect_stdout=_redirect_stdout_to_devnull,
+                    drain_outbox=_drain_outbox_result,
+                    strict_feedback=lambda stats: _module("exit_diagnostics").strict_feedback(
+                        stats, enabled=_EXIT_STRICT
+                    ),
                 ),
-            ),
-        )
+            )
+        except KeyboardInterrupt:
+            _diag("on-exit drain interrupted by user")
+            _module("exit_presentation").render_drain_interrupted_panel(core)
+            return 130
         # The drain owns and resets its invocation state; restore the startup
         # timings so benchmark-only reporting retains the complete breakdown.
         _exit_runtime_state().startup_stats = startup_stats

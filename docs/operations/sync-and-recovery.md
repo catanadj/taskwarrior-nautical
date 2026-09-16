@@ -51,6 +51,9 @@ computed under different scheduling inputs.
 - The deterministic child exists but the parent lacks `nextLink`.
 - Application stopped after importing a child but before recording the stage.
 - A retryable command or lock failure interrupted an outbox drain.
+- You stopped an active drain with Ctrl-C. Nautical preserves queued work and
+  shows the recovery command; run `nautical reconcile --apply` to resume and
+  verify the durable outbox state.
 
 ## Cases that require review
 

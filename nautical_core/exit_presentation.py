@@ -186,4 +186,27 @@ def render_drain_failure_panel(core: Any, stats: dict[str, Any]) -> None:
     )
 
 
-__all__ = ("ExitDrainProgress", "render_drain_failure_panel")
+def render_drain_interrupted_panel(core: Any) -> None:
+    """Render concise recovery guidance when a user stops an active drain."""
+    if core is None:
+        return
+    core.render_panel(
+        "⚠ Nautical drain interrupted",
+        [
+            ("Status", "Drain stopped before the batch completed"),
+            ("Recovery", "Queued work is preserved and can be resumed safely"),
+            ("Action", "Run nautical reconcile --apply"),
+        ],
+        kind="warning",
+        panel_mode=core.PANEL_MODE,
+        live_duration_ms=getattr(core, "LIVE_PANEL_DURATION_MS", 160),
+        live_footer=getattr(core, "LIVE_PANEL_FOOTER", "NAUTICAL"),
+        fast_color=core.FAST_COLOR,
+        themes=core.panel_themes(),
+        allow_line=True,
+        label_width_min=7,
+        label_width_max=14,
+    )
+
+
+__all__ = ("ExitDrainProgress", "render_drain_failure_panel", "render_drain_interrupted_panel")

@@ -495,9 +495,7 @@ def _append_next_wait_sched_rows(
         nxt_due_utc,
         anchor_field=anchor_field,
         format_local=core.fmt_dt_local,
-        compare_datetimes=lambda left, right: _module("modify_value_effects").compare_datetimes(
-            _hook_host(), left, right
-        ),
+        compare_datetimes=core._import_sibling("timeutil").compare_datetimes,
         format_delta=_module("modify_value_effects").format_delta,
     )
 

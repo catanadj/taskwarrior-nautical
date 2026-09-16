@@ -42,6 +42,35 @@ daylight-saving transition, it preserves the local clock relationship; the
 elapsed UTC difference can therefore change. If Nautical cannot parse a
 timestamp needed for the carry, it rejects the update instead of guessing.
 
+### How reconcile reconstructs the relationship
+
+Reconcile does not infer offsets from task descriptions or from the current
+clock. It builds an authoritative snapshot of the active chain, then resolves
+the candidate's predecessor by `chainID` and the immediately lower `link`
+(refreshing Taskwarrior data when necessary). For each available pair it parses
+the predecessor's target (`due`, or `scheduled` for a scheduled-only chain),
+its `scheduled`, `wait`, and `until` values, and the candidate's target. The
+expected relationship is the predecessor's local-time offset from its target:
+
+```text
+offset(field) = predecessor[field] - predecessor[target]
+expected     = candidate[target] + offset(field)
+```
+
+The comparison uses canonical timestamps. Ordinary `scheduled` and `wait`
+values preserve their exact offsets. Native `until` also preserves whether the
+predecessor used calendar carry or an exact second-level carry, so daylight-
+saving transitions do not create false alarms. Mismatches are reported as
+repairable or manual review according to the available evidence; they are
+never silently overwritten.
+
+If the predecessor is missing, malformed, changed since the snapshot, or the
+candidate no longer matches the audited task, reconcile refuses to guess. It
+reports the evidence gap, refreshes the relevant rows under mutation guards,
+and requires a new dry-run before applying a change. For native `until`, a
+documented local end-of-day fallback may be offered when predecessor evidence
+cannot provide a safe policy.
+
 When Nautical creates a successor, it carries `scheduled` and `wait` relative
 to the recurrence target. For a task with `due`, that target is `due`. For a
 scheduled-only task, `scheduled` is the target and the child remains

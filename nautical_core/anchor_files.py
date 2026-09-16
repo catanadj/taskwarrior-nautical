@@ -32,7 +32,7 @@ from .occurrence_provider import (
     ProviderContract,
     _cursor_before,
 )
-from .timeutil import compare_datetimes
+from .timeutil import compare_datetimes, local_naive_to_utc
 from .time_windows import parse_clock_value, parse_random_time_window_spec, parse_time_schedule_spec, parse_time_window_spec
 
 
@@ -673,10 +673,19 @@ class AnchorFileOccurrenceProvider:
                 ]
                 if any(flag != aware[0] for flag in aware[1:]):
                     raise ValueError("mixed aware and naive datetimes")
-                order_keys = [
-                    value.astimezone(timezone.utc) if aware and aware[0] else value
-                    for value in candidates
-                ]
+                order_keys = []
+                for value in candidates:
+                    if not aware or not aware[0]:
+                        order_keys.append(value)
+                        continue
+                    # Resolve from the wall-clock slot as well as the
+                    # provider's attached offset. This makes nonexistent DST
+                    # slots converge to one instant on every supported
+                    # Python/tzdata combination.
+                    try:
+                        order_keys.append(local_naive_to_utc(value.replace(tzinfo=None), value.tzinfo))
+                    except (TypeError, ValueError):
+                        order_keys.append(value.astimezone(timezone.utc))
                 ordered_pairs = sorted(
                     zip(order_keys, candidates, descriptions),
                     key=lambda item: item[0],

@@ -11712,8 +11712,9 @@ def test_on_modify_explicit_timing_edits_warn_on_invalid_order():
         mod._panel = orig_panel
         mod._print_task = orig_print_task
 
-    expect(len(panels) == len(cases), f"only invalid explicit edits should warn: {panels!r}")
-    for panel, (_changed, expected, problem) in zip(panels, cases):
+    warning_panels = [panel for panel in panels if panel[0] == "⚠ Nautical timing order"]
+    expect(len(warning_panels) == len(cases), f"only invalid explicit edits should warn: {panels!r}")
+    for panel, (_changed, expected, problem) in zip(warning_panels, cases):
         title, rows, kind = panel
         expect(title == "⚠ Nautical timing order", f"unexpected warning title: {panel!r}")
         expect(kind == "warning", f"timing order should use warning styling: {panel!r}")

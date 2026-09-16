@@ -8,6 +8,7 @@ from typing import Any, Literal, Mapping
 
 
 _UDA_ATTR_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_LAST_DIAG_SEARCH_ORDER: tuple[str, ...] | None = None
 
 
 class ConfigReadResult:
@@ -359,11 +360,13 @@ def config_paths(*, warn_env_config_missing, taskdata: str | None = None, error_
 
     out = _dedup(paths)
 
-    if os.environ.get("NAUTICAL_DIAG") == "1":
+    global _LAST_DIAG_SEARCH_ORDER
+    if os.environ.get("NAUTICAL_DIAG") == "1" and tuple(out) != _LAST_DIAG_SEARCH_ORDER:
         try:
             print("[nautical] Config search order:", file=sys.stderr)
             for path in out:
                 print(f"  - {path}", file=sys.stderr)
+            _LAST_DIAG_SEARCH_ORDER = tuple(out)
         except Exception:
             pass
 

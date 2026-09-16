@@ -1,14 +1,27 @@
 from __future__ import annotations
 
 import os
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 
 from nautical_core import config_support, runtime
 
 
 class ConfigPathSecurityContractTests(unittest.TestCase):
+    def test_diagnostic_search_order_is_emitted_once_per_signature(self) -> None:
+        with patch.dict(os.environ, {"NAUTICAL_DIAG": "1"}), redirect_stderr(io.StringIO()) as stream:
+            previous = config_support._LAST_DIAG_SEARCH_ORDER
+            config_support._LAST_DIAG_SEARCH_ORDER = None
+            try:
+                for _ in range(3):
+                    config_support.config_paths(warn_env_config_missing=lambda _path: None)
+            finally:
+                config_support._LAST_DIAG_SEARCH_ORDER = previous
+        self.assertEqual(stream.getvalue().count("Config search order:"), 1)
+
     def test_taskdata_context_prefers_argv_then_environment_then_fallback(self) -> None:
         argv_path, argv_rc, argv_source = runtime.resolve_task_data_context(
             argv=["api:2", "command:modify", "data:/tmp/nautical_core_arg_test"],

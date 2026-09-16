@@ -683,15 +683,16 @@ class AnchorFileOccurrenceProvider:
                     # nonexistent spring-forward slot canonically. Calling
                     # local_naive_to_utc unconditionally would collapse the
                     # two legitimate fold instants.
+                    zone = getattr(self.context, "timezone", None) or value.tzinfo
                     valid_folds = []
                     for fold in (0, 1):
-                        folded = wall.replace(tzinfo=value.tzinfo, fold=fold)
-                        round_trip = folded.astimezone(timezone.utc).astimezone(value.tzinfo)
+                        folded = wall.replace(tzinfo=zone, fold=fold)
+                        round_trip = folded.astimezone(timezone.utc).astimezone(zone)
                         if round_trip.replace(tzinfo=None) == wall:
                             valid_folds.append(fold)
                     try:
                         order_keys.append(
-                            local_naive_to_utc(wall, value.tzinfo)
+                            local_naive_to_utc(wall, zone)
                             if not valid_folds
                             else value.astimezone(timezone.utc)
                         )

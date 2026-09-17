@@ -112,6 +112,54 @@ class HookEngineContractTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIs(runtime.lifecycle_result, lifecycle)
 
+    def test_scheduler_completion_failure_vetoes_taskwarrior_completion(self) -> None:
+        lifecycle = SimpleNamespace(
+            state="retryable",
+            reason="These anchors joined with '+' don't share any possible date.",
+            diagnostic=SimpleNamespace(failure_kind="scheduler_error"),
+        )
+        runtime = SimpleNamespace(lifecycle_result=None, uow=object())
+        request = SimpleNamespace(
+            old={"uuid": "00000000-0000-4000-8000-000000000304", "status": "pending", "chainID": "chain304"},
+            new={"uuid": "00000000-0000-4000-8000-000000000304", "status": "completed", "chainID": "chain304"},
+            runtime=runtime,
+        )
+        failures = []
+
+        class Services:
+            def result(self, *, task, sanitize):
+                return {"task": task, "sanitize": sanitize}
+
+            def has_nautical_fields(self, task):
+                return bool(task.get("chainID"))
+
+            def load_core(self):
+                return None
+
+            def diag(self, _message):
+                return None
+
+            def fail_and_exit(self, title, message):
+                failures.append((title, message))
+                raise RuntimeError("veto")
+
+            def handle_completion(self, *_args):
+                return lifecycle
+
+            def handle_non_completion(self, *_args):
+                raise AssertionError("non-completion route selected")
+
+            def handle_deleted(self, *_args):
+                raise AssertionError("delete route selected")
+
+        with self.assertRaisesRegex(RuntimeError, "veto"):
+            handle_on_modify(request, Services())
+
+        self.assertEqual(
+            failures,
+            [("Completion blocked", "These anchors joined with '+' don't share any possible date.")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -170,6 +170,12 @@ def handle_on_modify(
         services.load_core()
         lifecycle_result = invoke("handle_completion")
         request.runtime.lifecycle_result = lifecycle_result
+        diagnostic = getattr(lifecycle_result, "diagnostic", None)
+        if getattr(diagnostic, "failure_kind", "") == "scheduler_error":
+            services.fail_and_exit(
+                "Completion blocked",
+                str(getattr(lifecycle_result, "reason", "recurrence could not be computed")),
+            )
         return None
     services.load_core()
     invoke("handle_non_completion")

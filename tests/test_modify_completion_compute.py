@@ -15,6 +15,26 @@ from nautical_core.modify_completion_preflight import completion_existing_next_o
 
 
 class CompletionComputeTerminalEvidenceTests(unittest.TestCase):
+    def test_compute_failure_panel_preserves_actionable_scheduler_reason(self) -> None:
+        panels = []
+        reason = (
+            "These anchors joined with '+' don't share any possible date. "
+            "If you meant 'either/or', use '|'."
+        )
+
+        result = completion_compute_child_due(
+            {"chain": "on", "uuid": "incompatible-anchor"},
+            "anchor",
+            compute_anchor_child_due=lambda _task: (_ for _ in ()).throw(Exception(reason)),
+            compute_cp_child_due=lambda _task: (None, None),
+            panel=lambda title, rows, **kwargs: panels.append((title, list(rows), kwargs)),
+            print_task=lambda _value: None,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(panels[0][0], "⛔ Chain error")
+        self.assertEqual(panels[0][1], [("Reason", reason)])
+
     def test_date_and_search_exhaustion_never_produce_child_tuples(self) -> None:
         from nautical_core import modify_completion_compute as compute
 

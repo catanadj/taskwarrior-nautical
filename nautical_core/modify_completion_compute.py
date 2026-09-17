@@ -100,9 +100,10 @@ def completion_compute_child_due(
     except Exception as exc:
         if callable(diag):
             diag(f"compute next due failed: {exc}")
+        reason = str(exc).strip() or type(exc).__name__
         panel(
             "⛔ Chain error",
-            [("Reason", "Could not compute next recurrence timestamp")],
+            [("Reason", reason)],
             kind="error",
         )
         print_task(task_row)

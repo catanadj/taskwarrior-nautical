@@ -64,6 +64,7 @@ grammar and ready-to-adapt examples whenever you need them.
 
 - [Taskwarrior Nautical documentation](https://catanadj.github.io/taskwarrior-nautical/)
 - [Getting started](https://catanadj.github.io/taskwarrior-nautical/getting-started/installation/)
+- [Recipe gallery](https://catanadj.github.io/taskwarrior-nautical/guides/recipes/)
 - [Command reference](https://catanadj.github.io/taskwarrior-nautical/reference/commands/)
 - [Grammar reference](https://catanadj.github.io/taskwarrior-nautical/reference/grammar/)
 - [Backup and restore](https://catanadj.github.io/taskwarrior-nautical/tools/backup-restore/)

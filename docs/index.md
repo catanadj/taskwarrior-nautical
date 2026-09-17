@@ -39,6 +39,15 @@ lock.
 
     [Open the guides](guides/completion-periods.md)
 
+-   **Start from a recipe**
+
+    ---
+
+    Browse ready-to-adapt examples for completion periods, calendar positions,
+    random schedules, business days, omissions, astronomy, and more.
+
+    [Open the recipe gallery](guides/recipes.md)
+
 -   **Compose precise schedules**
 
     ---

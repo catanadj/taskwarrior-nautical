@@ -78,11 +78,9 @@ nav:
       - Environment and Files: reference/environment-and-files.md
       - Command Status and Exit Codes: reference/command-status.md
   - Project:
-      - Composable Recurrence Policy (Exploratory): design/composable-recurrence-policy-grammar.md
       - Documentation Development: contributing-docs.md
 
 exclude_docs: |
-  design/GOLDEN_REGISTRY_INVENTORY.md
   superpowers/plans/**
 
 markdown_extensions:

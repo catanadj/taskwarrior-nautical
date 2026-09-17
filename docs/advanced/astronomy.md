@@ -52,6 +52,12 @@ Phases are `new`, `first-quarter`, `full`, and `last-quarter`; common aliases
 are accepted. Multiple matching phase windows in one year or month remain
 distinct occurrences.
 
+Expressions such as `y:jul` cover the complete month. If Astral reports that
+an event is unavailable on the first matching date, Nautical continues through
+later dates that still satisfy the phase and month constraints. For example,
+`(moon:last-quarter + y:jul)@t=moonrise` can skip July 1 when there is no
+moonrise and select the next valid moonrise in the same July phase window.
+
 ## Seasonal boundaries
 
 Astronomical seasonal mode uses Nautical's focused equinox and solstice

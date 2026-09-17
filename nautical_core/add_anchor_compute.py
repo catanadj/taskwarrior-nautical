@@ -395,10 +395,16 @@ def anchor_next_occurrence_after_local_dt(
     if anchor_expr_fires_on_date_with_omit(
         dnf, previous_date, interval_seed, seed_base, omit_dnf=omit_dnf, core=core
     ):
-        previous_slots = anchor_times_for_date(
-            dnf, previous_date, interval_seed, seed_base, omit_dnf=omit_dnf,
-            core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
-        )
+        try:
+            previous_slots = anchor_times_for_date(
+                dnf, previous_date, interval_seed, seed_base, omit_dnf=omit_dnf,
+                core=core, norm_t_mod=norm_t_mod, resolve_time_slots=resolve_time_slots,
+            )
+        except LookupError:
+            # A previous anchor date may match the calendar expression while
+            # its astronomical event is unavailable.  That date cannot supply
+            # an overnight slot, but it must not invalidate the next date.
+            previous_slots = []
         for cand_local in _unique_local_candidates(previous_date, previous_slots, core=core):
             if compare_datetimes(cand_local, after_dt_local) > 0:
                 return cand_local

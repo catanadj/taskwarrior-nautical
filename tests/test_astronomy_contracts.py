@@ -49,7 +49,11 @@ class AstronomyContractTests(unittest.TestCase):
                 )
             return [(6, 10)]
 
-        with patch.object(add_anchor_compute, "anchor_step_once_with_omit", return_value=None):
+        with patch.object(
+            add_anchor_compute,
+            "anchor_step_once_with_omit",
+            return_value=date(2028, 7, 1),
+        ):
             actual = add_anchor_compute.anchor_next_occurrence_after_local_dt(
                 [[{"mods": {"t": "moonrise"}}]],
                 datetime(2027, 7, 1, 12, 0, tzinfo=timezone.utc),
@@ -62,6 +66,108 @@ class AstronomyContractTests(unittest.TestCase):
             )
 
         self.assertEqual(actual, datetime(2027, 7, 2, 6, 10, tzinfo=timezone.utc))
+
+    def test_unavailable_moonrise_advances_within_phase_month_intersection(self) -> None:
+        first = date(2027, 7, 1)
+
+        class FakeCore:
+            MAX_ANCHOR_ITER = 4
+            _scheduler_api = SimpleNamespace()
+            dnf_has_counted_random = staticmethod(lambda _dnf: False)
+            _import_sibling = staticmethod(core._import_sibling)
+            build_local_datetime = staticmethod(
+                lambda day, hhmm: datetime(
+                    day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
+                )
+            )
+            to_local = staticmethod(lambda value: value)
+
+            @staticmethod
+            def factor_matches_on(atom, day, *_args, **_kwargs):
+                typ = atom.get("typ")
+                if typ == "y":
+                    return day.month == 7
+                if typ == "moon":
+                    return day.month == 7 and day.day <= 7
+                return True
+
+        FakeCore._scheduler_api.factor_matches_on = FakeCore.factor_matches_on
+        FakeCore._scheduler_api.dnf_has_counted_random = FakeCore.dnf_has_counted_random
+
+        def resolve_slots(_mods, day):
+            if day == first:
+                raise astronomy.AstronomyEventUnavailableError(
+                    "astronomical event 'moonrise' is unavailable on 2027-07-01 at home"
+                )
+            return [(3, 4)]
+
+        dnf = core.validate_anchor_expr_strict("(moon:last-quarter + y:jul)@t=moonrise")
+        with patch.object(add_anchor_compute, "anchor_step_once_with_omit", return_value=None):
+            actual = add_anchor_compute.anchor_next_occurrence_after_local_dt(
+                dnf,
+                datetime(2027, 7, 1, 0, 0, tzinfo=timezone.utc),
+                (9, 0),
+                first,
+                first,
+                core=FakeCore(),
+                norm_t_mod=lambda _value: [],
+                resolve_time_slots=resolve_slots,
+            )
+
+        self.assertEqual(actual, datetime(2027, 7, 2, 3, 4, tzinfo=timezone.utc))
+
+    def test_unavailable_previous_astronomy_date_does_not_block_next_occurrence(self) -> None:
+        first = date(2027, 7, 1)
+
+        class FakeCore:
+            MAX_ANCHOR_ITER = 4
+            _scheduler_api = SimpleNamespace()
+            dnf_has_counted_random = staticmethod(lambda _dnf: False)
+            _import_sibling = staticmethod(core._import_sibling)
+            build_local_datetime = staticmethod(
+                lambda day, hhmm: datetime(
+                    day.year, day.month, day.day, hhmm[0], hhmm[1], tzinfo=timezone.utc
+                )
+            )
+            to_local = staticmethod(lambda value: value)
+
+            @staticmethod
+            def factor_matches_on(atom, day, *_args, **_kwargs):
+                typ = atom.get("typ")
+                if typ == "y":
+                    return day.month == 7
+                if typ == "moon":
+                    return day.month == 7 and day.day <= 3
+                return True
+
+        FakeCore._scheduler_api.factor_matches_on = FakeCore.factor_matches_on
+        FakeCore._scheduler_api.dnf_has_counted_random = FakeCore.dnf_has_counted_random
+
+        def resolve_slots(_mods, day):
+            if day == first:
+                raise astronomy.AstronomyEventUnavailableError(
+                    "astronomical event 'moonrise' is unavailable on 2027-07-01 at home"
+                )
+            return [(3, 4)]
+
+        dnf = core.validate_anchor_expr_strict("(moon:last-quarter + y:jul)@t=moonrise")
+        with patch.object(
+            add_anchor_compute,
+            "anchor_step_once_with_omit",
+            return_value=date(2028, 7, 1),
+        ):
+            actual = add_anchor_compute.anchor_next_occurrence_after_local_dt(
+                dnf,
+                datetime(2027, 7, 2, 4, 0, tzinfo=timezone.utc),
+                (9, 0),
+                first,
+                first,
+                core=FakeCore(),
+                norm_t_mod=lambda _value: [],
+                resolve_time_slots=resolve_slots,
+            )
+
+        self.assertEqual(actual, datetime(2028, 7, 1, 3, 4, tzinfo=timezone.utc))
 
     def test_provider_failure_is_actionable_and_reconcile_fails_closed(self) -> None:
         message = astronomy.scheduling_error_message(

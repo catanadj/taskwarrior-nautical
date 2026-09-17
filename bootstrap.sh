@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPOSITORY="https://github.com/catanadj/taskwarrior-nautical.git"
-DEFAULT_VERSION="v7.5.2"
+DEFAULT_VERSION="v7.5.3"
 VERSION="${NAUTICAL_VERSION:-$DEFAULT_VERSION}"
 TASKDATA="${TASKDATA:-$HOME/.task}"
 LAUNCHER_PATH=""
@@ -36,7 +36,7 @@ Usage: bootstrap.sh [options]
 Download and install a pinned Nautical release.
 
 Options:
-  --version REF         Release tag or branch (default: v7.5.2)
+  --version REF         Release tag or branch (default: v7.5.3)
   --taskdata PATH       Taskwarrior data directory (default: TASKDATA or ~/.task)
   --launcher-path PATH  User-facing launcher path (use $PREFIX/bin/nautical on Termux)
   --hooks-dir PATH      Taskwarrior hooks directory override
@@ -84,22 +84,35 @@ missing_python_requirements() {
     python3 - "$1" <<'PY'
 from importlib import metadata
 from pathlib import Path
-import re
 import sys
+
+try:
+    from packaging.requirements import Requirement
+except ImportError:
+    Requirement = None
 
 missing = []
 for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     line = raw.strip()
     if not line or line.startswith("#"):
         continue
-    match = re.match(r"([A-Za-z0-9_.-]+)", line)
-    if match is None:
-        continue
-    name = match.group(1)
     try:
-        metadata.version(name)
-    except metadata.PackageNotFoundError:
-        missing.append(name)
+        requirement = Requirement(line) if Requirement is not None else None
+        name = requirement.name if requirement is not None else line.split("==", 1)[0].strip()
+        installed_version = metadata.version(name)
+        if requirement is not None:
+            compatible = not requirement.specifier or requirement.specifier.contains(
+                installed_version, prereleases=True
+            )
+        else:
+            # Keep the bootstrap usable on minimal Python images without
+            # packaging while still enforcing the pinned runtime versions.
+            expected = line.split("==", 1)[1].strip() if "==" in line else ""
+            compatible = not expected or installed_version == expected
+        if not compatible:
+            missing.append(line)
+    except (metadata.PackageNotFoundError, ValueError):
+        missing.append(line)
 print(", ".join(missing))
 PY
 }

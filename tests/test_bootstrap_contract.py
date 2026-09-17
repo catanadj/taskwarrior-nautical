@@ -66,6 +66,12 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertIn('if astronomy_configured;', source)
         self.assertIn('pip_requirement_args+=(-r "$astronomy_requirements_file")', source)
 
+    def test_requirement_gate_rejects_installed_but_incompatible_versions(self) -> None:
+        source = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("from packaging.requirements import Requirement", source)
+        self.assertIn("requirement.specifier.contains(", source)
+        self.assertIn("installed_version, prereleases=True", source)
+
     def test_verification_is_required_after_non_dry_install(self) -> None:
         source = BOOTSTRAP.read_text(encoding="utf-8")
         self.assertIn('if (( ! DRY_RUN )); then', source)

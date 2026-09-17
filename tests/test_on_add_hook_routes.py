@@ -223,6 +223,11 @@ class OnAddHookRouteTests(HookSubprocessFixture):
             ("malformed cp negative jitter", self._task(cp="2d~3d"), ("Invalid cp", "lower bound must be >= 0")),
             ("malformed cp empty sequence", self._task(cp="3d,,7d"), ("Invalid cp", "empty duration", "position 2")),
             ("malformed anchor", self._task(anchor="not-a-valid-expression"), ("Invalid anchor",)),
+            (
+                "astronomy without a resolvable event",
+                self._task(anchor="(moon:last-quarter + y:jul)@t=moonrise"),
+                ("No astronomical occurrence", "astral", "astronomy profile"),
+            ),
             ("missing anchor file", self._task(anchor_file="missing.csv"), ("Invalid anchor_file",)),
             ("cp zero limit", self._task(cp="1d", chainMax=0), ("Invalid chainMax", "chainMax must be a positive integer")),
             ("cp negative limit", self._task(cp="1d", chainMax=-1), ("Invalid chainMax", "chainMax must be a positive integer")),

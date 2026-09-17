@@ -248,6 +248,19 @@ def anchor_preview_seed_context(
     return base_local_date, interval_seed, seed_base
 
 
+def _dnf_uses_astronomy(dnf: Any) -> bool:
+    """Return whether a parsed anchor needs an astronomical provider."""
+    events = {"sunrise", "sunset", "dawn", "dusk", "moonrise", "moonset"}
+    for term in dnf or ():
+        for atom in term or ():
+            if str(atom.get("typ") or atom.get("type") or "").lower() == "moon":
+                return True
+            value = (atom.get("mods") or {}).get("t")
+            if isinstance(value, str) and value.strip().lower().split("@", 1)[0] in events:
+                return True
+    return False
+
+
 def anchor_preview_first_due(
     task: TaskPayload,
     dnf: Any,
@@ -291,7 +304,15 @@ def anchor_preview_first_due(
     else:
         first_due_local_dt = None
     if first_due_local_dt is None:
-        if omit_dnf:
+        if _dnf_uses_astronomy(dnf):
+            message = (
+                "No astronomical occurrence could be resolved. Install the optional "
+                "'astral' package and configure the astronomy profile with a default_location "
+                "and location profile, then run nautical doctor."
+            )
+            error_and_exit([("Astronomy", message)])
+            raise RuntimeError("astronomy preview terminated")
+        elif omit_dnf:
             message = "No matching anchor dates found. Omit rules removed every future occurrence."
         else:
             message = (

@@ -767,11 +767,16 @@ def lifecycle_result_feedback_facts(lifecycle_result: CompletionLifecycleResult)
     state = lifecycle_result.state
     reason = lifecycle_result.reason
     recovery: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
     if state in {"retryable", "manual_review", "stale"}:
         recovery = ("Run nautical reconcile --apply if recovery remains pending.",)
+        warnings = (reason,) if reason else ()
+    elif state == "applied" and reason.lower().startswith("outbox quarantined"):
+        recovery = ("Run nautical reconcile --apply to review the preserved outbox.",)
+        warnings = (reason,)
     return FeedbackFacts(
         chain_completed=state == "terminal",
-        warnings=(reason,) if state in {"retryable", "manual_review", "stale"} and reason else (),
+        warnings=warnings,
         recovery_guidance=recovery,
         fact_kinds=(
             FeedbackFactKind.MANUAL_REVIEW

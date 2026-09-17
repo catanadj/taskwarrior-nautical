@@ -19,6 +19,60 @@ from nautical_core.panel_diagnostics import file_source_warnings
 
 
 class StructuredFailureBoundaryTests(unittest.TestCase):
+    def test_outbox_integrity_check_accepts_healthy_database(self) -> None:
+        repository = LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
+        connection = Mock()
+        connection.execute.return_value.fetchone.return_value = ("ok",)
+
+        repository._assert_integrity(connection)
+
+        connection.execute.assert_called_once_with("PRAGMA quick_check")
+
+    def test_outbox_integrity_check_fails_closed_on_database_corruption(self) -> None:
+        repository = LifecycleOutboxRepository(Path("/tmp/nautical-integrity-test"))
+        connection = Mock()
+        connection.execute.side_effect = sqlite3.DatabaseError("database disk image is malformed")
+
+        with self.assertRaisesRegex(LifecycleOutboxError, "outbox integrity check failed"):
+            repository._assert_integrity(connection)
+
+    def test_outbox_corruption_is_quarantined_without_discarding_state(self) -> None:
+        with TemporaryDirectory() as directory:
+            taskdata = Path(directory)
+            state = taskdata / ".nautical-state"
+            state.mkdir()
+            database = state / ".nautical_lifecycle_outbox.db"
+            database.write_bytes(b"corrupt")
+            (state / f"{database.name}-wal").write_bytes(b"wal")
+            repository = LifecycleOutboxRepository(taskdata)
+
+            quarantine = repository._quarantine_corrupt_state("database disk image is malformed")
+
+            self.assertFalse(database.exists())
+            self.assertEqual((quarantine / database.name).read_bytes(), b"corrupt")
+            self.assertEqual(
+                (quarantine / "manifest.json").read_text(encoding="utf-8").count("malformed"),
+                1,
+            )
+
+    def test_stale_outbox_recovery_marker_is_reclaimed_only_after_process_exit(self) -> None:
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / ".nautical_outbox_recovery.lock"
+            marker.write_text('{"created_at": 1, "pid": 12345}', encoding="utf-8")
+            with patch("nautical_core.lifecycle_outbox.os.kill", side_effect=ProcessLookupError):
+                self.assertTrue(LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
+            self.assertFalse(marker.exists())
+
+    def test_old_incomplete_outbox_recovery_marker_is_reclaimed(self) -> None:
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / ".nautical_outbox_recovery.lock"
+            marker.write_bytes(b"")
+            old = 1.0
+            os.utime(marker, (old, old))
+
+            self.assertTrue(LifecycleOutboxRepository._reclaim_stale_recovery_lock(marker))
+            self.assertFalse(marker.exists())
+
     def test_panel_config_warning_reports_missing_explicit_config(self) -> None:
         from nautical_core.panel_diagnostics import config_warnings
 

@@ -235,6 +235,16 @@ class EffectBoundaryTests(unittest.TestCase):
         self.assertEqual(facts.fact_kinds, (FeedbackFactKind.RECOVERY,))
         self.assertFalse(facts.chain_completed)
 
+    def test_lifecycle_feedback_surfaces_quarantined_outbox_after_success(self) -> None:
+        class Result:
+            state = "applied"
+            reason = "outbox quarantined at /tmp/quarantine; current intent was re-enqueued"
+
+        facts = lifecycle_result_feedback_facts(Result())
+        self.assertEqual(facts.warnings, (Result.reason,))
+        self.assertEqual(facts.fact_kinds, (FeedbackFactKind.UPDATE,))
+        self.assertTrue(facts.recovery_guidance)
+
     def test_feedback_fact_contract_requires_actionable_failures(self) -> None:
         with self.assertRaises(ValueError):
             FeedbackFacts(fact_kinds=(FeedbackFactKind.MANUAL_REVIEW,))

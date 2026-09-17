@@ -33,6 +33,7 @@ OUTBOX_MAINTENANCE_FILESYSTEM_FAILURE = "filesystem_security_failure"
 _INIT_RETRIES = 8
 _INIT_BACKOFF_S = 0.025
 _MAX_INIT_BACKOFF_S = 0.25
+_RECOVERY_LOCK_STALE_SECONDS = 15.0 * 60.0
 
 
 class LifecycleOutboxError(RuntimeError):
@@ -590,6 +591,145 @@ class LifecycleOutboxRepository:
         if missing:
             raise LifecycleOutboxError(f"outbox schema is incomplete: missing {', '.join(missing)}")
 
+    def _assert_integrity(self, conn: sqlite3.Connection) -> None:
+        """Fail closed before enqueueing into a damaged SQLite outbox."""
+        self._metric("outbox_integrity_checks")
+        try:
+            row = conn.execute("PRAGMA quick_check").fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise LifecycleOutboxError(f"outbox integrity check failed: {exc}") from exc
+        result = str(row[0] if row else "").strip().lower()
+        if result != "ok":
+            raise LifecycleOutboxError(
+                f"outbox integrity check failed: {result or 'no result'}"
+            )
+
+    def _quarantine_corrupt_state(self, reason: str) -> Path:
+        """Atomically preserve a damaged outbox before starting a fresh one."""
+        if self._session_conn is not None:
+            raise LifecycleOutboxError("cannot quarantine an outbox during an active session")
+        state_dir = self.path.parent
+        lock_path = state_dir / ".nautical_outbox_recovery.lock"
+        lock_fd: int | None = None
+        for attempt in range(2):
+            try:
+                lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                break
+            except FileExistsError as exc:
+                if attempt == 0 and self._reclaim_stale_recovery_lock(lock_path):
+                    continue
+                raise LifecycleOutboxError("outbox recovery is already in progress") from exc
+            except OSError as exc:
+                raise LifecycleOutboxError(f"cannot lock outbox recovery: {exc}") from exc
+        if lock_fd is None:
+            raise LifecycleOutboxError("cannot lock outbox recovery")
+        try:
+            lock_payload = json.dumps(
+                {"pid": os.getpid(), "created_at": self._clock()},
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+            os.write(lock_fd, lock_payload)
+            os.fsync(lock_fd)
+            stamp = f"{time.time_ns()}-{os.getpid()}"
+            quarantine = state_dir / f"quarantine-{stamp}"
+            quarantine.mkdir(mode=0o700)
+            moved: list[str] = []
+            for source in (
+                self.path,
+                self.path.with_name(f"{self.path.name}-wal"),
+                self.path.with_name(f"{self.path.name}-shm"),
+            ):
+                if not source.exists():
+                    continue
+                target = quarantine / source.name
+                os.replace(source, target)
+                self._fsync_file(target)
+                moved.append(source.name)
+            manifest = {
+                "reason": str(reason),
+                "database": self.path.name,
+                "created_at": self._clock(),
+                "files": moved,
+            }
+            manifest_tmp = quarantine / ".manifest.json.tmp"
+            manifest_path = quarantine / "manifest.json"
+            manifest_tmp.write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            self._fsync_file(manifest_tmp)
+            os.replace(manifest_tmp, manifest_path)
+            self._fsync_file(manifest_path)
+            self._fsync_directory(quarantine)
+            self._fsync_directory(state_dir)
+            self._schema_identity = None
+            return quarantine
+        except Exception as exc:
+            raise LifecycleOutboxError(f"could not quarantine corrupt outbox: {exc}") from exc
+        finally:
+            os.close(lock_fd)
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _reclaim_stale_recovery_lock(lock_path: Path) -> bool:
+        """Remove a marker left by a process that is no longer alive."""
+        try:
+            payload = json.loads(lock_path.read_text(encoding="utf-8"))
+            pid = int(payload.get("pid", 0))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+                if age <= _RECOVERY_LOCK_STALE_SECONDS:
+                    return False
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+            return True
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+            return True
+        except OSError:
+            return False
+        return False
+
+    @staticmethod
+    def _fsync_file(path: Path) -> None:
+        with path.open("rb") as handle:
+            os.fsync(handle.fileno())
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            return
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _integrity_failure(result: OutboxResult) -> bool:
+        return result.kind is OutboxResultKind.REJECTED and "outbox integrity check failed" in result.reason.lower()
+
     def _with_connection(self, operation: Callable[[sqlite3.Connection], OutboxResult]) -> OutboxResult:
         if self._session_conn is not None:
             if self._session_pid != os.getpid():
@@ -748,10 +888,27 @@ class LifecycleOutboxRepository:
         now = self._clock()
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:
+            self._assert_integrity(conn)
             with self._transaction(conn):
                 return self._enqueue_row(conn, plan, config, schedule, encoded_plan, plan_fingerprint, guard_json, now)
 
-        return self._with_connection(operation)
+        result = self._with_connection(operation)
+        if not self._integrity_failure(result):
+            return result
+        self._metric("outbox_integrity_recoveries")
+        try:
+            quarantine = self._quarantine_corrupt_state(result.reason)
+        except LifecycleOutboxError as exc:
+            self._metric("outbox_quarantine_failures")
+            return OutboxResult(OutboxResultKind.REJECTED, reason=f"{result.reason}; {exc}")
+        self._metric("outbox_quarantines")
+        retried = self._with_connection(operation)
+        if retried.kind is OutboxResultKind.APPLIED:
+            return replace(
+                retried,
+                reason=f"outbox quarantined at {quarantine}; current intent was re-enqueued",
+            )
+        return retried
 
     def _enqueue_row(
         self, conn: sqlite3.Connection, plan: LifecyclePlan, config: str, schedule: str,
@@ -815,6 +972,7 @@ class LifecycleOutboxRepository:
         now = self._clock()
 
         def operation(conn: sqlite3.Connection) -> OutboxResult:
+            self._assert_integrity(conn)
             with self._transaction(conn):
                 row = conn.execute("SELECT * FROM lifecycle_outbox WHERE intent_id=?", (intent_id,)).fetchone()
                 if row is not None:
@@ -872,6 +1030,7 @@ class LifecycleOutboxRepository:
 
         def operation(conn: sqlite3.Connection) -> Mapping[str, OutboxResult]:
             results: dict[str, OutboxResult] = {}
+            self._assert_integrity(conn)
             with self._transaction(conn):
                 for plan in normalized:
                     intent_id = plan.identity.idempotency_key

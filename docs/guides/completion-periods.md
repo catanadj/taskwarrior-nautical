@@ -76,6 +76,42 @@ to the recurrence target. For a task with `due`, that target is `due`. For a
 scheduled-only task, `scheduled` is the target and the child remains
 scheduled-only; `wait` keeps its offset from `scheduled`.
 
+## Carry custom date UDAs
+
+If a recurrence has another date-valued UDA that should follow the same local
+time relationship, list its field name in the configuration:
+
+```toml
+recurrence_update_udas = ["review_at", "reminder_at"]
+```
+
+The fields must be registered with Taskwarrior and contain parseable date or
+datetime values. For example, a task with `due:2026-07-10T09:00` and
+`review_at:2026-07-10T08:30` carries `review_at` to the successor at 08:30
+relative to that successor's target. The same rule applies to `cp` and anchor
+recurrences.
+
+For a task with `due`, Nautical measures the custom field from `due`. For a
+scheduled-only task, it measures from `scheduled`. The calculation preserves
+the configured local clock relationship across daylight-saving transitions,
+just like `wait` and `scheduled`; it does not copy the parent's absolute UTC
+timestamp.
+
+Only configured fields present on the parent are carried. Field names are
+matched case-insensitively, duplicate names are ignored, and lifecycle-owned
+fields are never treated as custom carry fields. The generated child clears the
+field first, so an absent parent value does not leave a stale inherited value.
+
+If a configured value or its recurrence target is missing or malformed,
+successor generation fails safely with a carry error instead of guessing. Fix
+the date value or configuration, then retry through the normal lifecycle or
+reconcile workflow. The nested compatibility form is also accepted:
+
+```toml
+[recurrence]
+update_udas = ["review_at"]
+```
+
 ## Period sequences
 
 ```bash

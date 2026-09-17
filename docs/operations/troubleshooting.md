@@ -1,6 +1,9 @@
 # Troubleshooting
 
-Start with the narrowest supported command.
+Start with the [command reference](../reference/commands.md) when you are not
+sure which operator command owns a problem, then use the narrowest supported
+check below. For backup validation or device transfer, use the dedicated
+[Backup and Restore](../tools/backup-restore.md) guide.
 
 | Symptom | First action |
 | --- | --- |
@@ -11,6 +14,7 @@ Start with the narrowest supported command.
 | Missing successor | `nautical reconcile --uuid UUID` |
 | Inspect one chain | `nautical query integrity --chain-id CHAIN_ID` |
 | Lifecycle retry or review | `nautical queue-status --json` |
+| Corrupt outbox or quarantine warning | `nautical queue-status --json` followed by a reconcile dry run |
 | Startup/config search details | `NAUTICAL_DIAG=1 nautical doctor` |
 
 ## Hook error without feedback
@@ -67,6 +71,37 @@ Use `queue-status --json` and a scoped integrity query. The result should name
 the changed immutable fields or failed mutation stage. Volatile Taskwarrior
 fields and equivalent timestamp encodings are normalized before comparison;
 remaining differences require actual evidence review.
+
+## Corrupt lifecycle outbox
+
+If a completion reports that the outbox was quarantined, Nautical has preserved
+the malformed SQLite database and retried the current enqueue against a fresh
+database. The completion may succeed, but older queued work still needs review.
+
+First inspect the active queue and preserved evidence:
+
+```bash
+nautical queue-status --json
+find "$TASKDATA/.nautical-state" -maxdepth 2 -name 'manifest.json' -path '*quarantine-*' -print
+```
+
+Then preview recovery before changing Taskwarrior:
+
+```bash
+nautical reconcile --dry-run --json
+```
+
+Apply only after checking the proposed chains, targets, and reasons:
+
+```bash
+nautical reconcile --apply
+```
+
+Keep the `quarantine-*` directory until queue status and chain integrity are
+clean. It is local forensic evidence and is not part of the normal Taskwarrior
+backup generation; preserve it separately if the incident needs to be moved to
+another device. Never replace the fresh outbox with the quarantined database or
+edit SQLite rows by hand.
 
 ## Launcher is stale or absent
 

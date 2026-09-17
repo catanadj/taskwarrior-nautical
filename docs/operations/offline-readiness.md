@@ -56,7 +56,9 @@ back those up separately before an offline recovery operation.
 
 ## Snapshot Taskdata Before Recovery
 
-For a verified Nautical backup generation, use the local backup command. It
+For a verified Nautical backup generation, use the local backup command. See
+the concise [Backup and Restore reference](../tools/backup-restore.md) for the
+operator workflow. It
 captures the hooks-off export and the lifecycle outbox into a new directory:
 
 Run this only against an initialized installation that has a lifecycle outbox;

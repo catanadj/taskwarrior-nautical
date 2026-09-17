@@ -100,6 +100,12 @@ task add "Workout except holidays" anchor:"@workout" omit:"@holidays"
 Anchor and omission presets have separate namespaces. Preset and calendar
 content contributes to the effective schedule fingerprint.
 
+`recurrence_update_udas` names additional date-valued Taskwarrior fields that
+Nautical should carry to generated successors relative to the recurrence
+target. See [Completion periods](../guides/completion-periods.md#carry-custom-date-udas)
+for the offset and validation rules. The equivalent
+`[recurrence] update_udas = [...]` form is accepted for compatibility.
+
 ## Deprecated keys
 
 Remove `holiday_region`, `verify_import`, `spawn_queue_max_bytes`, and

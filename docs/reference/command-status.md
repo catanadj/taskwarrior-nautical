@@ -3,6 +3,9 @@
 Machine-readable commands emit one JSON document with `ensure_ascii=False`.
 Diagnostics are sent to stderr only when enabled.
 
+See the [Command Reference](commands.md) for the complete operator command
+map and links to each command's detailed guide.
+
 ## Query
 
 | Exit | Meaning |

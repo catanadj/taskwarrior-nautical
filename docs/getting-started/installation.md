@@ -101,3 +101,28 @@ type -a nautical
 ```
 
 Then follow [Troubleshooting](../operations/troubleshooting.md).
+
+## Clean inactive runtime releases
+
+Each upgrade keeps content-addressed releases under the Taskwarrior data
+directory so the active runtime can be identified and rolled back safely. To
+inspect inactive releases and abandoned staging paths without deleting
+anything, run:
+
+```bash
+nautical runtime-clean --taskdata "$TASKDATA" --keep 1
+```
+
+The active release is always retained. `--keep` retains that many additional
+inactive releases; stale abandoned staging paths are eligible after the
+default one-day age threshold. Review the dry-run output, then apply the same
+plan explicitly:
+
+```bash
+nautical runtime-clean --taskdata "$TASKDATA" --keep 1 --apply
+```
+
+Use `--stale-after-seconds` to change the abandoned-path age threshold and
+`--json` for automation. Cleanup is serialized with installation and never
+removes the active release. Run it only after a successful Doctor check; keep
+at least one known-good inactive release when rollback matters.

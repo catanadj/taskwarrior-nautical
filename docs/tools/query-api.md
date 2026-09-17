@@ -41,6 +41,41 @@ daylight-saving fold, source, and omission details. This is a schedule
 projection; it does not claim that lifecycle hooks have already created every
 future Taskwarrior child.
 
+## Paginate whole-system queries
+
+Whole-system (`--all`) occurrence queries are returned in deterministic pages.
+When more tasks remain, the response has `complete: false` and includes a
+`cursor` object. Pass that cursor back unchanged to fetch the next page:
+
+```bash
+nautical query occurrences \
+  --all \
+  --from 2026-08-24 \
+  --to 2026-08-31 > page.json
+
+cursor=$(jq -c '.cursor // empty' page.json)
+if [ -n "$cursor" ]; then
+  nautical query occurrences \
+    --all \
+    --from 2026-08-24 \
+    --to 2026-08-31 \
+    --cursor "$cursor"
+fi
+```
+
+Keep the selector, date boundaries, omission policy, and safety limits the
+same on every continuation request. A cursor is opaque: do not construct it,
+edit its fields, or treat its internal fields as a stable API. Cursors are
+valid only for `--all` queries and are bound to the observed snapshot,
+configuration fingerprint, and mutation epoch. If Taskwarrior data or the
+configuration changes between pages, the response is `unavailable` with the
+`cursor_unavailable` failure code; discard the cursor and restart the query.
+
+The `--count` option limits occurrences per task, not the number of tasks in a
+page. `--max-total-occurrences` caps occurrences returned by one response and
+is independent of page continuation. Use the `complete` flag, rather than the
+presence of results, to decide whether another page is required.
+
 ## Omission policies
 
 ```bash

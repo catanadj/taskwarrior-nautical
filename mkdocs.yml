@@ -45,6 +45,7 @@ nav:
       - Mental Model: getting-started/mental-model.md
   - Guides:
       - Completion Periods: guides/completion-periods.md
+      - Editing Recurrence: guides/editing-recurrence.md
       - Calendar Anchors: guides/calendar-anchors.md
       - Multiple Times: guides/multiple-times.md
       - Limits and Expiration: guides/limits-and-expiration.md
@@ -62,6 +63,7 @@ nav:
       - Doctor: tools/doctor.md
       - Reconcile: tools/reconcile.md
       - Lifecycle Outbox: tools/lifecycle-outbox.md
+      - Backup and Restore: tools/backup-restore.md
   - Operations:
       - Lifecycle and Chain Integrity: operations/lifecycle-and-integrity.md
       - Sync and Recovery: operations/sync-and-recovery.md
@@ -69,6 +71,7 @@ nav:
       - Offline Readiness: operations/offline-readiness.md
       - Troubleshooting: operations/troubleshooting.md
   - Reference:
+      - Commands: reference/commands.md
       - Grammar: reference/grammar.md
       - Taskwarrior UDAs: reference/udas.md
       - Configuration: reference/configuration.md

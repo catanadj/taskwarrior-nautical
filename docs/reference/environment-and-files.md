@@ -37,6 +37,8 @@ Hooks also understand Taskwarrior Hooks v2 data-location arguments.
 | --- | --- |
 | `TASKDATA/.nautical-state/.nautical_lifecycle_outbox.db` | Durable lifecycle plans |
 | database `-wal` and `-shm` sidecars | SQLite WAL state |
+| `TASKDATA/.nautical-state/quarantine-*/` | Preserved corrupt outbox files and recovery manifest |
+| `TASKDATA/.nautical-state/.nautical_outbox_recovery.lock` | Short-lived automatic recovery marker |
 | `TASKDATA/.nautical-locks/.nautical_parent_nextlink.<uuid>.lock` | Parent mutation serialization |
 | `TASKDATA/.nautical-locks/.nautical_reconcile.lock` | Reconcile application lock |
 | `TASKDATA/.nautical_diag.jsonl` | Optional structured diagnostics |
@@ -44,5 +46,7 @@ Hooks also understand Taskwarrior Hooks v2 data-location arguments.
 Cache location is selected from explicit `anchor_cache_dir`, writable managed
 locations, Taskdata, and platform cache directories.
 
-Do not sync or edit the outbox database as task data. Taskwarrior tasks are the
-shared record; the outbox is local durable execution state.
+Do not sync or edit the outbox database or quarantine directories as task data.
+Taskwarrior tasks are the shared record; the outbox is local durable execution
+state. A quarantine directory is retained evidence from an automatic recovery,
+not an active database and not a substitute for Taskwarrior backup data.

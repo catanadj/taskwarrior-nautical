@@ -78,3 +78,45 @@ TASKDATA/.nautical-state/.nautical_lifecycle_outbox.db
 
 Do not edit SQLite rows by hand. The plan fingerprint, stage records, leases,
 and acknowledgement history are part of replay safety.
+
+## Corrupt outbox recovery
+
+Before Nautical enqueues a new lifecycle intent, it runs SQLite's integrity
+check. If the database is malformed, Nautical preserves the database and any
+WAL/SHM sidecars in a private directory under:
+
+```text
+TASKDATA/.nautical-state/quarantine-<timestamp>-<process-id>/
+```
+
+The quarantine contains the original files and an atomic `manifest.json` with
+the failure reason, creation time, database name, and preserved file names. The
+original files are moved rather than overwritten, so they remain available for
+forensic inspection or later recovery. Do not edit or delete a quarantine while
+investigating an incident.
+
+After a successful quarantine, Nautical creates a fresh outbox and retries the
+current lifecycle enqueue. The Taskwarrior completion can therefore succeed,
+but the preserved outbox may contain earlier unfinished work. Review it with:
+
+```bash
+nautical queue-status --json
+nautical reconcile --dry-run --json
+```
+
+If the dry run is safe, apply the reviewed recovery:
+
+```bash
+nautical reconcile --apply
+```
+
+A completion that succeeded after this recovery includes a warning naming the
+quarantine directory. Keep that directory until the queue and chain integrity
+checks are clean. Quarantine directories are local forensic state; they are not
+Taskwarrior records and are not included in the normal backup generation. If
+you need to preserve one, copy it separately before cleanup.
+
+If quarantine cannot be acquired or the fresh retry fails, Nautical returns a
+structured failure and leaves the original evidence in place. Do not remove
+the outbox manually; use [Troubleshooting](../operations/troubleshooting.md)
+and [Reconcile](reconcile.md).

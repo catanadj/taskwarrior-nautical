@@ -26,8 +26,11 @@ portable across supported 3.x installations.
 ## Ownership rules
 
 User recurrence inputs may be changed on a pending task, subject to transition
-validation. Lineage fields must not be manually cleared or changed. Nautical
-requires a complete chain identity before planning recurrence.
+validation. A task can be promoted to a new recurrence root, paused with
+`chain:off`, resumed with `chain:on`, or disabled by removing all recurrence
+inputs. Lineage fields must not be manually cleared or changed. See
+[Editing, pausing, and resuming recurrence](../guides/editing-recurrence.md)
+for the transition rules and examples.
 
 `cp` and anchor recurrence are mutually exclusive. Anchor recurrence may use
 any combination of `anchor`, `anchor_file`, `omit`, and `omit_file`.

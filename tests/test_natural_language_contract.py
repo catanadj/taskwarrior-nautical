@@ -115,6 +115,23 @@ class NaturalLanguageContractTests(unittest.TestCase):
                 self.assertEqual(self.direct_description(expression), expected)
                 self.assertEqual(core.describe_anchor_expr(expression), expected)
 
+    def test_natural_language_keeps_json_style_mixed_time_slots(self) -> None:
+        dnf = [[
+            {
+                "typ": "w",
+                "spec": "mon..fri",
+                "ival": 1,
+                "mods": {
+                    "t": [[6, 0], [8, 0], [10, 0], [12, 0], [16, 0], [18, 0], [20, 0], [22, 0], "dawn"],
+                },
+            }
+        ]]
+
+        self.assertEqual(
+            core.describe_anchor_dnf(dnf, {"anchor_mode": "skip"}),
+            "Mondays through Fridays at 06:00, 08:00, 10:00, 12:00, 16:00, 18:00, 20:00, 22:00, dawn; skip missed anchors",
+        )
+
     def test_time_offsets_are_reflected_in_natural_language(self) -> None:
         self.assertEqual(
             self.direct_description("w:mon@t=sunrise@-30m"),

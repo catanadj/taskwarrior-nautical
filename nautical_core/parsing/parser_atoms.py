@@ -157,10 +157,11 @@ def parse_atom_mods(
                     except ValueError:
                         raise exc from None
                     if numeric_schedule is not None:
-                        mods["t"] = list(numeric_schedule.slots)
+                        mixed_slots: list[Any] = list(numeric_schedule.slots)
                         for event in event_parts:
-                            if event not in mods["t"]:
-                                mods["t"].append(event)
+                            if event not in mixed_slots:
+                                mixed_slots.append(event)
+                        mods["t"] = mixed_slots
                         continue
                 raise parse_error_cls(str(exc)) from None
             if schedule is not None:
